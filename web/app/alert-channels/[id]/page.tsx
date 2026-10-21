@@ -11,6 +11,8 @@ import FormCard from '@/components/ui/FormCard';
 import Panel from '@/components/ui/Panel';
 import Pill from '@/components/ui/Pill';
 import Callout from '@/components/ui/Callout';
+import Page from '@/components/ui/Page';
+import useDocumentTitle from '@/lib/useDocumentTitle';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 
 export default function EditAlertChannelPage() {
@@ -23,6 +25,7 @@ export default function EditAlertChannelPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
   const { showToast } = useToast();
+  useDocumentTitle(channel?.name);
 
   useEffect(() => {
     loadChannel();
@@ -76,7 +79,7 @@ export default function EditAlertChannelPage() {
   }
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <Page width="reading">
       <PageHeader
         breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Notifications', href: '/settings?tab=channels' }, { label: channel.name }]}
         title="Edit alert channel"
@@ -132,6 +135,6 @@ export default function EditAlertChannelPage() {
           </dl>
         </Panel>
       </div>
-    </div>
+    </Page>
   );
 }

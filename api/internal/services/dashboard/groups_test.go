@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -24,7 +26,7 @@ func TestAggregateGroups_NoGroupTags_ReturnsNil(t *testing.T) {
 func TestAggregateGroups_MonitorInTwoGroupsAppearsInBoth(t *testing.T) {
 	m := uuid.New()
 	rows := []groupAggregationRow{
-		{MonitorID: m, Name: "stripe-webhook", Uptime: ptrFloat(91.2), Tags: []string{"api", "payments"}, CurrentStatus: ptrString("failure"), AttentionCount: 1},
+		{MonitorID: m, Name: "stripe-webhook", Uptime: ptrFloat(91.2), Tags: []string{"api", "payments"}, CurrentStatus: ptrString("failure"), CurrentState: "down"},
 	}
 	groups := aggregateGroups(rows, []string{"api", "payments"})
 
@@ -63,7 +65,7 @@ func TestAggregateGroups_MonitorInTwoGroupsAppearsInBoth(t *testing.T) {
 
 func TestAggregateGroups_UntaggedMonitorGoesToUngrouped(t *testing.T) {
 	rows := []groupAggregationRow{
-		{MonitorID: uuid.New(), Name: "lone", Uptime: ptrFloat(99.9), Tags: []string{"customer-x"}, AttentionCount: 0},
+		{MonitorID: uuid.New(), Name: "lone", Uptime: ptrFloat(99.9), Tags: []string{"customer-x"}, CurrentState: "up"},
 	}
 	groups := aggregateGroups(rows, []string{"api", "payments"})
 
@@ -83,7 +85,7 @@ func TestAggregateGroups_UntaggedMonitorGoesToUngrouped(t *testing.T) {
 
 func TestAggregateGroups_StaleTagYieldsZeroCount(t *testing.T) {
 	rows := []groupAggregationRow{
-		{MonitorID: uuid.New(), Name: "x", Uptime: ptrFloat(100), Tags: []string{"api"}, AttentionCount: 0},
+		{MonitorID: uuid.New(), Name: "x", Uptime: ptrFloat(100), Tags: []string{"api"}, CurrentState: "up"},
 	}
 	groups := aggregateGroups(rows, []string{"api", "ghost-tag"})
 
@@ -100,8 +102,8 @@ func TestAggregateGroups_StaleTagYieldsZeroCount(t *testing.T) {
 
 func TestAggregateGroups_WorstMemberSetWhenAttention(t *testing.T) {
 	rows := []groupAggregationRow{
-		{MonitorID: uuid.New(), Name: "healthy", Uptime: ptrFloat(100), Tags: []string{"api"}, AttentionCount: 0},
-		{MonitorID: uuid.New(), Name: "sick", Uptime: ptrFloat(91.2), Tags: []string{"api"}, CurrentStatus: ptrString("failure"), AttentionCount: 1},
+		{MonitorID: uuid.New(), Name: "healthy", Uptime: ptrFloat(100), Tags: []string{"api"}, CurrentState: "up"},
+		{MonitorID: uuid.New(), Name: "sick", Uptime: ptrFloat(91.2), Tags: []string{"api"}, CurrentStatus: ptrString("failure"), CurrentState: "down"},
 	}
 	groups := aggregateGroups(rows, []string{"api"})
 	if len(groups) != 1 {
@@ -124,7 +126,7 @@ func TestAggregateGroups_WorstMemberSetWhenAttention(t *testing.T) {
 
 func TestAggregateGroups_NoAttention_NoWorstMember(t *testing.T) {
 	rows := []groupAggregationRow{
-		{MonitorID: uuid.New(), Name: "x", Uptime: ptrFloat(100), Tags: []string{"api"}, AttentionCount: 0},
+		{MonitorID: uuid.New(), Name: "x", Uptime: ptrFloat(100), Tags: []string{"api"}, CurrentState: "up"},
 	}
 	groups := aggregateGroups(rows, []string{"api"})
 	if groups[0].WorstMember != nil {
@@ -138,9 +140,9 @@ func TestAggregateGroups_NoAttention_NoWorstMember(t *testing.T) {
 // reads null rather than a number.
 func TestAggregateGroups_NoDataIsNotHundredPercent(t *testing.T) {
 	rows := []groupAggregationRow{
-		{MonitorID: uuid.New(), Name: "checked", Uptime: ptrFloat(80), Tags: []string{"api"}, AttentionCount: 1, CurrentStatus: ptrString("failure")},
-		{MonitorID: uuid.New(), Name: "paused", Uptime: nil, Tags: []string{"api"}, AttentionCount: 0},
-		{MonitorID: uuid.New(), Name: "new", Uptime: nil, Tags: []string{"empty"}, AttentionCount: 0},
+		{MonitorID: uuid.New(), Name: "checked", Uptime: ptrFloat(80), Tags: []string{"api"}, CurrentState: "down", CurrentStatus: ptrString("failure")},
+		{MonitorID: uuid.New(), Name: "paused", Uptime: nil, Tags: []string{"api"}, CurrentState: "up"},
+		{MonitorID: uuid.New(), Name: "new", Uptime: nil, Tags: []string{"empty"}, CurrentState: "up"},
 	}
 	groups := aggregateGroups(rows, []string{"api", "empty"})
 
@@ -166,6 +168,79 @@ func TestAggregateGroups_NoDataIsNotHundredPercent(t *testing.T) {
 		default:
 			t.Fatalf("unexpected tag %q", *g.Tag)
 		}
+	}
+}
+
+// A group's attention is its members' CURRENT state, never failed checks
+// earlier in the range: on 30d/90d almost every member has some failure, and
+// counting those turned every group amber at 99.9% with every member up. The
+// uptime figure already carries the history.
+func TestAggregateGroups_HistoricalFailuresAloneNeedNoAttention(t *testing.T) {
+	rows := []groupAggregationRow{
+		// Failed checks in the range (uptime < 100, latest check failed), up now.
+		{MonitorID: uuid.New(), Name: "flapped", Uptime: ptrFloat(99.93), Tags: []string{"api"}, CurrentStatus: ptrString("failure"), CurrentState: "up"},
+		{MonitorID: uuid.New(), Name: "steady", Uptime: ptrFloat(99.99), Tags: []string{"api"}, CurrentStatus: ptrString("success"), CurrentState: "up"},
+	}
+	groups := aggregateGroups(rows, []string{"api"})
+	if got := groups[0].AttentionCount; got != 0 {
+		t.Fatalf("AttentionCount = %d, want 0: every member is up now", got)
+	}
+	if groups[0].WorstMember != nil {
+		t.Fatalf("WorstMember = %+v, want nil when nothing needs attention", groups[0].WorstMember)
+	}
+}
+
+func TestAggregateGroups_CurrentStateDrivesAttentionAndOrder(t *testing.T) {
+	rows := []groupAggregationRow{
+		{MonitorID: uuid.New(), Name: "low-but-up", Uptime: ptrFloat(80), Tags: []string{"api"}, CurrentState: "up"},
+		{MonitorID: uuid.New(), Name: "no-data", Uptime: nil, Tags: []string{"api"}, CurrentState: "unknown"},
+		{MonitorID: uuid.New(), Name: "degraded", Uptime: ptrFloat(99), Tags: []string{"api"}, CurrentState: "degraded"},
+		{MonitorID: uuid.New(), Name: "suspect", Uptime: ptrFloat(98), Tags: []string{"api"}, CurrentState: "suspect"},
+		{MonitorID: uuid.New(), Name: "down-now", Uptime: ptrFloat(99.5), Tags: []string{"api"}, CurrentState: "down"},
+	}
+	g := aggregateGroups(rows, []string{"api"})[0]
+	if g.AttentionCount != 3 {
+		t.Fatalf("AttentionCount = %d, want 3 (down + degraded + suspect)", g.AttentionCount)
+	}
+	if g.WorstMember == nil || g.WorstMember.MonitorName != "down-now" {
+		t.Fatalf("WorstMember = %+v, want down-now (state outranks uptime)", g.WorstMember)
+	}
+	var names []string
+	for _, m := range g.Members {
+		names = append(names, m.MonitorName)
+	}
+	want := []string{"down-now", "suspect", "degraded", "low-but-up", "no-data"}
+	if len(names) != len(want) {
+		t.Fatalf("members = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("members = %v, want %v", names, want)
+		}
+	}
+}
+
+func TestCurrentStateRank_MatchesSQL(t *testing.T) {
+	sql := currentStateRankSQL("m.current_state")
+	for _, entry := range currentStateRanks {
+		if got := currentStateRank(entry.state); got != entry.rank {
+			t.Fatalf("currentStateRank(%q) = %d, want %d", entry.state, got, entry.rank)
+		}
+		clause := fmt.Sprintf("WHEN '%s' THEN %d", entry.state, entry.rank)
+		if !strings.Contains(sql, clause) {
+			t.Fatalf("SQL %q misses %q", sql, clause)
+		}
+	}
+	if !strings.Contains(sql, fmt.Sprintf("ELSE %d END", currentStateRankDefault)) {
+		t.Fatalf("SQL %q misses the default rank", sql)
+	}
+	if currentStateRank("down") >= currentStateRank("degraded") ||
+		currentStateRank("degraded") >= currentStateRank("unknown") ||
+		currentStateRank("unknown") >= currentStateRank("up") {
+		t.Fatal("rank order must be down < degraded < unknown < up (web STATUS_RANK)")
+	}
+	if !currentStateNeedsAttention("suspect") || currentStateNeedsAttention("unknown") || currentStateNeedsAttention("up") {
+		t.Fatal("only down, degraded and suspect need attention")
 	}
 }
 

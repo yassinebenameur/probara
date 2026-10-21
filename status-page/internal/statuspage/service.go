@@ -69,7 +69,7 @@ type StatusPageData struct {
 	CustomTemplateVersion int    `json:"-"` // For template use only
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
-	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (5-min buckets)
+	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (1-min buckets)
 	UptimeHistory1   []HourlyUptime `json:"-"` // Last 24 hours (hourly buckets)
 	UptimeHistory30  []DailyUptime  `json:"-"` // Last 30 days
 	UptimeHistory90  []DailyUptime  `json:"-"` // Last 90 days
@@ -148,7 +148,7 @@ type MonitorStatus struct {
 	DowntimePeriods365d []DowntimePeriod `json:"-"` // Downtime periods in last 1y
 	// Multi-range uptime history for each monitor
 	UptimeHistory7d   []DailyUptime  `json:"-"` // Last 7 days
-	UptimeHistory1h   []MinuteUptime `json:"-"` // Last 1 hour (5-min buckets)
+	UptimeHistory1h   []MinuteUptime `json:"-"` // Last 1 hour (1-min buckets)
 	UptimeHistory24h  []HourlyUptime `json:"-"` // Last 24 hours (hourly buckets)
 	UptimeHistory30d  []DailyUptime  `json:"-"` // Last 30 days
 	UptimeHistory90d  []DailyUptime  `json:"-"` // Last 90 days
@@ -177,7 +177,7 @@ type AgentMetricsData struct {
 	Timestamp       time.Time `json:"timestamp"`
 }
 
-// MinuteUptime represents uptime percentage for a time bucket (used for 1h view with 5-min buckets)
+// MinuteUptime represents uptime percentage for one minute (the 1h view's buckets)
 type MinuteUptime struct {
 	Time   string  `json:"time"`
 	Uptime float64 `json:"uptime"`
@@ -519,13 +519,15 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 
 	// Fetch only short-range and rollup-backed global uptime to keep public page responses bounded.
 	// Rollup-backed ranges (7/30/90/365d) avoid large scans over check_results.
-	if uptimeHistory1h, err := s.GetGlobal5MinuteUptime(ctx, pageID, tenantID); err == nil {
-		page.UptimeHistory1h = uptimeHistory1h
-	}
-	if uptimeHistory1, err := s.GetGlobalHourlyUptime(ctx, pageID, tenantID); err == nil {
-		page.UptimeHistory1 = uptimeHistory1
-	}
+	// The 1h strip reads raw check_results (one-minute buckets), 24h the hourly rollups plus
+	// the raw tail. The operational monitor set is resolved once for all ranges.
 	if globalMonitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, pageID, tenantID); err == nil {
+		if uptimeHistory1h, err := s.GetGlobalMinuteUptime(ctx, globalMonitorIDs, tenantID); err == nil {
+			page.UptimeHistory1h = uptimeHistory1h
+		}
+		if uptimeHistory1, err := s.GetGlobalHourlyUptime(ctx, globalMonitorIDs, tenantID); err == nil {
+			page.UptimeHistory1 = uptimeHistory1
+		}
 		s.applyGlobalLongRangeAnalytics(ctx, &page, tenantID, globalMonitorIDs)
 	}
 
@@ -712,74 +714,6 @@ func (s *Service) batchIncidentPublicUpdates(ctx context.Context, tenantID uuid.
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate incident public updates: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetGlobal5MinuteUptime calculates 5-minute bucket uptime across all monitors in a status page for the last 1 hour
-func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]MinuteUptime, error) {
-	monitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, statusPageID, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	if len(monitorIDs) == 0 {
-		return []MinuteUptime{}, nil
-	}
-
-	query := `
-		WITH buckets AS (
-			SELECT generate_series(
-				date_trunc('minute', NOW() - INTERVAL '55 minutes') - (EXTRACT(minute FROM NOW())::int % 5) * INTERVAL '1 minute',
-				date_trunc('minute', NOW()),
-				INTERVAL '5 minutes'
-			) AS bucket
-		),
-		bucket_stats AS (
-			SELECT 
-				date_trunc('minute', cr.created_at) - (EXTRACT(minute FROM cr.created_at)::int % 5) * INTERVAL '1 minute' AS bucket,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
-			FROM check_results cr
-			WHERE cr.monitor_id = ANY($1)
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - INTERVAL '1 hour'
-			GROUP BY 1
-		)
-		SELECT 
-			b.bucket,
-			COALESCE(bs.total, 0) AS total,
-			COALESCE(bs.successful, 0) AS successful
-		FROM buckets b
-		LEFT JOIN bucket_stats bs ON b.bucket = bs.bucket
-		ORDER BY b.bucket
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query global 5-minute uptime: %w", err)
-	}
-	defer rows.Close()
-
-	var result []MinuteUptime
-	for rows.Next() {
-		var bucket time.Time
-		var total, successful int
-
-		if err := rows.Scan(&bucket, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan global 5-minute uptime: %w", err)
-		}
-
-		uptime := bucketUptime(total, successful)
-
-		result = append(result, MinuteUptime{
-			Time:   bucket.Format("15:04"),
-			Uptime: uptime,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating global 5-minute uptime: %w", err)
 	}
 
 	return result, nil
@@ -1021,9 +955,9 @@ func (s *Service) monitorPresenter(monitorType string) monitorPresenter {
 
 // populateGroupMonitorShortRange fills a group monitor's status, uptime, latency, hourly
 // strip and recent history by aggregating over its (pre-resolved) leaf member IDs. Long-range
-// analytics are applied separately by the batched pass. Per-monitor widgets that the public
-// page never renders (5-minute strip, raw latency series, short-range downtime) are
-// intentionally not populated.
+// analytics and the 1h strip are applied separately by the batched passes in
+// populatePageMonitors. Per-monitor widgets that the public page never renders (raw latency
+// series, short-range downtime) are intentionally not populated.
 func (s *Service) populateGroupMonitorShortRange(ctx context.Context, monitor *MonitorStatus, memberIDs []uuid.UUID, tenantID uuid.UUID) {
 	if len(memberIDs) == 0 {
 		monitor.Status = "unknown"
@@ -1394,12 +1328,9 @@ func (s *Service) GetMonitorHistory(ctx context.Context, monitorID, tenantID uui
 	return history, nil
 }
 
-// GetGlobalHourlyUptime calculates hourly uptime across all monitors in a status page for the last 24 hours
-func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]HourlyUptime, error) {
-	monitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, statusPageID, tenantID)
-	if err != nil {
-		return nil, err
-	}
+// GetGlobalHourlyUptime calculates hourly uptime across a status page's operational monitors
+// (resolveStatusPageOperationalMonitorIDs) for the last 24 hours.
+func (s *Service) GetGlobalHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) ([]HourlyUptime, error) {
 	if len(monitorIDs) == 0 {
 		return []HourlyUptime{}, nil
 	}

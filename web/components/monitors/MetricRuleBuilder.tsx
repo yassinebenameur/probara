@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
+import { FOCUS_RING } from '@/components/ui/focus';
 import { MetricRule, MetricSeriesInfo } from '@/lib/types';
 import { getMonitorMetricSeries } from '@/lib/api';
 import {
@@ -194,10 +195,11 @@ export default function MetricRuleBuilder({
           >
             <div className="flex flex-wrap items-end gap-2">
               <div className="min-w-[220px] flex-1">
-                <label className="mb-1.5 block text-xs text-slate-400">
+                <label htmlFor={`${datalistId}-${index}-metric`} className="mb-1.5 block text-xs text-slate-400">
                   Metric{curatedLabel ? ` — ${curatedLabel}` : ''}
                 </label>
                 <input
+                  id={`${datalistId}-${index}-metric`}
                   type="text"
                   list={datalistId}
                   value={draft.metric_name}
@@ -207,8 +209,9 @@ export default function MetricRuleBuilder({
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-xs text-slate-400">Operator</label>
+                <label htmlFor={`${datalistId}-${index}-op`} className="mb-1.5 block text-xs text-slate-400">Operator</label>
                 <select
+                  id={`${datalistId}-${index}-op`}
                   value={draft.operator}
                   onChange={(e) => updateDraft(index, { operator: e.target.value as MetricRuleDraft['operator'] })}
                   className="input input-sm h-9"
@@ -218,10 +221,11 @@ export default function MetricRuleBuilder({
                 </select>
               </div>
               <div className="w-28">
-                <label className="mb-1.5 block text-xs text-slate-400">
+                <label htmlFor={`${datalistId}-${index}-threshold`} className="mb-1.5 block text-xs text-slate-400">
                   Threshold{unitSuffix ? ` (${unitSuffix})` : ''}
                 </label>
                 <input
+                  id={`${datalistId}-${index}-threshold`}
                   type="number"
                   value={draft.threshold}
                   onChange={(e) => updateDraft(index, { threshold: e.target.value })}
@@ -231,8 +235,9 @@ export default function MetricRuleBuilder({
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-xs text-slate-400">Duration</label>
+                <label htmlFor={`${datalistId}-${index}-duration`} className="mb-1.5 block text-xs text-slate-400">Duration</label>
                 <select
+                  id={`${datalistId}-${index}-duration`}
                   value={draft.for_duration_seconds}
                   onChange={(e) => updateDraft(index, { for_duration_seconds: Number(e.target.value) })}
                   className="input input-sm h-9"
@@ -260,10 +265,10 @@ export default function MetricRuleBuilder({
                   <button
                     type="button"
                     aria-label={`Remove filter ${filter.key}`}
-                    className="rounded-full p-0.5 text-slate-500 transition-colors hover:text-white"
+                    className={`rounded-full p-0.5 text-slate-500 transition-colors hover:text-white ${FOCUS_RING}`}
                     onClick={() => removeFilter(index, filterIndex)}
                   >
-                    <X className="h-3 w-3" strokeWidth={1.75} />
+                    <X className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
                   </button>
                 </span>
               ))}
@@ -271,6 +276,7 @@ export default function MetricRuleBuilder({
                 type="text"
                 value={pending.key}
                 onChange={(e) => setPendingFilter(index, { key: e.target.value })}
+                aria-label="Filter key"
                 placeholder="key"
                 className="input input-sm h-7 !w-28 font-mono"
               />
@@ -285,6 +291,7 @@ export default function MetricRuleBuilder({
                   }
                 }}
                 placeholder="value"
+                aria-label="Filter value"
                 className="input input-sm h-7 !w-28 font-mono"
               />
               <Button

@@ -1,3 +1,21 @@
+# [2.0.0-alpha.5](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.4...v2.0.0-alpha.5) (2026-10-21)
+
+
+### Bug Fixes
+
+* **dashboard:** rank problem monitors and service groups by current state ([fb77339](https://github.com/yassinebenameur/probara/commit/fb773394209b5a9d82bb30f2d1b66d7da0d7d453))
+* **web:** float the notification save bar and tidy settings alignment, focus and labels ([b6cd8c2](https://github.com/yassinebenameur/probara/commit/b6cd8c2acda7a6b86f647cc14e5114c34b33e456))
+* **web:** lay notification settings cards out in balanced column stacks with one control rail ([c35c1ba](https://github.com/yassinebenameur/probara/commit/c35c1bada2f35dc5cde1e520e9fdc221ed505d3a))
+* **web:** split notification settings into two columns sooner, equalize segments and fit the channel table on phones ([ad6d0d0](https://github.com/yassinebenameur/probara/commit/ad6d0d079ba1fa3ba7ea3e0ed11a2c35cfeaf4b2))
+
+
+### Features
+
+* **maintenance:** order maintenance windows per status ([7eff411](https://github.com/yassinebenameur/probara/commit/7eff4114f5897a0dfe1ef7f9f9b7bf0208c48a95))
+* **status-page:** add a 1h uptime range ([a235bea](https://github.com/yassinebenameur/probara/commit/a235bead7d07518b87659cadc8e6c9650370c55f))
+* **web:** premium UI overhaul: full-width layouts, flat canvas, accessible contrast, live feedback and shared controls ([c6736a7](https://github.com/yassinebenameur/probara/commit/c6736a72aacdf485b75bf2576491f84f7982d1b1))
+* **web:** redesign notification settings as sectioned setting rows with segmented controls ([1b9a7d4](https://github.com/yassinebenameur/probara/commit/1b9a7d4f06d4dac1c5721dddde9911a9a343370b))
+
 # [2.0.0-alpha.4](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.3...v2.0.0-alpha.4) (2026-10-20)
 
 

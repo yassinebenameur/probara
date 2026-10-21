@@ -3,7 +3,6 @@ package statuspage
 import (
 	"context"
 	"math"
-	"regexp"
 	"testing"
 	"time"
 
@@ -20,30 +19,9 @@ func TestService_GetGlobalHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *tes
 	}
 	defer sqlDB.Close()
 
-	statusPageID := uuid.New()
 	tenantID := uuid.New()
 	monitorA := uuid.New()
 	monitorB := uuid.New()
-
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT spsm.monitor_id
-		FROM status_page_sections sps
-		JOIN status_page_section_monitors spsm ON spsm.section_id = sps.id
-		WHERE sps.status_page_id = $1
-		ORDER BY sps.position ASC, spsm.position ASC, spsm.monitor_id ASC
-	`)).
-		WithArgs(statusPageID).
-		WillReturnRows(sqlmock.NewRows([]string{"monitor_id"}).AddRow(monitorA).AddRow(monitorB))
-
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT m.id, m.type
-		FROM monitors m
-		WHERE m.id = ANY($1) AND m.tenant_id = $2 AND m.deleted_at IS NULL
-	`)).
-		WithArgs(sqlmock.AnyArg(), tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "type"}).
-			AddRow(monitorA, "http").
-			AddRow(monitorB, "http"))
 
 	// The rollup cursor is read in its own cheap query so the main query's raw
 	// scan bounds arrive as plain parameters (index-friendly), not a CTE join.
@@ -58,7 +36,7 @@ func TestService_GetGlobalHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *tes
 		WillReturnRows(rows)
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
-	if _, err := svc.GetGlobalHourlyUptime(context.Background(), statusPageID, tenantID); err != nil {
+	if _, err := svc.GetGlobalHourlyUptime(context.Background(), []uuid.UUID{monitorA, monitorB}, tenantID); err != nil {
 		t.Fatalf("GetGlobalHourlyUptime() error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

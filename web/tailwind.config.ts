@@ -27,9 +27,17 @@ const config: Config = {
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
+    // lib/status-tones.ts is the home of tone classes (NO_DATA_BAR and the
+    // tone maps); a class that appears only there must still be generated.
+    "./lib/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
     extend: {
+      // Wide-screen steps for data pages (dashboard grid, monitors list).
+      screens: {
+        "3xl": "1920px",
+        "4xl": "2400px",
+      },
       fontFamily: {
         sans: [
           "var(--font-sans)",
@@ -53,6 +61,8 @@ const config: Config = {
         "2xs": ["11px", { lineHeight: "16px" }],
         ui: ["13px", { lineHeight: "18px" }],
         title: ["16px", { lineHeight: "22px" }],
+        // KPI / headline numbers (dashboard tiles, monitor analytics).
+        metric: ["24px", { lineHeight: "28px", letterSpacing: "-0.01em" }],
       },
       colors: {
         white: "rgb(var(--tw-white) / <alpha-value>)",
@@ -297,7 +307,15 @@ const config: Config = {
         well: {
           DEFAULT: "var(--well)",
           hover: "var(--well-hover)",
+          // A checked row: one step above the previewed/hovered fills.
+          strong: "var(--well-strong)",
         },
+        // The "selected" fill of tabs, chips, segments and the active nav
+        // item: the brightest neutral in each theme (SELECTED_SEGMENT).
+        selected: "var(--segment-selected)",
+        // The active sidebar item: a filled step above hover in both themes
+        // (white would vanish on the light shell).
+        "nav-selected": "var(--nav-selected)",
         control: {
           DEFAULT: "var(--control)",
           hover: "var(--control-hover)",
@@ -309,6 +327,8 @@ const config: Config = {
         },
         divider: "var(--divider)",
         onaccent: "var(--accent-ink)",
+        // Focus indicator (>= 3:1 on every surface): ring-focus, outline-focus.
+        focus: "var(--focus)",
         // The only semantic aliases. warning is the -300 step so text in it
         // keeps AA in light mode (the -300 steps darken there).
         success: "rgb(var(--tw-emerald-500) / <alpha-value>)",
@@ -324,11 +344,39 @@ const config: Config = {
       },
       boxShadow: {
         glass: "inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow)",
-        // Selected tab/segment: raised glass plus a hairline, so it still
-        // separates from the well in dark mode where the fill is darker.
+        // Selected tab/segment: the selected fill plus a hairline, so it
+        // separates from the well and from a white panel in light mode.
         segment: "inset 0 0 0 1px var(--glass-edge-strong), inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow)",
         overlay: "inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow-overlay)",
-        accent: "inset 0 1px 0 0 rgb(255 255 255 / 0.28), 0 6px 18px -8px rgb(255 90 36 / 0.7)",
+        accent: "inset 0 1px 0 0 rgb(255 255 255 / 0.28), 0 6px 18px -8px rgba(var(--accent-rgb), 0.7)",
+      },
+      // The bare `transition` / `transition-colors` utilities pick up the
+      // DEFAULT duration and easing, so every existing transition is on the
+      // motion tokens without per-component edits.
+      transitionDuration: {
+        DEFAULT: "var(--dur-base)",
+        fast: "var(--dur-fast)",
+        base: "var(--dur-base)",
+        slow: "var(--dur-slow)",
+      },
+      transitionTimingFunction: {
+        DEFAULT: "var(--ease-standard)",
+        standard: "var(--ease-standard)",
+        emphasized: "var(--ease-emphasized)",
+        exit: "var(--ease-exit)",
+      },
+      // Keyframes are in app/globals.css. Entrances use fill-mode backwards
+      // so the element ends on its own styles.
+      animation: {
+        "fade-in": "fade-in var(--dur-base) var(--ease-standard) backwards",
+        "pop-in": "pop-in var(--dur-base) var(--ease-emphasized) backwards",
+        "dialog-in": "dialog-in var(--dur-slow) var(--ease-emphasized) backwards",
+        "toast-in": "toast-in var(--dur-slow) var(--ease-emphasized) backwards",
+        "row-flash": "row-flash var(--dur-decay) var(--ease-standard)",
+        "bar-in": "bar-in var(--dur-slow) var(--ease-emphasized) backwards",
+        "value-in": "value-in var(--dur-base) var(--ease-emphasized) backwards",
+        "live-ping": "live-ping 2s var(--ease-standard) infinite",
+        "status-pulse": "status-pulse 1.6s ease-in-out infinite",
       },
     },
   },

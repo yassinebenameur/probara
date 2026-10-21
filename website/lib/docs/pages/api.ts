@@ -501,7 +501,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Overview ranges are `1h`, `24h`, `7d`, `30d`, `90d`, and `365d`, defaulting to `24h`. Dashboard group rows are tag-derived presentation, not group-monitor resources.",
+            "Overview ranges are `1h`, `24h`, `7d`, `30d`, `90d`, and `365d`, defaulting to `24h`. Dashboard group rows are tag-derived presentation, not group-monitor resources. Problem monitors are ordered by current state (down, degraded, unknown, up), then failed checks, before the limit applies, so a monitor that is down now is never cut. A group's `attention_count` counts members down or degraded now; failures earlier in the range show only in its uptime.",
         },
       ],
     },

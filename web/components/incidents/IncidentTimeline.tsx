@@ -98,8 +98,9 @@ export default function IncidentTimeline({
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <form onSubmit={submitInternal} className="glass-well flex flex-col p-4">
-          <div className="text-ui font-medium text-slate-300">Add internal note</div>
+          <label htmlFor="incident-internal-note" className="text-ui font-medium text-slate-300">Add internal note</label>
           <textarea
+            id="incident-internal-note"
             className="input mt-2 min-h-[88px] flex-1 resize-y"
             value={internalMessage}
             onChange={(event) => setInternalMessage(event.target.value)}
@@ -114,8 +115,9 @@ export default function IncidentTimeline({
         </form>
 
         <form onSubmit={submitPublic} className="glass-well flex flex-col p-4">
-          <div className="text-ui font-medium text-slate-300">Add public update</div>
+          <label htmlFor="incident-public-update" className="text-ui font-medium text-slate-300">Add public update</label>
           <textarea
+            id="incident-public-update"
             className="input mt-2 min-h-[88px] flex-1 resize-y"
             value={publicMessage}
             onChange={(event) => setPublicMessage(event.target.value)}

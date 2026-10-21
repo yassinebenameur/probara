@@ -1,8 +1,7 @@
 'use client';
 
-import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { RefreshCw } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getAlert, getAlerts, getTenants } from '@/lib/api';
 import { markTriageLabelled, mergeAlertUpdate } from '@/lib/ai-triage';
@@ -11,14 +10,25 @@ import { emitTenantChange, setSelectedTenantId } from '@/lib/tenant';
 import { useSelectedTenantId } from '@/components/providers/TenantProvider';
 import { RANGES, RangeId, rangeStart } from '@/lib/format';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
-import AlertTable from '@/components/alerts/AlertTable';
+import AlertTable, {
+  ALERT_SORT_DEFAULT,
+  ALERT_SORT_DEFAULT_DIR,
+  ALERT_SORT_KEYS,
+  sortAlerts,
+  type AlertSortKey,
+} from '@/components/alerts/AlertTable';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import ChipGroup from '@/components/ui/ChipGroup';
 import FilterChip from '@/components/ui/FilterChip';
-import IconButton from '@/components/ui/IconButton';
+import LiveStatus from '@/components/ui/LiveStatus';
+import Page from '@/components/ui/Page';
 import PageHeader from '@/components/ui/PageHeader';
 import Select from '@/components/ui/Select';
+import { useUrlSort } from '@/components/ui/SortableHeader';
+import type { SortState } from '@/lib/sort';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
+import { useRowFlash } from '@/lib/useRowFlash';
 
 // 'open' (active + acknowledged) is the default: the queue an operator works.
 type StatusFilter = 'open' | AlertStatus | 'all';
@@ -41,6 +51,10 @@ const DEFAULT_WINDOW: AlertWindow = '7d';
 const PAGE_SIZE = 20;
 // The API caps page_size at 100.
 const MAX_API_PAGE = 100;
+// The Open view reads the whole queue (each status up to this many) so a
+// column sort orders every open alert, not one page. The other views page on
+// the server, newest first (the API has no sort parameter).
+const MAX_OPEN = 1000;
 
 function parseStatus(value: string | null): StatusFilter {
   return STATUS_FILTERS.some((f) => f.value === value) ? (value as StatusFilter) : DEFAULT_STATUS;
@@ -79,23 +93,37 @@ function AlertsView() {
   const selectedTenantId = useSelectedTenantId();
   const [focused, setFocused] = useState<{ id: string; alert: Alert | null; error: string } | null>(null);
 
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Open view: every open alert (sorted and paged here). Other views: the
+  // server's current page.
+  const [rows, setRows] = useState<Alert[]>([]);
   const [error, setError] = useState<string>('');
-  // The page belongs to the filters it was chosen under: any filter change
-  // (a chip, a sidebar link) reads as page 1 in the same render, so no
+  const [sort, setSort] = useUrlSort(ALERT_SORT_KEYS, ALERT_SORT_DEFAULT, ALERT_SORT_DEFAULT_DIR);
+  const clientSorted = statusFilter === 'open';
+  // The page belongs to the filters (and, in the Open view, the sort) it was
+  // chosen under: any change reads as page 1 in the same render, so no
   // request ever goes out for the old page under the new filter.
-  const filterKey = `${statusFilter}|${windowFilter}`;
+  const filterKey = `${statusFilter}|${windowFilter}${clientSorted ? `|${sort.key}:${sort.dir}` : ''}`;
   const [pageState, setPageState] = useState({ key: filterKey, page: 1 });
   const page = pageState.key === filterKey ? pageState.page : 1;
   const setPage = (update: (current: number) => number) =>
     setPageState({ key: filterKey, page: update(page) });
-  const [total, setTotal] = useState(0);
+  const [serverTotal, setServerTotal] = useState(0);
+  const [openTotal, setOpenTotal] = useState(0);
   const [counts, setCounts] = useState<{ active: number; acknowledged: number } | null>(null);
   const requestRef = useRef(0);
   const { subscribe } = useAlertEvents();
+  const rowFlash = useRowFlash(rows, (alert) => alert.id, (alert) => alert.status);
 
+  const sorted = useMemo(() => (clientSorted ? sortAlerts(rows, sort) : rows), [rows, sort, clientSorted]);
+  const total = clientSorted ? sorted.length : serverTotal;
+  // The Open view is read whole, so its page never refetches.
+  const serverPage = clientSorted ? 1 : page;
+  const rowsRef = useRef(rows);
+  useEffect(() => {
+    rowsRef.current = rows;
+  });
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const visible = clientSorted ? sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : rows;
 
   // Filters live in the URL (the sidebar links to ?status=active), so a
   // change replaces the query and the page re-renders from it.
@@ -124,52 +152,54 @@ function AlertsView() {
     }
   }, []);
 
-  const loadAlerts = useCallback(async () => {
-    if (focusAlertId) return;
-    const request = ++requestRef.current;
-    try {
-      setLoading(true);
-      setError('');
-
-      let items: Alert[];
-      let count: number;
-      if (statusFilter === 'open') {
-        // No multi-status filter in the API: merge the two lists, unhandled
-        // (active) first, each newest first, and page through the result.
-        const want = page * PAGE_SIZE;
-        const [active, acknowledged] = await Promise.all([
-          fetchFirst('active', want),
-          fetchFirst('acknowledged', want),
-        ]);
-        items = [...active.items, ...acknowledged.items].slice((page - 1) * PAGE_SIZE, want);
-        count = active.total + acknowledged.total;
-      } else {
-        const since = rangeStart(windowFilter)?.toISOString();
-        const response = await getAlerts({
-          page,
-          page_size: PAGE_SIZE,
-          ...(statusFilter !== 'all' && { status: statusFilter }),
-          ...(since && { since }),
-        });
-        items = response?.items || [];
-        count = response?.total || 0;
+  // Silent loads (the poll, a stream reconnect) keep the rows and say
+  // nothing on failure (LiveStatus shows it); a failed visible load keeps the
+  // rows too and shows the error above them.
+  const loadAlerts = useCallback(
+    async ({ silent }: { silent: boolean }) => {
+      if (focusAlertId) return true;
+      const request = ++requestRef.current;
+      void loadCounts();
+      try {
+        if (!silent) setError('');
+        let items: Alert[];
+        if (statusFilter === 'open') {
+          // No multi-status filter in the API: read both queues in full.
+          const [active, acknowledged] = await Promise.all([
+            fetchFirst('active', MAX_OPEN),
+            fetchFirst('acknowledged', MAX_OPEN),
+          ]);
+          items = [...active.items, ...acknowledged.items];
+          if (request !== requestRef.current) return true;
+          setOpenTotal(active.total + acknowledged.total);
+        } else {
+          const since = rangeStart(windowFilter)?.toISOString();
+          const response = await getAlerts({
+            page: serverPage,
+            page_size: PAGE_SIZE,
+            ...(statusFilter !== 'all' && { status: statusFilter }),
+            ...(since && { since }),
+          });
+          items = response?.items || [];
+          if (request !== requestRef.current) return true;
+          setServerTotal(response?.total || 0);
+        }
+        if (request !== requestRef.current) return true;
+        setRows(items);
+        setError('');
+        return true;
+      } catch (err: any) {
+        if (request !== requestRef.current) return true;
+        if (!silent) setError(err.message || 'Failed to load alerts');
+        return false;
       }
+    },
+    [serverPage, statusFilter, windowFilter, focusAlertId, loadCounts]
+  );
 
-      if (request !== requestRef.current) return;
-      setAlerts(items);
-      setTotal(count);
-    } catch (err: any) {
-      if (request !== requestRef.current) return;
-      setError(err.message || 'Failed to load alerts');
-      setAlerts([]);
-    } finally {
-      if (request === requestRef.current) setLoading(false);
-    }
-  }, [page, statusFilter, windowFilter, focusAlertId]);
-
-  useEffect(() => {
-    loadAlerts();
-  }, [loadAlerts]);
+  // Stream events update rows in place (below), so they don't reload; the
+  // poll and the reconnect resync catch anything the stream missed.
+  const live = useLiveRefresh(loadAlerts, { streamDebounceMs: 0 });
 
   // Focused view: switch to the link's workspace first when the viewer can
   // see it (TenantScope then remounts this page under it), else load the
@@ -213,36 +243,35 @@ function AlertsView() {
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
 
-  useEffect(() => {
-    loadCounts();
-  }, [loadCounts]);
-
-  const refresh = () => {
-    loadAlerts();
-    loadCounts();
-  };
-
   // Live updates: rows already on screen change in place (so a row does not
-  // jump away mid-scan); an alert not listed yet whose new status matches the
-  // filter (created, or newly acknowledged/resolved) is added on page 1, so
-  // the list keeps up with the chip counts. Stream events never carry triage
-  // (core NATS), so a listed row keeps its pill until the next fetch.
-  const handleAlertUpdate = useCallback((alert: Alert) => {
-    setAlerts(prev => {
-      const exists = prev.find(a => a.id === alert.id);
-      if (exists) {
-        return prev.map(a => a.id === alert.id ? mergeAlertUpdate(a, alert) : a);
+  // jump away mid-scan) and flash when their status changes (useRowFlash);
+  // an alert not listed yet whose new status matches the filter (created, or
+  // newly acknowledged/resolved) is added and flashed: in the Open view it
+  // takes its place in the sort, elsewhere it leads page 1. Stream events
+  // never carry triage (core NATS), so a listed row keeps its pill until the
+  // next fetch.
+  const { flash } = rowFlash;
+  const handleAlertUpdate = useCallback(
+    (alert: Alert) => {
+      if (rowsRef.current.some((a) => a.id === alert.id)) {
+        setRows((prev) => prev.map((a) => (a.id === alert.id ? mergeAlertUpdate(a, alert) : a)));
+        return;
       }
       const matches =
         statusFilter === 'all' ||
         alert.status === statusFilter ||
         (statusFilter === 'open' && alert.status !== 'resolved');
-      if (page === 1 && matches) {
-        return [alert, ...prev].slice(0, PAGE_SIZE);
-      }
-      return prev;
-    });
-  }, [statusFilter, page]);
+      if (!matches || (statusFilter !== 'open' && page !== 1)) return;
+      setRows((prev) => {
+        if (prev.some((a) => a.id === alert.id)) return prev;
+        return statusFilter === 'open' ? [...prev, alert] : [alert, ...prev].slice(0, PAGE_SIZE);
+      });
+      if (statusFilter !== 'open') setServerTotal((n) => n + 1);
+      // After the row mounts, so the animation starts on screen.
+      window.requestAnimationFrame(() => flash(alert.id));
+    },
+    [statusFilter, page, flash]
+  );
 
   useEffect(() => {
     return subscribe((event) => {
@@ -250,18 +279,22 @@ function AlertsView() {
       setFocused((f) =>
         f?.alert && f.alert.id === event.alert.id ? { ...f, alert: mergeAlertUpdate(f.alert, event.alert) } : f
       );
-      loadCounts();
+      void loadCounts();
     });
   }, [handleAlertUpdate, subscribe, loadCounts]);
 
+  // The user's own acknowledge/resolve: the row changes in place and flashes
+  // (no success toast: the change is right there).
   const handleAlertTableUpdate = (alert: Alert) => {
-    setAlerts(prev => prev.map(a => a.id === alert.id ? mergeAlertUpdate(a, alert) : a));
-    loadCounts();
+    setRows((prev) => prev.map((a) => (a.id === alert.id ? mergeAlertUpdate(a, alert) : a)));
+    void loadCounts();
   };
 
   const handleTriageLabelled = (alertId: string) => {
-    setAlerts(prev => markTriageLabelled(prev, alertId));
+    setRows((prev) => markTriageLabelled(prev, alertId));
   };
+
+  const changeSort = (next: SortState<AlertSortKey>) => setSort(next);
 
   const chipCount = (value: StatusFilter): number | undefined => {
     if (!counts) return undefined;
@@ -276,7 +309,7 @@ function AlertsView() {
   if (focusAlertId) {
     const current = focused?.id === focusAlertId ? focused : null;
     return (
-      <div className="space-y-6">
+      <Page width="data">
         <PageHeader title="Alerts" />
         <Callout
           tone="info"
@@ -296,12 +329,12 @@ function AlertsView() {
           loading={!current}
           emptyTitle="Alert not found"
         />
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         title="Alerts"
         subtitle={
@@ -312,11 +345,12 @@ function AlertsView() {
               : [`${counts.active} active`, `${counts.acknowledged} acknowledged`]
         }
         action={
-          <IconButton
-            icon={<RefreshCw strokeWidth={1.75} />}
-            label="Refresh"
-            onClick={refresh}
-            loading={loading && alerts.length > 0}
+          <LiveStatus
+            updatedAt={live.updatedAt}
+            refreshing={live.refreshing}
+            failed={live.failed && !error}
+            onRefresh={live.refresh}
+            refreshLabel="Refresh alerts"
           />
         }
       />
@@ -357,21 +391,34 @@ function AlertsView() {
       {error && (
         <Callout
           tone="danger"
-          action={<Button variant="subtle" size="xs" onClick={refresh}>Retry</Button>}
+          action={
+            <Button variant="subtle" size="xs" onClick={live.refresh} loading={live.loading}>
+              Retry
+            </Button>
+          }
         >
           {error}
         </Callout>
       )}
 
       <AlertTable
-        alerts={alerts}
+        alerts={visible}
         onAlertUpdate={handleAlertTableUpdate}
         onTriageLabelled={handleTriageLabelled}
-        loading={loading}
+        // Before the first load lands the table is loading, not empty.
+        loading={live.loading || (live.updatedAt === null && !error)}
+        flashClass={rowFlash.flashClass}
+        {...(clientSorted ? { sort, onSort: changeSort } : {})}
         emptyTitle={
           statusFilter === 'open' ? 'No open alerts' : statusFilter === 'active' ? 'No active alerts' : 'No alerts found'
         }
       />
+
+      {clientSorted && openTotal > rows.length && (
+        <p className="text-center text-xs text-slate-500">
+          Sorting the newest {rows.length} of {openTotal} open alerts.
+        </p>
+      )}
 
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">
@@ -396,7 +443,7 @@ function AlertsView() {
           </Button>
         </div>
       )}
-    </div>
+    </Page>
   );
 }
 

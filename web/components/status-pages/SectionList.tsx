@@ -244,7 +244,7 @@ function SectionCard({
           className={ICON_BUTTON_CLASS}
         >
           <ChevronDown
-            className={`transition-transform duration-150 ${collapsed ? '-rotate-90' : ''}`}
+            className={`transition-transform duration-fast ${collapsed ? '-rotate-90' : ''}`}
             strokeWidth={1.75}
             aria-hidden="true"
           />
@@ -255,7 +255,10 @@ function SectionCard({
           onChange={(event) => dispatch({ type: 'rename_section', sectionId: section.id, title: event.target.value })}
           placeholder="Section title"
           aria-label="Section title"
-          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-title font-semibold text-white placeholder:font-normal placeholder:text-slate-500 transition-colors hover:border-edge-control focus:border-cyan-500 focus:bg-control focus:outline-none"
+          // Inline-edit look, but with a resting --input-edge underline
+          // (>= 3:1) so the title reads as editable without a hover (touch
+          // has none); the full box arrives on hover and focus.
+          className="min-w-0 flex-1 rounded-lg border border-transparent border-b-[var(--input-edge)] bg-transparent px-2 py-1 text-title font-semibold text-white placeholder:font-normal placeholder:text-slate-500 transition-colors hover:border-[var(--input-edge)] focus:border-[var(--focus)] focus:bg-control focus:shadow-[0_0_0_1px_var(--focus)] focus:outline-none"
         />
         <div className="flex flex-shrink-0 items-center gap-0.5 transition-opacity lg:opacity-0 lg:focus-within:opacity-100 lg:group-hover/section:opacity-100">
           <IconButton
@@ -348,7 +351,7 @@ function DropLine({ active }: { active: boolean }) {
   return (
     <div aria-hidden="true" className="px-1">
       <div
-        className={`rounded-full bg-cyan-400 transition-all duration-100 ${
+        className={`rounded-full bg-cyan-400 transition-[height,margin,opacity] duration-fast ${
           active ? 'my-0.5 h-0.5 opacity-100' : 'h-0 opacity-0'
         }`}
       />

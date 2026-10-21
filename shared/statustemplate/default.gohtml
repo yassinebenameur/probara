@@ -1447,6 +1447,10 @@
                     data-strip-kind="kiosk"
                     data-active-range="{{$.DefaultRange}}"
                     data-cells="{{$.MonitorStripCells}}"
+                    data-cells-1h="{{monitorStripCells "1h"}}"
+                    data-cells-30d="{{monitorStripCells "30d"}}"
+                    data-cells-90d="{{monitorStripCells "90d"}}"
+                    data-range-1h="{{.History1hJSON}}"
                     data-range-24h="{{.History24hJSON}}"
                     data-range-7d="{{.History7dJSON}}"
                     data-range-30d="{{.History30dJSON}}"
@@ -1532,6 +1536,7 @@
               <div class="uptime-label">Network uptime</div>
               {{if .ShowRangeSelector}}
                 <div class="range-group" role="group" aria-label="Select uptime range">
+                  <button type="button" class="range-btn" data-range-pill="1h" aria-pressed="false">1h</button>
                   <button type="button" class="range-btn active" data-range-pill="24h" aria-pressed="true">24h</button>
                   <button type="button" class="range-btn" data-range-pill="7d" aria-pressed="false">7d</button>
                   <button type="button" class="range-btn" data-range-pill="30d" aria-pressed="false">30d</button>
@@ -1542,6 +1547,7 @@
             <div
               class="uptime-pct"
               id="globalUptimeValue"
+              data-range-value-1h="{{.GlobalUptime1hValue}}"
               data-range-value-24h="{{.GlobalUptime24Value}}"
               data-range-value-7d="{{.GlobalUptime7Value}}"
               data-range-value-30d="{{.GlobalUptime30Value}}"
@@ -1553,9 +1559,11 @@
             data-strip-kind="global"
             data-active-range="{{.DefaultRange}}"
             data-cells="{{.GlobalStripCells}}"
+            data-cells-1h="{{globalStripCells "1h"}}"
             data-cells-7d="{{globalStripCells "7d"}}"
             data-cells-30d="{{globalStripCells "30d"}}"
             data-cells-90d="{{globalStripCells "90d"}}"
+            data-range-1h="{{.GlobalUptime1hJSON}}"
             data-range-24h="{{.GlobalUptime24JSON}}"
             data-range-7d="{{.GlobalUptime7JSON}}"
             data-range-30d="{{.GlobalUptime30JSON}}"
@@ -1563,13 +1571,14 @@
           ></div>
           <div class="uptime-foot">
             <span id="globalRangeStart">Last 24 hours</span>
-            <span>Today</span>
+            <span>Now</span>
           </div>
         </div>
       {{else if .ShowRangeSelector}}
         <div class="range-section">
           <div class="uptime-label">Uptime range</div>
           <div class="range-group" role="group" aria-label="Select uptime range">
+            <button type="button" class="range-btn" data-range-pill="1h" aria-pressed="false">1h</button>
             <button type="button" class="range-btn active" data-range-pill="24h" aria-pressed="true">24h</button>
             <button type="button" class="range-btn" data-range-pill="7d" aria-pressed="false">7d</button>
             <button type="button" class="range-btn" data-range-pill="30d" aria-pressed="false">30d</button>
@@ -1644,6 +1653,7 @@
                       <div
                         class="svc-metric-value"
                         data-monitor-uptime-value
+                        data-range-value-1h="{{.Uptime1hValue}}"
                         data-range-value-24h="{{.Uptime24Value}}"
                         data-range-value-7d="{{.Uptime7Value}}"
                         data-range-value-30d="{{.Uptime30Value}}"
@@ -1664,8 +1674,10 @@
                     data-strip-kind="monitor"
                     data-active-range="{{$.DefaultRange}}"
                     data-cells="{{$.MonitorStripCells}}"
+                    data-cells-1h="{{monitorStripCells "1h"}}"
                     data-cells-30d="{{monitorStripCells "30d"}}"
                     data-cells-90d="{{monitorStripCells "90d"}}"
+                    data-range-1h="{{.History1hJSON}}"
                     data-range-24h="{{.History24hJSON}}"
                     data-range-7d="{{.History7dJSON}}"
                     data-range-30d="{{.History30dJSON}}"
@@ -1682,6 +1694,7 @@
                             <span
                               class="expanded-bar-label"
                               data-monitor-uptime-value
+                              data-range-value-1h="{{.Uptime1hValue}}"
                               data-range-value-24h="{{.Uptime24Value}}"
                               data-range-value-7d="{{.Uptime7Value}}"
                               data-range-value-30d="{{.Uptime30Value}}"
@@ -1693,8 +1706,10 @@
                             data-strip-kind="expanded"
                             data-active-range="{{$.DefaultRange}}"
                             data-cells="{{$.MonitorStripCells}}"
+                            data-cells-1h="{{expandedStripCells "1h"}}"
                             data-cells-30d="{{expandedStripCells "30d"}}"
                             data-cells-90d="{{expandedStripCells "90d"}}"
+                            data-range-1h="{{.ExpandedHistory1hJSON}}"
                             data-range-24h="{{.History24hJSON}}"
                             data-range-7d="{{.History7dJSON}}"
                             data-range-30d="{{.ExpandedHistory30dJSON}}"
@@ -1720,6 +1735,7 @@
                           <span
                             class="dp-value"
                             data-monitor-uptime-value
+                            data-range-value-1h="{{.Uptime1hValue}}"
                             data-range-value-24h="{{.Uptime24Value}}"
                             data-range-value-7d="{{.Uptime7Value}}"
                             data-range-value-30d="{{.Uptime30Value}}"
@@ -1819,7 +1835,13 @@
       const body = document.body;
       const defaultTheme = body.dataset.defaultTheme === 'light' ? 'light' : 'dark';
       const themeAllowed = body.dataset.allowThemeToggle === '1';
-      const defaultRange = ['24h', '7d', '30d', '90d'].includes(body.dataset.defaultRange || '') ? body.dataset.defaultRange : '24h';
+      // The visitor ranges, in pill order. Each range needs a pill, a
+      // data-range-<range> JSON strip on every .js-strip (data-cells-<range>
+      // when its cell count differs from data-cells) and a
+      // data-range-value-<range> on every uptime figure; a range a strip has
+      // no data for renders as "No data".
+      const RANGES = ['1h', '24h', '7d', '30d', '90d'];
+      const defaultRange = RANGES.includes(body.dataset.defaultRange || '') ? body.dataset.defaultRange : '24h';
       const defaultMode = body.dataset.defaultMode || 'default';
       let clockTimer = null;
       let refreshTimer = null;
@@ -1852,7 +1874,7 @@
       }
 
       function isValidRange(range) {
-        return ['24h', '7d', '30d', '90d'].includes(range || '');
+        return RANGES.includes(range || '');
       }
 
       function getParams() {
@@ -1897,6 +1919,7 @@
 
       function rangeLabel(range) {
         switch (range) {
+          case '1h': return 'Last hour';
           case '24h': return 'Last 24 hours';
           case '7d': return 'Last 7 days';
           case '90d': return 'Last 90 days';
@@ -1906,6 +1929,7 @@
 
       function monitorUptimeLabel(range) {
         switch (range) {
+          case '1h': return '1h uptime';
           case '24h': return '24h uptime';
           case '7d': return '7d uptime';
           case '90d': return '90d uptime';
@@ -1932,9 +1956,11 @@
       function renderStrip(el, raw, range) {
         const points = parseStripData(raw);
         const cells = stripCells(el, range);
-        const filled = points.slice(0, cells);
+        // Strips end at "now": keep the newest points when there are more than
+        // cells, and pad missing cells on the left (the oldest end).
+        const filled = points.length > cells ? points.slice(points.length - cells) : points.slice();
         while (filled.length < cells) {
-          filled.push({ uptime: -1 });
+          filled.unshift({ uptime: -1 });
         }
         el.innerHTML = filled.map(function (point) {
           const tone = toneForUptime(point.uptime);

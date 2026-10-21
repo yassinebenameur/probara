@@ -2,7 +2,8 @@
 
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import FormField from '@/components/ui/FormField';
-import { handleRovingKeyDown, SELECTED_SEGMENT } from '@/components/ui/roving';
+import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from '@/components/ui/roving';
+import { FOCUS_RING } from '@/components/ui/focus';
 import { formatDuration } from '@/lib/format';
 import type { Location } from '@/lib/types';
 import { LocationsSection } from './LocationsSection';
@@ -58,7 +59,7 @@ export function IntervalField({
                     data-roving-id={String(seconds)}
                     tabIndex={selected || (!anySelected && i === 0) ? 0 : -1}
                     onClick={() => onChange(seconds)}
-                    className={`inline-flex h-7 items-center rounded-md px-2.5 text-xs font-medium tabular-nums transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                    className={`inline-flex h-7 items-center rounded-md px-2.5 text-xs font-medium tabular-nums ${SEGMENT_ITEM} ${FOCUS_RING} ${
                       selected ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
                     }`}
                   >

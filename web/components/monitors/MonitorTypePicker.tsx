@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Lock, Search, type LucideIcon } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import { FOCUS_RING } from '@/components/ui/focus';
 import { MonitorType } from '@/lib/types';
 import { TILE_SELECTED } from './form-kit';
 
@@ -115,7 +116,7 @@ export function MonitorTypePicker({
                         onClick={() => onSelect(m.type)}
                         aria-current={isSelected ? 'true' : undefined}
                         title={m.label}
-                        className={`glass-well flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                        className={`glass-well flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors active:bg-well-hover ${FOCUS_RING} ${
                           isSelected ? TILE_SELECTED : 'hover:bg-well-hover'
                         }`}
                       >

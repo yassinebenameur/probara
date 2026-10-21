@@ -1,7 +1,8 @@
 'use client';
 
 import { RangeId, RANGES } from '@/lib/format';
-import { handleRovingKeyDown, SELECTED_SEGMENT } from './roving';
+import { FOCUS_RING_INSET } from './focus';
+import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from './roving';
 
 interface RangePickerProps<T extends RangeId> {
   /** The ranges this page supports, in display order (ids from RANGES). */
@@ -51,8 +52,8 @@ export default function RangePicker<T extends RangeId>({
             title={def.long}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(id)}
-            className={`inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium tabular-nums transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${item} ${
-              selected ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
+            className={`inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium tabular-nums ${SEGMENT_ITEM} ${FOCUS_RING_INSET} ${item} ${
+              selected ? SELECTED_SEGMENT : 'text-slate-400 hover:bg-well-hover hover:text-slate-100'
             }`}
           >
             {def.short}

@@ -329,11 +329,12 @@ export default function AgentForm({
                 <FormField label="API key">
                   <div className="space-y-2">
                     {loadingApiKeys ? (
-                      <p className="text-xs text-slate-500">Loading API keys…</p>
+                      <p role="status" className="text-xs text-slate-500">Loading API keys…</p>
                     ) : apiKeyOptions.length > 1 ? (
                       <select
                         value={selectedApiKeyId}
                         onChange={(e) => setSelectedApiKeyId(e.target.value)}
+                        aria-label="API key"
                         className="input"
                       >
                         {apiKeyOptions.map((option) => (

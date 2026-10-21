@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Copy, ExternalLink } from 'lucide-react';
+import { FOCUS_RING } from './focus';
 
 export type CopyableTargetSize = 'xs' | 'sm';
 
@@ -24,6 +25,12 @@ interface CopyableTargetProps {
   className?: string;
   /** Extra classes for the value text (colour, weight, max width). */
   textClassName?: string;
+  /**
+   * False takes the copy and open actions out of the tab order — for dense
+   * lists whose row already links to a page that offers them, so a row
+   * costs fewer Tab stops. Pointer users are unaffected.
+   */
+  focusable?: boolean;
 }
 
 const SIZE: Record<CopyableTargetSize, { text: string; icon: string; gap: string }> = {
@@ -75,6 +82,7 @@ export default function CopyableTarget({
   revealOnHover = false,
   className = '',
   textClassName = '',
+  focusable = true,
 }: CopyableTargetProps) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -111,7 +119,8 @@ export default function CopyableTarget({
         onClick={handleCopy}
         title={state === 'copied' ? `Copied ${label}` : `${value}\n\nClick to copy`}
         aria-label={`Copy ${label}: ${value}`}
-        className={`inline-flex min-w-0 items-center ${dims.gap} cursor-pointer rounded text-left transition-colors hover:text-cyan-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50 ${textClassName}`}
+        tabIndex={focusable ? undefined : -1}
+        className={`inline-flex min-w-0 items-center ${dims.gap} cursor-pointer rounded text-left transition-colors duration-fast hover:text-cyan-300 ${FOCUS_RING} ${textClassName}`}
       >
         <span className="truncate font-mono">{value}</span>
         <span className={`${actionClasses} ${state === 'copied' ? 'text-emerald-400' : state === 'failed' ? 'text-rose-400' : 'text-slate-500'}`}>
@@ -130,7 +139,8 @@ export default function CopyableTarget({
           onClick={(event) => event.stopPropagation()}
           title={`Open ${label} in a new tab`}
           aria-label={`Open ${label} in a new tab: ${value}`}
-          className={`${actionClasses} text-slate-500 hover:text-cyan-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50`}
+          tabIndex={focusable ? undefined : -1}
+          className={`${actionClasses} -m-1 p-1 text-slate-500 hover:text-cyan-300 ${FOCUS_RING}`}
         >
           <ExternalLink className={dims.icon} strokeWidth={2} aria-hidden="true" />
         </a>

@@ -326,7 +326,7 @@ export function revealFirstError(root: HTMLElement | null) {
 export const FIELD_LABEL = 'block text-ui font-medium text-slate-300';
 
 /** A picked tile (type picker, guided journey). Selected is neutral raised glass, never orange. */
-export const TILE_SELECTED = 'bg-glass-strong shadow-segment';
+export const TILE_SELECTED = 'bg-selected shadow-segment';
 
 // Plain labelled controls for the fields MonitorForm's inline editors draw
 // (name, host, DNS, synthetic steps). Each links its label to the control and

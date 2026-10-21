@@ -6,6 +6,7 @@ import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import CurlPreview from './CurlPreview';
 import { FormPanel, ToggleRow } from './form-kit';
 import Button from '@/components/ui/Button';
+import Checkbox from '@/components/ui/Checkbox';
 import FormField from '@/components/ui/FormField';
 import IconButton from '@/components/ui/IconButton';
 import {
@@ -93,14 +94,14 @@ function MethodUrlRow({
           className={`flex rounded-[10px] border bg-control transition-colors ${
             error
               ? 'border-rose-500/60'
-              : 'border-edge-control focus-within:border-cyan-500 focus-within:shadow-[0_0_0_3px_rgba(var(--accent-rgb),0.16)]'
+              : 'border-[var(--input-edge)] hover:border-slate-400 focus-within:border-[var(--focus)] focus-within:shadow-[0_0_0_1px_var(--focus)]'
           }`}
         >
           <select
             aria-label="HTTP method"
             value={method}
             onChange={(e) => onMethodChange(e.target.value)}
-            className="shrink-0 rounded-l-[10px] border-r border-edge-control bg-transparent px-3 py-[9px] text-sm font-semibold text-white focus:outline-none"
+            className="shrink-0 rounded-l-[10px] border-r border-edge-control bg-transparent px-3 py-[9px] text-sm font-semibold text-white focus:outline-none focus-visible:bg-control-hover"
           >
             {['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].map((m) => (
               <option key={m} value={m}>
@@ -128,15 +129,15 @@ function Hint({ children }: { children: ReactNode }) {
 
 function CaseToggle({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) {
   return (
-    <label className="flex items-center gap-1 whitespace-nowrap text-xs text-slate-400">
-      <input
-        type="checkbox"
-        className="accent-cyan-500"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      CI
-    </label>
+    <Checkbox
+      size="sm"
+      checked={checked}
+      onChange={onChange}
+      title="Case-insensitive match"
+      aria-label="Case-insensitive"
+      className="!items-center !gap-1.5 whitespace-nowrap"
+      label={<span className="text-xs text-slate-400" aria-hidden="true">CI</span>}
+    />
   );
 }
 
@@ -164,6 +165,7 @@ function HeadersEditor({
               <input
                 className="input"
                 placeholder="Header name"
+                aria-label={`Header ${idx + 1} name`}
                 value={h.key}
                 onChange={(e) => {
                   const next = [...headers];
@@ -174,6 +176,7 @@ function HeadersEditor({
               <input
                 className="input"
                 placeholder="Value"
+                aria-label={`Header ${idx + 1} value`}
                 type={sensitive && !h.reveal ? 'password' : 'text'}
                 value={h.value}
                 onChange={(e) => {
@@ -342,6 +345,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                   >
                     <select
                       className="input"
+                      aria-label={`Body assertion ${idx + 1} operator`}
                       value={a.op}
                       onChange={(e) => {
                         const next = [...data.body_assertions];
@@ -357,6 +361,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                     <input
                       className="input"
                       placeholder="Value / pattern"
+                      aria-label={`Body assertion ${idx + 1} value`}
                       value={a.value}
                       onChange={(e) => {
                         const next = [...data.body_assertions];
@@ -417,6 +422,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       <input
                         className="input"
                         placeholder="Header name"
+                        aria-label={`Header assertion ${idx + 1} name`}
                         value={a.name}
                         onChange={(e) => {
                           const next = [...data.response_header_assertions];
@@ -426,6 +432,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       />
                       <select
                         className="input"
+                        aria-label={`Header assertion ${idx + 1} operator`}
                         value={a.op}
                         onChange={(e) => {
                           const next = [...data.response_header_assertions];
@@ -444,6 +451,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       <input
                         className="input"
                         placeholder={needsValue ? 'Value / pattern' : '—'}
+                        aria-label={`Header assertion ${idx + 1} value`}
                         disabled={!needsValue}
                         value={a.value || ''}
                         onChange={(e) => {
@@ -506,6 +514,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       <input
                         className="input font-mono"
                         placeholder="Path (e.g. data.status)"
+                        aria-label={`JSON assertion ${idx + 1} path`}
                         value={a.path}
                         onChange={(e) => {
                           const next = [...data.json_assertions];
@@ -515,6 +524,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       />
                       <select
                         className="input"
+                        aria-label={`JSON assertion ${idx + 1} operator`}
                         value={a.op}
                         onChange={(e) => {
                           const next = [...data.json_assertions];
@@ -537,6 +547,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       <input
                         className="input"
                         placeholder={needsValue ? 'Value / pattern' : '—'}
+                        aria-label={`JSON assertion ${idx + 1} value`}
                         disabled={!needsValue}
                         value={a.value || ''}
                         onChange={(e) => {

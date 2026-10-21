@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, BellOff } from 'lucide-react';
 import { getNotificationSettings } from '@/lib/api';
@@ -14,12 +14,15 @@ import type {
 } from '@/lib/types';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import Callout from '@/components/ui/Callout';
+import Radio from '@/components/ui/Radio';
 
 const GROUP_LABEL = 'mb-2.5 block text-ui font-medium text-slate-300';
-const OPTION = 'flex items-start gap-2.5 text-sm text-slate-200';
-const OPTION_HINT = 'mt-0.5 block text-xs text-slate-500';
-const RADIO = 'mt-1 accent-cyan-500';
-const LINK = 'font-medium text-cyan-300 hover:text-cyan-200';
+// Links inside running text are underlined: colour alone is not enough to
+// tell them from the sentence around them (WCAG 1.4.1).
+const LINK =
+  'font-medium text-cyan-300 underline decoration-cyan-300/40 underline-offset-2 hover:text-cyan-200 hover:decoration-cyan-300';
+// Lines up nested content with the radio labels (16px box + 10px gap).
+const NESTED = 'ml-[26px]';
 
 interface AlertingSectionProps {
   isGroup: boolean;
@@ -65,6 +68,9 @@ export function AlertingSection({
 }: AlertingSectionProps) {
   const [settings, setSettings] = useState<NotificationSettings | null>(null);
   const [channels, setChannels] = useState<AlertChannel[]>([]);
+  // Radios need a shared name per group for arrow-key movement, and the
+  // form can render more than one AlertingSection.
+  const radioName = useId();
   useEffect(() => { getNotificationSettings().then(setSettings).catch(() => setSettings(null)); }, []);
 
   const defaults = settings?.default_channels ?? [];
@@ -99,35 +105,21 @@ export function AlertingSection({
           <legend className={GROUP_LABEL}>
             When monitors in this group go down
           </legend>
-          <div className="space-y-2.5">
-            <label className={OPTION}>
-              <input
-                type="radio"
-                className={RADIO}
-                checked={rollup === 'per_monitor'}
-                onChange={() => onRollupChange('per_monitor')}
-              />
-              <span>
-                Alert me for each monitor
-                <span className={OPTION_HINT}>
-                  Each member notifies on its own. Best for grouping similar monitors (e.g. all ASRs).
-                </span>
-              </span>
-            </label>
-            <label className={OPTION}>
-              <input
-                type="radio"
-                className={RADIO}
-                checked={rollup === 'group'}
-                onChange={() => onRollupChange('group')}
-              />
-              <span>
-                Send one alert for the whole group
-                <span className={OPTION_HINT}>
-                  Members are silenced; one group alert covers them. Best for a single service made of several monitors.
-                </span>
-              </span>
-            </label>
+          <div className="flex flex-col items-start gap-1">
+            <Radio
+              name={`${radioName}-rollup`}
+              checked={rollup === 'per_monitor'}
+              onChange={() => onRollupChange('per_monitor')}
+              label="Alert me for each monitor"
+              description="Each member notifies on its own. Best for grouping similar monitors (e.g. all ASRs)."
+            />
+            <Radio
+              name={`${radioName}-rollup`}
+              checked={rollup === 'group'}
+              onChange={() => onRollupChange('group')}
+              label="Send one alert for the whole group"
+              description="Members are silenced; one group alert covers them. Best for a single service made of several monitors."
+            />
           </div>
         </fieldset>
       )}
@@ -166,16 +158,20 @@ export function AlertingSection({
       ) : (
       <fieldset>
         <legend className={GROUP_LABEL}>Notifications</legend>
-        <div className="space-y-2.5">
-          <label className={OPTION}>
-            <input type="radio" className={RADIO} checked={mode === 'default'} onChange={() => onModeChange('default')} />
-            <span>
-              Workspace default
-              {defaultSummary && <span className="ml-1 text-xs text-slate-500">— {defaultSummary}</span>}
-            </span>
-          </label>
+        <div className="space-y-1">
+          <Radio
+            name={`${radioName}-mode`}
+            checked={mode === 'default'}
+            onChange={() => onModeChange('default')}
+            label={
+              <>
+                Workspace default
+                {defaultSummary && <span className="ml-1 text-xs text-slate-500">— {defaultSummary}</span>}
+              </>
+            }
+          />
           {mode === 'default' && settings && defaults.length === 0 && (
-            <Callout tone="warning" className="ml-6">
+            <Callout tone="warning" className={NESTED}>
               No default configured, so alerts won&apos;t notify anyone.{' '}
               {/* A new tab, so a half-filled monitor form isn't lost. */}
               <Link href="/settings?tab=channels" target="_blank" rel="noopener noreferrer" className={LINK}>
@@ -183,12 +179,16 @@ export function AlertingSection({
               </Link>
             </Callout>
           )}
-          <label className={OPTION}>
-            <input type="radio" className={RADIO} checked={mode === 'custom'} onChange={switchToCustom} />
-            <span>Custom for this monitor…</span>
-          </label>
+          <div>
+            <Radio
+              name={`${radioName}-mode`}
+              checked={mode === 'custom'}
+              onChange={switchToCustom}
+              label="Custom for this monitor…"
+            />
+          </div>
           {mode === 'custom' && (
-            <div className="ml-6 space-y-2">
+            <div className={`${NESTED} space-y-2`}>
               <ChannelPicker
                 value={customChannels}
                 onChange={onCustomChannelsChange}
@@ -217,53 +217,42 @@ export function AlertingSection({
           <legend className={GROUP_LABEL}>
             When an upstream dependency is down
           </legend>
-          <div className="space-y-2.5">
-            <label className={OPTION}>
-              <input
-                type="radio"
-                className={RADIO}
-                checked={dependencySuppression === 'inherit'}
-                onChange={() => onDependencySuppressionChange('inherit')}
-              />
-              <span>
-                Follow the workspace setting
-                {settings && (
-                  <span className="ml-1 text-xs text-slate-500">
-                    — currently {settings.dependency_suppression_enabled ? 'suppress' : 'always page'}
-                  </span>
-                )}
-              </span>
-            </label>
-            <label className={OPTION}>
-              <input
-                type="radio"
-                className={RADIO}
-                checked={dependencySuppression === 'off'}
-                onChange={() => onDependencySuppressionChange('off')}
-              />
-              <span>
-                Always page
-                <span className={OPTION_HINT}>
-                  Notify even when the outage is explained by a dependency. For monitors that must never go quiet.
-                </span>
-              </span>
-            </label>
-            <label className={OPTION}>
-              <input
-                type="radio"
-                className={RADIO}
-                checked={dependencySuppression === 'on'}
-                onChange={() => onDependencySuppressionChange('on')}
-              />
-              <span>
-                Suppress notifications while an upstream is down
-                <span className={OPTION_HINT}>
+          <div className="flex flex-col items-start gap-1">
+            <Radio
+              name={`${radioName}-dependency`}
+              checked={dependencySuppression === 'inherit'}
+              onChange={() => onDependencySuppressionChange('inherit')}
+              label={
+                <>
+                  Follow the workspace setting
+                  {settings && (
+                    <span className="ml-1 text-xs text-slate-500">
+                      — currently {settings.dependency_suppression_enabled ? 'suppress' : 'always page'}
+                    </span>
+                  )}
+                </>
+              }
+            />
+            <Radio
+              name={`${radioName}-dependency`}
+              checked={dependencySuppression === 'off'}
+              onChange={() => onDependencySuppressionChange('off')}
+              label="Always page"
+              description="Notify even when the outage is explained by a dependency. For monitors that must never go quiet."
+            />
+            <Radio
+              name={`${radioName}-dependency`}
+              checked={dependencySuppression === 'on'}
+              onChange={() => onDependencySuppressionChange('on')}
+              label="Suppress notifications while an upstream is down"
+              description={
+                <>
                   The alert still opens and the root cause&apos;s notification lists this monitor. If the upstream
                   recovers and this monitor stays down, it pages{' '}
                   {graceLabel(settings?.dependency_suppression_grace_seconds ?? 120)}.
-                </span>
-              </span>
-            </label>
+                </>
+              }
+            />
           </div>
           {!hasDependencies && (
             <p className="mt-2 text-xs text-slate-500">

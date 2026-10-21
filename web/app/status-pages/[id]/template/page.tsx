@@ -41,6 +41,7 @@ import {
   resolveStatusPageDraftPreviewUrl,
 } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
@@ -49,10 +50,11 @@ import FormField from '@/components/ui/FormField';
 import Pill from '@/components/ui/Pill';
 import { useToast } from '@/components/ui/ToastProvider';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
+import useDocumentTitle from '@/lib/useDocumentTitle';
 
 const CODE_AREA =
   'glass-well block w-full font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 ' +
-  'focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-500/50';
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -66,6 +68,7 @@ export default function StatusPageTemplatePage() {
   const { showToast } = useToast();
 
   const [statusPage, setStatusPage] = useState<StatusPage | null>(null);
+  useDocumentTitle(statusPage ? `Template · ${statusPage.title}` : null);
   const [templateState, setTemplateState] = useState<StatusPageTemplateState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -335,14 +338,13 @@ export default function StatusPageTemplatePage() {
 
   if (loading) {
     return (
-      <div className="animate-pulse space-y-6">
-        <div className="space-y-2">
+      <div className="animate-pulse space-y-6" role="status" aria-label="Loading template">
+        <div className="space-y-2" aria-hidden="true">
           <div className="h-4 w-56 rounded-md bg-well-hover" />
           <div className="h-8 w-48 rounded-lg bg-well-hover" />
         </div>
-        <div className="glass h-14" />
-        <div className="glass h-[700px]" />
-        <span className="sr-only">Loading template…</span>
+        <div className="glass h-14" aria-hidden="true" />
+        <div className="glass h-[700px]" aria-hidden="true" />
       </div>
     );
   }
@@ -372,7 +374,7 @@ export default function StatusPageTemplatePage() {
   );
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         breadcrumb={[
           { label: 'Status pages', href: '/status-pages' },
@@ -674,6 +676,6 @@ export default function StatusPageTemplatePage() {
         className="hidden"
         onChange={handleUpload}
       />
-    </div>
+    </Page>
   );
 }

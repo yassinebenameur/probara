@@ -108,6 +108,7 @@ func TestService_GetStatusPageBySlug_BatchedShortRangeMatchesPerMonitorHelpers(t
 
 	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient))
 	now := time.Now().UTC()
+	svc.now = func() time.Time { return now }
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "status-batch-parity")
 	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "batch-parity", "Batch Parity")
@@ -164,6 +165,20 @@ func TestService_GetStatusPageBySlug_BatchedShortRangeMatchesPerMonitorHelpers(t
 		t.Fatalf("GetMonitorHourlyUptime() error = %v", err)
 	}
 	assertHourlySeriesEqual(t, monitor.UptimeHistory24h, wantHourly)
+
+	// 1h strip: 60 one-minute buckets; the -4min success and -40min failure
+	// land in their own minutes.
+	if len(monitor.UptimeHistory1h) != 60 {
+		t.Fatalf("1h strip has %d buckets, want 60", len(monitor.UptimeHistory1h))
+	}
+	minuteStart, _ := oneHourWindow(svc.now())
+	minuteIdx := func(at time.Time) int { return int(at.Truncate(time.Minute).Sub(minuteStart) / time.Minute) }
+	if got := monitor.UptimeHistory1h[minuteIdx(now.Add(-4*time.Minute))].Uptime; got != 100 {
+		t.Fatalf("1h bucket at -4min = %v, want 100", got)
+	}
+	if got := monitor.UptimeHistory1h[minuteIdx(now.Add(-40*time.Minute))].Uptime; got != 0 {
+		t.Fatalf("1h bucket at -40min = %v, want 0", got)
+	}
 
 	// Recent history parity.
 	wantHistory, err := svc.GetMonitorHistory(ctx, monitorA, tenantID, 50, nil)

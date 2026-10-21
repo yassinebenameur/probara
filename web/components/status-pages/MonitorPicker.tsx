@@ -6,6 +6,7 @@ import type { Monitor } from '@/lib/types';
 import Button from '@/components/ui/Button';
 import { monitorMatches, sortMonitors, type DerivedState } from './useStatusPageFormState';
 import TypeBadge from '@/components/ui/TypeBadge';
+import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 import { MONITOR_STATUS_DOT } from '@/lib/status-tones';
 import { leafComponentStatus } from '@/lib/status-page-status';
 
@@ -92,8 +93,8 @@ export default function MonitorPicker({
       {open && (
         // Opaque: inside the section's .glass card the backdrop blur only
         // samples that card, so the sticky save bar below would show through.
-        <div className="glass-overlay absolute left-0 z-30 mt-2 w-[min(400px,85vw)] overflow-hidden !rounded-xl bg-[rgb(var(--panel-rgb))]">
-          <div className="flex items-center gap-2 border-b border-divider px-3 py-2.5">
+        <div className="glass-overlay absolute left-0 z-30 mt-2 w-[min(400px,85vw)] origin-top-left animate-pop-in overflow-hidden !rounded-xl bg-[rgb(var(--panel-rgb))]">
+          <div className="flex items-center gap-2 border-b border-divider px-3 py-2.5 focus-within:shadow-[inset_0_-2px_0_var(--focus)]">
             <Search className="h-4 w-4 flex-shrink-0 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
             <input
               ref={inputRef}
@@ -101,22 +102,23 @@ export default function MonitorPicker({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search by name, URL, tag…"
+              aria-label="Search monitors"
               className="w-full bg-transparent text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none"
             />
             {addableIds.length > 0 && (
               <button
                 type="button"
                 onClick={() => onAdd(addableIds)}
-                className="flex-shrink-0 whitespace-nowrap text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+                className={`flex-shrink-0 whitespace-nowrap rounded text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200 ${FOCUS_RING}`}
               >
                 Add all{search.trim() ? ` (${addableIds.length})` : ''}
               </button>
             )}
           </div>
 
-          <div className="max-h-72 overflow-y-auto p-1" role="listbox" aria-multiselectable="true">
+          <div className="max-h-72 overflow-y-auto p-1" role="listbox" aria-multiselectable="true" aria-label="Monitors">
             {loading ? (
-              <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-500">
+              <div role="status" className="flex items-center justify-center gap-2 py-8 text-xs text-slate-500">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                 Loading monitors…
               </div>
@@ -138,16 +140,16 @@ export default function MonitorPicker({
                     onClick={() =>
                       inThisSection ? onRemove(monitor.id) : onAdd([monitor.id])
                     }
-                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-well-hover ${
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-well-hover active:bg-control-hover ${FOCUS_RING_INSET} ${
                       inThisSection ? 'bg-well' : ''
                     }`}
                   >
                     <span
                       aria-hidden="true"
-                      className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[5px] border transition-colors ${
+                      className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] border transition-colors duration-fast ${
                         inThisSection
-                          ? 'border-cyan-500 bg-cyan-500 text-onaccent'
-                          : 'border-edge-control bg-control'
+                          ? 'border-white bg-white text-[rgb(var(--panel-rgb))]'
+                          : 'border-[var(--input-edge)] bg-transparent'
                       }`}
                     >
                       {inThisSection && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
@@ -169,6 +171,11 @@ export default function MonitorPicker({
                     <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
                       {monitor.name}
                     </span>
+                    {monitor.type !== 'group' && (
+                      <span className="sr-only">
+                        , {monitor.enabled ? leafComponentStatus(monitor) : 'paused'}
+                      </span>
+                    )}
                     {elsewhere ? (
                       <span className="flex-shrink-0 text-xs text-amber-300">
                         in {placement.sectionTitle || 'another section'}

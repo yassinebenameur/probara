@@ -7,6 +7,8 @@ import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
+import { ICON_BUTTON_CLASS, ICON_BUTTON_SM_CLASS } from '@/components/ui/IconButton';
 import EmptyState from '@/components/ui/EmptyState';
 import Select from '@/components/ui/Select';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
@@ -47,6 +49,8 @@ export default function AuditLogPage() {
   const [outcomeFilter, setOutcomeFilter] = useState('');
   const [rangeHours, setRangeHours] = useState(24 * 7);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  // Rows on screen: a failed refresh keeps them (with the error above).
+  const [loaded, setLoaded] = useState(false);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
   const allowed = isSuperadmin || role === 'admin';
@@ -70,10 +74,9 @@ export default function AuditLogPage() {
         setEvents(response.items || []);
         setTotal(response.total || 0);
         setPage(response.page || targetPage);
+        setLoaded(true);
       } catch (err: any) {
         setError(err.message || 'Failed to load audit log');
-        setEvents([]);
-        setTotal(0);
       } finally {
         setLoading(false);
       }
@@ -123,6 +126,7 @@ export default function AuditLogPage() {
             size="sm"
             icon={<RefreshCw strokeWidth={1.75} />}
             onClick={() => loadEvents(page)}
+            loading={loading && loaded}
           >
             Refresh
           </Button>
@@ -133,19 +137,19 @@ export default function AuditLogPage() {
 
   if (!userLoading && !allowed) {
     return (
-      <div className="space-y-6">
+      <Page width="data">
         {header}
         <Panel title="Tenant admin required" subtitle="The audit log is visible to tenant admins and superadmins.">
           <p className="text-sm text-slate-300">
             Your current role does not include audit access.
           </p>
         </Panel>
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       {header}
 
       <div className="flex flex-wrap items-end gap-3">
@@ -178,19 +182,21 @@ export default function AuditLogPage() {
         </div>
       </div>
 
-      {loading && events.length === 0 ? (
-        <TableSkeleton rows={8} columns={4} label="Loading audit events" />
-      ) : error ? (
+      {error && (
         <Callout
           tone="danger"
           action={
-            <Button variant="ghost" size="xs" onClick={() => loadEvents(page)}>
+            <Button variant="ghost" size="xs" onClick={() => loadEvents(page)} loading={loading}>
               Retry
             </Button>
           }
         >
           {error}
         </Callout>
+      )}
+
+      {!loaded ? (
+        loading ? <TableSkeleton rows={8} columns={4} label="Loading audit events" /> : null
       ) : events.length === 0 ? (
         <EmptyState
           icon={<ScrollText strokeWidth={1.5} />}
@@ -198,16 +204,22 @@ export default function AuditLogPage() {
           description="Events appear here as users and API keys make changes."
         />
       ) : (
+        // The dim waits 300ms, so a quick refresh never blinks the table.
         <div
-          className={`glass overflow-hidden transition-opacity ${loading ? 'opacity-60' : ''}`}
-          aria-busy={loading}
+          className={`glass overflow-hidden transition-opacity duration-base ${
+            loading ? 'opacity-60 delay-300' : 'delay-0'
+          }`}
+          aria-busy={loading || undefined}
         >
           <div className="overflow-x-auto">
             <table className="data-table text-sm">
               <thead>
                 <tr>
-                  <th className="w-8 !pr-0" />
-                  <th>Time ({timezoneLabel()})</th>
+                  <th className="w-8 !pr-0">
+                    <span className="sr-only">Details</span>
+                  </th>
+                  {/* Server-paged, newest first (the API has no other order). */}
+                  <th title="Newest first">Time ({timezoneLabel()})</th>
                   <th>Actor</th>
                   <th>Action</th>
                   <th>Resource</th>
@@ -223,19 +235,36 @@ export default function AuditLogPage() {
                     event.user_agent;
                   const actor = auditActor(event, actorNames);
                   const ip = auditIp(event.ip);
+                  const detailsId = `audit-${event.id}-details`;
+                  const toggle = () => setExpandedId(expanded ? null : event.id);
                   return (
                     <Fragment key={event.id}>
                       <tr
                         className={`${hasDetails ? 'cursor-pointer' : ''} ${expanded ? '[&>td]:!border-b-0' : ''}`}
-                        onClick={() => hasDetails && setExpandedId(expanded ? null : event.id)}
+                        // Pointer convenience; the chevron button is the
+                        // keyboard and screen-reader control.
+                        onClick={() => hasDetails && toggle()}
                       >
-                        <td className="!pr-0 text-slate-500">
-                          {hasDetails &&
-                            (expanded ? (
-                              <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} />
-                            ) : (
-                              <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
-                            ))}
+                        <td className="!py-1 !pl-2 !pr-0 text-slate-500">
+                          {hasDetails && (
+                            <button
+                              type="button"
+                              aria-expanded={expanded}
+                              aria-controls={expanded ? detailsId : undefined}
+                              aria-label={`${expanded ? 'Hide' : 'Show'} details for ${event.action}`}
+                              className={`${ICON_BUTTON_CLASS} ${ICON_BUTTON_SM_CLASS}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggle();
+                              }}
+                            >
+                              {expanded ? (
+                                <ChevronDown strokeWidth={1.75} aria-hidden="true" />
+                              ) : (
+                                <ChevronRight strokeWidth={1.75} aria-hidden="true" />
+                              )}
+                            </button>
+                          )}
                         </td>
                         <td
                           className="whitespace-nowrap font-mono text-xs tabular-nums text-slate-400"
@@ -280,7 +309,7 @@ export default function AuditLogPage() {
                         </td>
                       </tr>
                       {expanded && (
-                        <tr>
+                        <tr id={detailsId}>
                           <td className="!pr-0" />
                           <td colSpan={6} className="!pt-0">
                             <div className="glass-well px-3 py-2">
@@ -331,6 +360,6 @@ export default function AuditLogPage() {
           </div>
         </div>
       )}
-    </div>
+    </Page>
   );
 }

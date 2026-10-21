@@ -2,6 +2,7 @@
 
 import { ReactNode, useState, useId } from 'react';
 import { AlertTriangle, ChevronDown } from 'lucide-react';
+import { FOCUS_RING_INSET } from './focus';
 
 export type CollapsibleTone = 'default' | 'warning' | 'danger';
 
@@ -78,7 +79,7 @@ export default function CollapsibleSection({
         onClick={handleToggle}
         aria-expanded={open}
         aria-controls={id}
-        className={`flex w-full items-center justify-between gap-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500/50 ${
+        className={`flex w-full items-center justify-between gap-3 text-left transition-colors duration-fast ${FOCUS_RING_INSET} ${
           row ? 'rounded-lg py-3 hover:text-white' : 'px-6 py-4 hover:bg-well'
         }`}
       >
@@ -98,7 +99,7 @@ export default function CollapsibleSection({
           )}
         </div>
         <ChevronDown
-          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 motion-reduce:transition-none ${open ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-base ease-standard motion-reduce:transition-none ${open ? 'rotate-180' : ''}`}
           strokeWidth={1.75}
           aria-hidden="true"
         />
@@ -106,7 +107,7 @@ export default function CollapsibleSection({
 
       <div
         id={id}
-        className="grid transition-all duration-200 ease-in-out motion-reduce:transition-none"
+        className="grid transition-[grid-template-rows] duration-base ease-standard motion-reduce:transition-none"
         style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
       >
         {/* Collapsed content stays mounted (it may hold form state) but is

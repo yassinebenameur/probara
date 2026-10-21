@@ -4,6 +4,7 @@ import { ReactNode, useMemo } from 'react';
 import {
   Area,
   AreaChart,
+  CartesianGrid,
   ReferenceArea,
   ResponsiveContainer,
   Tooltip,
@@ -31,17 +32,23 @@ import {
   checkResultLabel,
   checkResultTone,
   failedChecksTone,
+  NO_DATA_BAR,
   UPTIME_TONE_BAR,
   UPTIME_TONE_TEXT,
   uptimeTone,
 } from '@/lib/status-tones';
 import { isPlatformResult, shortFailureReason } from '@/lib/monitor-utils';
 import Pill from '@/components/ui/Pill';
-import { CHART_AXIS_TICK, CHART_CURSOR, CHART_TOOLTIP_CLASS, isolatedDot } from './metric-chart';
-
-// Latency is not a status, so it takes a calm series colour, never the
-// orange reserved for actions.
-const LATENCY_COLOR = '#6fb5dd';
+// Latency is not a status, so it takes the first series colour (the same
+// one as the dashboard trend), never a status hue or the action orange.
+import {
+  CHART_AXIS_TICK,
+  CHART_CURSOR,
+  CHART_GRID,
+  CHART_TOOLTIP_CLASS,
+  isolatedDot,
+  LATENCY_COLOR,
+} from './metric-chart';
 
 const isIntraday = (range: MonitorAnalyticsRange) => range === '1h' || range === '6h' || range === '24h';
 
@@ -58,7 +65,7 @@ function formatBucketTitle(value: number, range: MonitorAnalyticsRange): string 
 // ── Stat strip ───────────────────────────────────────────────────────────
 
 /**
- * One headline number: muted label, 22px value, one caption line. Cells sit
+ * One headline number: muted label, text-metric value, one caption line. Cells sit
  * side by side in a StatStrip, divided by hairlines.
  */
 export function Stat({
@@ -75,7 +82,7 @@ export function Stat({
   return (
     <div className="min-w-0 px-5 py-4">
       <dt className="text-xs text-slate-400">{label}</dt>
-      <dd className={`mt-1 text-[22px] font-semibold leading-7 tabular-nums ${valueClassName}`}>{value}</dd>
+      <dd className={`mt-1 text-metric font-semibold tabular-nums ${valueClassName}`}>{value}</dd>
       {caption && <dd className="mt-0.5 text-xs leading-4 text-slate-500">{caption}</dd>}
     </div>
   );
@@ -145,7 +152,7 @@ function UptimeTrace({
               key={bucket.ts}
               title={title}
               className={`min-w-0 flex-1 rounded-[2px] transition-opacity hover:opacity-70 ${
-                bucket.pct === null ? 'bg-slate-500/20' : UPTIME_TONE_BAR[failedChecksTone(bucket.failed, bucket.checks)]
+                bucket.pct === null ? NO_DATA_BAR : UPTIME_TONE_BAR[failedChecksTone(bucket.failed, bucket.checks)]
               }`}
             />
           );
@@ -416,6 +423,15 @@ export default function MonitorAnalyticsOverview({
     [analytics]
   );
   const hasLatencyData = chartData.some((point) => typeof point.latency === 'number');
+  // The chart's text alternative: the same numbers a sighted reader takes
+  // from the curve (average and worst bucket), plus the downtime bands.
+  const latencySummary = useMemo(() => {
+    const values = chartData.map((p) => p.latency).filter((v): v is number => typeof v === 'number');
+    if (values.length === 0) return 'No successful checks in this range';
+    const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
+    const peak = Math.max(...values);
+    return `Response time, ${RANGES[timeRange].long.toLowerCase()}: average ${formatLatency(avg)}, slowest bucket ${formatLatency(peak)}`;
+  }, [chartData, timeRange]);
 
   // Newest first: the period an operator is looking for is the latest one.
   const downtimePeriods = useMemo(
@@ -503,8 +519,10 @@ export default function MonitorAnalyticsOverview({
         />
         <Stat
           label="Downtime"
-          value={downtimeSeconds === null ? '—' : downtimeSeconds < 1 ? 'none' : formatDuration(downtimeSeconds)}
-          valueClassName={downtimeSeconds !== null && downtimeSeconds >= 1 ? 'text-white' : 'text-slate-400'}
+          value={downtimeSeconds === null ? '—' : downtimeSeconds < 1 ? 'None' : formatDuration(downtimeSeconds)}
+          // "None" is a real reading (a good one), so it keeps the value
+          // colour; only a missing value is muted.
+          valueClassName={downtimeSeconds === null ? 'text-slate-500' : 'text-white'}
           caption={downtimeCaption}
         />
         {showLatency && (
@@ -548,7 +566,11 @@ export default function MonitorAnalyticsOverview({
                 </p>
               </div>
               {hasLatencyData || downtimeAreas.length > 0 ? (
-                <div className="relative h-48">
+                <div
+                  className="relative h-48"
+                  role="img"
+                  aria-label={`${latencySummary}${downtimeAreas.length > 0 ? `; ${pluralize(downtimeAreas.length, 'downtime period')} shaded` : ''}`}
+                >
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={chartData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
                       <defs>
@@ -557,6 +579,7 @@ export default function MonitorAnalyticsOverview({
                           <stop offset="100%" stopColor={LATENCY_COLOR} stopOpacity={0} />
                         </linearGradient>
                       </defs>
+                      {hasLatencyData && <CartesianGrid {...CHART_GRID} />}
                       <XAxis
                         dataKey="ts"
                         type="number"
@@ -584,9 +607,12 @@ export default function MonitorAnalyticsOverview({
                           x1={area.start}
                           x2={area.end}
                           ifOverflow="hidden"
+                          // A soft fill with full-strength-ish edges, so the
+                          // band reads as red and its span as a shape.
                           fill="var(--danger)"
-                          fillOpacity={0.16}
-                          strokeOpacity={0}
+                          fillOpacity={0.2}
+                          stroke="var(--danger)"
+                          strokeOpacity={0.8}
                         />
                       ))}
                       <Area

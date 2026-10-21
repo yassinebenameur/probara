@@ -11,11 +11,11 @@ import {
   updateMonitor,
 } from '@/lib/api';
 import { monitorStateColors } from '@/lib/monitor-utils';
-import { useToast } from '@/components/ui/ToastProvider';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
-import ModalPortal from '@/components/ui/ModalPortal';
+import Dialog from '@/components/ui/Dialog';
+import { FOCUS_RING_INSET } from '@/components/ui/focus';
 import { MonitorMultiSelect } from './MonitorMultiSelect';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 
@@ -36,10 +36,11 @@ function DependencyRow({ item }: { item: DependencyMonitor }) {
   return (
     <Link
       href={`/monitors/${item.id}`}
-      className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-well"
+      className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-well active:bg-well-hover ${FOCUS_RING_INSET}`}
     >
-      <span className={`h-2 w-2 shrink-0 rounded-full ${colors.dot}`} />
+      <span className={`h-2 w-2 shrink-0 rounded-full ${colors.dot}`} aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate text-sm text-slate-200">{item.name}</span>
+      <span className="sr-only">, {item.current_state ?? 'unknown'}</span>
       <span className="text-xs text-slate-500">{monitorTypeLabel(item.type)}</span>
     </Link>
   );
@@ -59,7 +60,6 @@ function EditDependenciesModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { showToast } = useToast();
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [selected, setSelected] = useState<string[]>(initialIds);
   const [saving, setSaving] = useState(false);
@@ -71,20 +71,12 @@ function EditDependenciesModal({
       .catch(() => setMonitors([]));
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const save = async () => {
     try {
       setSaving(true);
       setError('');
       await updateMonitor(monitorId, { depends_on_ids: selected });
-      showToast('Dependencies updated', 'success', 2500);
+      // No success toast: the card behind refreshes with the new list.
       onSaved();
       onClose();
     } catch (err) {
@@ -95,45 +87,31 @@ function EditDependenciesModal({
   };
 
   return (
-    <ModalPortal>
-      <div
-        className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) onClose();
-        }}
-        role="dialog"
-        aria-label="Edit dependencies"
-      >
-        <div className="glass-overlay w-full max-w-lg">
-          <div className="px-6 pt-5">
-            <h2 className="text-base font-semibold text-white">Edit dependencies</h2>
-            <p className="mt-1.5 text-sm leading-relaxed text-slate-400">
-              Pick the upstream monitors this one depends on. When one of them is down, alerts for
-              this monitor are annotated with the likely root cause.
-            </p>
-          </div>
-
-          <div className="space-y-3 px-6 py-4">
-            <MonitorMultiSelect
-              monitors={monitors}
-              selectedIds={selected}
-              onChange={setSelected}
-              excludeIds={[monitorId]}
-            />
-            {error && <Callout tone="danger">{error}</Callout>}
-          </div>
-
-          <div className="flex justify-end gap-2 px-6 pb-5">
-            <Button variant="ghost" size="sm" type="button" onClick={onClose} disabled={saving}>
-              Cancel
-            </Button>
-            <Button variant="accent" size="sm" type="button" onClick={save} loading={saving} disabled={saving}>
-              {saving ? 'Saving…' : 'Save dependencies'}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </ModalPortal>
+    <Dialog
+      onClose={onClose}
+      busy={saving}
+      title="Edit dependencies"
+      description="Pick the upstream monitors this one depends on. When one of them is down, alerts for this monitor are annotated with the likely root cause."
+      bodyClassName="space-y-3"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" type="button" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button variant="accent" size="sm" type="button" onClick={save} loading={saving} disabled={saving}>
+            {saving ? 'Saving…' : 'Save dependencies'}
+          </Button>
+        </>
+      }
+    >
+      <MonitorMultiSelect
+        monitors={monitors}
+        selectedIds={selected}
+        onChange={setSelected}
+        excludeIds={[monitorId]}
+      />
+      {error && <Callout tone="danger">{error}</Callout>}
+    </Dialog>
   );
 }
 
@@ -198,7 +176,7 @@ export function MonitorDependenciesCard({ monitorId, monitorType }: MonitorDepen
         {upstream.length > 0 && (
           <div>
             <p className="mb-1 flex items-center gap-1.5 text-xs text-slate-500">
-              <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
               Depends on
             </p>
             <div className="-mx-2 space-y-0.5">
@@ -211,7 +189,7 @@ export function MonitorDependenciesCard({ monitorId, monitorType }: MonitorDepen
         {downstream.length > 0 && (
           <div>
             <p className="mb-1 flex items-center gap-1.5 text-xs text-slate-500">
-              <ArrowDownLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+              <ArrowDownLeft className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
               Depended on by
             </p>
             <div className="-mx-2 space-y-0.5">

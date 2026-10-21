@@ -2,6 +2,7 @@
 
 import Pill, { type PillTone } from '@/components/ui/Pill';
 import { formatSlaPct, type SlaTone } from '@/lib/sla';
+import { NO_DATA_BAR, UPTIME_TONE_BAR } from '@/lib/status-tones';
 
 const PILL_TONE: Record<SlaTone, PillTone> = { good: 'success', warn: 'warning', bad: 'danger', none: 'neutral' };
 
@@ -12,12 +13,17 @@ export const TONE_TEXT: Record<SlaTone, string> = {
   none: 'text-slate-400',
 };
 
+// The same fills as every other bar (check traces, hourly bars), at full
+// strength: a faded green reads as a different state.
 export const TONE_BG: Record<SlaTone, string> = {
-  good: 'bg-emerald-500/80',
-  warn: 'bg-amber-500/80',
-  bad: 'bg-rose-500/80',
-  none: 'bg-slate-500/25',
+  good: UPTIME_TONE_BAR.good,
+  warn: UPTIME_TONE_BAR.warn,
+  bad: UPTIME_TONE_BAR.bad,
+  none: NO_DATA_BAR,
 };
+
+// The empty part of a budget bar: visible enough to show where 100% ends.
+const BUDGET_TRACK = 'bg-[rgb(var(--ink-rgb)/0.12)]';
 
 export function SlaStatusPill({ met, running }: { met: boolean | null | undefined; running?: boolean }) {
   if (met === null || met === undefined) return <Pill tone="neutral" size="xs">No data</Pill>;
@@ -33,7 +39,7 @@ export function SlaStatusPill({ met, running }: { met: boolean | null | undefine
  */
 export function BudgetBar({ remainingPct }: { remainingPct: number | null | undefined }) {
   if (remainingPct === null || remainingPct === undefined) {
-    return <div className="h-1.5 w-full rounded-full bg-well-hover" aria-label="No error budget data" />;
+    return <div className={`h-1.5 w-full rounded-full ${BUDGET_TRACK}`} aria-label="No error budget data" />;
   }
   const exhausted = remainingPct <= 0;
   const clamped = Math.max(0, Math.min(100, remainingPct));
@@ -42,7 +48,7 @@ export function BudgetBar({ remainingPct }: { remainingPct: number | null | unde
     <div className="flex items-center gap-2">
       <div
         className={`h-1.5 w-full overflow-hidden rounded-full ${
-          exhausted ? 'bg-rose-500/15 shadow-[inset_0_0_0_1px_rgb(var(--tw-rose-500)/0.45)]' : 'bg-well-hover'
+          exhausted ? 'bg-rose-500/15 shadow-[inset_0_0_0_1px_rgb(var(--tw-rose-500)/0.45)]' : BUDGET_TRACK
         }`}
         role="meter"
         aria-valuemin={0}

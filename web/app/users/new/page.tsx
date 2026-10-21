@@ -4,10 +4,12 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import FormCard from '@/components/ui/FormCard';
 import FormField from '@/components/ui/FormField';
 import FormActions from '@/components/ui/FormActions';
 import Select from '@/components/ui/Select';
+import Radio from '@/components/ui/Radio';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
 import { createUser, getTenants } from '@/lib/api';
 import type { MembershipInput, PlatformRole, Tenant } from '@/lib/types';
@@ -67,7 +69,7 @@ export default function NewUserPage() {
   };
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <Page width="form">
       <PageHeader
         breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'New user' }]}
         title="New user"
@@ -105,27 +107,21 @@ export default function NewUserPage() {
           </FormField>
 
           <FormField label="Sign-in method" required>
-            <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-200">
-              <label className="flex cursor-pointer items-center gap-2">
-                <input
-                  type="radio"
-                  name="sign-in-method"
-                  checked={signInMethod === 'password'}
-                  onChange={() => setSignInMethod('password')}
-                  className="h-4 w-4 cursor-pointer accent-cyan-500"
-                />
-                Password
-              </label>
-              <label className="flex cursor-pointer items-center gap-2">
-                <input
-                  type="radio"
-                  name="sign-in-method"
-                  checked={signInMethod === 'oidc'}
-                  onChange={() => setSignInMethod('oidc')}
-                  className="h-4 w-4 cursor-pointer accent-cyan-500"
-                />
-                SSO only (no local password)
-              </label>
+            <div role="radiogroup" aria-label="Sign-in method" className="flex flex-wrap gap-x-5 gap-y-1">
+              <Radio
+                name="sign-in-method"
+                value="password"
+                checked={signInMethod === 'password'}
+                onChange={() => setSignInMethod('password')}
+                label="Password"
+              />
+              <Radio
+                name="sign-in-method"
+                value="oidc"
+                checked={signInMethod === 'oidc'}
+                onChange={() => setSignInMethod('oidc')}
+                label="SSO only (no local password)"
+              />
             </div>
           </FormField>
 
@@ -177,6 +173,6 @@ export default function NewUserPage() {
           />
         </form>
       </FormCard>
-    </div>
+    </Page>
   );
 }

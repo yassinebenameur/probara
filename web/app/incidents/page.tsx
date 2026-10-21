@@ -6,10 +6,18 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { getIncidents, getUsers } from '@/lib/api';
 import type { AdminUser, IncidentDetail } from '@/lib/types';
 import IncidentQuickCreateButton from '@/components/incidents/IncidentQuickCreateButton';
-import IncidentList, { type IncidentRow } from '@/components/incidents/IncidentList';
-import { INCIDENT_SEVERITY_RANK } from '@/lib/status-tones';
+import IncidentList, {
+  INCIDENT_SORT_DEFAULT_DIR,
+  INCIDENT_SORT_KEYS,
+  type IncidentRow,
+  type IncidentSortKey,
+} from '@/components/incidents/IncidentList';
+import { INCIDENT_SEVERITY_RANK, INCIDENT_STATE_LABEL } from '@/lib/status-tones';
+import { sortRows, type SortState, type SortValue } from '@/lib/sort';
+import { useUrlSort } from '@/components/ui/SortableHeader';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import ChipGroup from '@/components/ui/ChipGroup';
@@ -48,6 +56,27 @@ function triageOrder(a: IncidentRow, b: IncidentRow): number {
   return Date.parse(b.updated_at) - Date.parse(a.updated_at);
 }
 
+// 'triage' (no column active) is the default: triageOrder above.
+const DEFAULT_SORT: SortState<IncidentSortKey> = { key: 'triage', dir: 'asc' };
+// Lifecycle order, from the label table (investigating … resolved).
+const STATE_ORDER = Object.keys(INCIDENT_STATE_LABEL);
+
+const SORT_VALUE: Record<Exclude<IncidentSortKey, 'triage'>, (row: IncidentRow) => SortValue> = {
+  title: (row) => row.title,
+  severity: (row) => (row.severity ? INCIDENT_SEVERITY_RANK[row.severity] ?? null : null),
+  state: (row) => {
+    const index = STATE_ORDER.indexOf(row.state);
+    return index < 0 ? null : index;
+  },
+  updated: (row) => Date.parse(row.updated_at),
+};
+
+function sortIncidents(rows: IncidentRow[], sort: SortState<IncidentSortKey>): IncidentRow[] {
+  if (sort.key === 'triage') return [...rows].sort(triageOrder);
+  // Ties fall back to the triage order (a stable sort over the triaged list).
+  return sortRows([...rows].sort(triageOrder), SORT_VALUE[sort.key], sort.dir);
+}
+
 function IncidentsView() {
   const router = useRouter();
   const pathname = usePathname();
@@ -62,6 +91,7 @@ function IncidentsView() {
   const [error, setError] = useState('');
   const [usersError, setUsersError] = useState('');
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useUrlSort(INCIDENT_SORT_KEYS, DEFAULT_SORT, INCIDENT_SORT_DEFAULT_DIR);
   const { showToast } = useToast();
 
   const loadIncidents = useCallback(async () => {
@@ -82,8 +112,8 @@ function IncidentsView() {
       setIncidents(items);
       setTotals({ total, open });
     } catch (err) {
+      // Keep the incidents already listed; the Callout says the refresh failed.
       setError(err instanceof Error ? err.message : 'Failed to load incidents');
-      setIncidents([]);
     } finally {
       setLoading(false);
     }
@@ -125,13 +155,19 @@ function IncidentsView() {
     showToast('Incident created', 'success');
   };
 
+  // Filter and sort the whole list, then page.
   const filtered = useMemo(
     () =>
-      incidents
-        .filter((i) => filter === 'all' || (filter === 'open' ? i.state !== 'resolved' : i.state === 'resolved'))
-        .sort(triageOrder),
-    [incidents, filter]
+      sortIncidents(
+        incidents.filter((i) => filter === 'all' || (filter === 'open' ? i.state !== 'resolved' : i.state === 'resolved')),
+        sort
+      ),
+    [incidents, filter, sort]
   );
+  const changeSort = (next: SortState<IncidentSortKey>) => {
+    setSort(next);
+    setPage(1);
+  };
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const visible = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
@@ -144,7 +180,7 @@ function IncidentsView() {
   };
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         title="Incidents"
         subtitle={totals ? [`${totals.open} open`, `${resolvedTotal} resolved`] : undefined}
@@ -168,31 +204,42 @@ function IncidentsView() {
         <Callout tone="warning">No users are available to assign as incident owners.</Callout>
       ) : null}
 
-      <ChipGroup ariaLabel="State">
-        {STATE_FILTERS.map((opt) => (
-          <FilterChip
-            key={opt.value}
-            selected={filter === opt.value}
-            count={chipCount(opt.value)}
-            onClick={() => setFilter(opt.value)}
-          >
-            {opt.label}
-          </FilterChip>
-        ))}
-      </ChipGroup>
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <ChipGroup ariaLabel="State">
+          {STATE_FILTERS.map((opt) => (
+            <FilterChip
+              key={opt.value}
+              selected={filter === opt.value}
+              count={chipCount(opt.value)}
+              onClick={() => setFilter(opt.value)}
+            >
+              {opt.label}
+            </FilterChip>
+          ))}
+        </ChipGroup>
+        {sort.key !== 'triage' && (
+          <Button variant="ghost" size="xs" onClick={() => changeSort(DEFAULT_SORT)}>
+            Back to triage order
+          </Button>
+        )}
+      </div>
 
-      {loading && incidents.length === 0 ? (
-        <TableSkeleton rows={4} columns={3} label="Loading incidents" />
-      ) : error ? (
+      {error && (
         <Callout
           tone="danger"
-          action={<Button variant="subtle" size="xs" onClick={loadIncidents}>Retry</Button>}
+          action={<Button variant="subtle" size="xs" onClick={loadIncidents} loading={loading}>Retry</Button>}
         >
           {error}
         </Callout>
-      ) : (
+      )}
+
+      {loading && incidents.length === 0 ? (
+        <TableSkeleton rows={4} columns={3} label="Loading incidents" />
+      ) : error && incidents.length === 0 ? null : (
         <IncidentList
           incidents={visible}
+          sort={sort}
+          onSort={changeSort}
           {...(filter === 'open' && incidents.length > 0 && {
             emptyTitle: 'No open incidents',
             emptyDescription: 'Resolved incidents are under Resolved.',
@@ -233,7 +280,7 @@ function IncidentsView() {
           </Button>
         </div>
       )}
-    </div>
+    </Page>
   );
 }
 

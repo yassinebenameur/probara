@@ -15,6 +15,7 @@ import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import { pluralize } from '@/lib/format';
 import FormField from '@/components/ui/FormField';
 import Button from '@/components/ui/Button';
+import Checkbox from '@/components/ui/Checkbox';
 import SectionList from './SectionList';
 import PagePreview from './PagePreview';
 import {
@@ -242,7 +243,8 @@ export default function StatusPageForm({
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       if (nextErrors.slug || nextErrors.title) {
-        formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        formRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
       }
       return;
     }
@@ -370,26 +372,15 @@ export default function StatusPageForm({
               />
             </div>
 
-            <label className="glass-well flex cursor-pointer items-start gap-3 p-4">
-              <input
-                type="checkbox"
-                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-cyan-500"
+            <div className="glass-well p-4">
+              <Checkbox
                 checked={state.enablePushNotifications}
-                onChange={(event) =>
-                  dispatch({ type: 'set_push_notifications', value: event.target.checked })
-                }
+                onChange={(checked) => dispatch({ type: 'set_push_notifications', value: checked })}
+                className="!py-0"
+                label={<span className="font-medium text-white">Browser notifications</span>}
+                description="Let visitors opt in to a browser notification when a component here goes down, and when it recovers. Requires a VAPID keypair on the status-page service; without one the control is not shown."
               />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium text-white">
-                  Browser notifications
-                </span>
-                <span className="mt-0.5 block text-xs leading-relaxed text-slate-400">
-                  Let visitors opt in to a browser notification when a component here goes
-                  down, and when it recovers. Requires a VAPID keypair on the status-page
-                  service; without one the control is not shown.
-                </span>
-              </span>
-            </label>
+            </div>
           </div>
 
           <PagePreview
@@ -475,11 +466,12 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
   const safeValue = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value) ? value : '#000000';
   return (
     <FormField label={label}>
-      <div className="flex items-center gap-2.5 rounded-lg border border-edge-control bg-control p-[5px] pr-3 transition-colors hover:border-[var(--control-edge-strong)] focus-within:border-cyan-500 focus-within:bg-control-hover focus-within:shadow-[0_0_0_3px_rgba(var(--accent-rgb),0.16)]">
+      <div className="flex items-center gap-2.5 rounded-lg border border-[var(--input-edge)] bg-control p-[5px] pr-3 transition-colors hover:border-slate-400 focus-within:border-[var(--focus)] focus-within:bg-control-hover focus-within:shadow-[0_0_0_1px_var(--focus)]">
         <label
-          className="relative h-7 w-7 flex-shrink-0 cursor-pointer overflow-hidden rounded-md border border-edge-control"
+          // --input-edge, not the control hairline: a near-black or
+          // panel-coloured brand colour must still show as a swatch.
+          className="relative h-7 w-7 flex-shrink-0 cursor-pointer overflow-hidden rounded-md border border-[var(--input-edge)]"
           style={{ backgroundColor: safeValue }}
-          aria-label={`${label} picker`}
           title={`Pick ${label.toLowerCase()}`}
         >
           <input
@@ -487,13 +479,14 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
             value={safeValue}
             onChange={(event) => onChange(event.target.value)}
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-            aria-label={`${label} picker input`}
+            aria-label={`${label} picker`}
           />
         </label>
         <input
           type="text"
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          aria-label={`${label} hex value`}
           className="w-full bg-transparent font-mono text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none"
           placeholder="#ff5a24"
           spellCheck={false}

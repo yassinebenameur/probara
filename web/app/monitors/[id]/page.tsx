@@ -17,9 +17,10 @@ import { GroupMembersCard } from '@/components/monitors/GroupMembersCard';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
 import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import Panel from '@/components/ui/Panel';
 import Pill from '@/components/ui/Pill';
-import Tabs, { useUrlTab } from '@/components/ui/Tabs';
+import Tabs, { TabPanel, useUrlTab } from '@/components/ui/Tabs';
 import RangePicker from '@/components/ui/RangePicker';
 import RowMenu, { RowMenuItem, RowMenuSeparator } from '@/components/ui/RowMenu';
 import TypeBadge from '@/components/ui/TypeBadge';
@@ -27,14 +28,16 @@ import Callout from '@/components/ui/Callout';
 import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import ModalPortal from '@/components/ui/ModalPortal';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 import InfoTip from '@/components/ui/InfoTip';
 import { useToast } from '@/components/ui/ToastProvider';
+import Dialog from '@/components/ui/Dialog';
+import { RelativeTime } from '@/components/ui/RelativeTime';
+import useDocumentTitle from '@/lib/useDocumentTitle';
 import { useCanWrite, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import { getEffectiveMonitorStatus, monitorTarget, monitorTargetLabel, shortFailureReason } from '@/lib/monitor-utils';
 import { checkResultLabel, MONITOR_STATUS_LABEL, MONITOR_STATUS_TONE } from '@/lib/status-tones';
-import { formatDateTime, formatDateTimeFull, formatDuration, formatRelativeTime, pluralize, RANGES } from '@/lib/format';
+import { formatDateTime, formatDateTimeFull, formatDuration, pluralize, RANGES } from '@/lib/format';
 import { isSipCall } from '@/lib/sip-config';
 import { strictestTarget, type Sla } from '@/lib/sla';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
@@ -280,50 +283,56 @@ function ConfirmHistoryResetModal({
   const canConfirm = confirmationText.trim().toUpperCase() === expectedText && !loading;
 
   return (
-    <ModalPortal>
-      <div className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="glass-overlay w-full max-w-lg">
-          <div className="flex items-start gap-4 px-6 pt-5">
-            <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-rose-500/[0.13] text-rose-400">
-              <AlertTriangle className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden="true" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-base font-semibold text-white">Clear monitor history</h2>
-              <p className="mt-1.5 text-sm leading-relaxed text-slate-400">
-                {isGroup
-                  ? `This will permanently remove checks, alerts, and SLA history for ${monitorName} and every monitor inside that group.`
-                  : `This will permanently remove checks, alerts, and SLA history for ${monitorName}, but keep the monitor itself.`}
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-4 px-6 py-4">
-            <Callout tone="danger" title="This cannot be undone.">
-              Dashboard failures, monitor analytics, and public status page history will rebuild only from future checks.
-            </Callout>
-
-            <Input
-              label={`Type ${expectedText} to confirm`}
-              type="text"
-              value={confirmationText}
-              onChange={(event) => onConfirmationTextChange(event.target.value)}
-              placeholder={expectedText}
-              autoFocus
-              disabled={loading}
-            />
-          </div>
-
-          <div className="flex items-center justify-end gap-2 px-6 pb-5">
-            <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
-              Cancel
-            </Button>
-            <Button type="button" variant="danger" onClick={onConfirm} disabled={!canConfirm} loading={loading}>
-              {loading ? 'Clearing…' : isGroup ? 'Clear group history' : 'Clear history'}
-            </Button>
-          </div>
+    <Dialog
+      onClose={onClose}
+      busy={loading}
+      tone="danger"
+      title="Clear monitor history"
+      description={
+        isGroup
+          ? `This will permanently remove checks, alerts, and SLA history for ${monitorName} and every monitor inside that group.`
+          : `This will permanently remove checks, alerts, and SLA history for ${monitorName}, but keep the monitor itself.`
+      }
+      icon={
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-500/[0.13] text-rose-400">
+          <AlertTriangle className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden="true" />
         </div>
-      </div>
-    </ModalPortal>
+      }
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
+            Cancel
+          </Button>
+          <Button type="button" variant="danger" onClick={onConfirm} disabled={!canConfirm} loading={loading}>
+            {loading ? 'Clearing…' : isGroup ? 'Clear group history' : 'Clear history'}
+          </Button>
+        </>
+      }
+    >
+      <Callout tone="danger" title="This cannot be undone." live="off">
+        Dashboard failures, monitor analytics, and public status page history will rebuild only from future checks.
+      </Callout>
+
+      {/* Enter confirms once the phrase matches. */}
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (canConfirm) onConfirm();
+        }}
+        noValidate
+      >
+        <Input
+          label={`Type ${expectedText} to confirm`}
+          type="text"
+          value={confirmationText}
+          onChange={(event) => onConfirmationTextChange(event.target.value)}
+          placeholder={expectedText}
+          autoFocus
+          autoComplete="off"
+          disabled={loading}
+        />
+      </form>
+    </Dialog>
   );
 }
 
@@ -338,7 +347,8 @@ export default function EditMonitorPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
-  const { showToast } = useToast();
+  const { showToast, updateToast } = useToast();
+  useDocumentTitle(monitor?.name);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [results, setResults] = useState<MonitorResultsResponse | null>(null);
@@ -626,20 +636,32 @@ export default function EditMonitorPage() {
   };
 
   // Queues an on-demand run (all of the monitor's locations), then waits for
-  // its first result so the toast can say how it went.
+  // its first result. One toast carries the whole run: "Running check" stays
+  // up while it waits and becomes the result (or "no result yet").
   const handleRunCheck = async () => {
     if (!monitor || runningCheck) return;
     setConfirmRunCall(false);
     setRunningCheck(true);
+    let toastId: string | null = null;
+    // Leaving the page mid-wait must not strand a toast that never ends.
+    const settle = (patch: Parameters<typeof updateToast>[1]) => {
+      if (toastId) updateToast(toastId, patch);
+      else showToast(patch);
+    };
     try {
       const run = await runMonitorNow(monitor.id);
-      showToast('Check queued', 'info', 3000);
+      toastId = showToast({
+        title: 'Running check',
+        message: `${monitor.name}: queued, waiting for the result…`,
+        type: 'info',
+        duration: Infinity,
+      });
       const queuedMs = Date.parse(run.queued_at) || Date.now();
       const sinceISO = new Date(queuedMs - 1500).toISOString();
       const deadline = Date.now() + RUN_RESULT_WAIT_MS;
       while (mountedRef.current && Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 2000));
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) break;
         const data = await getMonitorResults(monitor.id, { limit: 10, since: sinceISO });
         const result = (data.results || []).find((r) => Date.parse(r.created_at) >= queuedMs - 1500);
         if (result) {
@@ -649,18 +671,21 @@ export default function EditMonitorPage() {
             httpStatus: result.http_status,
             timeoutSeconds: monitor.timeout_seconds,
           });
-          showToast(
-            `Check ${checkResultLabel(result.status).toLowerCase()}${reason ? `: ${reason}` : ''}`,
-            result.status === 'success' ? 'success' : result.status === 'degraded' ? 'warning' : 'error'
-          );
+          settle({
+            title: `Check ${checkResultLabel(result.status).toLowerCase()}`,
+            message: reason ? `${monitor.name}: ${reason}` : monitor.name,
+            type: result.status === 'success' ? 'success' : result.status === 'degraded' ? 'warning' : 'error',
+          });
           return;
         }
       }
-      if (mountedRef.current) {
-        showToast('No result yet. It will appear under Latest checks when the worker reports.', 'info');
-      }
+      settle({
+        title: 'No result yet',
+        message: 'It will appear under Latest checks when the worker reports.',
+        type: 'info',
+      });
     } catch (err: any) {
-      showToast(err.message || 'Failed to run the check', 'error');
+      settle({ title: 'Check not run', message: err.message || 'Failed to run the check', type: 'error' });
     } finally {
       if (mountedRef.current) setRunningCheck(false);
     }
@@ -906,7 +931,7 @@ export default function EditMonitorPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <Page width="detail">
       <PageHeader
         breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: monitor.name }]}
         title={monitor.name}
@@ -939,9 +964,7 @@ export default function EditMonitorPage() {
             {/* Agent results are scheduler-written freshness verdicts, not
                 reports; the agent view shows the real last report itself. */}
             {lastCheckAt && monitor.type !== 'agent' && (
-              <span className="shrink-0 whitespace-nowrap" title={formatDateTimeFull(lastCheckAt)}>
-                checked {formatRelativeTime(lastCheckAt)}
-              </span>
+              <RelativeTime value={lastCheckAt} prefix="checked " className="shrink-0 whitespace-nowrap" />
             )}
           </div>
         }
@@ -1038,6 +1061,7 @@ export default function EditMonitorPage() {
         active={activeTab}
         onChange={setActiveTab}
         label="Monitor sections"
+        idBase="monitor"
         trailing={
           activeTab === 'overview' ? (
             monitor.type === 'agent' ? (
@@ -1065,6 +1089,7 @@ export default function EditMonitorPage() {
         </Callout>
       )}
 
+      <TabPanel idBase="monitor" id={activeTab}>
       {activeTab === 'overview' && (
         <MonitorDetailOverview
           monitor={monitor}
@@ -1099,6 +1124,7 @@ export default function EditMonitorPage() {
       {activeTab === 'json' && (
         <MonitorDetailJson monitor={monitor} analytics={analytics} />
       )}
+      </TabPanel>
 
       <ConfirmDialog
         open={confirmRunCall}
@@ -1146,6 +1172,6 @@ export default function EditMonitorPage() {
           loading={clearingHistory}
         />
       )}
-    </div>
+    </Page>
   );
 }

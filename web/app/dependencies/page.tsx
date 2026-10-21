@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import { useState } from 'react';
 
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import { useCanWrite, useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { useAISuggestions } from '@/components/dependencies/AISuggestions';
 
@@ -22,7 +23,7 @@ export default function DependenciesPage() {
   const canWrite = useCanWrite();
   const { loading: userLoading } = useCurrentUser();
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         title="Dependencies"
         subtitle="How your monitors depend on each other. Alerts use this map to point at the likely root cause."
@@ -34,6 +35,6 @@ export default function DependenciesPage() {
         permissionsLoading={userLoading}
         renderAIButton={canWrite ? suggestions.renderButton : undefined}
       />
-    </div>
+    </Page>
   );
 }

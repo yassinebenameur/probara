@@ -37,12 +37,21 @@ export const UPTIME_TONE_TEXT: Record<UptimeTone, string> = {
   none: 'text-slate-500',
 };
 
+/**
+ * An empty trace slot or a no-data bucket: a hollow bar, same size as the
+ * others, whose 1px edge (slate-500 at 75%) keeps >= 3:1 on glass, wells and
+ * hovered or checked rows in both themes (WCAG 1.4.11). Hollow rather than a
+ * faint fill, so a gap reads as a gap and never as the solid grey "not run"
+ * bar. The trace's text alternative carries the count.
+ */
+export const NO_DATA_BAR = 'bg-transparent shadow-[inset_0_0_0_1px_rgb(var(--tw-slate-500)/0.75)]';
+
 /** Fill for bars, dots and trace segments. */
 export const UPTIME_TONE_BAR: Record<UptimeTone, string> = {
   good: 'bg-emerald-500',
   warn: 'bg-amber-500',
   bad: 'bg-rose-500',
-  none: 'bg-slate-600',
+  none: NO_DATA_BAR,
 };
 
 /** CSS colour for charts (recharts strokes, SVG fills). */

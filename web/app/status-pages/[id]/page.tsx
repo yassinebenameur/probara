@@ -8,9 +8,11 @@ import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import { useToast } from '@/components/ui/ToastProvider';
+import useDocumentTitle from '@/lib/useDocumentTitle';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
@@ -18,6 +20,7 @@ export default function EditStatusPagePage() {
   const id = params.id as string;
 
   const [statusPage, setStatusPage] = useState<StatusPage | null>(null);
+  useDocumentTitle(statusPage?.title);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
@@ -55,14 +58,13 @@ export default function EditStatusPagePage() {
 
   if (loading) {
     return (
-      <div className="animate-pulse space-y-6">
-        <div className="space-y-2">
+      <div className="mx-auto w-full max-w-[100rem] animate-pulse space-y-6" role="status" aria-label="Loading status page">
+        <div className="space-y-2" aria-hidden="true">
           <div className="h-4 w-40 rounded-md bg-well-hover" />
           <div className="h-8 w-64 rounded-lg bg-well-hover" />
         </div>
-        <div className="glass h-[590px]" />
-        <div className="glass h-40" />
-        <span className="sr-only">Loading status page…</span>
+        <div className="glass h-[590px]" aria-hidden="true" />
+        <div className="glass h-40" aria-hidden="true" />
       </div>
     );
   }
@@ -85,7 +87,7 @@ export default function EditStatusPagePage() {
   const publicUrl = resolveStatusPagePublicUrl(statusPage);
 
   return (
-    <div className="space-y-6">
+    <Page width="detail">
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: statusPage.title }]}
         title={statusPage.title}
@@ -115,6 +117,6 @@ export default function EditStatusPagePage() {
         onCancel={() => router.push('/status-pages')}
         loading={saving}
       />
-    </div>
+    </Page>
   );
 }

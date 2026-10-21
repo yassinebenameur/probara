@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Pencil, Plus, Target, Trash2 } from 'lucide-react';
 import { deleteSla, getSlas } from '@/lib/api';
@@ -8,9 +8,13 @@ import {
   SLA_AGGREGATION_SHORT, SLA_PERIOD_LABELS, formatSlaPct, formatSlaPeriodRange, formatTarget, type Sla,
 } from '@/lib/sla';
 import { pluralize } from '@/lib/format';
+import { sortRows, type SortState, type SortValue } from '@/lib/sort';
+import SortableHeader, { useUrlSort } from '@/components/ui/SortableHeader';
+import { FOCUS_RING } from '@/components/ui/focus';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import EmptyState from '@/components/ui/EmptyState';
 import Callout from '@/components/ui/Callout';
 import TableSkeleton from '@/components/ui/TableSkeleton';
@@ -24,6 +28,20 @@ import { BudgetBar, SlaStatusPill } from '@/components/slas/SlaVisuals';
 // so next to the figure so a near-empty period never reads as an outage.
 const LOW_COVERAGE_PCT = 99;
 
+const SORT_KEYS = ['name', 'target', 'current', 'budget'] as const;
+type SlaSortKey = (typeof SORT_KEYS)[number];
+const DEFAULT_SORT: SortState<SlaSortKey> = { key: 'name', dir: 'asc' };
+// Strictest target first; worst attainment and least budget left first.
+const DEFAULT_DIR = { target: 'desc' } as const;
+
+// A period without data has no figure: it sorts last either way.
+const SORT_VALUE: Record<SlaSortKey, (sla: Sla) => SortValue> = {
+  name: (sla) => sla.name,
+  target: (sla) => sla.target_pct,
+  current: (sla) => (sla.current?.has_data ? sla.current.availability_pct : null),
+  budget: (sla) => (sla.current?.has_data ? sla.current.budget_remaining_pct : null),
+};
+
 export default function SlasPage() {
   const { showToast } = useToast();
   const canWrite = useCanWrite();
@@ -34,6 +52,8 @@ export default function SlasPage() {
   const [editing, setEditing] = useState<Sla | undefined>(undefined);
   const [pendingDelete, setPendingDelete] = useState<Sla | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [sort, setSort] = useUrlSort(SORT_KEYS, DEFAULT_SORT, DEFAULT_DIR);
+  const sorted = useMemo(() => sortRows(slas, SORT_VALUE[sort.key], sort.dir, (sla) => sla.name), [slas, sort]);
 
   const load = useCallback(async () => {
     try {
@@ -72,7 +92,7 @@ export default function SlasPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         title="SLAs"
         subtitle="Availability targets for sets of monitors, reported per calendar period with error budgets and exports."
@@ -86,7 +106,10 @@ export default function SlasPage() {
       />
 
       {error && (
-        <Callout tone="danger" action={<Button variant="ghost" size="xs" onClick={load}>Retry</Button>}>
+        <Callout
+          tone="danger"
+          action={<Button variant="ghost" size="xs" onClick={load} loading={loading}>Retry</Button>}
+        >
           {error}
         </Callout>
       )}
@@ -106,15 +129,38 @@ export default function SlasPage() {
             <table className="data-table min-w-[720px] text-sm">
               <thead>
                 <tr>
-                  <th>SLA</th>
-                  <th className="text-right">Target</th>
-                  <th>Current period</th>
-                  <th className="w-56">Error budget left</th>
+                  <SortableHeader label="SLA" sortKey="name" sort={sort} onSort={setSort} defaultDir={DEFAULT_DIR} />
+                  <SortableHeader
+                    label="Target"
+                    sortKey="target"
+                    sort={sort}
+                    onSort={setSort}
+                    defaultDir={DEFAULT_DIR}
+                    align="right"
+                    title="Strictest first"
+                  />
+                  <SortableHeader
+                    label="Current period"
+                    sortKey="current"
+                    sort={sort}
+                    onSort={setSort}
+                    defaultDir={DEFAULT_DIR}
+                    title="Lowest availability first"
+                  />
+                  <SortableHeader
+                    label="Error budget left"
+                    sortKey="budget"
+                    sort={sort}
+                    onSort={setSort}
+                    defaultDir={DEFAULT_DIR}
+                    title="Least budget left first"
+                    className="w-56"
+                  />
                   <th><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
-                {slas.map((sla) => {
+                {sorted.map((sla) => {
                   const cur = sla.current;
                   const lowCoverage = cur?.has_data && cur.coverage_pct < LOW_COVERAGE_PCT;
                   return (
@@ -122,7 +168,7 @@ export default function SlasPage() {
                       <td>
                         <Link
                           href={`/slas/${sla.id}`}
-                          className="font-medium text-white transition-colors hover:text-cyan-300"
+                          className={`rounded-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
                         >
                           {sla.name}
                         </Link>
@@ -203,6 +249,6 @@ export default function SlasPage() {
         onCancel={() => setPendingDelete(null)}
         loading={deleting}
       />
-    </div>
+    </Page>
   );
 }

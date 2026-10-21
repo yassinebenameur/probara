@@ -1,13 +1,17 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, ArrowRight, Check, Loader2, UploadCloud, X } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
 import TypeBadge from '@/components/ui/TypeBadge';
+import SortableHeader from '@/components/ui/SortableHeader';
+import { FOCUS_RING } from '@/components/ui/focus';
+import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import { previewImport, executeImport } from '@/lib/api';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 import type {
@@ -23,6 +27,11 @@ import { IMPORT_SCHEMA_PORTABLE, IMPORT_SCHEMA_UPTIME_KUMA } from '@/lib/types';
 // Recognized schemas arrive pre-translated: every field is already mapped, so
 // the mapping step is informational rather than something to fill in.
 const PRE_MAPPED_SCHEMAS: string[] = [IMPORT_SCHEMA_PORTABLE, IMPORT_SCHEMA_UPTIME_KUMA];
+
+// Preview and result tables sort locally (the wizard's data never leaves
+// this page, so the order is not kept in the URL). '#' is the file order.
+type RowSortKey = 'index' | 'name' | 'type' | 'status';
+const ROW_SORT_DEFAULT: SortState<RowSortKey> = { key: 'index', dir: 'asc' };
 
 function isPreMapped(schema?: string): boolean {
   return !!schema && PRE_MAPPED_SCHEMAS.includes(schema);
@@ -165,15 +174,25 @@ function FileUpload({ onFileSelect, loading }: { onFileSelect: (file: File) => v
 
   return (
     <div
+      role="button"
+      tabIndex={loading ? -1 : 0}
+      aria-label="Choose a file to import (JSON, YAML or CSV), or drop one here"
+      aria-disabled={loading || undefined}
       onDragEnter={handleDrag}
       onDragLeave={handleDrag}
       onDragOver={handleDrag}
       onDrop={handleDrop}
       onClick={() => inputRef.current?.click()}
-      className={`relative flex h-64 w-full cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed transition-colors ${
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          inputRef.current?.click();
+        }
+      }}
+      className={`relative flex h-64 w-full cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed transition-colors ${FOCUS_RING} ${
         dragActive
           ? 'border-cyan-500 bg-cyan-500/[0.08]'
-          : 'border-[var(--control-edge-strong)] bg-well hover:bg-well-hover'
+          : 'border-[var(--input-edge)] bg-well hover:bg-well-hover'
       } ${loading ? 'pointer-events-none opacity-50' : ''}`}
     >
       <input
@@ -182,6 +201,8 @@ function FileUpload({ onFileSelect, loading }: { onFileSelect: (file: File) => v
         accept=".json,.yaml,.yml,.csv"
         onChange={handleChange}
         className="hidden"
+        tabIndex={-1}
+        aria-hidden="true"
       />
       
       {loading ? (
@@ -357,22 +378,32 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
     return ['', ...SUPPORTED_TYPES.map((supportedType) => supportedType.value)].includes(type);
   };
 
+  // Sort every row, then show the first 50: "Status" puts skipped rows first.
+  const [sort, setSort] = useState<SortState<RowSortKey>>(ROW_SORT_DEFAULT);
+  const sortValue: Record<RowSortKey, (row: ImportRow) => SortValue> = {
+    index: (row) => row.index,
+    name: (row) => getFieldValue(row, 'name') || `Monitor ${row.index + 1}`,
+    type: (row) => monitorTypeLabel(getMonitorType(row) || 'http'),
+    status: (row) => (isSupported(row) ? 1 : 0),
+  };
+  const sortedRows = sortRows(rows, sortValue[sort.key], sort.dir, (row) => row.index);
+
   return (
     <div className="glass-well overflow-hidden">
       <div className="overflow-x-auto">
         <table className="data-table">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Name</th>
-              <th>Type</th>
+              <SortableHeader label="#" sortKey="index" sort={sort} onSort={setSort} />
+              <SortableHeader label="Name" sortKey="name" sort={sort} onSort={setSort} />
+              <SortableHeader label="Type" sortKey="type" sort={sort} onSort={setSort} />
               <th>Target</th>
-              <th>Status</th>
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={setSort} title="Skipped first" />
               <th>Notes</th>
             </tr>
           </thead>
           <tbody>
-            {rows.slice(0, 50).map((row) => {
+            {sortedRows.slice(0, 50).map((row) => {
               const type = getMonitorType(row);
               const supported = isSupported(row);
               const target = getTarget(row, type);
@@ -475,21 +506,32 @@ function ResultsTable({ results, rows, configField }: { results: ImportRowResult
   // Results carry no config; the preview rows do, so a test call still
   // badges as CALL here.
   const configByIndex = new Map(rows.map((row) => [row.index, configField ? row.fields[configField] : undefined]));
+  const [sort, setSort] = useState<SortState<RowSortKey>>(ROW_SORT_DEFAULT);
+  const sorted = useMemo(() => {
+    const statusRank: Record<string, number> = { failed: 0, skipped: 1, success: 2 };
+    const value: Record<RowSortKey, (result: ImportRowResult) => SortValue> = {
+      index: (result) => result.index,
+      name: (result) => result.name,
+      type: (result) => monitorTypeLabel(result.type),
+      status: (result) => statusRank[result.status] ?? null,
+    };
+    return sortRows(results, value[sort.key], sort.dir, (result) => result.index);
+  }, [results, sort]);
   return (
     <div className="glass-well overflow-hidden">
       <div className="max-h-96 overflow-x-auto">
         <table className="data-table">
           <thead className="sticky top-0 z-10 [background:linear-gradient(var(--well),var(--well)),var(--glass-fill-strong)]">
             <tr>
-              <th>#</th>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Status</th>
+              <SortableHeader label="#" sortKey="index" sort={sort} onSort={setSort} />
+              <SortableHeader label="Name" sortKey="name" sort={sort} onSort={setSort} />
+              <SortableHeader label="Type" sortKey="type" sort={sort} onSort={setSort} />
+              <SortableHeader label="Status" sortKey="status" sort={sort} onSort={setSort} title="Failed first" />
               <th>Details</th>
             </tr>
           </thead>
           <tbody>
-            {results.map((result) => (
+            {sorted.map((result) => (
               <tr key={result.index}>
                 <td className="text-sm tabular-nums text-slate-400">{result.index + 1}</td>
                 <td className="max-w-[200px] truncate text-sm font-medium text-white">
@@ -642,7 +684,7 @@ export default function ImportPage() {
   };
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <Page width="wide">
       <PageHeader
         breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: 'Import' }]}
         title="Import monitors"
@@ -887,6 +929,6 @@ export default function ImportPage() {
           </div>
         )}
       </div>
-    </div>
+    </Page>
   );
 }

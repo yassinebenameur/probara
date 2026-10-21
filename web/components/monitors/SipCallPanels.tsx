@@ -311,7 +311,7 @@ function PanelCard({
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                 {panel.series.map((s) => (
                   <span key={s.key} className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.color }} aria-hidden="true" />
                     {s.name}
                   </span>
                 ))}

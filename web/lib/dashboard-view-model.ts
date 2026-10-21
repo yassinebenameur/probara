@@ -1,12 +1,14 @@
 import type {
   Alert,
   DashboardFailureEvent,
+  DashboardGroup,
+  DashboardGroupMember,
   DashboardOpsSummary,
   DashboardProblemMonitor,
 } from './types';
 import { STATUS_RANK, type MonitorDisplayStatus } from './monitor-utils';
-import { formatDurationBetween, formatLatency, formatRelativeTime, formatUptime, pluralize } from './format';
-import { formatMonitorListParams } from './monitor-list';
+import { formatDurationBetween, formatLatency, formatUptime, pluralize } from './format';
+import { formatMonitorListParams, parseMonitorListParams, type MonitorListParams } from './monitor-list';
 import { MONITOR_STATUS_LABEL, MONITOR_STATUS_TONE, StatusTone, uptimeTone } from './status-tones';
 
 export type OperationalTone = 'critical' | 'attention' | 'stable' | 'clean';
@@ -28,6 +30,10 @@ export type OperationalSummary = {
     /** Hover text for facts that do not fit the tile. */
     title?: string;
     tone?: OperationalTone;
+    /** Where the number leads; the tile becomes a link. */
+    href?: string;
+    /** Extra context shown only on very wide screens (3xl and up). */
+    wideOnly?: boolean;
   }>;
 };
 
@@ -41,7 +47,13 @@ export const DOWN_MONITORS_HREF = '/monitors?status=down';
  */
 export function downMonitorsHref(tags: readonly string[] = []): string {
   if (tags.length === 0) return DOWN_MONITORS_HREF;
-  return `/monitors?${formatMonitorListParams({ status: 'down', tags: [...tags], unroutedOnly: false, sort: 'status' })}`;
+  return monitorsListHref({ status: 'down', tags: [...tags] });
+}
+
+/** A /monitors deep link: the list's defaults plus `overrides`, written by formatMonitorListParams. */
+export function monitorsListHref(overrides: Partial<MonitorListParams>): string {
+  const query = formatMonitorListParams({ ...parseMonitorListParams(''), ...overrides });
+  return query ? `/monitors?${query}` : '/monitors';
 }
 /** Same target as OPEN_ALERTS_HREF in components/layout/FleetHealth.tsx (kept here so lib tests stay React-free). */
 export const OPEN_ALERTS_HREF = '/alerts?status=active';
@@ -53,14 +65,19 @@ export type ActivityTimelineItem = {
   /** The monitor's current state (Down, Degraded, Up) or an alert event (Alert fired…). */
   event: string;
   tone: StatusTone;
-  /** Secondary fact ("12 failed checks", "Alert fired 2 h ago"); empty when there is none. */
+  /**
+   * Secondary fact ("12 failed checks", "Alert fired"); empty when there is
+   * none. With `detailAt` the page appends that time, live ("Alert fired 2 min ago").
+   */
   detail: string;
+  /** Timestamp the detail ends with, rendered as a live relative time. */
+  detailAt?: string;
   /** Raw error text of the latest failed check (or open alert); undefined when there is none. */
   reason?: string;
   /** Drill-down for the row; undefined when the subject has no page. */
   href?: string;
+  /** When it happened; the page renders it as a live relative time. */
   occurredAt: string;
-  relativeTime: string;
 };
 
 // ─── Failure reason parsing ─────────────────────────────────────────────────
@@ -190,6 +207,7 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
   const suppressedAlerts = ops?.suppressed_alerts ?? 0;
   const pausedMonitors = ops?.paused_monitors ?? 0;
   const maintenanceMonitors = ops?.maintenance_monitors ?? 0;
+  const unroutedMonitors = ops?.unrouted_monitors ?? 0;
   const totalMonitors = input.totalMonitors ?? upMonitors + downMonitors + pausedMonitors + maintenanceMonitors;
   const activeMonitors = Math.max(0, totalMonitors - pausedMonitors - maintenanceMonitors);
   const degradedMonitors = input.degradedMonitors ?? 0;
@@ -298,6 +316,24 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
         value: String(activeAlerts),
         detail: alertSplit.join(', ') || (activeAlerts > 0 ? 'None acknowledged' : 'None active'),
         tone: activeAlerts > 0 ? 'critical' : 'clean',
+      },
+      // Wide screens have room for two facts that otherwise live in a banner
+      // (NotificationNudge) and a tooltip (the Down tile's split).
+      {
+        label: 'Unrouted',
+        value: String(unroutedMonitors),
+        detail: unroutedMonitors > 0 ? 'Alert no one' : 'Every monitor alerts someone',
+        tone: unroutedMonitors > 0 ? 'attention' : undefined,
+        href: unroutedMonitors > 0 ? monitorsListHref({ unroutedOnly: true, tags: [...(input.tags ?? [])] }) : undefined,
+        wideOnly: true,
+      },
+      {
+        label: 'Paused / maintenance',
+        value: String(pausedMonitors + maintenanceMonitors),
+        detail: pausedMonitors + maintenanceMonitors > 0
+          ? `${pausedMonitors} paused, ${maintenanceMonitors} in maintenance`
+          : 'All monitors active',
+        wideOnly: true,
       },
     ],
   };
@@ -414,7 +450,6 @@ export function buildActivityTimeline(input: BuildActivityTimelineInput): Activi
         reason: failure.error_message || undefined,
         href,
         occurredAt: failure.occurred_at,
-        relativeTime: formatRelativeTime(failure.occurred_at, now),
       });
       continue;
     }
@@ -432,14 +467,14 @@ export function buildActivityTimeline(input: BuildActivityTimelineInput): Activi
       event: status ? MONITOR_STATUS_LABEL[status] : 'Checks failing',
       tone: status ? MONITOR_STATUS_TONE[status] : 'danger',
       detail: alertInRange
-        ? `Alert ${alertInRange.event.verb} ${formatRelativeTime(alertInRange.event.at, now)}`
+        ? `Alert ${alertInRange.event.verb}`
         : failedCount > 0
           ? pluralize(failedCount, 'failed check')
           : '',
+      detailAt: alertInRange?.event.at,
       reason: failure.error_message || undefined,
       href,
       occurredAt,
-      relativeTime: formatRelativeTime(occurredAt, now),
     });
   }
 
@@ -456,9 +491,81 @@ export function buildActivityTimeline(input: BuildActivityTimelineInput): Activi
       reason: alert.status === 'resolved' ? undefined : alert.last_error || undefined,
       href: alert.monitor_id ? `/monitors/${alert.monitor_id}` : undefined,
       occurredAt: event.at,
-      relativeTime: formatRelativeTime(event.at, now),
     });
   }
 
   return items.sort((a, b) => time(b.occurredAt) - time(a.occurredAt));
+}
+
+// ─── Service groups ──────────────────────────────────────────────────────────
+
+/** Problem-list rows by monitor id: they carry the real state (current_state). */
+export type MonitorStates = ReadonlyMap<string, DashboardProblemMonitor>;
+
+type GroupMemberLike = Pick<DashboardGroupMember, 'monitor_id' | 'current_status'>;
+
+/**
+ * A group member's display status now. A member's current_status is its
+ * latest check in the range; a member on the problem list has its real state
+ * (current_state), which wins.
+ */
+export function groupMemberStatus(member: GroupMemberLike | null | undefined, states?: MonitorStates): MonitorDisplayStatus {
+  return problemMonitorStatus(member && (states?.get(member.monitor_id) ?? member));
+}
+
+export type GroupHealth = 'down' | 'degraded' | 'up' | 'unknown' | 'empty';
+
+/**
+ * A service group's health NOW: its worst member's current state (down,
+ * degraded, otherwise up), "unknown" when nothing has data and "empty" for a
+ * group without monitors. Failed checks earlier in the range never make a
+ * group amber by themselves — on 30d nearly every group has some, and its
+ * uptime figure (coloured by uptimeTone) already carries them.
+ *
+ * Read from the members, never from attention_count: the API returns the
+ * worst members first, and their state is what the tile should say.
+ */
+export function groupHealth(group: DashboardGroup, states?: MonitorStates): GroupHealth {
+  if (group.monitor_count === 0) return 'empty';
+  const statuses = groupMemberStatuses(group, states);
+  if (statuses.includes('down')) return 'down';
+  if (statuses.includes('degraded')) return 'degraded';
+  if (group.uptime == null && statuses.every((status) => status === 'unknown')) return 'unknown';
+  return 'up';
+}
+
+function groupMemberStatuses(group: DashboardGroup, states?: MonitorStates): MonitorDisplayStatus[] {
+  const members = group.worst_member ? [group.worst_member, ...group.members] : group.members;
+  const seen = new Set<string>();
+  const out: MonitorDisplayStatus[] = [];
+  for (const member of members) {
+    if (seen.has(member.monitor_id)) continue;
+    seen.add(member.monitor_id);
+    out.push(groupMemberStatus(member, states));
+  }
+  return out;
+}
+
+/** Members down or degraded now, from the member preview (the API's worst-first slice). */
+export function groupAttentionCount(group: DashboardGroup, states?: MonitorStates): number {
+  return groupMemberStatuses(group, states).filter((status) => status === 'down' || status === 'degraded').length;
+}
+
+const GROUP_HEALTH_RANK: Record<GroupHealth, number> = { down: 0, degraded: 1, up: 2, unknown: 3, empty: 4 };
+
+/**
+ * Worst first: current health (down, degraded, up, no data), then lower
+ * uptime, then name. "Ungrouped" (tag null) is not a service and goes last.
+ */
+export function sortServiceGroups(groups: readonly DashboardGroup[], states?: MonitorStates): DashboardGroup[] {
+  const health = new Map(groups.map((group) => [group, groupHealth(group, states)] as const));
+  return [...groups].sort((a, b) => {
+    if ((a.tag == null) !== (b.tag == null)) return a.tag == null ? 1 : -1;
+    const rank = GROUP_HEALTH_RANK[health.get(a)!] - GROUP_HEALTH_RANK[health.get(b)!];
+    if (rank !== 0) return rank;
+    const au = a.uptime ?? Infinity;
+    const bu = b.uptime ?? Infinity;
+    if (au !== bu) return au - bu;
+    return (a.tag ?? '').localeCompare(b.tag ?? '', undefined, { sensitivity: 'base', numeric: true });
+  });
 }

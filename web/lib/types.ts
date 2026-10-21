@@ -1258,7 +1258,9 @@ export interface DashboardGroup {
   monitor_count: number;
   /** Mean over members with data; null when no member has any. */
   uptime: number | null;
+  /** Members down or degraded NOW (current state), not failures earlier in the range. */
   attention_count: number;
+  /** First of members: down, then degraded, then lowest uptime; null when nothing needs attention. */
   worst_member: DashboardGroupMember | null;
   members: DashboardGroupMember[];
 }

@@ -134,12 +134,14 @@ export function SyntheticVariablesField({
             <input
               className="input col-span-5"
               placeholder="Variable name"
+              aria-label={`Variable ${idx + 1} name`}
               value={row.key}
               onChange={(e) => setRow(idx, { key: e.target.value })}
             />
             <input
               className="input col-span-6"
               placeholder="Variable value"
+              aria-label={`Variable ${idx + 1} value`}
               value={row.value}
               onChange={(e) => setRow(idx, { value: e.target.value })}
             />

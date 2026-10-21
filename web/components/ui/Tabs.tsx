@@ -1,7 +1,8 @@
 'use client';
 
 import { ReactNode, useEffect, useId, useState } from 'react';
-import { handleRovingKeyDown, SELECTED_SEGMENT } from './roving';
+import { FOCUS_RING } from './focus';
+import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from './roving';
 
 interface TabsProps<T extends string> {
   tabs: readonly { id: T; label: string; count?: number }[];
@@ -14,6 +15,11 @@ interface TabsProps<T extends string> {
    * the whole page). Wraps under the tabs on narrow screens.
    */
   trailing?: ReactNode;
+  /**
+   * Stable id prefix shared with the page's <TabPanel idBase=…>. When set,
+   * each tab gets aria-controls pointing at its panel.
+   */
+  idBase?: string;
 }
 
 // Tab ids for aria wiring: a panel can point back with
@@ -22,8 +28,13 @@ export function tabElementId(baseId: string, id: string): string {
   return `${baseId}-tab-${id}`;
 }
 
-export default function Tabs<T extends string>({ tabs, active, onChange, label, trailing }: TabsProps<T>) {
-  const baseId = useId();
+export function tabPanelId(baseId: string, id: string): string {
+  return `${baseId}-panel-${id}`;
+}
+
+export default function Tabs<T extends string>({ tabs, active, onChange, label, trailing, idBase }: TabsProps<T>) {
+  const generatedId = useId();
+  const baseId = idBase ?? generatedId;
   const ids = tabs.map((t) => t.id);
   const list = (
     <div
@@ -42,15 +53,22 @@ export default function Tabs<T extends string>({ tabs, active, onChange, label, 
             role="tab"
             data-roving-id={tab.id}
             aria-selected={selected}
+            aria-controls={idBase ? tabPanelId(idBase, tab.id) : undefined}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
-              selected ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium ${SEGMENT_ITEM} ${FOCUS_RING} ${
+              selected ? SELECTED_SEGMENT : 'text-slate-400 hover:bg-well-hover hover:text-slate-100'
             }`}
           >
             {tab.label}
             {typeof tab.count === 'number' && (
-              <span className="rounded-full bg-well-hover px-1.5 text-2xs tabular-nums text-slate-400">{tab.count}</span>
+              <span
+                className={`rounded-full bg-well-hover px-1.5 text-2xs tabular-nums ${
+                  selected ? 'text-slate-200' : 'text-slate-400'
+                }`}
+              >
+                {tab.count}
+              </span>
             )}
           </button>
         );
@@ -64,6 +82,33 @@ export default function Tabs<T extends string>({ tabs, active, onChange, label, 
     <div className="flex flex-wrap items-center justify-between gap-3">
       {list}
       {trailing ? <div className="flex items-center gap-2">{trailing}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * The content of one tab, tied to its tab for assistive tech. Pass the same
+ * `idBase` as the <Tabs idBase=…> above it; render only the active panel.
+ */
+export function TabPanel({
+  idBase,
+  id,
+  className = '',
+  children,
+}: {
+  idBase: string;
+  id: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      role="tabpanel"
+      id={tabPanelId(idBase, id)}
+      aria-labelledby={tabElementId(idBase, id)}
+      className={`rounded-2xl ${FOCUS_RING} ${className}`.trim()}
+    >
+      {children}
     </div>
   );
 }

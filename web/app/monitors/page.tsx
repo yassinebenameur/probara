@@ -1,17 +1,26 @@
 'use client';
 
 import PrometheusDetails from '@/components/monitors/PrometheusDetails';
-import { createContext, Suspense, useCallback, useContext, useState, useEffect, useMemo, useRef, type CSSProperties, type MouseEvent } from 'react';
+import { createPortal } from 'react-dom';
+import { createContext, Suspense, useCallback, useContext, useId, useState, useEffect, useMemo, useRef, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, Download, Upload, Search, Tag, ChevronDown, ChevronRight, Activity, ArrowUpDown, CheckSquare, FolderPlus, Move, Trash2, Bell, BellOff, Layers, X, Pencil, Copy, Pause, Play } from 'lucide-react';
+import { Plus, Download, Upload, Search, Tag, ChevronRight, Activity, FolderPlus, Move, Trash2, Bell, BellOff, Layers, X, Pencil, Copy, Pause, Play } from 'lucide-react';
 import RowMenu, { RowMenuItem, RowMenuSeparator, useCloseRowMenu } from '@/components/ui/RowMenu';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import SharedSelectCheckbox from '@/components/ui/SelectCheckbox';
+import Checkbox from '@/components/ui/Checkbox';
+import Page from '@/components/ui/Page';
+import SortableHeader from '@/components/ui/SortableHeader';
+import LiveStatus from '@/components/ui/LiveStatus';
+import { RelativeTime } from '@/components/ui/RelativeTime';
+import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
+import { useOptionalAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import FilterChip from '@/components/ui/FilterChip';
+import FilterPopover, { type FilterOption } from '@/components/ui/FilterPopover';
 import PageHeader from '@/components/ui/PageHeader';
 import SharedEmptyState from '@/components/ui/EmptyState';
 import TableSkeleton from '@/components/ui/TableSkeleton';
@@ -21,7 +30,9 @@ import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import CheckTrace from '@/components/monitors/CheckTrace';
-import TagPill from '@/components/monitors/TagPill';
+import TagPill, { getTagColor } from '@/components/monitors/TagPill';
+import { type LiveLoadOptions, useLiveRefresh } from '@/lib/useLiveRefresh';
+import { flashStyle, useRowFlash } from '@/lib/useRowFlash';
 import { Monitor, CheckResult, AgentMetrics, HTTPDisplayValue } from '@/lib/types';
 import {
   deleteMonitor,
@@ -36,13 +47,19 @@ import {
   snoozeMonitor,
 } from '@/lib/api';
 import {
+  DEFAULT_MONITOR_SORT,
   formatMonitorListParams,
   getAllMonitors,
+  MONITOR_SORT_DEFAULT_DIR,
+  MONITOR_SORT_KEYS,
   MONITOR_STATUS_FILTERS,
   MonitorListParams,
   MonitorListSort,
+  MonitorSortContext,
+  MonitorSortKey,
   MonitorStatusFilter,
   parseMonitorListParams,
+  sortMonitorList,
   sortMonitorsByName,
 } from '@/lib/monitor-list';
 import { getApiKey } from '@/lib/auth';
@@ -62,24 +79,17 @@ import {
   MonitorDisplayStatus,
   calculateLatencyStats,
   shortFailureReason,
-  sortBySeverity,
 } from '@/lib/monitor-utils';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
-import {
-  formatDateTime,
-  formatDateTimeFull,
-  formatLatency,
-  formatRelativeTime,
-  formatUptime,
-} from '@/lib/format';
+import { formatDateTime, formatLatency, formatUptime } from '@/lib/format';
 import {
   CHECK_RESULT_BAR,
   MONITOR_STATUS_DOT,
   MONITOR_STATUS_LABEL,
   MONITOR_STATUS_TONE,
+  TONE_TEXT,
 } from '@/lib/status-tones';
 
-const DEBUG_INGEST_URL = process.env.NEXT_PUBLIC_DEBUG_INGEST_URL;
 const NO_GROUP_VALUE = '__no_group__';
 
 // The list fetches this many recent results per monitor. The trace, the
@@ -124,14 +134,12 @@ function groupContainsGroup(
   return false;
 }
 
-function debugIngest(payload: Record<string, unknown>) {
-  if (!DEBUG_INGEST_URL) return;
-  fetch(DEBUG_INGEST_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-}
+// Live refresh: the monitor list is one request and polls every 30s. Results
+// are one request per monitor, so a background tick refetches only the
+// monitors that changed state, that an alert event named, or whose next
+// check is due, at most this many per tick (stalest first).
+const RESULTS_PER_TICK = 30;
+const RESULTS_CHUNK = 6;
 
 // ── Row layout ───────────────────────────────────────────────────────────
 //
@@ -142,9 +150,14 @@ function debugIngest(payload: Record<string, unknown>) {
 // is name + compact trace + menu (--row-lead-narrow). The chevron keeps its
 // slot at every width: it is the only way to reach members for Select mode,
 // and a group expanded at lg must stay collapsible when the preview opens
-// and the wide columns drop out. While the preview panel takes 344px of the width, the wide
-// columns start at xl with trace and success only (the panel has the
-// latency and the recent checks) and the full set returns at 2xl.
+// and the wide columns drop out. While the preview panel takes its width,
+// the wide columns start at xl with trace and success only (the panel has
+// the latency and the recent checks) and the full set returns at 2xl.
+//
+// The trace column is the trace's own fixed width (20 × 5px bars + gaps =
+// 79px, CheckTrace): extra width never stretches it. On very wide screens
+// (3xl list, 4xl with the preview) the target moves out of the name cell
+// into its own column, so the room goes to the name and the target.
 interface RowLayout {
   cols: string;
   header: string;
@@ -153,22 +166,37 @@ interface RowLayout {
   /** Latency and last-check columns. */
   full: string;
   narrow: string;
+  /** The target column (very wide screens only). */
+  target: string;
+  /** The target under the name, where there is no target column. */
+  targetInline: string;
 }
 
 const ROW_LAYOUTS: Record<'list' | 'panel', RowLayout> = {
   list: {
-    cols: 'grid grid-cols-[var(--row-lead-narrow)_minmax(0,1fr)_auto_32px] lg:grid-cols-[var(--row-lead)_minmax(0,1fr)_minmax(120px,200px)_56px_64px_80px_32px]',
+    cols:
+      'grid grid-cols-[var(--row-lead-narrow)_minmax(0,1fr)_auto_32px] ' +
+      'lg:grid-cols-[var(--row-lead)_minmax(0,1fr)_80px_64px_72px_88px_32px] ' +
+      '3xl:grid-cols-[var(--row-lead)_minmax(0,3fr)_minmax(0,2fr)_80px_72px_80px_96px_32px]',
     header: 'hidden lg:grid',
     wide: 'hidden lg:flex',
     full: 'hidden lg:flex',
     narrow: 'flex lg:hidden',
+    target: 'hidden 3xl:flex',
+    targetInline: '3xl:hidden',
   },
   panel: {
-    cols: 'grid grid-cols-[var(--row-lead-narrow)_minmax(0,1fr)_auto_32px] xl:grid-cols-[var(--row-lead)_minmax(0,1fr)_minmax(100px,160px)_56px_32px] 2xl:grid-cols-[var(--row-lead)_minmax(0,1fr)_minmax(120px,200px)_56px_64px_80px_32px]',
+    cols:
+      'grid grid-cols-[var(--row-lead-narrow)_minmax(0,1fr)_auto_32px] ' +
+      'xl:grid-cols-[var(--row-lead)_minmax(0,1fr)_80px_64px_32px] ' +
+      '2xl:grid-cols-[var(--row-lead)_minmax(0,1fr)_80px_64px_72px_88px_32px] ' +
+      '4xl:grid-cols-[var(--row-lead)_minmax(0,3fr)_minmax(0,2fr)_80px_72px_80px_96px_32px]',
     header: 'hidden xl:grid',
     wide: 'hidden xl:flex',
     full: 'hidden 2xl:flex',
     narrow: 'flex xl:hidden',
+    target: 'hidden 4xl:flex',
+    targetInline: '4xl:hidden',
   },
 };
 
@@ -178,25 +206,51 @@ function useRowLayout() {
   return useContext(RowLayoutContext);
 }
 
-/** Lead column width: [checkbox] [chevron slot] dot, 8px apart. */
-function leadWidth(selectionMode: boolean, hasGroups: boolean): number {
-  return 8 + (selectionMode ? 16 + 8 : 0) + (hasGroups ? 24 + 8 : 0);
+/**
+ * Lead column width: [checkbox] [chevron slot] dot, 8px apart. The checkbox
+ * slot is reserved whenever rows are selectable (it reveals on hover), so
+ * starting a selection never shifts the row.
+ */
+function leadWidth(selectable: boolean, hasGroups: boolean): number {
+  return 8 + (selectable ? 16 + 8 : 0) + (hasGroups ? 24 + 8 : 0);
 }
 
-function leadStyle(selectionMode: boolean, hasGroups: boolean): CSSProperties {
+function leadStyle(selectable: boolean, hasGroups: boolean): CSSProperties {
   return {
-    '--row-lead': `${leadWidth(selectionMode, hasGroups)}px`,
-    '--row-lead-narrow': `${leadWidth(selectionMode, hasGroups)}px`,
+    '--row-lead': `${leadWidth(selectable, hasGroups)}px`,
+    '--row-lead-narrow': `${leadWidth(selectable, hasGroups)}px`,
   } as CSSProperties;
 }
 
-// The previewed row carries an accent edge, checked rows a light accent
-// tint. Keyboard focus lands on the row's name link and rings the whole row.
+// Rows are selectable only for writers: every bulk action is a write.
+const SelectableContext = createContext(false);
+
+// Fills step up: hover (well) < previewed (well-hover) < checked
+// (well-strong), so hovering a row never looks like checking it. Selection is
+// never orange: orange is for actions. Keyboard focus lands on the row's name
+// link and rings the whole row in the focus colour.
 function rowStateClass(isSelected: boolean, isChecked: boolean) {
-  const focus = 'has-[.row-link:focus-visible]:shadow-[inset_0_0_0_2px_rgba(var(--accent-rgb),0.55)]';
-  if (isSelected) return `bg-well-hover shadow-[inset_2px_0_0_0_var(--accent)] ${focus}`;
-  if (isChecked) return `bg-cyan-500/[0.06] ${focus}`;
-  return `hover:bg-well ${focus}`;
+  const focus = 'has-[.row-link:focus-visible]:shadow-[inset_0_0_0_2px_var(--focus)]';
+  if (isChecked) return `bg-well-strong ${focus}`;
+  if (isSelected) return `bg-well-hover ${focus}`;
+  return `hover:bg-well active:bg-well-hover ${focus}`;
+}
+
+// Rows whose status changed since the last refresh flash once (useRowFlash);
+// the list provides the class per monitor id.
+const RowFlashContext = createContext<(id: string) => string>(() => '');
+
+// Arrow keys move between the rows' name links (each row is one link in
+// the tab order, plus its copy and ⋮ controls).
+function handleRowArrowKeys(event: KeyboardEvent<HTMLElement>) {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  const current = event.target as HTMLElement;
+  if (!current.classList.contains('row-link')) return;
+  const links = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('.row-link'));
+  const next = links[links.indexOf(current) + (event.key === 'ArrowDown' ? 1 : -1)];
+  if (!next) return;
+  event.preventDefault();
+  next.focus();
 }
 
 // The name is a real link (focusable, opens in a new tab with a modifier),
@@ -219,7 +273,14 @@ function StatusDot({ status, name }: { status: MonitorDisplayStatus; name?: stri
   const label = name ? `${name}: ${MONITOR_STATUS_LABEL[status]}` : MONITOR_STATUS_LABEL[status];
   const fill =
     status === 'paused' ? 'ring-[1.5px] ring-inset ring-slate-400' : MONITOR_STATUS_DOT[status];
-  return <span role="img" aria-label={label} title={label} className={`h-2 w-2 flex-shrink-0 rounded-full ${fill}`} />;
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={`h-2 w-2 flex-shrink-0 rounded-full transition-colors duration-slow ${fill}`}
+    />
+  );
 }
 
 /** Paused and maintenance are states the operator chose; say so on the row. */
@@ -259,15 +320,28 @@ function TargetLine({ monitor }: { monitor: Monitor }) {
     <>
       <span className="min-w-0 truncate font-mono text-xs text-slate-500 md:hidden">{target}</span>
       <span className="hidden min-w-0 md:flex">
+        {/* Out of the tab order: copy is also on the preview and detail
+            pages, and a row should cost one Tab stop, not three. */}
         <CopyableTarget
           value={target}
           label={monitorTargetLabel(monitor.type)}
           size="sm"
           revealOnHover
+          focusable={false}
           textClassName="text-slate-500"
         />
       </span>
     </>
+  );
+}
+
+/** The target in its own column (very wide layouts). Groups have none. */
+function TargetCell({ monitor }: { monitor?: Monitor }) {
+  const layout = useRowLayout();
+  return (
+    <div role="cell" className={`${layout.target} min-w-0 items-center`}>
+      {monitor && <TargetLine monitor={monitor} />}
+    </div>
   );
 }
 
@@ -286,8 +360,18 @@ function TagList({ tags, max }: { tags?: string[]; max: number }) {
 /**
  * Trace, success share, latency and last check: the wide columns, plus the
  * compact cell (short trace + success) that replaces them on narrow screens.
+ * A paused monitor's figures are history, so they are muted rather than
+ * shown as live health (a green trace weeks old reads as "up").
  */
-function RowMetrics({ results, showLatency = true }: { results: CheckResult[]; showLatency?: boolean }) {
+function RowMetrics({
+  results,
+  showLatency = true,
+  paused = false,
+}: {
+  results: CheckResult[];
+  showLatency?: boolean;
+  paused?: boolean;
+}) {
   const layout = useRowLayout();
   const operational = getOperationalResults(results);
   const passed = operational.filter((r) => r.status === 'success').length;
@@ -299,24 +383,25 @@ function RowMetrics({ results, showLatency = true }: { results: CheckResult[]; s
 
   return (
     <>
-      <div className={`${layout.narrow} flex-col items-end gap-1`}>
-        <CheckTrace results={results} slots={10} size="sm" />
-        <span className="text-2xs tabular-nums text-slate-400" title={successTitle}>{success}</span>
+      <div role="cell" className={`${layout.narrow} flex-col items-end gap-1`}>
+        <CheckTrace results={results} slots={10} size="sm" muted={paused} />
+        <span className={`text-2xs tabular-nums ${paused ? 'text-slate-500' : 'text-slate-400'}`} title={successTitle}>{success}</span>
       </div>
-      <div className={`${layout.wide} min-w-0 justify-end`}>
-        <CheckTrace results={results} slots={RECENT_CHECKS} className="w-full" />
-      </div>
-      <div className={`${layout.wide} justify-end text-xs tabular-nums text-slate-300`} title={successTitle}>
-        {success}
-      </div>
-      <div className={`${layout.full} justify-end text-xs tabular-nums text-slate-400`}>
-        {showLatency && latency.samples > 0 ? formatLatency(latency.median) : '—'}
+      <div role="cell" className={`${layout.wide} min-w-0 justify-end`}>
+        <CheckTrace results={results} slots={RECENT_CHECKS} muted={paused} className="flex-none" />
       </div>
       <div
-        className={`${layout.full} justify-end whitespace-nowrap text-xs tabular-nums text-slate-500`}
-        title={latest ? formatDateTimeFull(latest.created_at) : undefined}
+        role="cell"
+        className={`${layout.wide} justify-end text-xs tabular-nums ${paused ? 'text-slate-500' : 'text-slate-300'}`}
+        title={successTitle}
       >
-        {latest ? formatRelativeTime(latest.created_at) : 'Never'}
+        {success}
+      </div>
+      <div role="cell" className={`${layout.full} justify-end text-xs tabular-nums text-slate-400`}>
+        {showLatency && latency.samples > 0 ? formatLatency(latency.median) : '—'}
+      </div>
+      <div role="cell" className={`${layout.full} justify-end whitespace-nowrap text-xs tabular-nums text-slate-500`}>
+        <RelativeTime value={latest?.created_at} fallback="Never" />
       </div>
     </>
   );
@@ -381,7 +466,9 @@ function DisplayValueChips({ values }: { values: HTTPDisplayValue[] }) {
           className="inline-flex min-w-0 max-w-[120px] flex-shrink-0 items-center sm:max-w-[180px] gap-1 rounded-md bg-well-hover px-1.5 py-0.5 font-mono text-2xs leading-none text-slate-300"
           title={`${v.path} = ${v.value}`}
         >
-          {displayValueLabel(v) && <span className="shrink-0 text-slate-500">{displayValueLabel(v)}</span>}
+          {/* slate-400, not the caption step: the chip's well-hover sits on a
+              hovered or checked row, a stacked fill slate-500 can't clear. */}
+          {displayValueLabel(v) && <span className="shrink-0 text-slate-400">{displayValueLabel(v)}</span>}
           <span className="truncate">{v.value}</span>
         </span>
       ))}
@@ -389,19 +476,36 @@ function DisplayValueChips({ values }: { values: HTTPDisplayValue[] }) {
   );
 }
 
+// The row's selection box is always in the DOM (its slot is reserved, so
+// nothing shifts) but only shows on row hover or keyboard focus — or always
+// once a selection exists (`pinned`), and always on touch screens, which
+// have no hover to reveal it.
+const REVEAL_ON_HOVER =
+  'opacity-0 transition-opacity duration-fast ease-standard focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100';
+
 function SelectCheckbox({
   checked,
   onChange,
-  visible = true,
+  pinned,
   label,
 }: {
   checked: boolean;
   onChange: () => void;
-  visible?: boolean;
+  pinned: boolean;
   label?: string;
 }) {
-  if (!visible) return null;
-  return <SharedSelectCheckbox checked={checked} onChange={onChange} label={label} />;
+  const selectable = useContext(SelectableContext);
+  if (!selectable) return null;
+  return (
+    <SharedSelectCheckbox
+      checked={checked}
+      onChange={onChange}
+      label={label}
+      // mr-auto: the lead cell is right-aligned (dot last), so the box keeps
+      // the column's left edge whether or not a chevron sits between.
+      className={`mr-auto ${pinned || checked ? 'opacity-100' : REVEAL_ON_HOVER}`}
+    />
+  );
 }
 
 function SnoozeOptions({ onSnooze }: { onSnooze: (minutes: number) => void }) {
@@ -476,7 +580,10 @@ function MonitorActionsMenu({
 // The ⋮ cell. Hover-revealed on pointer layouts, always shown on touch.
 function RowActions(props: Parameters<typeof MonitorActionsMenu>[0]) {
   return (
-    <div className="flex justify-end opacity-100 transition-opacity focus-within:opacity-100 md:opacity-0 md:focus-within:opacity-100 md:group-hover:opacity-100 md:group-has-[.row-link:focus-visible]:opacity-100">
+    <div
+      role="cell"
+      className="flex justify-end opacity-100 transition-opacity focus-within:opacity-100 md:opacity-0 md:focus-within:opacity-100 md:group-hover:opacity-100 md:group-has-[.row-link:focus-visible]:opacity-100"
+    >
       <MonitorActionsMenu {...props} />
     </div>
   );
@@ -507,6 +614,7 @@ function MonitorRow({
   selectionMode: boolean;
 }) {
   const layout = useRowLayout();
+  const flashClass = useContext(RowFlashContext);
   const status = getEffectiveMonitorStatus(monitor, results);
   const latestResult = results[0];
   const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
@@ -514,22 +622,24 @@ function MonitorRow({
 
   return (
     <div
+      role="row"
       onClick={onClick}
-      className={`group ${layout.cols} cursor-pointer items-center gap-x-3 px-4 py-2 transition-colors ${rowStateClass(isSelected, isChecked)}`}
+      style={flashStyle(MONITOR_STATUS_TONE[status])}
+      className={`group ${layout.cols} cursor-pointer items-center gap-x-3 px-4 py-1.5 transition-colors ${rowStateClass(isSelected, isChecked)} ${flashClass(monitor.id)}`}
     >
       {/* Lead: [checkbox] [chevron slot] dot */}
-      <div className="flex items-center justify-end gap-2">
+      <div role="cell" className="flex items-center justify-end gap-2">
         <SelectCheckbox
           checked={isChecked}
           onChange={onToggleSelect}
-          visible={selectionMode}
+          pinned={selectionMode}
           label={`Select ${monitor.name}`}
         />
         <StatusDot status={status} />
       </div>
 
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+      <div role="cell" className="min-w-0">
+        <div className="flex h-5 min-w-0 items-center gap-2 overflow-hidden">
           <Link
             href={`/monitors/${monitor.id}`}
             onClick={handleRowLinkClick}
@@ -541,14 +651,18 @@ function MonitorRow({
           <DisplayValueChips values={displayValues} />
           <TagList tags={monitor.tags} max={3} />
         </div>
-        <div className="mt-1 flex min-w-0 items-center gap-2">
-          <TypeBadge type={monitor.type} config={monitor.config} />
-          <TargetLine monitor={monitor} />
+        <div className="mt-1 flex h-4 min-w-0 items-center gap-2">
+          <TypeBadge type={monitor.type} config={monitor.config} size="sm" />
+          <span className={`flex min-w-0 items-center ${layout.targetInline}`}>
+            <TargetLine monitor={monitor} />
+          </span>
           {monitor.type === 'agent' && agentMetrics && <AgentMetricsMini metrics={agentMetrics} />}
         </div>
       </div>
 
-      <RowMetrics results={results} />
+      <TargetCell monitor={monitor} />
+
+      <RowMetrics results={results} paused={status === 'paused'} />
 
       <RowActions
         monitor={monitor}
@@ -613,6 +727,8 @@ function GroupCard({
   groupHasMatch?: (groupId: string) => boolean;
 }) {
   const layout = useRowLayout();
+  const flashClass = useContext(RowFlashContext);
+  const membersId = useId();
   const [expanded, setExpanded] = useState(false); // Collapsed by default
 
   // Expand automatically while a filter matches members inside this group,
@@ -636,11 +752,12 @@ function GroupCard({
   // Calculate aggregate stats from members
   const memberStatuses = members.map((m) => getEffectiveMonitorStatus(m, memberResults[m.id] || []));
   const healthyCount = memberStatuses.filter((s) => s === 'up').length;
-  const downCount = memberStatuses.filter((s) => s === 'down' || s === 'degraded').length;
-  const healthTone = downCount > 0
-    ? 'text-rose-300'
-    : healthyCount === members.length && members.length > 0
-      ? 'text-emerald-300'
+  // The summary takes the group's own rolled-up status tone, so it always
+  // agrees with the group's dot (a group can roll a down member up to
+  // degraded); no members or no status yet stays neutral.
+  const healthTone =
+    members.length > 0 && (status === 'down' || status === 'degraded' || status === 'up')
+      ? TONE_TEXT[MONITOR_STATUS_TONE[status]]
       : 'text-slate-500';
 
   // While filtering, only show the members that match (fall back to all if
@@ -656,36 +773,39 @@ function GroupCard({
   const hiddenMemberCount = members.length - visibleMembers.length;
 
   return (
-    <div>
+    <div role="none">
       {/* Group Header */}
       <div
+        role="row"
         onClick={onClick}
-        className={`group ${layout.cols} cursor-pointer items-center gap-x-3 px-4 py-2 transition-colors ${rowStateClass(isSelected, isChecked)}`}
+        style={flashStyle(MONITOR_STATUS_TONE[status])}
+        className={`group ${layout.cols} cursor-pointer items-center gap-x-3 px-4 py-1.5 transition-colors ${rowStateClass(isSelected, isChecked)} ${flashClass(monitor.id)}`}
       >
-        <div className="flex items-center justify-end gap-2">
+        <div role="cell" className="flex items-center justify-end gap-2">
           <SelectCheckbox
             checked={isChecked}
             onChange={onToggleSelect}
-            visible={selectionMode}
+            pinned={selectionMode}
             label={`Select ${monitor.name}`}
           />
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
             aria-expanded={expanded}
+            aria-controls={expanded ? membersId : undefined}
             aria-label={`${expanded ? 'Collapse' : 'Expand'} ${monitor.name}`}
-            className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-well-hover hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50`}
+            className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-well-hover hover:text-white active:bg-control-hover ${FOCUS_RING}`}
           >
             <ChevronRight
-              className={`h-4 w-4 transition-transform ${expanded ? 'rotate-90' : ''}`}
+              className={`h-4 w-4 transition-transform duration-base ease-standard ${expanded ? 'rotate-90' : ''}`}
               strokeWidth={1.75}
             />
           </button>
           <StatusDot status={status} />
         </div>
 
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+        <div role="cell" className="min-w-0">
+          <div className="flex h-5 min-w-0 items-center gap-2 overflow-hidden">
             <Link
               href={`/monitors/${monitor.id}`}
               onClick={handleRowLinkClick}
@@ -696,8 +816,8 @@ function GroupCard({
             <StatePill monitor={monitor} status={status} />
             <TagList tags={monitor.tags} max={2} />
           </div>
-          <div className="mt-1 flex min-w-0 items-center gap-2">
-            <TypeBadge type="group" />
+          <div className="mt-1 flex h-4 min-w-0 items-center gap-2">
+            <TypeBadge type="group" size="sm" />
             <span className={`whitespace-nowrap text-xs tabular-nums ${healthTone}`}>
               {healthyCount}/{members.length} healthy
             </span>
@@ -711,8 +831,10 @@ function GroupCard({
           </div>
         </div>
 
+        <TargetCell />
+
         {/* A group's own checks are its roll-up; latency means nothing there. */}
-        <RowMetrics results={results} showLatency={false} />
+        <RowMetrics results={results} showLatency={false} paused={status === 'paused'} />
 
         <RowActions
           monitor={monitor}
@@ -725,19 +847,25 @@ function GroupCard({
 
       {/* Expanded Children */}
       {expanded && visibleMembers.length > 0 && (
-        <div className="dashboard-scroll max-h-[60vh] overflow-y-auto overscroll-contain border-t border-divider bg-well pl-6 ![scrollbar-gutter:auto]">
+        <div
+          id={membersId}
+          role="none"
+          className="dashboard-scroll max-h-[60vh] animate-fade-in overflow-y-auto overscroll-contain border-t border-divider bg-well pl-6 ![scrollbar-gutter:auto]"
+        >
           {hiddenMemberCount > 0 && (
-            <p className="px-4 pb-1 pt-2.5 text-xs text-slate-500">
-              Showing {visibleMembers.length} matching of {members.length} members
-            </p>
+            <div role="row">
+              <p role="cell" className="px-4 pb-1 pt-2.5 text-xs text-slate-500">
+                Showing {visibleMembers.length} matching of {members.length} members
+              </p>
+            </div>
           )}
-          <div className="divide-y divide-divider">
+          <div role="none" className="divide-y divide-divider">
           {visibleMembers.map((member) => {
             const memberKey = `${monitor.id}:${member.id}`;
             if (member.type === 'group') {
               const cycleDetected = nextVisitedGroupIDs.has(member.id);
               return (
-                <div key={memberKey}>
+                <div key={memberKey} role="none">
                   {cycleDetected ? (
                     <>
                       <MonitorRow
@@ -752,9 +880,11 @@ function GroupCard({
                         onToggleSelect={() => onToggleMonitorSelection(member.id)}
                         selectionMode={selectionMode}
                       />
-                      <p className="px-4 pb-2.5 text-xs text-rose-300">
-                        Cycle detected in group nesting. Expansion stopped.
-                      </p>
+                      <div role="row">
+                        <p role="cell" className="px-4 pb-2.5 text-xs text-rose-300">
+                          Cycle detected in group nesting. Expansion stopped.
+                        </p>
+                      </div>
                     </>
                   ) : (
                     <GroupCard
@@ -1041,7 +1171,7 @@ function DetailPanel({
                     <button
                       key={member.id}
                       onClick={() => onSelectMember?.(member.id)}
-                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
+                      className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well active:bg-well-hover ${FOCUS_RING_INSET}`}
                     >
                       <StatusDot status={memberStatuses[i]} />
                       <span className="min-w-0 flex-1 truncate text-xs text-slate-300">{member.name}</span>
@@ -1173,7 +1303,11 @@ function DetailPanel({
                   decoding="async"
                 />
                 <div className="mt-2 text-2xs text-slate-500">
-                  {latestSyntheticBrowserResult ? formatRelativeTime(latestSyntheticBrowserResult.created_at) : 'Latest run'}
+                  {latestSyntheticBrowserResult ? (
+                    <RelativeTime value={latestSyntheticBrowserResult.created_at} />
+                  ) : (
+                    'Latest run'
+                  )}
                 </div>
               </div>
             ) : (
@@ -1198,9 +1332,7 @@ function DetailPanel({
                       <span
                         className={`h-2 w-2 flex-shrink-0 rounded-full ${platform ? 'bg-slate-500' : CHECK_RESULT_BAR[r.status]}`}
                       />
-                      <span className="whitespace-nowrap text-slate-500" title={formatDateTimeFull(r.created_at)}>
-                        {formatRelativeTime(r.created_at)}
-                      </span>
+                      <RelativeTime value={r.created_at} className="whitespace-nowrap text-slate-500" />
                     </div>
                     {reason ? (
                       <span className="min-w-0 truncate text-rose-300" title={r.error_message}>{reason}</span>
@@ -1227,27 +1359,53 @@ function DetailPanel({
   );
 }
 
-// Column labels on the rows' grid. Only shown where the wide columns are.
-function sortToggleLabel(sort: SortMode): string {
-  return `Sorted by ${sort === 'status' ? 'status, then name' : 'name'}. Switch to ${sort === 'status' ? 'name' : 'status'}`;
+// Sort choices for the narrow layouts, where the column header is hidden
+// (phones, or the preview panel taking the width): one select covering
+// every column and direction.
+const SORT_LABEL: Record<MonitorSortKey, string> = {
+  status: 'Status',
+  name: 'Name',
+  success: 'Success',
+  latency: 'Latency',
+  last_check: 'Last check',
+};
+
+const SORT_DIR_LABEL: Record<MonitorSortKey, { asc: string; desc: string }> = {
+  status: { asc: 'worst first', desc: 'best first' },
+  name: { asc: 'A to Z', desc: 'Z to A' },
+  success: { asc: 'lowest first', desc: 'highest first' },
+  latency: { asc: 'fastest first', desc: 'slowest first' },
+  last_check: { asc: 'stalest first', desc: 'most recent first' },
+};
+
+function sortDescription(sort: SortMode): string {
+  return `${SORT_LABEL[sort.key]}, ${SORT_DIR_LABEL[sort.key][sort.dir]}`;
 }
 
-// The sort switch where the column header is hidden (narrow layouts, or the
-// preview panel taking the width): the header holds it everywhere else.
-function NarrowSortChip({ sort, onSortChange }: { sort: SortMode; onSortChange: (sort: SortMode) => void }) {
+function NarrowSortSelect({ sort, onSortChange }: { sort: SortMode; onSortChange: (sort: SortMode) => void }) {
   const layout = useRowLayout();
   return (
-    <FilterChip
-      // `narrow` is "flex …:hidden"; the chip keeps its own inline-flex.
-      className={layout.narrow.replace(/^flex /, '')}
-      icon={<ArrowUpDown strokeWidth={1.75} />}
-      onClick={() => onSortChange(sort === 'status' ? 'name' : 'status')}
-      aria-pressed={undefined}
-      aria-label={sortToggleLabel(sort)}
-      title={sortToggleLabel(sort)}
-    >
-      {sort === 'status' ? 'Status, then name' : 'Name'}
-    </FilterChip>
+    <label className={`${layout.narrow} flex-shrink-0 items-center`}>
+      <span className="sr-only">Sort monitors by</span>
+      <select
+        value={`${sort.key}:${sort.dir}`}
+        onChange={(e) => {
+          const [key, dir] = e.target.value.split(':') as [MonitorSortKey, 'asc' | 'desc'];
+          onSortChange({ key, dir });
+        }}
+        className="input input-sm h-8 !w-auto py-0"
+      >
+        {MONITOR_SORT_KEYS.flatMap((key) => {
+          const first = MONITOR_SORT_DEFAULT_DIR[key];
+          const second: SortMode['dir'] = first === 'asc' ? 'desc' : 'asc';
+          return [first, second].map((dir) => (
+            <option key={`${key}:${dir}`} value={`${key}:${dir}`}>
+              {SORT_LABEL[key]}: {SORT_DIR_LABEL[key][dir]}
+            </option>
+          ));
+        })}
+      </select>
+    </label>
   );
 }
 
@@ -1264,28 +1422,79 @@ function MonitorListUrlSync({ onParams }: { onParams: (params: MonitorListParams
   return null;
 }
 
-function ListHeader({ sort, onSortChange }: { sort: SortMode; onSortChange: (sort: SortMode) => void }) {
+// Column headers on the rows' grid, shown where the wide columns are. The
+// status dot has no column of its own wide enough for a label, so the first
+// header cell spans the lead and name columns and holds two column headers,
+// Status then Name (each data row has a lead cell and a name cell, so the
+// header and row cells still pair up for assistive technology).
+function ListHeader({
+  sort,
+  onSortChange,
+  ranking,
+  selection,
+}: {
+  sort: SortMode;
+  onSortChange: (sort: SortMode) => void;
+  /** Status sort requested but results still loading: the order is by name for now. */
+  ranking: boolean;
+  /**
+   * The "select all shown" box: revealed while the pointer is over the list
+   * (the table is `group/list`), pinned once a selection exists.
+   */
+  selection?: { checked: boolean; indeterminate: boolean; pinned: boolean; onChange: () => void };
+}) {
   const layout = useRowLayout();
+  const header = (key: MonitorSortKey, label: string, align: 'left' | 'right' = 'right', title?: string, className = '') => (
+    <SortableHeader
+      as="div"
+      label={label}
+      sortKey={key}
+      sort={sort}
+      onSort={onSortChange}
+      defaultDir={MONITOR_SORT_DEFAULT_DIR}
+      align={align}
+      title={title}
+      className={className}
+    />
+  );
   return (
-    <div className={`${layout.header} ${layout.cols} items-center gap-x-3 border-b border-divider px-4 py-2 text-xs font-medium text-slate-500`}>
-      <span />
-      <span className="min-w-0">
-        <button
-          type="button"
-          onClick={() => onSortChange(sort === 'status' ? 'name' : 'status')}
-          aria-label={sortToggleLabel(sort)}
-          title={sortToggleLabel(sort)}
-          className="-mx-1 inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded px-1 transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
-        >
-          {sort === 'status' ? 'Status, then name' : 'Name'}
-          <ArrowUpDown className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
-        </button>
-      </span>
-      <span className="whitespace-nowrap text-right" title="One bar per check, newest on the right">Last {RECENT_CHECKS} checks</span>
-      <span className="text-right" title={`Share of the last ${RECENT_CHECKS} checks that passed`}>Success</span>
-      <span className={`${layout.full} justify-end`} title={`Median of the successful checks among the last ${RECENT_CHECKS}`}>Latency</span>
-      <span className={`${layout.full} justify-end whitespace-nowrap`}>Last check</span>
-      <span />
+    <div
+      role="row"
+      className={`${layout.header} ${layout.cols} h-10 items-center gap-x-3 border-b border-divider px-4 text-xs font-medium text-slate-500`}
+    >
+      {/* Lead cell over the rows' checkbox slot; sort labels start at the
+          name column, so "Name" sits over the names. */}
+      <div role="columnheader" className="flex items-center">
+        {selection ? (
+          <Checkbox
+            checked={selection.checked}
+            indeterminate={selection.indeterminate}
+            onChange={selection.onChange}
+            aria-label={selection.checked ? 'Deselect all shown monitors' : 'Select all shown monitors'}
+            className={
+              selection.pinned || selection.checked
+                ? 'opacity-100'
+                : 'opacity-0 transition-opacity duration-fast ease-standard focus-within:opacity-100 group-hover/list:opacity-100'
+            }
+          />
+        ) : (
+          <span className="sr-only">Status</span>
+        )}
+      </div>
+      <div role="none" className="flex min-w-0 items-center gap-5">
+        {header('name', 'Name', 'left')}
+        {header('status', ranking ? 'Status (ranking…)' : 'Status', 'left', 'Worst first: down, degraded, no data, up, maintenance, paused. A group ranks as its worst member.')}
+      </div>
+      <div role="columnheader" className={`${layout.target} min-w-0`}>Target</div>
+      <div role="columnheader" className="whitespace-nowrap text-right" title="One bar per check, newest on the right">
+        Last {RECENT_CHECKS} checks
+      </div>
+      {header('success', 'Success', 'right', `Share of the last ${RECENT_CHECKS} checks that passed`)}
+      {header('latency', 'Latency', 'right', `Median of the successful checks among the last ${RECENT_CHECKS}`, `${layout.full} justify-end`)}
+      {header('last_check', 'Last check', 'right', 'Stalest first, then most recent first', `${layout.full} justify-end whitespace-nowrap`)}
+      <div role="columnheader">
+        <span className="sr-only">Actions</span>
+      </div>
     </div>
   );
 }
@@ -1297,13 +1506,11 @@ export default function MonitorsPage() {
   const [error, setError] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
-  const [showTypeFilter, setShowTypeFilter] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   // Deep-linked from the dashboard's unrouted warning (?routing=unrouted).
   const [unroutedOnly, setUnroutedOnly] = useState(false);
-  const [sortMode, setSortMode] = useState<SortMode>('status');
+  const [sortMode, setSortMode] = useState<SortMode>(DEFAULT_MONITOR_SORT);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
-  const [showTagFilter, setShowTagFilter] = useState(false);
 
   // Filters live in the URL so other pages can deep-link them (the
   // dashboard's ?status=down, ?tag=…, ?routing=unrouted) and a reload keeps
@@ -1314,13 +1521,14 @@ export default function MonitorsPage() {
   const applyUrlParams = useCallback((params: MonitorListParams) => {
     setStatusFilter(params.status);
     setUnroutedOnly(params.unroutedOnly);
-    setSortMode(params.sort);
+    setSortMode((current) =>
+      current.key === params.sort.key && current.dir === params.sort.dir ? current : params.sort
+    );
     setSelectedTags((current) =>
       current.size === params.tags.length && params.tags.every((tag) => current.has(tag))
         ? current
         : new Set(params.tags)
     );
-    if (params.tags.length > 0) setShowTagFilter(true);
     setUrlRead(true);
   }, []);
 
@@ -1345,8 +1553,10 @@ export default function MonitorsPage() {
   const [pendingDelete, setPendingDelete] = useState<Monitor | null>(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMonitorIds, setSelectedMonitorIds] = useState<Set<string>>(new Set());
+  // No separate select mode: a selection exists as soon as one box is ticked
+  // (boxes reveal on row hover), and the floating action bar follows it.
+  const selectionMode = selectedMonitorIds.size > 0;
   const [groupNameInput, setGroupNameInput] = useState('');
   const [targetGroupId, setTargetGroupId] = useState('');
   const [exporting, setExporting] = useState(false);
@@ -1356,8 +1566,10 @@ export default function MonitorsPage() {
   // Below lg the detail panel is not rendered, so selecting a row would do
   // nothing visible — open the monitor's page instead.
   const selectMonitor = (id: string) => {
-    if (selectionMode) {
-      setSelectedMonitorId(id);
+    // On touch screens (no hover), a tap toggles the row while a selection
+    // exists, the usual mobile multi-select; with a pointer the boxes do it.
+    if (selectionMode && typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches) {
+      toggleMonitorSelection(id);
       return;
     }
     if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 1024px)').matches) {
@@ -1368,165 +1580,166 @@ export default function MonitorsPage() {
     setSelectedMonitorId((current) => (current === id ? null : id));
   };
 
+  // ── Loading and live refresh ──
+  //
+  // The first load (and a manual refresh) fetches the list, then every
+  // monitor's recent results and every group's members in chunks, rendering
+  // as they land. Background ticks (useLiveRefresh: 30s while visible, alert
+  // events, stream reconnects) refetch the list and only the results that
+  // can have changed. A failed refresh keeps the rows on screen.
+  const monitorsRef = useRef<Monitor[]>([]);
+  const resultsRef = useRef<Record<string, CheckResult[]>>({});
+  const fetchedAtRef = useRef(new Map<string, number>());
+  const streamIdsRef = useRef(new Set<string>());
+  const fullPassDone = useRef(false);
   useEffect(() => {
-    loadMonitors();
+    resultsRef.current = checkResultsMap;
+  }, [checkResultsMap]);
+
+  const loadAllResults = useCallback(async (list: Monitor[]) => {
+    const resultsMap: Record<string, CheckResult[]> = {};
+    const membersMap: Record<string, Monitor[]> = {};
+    for (let i = 0; i < list.length; i += RESULTS_CHUNK) {
+      const chunk = list.slice(i, i + RESULTS_CHUNK);
+      await Promise.all(
+        chunk.map(async (monitor) => {
+          try {
+            const results = await getMonitorResults(monitor.id, { limit: RECENT_CHECKS });
+            resultsMap[monitor.id] = results.results || [];
+            fetchedAtRef.current.set(monitor.id, Date.now());
+          } catch {
+            resultsMap[monitor.id] = resultsRef.current[monitor.id] ?? [];
+          }
+          if (monitor.type === 'group') {
+            try {
+              membersMap[monitor.id] = sortMonitorsByName(await getGroupMembers(monitor.id));
+            } catch {
+              membersMap[monitor.id] = [];
+            }
+          }
+        })
+      );
+      // Update after each chunk so rows fill in progressively. Merge over the
+      // previous maps so a refetch never blanks rows already on screen; the
+      // exact maps replace them once all chunks land.
+      setCheckResultsMap((prev) => ({ ...prev, ...resultsMap }));
+      setGroupMembersMap((prev) => ({ ...prev, ...membersMap }));
+    }
+    setCheckResultsMap({ ...resultsMap });
+    setGroupMembersMap({ ...membersMap });
   }, []);
 
-  const loadMonitors = async () => {
-    // #region agent log
-    const loadStartTime = Date.now();
-    debugIngest({
-      location: 'page.tsx:loadMonitors:start',
-      message: 'loadMonitors started (progressive)',
-      data: {},
-      timestamp: Date.now(),
-      sessionId: 'debug-session',
-      runId: 'progressive',
-      hypothesisId: 'A',
-    });
-    // #endregion
-    try {
-      setLoading(true);
-      setError('');
-      // #region agent log
-      const getMonitorsStart = Date.now();
-      // #endregion
-      const monitorsList = await getAllMonitors();
-      // #region agent log
-      debugIngest({
-        location: 'page.tsx:loadMonitors:getMonitors',
-        message: 'getMonitors API call completed',
-        data: {
-          durationMs: Date.now() - getMonitorsStart,
-          monitorCount: monitorsList.length,
-        },
-        timestamp: Date.now(),
-        sessionId: 'debug-session',
-        runId: 'progressive',
-        hypothesisId: 'A',
-      });
-      // #endregion
-      setMonitors(monitorsList);
-
-      // FIX: Progressive loading - show UI immediately, load results in background
-      // Stop showing loading spinner now - monitors list is ready
-      setLoading(false);
-
-      // Fetch check results and group members progressively in chunks
-      const resultsMap: Record<string, CheckResult[]> = {};
-      const membersMap: Record<string, Monitor[]> = {};
-
-      // #region agent log
-      const resultsStartTime = Date.now();
-      let apiCallCount = 0;
-      // #endregion
-
-      // FIX: Process in chunks of 6 (browser connection limit) to avoid queuing
-      const CHUNK_SIZE = 6;
-      for (let i = 0; i < monitorsList.length; i += CHUNK_SIZE) {
-        const chunk = monitorsList.slice(i, i + CHUNK_SIZE);
-        await Promise.all(
-          chunk.map(async (monitor) => {
-            try {
-              // #region agent log
-              apiCallCount++;
-              const resultStart = Date.now();
-              // #endregion
-              const results = await getMonitorResults(monitor.id, { limit: RECENT_CHECKS });
-              // #region agent log
-              debugIngest({
-                location: 'page.tsx:loadMonitors:getMonitorResults',
-                message: 'getMonitorResults for single monitor',
-                data: {
-                  monitorId: monitor.id,
-                  durationMs: Date.now() - resultStart,
-                  resultsCount: results?.results?.length || 0,
-                },
-                timestamp: Date.now(),
-                sessionId: 'debug-session',
-                runId: 'progressive',
-                hypothesisId: 'A,B',
-              });
-              // #endregion
-              resultsMap[monitor.id] = results.results || [];
-
-              if (monitor.type === 'group') {
-                try {
-                  // #region agent log
-                  apiCallCount++;
-                  const membersStart = Date.now();
-                  // #endregion
-                  const members = sortMonitorsByName(await getGroupMembers(monitor.id));
-                  // #region agent log
-                  debugIngest({
-                    location: 'page.tsx:loadMonitors:getGroupMembers',
-                    message: 'getGroupMembers call',
-                    data: {
-                      groupId: monitor.id,
-                      durationMs: Date.now() - membersStart,
-                      memberCount: members?.length || 0,
-                    },
-                    timestamp: Date.now(),
-                    sessionId: 'debug-session',
-                    runId: 'progressive',
-                    hypothesisId: 'C',
-                  });
-                  // #endregion
-                  membersMap[monitor.id] = members;
-                  members.forEach((m) => {
-                    if (!resultsMap[m.id]) {
-                      resultsMap[m.id] = [];
-                    }
-                  });
-                } catch { membersMap[monitor.id] = []; }
-              }
-            } catch {
-              resultsMap[monitor.id] = [];
-            }
-          })
-        );
-        // Update state after each chunk so UI updates progressively. Merge
-        // over the previous maps so a refetch never blanks rows that are
-        // already on screen; the exact maps replace them once all chunks land.
-        setCheckResultsMap((prev) => ({ ...prev, ...resultsMap }));
-        setGroupMembersMap((prev) => ({ ...prev, ...membersMap }));
+  // A background tick: results for monitors that changed state, that an
+  // alert event named, or new to the list first, then those whose next
+  // check is due since they were last fetched (stalest first), capped.
+  const refreshChangedResults = useCallback(async (previous: Monitor[], list: Monitor[]) => {
+    const before = new Map(previous.map((m) => [m.id, m]));
+    const now = Date.now();
+    const priority = new Set<string>(streamIdsRef.current);
+    streamIdsRef.current.clear();
+    list.forEach((m) => {
+      const old = before.get(m.id);
+      if (
+        !old ||
+        old.current_state !== m.current_state ||
+        old.enabled !== m.enabled ||
+        old.in_maintenance !== m.in_maintenance
+      ) {
+        priority.add(m.id);
       }
-      setCheckResultsMap({ ...resultsMap });
-      setGroupMembersMap({ ...membersMap });
-      setResultsReady(true);
-
-      // #region agent log
-      debugIngest({
-        location: 'page.tsx:loadMonitors:allResultsFetched',
-        message: 'All results and members fetched (progressive)',
-        data: {
-          totalApiCalls: apiCallCount,
-          totalResultsFetchDurationMs: Date.now() - resultsStartTime,
-        },
-        timestamp: Date.now(),
-        sessionId: 'debug-session',
-        runId: 'progressive',
-        hypothesisId: 'A,D',
-      });
-      // #endregion
-    } catch (err: any) {
-      setError(err.message || 'Failed to load monitors');
-      setMonitors([]);
-      setLoading(false);
-      setResultsReady(true);
-    }
-    // #region agent log
-    debugIngest({
-      location: 'page.tsx:loadMonitors:end',
-      message: 'loadMonitors completed (progressive)',
-      data: { totalDurationMs: Date.now() - loadStartTime },
-      timestamp: Date.now(),
-      sessionId: 'debug-session',
-      runId: 'progressive',
-      hypothesisId: 'A',
     });
-    // #endregion
-  };
+    const due = list
+      .filter((m) => m.enabled && !priority.has(m.id))
+      .map((m) => {
+        const intervalMs = Math.max(m.interval_seconds || 60, 10) * 1000;
+        const since = now - (fetchedAtRef.current.get(m.id) ?? 0);
+        return { id: m.id, overdue: since / intervalMs };
+      })
+      .filter((m) => m.overdue >= 1)
+      .sort((a, b) => b.overdue - a.overdue)
+      .map((m) => m.id);
+    const ids = [...Array.from(priority).filter((id) => list.some((m) => m.id === id)), ...due].slice(
+      0,
+      RESULTS_PER_TICK
+    );
+    if (ids.length === 0) return;
+
+    const byId = new Map(list.map((m) => [m.id, m]));
+    const updates: Record<string, CheckResult[]> = {};
+    const memberUpdates: Record<string, Monitor[]> = {};
+    for (let i = 0; i < ids.length; i += RESULTS_CHUNK) {
+      await Promise.all(
+        ids.slice(i, i + RESULTS_CHUNK).map(async (id) => {
+          try {
+            const results = await getMonitorResults(id, { limit: RECENT_CHECKS });
+            updates[id] = results.results || [];
+            fetchedAtRef.current.set(id, Date.now());
+          } catch {
+            // Keep what is on screen; the next tick tries again.
+          }
+          // A group that just appeared needs its members too.
+          if (byId.get(id)?.type === 'group' && !before.has(id)) {
+            try {
+              memberUpdates[id] = sortMonitorsByName(await getGroupMembers(id));
+            } catch {
+              memberUpdates[id] = [];
+            }
+          }
+        })
+      );
+    }
+    if (Object.keys(updates).length > 0) setCheckResultsMap((prev) => ({ ...prev, ...updates }));
+    if (Object.keys(memberUpdates).length > 0) setGroupMembersMap((prev) => ({ ...prev, ...memberUpdates }));
+  }, []);
+
+  const loadMonitors = useCallback(
+    async ({ silent }: LiveLoadOptions) => {
+      try {
+        if (!silent) setError('');
+        const list = await getAllMonitors();
+        const previous = monitorsRef.current;
+        monitorsRef.current = list;
+        setMonitors(list);
+        // The list is on screen; results fill in behind it.
+        setLoading(false);
+        if (!silent || !fullPassDone.current) {
+          await loadAllResults(list);
+          fullPassDone.current = true;
+        } else {
+          await refreshChangedResults(previous, list);
+        }
+        setError('');
+        setResultsReady(true);
+        return true;
+      } catch (err) {
+        // Keep the rows already on screen. A background failure only shows
+        // in the live status; a requested load also says why.
+        if (!silent || monitorsRef.current.length === 0) {
+          setError(err instanceof Error && err.message ? err.message : 'Failed to load monitors');
+        }
+        setLoading(false);
+        setResultsReady(true);
+        return false;
+      }
+    },
+    [loadAllResults, refreshChangedResults]
+  );
+
+  // Alert events name the monitor whose results just moved; the stream
+  // reload that useLiveRefresh debounces then refetches exactly those.
+  const alertStream = useOptionalAlertEvents();
+  const subscribeAlerts = alertStream?.subscribe;
+  useEffect(() => {
+    if (!subscribeAlerts) return;
+    return subscribeAlerts((event) => {
+      if (event.alert.monitor_id) streamIdsRef.current.add(event.alert.monitor_id);
+    });
+  }, [subscribeAlerts]);
+
+  const live = useLiveRefresh(loadMonitors, {
+    streamFilter: (event) => Boolean(event.alert.monitor_id),
+  });
+  const reloadAll = live.refresh;
 
   const handleExport = async () => {
     try {
@@ -1584,7 +1797,12 @@ export default function MonitorsPage() {
         ] as const);
         return Object.fromEntries(nextEntries);
       });
-      showToast(updated.enabled ? 'Monitor resumed' : 'Monitor paused', 'success');
+      showToast({
+        message: `${updated.name} ${updated.enabled ? 'resumed' : 'paused'}`,
+        type: 'success',
+        group: `toggle-${updated.id}`,
+        action: { label: 'Undo', onClick: () => void handleToggleEnabled(updated) },
+      });
     } catch (err: any) {
       showToast(err.message || 'Failed to update monitor', 'error');
     }
@@ -1608,21 +1826,46 @@ export default function MonitorsPage() {
     }
   };
 
+  // Shift-click extends from the last toggled row to this one, over the
+  // top-level rows in their shown order (members inside an expanded group
+  // toggle singly). The change event carries no modifier, so the shift state
+  // is tracked from the pointer/key event that precedes it.
+  const shiftHeldRef = useRef(false);
+  const selectionAnchorRef = useRef<string | null>(null);
+  const shownOrderRef = useRef<string[]>([]);
+  useEffect(() => {
+    const track = (e: PointerEvent | globalThis.KeyboardEvent) => {
+      shiftHeldRef.current = e.shiftKey;
+    };
+    window.addEventListener('pointerdown', track, true);
+    window.addEventListener('keydown', track, true);
+    window.addEventListener('keyup', track, true);
+    return () => {
+      window.removeEventListener('pointerdown', track, true);
+      window.removeEventListener('keydown', track, true);
+      window.removeEventListener('keyup', track, true);
+    };
+  }, []);
+
   const toggleMonitorSelection = (id: string) => {
+    const anchor = selectionAnchorRef.current;
+    const order = shownOrderRef.current;
+    const from = anchor ? order.indexOf(anchor) : -1;
+    const to = order.indexOf(id);
+    const range = shiftHeldRef.current && from >= 0 && to >= 0 && from !== to;
+    selectionAnchorRef.current = id;
     setSelectedMonitorIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      const select = !prev.has(id);
+      const ids = range ? order.slice(Math.min(from, to), Math.max(from, to) + 1) : [id];
+      ids.forEach((rowId) => (select ? next.add(rowId) : next.delete(rowId)));
       return next;
     });
   };
 
   const clearSelection = () => {
     setSelectedMonitorIds(new Set());
-    setSelectionMode(false);
+    selectionAnchorRef.current = null;
     setGroupNameInput('');
     setTargetGroupId('');
   };
@@ -1636,7 +1879,7 @@ export default function MonitorsPage() {
         monitor.tags.forEach((tag) => tagSet.add(tag));
       }
     });
-    return Array.from(tagSet).sort();
+    return Array.from(tagSet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }));
   }, [monitors, selectedTags]);
 
   // Types present in the workspace, with counts, most common first.
@@ -1659,32 +1902,6 @@ export default function MonitorsPage() {
     [monitors],
   );
 
-  const toggleType = (type: string) => {
-    const newSelected = new Set(selectedTypes);
-    if (newSelected.has(type)) {
-      newSelected.delete(type);
-    } else {
-      newSelected.add(type);
-    }
-    setSelectedTypes(newSelected);
-  };
-
-  // Toggle tag selection
-  const toggleTag = (tag: string) => {
-    const newSelected = new Set(selectedTags);
-    if (newSelected.has(tag)) {
-      newSelected.delete(tag);
-    } else {
-      newSelected.add(tag);
-    }
-    setSelectedTags(newSelected);
-  };
-
-  // Clear all tag filters
-  const clearTagFilters = () => {
-    setSelectedTags(new Set());
-  };
-
   // Collect all monitor IDs that are members of a group
   const groupMemberIds = useMemo(() => {
     const memberIds = new Set<string>();
@@ -1698,25 +1915,47 @@ export default function MonitorsPage() {
 
   // Search covers what the row shows: name, target (URL or host) and tags.
   const query = searchTerm.trim().toLowerCase();
-  const monitorMatchesFilters = (monitor: Monitor) => {
+  // `ignore` leaves one filter out: a filter popover counts its options
+  // against everything else that is set.
+  const monitorMatchesFilters = (monitor: Monitor, ignore?: 'type' | 'tags') => {
     const matchesSearch =
       !query ||
       monitor.name.toLowerCase().includes(query) ||
       Boolean(monitorTarget(monitor)?.toLowerCase().includes(query)) ||
       Boolean(monitor.tags?.some((tag) => tag.toLowerCase().includes(query)));
-    const matchesType = selectedTypes.size === 0 || selectedTypes.has(monitor.type);
+    const matchesType = ignore === 'type' || selectedTypes.size === 0 || selectedTypes.has(monitor.type);
     const status = statusOf(monitor);
     const matchesStatus = statusFilter === 'all' ||
       (statusFilter === 'up' && status === 'up') ||
       (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
       (statusFilter === 'paused' && status === 'paused') ||
       (statusFilter === 'maintenance' && status === 'maintenance');
-    const matchesTags = selectedTags.size === 0 ||
+    const matchesTags = ignore === 'tags' || selectedTags.size === 0 ||
       Boolean(monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
     const matchesRouting =
       !unroutedOnly || (monitor.enabled && monitor.alert_routing?.reachable === false);
     return matchesSearch && matchesType && matchesStatus && matchesTags && matchesRouting;
   };
+
+  // Options for the Type and Tags filter popovers. Each count is the
+  // monitors that option would add under the other filters (Datadog,
+  // GitHub), so "global 11" never leads to an empty list; the order stays
+  // the workspace order so rows do not move while ticking. A URL-selected
+  // tag no monitor carries shows 0.
+  const typeOptions: FilterOption[] = (() => {
+    const counts = new Map<string, number>();
+    monitors.forEach((monitor) => {
+      if (monitorMatchesFilters(monitor, 'type')) counts.set(monitor.type, (counts.get(monitor.type) || 0) + 1);
+    });
+    return typeCounts.map(([type]) => ({ value: type, label: monitorTypeLabel(type), count: counts.get(type) ?? 0 }));
+  })();
+  const tagOptions: FilterOption[] = (() => {
+    const counts = new Map<string, number>();
+    monitors.forEach((monitor) => {
+      if (monitorMatchesFilters(monitor, 'tags')) monitor.tags?.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1));
+    });
+    return allTags.map((tag) => ({ value: tag, label: tag, count: counts.get(tag) ?? 0, dotClassName: getTagColor(tag).dot }));
+  })();
 
   // A group also matches when any of its (nested) members match, so searching
   // for a member surfaces the group it lives in.
@@ -1742,23 +1981,44 @@ export default function MonitorsPage() {
     setUnroutedOnly(false);
   };
 
-  // Default order is severity then name, so what is broken comes first;
-  // monitors arrive name-sorted, so the name order is a stable no-op.
+  // One sort over groups and monitors together (lib/monitor-list.ts): a
+  // group ranks by its worst member under the status sort and is never
+  // pinned. Until the first results pass lands every monitor reads "no
+  // data", so a results-based sort keeps name order (monitors arrive
+  // name-sorted) and re-ranks once instead of jumping with every chunk.
+  const sortContext: MonitorSortContext = {
+    statusOf,
+    resultsOf: (monitor) => checkResultsMap[monitor.id] || [],
+    membersOf: (groupId) => groupMembersMap[groupId] || [],
+  };
+  const ranking = !resultsReady && sortMode.key !== 'name';
   const orderMonitors = (items: Monitor[]) =>
-    sortMode === 'status' && resultsReady ? sortBySeverity(items, statusOf, (m) => m.name) : sortMonitorsByName(items);
+    ranking ? sortMonitorsByName(items) : sortMonitorList(items, sortMode, sortContext);
 
-  // Filter monitors (exclude monitors that are members of a group - they only show under their group),
-  // then show groups ahead of ungrouped monitors.
+  // Filter monitors (members of a group only show under their group), then
+  // sort the whole filtered set.
   const topLevel = monitors.filter((monitor) => {
     if (groupMemberIds.has(monitor.id)) return false;
     if (monitorMatchesFilters(monitor)) return true;
     return monitor.type === 'group' && groupHasMatchingMember(monitor.id);
   });
-  const filteredMonitors = [
-    ...orderMonitors(topLevel.filter((m) => m.type === 'group')),
-    ...orderMonitors(topLevel.filter((m) => m.type !== 'group')),
-  ];
+  const filteredMonitors = orderMonitors(topLevel);
+  shownOrderRef.current = filteredMonitors.map((m) => m.id);
   const hasGroups = filteredMonitors.some((m) => m.type === 'group');
+
+  // Escape drops the selection (unless a field or dialog has the key).
+  useEffect(() => {
+    if (!selectionMode) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const target = e.target as HTMLElement | null;
+      // A text field or dialog keeps its own Escape; the row boxes do not.
+      if (target?.closest('input:not([type="checkbox"]), textarea, select, [role="dialog"]')) return;
+      clearSelection();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectionMode]);
 
   const selectedMonitor = monitors.find((m) => m.id === selectedMonitorId) || null;
   const selectedMonitors = monitors.filter((m) => selectedMonitorIds.has(m.id));
@@ -1766,6 +2026,7 @@ export default function MonitorsPage() {
     .filter((m) => m.type === 'group' && !selectedMonitorIds.has(m.id))
     .sort((a, b) => a.name.localeCompare(b.name));
   const allFilteredSelected = filteredMonitors.length > 0 && filteredMonitors.every((m) => selectedMonitorIds.has(m.id));
+  const someFilteredSelected = !allFilteredSelected && filteredMonitors.some((m) => selectedMonitorIds.has(m.id));
   const canDeleteSelected = selectedMonitorIds.size > 0;
   const canCreateGroup = selectedMonitorIds.size > 0 && groupNameInput.trim().length > 0;
   const canMoveToGroup = targetGroupId.length > 0 && selectedMonitors.length > 0;
@@ -1832,7 +2093,7 @@ export default function MonitorsPage() {
       });
       setGroupNameInput('');
       setSelectedMonitorIds(new Set());
-      await loadMonitors();
+      await reloadAll();
       showToast('Group created', 'success');
     } catch (err: any) {
       showToast(err.message || 'Failed to create group', 'error');
@@ -1923,7 +2184,7 @@ export default function MonitorsPage() {
       }
 
       setSelectedMonitorIds(new Set());
-      await loadMonitors();
+      await reloadAll();
       showToast(isNoGroupDestination
           ? `Removed ${selectedMonitors.length} item(s) from all groups`
           : `Moved ${selectedMonitors.length} item(s) to ${targetGroup?.name}`, 'success');
@@ -1948,22 +2209,79 @@ export default function MonitorsPage() {
   );
 
   const isEmptyWorkspace = !loading && !error && monitors.length === 0;
+
+  // Rows whose status moved since the last refresh flash once. The baseline
+  // is the first complete results pass, so loading never flashes.
+  const statusRows = useMemo(
+    () =>
+      resultsReady
+        ? monitors.map((m) => ({ id: m.id, name: m.name, status: getEffectiveMonitorStatus(m, checkResultsMap[m.id] || []) }))
+        : null,
+    [monitors, checkResultsMap, resultsReady]
+  );
+  const rowFlash = useRowFlash(
+    statusRows,
+    (row) => row.id,
+    (row) => row.status
+  );
+
+  // Screen-reader news, politely: status changes the flash shows, and the
+  // shown count after a filter or sort change (debounced while typing).
+  const [statusNews, setStatusNews] = useState('');
+  const announced = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = Array.from(rowFlash.flashing).filter((id) => !announced.current.has(id));
+    announced.current = new Set(rowFlash.flashing);
+    if (fresh.length === 0 || !statusRows) return;
+    const byId = new Map(statusRows.map((row) => [row.id, row]));
+    const parts = fresh
+      .map((id) => byId.get(id))
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      .map((row) => `${row.name} is now ${MONITOR_STATUS_LABEL[row.status].toLowerCase()}`);
+    if (parts.length > 0) setStatusNews(parts.length > 3 ? `${parts.length} monitors changed status` : parts.join('. '));
+  }, [rowFlash.flashing, statusRows]);
+
+  const shownCount = filteredMonitors.length;
+  const [listNews, setListNews] = useState('');
+  const sortKeyDir = `${sortMode.key}:${sortMode.dir}`;
+  useEffect(() => {
+    if (!resultsReady) return;
+    const timer = window.setTimeout(() => {
+      setListNews(`${shownCount} ${shownCount === 1 ? 'row' : 'rows'} shown, sorted by ${sortDescription(sortMode)}`);
+    }, 600);
+    return () => window.clearTimeout(timer);
+    // sortMode is read through its key:dir string.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownCount, sortKeyDir, resultsReady, searchTerm, statusFilter, selectedTypes, selectedTags, unroutedOnly]);
+
   const rowLayout = ROW_LAYOUTS[selectedMonitor ? 'panel' : 'list'];
-  const listStyle = leadStyle(selectionMode, hasGroups);
+  const listStyle = leadStyle(canWrite, hasGroups);
   // On phones the chip rows scroll sideways instead of wrapping into a wall.
   const scrollRow =
     '-mx-4 flex flex-nowrap items-center gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] sm:-mx-6 sm:px-6 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0';
 
   return (
-    <div className="space-y-6">
+    <Page width="data" className={canWrite && selectionMode ? 'pb-20' : undefined}>
       <Suspense fallback={null}>
         <MonitorListUrlSync onParams={applyUrlParams} />
       </Suspense>
+      <p role="status" className="sr-only">{listNews}</p>
+      <p role="status" className="sr-only">{statusNews}</p>
       {/* Header */}
       <PageHeader
         title="Monitors"
         action={
           <div className="flex items-center gap-2">
+            {!isEmptyWorkspace && (
+              <LiveStatus
+                updatedAt={live.updatedAt}
+                refreshing={live.refreshing}
+                failed={live.failed && monitors.length > 0}
+                onRefresh={() => void reloadAll()}
+                refreshLabel="Refresh monitors"
+                className="mr-1 hidden md:inline-flex"
+              />
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -2004,7 +2322,10 @@ export default function MonitorsPage() {
       {!isEmptyWorkspace && (
       <div className="space-y-3">
         <div className="flex flex-col gap-2.5 lg:flex-row lg:flex-wrap lg:items-center lg:gap-3">
-          <div className="relative w-full lg:w-64">
+          {/* Grows to 16rem but gives width back (down to 9rem) before the
+              row wraps, so setting a Type/Tags filter (its chip gains a
+              value and a ×) does not push the list down at laptop widths. */}
+          <div className="relative w-full lg:w-auto lg:min-w-0 lg:max-w-64 lg:flex-[1_1_9rem]">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
             <input
               type="search"
@@ -2029,42 +2350,27 @@ export default function MonitorsPage() {
             ))}
           </div>
 
-          {/* Wraps onto its own line as a unit when the row is too narrow. */}
-          <div className={`${scrollRow} lg:min-w-max lg:flex-1 lg:flex-nowrap`}>
-            {/* Type Filter Toggle */}
-            <FilterChip
-              selected={selectedTypes.size > 0}
-              count={selectedTypes.size > 0 ? selectedTypes.size : undefined}
+          {/* A selected Type/Tags chip shows a short value or "Tags ⓝ", so its
+              width stays bounded; the search field above absorbs it. */}
+          <div className={`${scrollRow} lg:min-w-max lg:flex-none lg:flex-nowrap`}>
+            <FilterPopover
+              label="Type"
+              noun="type"
               icon={<Layers strokeWidth={1.75} />}
-              onClick={() => setShowTypeFilter(!showTypeFilter)}
-              aria-expanded={showTypeFilter}
-            >
-              <span className="inline-flex items-center gap-1">
-                Type
-                <ChevronDown
-                  className={`h-3 w-3 transition-transform ${showTypeFilter ? 'rotate-180' : ''}`}
-                  strokeWidth={1.75}
-                />
-              </span>
-            </FilterChip>
+              options={typeOptions}
+              selected={selectedTypes}
+              onChange={setSelectedTypes}
+            />
 
-            {/* Tag Filter Toggle */}
             {allTags.length > 0 && (
-              <FilterChip
-                selected={selectedTags.size > 0}
-                count={selectedTags.size > 0 ? selectedTags.size : undefined}
+              <FilterPopover
+                label="Tags"
+                noun="tag"
                 icon={<Tag strokeWidth={1.75} />}
-                onClick={() => setShowTagFilter(!showTagFilter)}
-                aria-expanded={showTagFilter}
-              >
-                <span className="inline-flex items-center gap-1">
-                  Tags
-                  <ChevronDown
-                    className={`h-3 w-3 transition-transform ${showTagFilter ? 'rotate-180' : ''}`}
-                    strokeWidth={1.75}
-                  />
-                </span>
-              </FilterChip>
+                options={tagOptions}
+                selected={selectedTags}
+                onChange={setSelectedTags}
+              />
             )}
 
             {(unroutedCount > 0 || unroutedOnly) && (
@@ -2081,72 +2387,11 @@ export default function MonitorsPage() {
 
             {filteredMonitors.length > 0 && (
               <RowLayoutContext.Provider value={rowLayout}>
-                <NarrowSortChip sort={sortMode} onSortChange={setSortMode} />
+                <NarrowSortSelect sort={sortMode} onSortChange={setSortMode} />
               </RowLayoutContext.Provider>
-            )}
-
-            {!selectionMode && filteredMonitors.length > 0 && (
-              <FilterChip
-                className="lg:ml-auto"
-                icon={<CheckSquare strokeWidth={1.75} />}
-                onClick={() => setSelectionMode(true)}
-              >
-                Select
-              </FilterChip>
             )}
           </div>
         </div>
-
-        {/* Type Filter Dropdown */}
-        {showTypeFilter && typeCounts.length > 0 && (
-          <div className="glass p-4">
-            <div className="mb-3 flex h-7 items-center justify-between">
-              <span className="text-ui font-medium text-slate-300">Filter by type</span>
-              {selectedTypes.size > 0 && (
-                <Button variant="subtle" size="xs" onClick={() => setSelectedTypes(new Set())}>
-                  Clear types
-                </Button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {typeCounts.map(([type, count]) => (
-                <FilterChip
-                  key={type}
-                  selected={selectedTypes.has(type)}
-                  count={count}
-                  onClick={() => toggleType(type)}
-                >
-                  {monitorTypeLabel(type)}
-                </FilterChip>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Tag Filter Dropdown */}
-        {showTagFilter && allTags.length > 0 && (
-          <div className="glass p-4">
-            <div className="mb-3 flex h-7 items-center justify-between">
-              <span className="text-ui font-medium text-slate-300">Filter by tags</span>
-              {selectedTags.size > 0 && (
-                <Button variant="subtle" size="xs" onClick={clearTagFilters}>
-                  Clear tags
-                </Button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {allTags.map((tag) => (
-                <TagPill
-                  key={tag}
-                  tag={tag}
-                  size="sm"
-                  selected={selectedTags.has(tag)}
-                  onClick={() => toggleTag(tag)}
-                />
-              ))}
-            </div>
-          </div>
-        )}
       </div>
       )}
 
@@ -2154,7 +2399,11 @@ export default function MonitorsPage() {
       {error && (
         <Callout
           tone="danger"
-          action={<Button variant="danger" size="xs" onClick={loadMonitors}>Retry</Button>}
+          action={
+            <Button variant="danger" size="xs" onClick={() => void reloadAll()} loading={live.loading}>
+              Retry
+            </Button>
+          }
         >
           {error}
         </Callout>
@@ -2179,119 +2428,16 @@ export default function MonitorsPage() {
         )
       ) : (
         <RowLayoutContext.Provider value={rowLayout}>
-        <div className={`grid gap-6 ${selectedMonitor ? 'lg:grid-cols-[minmax(0,1fr)_320px]' : ''}`}>
+        <RowFlashContext.Provider value={rowFlash.flashClass}>
+        <div
+          className={`grid gap-6 ${
+            selectedMonitor
+              ? 'lg:grid-cols-[minmax(0,1fr)_320px] 3xl:grid-cols-[minmax(0,1fr)_400px] 4xl:grid-cols-[minmax(0,1fr)_480px]'
+              : ''
+          }`}
+        >
           {/* Monitor List */}
           <div className="glass min-w-0 self-start overflow-hidden" style={listStyle}>
-            {/* Bulk actions bar (selection mode is entered from the filter row) */}
-            {selectionMode && filteredMonitors.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-3">
-                {/* Selection mode toggle */}
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  icon={<X strokeWidth={1.75} />}
-                  onClick={() => {
-                    if (selectionMode) {
-                      clearSelection();
-                    } else {
-                      setSelectionMode(true);
-                    }
-                  }}
-                >
-                  {selectionMode ? 'Exit select' : 'Select'}
-                </Button>
-
-                {/* Selection actions - only show when in selection mode */}
-                {selectionMode && (
-                  <>
-                    <Button variant="ghost" size="xs" onClick={toggleSelectAllFiltered}>
-                      {allFilteredSelected ? 'Deselect all' : 'Select all'}
-                    </Button>
-
-                    {selectedMonitorIds.size > 0 && (
-                      <>
-                        <span className="px-1 text-xs font-medium tabular-nums text-slate-300">
-                          {selectedMonitorIds.size} selected
-                        </span>
-
-                        <div className="h-4 w-px bg-divider" />
-
-                        {/* Group creation */}
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="text"
-                            placeholder="New group name…"
-                            aria-label="New group name"
-                            value={groupNameInput}
-                            onChange={(e) => setGroupNameInput(e.target.value)}
-                            className="input input-xs h-7 !w-32"
-                          />
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            icon={<FolderPlus strokeWidth={1.75} />}
-                            onClick={handleCreateGroup}
-                            disabled={!canCreateGroup}
-                          >
-                            Group
-                          </Button>
-                        </div>
-
-                        {/* Move to existing group */}
-                        <div className="flex items-center gap-1.5">
-                          <select
-                            value={targetGroupId}
-                            onChange={(e) => setTargetGroupId(e.target.value)}
-                            aria-label="Move selected to group"
-                            className="input input-xs h-7 !w-36"
-                          >
-                            <option value="">Move to group…</option>
-                            <option value={NO_GROUP_VALUE}>No group</option>
-                            {availableGroups.map((group) => (
-                              <option key={group.id} value={group.id}>
-                                {group.name}
-                              </option>
-                            ))}
-                          </select>
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            icon={<Move strokeWidth={1.75} />}
-                            onClick={handleMoveToGroup}
-                            disabled={!canMoveToGroup}
-                          >
-                            Move
-                          </Button>
-                        </div>
-
-                        <div className="h-4 w-px bg-divider" />
-
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          icon={<Bell strokeWidth={1.75} />}
-                          onClick={() => setShowBulkAlerting(true)}
-                        >
-                          Edit alerting…
-                        </Button>
-
-                        <Button
-                          variant="danger"
-                          size="xs"
-                          icon={<Trash2 strokeWidth={1.75} />}
-                          onClick={() => setConfirmBulkDelete(true)}
-                        >
-                          Delete
-                        </Button>
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-            
-            {filteredMonitors.length > 0 && <ListHeader sort={sortMode} onSortChange={setSortMode} />}
-
             {filteredMonitors.length === 0 ? (
               <SharedEmptyState
                 variant="inline"
@@ -2307,7 +2453,30 @@ export default function MonitorsPage() {
                 }
               />
             ) : (
-              <div className="divide-y divide-divider">
+              <SelectableContext.Provider value={canWrite}>
+              <div
+                role="table"
+                aria-label="Monitors"
+                aria-busy={ranking || undefined}
+                onKeyDown={handleRowArrowKeys}
+                className="group/list"
+              >
+              <ListHeader
+                sort={sortMode}
+                onSortChange={setSortMode}
+                ranking={ranking}
+                selection={
+                  canWrite
+                    ? {
+                        checked: allFilteredSelected,
+                        indeterminate: someFilteredSelected,
+                        pinned: selectionMode,
+                        onChange: toggleSelectAllFiltered,
+                      }
+                    : undefined
+                }
+              />
+              <div role="rowgroup" className="divide-y divide-divider">
                 {filteredMonitors.map((monitor) => (
                   monitor.type === 'group' ? (
                     <GroupCard
@@ -2352,6 +2521,8 @@ export default function MonitorsPage() {
                   )
                 ))}
               </div>
+              </div>
+              </SelectableContext.Provider>
             )}
           </div>
 
@@ -2369,8 +2540,99 @@ export default function MonitorsPage() {
             </div>
           </div>}
         </div>
+        </RowFlashContext.Provider>
         </RowLayoutContext.Provider>
       )}
+
+      {/* Bulk actions: floats over the page while a selection exists, so the
+          list never shifts. Portaled (fixed inside a .glass would be offset). */}
+      {canWrite && selectionMode && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            data-floating-bar
+            className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4 transition-[left] duration-slow ease-emphasized sm:bottom-6 md:left-[var(--sidebar-offset)]"
+          >
+            <div
+              role="toolbar"
+              aria-label="Bulk actions"
+              className="glass-overlay pointer-events-auto flex max-w-full animate-toast-in flex-wrap items-center gap-2 rounded-xl px-3 py-2"
+            >
+              <span className="px-1 text-ui font-medium tabular-nums text-white" aria-live="polite">
+                {selectedMonitorIds.size} selected
+              </span>
+              <Button variant="ghost" size="xs" onClick={toggleSelectAllFiltered}>
+                {allFilteredSelected ? 'Deselect all' : `Select all ${filteredMonitors.length}`}
+              </Button>
+
+              <div className="h-4 w-px bg-divider" />
+
+              {/* Group creation */}
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  placeholder="New group name…"
+                  aria-label="New group name"
+                  value={groupNameInput}
+                  onChange={(e) => setGroupNameInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && canCreateGroup) handleCreateGroup();
+                  }}
+                  className="input input-xs h-7 !w-32"
+                />
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  icon={<FolderPlus strokeWidth={1.75} />}
+                  onClick={handleCreateGroup}
+                  disabled={!canCreateGroup}
+                >
+                  Group
+                </Button>
+              </div>
+
+              {/* Move to existing group */}
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={targetGroupId}
+                  onChange={(e) => setTargetGroupId(e.target.value)}
+                  aria-label="Move selected to group"
+                  className="input input-xs h-7 !w-36"
+                >
+                  <option value="">Move to group…</option>
+                  <option value={NO_GROUP_VALUE}>No group</option>
+                  {availableGroups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  icon={<Move strokeWidth={1.75} />}
+                  onClick={handleMoveToGroup}
+                  disabled={!canMoveToGroup}
+                >
+                  Move
+                </Button>
+              </div>
+
+              <div className="h-4 w-px bg-divider" />
+
+              <Button variant="ghost" size="xs" icon={<Bell strokeWidth={1.75} />} onClick={() => setShowBulkAlerting(true)}>
+                Edit alerting…
+              </Button>
+              <Button variant="danger" size="xs" icon={<Trash2 strokeWidth={1.75} />} onClick={() => setConfirmBulkDelete(true)}>
+                Delete
+              </Button>
+
+              <div className="h-4 w-px bg-divider" />
+
+              <IconButton label="Clear selection (Esc)" icon={<X strokeWidth={1.75} />} onClick={clearSelection} size="sm" />
+            </div>
+          </div>,
+          document.body
+        )}
 
       {showBulkAlerting && (
         <BulkAlertingModal
@@ -2378,9 +2640,8 @@ export default function MonitorsPage() {
           onDone={() => {
             setShowBulkAlerting(false);
             setSelectedMonitorIds(new Set());
-            setSelectionMode(false);
             showToast('Alerting settings updated', 'success');
-            loadMonitors();
+            void reloadAll();
           }}
           onCancel={() => setShowBulkAlerting(false)}
         />
@@ -2409,6 +2670,6 @@ export default function MonitorsPage() {
         onConfirm={handleBulkDelete}
         onCancel={() => !deleting && setConfirmBulkDelete(false)}
       />
-    </div>
+    </Page>
   );
 }

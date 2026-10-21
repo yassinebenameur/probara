@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Search, Tag as TagIcon } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 import TagPill from './TagPill';
 
 export interface TagOption {
@@ -56,7 +57,7 @@ export default function TagFilter({
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className="flex flex-shrink-0 items-center gap-1.5 rounded text-xs font-medium text-slate-400 transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
+          className={`flex flex-shrink-0 items-center gap-1.5 rounded text-xs font-medium text-slate-400 transition-colors hover:text-white ${FOCUS_RING}`}
         >
           {open ? (
             <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
@@ -125,7 +126,7 @@ export default function TagFilter({
                     role="option"
                     aria-selected={isSelected}
                     onClick={() => onToggle(tag)}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${FOCUS_RING_INSET} ${
                       isSelected ? 'bg-well-hover' : 'hover:bg-well-hover'
                     }`}
                   >

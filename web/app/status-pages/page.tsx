@@ -1,21 +1,47 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { ArrowUpRight, Globe, Pencil, Plus, Trash2 } from 'lucide-react';
 import { StatusPage } from '@/lib/types';
 import { getStatusPages, deleteStatusPage } from '@/lib/api';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import { pluralize } from '@/lib/format';
+import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import Button from '@/components/ui/Button';
 import IconButton, { ICON_BUTTON_CLASS } from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
+import Select from '@/components/ui/Select';
+import { useUrlSort } from '@/components/ui/SortableHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+
+const GRID = 'sm:grid-cols-2 lg:grid-cols-3 3xl:grid-cols-4 4xl:grid-cols-5';
+
+const SORT_KEYS = ['name', 'monitors', 'updated'] as const;
+type StatusPageSortKey = (typeof SORT_KEYS)[number];
+const DEFAULT_SORT: SortState<StatusPageSortKey> = { key: 'name', dir: 'asc' };
+const DEFAULT_DIR = { monitors: 'desc', updated: 'desc' } as const;
+
+// Cards have no column headers, so the order is a select (same URL state).
+const SORT_OPTIONS: { value: string; label: string; sort: SortState<StatusPageSortKey> }[] = [
+  { value: 'name:asc', label: 'Name, A–Z', sort: { key: 'name', dir: 'asc' } },
+  { value: 'name:desc', label: 'Name, Z–A', sort: { key: 'name', dir: 'desc' } },
+  { value: 'monitors:desc', label: 'Most monitors', sort: { key: 'monitors', dir: 'desc' } },
+  { value: 'monitors:asc', label: 'Fewest monitors', sort: { key: 'monitors', dir: 'asc' } },
+  { value: 'updated:desc', label: 'Recently updated', sort: { key: 'updated', dir: 'desc' } },
+];
+
+const SORT_VALUE: Record<StatusPageSortKey, (page: StatusPage) => SortValue> = {
+  name: (page) => page.title,
+  monitors: (page) => page.monitor_ids?.length || 0,
+  updated: (page) => Date.parse(page.updated_at),
+};
 
 export default function StatusPagesPage() {
   const { showToast } = useToast();
@@ -25,6 +51,11 @@ export default function StatusPagesPage() {
   const [error, setError] = useState<string>('');
   const [pendingDelete, setPendingDelete] = useState<StatusPage | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [sort, setSort] = useUrlSort(SORT_KEYS, DEFAULT_SORT, DEFAULT_DIR);
+  const sorted = useMemo(
+    () => sortRows(statusPages, SORT_VALUE[sort.key], sort.dir, (page) => page.title),
+    [statusPages, sort]
+  );
 
   useEffect(() => {
     loadStatusPages();
@@ -38,7 +69,6 @@ export default function StatusPagesPage() {
       setStatusPages(response?.items || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load status pages');
-      setStatusPages([]);
     } finally {
       setLoading(false);
     }
@@ -59,38 +89,70 @@ export default function StatusPagesPage() {
     }
   };
 
+  const sortControl =
+    statusPages.length > 1 ? (
+      <div className="flex items-center gap-2">
+        <label htmlFor="status-pages-sort" className="text-xs font-medium text-slate-400">
+          Sort
+        </label>
+        <Select
+          id="status-pages-sort"
+          className="input-xs w-auto rounded-lg py-0 pl-2.5 text-xs"
+          value={`${sort.key}:${sort.dir}`}
+          onChange={(e) => {
+            const option = SORT_OPTIONS.find((o) => o.value === e.target.value);
+            if (option) setSort(option.sort);
+          }}
+        >
+          {SORT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </Select>
+      </div>
+    ) : null;
+
   // While the list is empty the empty state carries the one CTA.
   const header = (
     <PageHeader
       title="Status pages"
       subtitle="Public pages that show your customers live service health."
       action={
-        canWrite && !loading && !error && statusPages.length > 0 ? (
-          <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-            <Link href="/status-pages/new">New status page</Link>
-          </Button>
+        sortControl || (canWrite && !loading && !error && statusPages.length > 0) ? (
+          <>
+            {sortControl}
+            {canWrite && !loading && !error && statusPages.length > 0 && (
+              <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+                <Link href="/status-pages/new">New status page</Link>
+              </Button>
+            )}
+          </>
         ) : undefined
       }
     />
   );
 
-  if (loading) {
+  if (loading && statusPages.length === 0) {
     return (
-      <div className="space-y-6">
+      <Page width="data">
         {header}
-        <div className="grid animate-pulse gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div
+          role="status"
+          aria-label="Loading status pages"
+          className={`grid animate-pulse gap-4 ${GRID}`}
+        >
           {[0, 1, 2].map((i) => (
-            <div key={i} className="glass h-[146px]" />
+            <div key={i} className="glass h-[146px]" aria-hidden="true" />
           ))}
         </div>
-        <span className="sr-only">Loading status pages…</span>
-      </div>
+      </Page>
     );
   }
 
-  if (error) {
+  if (error && statusPages.length === 0) {
     return (
-      <div className="space-y-6">
+      <Page width="data">
         {header}
         <Callout
           tone="danger"
@@ -102,12 +164,12 @@ export default function StatusPagesPage() {
         >
           {error}
         </Callout>
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       {header}
 
       {statusPages.length === 0 ? (
@@ -122,8 +184,8 @@ export default function StatusPagesPage() {
           }
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {statusPages.map((page) => {
+        <div className={`grid gap-4 ${GRID}`}>
+          {sorted.map((page) => {
             const monitorCount = page.monitor_ids?.length || 0;
             const publicUrl = resolveStatusPagePublicUrl(page);
             return (
@@ -132,7 +194,7 @@ export default function StatusPagesPage() {
               <div key={page.id} className="glass glass-hover relative flex flex-col p-5">
                 <Link
                   href={`/status-pages/${page.id}`}
-                  className="block truncate text-title font-semibold text-white after:absolute after:inset-0 after:rounded-2xl hover:text-cyan-300 focus:outline-none focus-visible:after:ring-2 focus-visible:after:ring-cyan-500/50"
+                  className="block truncate text-title font-semibold text-white after:absolute after:inset-0 after:rounded-2xl hover:text-cyan-300 focus:outline-none focus-visible:after:ring-2 focus-visible:after:ring-focus"
                 >
                   {page.title}
                 </Link>
@@ -199,6 +261,6 @@ export default function StatusPagesPage() {
         onConfirm={handleDelete}
         onCancel={() => !deleting && setPendingDelete(null)}
       />
-    </div>
+    </Page>
   );
 }
