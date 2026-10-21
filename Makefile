@@ -226,7 +226,7 @@ start-all:
 		nohup bash scripts/start-ui.sh > /tmp/probara-ui.log 2>&1 </dev/null & \
 		echo $$! > /tmp/probara-ui.pid; \
 	}
-	@echo "UI started. Logs: tail -f /tmp/probara-ui.log"
+	@echo "UI starting in the background (next dev). If http://localhost:3000 does not answer, check: tail -f /tmp/probara-ui.log"
 	@echo ""
 	@echo "Service URLs:"
 	@echo "  UI:           http://localhost:3000"

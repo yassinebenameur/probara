@@ -77,7 +77,7 @@ export const LOCATIONS_PAGE: DocPage = {
           language: "yaml",
           title: "Shape of generated worker environment",
           code:
-            "image: ghcr.io/yassinebenameur/probara-worker:latest\nenvironment:\n  NATS_URL: tls://nats.example.com:4222\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"\n  HTTP_BLOCK_PRIVATE_IPS: \"true\"",
+            "image: ghcr.io/yassinebenameur/probara-worker:latest\nenvironment:\n  NATS_URL: tls://nats.example.com:4222\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
         },
         {
           type: "callout",
@@ -125,7 +125,7 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Workers block private, loopback, link-local, and reserved destinations by default. The generated private-location configuration deliberately keeps `HTTP_BLOCK_PRIVATE_IPS=true`, so merely moving a monitor to an internal worker does not automatically permit every internal address.",
+            "Workers allow private, loopback, link-local, and reserved destinations unless `HTTP_BLOCK_PRIVATE_IPS=true`: the code default is `false`, and the generated private-location configuration does not set it. Add it, with a narrow `HTTP_ALLOWED_CIDRS`, so that moving a monitor to an internal worker does not permit every internal address that worker can reach.",
         },
         {
           type: "code",

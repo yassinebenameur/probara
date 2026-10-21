@@ -350,7 +350,7 @@ go run ./cmd/admin`,
           tone: 'warning',
           title: 'Helm initialApiKey is not a bootstrap mechanism',
           text:
-            'The chart currently stores and prints `secrets.initialApiKey`, but no job or service creates a matching database API key. Bootstrap an administrator and create API keys through the authenticated product/API.',
+            'The chart still stores `secrets.initialApiKey` in its Secret, but no job or service creates a matching database API key, and the install notes no longer print it. Bootstrap an administrator and create API keys through the authenticated product/API.',
         },
       ],
     },
