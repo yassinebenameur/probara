@@ -16,7 +16,14 @@ export const SETTINGS_COLUMNS =
 export const SETTINGS_COLUMNS_WIDE =
   'grid gap-6 grid-cols-[repeat(auto-fit,minmax(min(100%,max(44rem,calc((100%_-_1.5rem)/2))),1fr))]';
 
-// The same flow inside one wide panel (Notifications, AI): two sections side
+// Notifications: two stacks of section cards (Routing + Incidents, Latency +
+// Dependency), side by side once each stack gets 30rem, one stack otherwise.
+// Stacks rather than four grid cells so a short card never leaves a hole
+// beside a tall one.
+export const SETTINGS_SECTION_COLUMNS =
+  'grid items-start gap-6 grid-cols-[repeat(auto-fit,minmax(min(100%,max(30rem,calc((100%_-_1.5rem)/2))),1fr))]';
+
+// The same flow inside one wide panel (AI): two sections side
 // by side once each gets 26rem, so a full-width panel never stretches one
 // column of controls across the screen.
 export const SETTINGS_PANEL_COLUMNS =

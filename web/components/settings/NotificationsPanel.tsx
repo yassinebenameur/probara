@@ -1,15 +1,17 @@
 'use client';
 
-import { useEffect, useId, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
-import Select from '@/components/ui/Select';
+import FormActions from '@/components/ui/FormActions';
+import SegmentedControl, { type SegmentOption } from '@/components/ui/SegmentedControl';
 import Switch from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/ToastProvider';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import { getNotificationSettings, updateNotificationSettings } from '@/lib/api';
-import { SETTINGS_PANEL_COLUMNS } from './layout';
+import { SETTINGS_SECTION_COLUMNS } from './layout';
 import type { ChannelAssignment, NotificationSettings } from '@/lib/types';
 
 const REMINDER_OPTIONS = [
@@ -21,33 +23,36 @@ const REMINDER_OPTIONS = [
 
 // Latency anomaly presets — users pick a level, not a raw number. Each
 // sensitivity level bundles the statistical sigma + the minimum increase.
+// `short` is the segment text; `label` its tooltip and accessible name.
 const SENSITIVITY_LEVELS = [
-  { label: 'Low', sigma: 4.5, deltaPct: 30, hint: 'Only flags large, obvious slowdowns.' },
-  { label: 'Medium', sigma: 3.5, deltaPct: 20, hint: 'Balanced — recommended for most monitors.' },
-  { label: 'High', sigma: 2.5, deltaPct: 10, hint: 'Flags subtle drift; can be noisier.' },
+  { label: 'Low', short: 'Low', sigma: 4.5, deltaPct: 30, hint: 'Only flags large, obvious slowdowns.' },
+  { label: 'Medium', short: 'Medium', sigma: 3.5, deltaPct: 20, hint: 'Balanced — recommended for most monitors.' },
+  { label: 'High', short: 'High', sigma: 2.5, deltaPct: 10, hint: 'Flags subtle drift; can be noisier.' },
 ];
 const BASELINE_LEVELS = [
-  { label: '1 day', hours: 24 },
-  { label: '3 days', hours: 72 },
-  { label: '7 days', hours: 168 },
-  { label: '14 days', hours: 336 },
+  { label: '1 day', short: '1d', hours: 24 },
+  { label: '3 days', short: '3d', hours: 72 },
+  { label: '7 days', short: '7d', hours: 168 },
+  { label: '14 days', short: '14d', hours: 336 },
 ];
 const SUSTAINED_LEVELS = [
-  { label: '1 min', seconds: 60 },
-  { label: '2 min', seconds: 120 },
-  { label: '5 min', seconds: 300 },
-  { label: '10 min', seconds: 600 },
+  { label: '1 min', short: '1m', seconds: 60 },
+  { label: '2 min', short: '2m', seconds: 120 },
+  { label: '5 min', short: '5m', seconds: 300 },
+  { label: '10 min', short: '10m', seconds: 600 },
 ];
 // How long a downstream stays quiet after its upstream recovers before paging
 // if it is still down itself. Long enough for one or two checks to confirm.
 const DEPENDENCY_GRACE_LEVELS = [
-  { label: 'None', seconds: 0 },
-  { label: '2 min', seconds: 120 },
-  { label: '5 min', seconds: 300 },
-  { label: '15 min', seconds: 900 },
+  { label: 'None', short: 'None', seconds: 0 },
+  { label: '2 min', short: '2m', seconds: 120 },
+  { label: '5 min', short: '5m', seconds: 300 },
+  { label: '15 min', short: '15m', seconds: 900 },
 ];
 
 // nearestIndex maps a stored numeric value back to the closest preset step.
+// A value saved outside the presets (API, older UI) therefore shows as its
+// nearest stop and is written back as that stop on the next save.
 function nearestIndex<T>(levels: T[], get: (l: T) => number, value: number): number {
   let best = 0;
   let bestDiff = Infinity;
@@ -61,90 +66,90 @@ function nearestIndex<T>(levels: T[], get: (l: T) => number, value: number): num
   return best;
 }
 
-// Slider wells: one slider per row while the well is narrow, three across once
-// it reaches 45rem, never two (a 2+1 grid reads as a mistake). Below 45rem the
-// second max() term turns huge, so the track minimum becomes 100% (one
-// column); above it, a third of the row. SteppedSlider caps itself at
-// max-w-lg so a single column (or a well holding one slider) never stretches
-// a track across a wide panel.
-const SLIDER_GRID =
-  'grid gap-x-6 gap-y-4 grid-cols-[repeat(auto-fill,minmax(min(100%,max(calc((100%_-_3rem)/3),calc((45rem_-_100%)*999))),1fr))]';
-
-interface SteppedSliderProps {
-  label: string;
-  options: { label: string }[];
-  index: number;
-  onChange: (i: number) => void;
-  hint?: string;
-  disabled?: boolean;
+// Presets are held as indexes; the segmented control speaks strings.
+function segments(levels: { label: string; short: string }[]): SegmentOption<string>[] {
+  return levels.map((l, i) => ({
+    value: String(i),
+    label: l.short,
+    title: l.short === l.label ? undefined : l.label,
+  }));
 }
 
-// SteppedSlider is a discrete slider over predefined options, with the current
-// option named and clickable tick labels beneath the track.
-function SteppedSlider({ label, options, index, onChange, hint, disabled = false }: SteppedSliderProps) {
-  const hintId = useId();
-  // globals.css fills the WebKit track up to the thumb from --pct.
-  const pct = options.length > 1 ? (index / (options.length - 1)) * 100 : 0;
+const SENSITIVITY_OPTIONS = segments(SENSITIVITY_LEVELS);
+const BASELINE_OPTIONS = segments(BASELINE_LEVELS);
+const SUSTAINED_OPTIONS = segments(SUSTAINED_LEVELS);
+const DEPENDENCY_GRACE_OPTIONS = segments(DEPENDENCY_GRACE_LEVELS);
+
+// Every select in the panel (reminder here, per-channel delays in
+// ChannelPicker) is input-sm at w-44, so controls line up in one size.
+const SELECT_CLASS = 'input input-sm !w-44 cursor-pointer';
+
+interface SettingRowProps {
+  title: string;
+  /** Fixed id for the title, when content below the row points at it. */
+  titleId?: string;
+  description?: ReactNode;
+  /** Right-aligned beside the text while the row is wide, wrapped below it once narrow. */
+  control?: (ids: { titleId: string; descriptionId?: string }) => ReactNode;
+  /** Content under the row (a channel list, a toggle's parameters). */
+  children?: ReactNode;
+  /** Mute the text of a parameter whose toggle is off. */
+  muted?: boolean;
+  /** `sm` for a nested parameter row. */
+  size?: 'md' | 'sm';
+  /**
+   * Keep the control beside the text at every width (a Switch is small
+   * enough); wider controls wrap below the text in a narrow card.
+   */
+  inline?: boolean;
+}
+
+// One setting: title and description on the left, its control on the right.
+// The text column has a 14rem basis and the row wraps, so in a narrow card
+// the control drops under the description instead of squeezing it.
+function SettingRow({
+  title,
+  titleId: fixedTitleId,
+  description,
+  control,
+  children,
+  muted = false,
+  size = 'md',
+  inline = false,
+}: SettingRowProps) {
+  const autoTitleId = useId();
+  const titleId = fixedTitleId ?? autoTitleId;
+  const descriptionId = useId();
+  const pad = size === 'sm' ? 'py-3' : 'py-4';
   return (
-    <div className="max-w-lg">
-      <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <span className="text-ui font-medium text-slate-300">{label}</span>
-        <span className="shrink-0 whitespace-nowrap text-ui font-medium text-white">{options[index].label}</span>
+    <div className={`${pad} first:pt-0 last:pb-0`}>
+      <div className={`flex items-start justify-between gap-x-6 gap-y-3 ${inline ? '' : 'flex-wrap'}`}>
+        <div className={`min-w-0 max-w-prose grow ${inline ? 'basis-0' : 'basis-56'} transition-opacity duration-base ${muted ? 'opacity-60' : ''}`}>
+          <p id={titleId} className={`${size === 'sm' ? 'text-ui' : 'text-sm'} font-medium text-slate-200`}>
+            {title}
+          </p>
+          {description && (
+            <p id={descriptionId} className="mt-0.5 text-xs text-slate-500">
+              {description}
+            </p>
+          )}
+        </div>
+        {control && (
+          <div className="shrink-0">{control({ titleId, descriptionId: description ? descriptionId : undefined })}</div>
+        )}
       </div>
-      <input
-        type="range"
-        min={0}
-        max={options.length - 1}
-        step={1}
-        value={index}
-        aria-label={label}
-        aria-valuetext={options[index].label}
-        aria-describedby={hint ? hintId : undefined}
-        disabled={disabled}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ '--pct': `${pct}%` } as CSSProperties}
-        className="w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-      />
-      <div className="mt-1 flex justify-between">
-        {options.map((o, i) => (
-          <button
-            type="button"
-            key={o.label}
-            onClick={() => onChange(i)}
-            disabled={disabled}
-            tabIndex={-1}
-            className={`cursor-pointer text-2xs transition-colors disabled:cursor-not-allowed ${
-              i === index ? 'font-medium text-slate-200' : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
-      {hint && <p id={hintId} className="mt-1 text-xs text-slate-500">{hint}</p>}
+      {children}
     </div>
   );
 }
 
-interface SettingSwitchProps {
-  title: string;
-  description?: string;
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
-}
-
-// An on/off setting row: what it does on the left, the switch on the right.
-function SettingSwitch({ title, description, checked, onChange, disabled }: SettingSwitchProps) {
+// A toggle's parameters: a well under its switch row, always shown so the
+// card keeps its height and the reader sees what turning it on would tune;
+// disabled (and muted) while the toggle is off.
+function ParameterGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-6">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-200">{title}</p>
-        {description && <p className="mt-0.5 max-w-prose text-xs text-slate-500">{description}</p>}
-      </div>
-      <div className="pt-0.5">
-        <Switch checked={checked} onChange={onChange} label={title} disabled={disabled} />
-      </div>
+    <div role="group" aria-label={label} className="glass-well mt-4 divide-y divide-divider px-4 py-3">
+      {children}
     </div>
   );
 }
@@ -161,8 +166,11 @@ interface Snapshot {
   dependencyGraceIdx: number;
 }
 
-// Workspace notification policy. Read-only users see it with every control
-// disabled and no Save button (the parent page says why, once).
+// Workspace notification policy, as four section cards in two balanced
+// columns (Routing + Incidents, Latency + Dependency; stacked in that order
+// when narrow). Save and Discard sit in the shared sticky FormActions bar,
+// shown only while the form differs from the server. Read-only users see
+// every control disabled and no bar (the parent page says why, once).
 export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -173,14 +181,14 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
   const [reminderSeconds, setReminderSeconds] = useState(0);
   const [autoCreateIncident, setAutoCreateIncident] = useState(false);
   const [anomalyEnabled, setAnomalyEnabled] = useState(false);
-  // Slider positions (indexes into the preset level arrays). Default to Medium
+  // Preset positions (indexes into the level arrays). Default to Medium
   // sensitivity / 7-day baseline / 2-min sustained.
   const [sensitivityIdx, setSensitivityIdx] = useState(1);
   const [baselineIdx, setBaselineIdx] = useState(2);
   const [sustainedIdx, setSustainedIdx] = useState(1);
   const [dependencySuppression, setDependencySuppression] = useState(false);
   const [dependencyGraceIdx, setDependencyGraceIdx] = useState(1);
-  // What the server holds; Save only lights up when the form differs from it.
+  // What the server holds; the save bar only appears when the form differs.
   const [saved, setSaved] = useState<Snapshot | null>(null);
 
   const current: Snapshot = {
@@ -195,6 +203,18 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     dependencyGraceIdx,
   };
   const dirty = saved !== null && JSON.stringify(current) !== JSON.stringify(saved);
+
+  const apply = (s: Snapshot) => {
+    setDefaultChannels(s.defaultChannels);
+    setReminderSeconds(s.reminderSeconds);
+    setAutoCreateIncident(s.autoCreateIncident);
+    setAnomalyEnabled(s.anomalyEnabled);
+    setSensitivityIdx(s.sensitivityIdx);
+    setBaselineIdx(s.baselineIdx);
+    setSustainedIdx(s.sustainedIdx);
+    setDependencySuppression(s.dependencySuppression);
+    setDependencyGraceIdx(s.dependencyGraceIdx);
+  };
 
   const loadSettings = async () => {
     try {
@@ -212,15 +232,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         dependencySuppression: s.dependency_suppression_enabled ?? false,
         dependencyGraceIdx: nearestIndex(DEPENDENCY_GRACE_LEVELS, (l) => l.seconds, s.dependency_suppression_grace_seconds ?? 120),
       };
-      setDefaultChannels(loaded.defaultChannels);
-      setReminderSeconds(loaded.reminderSeconds);
-      setAutoCreateIncident(loaded.autoCreateIncident);
-      setAnomalyEnabled(loaded.anomalyEnabled);
-      setSensitivityIdx(loaded.sensitivityIdx);
-      setBaselineIdx(loaded.baselineIdx);
-      setSustainedIdx(loaded.sustainedIdx);
-      setDependencySuppression(loaded.dependencySuppression);
-      setDependencyGraceIdx(loaded.dependencyGraceIdx);
+      apply(loaded);
       setSaved(loaded);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load notification settings');
@@ -258,146 +270,221 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     }
   };
 
+  if (loading || error) {
+    return (
+      <Panel title="Notifications" subtitle="Where alerts go and when they fire.">
+        {loading ? (
+          <p role="status" className="text-sm text-slate-500">Loading notification settings…</p>
+        ) : (
+          <Callout
+            tone="danger"
+            action={<Button variant="ghost" size="xs" onClick={loadSettings}>Retry</Button>}
+          >
+            {error}
+          </Callout>
+        )}
+      </Panel>
+    );
+  }
+
+  const latencyOff = readOnly || !anomalyEnabled;
+  const graceOff = readOnly || !dependencySuppression;
+
   return (
-    <Panel
-      title="Notifications"
-      subtitle="Every monitor notifies these channels unless it has a custom list."
-    >
-      {loading ? (
-        <p className="text-sm text-slate-500">Loading notification settings…</p>
-      ) : error ? (
-        <Callout
-          tone="danger"
-          action={<Button variant="ghost" size="xs" onClick={loadSettings}>Retry</Button>}
-        >
-          {error}
-        </Callout>
-      ) : (
-        <div className="space-y-6">
-          {/* Routing on the left, alert behaviour on the right once the panel
-              is wide enough; stacked otherwise. */}
-          <div className={SETTINGS_PANEL_COLUMNS}>
-            <div className="space-y-6">
-              {/* Capped so a delay select stays beside its channel name. */}
-              <div className="max-w-2xl">
-                <p id="default-channels-label" className="mb-1.5 block text-ui font-medium text-slate-300">
-                  Default notification channels
-                </p>
-                <ChannelPicker
-                  value={defaultChannels}
-                  onChange={setDefaultChannels}
-                  showDelays
-                  disabled={readOnly}
-                  ariaLabelledBy="default-channels-label"
-                />
-              </div>
+    <div>
+      <div className={SETTINGS_SECTION_COLUMNS}>
+        <div className="grid min-w-0 content-start gap-6">
+          <Panel title="Routing">
+            <div className="divide-y divide-divider">
+              <SettingRow
+                title="Default channels"
+                titleId="default-channels-label"
+                description="Every monitor notifies these channels unless it has a custom list. A delay holds a channel back until the alert has lasted that long."
+              >
+                {/* Full row width: the delay selects share the right edge
+                    with the reminder select below, at every card width. */}
+                <div className="mt-3">
+                  <ChannelPicker
+                    value={defaultChannels}
+                    onChange={setDefaultChannels}
+                    showDelays
+                    allowCreate={false}
+                    disabled={readOnly}
+                    ariaLabelledBy="default-channels-label"
+                    emptyState={
+                      <>
+                        No channels yet. Add one under Channels below, or{' '}
+                        <Link
+                          href="/alert-channels/catalog"
+                          className="font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+                        >
+                          browse the catalog
+                        </Link>
+                        .
+                      </>
+                    }
+                  />
+                </div>
+              </SettingRow>
 
-              <div className="sm:w-60">
-                <Select
-                  label="Alert reminder"
-                  value={reminderSeconds}
-                  onChange={(e) => setReminderSeconds(Number(e.target.value))}
-                  disabled={readOnly}
-                  className="h-10 cursor-pointer"
-                >
-                  {REMINDER_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </Select>
-                <p className="mt-1 text-xs text-slate-500">Re-notify on still-open alerts at this interval.</p>
-              </div>
-            </div>
-
-            <div className="space-y-5">
-              <SettingSwitch
-                title="Open an incident when a monitor goes down"
-                checked={autoCreateIncident}
-                onChange={setAutoCreateIncident}
-                disabled={readOnly}
+              <SettingRow
+                title="Alert reminder"
+                description="Re-notify on still-open alerts at this interval."
+                control={({ titleId, descriptionId }) => (
+                  <select
+                    value={reminderSeconds}
+                    onChange={(e) => setReminderSeconds(Number(e.target.value))}
+                    disabled={readOnly}
+                    aria-labelledby={titleId}
+                    aria-describedby={descriptionId}
+                    className={SELECT_CLASS}
+                  >
+                    {REMINDER_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
               />
+            </div>
+          </Panel>
 
-              <div className="space-y-4">
-                <SettingSwitch
-                  title="Detect latency degradation"
-                  description="Alert when a monitor's response time rises well above its own baseline, before it goes hard down."
+          <Panel title="Incidents">
+            <SettingRow
+              inline
+              title="Open an incident when a monitor goes down"
+              control={() => (
+                <Switch
+                  checked={autoCreateIncident}
+                  onChange={setAutoCreateIncident}
+                  label="Open an incident when a monitor goes down"
+                  disabled={readOnly}
+                />
+              )}
+            />
+          </Panel>
+        </div>
+
+        <div className="grid min-w-0 content-start gap-6">
+          <Panel title="Latency degradation">
+            <SettingRow
+              inline
+              title="Detect latency degradation"
+              description="Alert when a monitor's response time rises well above its own baseline, before it goes hard down."
+              control={() => (
+                <Switch
                   checked={anomalyEnabled}
                   onChange={setAnomalyEnabled}
+                  label="Detect latency degradation"
                   disabled={readOnly}
                 />
+              )}
+            >
+              <ParameterGroup label="Latency degradation parameters">
+                <SettingRow
+                  size="sm"
+                  muted={latencyOff}
+                  title="Sensitivity"
+                  description={SENSITIVITY_LEVELS[sensitivityIdx].hint}
+                  control={({ titleId, descriptionId }) => (
+                    <SegmentedControl
+                      options={SENSITIVITY_OPTIONS}
+                      value={String(sensitivityIdx)}
+                      onChange={(v) => setSensitivityIdx(Number(v))}
+                      labelledBy={titleId}
+                      describedBy={descriptionId}
+                      disabled={latencyOff}
+                    />
+                  )}
+                />
+                <SettingRow
+                  size="sm"
+                  muted={latencyOff}
+                  title="Baseline window"
+                  description="How much history to compare recent latency against."
+                  control={({ titleId, descriptionId }) => (
+                    <SegmentedControl
+                      options={BASELINE_OPTIONS}
+                      value={String(baselineIdx)}
+                      onChange={(v) => setBaselineIdx(Number(v))}
+                      labelledBy={titleId}
+                      describedBy={descriptionId}
+                      disabled={latencyOff}
+                    />
+                  )}
+                />
+                <SettingRow
+                  size="sm"
+                  muted={latencyOff}
+                  title="Must stay slow for"
+                  description="Ignore brief spikes shorter than this."
+                  control={({ titleId, descriptionId }) => (
+                    <SegmentedControl
+                      options={SUSTAINED_OPTIONS}
+                      value={String(sustainedIdx)}
+                      onChange={(v) => setSustainedIdx(Number(v))}
+                      labelledBy={titleId}
+                      describedBy={descriptionId}
+                      disabled={latencyOff}
+                    />
+                  )}
+                />
+              </ParameterGroup>
+            </SettingRow>
+          </Panel>
 
-                {anomalyEnabled && (
-                  <div className={`glass-well p-4 ${SLIDER_GRID}`}>
-                    <SteppedSlider
-                      label="Sensitivity"
-                      options={SENSITIVITY_LEVELS}
-                      index={sensitivityIdx}
-                      onChange={setSensitivityIdx}
-                      hint={SENSITIVITY_LEVELS[sensitivityIdx].hint}
-                      disabled={readOnly}
-                    />
-                    <SteppedSlider
-                      label="Baseline window"
-                      options={BASELINE_LEVELS}
-                      index={baselineIdx}
-                      onChange={setBaselineIdx}
-                      hint="How much history to compare recent latency against."
-                      disabled={readOnly}
-                    />
-                    <SteppedSlider
-                      label="Must stay slow for"
-                      options={SUSTAINED_LEVELS}
-                      index={sustainedIdx}
-                      onChange={setSustainedIdx}
-                      hint="Ignore brief spikes shorter than this."
-                      disabled={readOnly}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-4">
-                <SettingSwitch
-                  title="Page root causes only"
-                  description="When a monitor goes down because an upstream dependency is down, open its alert but send no notification; the root cause's notification lists everything it affects. Monitors can override this in their Alerting section."
+          <Panel title="Dependency suppression">
+            <SettingRow
+              inline
+              title="Page root causes only"
+              description="When a monitor goes down because an upstream dependency is down, open its alert but send no notification; the root cause's notification lists everything it affects. Monitors can override this in their Alerting section."
+              control={() => (
+                <Switch
                   checked={dependencySuppression}
                   onChange={setDependencySuppression}
+                  label="Page root causes only"
                   disabled={readOnly}
                 />
-
-                {dependencySuppression && (
-                  <div className="glass-well max-w-lg p-4">
-                    <SteppedSlider
-                      label="After the upstream recovers, hold for"
-                      options={DEPENDENCY_GRACE_LEVELS}
-                      index={dependencyGraceIdx}
-                      onChange={setDependencyGraceIdx}
-                      hint="A downstream still down after this pages as a normal outage."
-                      disabled={readOnly}
+              )}
+            >
+              <ParameterGroup label="Dependency suppression parameters">
+                <SettingRow
+                  size="sm"
+                  muted={graceOff}
+                  title="After the upstream recovers, hold for"
+                  description="A downstream still down after this pages as a normal outage."
+                  control={({ titleId, descriptionId }) => (
+                    <SegmentedControl
+                      options={DEPENDENCY_GRACE_OPTIONS}
+                      value={String(dependencyGraceIdx)}
+                      onChange={(v) => setDependencyGraceIdx(Number(v))}
+                      labelledBy={titleId}
+                      describedBy={descriptionId}
+                      disabled={graceOff}
                     />
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {!readOnly && (
-            <div className="flex items-center justify-end gap-3">
-              {dirty && <span className="text-xs text-slate-400">Unsaved changes</span>}
-              <Button
-                variant={dirty ? 'accent' : 'ghost'}
-                size="sm"
-                onClick={handleSave}
-                disabled={saving || !dirty}
-                loading={saving}
-              >
-                {saving ? 'Saving…' : 'Save notifications'}
-              </Button>
-            </div>
-          )}
+                  )}
+                />
+              </ParameterGroup>
+            </SettingRow>
+          </Panel>
         </div>
+      </div>
+
+      {!readOnly && dirty && (
+        <FormActions
+          sticky
+          middle="Unsaved changes"
+          cancel={{ label: 'Discard', onClick: () => saved && apply(saved), disabled: saving }}
+          submit={{
+            label: saving ? 'Saving…' : 'Save changes',
+            type: 'button',
+            onClick: handleSave,
+            disabled: saving,
+            loading: saving,
+          }}
+        />
       )}
-    </Panel>
+    </div>
   );
 }

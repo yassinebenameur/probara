@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   AlertChannel,
@@ -15,6 +15,7 @@ import Checkbox from '@/components/ui/Checkbox';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import { usePluginNames } from '@/components/alert-channels/usePluginNames';
+import { formatDuration } from '@/lib/format';
 
 const DELAY_PRESETS = [
   { label: 'Immediately', value: 0 },
@@ -22,6 +23,21 @@ const DELAY_PRESETS = [
   { label: 'If still down 10 min', value: 600 },
   { label: 'If still down 30 min', value: 1800 },
 ] as const;
+
+// A delay saved outside the presets (API, import, an older UI) stays a
+// selectable option of its own; without it the select would show the first
+// preset while the stored delay stays in place.
+function delayText(seconds: number): string {
+  // Whole minutes under an hour read like the presets ("15 min").
+  return seconds % 60 === 0 && seconds < 3600 ? `${seconds / 60} min` : formatDuration(seconds);
+}
+
+function delayOptions(current: number): { label: string; value: number }[] {
+  if (DELAY_PRESETS.some((p) => p.value === current)) return [...DELAY_PRESETS];
+  return [...DELAY_PRESETS, { label: `If still down ${delayText(current)}`, value: current }].sort(
+    (a, b) => a.value - b.value
+  );
+}
 
 export interface ChannelPickerProps {
   value: ChannelAssignment[];
@@ -38,6 +54,13 @@ export interface ChannelPickerProps {
   disabled?: boolean;
   /** Id of the visible label naming the channel list. */
   ariaLabelledBy?: string;
+  /**
+   * Offer the inline "New channel" form (default on). Off where the page
+   * already has its own channel management (Settings → Notifications).
+   */
+  allowCreate?: boolean;
+  /** Replaces the "No channels yet" line, e.g. with a pointer to where channels are made. */
+  emptyState?: ReactNode;
 }
 
 export default function ChannelPicker({
@@ -48,6 +71,8 @@ export default function ChannelPicker({
   onChannelsLoaded,
   disabled = false,
   ariaLabelledBy,
+  allowCreate = true,
+  emptyState,
 }: ChannelPickerProps) {
   const pluginName = usePluginNames();
   const [channels, setChannels] = useState<AlertChannel[]>([]);
@@ -151,7 +176,8 @@ export default function ChannelPicker({
           <div role="alert" className="px-4 py-3 text-ui text-rose-300">{loadError}</div>
         ) : channels.length === 0 ? (
           <div className="px-4 py-3 text-ui text-slate-500">
-            {disabled ? 'No channels yet.' : 'No channels yet. Add one below to start receiving alerts.'}
+            {emptyState ??
+              (disabled || !allowCreate ? 'No channels yet.' : 'No channels yet. Add one below to start receiving alerts.')}
           </div>
         ) : (
           <ul className="divide-y divide-divider" aria-labelledby={ariaLabelledBy}>
@@ -161,9 +187,13 @@ export default function ChannelPicker({
               const isDefault = defaultChannelIds.includes(channel.id);
 
               return (
+                // Wraps instead of squeezing: once the name column would drop
+                // below 12rem the delay select moves to its own line.
                 <li
                   key={channel.id}
-                  className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-well-hover"
+                  className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 transition-colors ${
+                    isSelected ? 'bg-well-strong' : 'hover:bg-well-hover'
+                  }`}
                 >
                   <Checkbox
                     id={`channel-${channel.id}`}
@@ -172,25 +202,25 @@ export default function ChannelPicker({
                     disabled={disabled}
                   />
 
+                  {/* Name over a muted meta line (plugin, default, status), so
+                      the name keeps the width beside a delay select. */}
                   <label
                     htmlFor={`channel-${channel.id}`}
-                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
+                    className={`min-w-0 grow basis-48 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                   >
-                    <span className={`truncate text-sm ${channel.is_active === false ? 'text-slate-400' : 'text-slate-200'}`}>
+                    <span className={`block truncate text-sm ${channel.is_active === false ? 'text-slate-400' : 'text-slate-200'}`}>
                       {channel.name}
                     </span>
-                    <span className="flex-shrink-0 text-xs text-slate-500">{pluginName(channel.type)}</span>
-                    {isDefault && (
-                      <span className="flex-shrink-0 text-xs text-slate-400">(default)</span>
-                    )}
-                    {channel.is_active === false && (
-                      <span
-                        className="flex-shrink-0"
-                        title="This channel is disabled — selecting it delivers nothing"
-                      >
-                        <Pill tone="neutral" size="xs">Disabled</Pill>
-                      </span>
-                    )}
+                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                      <span>{pluginName(channel.type)}</span>
+                      {isDefault && <span className="text-slate-400">(default)</span>}
+                      {channel.is_active === false && (
+                        // Same wording and tone as the channel list's Status column.
+                        <span title="This channel is inactive — selecting it delivers nothing">
+                          <Pill tone="neutral" size="xs" dot>Inactive</Pill>
+                        </span>
+                      )}
+                    </span>
                   </label>
 
                   {showDelays && isSelected && assignment && (
@@ -199,11 +229,11 @@ export default function ChannelPicker({
                       onChange={(e) =>
                         handleDelayChange(channel.id, Number(e.target.value))
                       }
-                      className="input input-sm ml-auto !w-auto flex-shrink-0 cursor-pointer"
+                      className="input input-sm ml-auto !w-44 flex-shrink-0 cursor-pointer"
                       aria-label={`Delay for ${channel.name}`}
                       disabled={disabled}
                     >
-                      {DELAY_PRESETS.map((preset) => (
+                      {delayOptions(assignment.delay_seconds).map((preset) => (
                         <option key={preset.value} value={preset.value}>
                           {preset.label}
                         </option>
@@ -217,7 +247,7 @@ export default function ChannelPicker({
         )}
       </div>
 
-      {disabled ? null : showCreate ? (
+      {disabled || !allowCreate ? null : showCreate ? (
         <div className="glass-well space-y-4 p-4">
           <div className="flex items-center justify-between">
             <span className="text-title font-semibold text-white">New channel</span>

@@ -603,7 +603,11 @@ or imported groups come back empty. Any other path that creates groups through
   target and short failure reasons are `STATUS_RANK`/`sortBySeverity`,
   `monitorTarget`, `shortFailureReason` in `lib/monitor-utils.ts`.
 - **Shared controls**: time ranges use `components/ui/RangePicker.tsx`
-  (page-scoped: header or Tabs `trailing`, never inside one card); monitor
+  (page-scoped: header or Tabs `trailing`, never inside one card); a setting
+  with a few discrete stops (sensitivity, a window length) is
+  `components/ui/SegmentedControl.tsx` (radiogroup, roving arrows,
+  `SELECTED_SEGMENT`), never a stepped range slider; a Switch's on track is
+  neutral ink like a checked Checkbox, never orange; monitor
   types render as `components/ui/TypeBadge.tsx` (pass `config` where it is at
   hand so a SIP test call reads `CALL`, via `monitorTypeDisplay`), labels from
   `lib/monitor-type-labels.ts` only; write affordances gate on
