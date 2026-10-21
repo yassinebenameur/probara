@@ -206,7 +206,7 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 			sip.ConfigureCalls(cfg.SIPCallEnabled, cfg.SIPCallAllowedDestinations)
 			lingers := metricsRegistry.NewCounter(
 				"sip_linger_total",
-				"SIP test-call lingers by outcome (late answers BYE'd, late provisionals CANCELled, quiet)",
+				"SIP test-call lingers by outcome (late answers BYE'd, unanswered BYEs sent again, late provisionals CANCELled, quiet)",
 				[]string{"outcome"},
 			)
 			dropped := metricsRegistry.NewCounter(

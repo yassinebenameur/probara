@@ -13,7 +13,8 @@ import (
 // connected call nobody hangs up, billed until the far end times it out. A
 // linger keeps the call's flow open for up to 32 s: the dispatcher keeps
 // ACKing every 2xx (sipCall.onResponse), and the linger BYEs each new dialog
-// and CANCELs an INVITE that only now draws a provisional.
+// and CANCELs an INVITE that only now draws a provisional. It also sends one
+// more BYE to a dialog whose teardown BYE drew no response.
 //
 // At most slots lingers run at once; above that the flow is closed at once
 // (onDropped). A worker that shuts down closes them without BYE.
@@ -61,9 +62,13 @@ func (p *sipLingerPool) hand(s *sipCall) {
 }
 
 // linger runs detached from the check, which has returned: it touches no
-// metrics. Outcome: "late_answer" when it BYE'd a dialog, "late_cancel" when
-// it CANCELled a late provisional, "flow_closed" when the peer closed the
-// flow first, else "quiet".
+// metrics. It first sends one more BYE to each dialog whose teardown BYE
+// drew no response (retryUnansweredByes), then waits for late answers.
+// Outcome: "late_bye_unconfirmed" when that second BYE went unconfirmed too
+// (the call may still be up, and billed, so nothing else outranks it),
+// "late_answer" when it BYE'd a new dialog, "late_bye_ok" when the second
+// BYE was confirmed, "late_cancel" when it CANCELled a late provisional,
+// "flow_closed" when the peer closed the flow first, else "quiet".
 func (s *sipCall) linger(lingerFor time.Duration) (outcome string) {
 	defer s.ep.Close()
 	defer func() {
@@ -75,12 +80,17 @@ func (s *sipCall) linger(lingerFor time.Duration) (outcome string) {
 	deadline := time.NewTimer(lingerFor)
 	defer deadline.Stop()
 
+	if retried := s.retryUnansweredByes(); retried != "" {
+		outcome = retried
+	}
 	byeNew := func() {
 		for d := s.nextUnended(); d != nil; d = s.nextUnended() {
 			ctx, cancel := context.WithTimeout(context.Background(), s.c.teardownBudget())
 			s.bye(ctx, d)
 			cancel()
-			outcome = "late_answer"
+			if outcome != "late_bye_unconfirmed" {
+				outcome = "late_answer"
+			}
 		}
 	}
 	byeNew() // anything that answered after teardown's last look
@@ -116,4 +126,39 @@ func (s *sipCall) linger(lingerFor time.Duration) (outcome string) {
 			return outcome
 		}
 	}
+}
+
+// retryUnansweredByes sends one more BYE, as a new request, to each dialog
+// whose teardown BYE drew no response at all and that the callee has not
+// hung up since. nextUnended marks a dialog done before its BYE leaves, so
+// nothing else ever retries it, and a far end that missed the BYE (a lost
+// datagram, a proxy that dropped the transaction) keeps the call up and
+// billed until it times out. The published result is not touched: it
+// already reports bye_unconfirmed. It returns "late_bye_ok" when every one
+// was confirmed (a 2xx, or 481: the far end no longer knows the dialog),
+// "late_bye_unconfirmed" when any drew no response again or another final
+// (the call's end is still unknown), and "" when there was nothing to retry.
+func (s *sipCall) retryUnansweredByes() string {
+	s.mu.Lock()
+	var retry []*sipDialog
+	for _, d := range s.dialogs {
+		if d.byeUnanswered && !d.remoteBye {
+			retry = append(retry, d)
+		}
+	}
+	s.mu.Unlock()
+	outcome := ""
+	for _, d := range retry {
+		d.byeUnanswered = false
+		ctx, cancel := context.WithTimeout(context.Background(), s.c.teardownBudget())
+		result, _, _ := s.bye(ctx, d)
+		cancel()
+		switch {
+		case result != "bye_ok" && result != "bye_481":
+			outcome = "late_bye_unconfirmed"
+		case outcome == "":
+			outcome = "late_bye_ok"
+		}
+	}
+	return outcome
 }

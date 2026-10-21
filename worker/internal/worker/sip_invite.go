@@ -1251,6 +1251,7 @@ func (s *sipCall) byeAll(ctx context.Context) {
 			s.cm.ByeMs = ms
 		}
 		if outcome == "bye_unconfirmed" {
+			d.byeUnanswered = true
 			s.metrics.warn(sipByeUnconfirmedWarning)
 		}
 	}
@@ -1271,12 +1272,15 @@ func (s *sipCall) nextUnended() *sipDialog {
 
 // bye ends one dialog: 2xx is bye_ok, 481 bye_481 (the far end had already
 // ended it), a challenge is answered once, no answer within the budget is
-// bye_unconfirmed, anything else bye_<code>.
+// bye_unconfirmed, anything else bye_<code>. Each BYE takes the dialog's
+// next CSeq (RFC 3261 §12.2.1.1), so the linger's second one is a new
+// request a far end cannot take for a copy of the first.
 func (s *sipCall) bye(ctx context.Context, d *sipDialog) (outcome string, status int, ms *int64) {
-	cseq := d.inviteCSeq + 1
+	cseq := max(d.inviteCSeq, d.byeCSeq) + 1
 	var credentials []sipHeader
 	for round := 0; ; round++ {
 		req := d.buildBye(s.flow, cseq, credentials)
+		d.byeCSeq = cseq
 		sent := time.Now()
 		in, err := s.ep.roundTripNonInvite(ctx, req, nil)
 		if err != nil {
