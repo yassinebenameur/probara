@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  formatClock,
+  formatCount,
   formatDate,
   formatDateTime,
   formatDateTimeFull,
@@ -132,4 +134,23 @@ test('call-quality figures: MOS to two decimals, loss as the worker prints it, f
   assert.equal(formatJitter(9.96), '10 ms');
   assert.equal(formatJitter(34.4), '34 ms');
   assert.equal(formatJitter(undefined), '—');
+});
+
+test('formatCount groups thousands the same on every locale', () => {
+  assert.equal(formatCount(0), '0');
+  assert.equal(formatCount(999), '999');
+  assert.equal(formatCount(1459), '1,459');
+  assert.equal(formatCount(1234567.4), '1,234,567');
+  assert.equal(formatCount(-12000), '-12,000');
+  assert.equal(formatCount(null), '—');
+  assert.equal(formatCount(Number.NaN), '—');
+});
+
+test('formatClock is the time half of formatTimestamp', () => {
+  const value = '2026-10-01T09:05:42Z';
+  assert.equal(formatClock(value, { tz: 'utc' }), '09:05');
+  assert.equal(formatClock(value, { tz: 'utc', seconds: true }), '09:05:42');
+  assert.ok(formatTimestamp(value).endsWith(` ${formatClock(value, { seconds: true })}`));
+  assert.equal(formatClock(undefined), '—');
+  assert.equal(formatClock('garbage', {}, 'garbage'), 'garbage');
 });

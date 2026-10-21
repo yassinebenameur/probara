@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   calculateLatencyStats,
+  displayStatusFromState,
   displayValueLabel,
   getEffectiveMonitorStatus,
+  isFailingStatus,
   getHTTPDisplayValues,
   monitorTarget,
   shortFailureReason,
@@ -186,4 +188,23 @@ test('shortFailureReason strips Go framing', () => {
   assert.equal(shortFailureReason('header X-Status: != "timeout"'), 'header X-Status: != "timeout"');
   assert.equal(shortFailureReason('', { httpStatus: 502 }), 'HTTP 502');
   assert.equal(shortFailureReason(null), '');
+});
+
+test('displayStatusFromState maps persisted state after paused and maintenance', () => {
+  assert.equal(displayStatusFromState({ enabled: false, in_maintenance: true, current_state: 'down' }), 'paused');
+  assert.equal(displayStatusFromState({ enabled: true, in_maintenance: true, current_state: 'down' }), 'maintenance');
+  assert.equal(displayStatusFromState({ enabled: true, current_state: 'suspect' }), 'degraded');
+  assert.equal(displayStatusFromState({ enabled: true, current_state: 'degraded' }), 'degraded');
+  assert.equal(displayStatusFromState({ enabled: true, current_state: 'up' }), 'up');
+  assert.equal(displayStatusFromState({ enabled: true, current_state: 'down' }), 'down');
+  assert.equal(displayStatusFromState({ enabled: true }), 'unknown');
+  // A location carries no enabled flag: absent is not paused.
+  assert.equal(displayStatusFromState({ current_state: 'down' }), 'down');
+});
+
+test('isFailingStatus counts down and degraded only', () => {
+  assert.deepEqual(
+    (['down', 'degraded', 'unknown', 'up', 'maintenance', 'paused'] as const).filter(isFailingStatus),
+    ['down', 'degraded']
+  );
 });

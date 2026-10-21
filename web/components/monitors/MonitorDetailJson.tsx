@@ -1,11 +1,13 @@
 'use client';
 
 import { Monitor, MonitorAnalyticsResponse } from '@/lib/types';
-import { formatDateTimeFull, RANGES } from '@/lib/format';
+import { formatDateTime, formatDateTimeFull, RANGES } from '@/lib/format';
 import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import { DetailList, DetailRow } from './MonitorFactsCard';
+import { ASIDE_STACK, DETAIL_COLUMNS } from './MonitorAnalyticsOverview';
 
 interface MonitorDetailJsonProps {
   monitor: Monitor;
@@ -40,13 +42,18 @@ export default function MonitorDetailJson({ monitor, analytics }: MonitorDetailJ
         },
         { label: 'Source', value: analytics.source === 'rollup' ? 'Rollups and raw tail' : 'Raw results' },
         { label: 'Coverage', value: analytics.is_partial ? 'Partial' : 'Complete' },
-        { label: 'Coverage start', value: formatDateTimeFull(analytics.coverage_start) },
-        { label: 'Generated', value: formatDateTimeFull(analytics.generated_at) },
+        // Short in the side panel; the full timestamp is the tooltip.
+        {
+          label: 'Coverage start',
+          value: formatDateTime(analytics.coverage_start),
+          title: formatDateTimeFull(analytics.coverage_start),
+        },
+        { label: 'Generated', value: formatDateTime(analytics.generated_at), title: formatDateTimeFull(analytics.generated_at) },
       ]
     : [];
 
   return (
-    <div className="space-y-6">
+    <div className={provenance.length > 0 ? DETAIL_COLUMNS : undefined}>
       <Panel
         title="Raw JSON"
         subtitle="Monitor configuration payload"
@@ -70,16 +77,19 @@ export default function MonitorDetailJson({ monitor, analytics }: MonitorDetailJ
         <pre className="glass-well overflow-x-auto whitespace-pre p-4 font-mono text-xs text-slate-300">{jsonString}</pre>
       </Panel>
       {provenance.length > 0 && (
-        <Panel title="Analytics source" subtitle="How the Overview's figures were computed">
-          <dl className="grid gap-x-6 gap-y-2.5 text-ui sm:grid-cols-2 lg:grid-cols-3">
-            {provenance.map((row) => (
-              <div key={row.label} className="flex justify-between gap-3 sm:block">
-                <dt className="text-slate-400">{row.label}</dt>
-                <dd className="tabular-nums text-slate-200 sm:mt-0.5">{row.value}</dd>
-              </div>
-            ))}
-          </dl>
-        </Panel>
+        <div className={ASIDE_STACK}>
+          <Panel title="Analytics source" subtitle="How the Overview's figures were computed">
+            <DetailList>
+              {provenance.map((row) => (
+                <DetailRow key={row.label} label={row.label}>
+                  <span className="tabular-nums" title={'title' in row ? row.title : undefined}>
+                    {row.value}
+                  </span>
+                </DetailRow>
+              ))}
+            </DetailList>
+          </Panel>
+        </div>
       )}
     </div>
   );

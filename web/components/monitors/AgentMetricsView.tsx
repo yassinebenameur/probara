@@ -3,7 +3,7 @@
 // Curated host overview for agent monitors, fed by the generic metric store
 // (POST /monitors/{id}/metrics/query) instead of per-check metrics_data.
 
-import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChartColumn } from 'lucide-react';
 import {
   MetricQueryRefResult,
@@ -31,6 +31,7 @@ import {
   ChartRow,
   ChartSeries,
   ChartSeriesInput,
+  ChartTile,
   MetricChart,
   RANGE_MS,
   RANGE_STEP_SECONDS,
@@ -178,38 +179,6 @@ function StatCard({ label, value }: { label: string; value: string }) {
     <div className="glass-well flex items-baseline justify-between gap-3 px-4 py-3 sm:block sm:p-4">
       <p className="text-xs text-slate-400">{label}</p>
       <p className="text-sm font-semibold tabular-nums text-white sm:mt-1 sm:text-lg">{value}</p>
-    </div>
-  );
-}
-
-function ChartTile({
-  title,
-  headline,
-  legend,
-  children,
-}: {
-  title: string;
-  headline: ReactNode;
-  legend?: ChartSeries[];
-  children: ReactNode;
-}) {
-  return (
-    <div className="glass-well p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <span className="text-ui font-medium text-slate-200">{title}</span>
-        <span className="text-xs tabular-nums text-slate-400">{headline}</span>
-      </div>
-      {children}
-      {legend && legend.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-          {legend.map((entry) => (
-            <span key={entry.key} className="flex items-center gap-1.5">
-              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} aria-hidden="true" />
-              {entry.name}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -529,6 +498,19 @@ export default function AgentMetricsView({
   const diskIORefLines = rateRuleLines('system.disk.io', diskioResult?.series || []);
   const netRefLines = rateRuleLines('system.network.io', netResult?.series || []);
 
+  const memSwapSeries: ChartSeries[] = [
+    { key: 'mem', name: 'Memory', color: SERIES_COLORS[0] },
+    { key: 'swap', name: 'Swap', color: SERIES_COLORS[1] },
+  ];
+  const diskIOSeries: ChartSeries[] = [
+    { key: 'diskRead', name: 'Read', color: SERIES_COLORS[2] },
+    { key: 'diskWrite', name: 'Write', color: SERIES_COLORS[3] },
+  ];
+  const netSeries: ChartSeries[] = [
+    { key: 'netIn', name: 'In', color: SERIES_COLORS[2] },
+    { key: 'netOut', name: 'Out', color: SERIES_COLORS[3] },
+  ];
+
   const bucketCount = chartRows.reduce(
     (count, row) => (row.cpu !== null && row.cpu !== undefined ? count + 1 : count),
     0
@@ -557,6 +539,9 @@ export default function AgentMetricsView({
           />
         </div>
 
+        {/* Gauges over the facts; side by side from 3xl, the detail page's
+            widest layout (it caps at 100rem, so 1920 and 2560 look alike). */}
+        <div className="grid gap-6 3xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] 3xl:items-center">
         <div className="grid grid-cols-3 gap-6">
           <CircularProgress
             value={cpuPercent}
@@ -585,7 +570,7 @@ export default function AgentMetricsView({
           />
         </div>
 
-        <div className="mt-6 grid gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3">
           <StatCard
             label="Memory"
             value={
@@ -614,6 +599,7 @@ export default function AgentMetricsView({
           <StatCard label="Uptime" value={uptimeSeconds !== null ? formatDurationSeconds(uptimeSeconds) : '—'} />
           <StatCard label="CPU cores" value={coreCount !== null && coreCount > 0 ? `${Math.round(coreCount)}` : '—'} />
         </div>
+        </div>
       </div>
 
       <div className="glass p-5">
@@ -636,7 +622,9 @@ export default function AgentMetricsView({
             No points in the selected range.
           </div>
         ) : (
-          <div className="space-y-4">
+          // One column while the overview has its side column; two from 3xl,
+          // where the capped detail page leaves ~1200px for the main column.
+          <div className="grid gap-4 3xl:grid-cols-2 3xl:[&>*:last-child:nth-child(odd)]:col-span-2">
             <ChartTile title="CPU usage" headline={cpuAvailable ? `${cpuPercent.toFixed(1)}%` : '—'}>
               <MetricChart
                 data={chartRows}
@@ -657,13 +645,11 @@ export default function AgentMetricsView({
                   ? `${memoryPercent.toFixed(1)}%${swapAvailable ? `, swap ${swapPercent.toFixed(1)}%` : ''}`
                   : '—'
               }
+              legend={swapAvailable ? memSwapSeries : undefined}
             >
               <MetricChart
                 data={chartRows}
-                series={[
-                  { key: 'mem', name: 'Memory', color: SERIES_COLORS[0] },
-                  { key: 'swap', name: 'Swap', color: SERIES_COLORS[1] },
-                ]}
+                series={memSwapSeries}
                 range={timeRange}
                 yDomain={[0, 100]}
                 yTickFormatter={percentTick}
@@ -694,18 +680,16 @@ export default function AgentMetricsView({
             <ChartTile
               title="Disk I/O"
               headline={
-                <span className="flex gap-4">
+                <span className="flex gap-3">
                   <span>R {formatRate(latestRow?.diskRead ?? 0)}</span>
                   <span>W {formatRate(latestRow?.diskWrite ?? 0)}</span>
                 </span>
               }
+              legend={diskIOSeries}
             >
               <MetricChart
                 data={chartRows}
-                series={[
-                  { key: 'diskRead', name: 'Read', color: SERIES_COLORS[2] },
-                  { key: 'diskWrite', name: 'Write', color: SERIES_COLORS[3] },
-                ]}
+                series={diskIOSeries}
                 range={timeRange}
                 yDomain={[0, 'auto']}
                 yTickFormatter={formatRateTick}
@@ -718,18 +702,16 @@ export default function AgentMetricsView({
             <ChartTile
               title="Network throughput"
               headline={
-                <span className="flex gap-4">
+                <span className="flex gap-3">
                   <span>↓ {formatRate(latestInRate)}</span>
                   <span>↑ {formatRate(latestOutRate)}</span>
                 </span>
               }
+              legend={netSeries}
             >
               <MetricChart
                 data={chartRows}
-                series={[
-                  { key: 'netIn', name: 'In', color: SERIES_COLORS[2] },
-                  { key: 'netOut', name: 'Out', color: SERIES_COLORS[3] },
-                ]}
+                series={netSeries}
                 range={timeRange}
                 yDomain={[0, 'auto']}
                 yTickFormatter={formatRateTick}

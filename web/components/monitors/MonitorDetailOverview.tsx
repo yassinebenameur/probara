@@ -6,7 +6,7 @@ import type { Sla } from '@/lib/sla';
 import AgentMetricsView from './AgentMetricsView';
 import MetricExplorer from './MetricExplorer';
 import type { TimeRange as AgentTimeRange } from './metric-chart';
-import MonitorAnalyticsOverview from './MonitorAnalyticsOverview';
+import MonitorAnalyticsOverview, { ASIDE_STACK, DETAIL_COLUMNS } from './MonitorAnalyticsOverview';
 import MongoClusterPanels from './MongoClusterPanels';
 import SipCallPanels from './SipCallPanels';
 import { isSipCall } from '@/lib/sip-config';
@@ -22,7 +22,7 @@ interface MonitorDetailOverviewProps {
   slaTarget: number;
   targetSla?: Sla;
   resultsLimit: number;
-  /** Side column (dependencies, configuration); stacks under the charts below xl. */
+  /** Side column (details, dependencies); stacks under the charts below xl. */
   aside?: ReactNode;
 }
 
@@ -63,7 +63,7 @@ export default function MonitorDetailOverview({
     // views), not from check results — no results-loading gate here.
     const agentConfig = monitor.config as AgentMonitorConfig | undefined;
     return (
-      <div className={aside ? 'grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px]' : undefined}>
+      <div className={aside ? DETAIL_COLUMNS : undefined}>
         <div className="min-w-0 space-y-6">
           <AgentMetricsView
             monitorId={monitor.id}
@@ -73,7 +73,7 @@ export default function MonitorDetailOverview({
           />
           <MetricExplorer monitorId={monitor.id} timeRange={agentTimeRange} />
         </div>
-        {aside && <div className="grid grid-cols-1 content-start gap-4 md:grid-cols-2 xl:grid-cols-1">{aside}</div>}
+        {aside && <div className={ASIDE_STACK}>{aside}</div>}
       </div>
     );
   }
@@ -82,24 +82,25 @@ export default function MonitorDetailOverview({
     return <OverviewSkeleton />;
   }
 
+  // The type's own charts sit in the main column under response time, so
+  // they share its range and width instead of trailing the page.
   return (
-    <div className="space-y-6">
-      <MonitorAnalyticsOverview
-        monitor={monitor}
-        analytics={analytics}
-        results={results}
-        timeRange={timeRange}
-        slaTarget={slaTarget}
-        targetSla={targetSla}
-        resultsLimit={resultsLimit}
-        aside={aside}
-      />
+    <MonitorAnalyticsOverview
+      monitor={monitor}
+      analytics={analytics}
+      results={results}
+      timeRange={timeRange}
+      slaTarget={slaTarget}
+      targetSla={targetSla}
+      resultsLimit={resultsLimit}
+      aside={aside}
+    >
       {monitor.type === 'mongodb' && (
         <MongoClusterPanels monitor={monitor} timeRange={timeRange} latestResultAt={results[0]?.created_at} />
       )}
       {isSipCall(monitor.type, monitor.config) && (
         <SipCallPanels monitor={monitor} timeRange={timeRange} latestResultAt={results[0]?.created_at} />
       )}
-    </div>
+    </MonitorAnalyticsOverview>
   );
 }

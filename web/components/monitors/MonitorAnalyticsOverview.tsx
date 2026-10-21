@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useMemo } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -12,11 +12,22 @@ import {
   YAxis,
 } from 'recharts';
 import Link from 'next/link';
+import { Check } from 'lucide-react';
 
 import { CheckResult, Monitor, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
-import { collapseResultRuns, describeRun } from '@/lib/result-runs';
+import { getGroupMembers, getMonitorResults, getMonitorResultsBatch, MONITOR_RESULTS_BATCH_MAX_IDS } from '@/lib/api';
+import {
+  describeRun,
+  foldRunsByLane,
+  laneReachesCut,
+  runStartLabel,
+  type FoldedRun,
+  type ResultRun,
+  type RunSpan,
+} from '@/lib/result-runs';
 import { formatTarget, type Sla } from '@/lib/sla';
 import {
+  formatCount,
   formatDate,
   formatDateTime,
   formatDateTimeFull,
@@ -39,6 +50,7 @@ import {
 } from '@/lib/status-tones';
 import { isPlatformResult, shortFailureReason } from '@/lib/monitor-utils';
 import Pill from '@/components/ui/Pill';
+import { FOCUS_RING } from '@/components/ui/focus';
 // Latency is not a status, so it takes the first series colour (the same
 // one as the dashboard trend), never a status hue or the action orange.
 import {
@@ -118,7 +130,7 @@ export function bucketFailedChecks(checks: number, pct: number | null): number {
  * availability target the headline uses. A single bucket and a 0% bucket
  * both stay visible, which an area chart pinned to its baseline does not.
  */
-function UptimeTrace({
+export function UptimeTrace({
   buckets,
   range,
   windowStart,
@@ -146,7 +158,7 @@ function UptimeTrace({
           const title =
             bucket.pct === null
               ? `${span}: no checks`
-              : `${span}: ${bucket.failed.toLocaleString()} of ${pluralize(bucket.checks, 'check')} failed`;
+              : `${span}: ${formatCount(bucket.failed)} of ${formatCount(bucket.checks)} ${bucket.checks === 1 ? 'check' : 'checks'} failed`;
           return (
             <span
               key={bucket.ts}
@@ -224,10 +236,16 @@ function Reason({ result, timeoutSeconds }: { result: CheckResult; timeoutSecond
   );
 }
 
-function RunTime({ span, truncated }: { span: ReturnType<typeof describeRun>; truncated: boolean }) {
+function RunTime({ run, span, truncated }: { run: ResultRun; span: RunSpan; truncated: boolean }) {
+  // Today's runs drop the date (the column would otherwise crowd out the
+  // reason); the full timestamps stay in the tooltip.
   return (
-    <span title={truncated ? 'This run started before the oldest check fetched' : undefined}>
-      {span.start}
+    <span
+      title={[span.end ? `${span.start} – ${span.end}` : span.start, truncated ? 'This run started before the oldest check fetched' : '']
+        .filter(Boolean)
+        .join('. ')}
+    >
+      {runStartLabel(run)}
       {span.end && (
         <>
           <span className="text-slate-500"> – </span>
@@ -238,10 +256,175 @@ function RunTime({ span, truncated }: { span: ReturnType<typeof describeRun>; tr
   );
 }
 
+const LATEST_RUNS = 10;
+/** Checks fetched per member for a group's Latest checks. */
+const MEMBER_RESULTS_LIMIT = 10;
+
+type LatestRow = FoldedRun & {
+  span: RunSpan;
+  /** The group member the run belongs to (group pages only). */
+  member?: Monitor;
+};
+
+function toRows(folded: FoldedRun[], memberOf?: (result: CheckResult) => Monitor | undefined): LatestRow[] {
+  return folded.slice(0, LATEST_RUNS).map((row) => ({
+    ...row,
+    span: describeRun(row.run, { truncated: row.truncated }),
+    member: memberOf?.(row.run.latest),
+  }));
+}
+
 /**
- * The newest checks, independent of the time range. Consecutive checks with
- * the same outcome fold into a run; the oldest run is marked as a lower bound
- * when the page was cut off by `fetchLimit`.
+ * The folded runs as a table (a stacked list on phones). The Member and
+ * Location columns tell interleaved lanes apart: members on a group,
+ * locations on a multi-location monitor.
+ */
+function LatestChecksTable({
+  rows,
+  caption,
+  showLatency,
+  showMember,
+  showLocation,
+  timeoutSeconds,
+  emptyText,
+}: {
+  rows: LatestRow[];
+  caption: string;
+  showLatency: boolean;
+  showMember: boolean;
+  showLocation: boolean;
+  timeoutSeconds: number;
+  emptyText: string;
+}) {
+  const latencyOf = (row: LatestRow) =>
+    row.run.latest.status === 'success' && (!row.member || measuresLatency(row.member.type))
+      ? formatLatency(row.run.latest.latency_ms)
+      : null;
+  return (
+    <section className="glass overflow-hidden">
+      <div className="px-5 pb-3 pt-4">
+        <h3 className="text-title font-semibold text-white">Latest checks</h3>
+        <p className="mt-0.5 text-xs text-slate-500">{caption}</p>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="border-t border-divider px-5 py-6 text-center text-ui text-slate-500">{emptyText}</p>
+      ) : (
+        <>
+          {/* Phones: one stacked row per run instead of a sideways-scrolling table. */}
+          <ul className="divide-y divide-divider border-t border-divider sm:hidden">
+            {rows.map((row) => {
+              const { run, span, truncated, member } = row;
+              const latency = showLatency ? latencyOf(row) : null;
+              return (
+                <li key={run.latest.id} className="space-y-1 px-5 py-3">
+                  {member && <p className="truncate text-ui font-medium text-slate-200">{member.name}</p>}
+                  <div className="flex items-center gap-2">
+                    <Pill size="xs" tone={checkResultTone(run.latest.status)}>
+                      {checkResultLabel(run.latest.status)}
+                    </Pill>
+                    {span.count && <span className="text-xs tabular-nums text-slate-500">{span.count}</span>}
+                    <SourceTag result={run.latest} />
+                    {showLocation && run.latest.location_name && <Pill size="xs">{run.latest.location_name}</Pill>}
+                    {latency && <span className="ml-auto text-ui tabular-nums text-slate-300">{latency}</span>}
+                  </div>
+                  <p className="font-mono text-2xs text-slate-400">
+                    <RunTime run={run} span={span} truncated={truncated} />
+                    {span.duration && <span className="ml-2 font-sans text-slate-500">{span.duration}</span>}
+                  </p>
+                  <div className="text-xs text-slate-400">
+                    <Reason result={run.latest} timeoutSeconds={member?.timeout_seconds ?? timeoutSeconds} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+
+          <div className="hidden overflow-x-auto sm:block">
+            <table className="w-full">
+              <thead>
+                <tr className="border-y border-divider text-left text-xs font-medium text-slate-500">
+                  <th className="px-5 py-2.5 font-medium">Time ({timezoneLabel()})</th>
+                  <th className="px-3 py-2.5 font-medium">Status</th>
+                  {showLatency && <th className="px-3 py-2.5 text-right font-medium">Latency</th>}
+                  {showMember && <th className="px-3 py-2.5 font-medium">Member</th>}
+                  {showLocation && <th className="px-3 py-2.5 font-medium">Location</th>}
+                  <th className="px-5 py-2.5 font-medium">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const { run, span, truncated, member } = row;
+                  const latency = showLatency ? latencyOf(row) : null;
+                  return (
+                    <tr key={run.latest.id} className="border-b border-divider last:border-0">
+                      <td className="whitespace-nowrap px-5 py-2.5 font-mono text-xs text-slate-400">
+                        <RunTime run={run} span={span} truncated={truncated} />
+                        {span.duration && <span className="ml-2 font-sans text-slate-500">{span.duration}</span>}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Pill size="xs" tone={checkResultTone(run.latest.status)}>
+                            {checkResultLabel(run.latest.status)}
+                          </Pill>
+                          {span.count && <span className="text-xs tabular-nums text-slate-500">{span.count}</span>}
+                          <SourceTag result={run.latest} />
+                        </span>
+                      </td>
+                      {showLatency && (
+                        <td
+                          className="whitespace-nowrap px-3 py-2.5 text-right text-ui tabular-nums text-slate-300"
+                          title={
+                            run.latest.status !== 'success' && typeof run.latest.latency_ms === 'number'
+                              ? `Failed after ${formatLatency(run.latest.latency_ms)}`
+                              : undefined
+                          }
+                        >
+                          {latency ?? <span className="text-slate-500">—</span>}
+                        </td>
+                      )}
+                      {showMember && (
+                        <td className="max-w-[14rem] px-3 py-2.5 text-ui text-slate-200">
+                          {member ? (
+                            <Link
+                              href={`/monitors/${member.id}`}
+                              title={member.name}
+                              className={`block truncate rounded transition-colors hover:text-cyan-300 hover:underline ${FOCUS_RING}`}
+                            >
+                              {member.name}
+                            </Link>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </td>
+                      )}
+                      {showLocation && (
+                        <td className="whitespace-nowrap px-3 py-2.5 text-ui text-slate-300">
+                          {run.latest.location_name || <span className="text-slate-500">Default</span>}
+                        </td>
+                      )}
+                      <td className="w-full max-w-0 px-5 py-2.5 text-ui text-slate-300">
+                        <Reason result={run.latest} timeoutSeconds={member?.timeout_seconds ?? timeoutSeconds} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+const locationLane = (result: CheckResult) => result.location_id ?? result.location_name ?? '';
+
+/**
+ * The newest checks, independent of the time range, folded into runs (per
+ * location on a multi-location monitor, whose checks interleave). A lane's
+ * oldest run is a lower bound when the page hit `fetchLimit` and the lane
+ * reaches back to the oldest result fetched.
  */
 function LatestChecks({
   results,
@@ -252,121 +435,158 @@ function LatestChecks({
   monitor: Monitor;
   fetchLimit: number;
 }) {
-  const allRuns = collapseResultRuns(results);
-  const runs = allRuns.slice(0, 10);
-  const pageFull = results.length >= fetchLimit;
   const showLocation = (monitor.locations?.length ?? 0) > 0;
-  // A group's results are its members' checks (unnamed here) plus its own
-  // roll-up records, so its caption says so.
-  const isGroup = monitor.type === 'group';
-  const showLatency = measuresLatency(monitor.type);
-  const rows = runs.map((run, index) => {
-    const truncated = pageFull && index === allRuns.length - 1;
-    return { run, truncated, span: describeRun(run, { truncated }) };
-  });
+  const rows = useMemo(() => {
+    const pageFull = results.length >= fetchLimit;
+    const oldest = results[results.length - 1];
+    return toRows(
+      foldRunsByLane(results, showLocation ? locationLane : () => '', (laneOldest) =>
+        pageFull ? laneReachesCut(laneOldest, oldest, monitor.interval_seconds) : false
+      )
+    );
+  }, [results, fetchLimit, showLocation, monitor.interval_seconds]);
 
   return (
-    <section className="glass overflow-hidden">
-      <div className="px-5 pb-3 pt-4">
-        <h3 className="text-title font-semibold text-white">Latest checks</h3>
-        <p className="mt-0.5 text-xs text-slate-500">
-          {isGroup
-            ? `The last ${fetchLimit} checks across the group's members, whatever the time range. Repeats are folded into one row.`
-            : `The last ${fetchLimit} checks, whatever the time range. Repeats are folded into one row.`}
-        </p>
-      </div>
+    <LatestChecksTable
+      rows={rows}
+      caption={
+        showLocation
+          ? `The last ${fetchLimit} checks, whatever the time range. Repeats are folded into one row per location.`
+          : `The last ${fetchLimit} checks, whatever the time range. Repeats are folded into one row.`
+      }
+      showLatency={measuresLatency(monitor.type)}
+      showMember={false}
+      showLocation={showLocation}
+      timeoutSeconds={monitor.timeout_seconds}
+      emptyText="No checks recorded yet."
+    />
+  );
+}
 
-      {rows.length === 0 ? (
-        <p className="border-t border-divider px-5 py-8 text-center text-sm text-slate-500">No checks recorded yet.</p>
-      ) : (
-        <>
-          {/* Phones: one stacked row per run instead of a sideways-scrolling table. */}
-          <ul className="divide-y divide-divider border-t border-divider sm:hidden">
-            {rows.map(({ run, span, truncated }) => (
-              <li key={run.latest.id} className="space-y-1 px-5 py-3">
-                <div className="flex items-center gap-2">
-                  <Pill size="xs" tone={checkResultTone(run.latest.status)}>
-                    {checkResultLabel(run.latest.status)}
-                  </Pill>
-                  {span.count && <span className="text-xs tabular-nums text-slate-500">{span.count}</span>}
-                  <SourceTag result={run.latest} />
-                  {showLocation && run.latest.location_name && <Pill size="xs">{run.latest.location_name}</Pill>}
-                  {showLatency && (
-                    <span className="ml-auto text-ui tabular-nums text-slate-300">
-                      {run.latest.status === 'success' ? formatLatency(run.latest.latency_ms) : ''}
-                    </span>
-                  )}
-                </div>
-                <p className="font-mono text-2xs text-slate-400">
-                  <RunTime span={span} truncated={truncated} />
-                  {span.duration && <span className="ml-2 font-sans text-slate-500">{span.duration}</span>}
-                </p>
-                <div className="text-xs text-slate-400">
-                  <Reason result={run.latest} timeoutSeconds={monitor.timeout_seconds} />
-                </div>
-              </li>
-            ))}
-          </ul>
+// One batch request; per-member reads when the API predates the batch
+// endpoint (an older API answers it 404), capped so a large group does not
+// fan out into dozens of requests.
+const MEMBER_FALLBACK_MAX = 25;
+async function loadMemberResults(ids: string[]): Promise<Record<string, CheckResult[]>> {
+  try {
+    return (await getMonitorResultsBatch(ids, { limit: MEMBER_RESULTS_LIMIT })).results ?? {};
+  } catch {
+    const subset = ids.slice(0, MEMBER_FALLBACK_MAX);
+    const responses = await Promise.all(subset.map((id) => getMonitorResults(id, { limit: MEMBER_RESULTS_LIMIT })));
+    return Object.fromEntries(subset.map((id, index) => [id, responses[index]?.results ?? []]));
+  }
+}
 
-          <div className="hidden overflow-x-auto sm:block">
-            <table className="w-full">
-              <thead>
-                <tr className="border-y border-divider text-left text-xs font-medium text-slate-500">
-                  <th className="px-5 py-2.5 font-medium">Time ({timezoneLabel()})</th>
-                  <th className="px-3 py-2.5 font-medium">Status</th>
-                  {showLatency && <th className="px-3 py-2.5 text-right font-medium">Latency</th>}
-                  {showLocation && <th className="px-3 py-2.5 font-medium">Location</th>}
-                  <th className="px-5 py-2.5 font-medium">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(({ run, span, truncated }) => (
-                  <tr key={run.latest.id} className="border-b border-divider last:border-0">
-                    <td className="whitespace-nowrap px-5 py-2.5 font-mono text-xs text-slate-400">
-                      <RunTime span={span} truncated={truncated} />
-                      {span.duration && <span className="ml-2 font-sans text-slate-500">{span.duration}</span>}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2.5">
-                      <span className="inline-flex items-center gap-1.5">
-                        <Pill size="xs" tone={checkResultTone(run.latest.status)}>
-                          {checkResultLabel(run.latest.status)}
-                        </Pill>
-                        {span.count && <span className="text-xs tabular-nums text-slate-500">{span.count}</span>}
-                        <SourceTag result={run.latest} />
-                      </span>
-                    </td>
-                    {showLatency && (
-                      <td
-                        className="whitespace-nowrap px-3 py-2.5 text-right text-ui tabular-nums text-slate-300"
-                        title={
-                          run.latest.status !== 'success' && typeof run.latest.latency_ms === 'number'
-                            ? `Failed after ${formatLatency(run.latest.latency_ms)}`
-                            : undefined
-                        }
-                      >
-                        {run.latest.status === 'success' ? formatLatency(run.latest.latency_ms) : <span className="text-slate-500">—</span>}
-                      </td>
-                    )}
-                    {showLocation && (
-                      <td className="whitespace-nowrap px-3 py-2.5 text-ui text-slate-300">
-                        {run.latest.location_name || <span className="text-slate-500">Default</span>}
-                      </td>
-                    )}
-                    <td className="w-full max-w-0 px-5 py-2.5 text-ui text-slate-300">
-                      <Reason result={run.latest} timeoutSeconds={monitor.timeout_seconds} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </section>
+/**
+ * A group's latest checks, laned by member. The group's own results are its
+ * members' checks merged without saying whose they are, which interleave
+ * into an unreadable list, so this reads each member's newest checks in one
+ * batch request and folds them per member (and location). `refreshKey`
+ * changes when the page's poll brings new results.
+ */
+function GroupLatestChecks({ monitor, refreshKey }: { monitor: Monitor; refreshKey: string | undefined }) {
+  const [members, setMembers] = useState<Monitor[] | null>(null);
+  const [batch, setBatch] = useState<Record<string, CheckResult[]> | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getGroupMembers(monitor.id)
+      .then((items) => !cancelled && setMembers(items || []))
+      .catch(() => {
+        if (cancelled) return;
+        setMembers([]);
+        setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [monitor.id]);
+
+  const memberIds = useMemo(
+    () => (members ?? []).slice(0, MONITOR_RESULTS_BATCH_MAX_IDS).map((m) => m.id),
+    [members]
+  );
+
+  useEffect(() => {
+    if (memberIds.length === 0) return;
+    let cancelled = false;
+    loadMemberResults(memberIds)
+      .then((results) => {
+        if (cancelled) return;
+        setBatch(results);
+        setFailed(false);
+      })
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+    };
+  }, [memberIds, refreshKey]);
+
+  const rows = useMemo(() => {
+    if (!members || !batch) return [];
+    const memberOfResult = new Map<string, Monitor>();
+    const cuts = new Map<string, { oldest: CheckResult; interval: number } | null>();
+    const merged: CheckResult[] = [];
+    for (const member of members) {
+      // A nested group's synthetic "current status" row is not a check.
+      const own = (batch[member.id] ?? []).filter((r) => r.result_source !== 'derived');
+      const full = own.length >= MEMBER_RESULTS_LIMIT;
+      const oldest = own[own.length - 1];
+      for (const result of own) {
+        memberOfResult.set(result.id, member);
+        merged.push(result);
+      }
+      // Remember per member whether its page was cut and where it ends.
+      cuts.set(member.id, full ? { oldest, interval: member.interval_seconds } : null);
+    }
+    merged.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+    const memberOf = (result: CheckResult) => memberOfResult.get(result.id);
+    const folded = foldRunsByLane(
+      merged,
+      (result) => `${memberOf(result)?.id ?? ''}\u0000${locationLane(result)}`,
+      (laneOldest) => {
+        const cut = cuts.get(memberOf(laneOldest)?.id ?? '');
+        return cut ? laneReachesCut(laneOldest, cut.oldest, cut.interval) : false;
+      }
+    );
+    return toRows(folded, memberOf);
+  }, [members, batch]);
+
+  const showLocation = rows.some((row) => row.run.latest.location_name);
+  const loading = members === null || (memberIds.length > 0 && batch === null && !failed);
+
+  return (
+    <LatestChecksTable
+      rows={rows}
+      caption={`Each member's last ${MEMBER_RESULTS_LIMIT} checks, whatever the time range. Repeats are folded into one row per member.`}
+      showLatency
+      showMember
+      showLocation={showLocation}
+      timeoutSeconds={monitor.timeout_seconds}
+      emptyText={
+        loading
+          ? 'Loading member checks…'
+          : failed
+            ? 'Could not load the members’ checks.'
+            : members?.length === 0
+              ? 'This group has no members yet.'
+              : 'No checks recorded yet.'
+      }
+    />
   );
 }
 
 // ── Overview ─────────────────────────────────────────────────────────────
+
+/**
+ * The overview's two columns: charts and lists, then a side column of
+ * panels (details, members, server, dependencies), 320px from xl and 360px
+ * from 2xl (1536px), where the main column has room to give. Below xl the
+ * side panels drop under the main column, two across from md.
+ */
+export const DETAIL_COLUMNS = 'grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_360px]';
+export const ASIDE_STACK = 'grid grid-cols-1 content-start gap-6 md:grid-cols-2 xl:grid-cols-1';
 
 export default function MonitorAnalyticsOverview({
   monitor,
@@ -377,6 +597,7 @@ export default function MonitorAnalyticsOverview({
   targetSla,
   resultsLimit,
   aside,
+  children,
 }: {
   monitor: Monitor;
   analytics: MonitorAnalyticsResponse | null;
@@ -388,8 +609,13 @@ export default function MonitorAnalyticsOverview({
   targetSla?: Sla;
   /** How many results the page fetches for Latest checks. */
   resultsLimit: number;
-  /** Side column (dependencies, configuration) rendered next to the charts. */
+  /** Side column (details, dependencies) rendered next to the charts. */
   aside?: ReactNode;
+  /**
+   * Type-specific charts (Mongo cluster, SIP call timing): in the main
+   * column right after response time, ahead of the lists.
+   */
+  children?: ReactNode;
 }) {
   const summary = analytics?.summary;
   const summaryHasData = summary?.has_data ?? false;
@@ -531,21 +757,23 @@ export default function MonitorAnalyticsOverview({
             value={formatLatency(latencyValue)}
             valueClassName={latencyValue === undefined || latencyValue === null ? 'text-slate-500' : 'text-white'}
             caption={
-              latencyValue === undefined || latencyValue === null
-                ? lastFailed
-                  ? `no successful checks; last failure took ${formatLatency(lastFailed.latency_ms)}`
-                  : 'no successful checks'
-                : 'successful checks'
+              totalChecks === 0
+                ? 'no checks in range'
+                : latencyValue === undefined || latencyValue === null
+                  ? lastFailed
+                    ? `no successful checks; last failure took ${formatLatency(lastFailed.latency_ms)}`
+                    : 'no successful checks'
+                  : 'successful checks'
             }
           />
         )}
         <Stat
           label="Checks"
-          value={totalChecks.toLocaleString()}
+          value={formatCount(totalChecks)}
           caption={
             totalChecks === 0 ? undefined : failedChecks > 0 ? (
               <span className={UPTIME_TONE_TEXT[failedChecksTone(failedChecks, totalChecks)]}>
-                {failedChecks.toLocaleString()} failed
+                {formatCount(failedChecks)} failed
               </span>
             ) : (
               'all passed'
@@ -554,7 +782,7 @@ export default function MonitorAnalyticsOverview({
         />
       </StatStrip>
 
-      <div className={aside ? 'grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px]' : undefined}>
+      <div className={aside ? DETAIL_COLUMNS : undefined}>
         <div className="min-w-0 space-y-6">
           {showLatency && (
             <section className="glass p-5">
@@ -637,12 +865,16 @@ export default function MonitorAnalyticsOverview({
                   )}
                 </div>
               ) : (
-                <p className="glass-well px-4 py-6 text-center text-sm text-slate-500">
-                  No successful checks in this range. Latency is measured on successes only.
+                <p className="glass-well px-4 py-5 text-center text-ui text-slate-500">
+                  {totalChecks === 0
+                    ? `No checks in the ${rangeLabel}.`
+                    : `No successful checks in the ${rangeLabel}. Latency is measured on successes only.`}
                 </p>
               )}
             </section>
           )}
+
+          {children}
 
           <section className="glass p-5">
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -665,8 +897,12 @@ export default function MonitorAnalyticsOverview({
               )}
             </div>
             {downtimePeriods.length === 0 ? (
-              <p className="glass-well px-4 py-6 text-center text-sm text-slate-500">
-                No downtime in the {rangeLabel}.
+              // A check mark only for a real all-clear: no checks is no news.
+              <p className="flex items-center gap-2 text-ui text-slate-400">
+                {summaryHasData && (
+                  <Check className="h-4 w-4 shrink-0 text-emerald-400" strokeWidth={2} aria-hidden="true" />
+                )}
+                {summaryHasData ? `No downtime in the ${rangeLabel}.` : `No checks in the ${rangeLabel}.`}
               </p>
             ) : (
               <ul className="divide-y divide-divider">
@@ -679,19 +915,19 @@ export default function MonitorAnalyticsOverview({
                       key={`${period.start_time}-${period.end_time}`}
                       className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-ui tabular-nums"
                     >
-                      <span className="text-slate-300" title={`${formatDateTimeFull(period.start_time)} to ${formatDateTimeFull(period.end_time)}`}>
+                      <span className="text-slate-200" title={`${formatDateTimeFull(period.start_time)} to ${formatDateTimeFull(period.end_time)}`}>
                         {start}
                         <span className="text-slate-500"> – </span>
                         {period.is_open ? 'now' : sameDay ? end.split(', ')[1] : end}
-                      </span>
-                      <span className="text-slate-400">
-                        {formatDuration((new Date(period.end_time).getTime() - new Date(period.start_time).getTime()) / 1000)}
                       </span>
                       {period.is_open && (
                         <Pill size="xs" tone="danger" dot>
                           Ongoing
                         </Pill>
                       )}
+                      <span className="ml-auto text-slate-400">
+                        {formatDuration((new Date(period.end_time).getTime() - new Date(period.start_time).getTime()) / 1000)}
+                      </span>
                     </li>
                   );
                 })}
@@ -702,10 +938,14 @@ export default function MonitorAnalyticsOverview({
             )}
           </section>
 
-          <LatestChecks results={results} monitor={monitor} fetchLimit={resultsLimit} />
+          {monitor.type === 'group' ? (
+            <GroupLatestChecks monitor={monitor} refreshKey={results[0]?.created_at} />
+          ) : (
+            <LatestChecks results={results} monitor={monitor} fetchLimit={resultsLimit} />
+          )}
         </div>
 
-        {aside && <div className="grid grid-cols-1 content-start gap-4 md:grid-cols-2 xl:grid-cols-1">{aside}</div>}
+        {aside && <div className={ASIDE_STACK}>{aside}</div>}
       </div>
     </div>
   );

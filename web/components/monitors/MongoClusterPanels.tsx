@@ -11,12 +11,14 @@
 
 import { useMemo } from 'react';
 import { Monitor, MonitorAnalyticsRange, MongoDBMetrics, MongoDBMonitorConfig } from '@/lib/types';
+import { formatCount } from '@/lib/format';
 import { formatBytes } from '@/lib/metrics';
 import { pickSnapshots, snapshotStepMs, type TimedSnapshot } from '@/lib/metric-snapshots';
 import { useMetricsSnapshots } from '@/lib/useMetricsSnapshots';
 import Callout from '@/components/ui/Callout';
 import InfoTip from '@/components/ui/InfoTip';
 import {
+  ChartTile,
   MetricChart,
   buildChartRows,
   SERIES_COLORS,
@@ -46,7 +48,7 @@ const BYTES_AXIS_WIDTH = 76;
 type Point = [number, number];
 
 const secondsValue = (v: number) => `${Math.round(v)}s`;
-const countValue = (v: number) => `${Math.round(v).toLocaleString()}`;
+const countValue = (v: number) => formatCount(v);
 const bytesTick = (v: number) => formatBytes(v);
 const rateValue = (v: number) => `${formatBytes(v)}/s`;
 const opsValue = (v: number) => `${v >= 10 ? Math.round(v) : v.toFixed(1)}/s`;
@@ -272,10 +274,17 @@ export default function MongoClusterPanels({
     return { panels: specs, unauthorized: isUnauthorized };
   }, [data, monitor.interval_seconds, config.warn_replication_lag_seconds, config.max_replication_lag_seconds]);
 
+  // The range window, clamped like the snapshots to raw retention, so the
+  // charts line up with the response-time chart above them.
+  const xDomain = useMemo<[number, number] | undefined>(() => {
+    const start = data ? Date.parse(data.coverage_start) : NaN;
+    return Number.isFinite(start) ? [start, Date.now()] : undefined;
+  }, [data]);
+
   if (panels.length === 0 && !unauthorized) return null;
 
   return (
-    <div className="glass p-5">
+    <section className="glass p-5">
       <div className="mb-4 flex items-center gap-1.5">
         <h3 className="text-title font-semibold text-white">Cluster metrics</h3>
         <InfoTip inLabel ariaLabel="About cluster metrics">
@@ -293,38 +302,27 @@ export default function MongoClusterPanels({
           Cluster checks are enabled but skipped — grant the monitoring user the clusterMonitor role.
         </Callout>
       )}
-      <div className="grid gap-4 md:grid-cols-2">
+      {/* Three across from 3xl, the detail page's widest layout (it caps at
+          100rem, so 1920 and 2560 look alike). */}
+      <div className="grid gap-4 lg:grid-cols-2 3xl:grid-cols-3">
         {panels.map((panel) => (
-          <div key={panel.title} className="glass-well p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <span className="text-ui font-medium text-slate-200">{panel.title}</span>
-              <span className="text-xs tabular-nums text-slate-400">{panel.headline}</span>
-            </div>
+          <ChartTile key={panel.title} title={panel.title} headline={panel.headline} legend={panel.series}>
             <MetricChart
               data={panel.rows}
               series={panel.series}
               range={chartRangeFor(timeRange)}
+              xDomain={xDomain}
               yDomain={panel.yDomain}
               yTickFormatter={panel.yTickFormatter}
               valueFormatter={panel.valueFormatter}
-              height={150}
+              height={160}
               referenceLines={panel.referenceLines}
               syncId=""
               yAxisWidth={panel.yAxisWidth}
             />
-            {panel.series.length > 1 && (
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-                {panel.series.map((s) => (
-                  <span key={s.key} className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.color }} aria-hidden="true" />
-                    {s.name}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          </ChartTile>
         ))}
       </div>
-    </div>
+    </section>
   );
 }
