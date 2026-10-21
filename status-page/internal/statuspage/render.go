@@ -56,6 +56,10 @@ type statusPageRenderView struct {
 	MonitorCount        int
 	MaintenanceCount    int
 	GlobalUptimePercent string
+	// The 1h fields were added after the others; custom templates that do
+	// not reference them keep working (template data is append-only).
+	GlobalUptime1hJSON  string
+	GlobalUptime1hValue string
 	GlobalUptime24JSON  string
 	GlobalUptime7JSON   string
 	GlobalUptime30JSON  string
@@ -135,6 +139,7 @@ type statusPageMonitorView struct {
 	LatencyText            string
 	LatencySort            int
 	UptimeText             string
+	Uptime1hValue          string
 	Uptime24Value          string
 	Uptime7Value           string
 	Uptime30Value          string
@@ -146,6 +151,7 @@ type statusPageMonitorView struct {
 	TLSDetail              string
 	CertExpiresSoon        bool
 	History1hJSON          string
+	ExpandedHistory1hJSON  string
 	History24hJSON         string
 	History7dJSON          string
 	History30dJSON         string
@@ -371,18 +377,22 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		view.OverallSummary = fmt.Sprintf("%d monitored services are healthy", view.OperationalCount)
 	}
 
+	global1hRaw := sliceToBarPoints(data.UptimeHistory1h)
 	global24Raw := sliceToBarPoints(data.UptimeHistory1)
 	global7Raw := sliceToBarPoints(trimDailyHistory(data.UptimeHistory7, data.UptimeHistory30, 7))
 	global30Raw := sliceToBarPoints(trimDailyHistory(data.UptimeHistory30, data.UptimeHistory90, 30))
 	global90Raw := sliceToBarPoints(trimDailyHistory(data.UptimeHistory90, data.UptimeHistory365, 90))
+	global1h := fixedStripPoints(global1hRaw, globalStripCellCount("1h"))
 	global24 := fixedStripPoints(global24Raw, globalStripCellCount("24h"))
 	global7 := fixedStripPoints(global7Raw, globalStripCellCount("7d"))
 	global30 := fixedStripPoints(global30Raw, globalStripCellCount("30d"))
 	global90 := fixedStripPoints(global90Raw, globalStripCellCount("90d"))
+	view.GlobalUptime1hJSON = mustJSON(global1h)
 	view.GlobalUptime24JSON = mustJSON(global24)
 	view.GlobalUptime7JSON = mustJSON(global7)
 	view.GlobalUptime30JSON = mustJSON(global30)
 	view.GlobalUptime90JSON = mustJSON(global90)
+	view.GlobalUptime1hValue = uptimeValue(averageBarPoints(global1hRaw))
 	view.GlobalUptime24Value = uptimeValue(averageBarPoints(global24Raw))
 	view.GlobalUptime7Value = uptimeValue(averageBarPoints(global7Raw))
 	view.GlobalUptime30Value = uptimeValue(averageBarPoints(global30Raw))
@@ -566,16 +576,20 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 		}
 	}
 
+	history1hRaw := sliceToBarPoints(monitor.UptimeHistory1h)
 	history24Raw := sliceToBarPoints(monitor.UptimeHistory24h)
 	history7Raw := sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory7d, monitor.UptimeHistory30d, 7))
 	history30Raw := sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory30d, monitor.UptimeHistory90d, 30))
 	history90Raw := sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory90d, monitor.UptimeHistory365d, 90))
+	history1hMonitor := fixedStripPoints(history1hRaw, monitorStripCellCount("1h"))
+	history1hExpanded := fixedStripPoints(history1hRaw, expandedStripCellCount("1h"))
 	history24 := fixedStripPoints(history24Raw, monitorStripCellCount("24h"))
 	history7 := fixedStripPoints(history7Raw, monitorStripCellCount("7d"))
 	history30Monitor := fixedStripPoints(history30Raw, monitorStripCellCount("30d"))
 	history90Monitor := fixedStripPoints(history90Raw, monitorStripCellCount("90d"))
 	history30Expanded := fixedStripPoints(history30Raw, expandedStripCellCount("30d"))
 	history90Expanded := fixedStripPoints(history90Raw, expandedStripCellCount("90d"))
+	uptime1hValue := uptimeValue(averageBarPoints(history1hRaw))
 	uptime24Value := uptimeValue(averageBarPoints(history24Raw))
 	uptime7Value := uptimeValue(averageBarPoints(history7Raw))
 	uptime30Value := uptimeValue(averageBarPoints(history30Raw))
@@ -600,6 +614,7 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 		LatencyText:            latencyText,
 		LatencySort:            latencySort,
 		UptimeText:             uptime24Value,
+		Uptime1hValue:          uptime1hValue,
 		Uptime24Value:          uptime24Value,
 		Uptime7Value:           uptime7Value,
 		Uptime30Value:          uptime30Value,
@@ -610,7 +625,8 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 		MonitorDetailLine:      detailLine,
 		TLSDetail:              tlsDetail,
 		CertExpiresSoon:        monitor.CertExpiresSoon,
-		History1hJSON:          mustJSON(sliceToBarPoints(monitor.UptimeHistory1h)),
+		History1hJSON:          mustJSON(history1hMonitor),
+		ExpandedHistory1hJSON:  mustJSON(history1hExpanded),
 		History24hJSON:         mustJSON(history24),
 		History7dJSON:          mustJSON(history7),
 		History30dJSON:         mustJSON(history30Monitor),
@@ -682,6 +698,8 @@ func summaryCaption(monitor MonitorStatus) string {
 
 func monitorUptimeLabel(rangeName string) string {
 	switch rangeName {
+	case "1h":
+		return "1h uptime"
 	case "24h":
 		return "24h uptime"
 	case "7d":
