@@ -428,6 +428,34 @@ export interface SIPCallConfig {
   sdp_address?: string;
   // Adds X-Probara-Probe: 1.
   probe_header?: boolean;
+  // Measures the hold's audio: answer mode, hold_ms >= 3000 (6000 for
+  // two_way), expected_status unset or 2xx (Go shared/models sip_media.go).
+  media?: SIPMediaConfig;
+}
+
+// What a test call's audio must prove: none measures and reports only, audio
+// needs the far end's audio to reach the probe, two_way that and the far
+// end's word that the probe's arrived (an echo of it or an RTCP report about
+// it), echo the probe's own audio back.
+export type SIPMediaExpect = 'none' | 'audio' | 'two_way' | 'echo';
+
+// call.media. Keys are strict: the API and the worker refuse any key that is
+// not one of these. Thresholds apply to every measured basis and are refused
+// with expect none; warn adds a warning, max and min fail the check.
+export interface SIPMediaConfig {
+  expect: SIPMediaExpect;
+  // Effective loss in percent, above 0 and below 100.
+  warn_loss_pct?: number;
+  max_loss_pct?: number;
+  // Mean RFC 3550 jitter, 1-1000.
+  warn_jitter_ms?: number;
+  max_jitter_ms?: number;
+  // The MOS-CQE estimate, 1-4.3; lower is worse, so warn sits above min.
+  warn_mos?: number;
+  min_mos?: number;
+  // The echo's median round trip, else RTCP's, 1-5000.
+  warn_rtt_ms?: number;
+  max_rtt_ms?: number;
 }
 
 // Pasted TLS material shared by the database monitor types: CA PEM for

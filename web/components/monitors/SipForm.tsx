@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, PhoneCall, PlugZap, XCircle } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, Location } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMediaExpect, SIPMonitorConfig, Location } from '@/lib/types';
 import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
 import {
   buildSipConfig,
@@ -10,11 +10,18 @@ import {
   parseWhole,
   sipCallsPerDay,
   sipCallTarget,
+  sipMediaMinHoldMs,
   validateSipCallFields,
   SipFormFields,
+  SipMediaThresholdField,
   SIP_CALL_MAX_HOLD_MS,
   SIP_CALL_MAX_TIMEOUT_SECONDS,
+  SIP_CALL_MIN_ANSWER_BUDGET_MS,
   SIP_CALL_MIN_INTERVAL_SECONDS,
+  SIP_MEDIA_MAX_JITTER_MS,
+  SIP_MEDIA_MAX_MOS,
+  SIP_MEDIA_MAX_RTT_MS,
+  SIP_MEDIA_MIN_MOS,
 } from '@/lib/sip-config';
 import { sipCallSummary, sipTestWarnings } from '@/lib/sip-metrics';
 import { buildSipRequest, initialSipFormState, sipFieldsFromForm } from '@/lib/monitor-form/sip';
@@ -55,7 +62,10 @@ type TestState =
 // test-call domain rule) lives only under method invite, the answer
 // thresholds and hold only in answer mode, the nameserver only under
 // rfc3263, and the certificate threshold only over TLS (which turning
-// "Locate via DNS" off can change along with the resolution).
+// "Locate via DNS" off can change along with the resolution). Call quality
+// moves the hold floor and refuses a non-2xx expected status, and its
+// thresholds live only while it is on, in answer mode, outside Measure only.
+const SIP_MEDIA_THRESHOLD_RELATED = ['call_media', 'call_media_expect', 'call_mode', 'method'];
 const SIP_RELATED_FIELDS: Record<string, string[]> = {
   timeout_seconds: ['interval_seconds', 'method'],
   interval_seconds: ['method'],
@@ -68,12 +78,20 @@ const SIP_RELATED_FIELDS: Record<string, string[]> = {
   call_from_display: ['method'],
   call_from_domain: ['method'],
   call_sdp_address: ['method'],
-  call_hold_ms: ['timeout_seconds', 'call_mode', 'method'],
+  call_hold_ms: ['timeout_seconds', 'call_mode', 'method', 'call_media', 'call_media_expect'],
   call_warn_pdd_ms: ['call_max_pdd_ms', 'method'],
   call_max_pdd_ms: ['method'],
   call_warn_answer_ms: ['call_max_answer_ms', 'call_mode', 'method'],
   call_max_answer_ms: ['call_mode', 'method'],
-  expected_status: ['call_mode', 'method'],
+  expected_status: ['call_mode', 'method', 'call_media'],
+  call_media_warn_loss_pct: ['call_media_max_loss_pct', ...SIP_MEDIA_THRESHOLD_RELATED],
+  call_media_max_loss_pct: SIP_MEDIA_THRESHOLD_RELATED,
+  call_media_warn_jitter_ms: ['call_media_max_jitter_ms', ...SIP_MEDIA_THRESHOLD_RELATED],
+  call_media_max_jitter_ms: SIP_MEDIA_THRESHOLD_RELATED,
+  call_media_warn_mos: ['call_media_min_mos', ...SIP_MEDIA_THRESHOLD_RELATED],
+  call_media_min_mos: SIP_MEDIA_THRESHOLD_RELATED,
+  call_media_warn_rtt_ms: ['call_media_max_rtt_ms', ...SIP_MEDIA_THRESHOLD_RELATED],
+  call_media_max_rtt_ms: SIP_MEDIA_THRESHOLD_RELATED,
 };
 
 // Error keys that live in the call's Advanced disclosure, opened on submit
@@ -89,6 +107,36 @@ const CALL_MODES = [
   { mode: 'ring', label: 'Ring only' },
 ] as const;
 const CALL_MODE_IDS = CALL_MODES.map((m) => m.mode);
+
+// What a measured call must prove (call.media.expect), the same roving
+// segment as the mode.
+const MEDIA_EXPECTS: { expect: SIPMediaExpect; label: string; hint: string }[] = [
+  {
+    expect: 'none',
+    label: 'Measure only',
+    hint: 'Reports what the audio did and never fails the check on it; problems only add warnings.',
+  },
+  {
+    expect: 'audio',
+    label: 'Far end sends audio',
+    hint: "Fails when the far end's audio never reaches the probe (one-way audio), or when a failure threshold is crossed.",
+  },
+  {
+    expect: 'two_way',
+    label: 'Two-way audio (echo or RTCP)',
+    hint: "Also needs the far end's word that the probe's audio arrived: an echo of it, or an RTCP report about it. Needs a hold of at least 6000 ms, as a far end can take that long to send its first report.",
+  },
+  {
+    expect: 'echo',
+    label: 'Echo test line',
+    hint: "For a number that plays the caller's audio back: sends a 1004 Hz tone and fails unless it comes back.",
+  },
+];
+const MEDIA_EXPECT_IDS = MEDIA_EXPECTS.map((m) => m.expect);
+// The hold a call is raised to when call quality is turned on with less:
+// above the 3000 ms floor, so the measured window clears the 2 s a quality
+// estimate needs with room to spare.
+const MEDIA_DEFAULT_HOLD_MS = 5000;
 
 type SipMethod = SipFormFields['method'];
 
@@ -175,6 +223,34 @@ export default function SipForm({
         timeout_seconds: Math.min(prev.timeout_seconds, SIP_CALL_MAX_TIMEOUT_SECONDS),
       };
     });
+
+  // Set when turning call quality on (or choosing two-way audio) raised the
+  // hold, so the Hold field says why it changed; editing the hold clears it.
+  const [holdNote, setHoldNote] = useState('');
+
+  // Applies a call-quality choice, raising a hold below its floor (and the
+  // timeout, to fit the hold and the time to answer) rather than leaving an
+  // error waiting on submit.
+  const setMedia = (patch: { call_media?: boolean; call_media_expect?: SIPMediaExpect }) => {
+    const next = { ...formData, ...patch };
+    const minHold = sipMediaMinHoldMs(next.call_media_expect);
+    const hold = parseWhole(next.call_hold_ms);
+    if (!next.call_media || (hold !== null && hold >= minHold)) {
+      setFormData(next);
+      if (!next.call_media) setHoldNote('');
+      return;
+    }
+    const raised = Math.max(minHold, MEDIA_DEFAULT_HOLD_MS);
+    const timeout = Math.min(
+      Math.max(next.timeout_seconds, Math.ceil((raised + SIP_CALL_MIN_ANSWER_BUDGET_MS) / 1000)),
+      SIP_CALL_MAX_TIMEOUT_SECONDS
+    );
+    setFormData({ ...next, call_hold_ms: String(raised), timeout_seconds: timeout });
+    setHoldNote(
+      `Raised to ${raised} ms: ${next.call_media_expect === 'two_way' ? 'two-way audio' : 'measuring call quality'} needs at least ${minHold} ms` +
+        (timeout !== next.timeout_seconds ? `, and the timeout to ${timeout} s to fit it` : '')
+    );
+  };
 
   const sipFields = (): SipFormFields => sipFieldsFromForm(formData);
 
@@ -304,6 +380,37 @@ export default function SipForm({
       )}
     </FormField>
   );
+
+  // One call-quality threshold. Loss and MOS take decimals; the native
+  // min/max (reportConstraintViolation) catch the out-of-range ones first.
+  const mediaThresholdInput = (
+    key: SipMediaThresholdField,
+    label: string,
+    placeholder: string,
+    unit: string,
+    bounds: { min: number; max: number; step: number | 'any' }
+  ) => (
+    <FormField label={label} error={errors[key]}>
+      {(control) => (
+        <span className="flex items-center gap-2">
+          <input
+            {...control}
+            type="number"
+            value={formData[key]}
+            onChange={(e) => setFormData({ ...formData, [key]: e.target.value })}
+            placeholder={placeholder}
+            min={bounds.min}
+            max={bounds.max}
+            step={bounds.step}
+            className="input !w-28 tabular-nums"
+          />
+          {unit && <span className="text-xs text-slate-500">{unit}</span>}
+        </span>
+      )}
+    </FormField>
+  );
+  const measured = isCall && !ring && formData.call_media;
+  const mediaExpect = MEDIA_EXPECTS.find((m) => m.expect === formData.call_media_expect) ?? MEDIA_EXPECTS[1];
 
   return (
     <>
@@ -732,7 +839,9 @@ export default function SipForm({
               <FieldHint>
                 {ring
                   ? 'Succeeds on the first ringing (18x) and cancels, so the call is never answered or billed. A call answered anyway is hung up at once and flagged.'
-                  : 'Waits for the answer (200), holds the call, then hangs up with BYE. No audio is sent.'}
+                  : `Waits for the answer (200), holds the call, then hangs up with BYE. ${
+                      formData.call_media ? 'Audio is exchanged and measured during the hold.' : 'No audio is sent.'
+                    }`}
               </FieldHint>
             </div>
 
@@ -745,8 +854,11 @@ export default function SipForm({
                         {...control}
                         type="number"
                         value={formData.call_hold_ms}
-                        onChange={(e) => setFormData({ ...formData, call_hold_ms: e.target.value })}
-                        placeholder="0"
+                        onChange={(e) => {
+                          setFormData({ ...formData, call_hold_ms: e.target.value });
+                          setHoldNote('');
+                        }}
+                        placeholder={formData.call_media ? String(sipMediaMinHoldMs(formData.call_media_expect)) : '0'}
                         min={0}
                         max={SIP_CALL_MAX_HOLD_MS}
                         className="input !w-28 tabular-nums"
@@ -754,7 +866,12 @@ export default function SipForm({
                       <span className="text-xs text-slate-500">ms</span>
                     </span>
                     {!errors.call_hold_ms && (
-                      <FieldHint>How long the answered call stays up before the hang-up; it comes out of the timeout</FieldHint>
+                      <FieldHint>
+                        {holdNote ||
+                          (formData.call_media
+                            ? `How long the answered call stays up, its audio measured, before the hang-up: at least ${sipMediaMinHoldMs(formData.call_media_expect)} ms; it comes out of the timeout`
+                            : 'How long the answered call stays up before the hang-up; it comes out of the timeout')}
+                      </FieldHint>
                     )}
                   </>
                 )}
@@ -881,6 +998,113 @@ export default function SipForm({
           </FormSection>
         )}
 
+        {isCall && !ring && (
+          <FormSection title="Call quality">
+            <ToggleRow
+              title="Measure call quality"
+              description="Exchange audio with the far end during the hold and measure loss, jitter, a MOS estimate and the round trip"
+              checked={formData.call_media}
+              onChange={(on) => setMedia({ call_media: on })}
+            />
+            {formData.call_media && (
+              <>
+                <Callout tone="info" title="Sends test audio">
+                  Sends RTP (about 50 packets a second for the hold) from the port the offer advertises to the address in
+                  the far end&apos;s answer, only if this worker&apos;s network policy allows it: a 1004 Hz test tone for an
+                  echo test line, silence otherwise. Quality is an E-model estimate, not a listening test.
+                </Callout>
+                {formData.location_ids.length > 0 && (
+                  <Callout tone="warning" title="Location workers need call-quality support">
+                    A location worker that predates call-quality measurement fails this monitor before it dials, with{' '}
+                    <span className="font-mono">call.media: media analysis is not available yet</span>. Upgrade the
+                    workers of the monitor&apos;s locations first.
+                  </Callout>
+                )}
+
+                <div>
+                  <p className="mb-2 text-xs font-medium text-slate-400">Expect</p>
+                  <div
+                    className="mb-2 flex w-fit max-w-full flex-wrap gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
+                    role="radiogroup"
+                    aria-label="What the call must prove about audio"
+                    onKeyDown={(e) =>
+                      handleRovingKeyDown(e, MEDIA_EXPECT_IDS, formData.call_media_expect, (expect) =>
+                        setMedia({ call_media_expect: expect })
+                      )
+                    }
+                  >
+                    {MEDIA_EXPECTS.map(({ expect, label }) => (
+                      <button
+                        key={expect}
+                        type="button"
+                        role="radio"
+                        data-roving-id={expect}
+                        tabIndex={formData.call_media_expect === expect ? 0 : -1}
+                        aria-checked={formData.call_media_expect === expect}
+                        onClick={() => setMedia({ call_media_expect: expect })}
+                        className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                          formData.call_media_expect === expect ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <FieldHint>{mediaExpect.hint}</FieldHint>
+                </div>
+
+                {formData.call_media_expect !== 'none' && (
+                  <>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      {mediaThresholdInput('call_media_warn_loss_pct', 'Loss warning', '1', '%', { min: 0, max: 100, step: 'any' })}
+                      {mediaThresholdInput('call_media_max_loss_pct', 'Loss failure', '5', '%', { min: 0, max: 100, step: 'any' })}
+                      {mediaThresholdInput('call_media_warn_jitter_ms', 'Jitter warning', '30', 'ms', {
+                        min: 1,
+                        max: SIP_MEDIA_MAX_JITTER_MS,
+                        step: 1,
+                      })}
+                      {mediaThresholdInput('call_media_max_jitter_ms', 'Jitter failure', '60', 'ms', {
+                        min: 1,
+                        max: SIP_MEDIA_MAX_JITTER_MS,
+                        step: 1,
+                      })}
+                      {mediaThresholdInput('call_media_warn_mos', 'MOS warning', '4.0', '', {
+                        min: SIP_MEDIA_MIN_MOS,
+                        max: SIP_MEDIA_MAX_MOS,
+                        step: 'any',
+                      })}
+                      {mediaThresholdInput('call_media_min_mos', 'MOS failure', '3.6', '', {
+                        min: SIP_MEDIA_MIN_MOS,
+                        max: SIP_MEDIA_MAX_MOS,
+                        step: 'any',
+                      })}
+                      {mediaThresholdInput('call_media_warn_rtt_ms', 'Round-trip warning', '300', 'ms', {
+                        min: 1,
+                        max: SIP_MEDIA_MAX_RTT_MS,
+                        step: 1,
+                      })}
+                      {mediaThresholdInput('call_media_max_rtt_ms', 'Round-trip failure', '500', 'ms', {
+                        min: 1,
+                        max: SIP_MEDIA_MAX_RTT_MS,
+                        step: 1,
+                      })}
+                    </div>
+                    <FieldHint>
+                      All optional. Each applies to every direction the call measured (the far end&apos;s audio, its RTCP
+                      reports on the probe&apos;s, an echo), and the worst one decides. Loss is effective loss, jitter the
+                      mean RFC 3550 jitter, MOS an estimate where a clean call scores about 4.37, the model&apos;s ceiling
+                      (thresholds take {SIP_MEDIA_MIN_MOS} to {SIP_MEDIA_MAX_MOS}), and the round trip the echo&apos;s, else
+                      RTCP&apos;s. One packet is 0.2-0.8% of a
+                      call this short, so a finer loss threshold is noise. A failure counts as downtime: keep failure
+                      thresholds well outside normal variance and use warnings for the band.
+                    </FieldHint>
+                  </>
+                )}
+              </>
+            )}
+          </FormSection>
+        )}
+
         <ScheduleSection
           intervalSeconds={formData.interval_seconds}
           onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
@@ -958,6 +1182,7 @@ export default function SipForm({
                           {formData.port ? `:${formData.port}` : ''}
                         </PlanTarget>,
                         ring ? 'ring only' : 'answer and hang up',
+                        ...(measured ? ['measures call quality'] : []),
                         `≈ ${pluralize(callsPerDay, 'call')}/day`,
                         downAfterLabel(formData.consecutive_failures_threshold),
                       ]
@@ -992,7 +1217,8 @@ export default function SipForm({
         description={
           <>
             This places a real call to <span className="font-mono text-slate-200">{callTarget || 'the configured number'}</span>{' '}
-            through {formData.host.trim()}. The carrier may bill it.
+            through {formData.host.trim()}
+            {measured ? ' and sends test audio during the hold' : ''}. The carrier may bill it.
           </>
         }
         confirmLabel="Place call"

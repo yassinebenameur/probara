@@ -829,6 +829,7 @@ export default function EditMonitorPage() {
   const isCall = isSipCall(monitor.type, monitor.config);
   const canOperate = isCall ? isTenantAdmin : canWrite;
   const runCallCount = Math.max(1, monitor.location_ids?.length ?? 0);
+  const runCallSendsAudio = isCall && Boolean((monitor.config as SIPMonitorConfig | undefined)?.call?.media);
   const target = monitorTarget(monitor);
   const lastCheckAt = results?.results?.[0]?.created_at ?? analytics?.summary?.latest_check_at;
   const serverRows = serverFactRows(monitor, results?.results || []);
@@ -1091,7 +1092,8 @@ export default function EditMonitorPage() {
                 {' '}to <span className="font-mono text-slate-200">{target}</span>
               </>
             ) : null}
-            {runCallCount > 1 ? ', one from each of the monitor’s locations' : ''}. The carrier may bill them.
+            {runCallCount > 1 ? ', one from each of the monitor’s locations' : ''}
+            {runCallSendsAudio ? ', each sending test audio during its hold' : ''}. The carrier may bill them.
           </>
         }
         confirmLabel={runCallCount > 1 ? `Place ${runCallCount} calls` : 'Place call'}

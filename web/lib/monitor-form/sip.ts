@@ -99,6 +99,16 @@ export const sipFieldsFromForm = (form: SipFormState): SipFormFields => ({
   call_max_answer_ms: form.call_max_answer_ms,
   call_sdp_address: form.call_sdp_address,
   call_probe_header: form.call_probe_header,
+  call_media: form.call_media,
+  call_media_expect: form.call_media_expect,
+  call_media_warn_loss_pct: form.call_media_warn_loss_pct,
+  call_media_max_loss_pct: form.call_media_max_loss_pct,
+  call_media_warn_jitter_ms: form.call_media_warn_jitter_ms,
+  call_media_max_jitter_ms: form.call_media_max_jitter_ms,
+  call_media_warn_mos: form.call_media_warn_mos,
+  call_media_min_mos: form.call_media_min_mos,
+  call_media_warn_rtt_ms: form.call_media_warn_rtt_ms,
+  call_media_max_rtt_ms: form.call_media_max_rtt_ms,
 });
 
 /** The request SipForm submits, built on `loadedConfig` (see sipLoadedConfig). */
