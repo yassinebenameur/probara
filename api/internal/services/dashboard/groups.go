@@ -17,14 +17,16 @@ const membersPreviewLimit = 10
 
 // groupAggregationRow is one monitor's pre-aggregated stats joined with its tag set.
 // Uptime is nil when the monitor had no checks in the range (paused, new): no
-// data is not 100% (S-D1, docs/state-semantics.md).
+// data is not 100% (S-D1, docs/state-semantics.md). CurrentStatus is the
+// latest check in the range; CurrentState is the persisted state machine
+// value (monitors.current_state), the monitor's real state now.
 type groupAggregationRow struct {
-	MonitorID      uuid.UUID
-	Name           string
-	Uptime         *float64
-	Tags           []string
-	CurrentStatus  *string
-	AttentionCount int // 1 if monitor needs attention (failure/error in range OR current_status in {failure,error}), else 0
+	MonitorID     uuid.UUID
+	Name          string
+	Uptime        *float64
+	Tags          []string
+	CurrentStatus *string
+	CurrentState  string
 }
 
 // aggregateGroups builds per-tag groups from the per-monitor rows.
@@ -34,6 +36,14 @@ type groupAggregationRow struct {
 //   - The ungrouped row is included only if at least one monitor falls into it.
 //   - Stale group tags (no matching monitors) are still rendered with monitor_count=0.
 //   - If groupTags is empty, returns nil (the empty-state CTA case).
+//
+// AttentionCount counts the members that need attention NOW: currently down
+// or degraded (currentStateNeedsAttention). It used to count any member with
+// a failed check anywhere in the range, which on 30d/90d turned nearly every
+// group amber at 99.9% with every member up; the group's uptime already
+// carries that history. Members sort down, then degraded, then the rest
+// (memberAttentionRank), then uptime ascending, so WorstMember and the preview lead
+// with what is broken now.
 func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.DashboardGroup {
 	if len(groupTags) == 0 {
 		return nil
@@ -56,6 +66,7 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 	counts := make(map[string]int, len(groupTags))
 	var ungroupedSum float64
 	var ungroupedCount int
+	states := make(map[uuid.UUID]string, len(rows))
 
 	for _, row := range rows {
 		matched := false
@@ -67,8 +78,11 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 					sums[tag] += *row.Uptime
 					counts[tag]++
 				}
-				g.AttentionCount += row.AttentionCount
+				if currentStateNeedsAttention(row.CurrentState) {
+					g.AttentionCount++
+				}
 				g.Members = appendGroupMember(g.Members, row)
+				states[row.MonitorID] = row.CurrentState
 			}
 		}
 		if !matched {
@@ -80,8 +94,11 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 				ungroupedSum += *row.Uptime
 				ungroupedCount++
 			}
-			ungrouped.AttentionCount += row.AttentionCount
+			if currentStateNeedsAttention(row.CurrentState) {
+				ungrouped.AttentionCount++
+			}
 			ungrouped.Members = appendGroupMember(ungrouped.Members, row)
+			states[row.MonitorID] = row.CurrentState
 		}
 	}
 
@@ -92,9 +109,16 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 			u := totalUptime / float64(dataCount)
 			g.Uptime = &u
 		}
-		// Worst-first among members with data; no-data members sort last —
-		// missing checks must not rank a member as the worst performer.
+		// Down, then degraded, then everyone else; within each, worst
+		// uptime first among members with data. No-data members sort last
+		// (unknown ranks with up here) — missing checks must not rank a
+		// member as the worst performer.
 		sort.SliceStable(g.Members, func(i, j int) bool {
+			ri := memberAttentionRank(states[g.Members[i].MonitorID])
+			rj := memberAttentionRank(states[g.Members[j].MonitorID])
+			if ri != rj {
+				return ri < rj
+			}
 			ui, uj := g.Members[i].Uptime, g.Members[j].Uptime
 			if ui == nil {
 				return false
@@ -127,6 +151,16 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 		out = append(out, *ungrouped)
 	}
 	return out
+}
+
+// memberAttentionRank is the member preview's order: down 0, degraded 1,
+// everything else 2. Unknown is not ranked above up here (unlike
+// currentStateRank): a member with no data is not a problem to lead with.
+func memberAttentionRank(state string) int {
+	if rank := currentStateRank(state); rank <= 1 {
+		return rank
+	}
+	return 2
 }
 
 func appendGroupMember(members []models.DashboardGroupMember, row groupAggregationRow) []models.DashboardGroupMember {
@@ -177,8 +211,7 @@ func (s *Service) queryMonitorsForGroupsRaw(
 			SELECT
 				cr.monitor_id,
 				COUNT(*) AS total_checks,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks,
-				COUNT(*) FILTER (WHERE cr.status IN ('failure', 'error')) AS bad_checks
+				COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks
 			FROM check_results cr
 			JOIN monitors m ON m.id = cr.monitor_id
 			WHERE cr.tenant_id = $1
@@ -200,7 +233,7 @@ func (s *Service) queryMonitorsForGroupsRaw(
 			CASE WHEN pm.total_checks > 0
 				THEN (pm.success_checks::float / pm.total_checks::float) * 100.0
 			END AS uptime,
-			COALESCE(pm.bad_checks, 0) > 0 OR COALESCE(cs.current_status IN ('failure','error'), FALSE) AS needs_attention
+			m.current_state
 		FROM monitors m
 		LEFT JOIN per_monitor pm ON pm.monitor_id = m.id
 		LEFT JOIN LATERAL (
@@ -230,19 +263,15 @@ func (s *Service) queryMonitorsForGroupsRaw(
 	out := []groupAggregationRow{}
 	for rows.Next() {
 		var r groupAggregationRow
-		var needsAttention bool
 		if err := rows.Scan(
 			&r.MonitorID,
 			&r.Name,
 			pq.Array(&r.Tags),
 			&r.CurrentStatus,
 			&r.Uptime,
-			&needsAttention,
+			&r.CurrentState,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan group row: %w", err)
-		}
-		if needsAttention {
-			r.AttentionCount = 1
 		}
 		out = append(out, r)
 	}
@@ -293,28 +322,24 @@ func (s *Service) queryMonitorsForGroups24hHourlyRollup(
 			u := (float64(t.SuccessChecks) / float64(t.TotalChecks)) * 100.0
 			uptime = &u
 		}
-		bad := t.TotalChecks - t.SuccessChecks
-		needsAttention := bad > 0 || (t.LatestStatus != nil && (*t.LatestStatus == "failure" || *t.LatestStatus == "error"))
-		row := groupAggregationRow{
+		out = append(out, groupAggregationRow{
 			MonitorID:     m.id,
 			Name:          m.name,
 			Tags:          m.tags,
 			Uptime:        uptime,
 			CurrentStatus: t.LatestStatus,
-		}
-		if needsAttention {
-			row.AttentionCount = 1
-		}
-		out = append(out, row)
+			CurrentState:  m.currentState,
+		})
 	}
 	return out, nil
 }
 
 // monitorRow is the minimal monitor identity needed by 24h group aggregation.
 type monitorRow struct {
-	id   uuid.UUID
-	name string
-	tags []string
+	id           uuid.UUID
+	name         string
+	tags         []string
+	currentState string
 }
 
 func (s *Service) listGroupMonitorRows(ctx context.Context, tenantID uuid.UUID, filterTags []string) ([]monitorRow, error) {
@@ -325,7 +350,7 @@ func (s *Service) listGroupMonitorRows(ctx context.Context, tenantID uuid.UUID, 
 		args = append(args, pq.Array(filterTags))
 	}
 	query := fmt.Sprintf(`
-		SELECT m.id, m.name, COALESCE(m.tags, '{}'::text[]) AS tags
+		SELECT m.id, m.name, COALESCE(m.tags, '{}'::text[]) AS tags, m.current_state
 		FROM monitors m
 		WHERE m.tenant_id = $1
 		  AND m.enabled = TRUE
@@ -341,7 +366,7 @@ func (s *Service) listGroupMonitorRows(ctx context.Context, tenantID uuid.UUID, 
 	out := make([]monitorRow, 0)
 	for rows.Next() {
 		var r monitorRow
-		if err := rows.Scan(&r.id, &r.name, pq.Array(&r.tags)); err != nil {
+		if err := rows.Scan(&r.id, &r.name, pq.Array(&r.tags), &r.currentState); err != nil {
 			return nil, fmt.Errorf("failed to scan group monitor: %w", err)
 		}
 		out = append(out, r)
@@ -370,8 +395,7 @@ func (s *Service) queryMonitorsForGroupsRollup(
 			SELECT
 				mdr.monitor_id,
 				COALESCE(SUM(mdr.total_checks), 0) AS total_checks,
-				COALESCE(SUM(mdr.success_checks), 0) AS success_checks,
-				COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) AS bad_checks
+				COALESCE(SUM(mdr.success_checks), 0) AS success_checks
 			FROM monitor_daily_rollups mdr
 			WHERE mdr.tenant_id = $1
 			  AND mdr.bucket_day >= $2::date
@@ -386,7 +410,7 @@ func (s *Service) queryMonitorsForGroupsRollup(
 			CASE WHEN pm.total_checks > 0
 				THEN (pm.success_checks::float / pm.total_checks::float) * 100.0
 			END AS uptime,
-			COALESCE(pm.bad_checks, 0) > 0 OR COALESCE(latest.current_status IN ('failure','error'), FALSE) AS needs_attention
+			m.current_state
 		FROM monitors m
 		LEFT JOIN per_monitor pm ON pm.monitor_id = m.id
 		LEFT JOIN LATERAL (
@@ -415,19 +439,15 @@ func (s *Service) queryMonitorsForGroupsRollup(
 	out := []groupAggregationRow{}
 	for rows.Next() {
 		var r groupAggregationRow
-		var needsAttention bool
 		if err := rows.Scan(
 			&r.MonitorID,
 			&r.Name,
 			pq.Array(&r.Tags),
 			&r.CurrentStatus,
 			&r.Uptime,
-			&needsAttention,
+			&r.CurrentState,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan rollup group row: %w", err)
-		}
-		if needsAttention {
-			r.AttentionCount = 1
 		}
 		out = append(out, r)
 	}

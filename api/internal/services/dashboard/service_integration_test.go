@@ -255,8 +255,8 @@ func TestService_QueryMonitorsForGroups_NoCheckDataDoesNotScanNullAttention(t *t
 	if len(rows) != 1 {
 		t.Fatalf("rows length = %d, want 1", len(rows))
 	}
-	if rows[0].AttentionCount != 0 {
-		t.Fatalf("AttentionCount = %d, want 0", rows[0].AttentionCount)
+	if currentStateNeedsAttention(rows[0].CurrentState) {
+		t.Fatalf("CurrentState = %q, a monitor with no data must not need attention", rows[0].CurrentState)
 	}
 }
 
@@ -325,9 +325,10 @@ func TestService_LoadGroups_24hHourlyRollupIgnoresOutsideWindowRawRows(t *testin
 	// Rollup bucket (endHour-16h): 16 total, 15 success, 1 bad → needsAttention = true.
 	// Raw row at now-1h (success) falls in raw_complement [trunc_hour(cursor), now).
 	// Rows before w_start and after w_end are excluded.
-	// The rollup bad check drives AttentionCount=1.
-	if groups[0].AttentionCount != 1 {
-		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
+	// The rollup bad check is history: the monitor's current state (unknown
+	// here) decides attention, so AttentionCount stays 0.
+	if groups[0].AttentionCount != 0 {
+		t.Fatalf("AttentionCount = %d, want 0 (failed checks in range alone need no attention)", groups[0].AttentionCount)
 	}
 	if len(groups[0].Members) != 1 {
 		t.Fatalf("Members length = %d, want 1", len(groups[0].Members))
@@ -379,6 +380,10 @@ func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
 	}
 	// Lag-tail failure row after cursor: should be included in raw_complement.
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, lagTailAt, "failure", "monitor", nil)
+	// The state machine confirmed the outage: attention follows current_state.
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = $1`, monitorID); err != nil {
+		t.Fatalf("set current_state down: %v", err)
+	}
 
 	rangeStart := now.Add(-24 * time.Hour)
 	rangeEnd := now
@@ -701,6 +706,9 @@ func TestService_LoadGroups_24hUsesExactRollingSummary(t *testing.T) {
 	// Rollup latest_status = failure, totals 5/10 → 50% uptime.
 	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 5, 500, 5, "failure", bucket.Add(59*time.Minute))
 	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = $1`, monitorID); err != nil {
+		t.Fatalf("set current_state down: %v", err)
+	}
 
 	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsWithTags{tags: []string{"team-a"}}, nil)
 	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
