@@ -11,6 +11,7 @@ import {
 import { createAlertChannel, getAlertChannels } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
 import Callout from '@/components/ui/Callout';
+import Checkbox from '@/components/ui/Checkbox';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import { usePluginNames } from '@/components/alert-channels/usePluginNames';
@@ -145,9 +146,9 @@ export default function ChannelPicker({
     <div className="space-y-2">
       <div className="glass-well overflow-hidden">
         {loadingChannels ? (
-          <div className="px-4 py-3 text-ui text-slate-500">Loading channels…</div>
+          <div role="status" className="px-4 py-3 text-ui text-slate-500">Loading channels…</div>
         ) : loadError ? (
-          <div className="px-4 py-3 text-ui text-rose-300">{loadError}</div>
+          <div role="alert" className="px-4 py-3 text-ui text-rose-300">{loadError}</div>
         ) : channels.length === 0 ? (
           <div className="px-4 py-3 text-ui text-slate-500">
             {disabled ? 'No channels yet.' : 'No channels yet. Add one below to start receiving alerts.'}
@@ -164,20 +165,20 @@ export default function ChannelPicker({
                   key={channel.id}
                   className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-well-hover"
                 >
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     id={`channel-${channel.id}`}
                     checked={isSelected}
                     onChange={() => handleToggle(channel)}
                     disabled={disabled}
-                    className="h-4 w-4 flex-shrink-0 cursor-pointer accent-cyan-500 disabled:cursor-not-allowed"
                   />
 
                   <label
                     htmlFor={`channel-${channel.id}`}
                     className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
                   >
-                    <span className="truncate text-sm text-slate-200">{channel.name}</span>
+                    <span className={`truncate text-sm ${channel.is_active === false ? 'text-slate-400' : 'text-slate-200'}`}>
+                      {channel.name}
+                    </span>
                     <span className="flex-shrink-0 text-xs text-slate-500">{pluginName(channel.type)}</span>
                     {isDefault && (
                       <span className="flex-shrink-0 text-xs text-slate-400">(default)</span>
@@ -187,7 +188,7 @@ export default function ChannelPicker({
                         className="flex-shrink-0"
                         title="This channel is disabled — selecting it delivers nothing"
                       >
-                        <Pill tone="warning" size="xs">Disabled</Pill>
+                        <Pill tone="neutral" size="xs">Disabled</Pill>
                       </span>
                     )}
                   </label>

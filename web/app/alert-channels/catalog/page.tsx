@@ -10,6 +10,8 @@ import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
+import { FOCUS_RING } from '@/components/ui/focus';
 
 const CAPABILITY_LABELS: Record<string, string> = {
   testable: 'Test from UI',
@@ -36,7 +38,7 @@ export default function AlertChannelCatalogPage() {
   }, []);
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         title="Alert channel catalog"
         subtitle="Every channel type this deployment can deliver alerts to."
@@ -52,13 +54,13 @@ export default function AlertChannelCatalogPage() {
       ) : error ? (
         <Callout tone="danger" title="Failed to load">{error}</Callout>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 3xl:grid-cols-4 4xl:grid-cols-5">
           {plugins.map((manifest) => (
             <PluginCard key={manifest.type} manifest={manifest} />
           ))}
         </div>
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -73,7 +75,7 @@ function PluginCard({ manifest }: { manifest: PluginManifest }) {
         </span>
         <div className="min-w-0 flex-1">
           <div>
-            <h3 className="inline text-title font-semibold text-white">{manifest.display_name}</h3>
+            <h2 className="inline text-title font-semibold text-white">{manifest.display_name}</h2>
             <span className="ml-2 whitespace-nowrap text-xs tabular-nums text-slate-500">v{manifest.version}</span>
           </div>
           <p className="mt-1 text-ui text-slate-400">{manifest.description}</p>
@@ -96,7 +98,7 @@ function PluginCard({ manifest }: { manifest: PluginManifest }) {
             href={manifest.docs_url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-white"
+            className={`inline-flex items-center gap-1.5 rounded-sm text-xs text-slate-400 transition-colors hover:text-white ${FOCUS_RING}`}
           >
             <BookOpen strokeWidth={1.75} className="h-3.5 w-3.5" />
             Setup docs

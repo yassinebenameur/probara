@@ -6,16 +6,15 @@ import { TENANT_CHANGED_EVENT } from '@/lib/tenant';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 
 /**
- * Count of active (unacknowledged) alerts for the shell's fleet-health line,
- * mirrored onto html[data-health] so the ambient field blooms while anything
- * is open (see AmbientBackdrop). Null until the first load, or when the count
- * cannot be read.
+ * Count of active (unacknowledged) alerts for the sidebar's FleetHealth row
+ * and the small-screen TopBar. Null until the first load, or when the count
+ * cannot be read. Fleet health is shown there only; nothing tints the page.
  *
- * Call it once, in the shell: it owns the data-health attribute.
+ * Call it once, in the shell, and pass the count down.
  */
 export function useFleetHealth(): number | null {
   const [openAlerts, setOpenAlerts] = useState<number | null>(null);
-  const { subscribe } = useAlertEvents();
+  const { subscribe, subscribeResync } = useAlertEvents();
   const reloadTimer = useRef<number | undefined>(undefined);
 
   const load = useCallback(async () => {
@@ -45,19 +44,11 @@ export function useFleetHealth(): number | null {
     [subscribe, load]
   );
 
-  useEffect(() => {
-    const root = document.documentElement;
-    if (openAlerts && openAlerts > 0) root.dataset.health = 'alert';
-    else delete root.dataset.health;
-  }, [openAlerts]);
+  // Events missed while the stream was down never arrive; re-read once on
+  // reconnect so the badge cannot stay stale.
+  useEffect(() => subscribeResync(() => void load()), [subscribeResync, load]);
 
-  useEffect(
-    () => () => {
-      window.clearTimeout(reloadTimer.current);
-      delete document.documentElement.dataset.health;
-    },
-    []
-  );
+  useEffect(() => () => window.clearTimeout(reloadTimer.current), []);
 
   return openAlerts;
 }

@@ -1,10 +1,10 @@
 'use client';
 
-import { ReactNode, useEffect } from 'react';
+import { ReactNode } from 'react';
 import { AlertTriangle } from 'lucide-react';
 
 import Button from '@/components/ui/Button';
-import ModalPortal from '@/components/ui/ModalPortal';
+import Dialog from '@/components/ui/Dialog';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -29,43 +29,25 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onCancel]);
-
-  if (!open) return null;
-
   return (
-    <ModalPortal>
-    <div
-      className="glass-scrim fixed inset-0 z-50 flex items-center justify-center px-4"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !loading) onCancel();
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-    >
-      <div className="glass-overlay w-full max-w-md">
-        <div className="flex items-start gap-4 px-6 py-5">
-          {tone === 'danger' && (
-            <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-rose-500/[0.13] text-rose-400">
-              <AlertTriangle className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden="true" />
-            </div>
-          )}
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold text-white">{title}</h2>
-            {description && (
-              <div className="mt-1.5 text-sm leading-relaxed text-slate-400">{description}</div>
-            )}
+    <Dialog
+      open={open}
+      onClose={onCancel}
+      title={title}
+      description={description}
+      tone={tone}
+      size="sm"
+      busy={loading}
+      showClose={false}
+      icon={
+        tone === 'danger' ? (
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-500/[0.13] text-rose-400">
+            <AlertTriangle className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden="true" />
           </div>
-        </div>
-        <div className="flex items-center justify-end gap-2 px-6 pb-5">
+        ) : undefined
+      }
+      footer={
+        <>
           <Button variant="ghost" onClick={onCancel} disabled={loading}>
             {cancelLabel}
           </Button>
@@ -77,9 +59,8 @@ export default function ConfirmDialog({
           >
             {confirmLabel}
           </Button>
-        </div>
-      </div>
-    </div>
-    </ModalPortal>
+        </>
+      }
+    />
   );
 }

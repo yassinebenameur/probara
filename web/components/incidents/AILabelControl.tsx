@@ -10,7 +10,7 @@ import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite, useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { labelControlHasContent, labelErrorMessage, labelSummary } from '@/lib/ai-labels';
-import { formatRelativeTime } from '@/lib/format';
+import { RelativeTime } from '@/components/ui/RelativeTime';
 import type { AILabel, AILabelContext } from '@/lib/types';
 
 const ABSTAIN = 'insufficient_evidence';
@@ -113,7 +113,7 @@ export default function AILabelControl({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <span className="inline-flex items-center gap-1.5 text-ui text-slate-400">
             <Check className="h-3.5 w-3.5 text-emerald-400" strokeWidth={2} aria-hidden="true" />
-            {labelSummary(label, context.choices, user?.id)} · {formatRelativeTime(label.labeled_at)}
+            {labelSummary(label, context.choices, user?.id)} · <RelativeTime value={label.labeled_at} />
           </span>
           {canWrite && mode === 'idle' && (
             <Button variant="ghost" size="xs" onClick={() => { setError(null); setMode('prompt'); }}>Change</Button>
@@ -147,7 +147,7 @@ export default function AILabelControl({
       {canWrite && mode === 'correct' && (
         <form className="glass-well space-y-3 p-4" onSubmit={onSubmitCorrect}>
           <Select label="Actual cause" value={cause} onChange={(e) => setCause(e.target.value)} required>
-            <option value="">Select a cause</option>
+            <option value="" data-prompt>Select a cause</option>
             {context.choices.map((c) => <option key={c.key} value={c.key}>{c.title}</option>)}
           </Select>
 

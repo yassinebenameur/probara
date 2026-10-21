@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState, type CSSProperties } from 'react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
@@ -9,6 +9,7 @@ import Switch from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/ToastProvider';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import { getNotificationSettings, updateNotificationSettings } from '@/lib/api';
+import { SETTINGS_PANEL_COLUMNS } from './layout';
 import type { ChannelAssignment, NotificationSettings } from '@/lib/types';
 
 const REMINDER_OPTIONS = [
@@ -60,6 +61,15 @@ function nearestIndex<T>(levels: T[], get: (l: T) => number, value: number): num
   return best;
 }
 
+// Slider wells: one slider per row while the well is narrow, three across once
+// it reaches 45rem, never two (a 2+1 grid reads as a mistake). Below 45rem the
+// second max() term turns huge, so the track minimum becomes 100% (one
+// column); above it, a third of the row. SteppedSlider caps itself at
+// max-w-lg so a single column (or a well holding one slider) never stretches
+// a track across a wide panel.
+const SLIDER_GRID =
+  'grid gap-x-6 gap-y-4 grid-cols-[repeat(auto-fill,minmax(min(100%,max(calc((100%_-_3rem)/3),calc((45rem_-_100%)*999))),1fr))]';
+
 interface SteppedSliderProps {
   label: string;
   options: { label: string }[];
@@ -72,11 +82,14 @@ interface SteppedSliderProps {
 // SteppedSlider is a discrete slider over predefined options, with the current
 // option named and clickable tick labels beneath the track.
 function SteppedSlider({ label, options, index, onChange, hint, disabled = false }: SteppedSliderProps) {
+  const hintId = useId();
+  // globals.css fills the WebKit track up to the thumb from --pct.
+  const pct = options.length > 1 ? (index / (options.length - 1)) * 100 : 0;
   return (
-    <div>
-      <div className="mb-1.5 flex items-baseline justify-between">
+    <div className="max-w-lg">
+      <div className="mb-1.5 flex items-baseline justify-between gap-3">
         <span className="text-ui font-medium text-slate-300">{label}</span>
-        <span className="text-ui font-medium text-white">{options[index].label}</span>
+        <span className="shrink-0 whitespace-nowrap text-ui font-medium text-white">{options[index].label}</span>
       </div>
       <input
         type="range"
@@ -86,9 +99,11 @@ function SteppedSlider({ label, options, index, onChange, hint, disabled = false
         value={index}
         aria-label={label}
         aria-valuetext={options[index].label}
+        aria-describedby={hint ? hintId : undefined}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full cursor-pointer accent-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ '--pct': `${pct}%` } as CSSProperties}
+        className="w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
       />
       <div className="mt-1 flex justify-between">
         {options.map((o, i) => (
@@ -106,7 +121,7 @@ function SteppedSlider({ label, options, index, onChange, hint, disabled = false
           </button>
         ))}
       </div>
-      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
+      {hint && <p id={hintId} className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );
 }
@@ -125,7 +140,7 @@ function SettingSwitch({ title, description, checked, onChange, disabled }: Sett
     <div className="flex items-start justify-between gap-6">
       <div className="min-w-0">
         <p className="text-sm font-medium text-slate-200">{title}</p>
-        {description && <p className="mt-0.5 max-w-2xl text-xs text-slate-500">{description}</p>}
+        {description && <p className="mt-0.5 max-w-prose text-xs text-slate-500">{description}</p>}
       </div>
       <div className="pt-0.5">
         <Switch checked={checked} onChange={onChange} label={title} disabled={disabled} />
@@ -259,104 +274,111 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         </Callout>
       ) : (
         <div className="space-y-6">
-          <div>
-            <p id="default-channels-label" className="mb-1.5 block text-ui font-medium text-slate-300">
-              Default notification channels
-            </p>
-            <ChannelPicker
-              value={defaultChannels}
-              onChange={setDefaultChannels}
-              showDelays
-              disabled={readOnly}
-              ariaLabelledBy="default-channels-label"
-            />
-          </div>
+          {/* Routing on the left, alert behaviour on the right once the panel
+              is wide enough; stacked otherwise. */}
+          <div className={SETTINGS_PANEL_COLUMNS}>
+            <div className="space-y-6">
+              {/* Capped so a delay select stays beside its channel name. */}
+              <div className="max-w-2xl">
+                <p id="default-channels-label" className="mb-1.5 block text-ui font-medium text-slate-300">
+                  Default notification channels
+                </p>
+                <ChannelPicker
+                  value={defaultChannels}
+                  onChange={setDefaultChannels}
+                  showDelays
+                  disabled={readOnly}
+                  ariaLabelledBy="default-channels-label"
+                />
+              </div>
 
-          <div className="sm:w-60">
-            <Select
-              label="Alert reminder"
-              value={reminderSeconds}
-              onChange={(e) => setReminderSeconds(Number(e.target.value))}
-              disabled={readOnly}
-              className="h-10 cursor-pointer"
-            >
-              {REMINDER_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </Select>
-            <p className="mt-1 text-xs text-slate-500">Re-notify on still-open alerts at this interval.</p>
-          </div>
-
-          <div className="space-y-5 border-t border-divider pt-5">
-            <SettingSwitch
-              title="Open an incident when a monitor goes down"
-              checked={autoCreateIncident}
-              onChange={setAutoCreateIncident}
-              disabled={readOnly}
-            />
-
-            <div className="space-y-4">
-              <SettingSwitch
-                title="Detect latency degradation"
-                description="Alert when a monitor's response time rises well above its own baseline, before it goes hard down."
-                checked={anomalyEnabled}
-                onChange={setAnomalyEnabled}
-                disabled={readOnly}
-              />
-
-              {anomalyEnabled && (
-                <div className="glass-well space-y-4 p-4">
-                  <SteppedSlider
-                    label="Sensitivity"
-                    options={SENSITIVITY_LEVELS}
-                    index={sensitivityIdx}
-                    onChange={setSensitivityIdx}
-                    hint={SENSITIVITY_LEVELS[sensitivityIdx].hint}
-                    disabled={readOnly}
-                  />
-                  <SteppedSlider
-                    label="Baseline window"
-                    options={BASELINE_LEVELS}
-                    index={baselineIdx}
-                    onChange={setBaselineIdx}
-                    hint="How much history to compare recent latency against."
-                    disabled={readOnly}
-                  />
-                  <SteppedSlider
-                    label="Must stay slow for"
-                    options={SUSTAINED_LEVELS}
-                    index={sustainedIdx}
-                    onChange={setSustainedIdx}
-                    hint="Ignore brief spikes shorter than this."
-                    disabled={readOnly}
-                  />
-                </div>
-              )}
+              <div className="sm:w-60">
+                <Select
+                  label="Alert reminder"
+                  value={reminderSeconds}
+                  onChange={(e) => setReminderSeconds(Number(e.target.value))}
+                  disabled={readOnly}
+                  className="h-10 cursor-pointer"
+                >
+                  {REMINDER_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </Select>
+                <p className="mt-1 text-xs text-slate-500">Re-notify on still-open alerts at this interval.</p>
+              </div>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-5">
               <SettingSwitch
-                title="Page root causes only"
-                description="When a monitor goes down because an upstream dependency is down, open its alert but send no notification; the root cause's notification lists everything it affects. Monitors can override this in their Alerting section."
-                checked={dependencySuppression}
-                onChange={setDependencySuppression}
+                title="Open an incident when a monitor goes down"
+                checked={autoCreateIncident}
+                onChange={setAutoCreateIncident}
                 disabled={readOnly}
               />
 
-              {dependencySuppression && (
-                <div className="glass-well p-4">
-                  <SteppedSlider
-                    label="After the upstream recovers, hold for"
-                    options={DEPENDENCY_GRACE_LEVELS}
-                    index={dependencyGraceIdx}
-                    onChange={setDependencyGraceIdx}
-                    hint="A downstream still down after this pages as a normal outage."
-                    disabled={readOnly}
-                  />
-                </div>
-              )}
+              <div className="space-y-4">
+                <SettingSwitch
+                  title="Detect latency degradation"
+                  description="Alert when a monitor's response time rises well above its own baseline, before it goes hard down."
+                  checked={anomalyEnabled}
+                  onChange={setAnomalyEnabled}
+                  disabled={readOnly}
+                />
+
+                {anomalyEnabled && (
+                  <div className={`glass-well p-4 ${SLIDER_GRID}`}>
+                    <SteppedSlider
+                      label="Sensitivity"
+                      options={SENSITIVITY_LEVELS}
+                      index={sensitivityIdx}
+                      onChange={setSensitivityIdx}
+                      hint={SENSITIVITY_LEVELS[sensitivityIdx].hint}
+                      disabled={readOnly}
+                    />
+                    <SteppedSlider
+                      label="Baseline window"
+                      options={BASELINE_LEVELS}
+                      index={baselineIdx}
+                      onChange={setBaselineIdx}
+                      hint="How much history to compare recent latency against."
+                      disabled={readOnly}
+                    />
+                    <SteppedSlider
+                      label="Must stay slow for"
+                      options={SUSTAINED_LEVELS}
+                      index={sustainedIdx}
+                      onChange={setSustainedIdx}
+                      hint="Ignore brief spikes shorter than this."
+                      disabled={readOnly}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <SettingSwitch
+                  title="Page root causes only"
+                  description="When a monitor goes down because an upstream dependency is down, open its alert but send no notification; the root cause's notification lists everything it affects. Monitors can override this in their Alerting section."
+                  checked={dependencySuppression}
+                  onChange={setDependencySuppression}
+                  disabled={readOnly}
+                />
+
+                {dependencySuppression && (
+                  <div className="glass-well max-w-lg p-4">
+                    <SteppedSlider
+                      label="After the upstream recovers, hold for"
+                      options={DEPENDENCY_GRACE_LEVELS}
+                      index={dependencyGraceIdx}
+                      onChange={setDependencyGraceIdx}
+                      hint="A downstream still down after this pages as a normal outage."
+                      disabled={readOnly}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

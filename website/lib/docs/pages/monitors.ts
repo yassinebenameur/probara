@@ -725,6 +725,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "list",
           items: [
+            "On the monitors list, hover a row (or tab to it) to reveal its checkbox; shift-click selects a range and Esc clears the selection. While anything is selected, a floating action bar offers grouping, moving, bulk alerting, and delete. Selection needs write access.",
             "Bulk alerting changes can update notification mode and channel assignments across selected monitors.",
             "Bulk delete soft-deletes selected monitors and schedules cleanup.",
             "Import preview parses and validates without creating monitors. Execution reports a per-row outcome rather than treating every file as all-or-nothing.",

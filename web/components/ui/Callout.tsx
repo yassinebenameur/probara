@@ -20,16 +20,24 @@ interface CalloutProps {
   icon?: ReactNode;
   /** Right-aligned control, e.g. a Dismiss or Fix button. */
   action?: ReactNode;
+  /**
+   * Announce it when it appears: `assertive` (role=alert) is the default for
+   * danger — a failed save or load inserted after the fact — `off` for the
+   * rest. Static notices present at page load are not read either way.
+   */
+  live?: 'off' | 'polite' | 'assertive';
   className?: string;
   children?: ReactNode;
 }
 
 /** Inline banner for warnings, errors and notices. */
-export default function Callout({ tone = 'info', title, icon, action, className = '', children }: CalloutProps) {
+export default function Callout({ tone = 'info', title, icon, action, live, className = '', children }: CalloutProps) {
   const t = TONE[tone];
+  const politeness = live ?? (tone === 'danger' ? 'assertive' : 'off');
   const tint = `rgb(var(--tw-${t.scale}-500) / 0.09)`;
   return (
     <div
+      role={politeness === 'assertive' ? 'alert' : politeness === 'polite' ? 'status' : undefined}
       className={`flex items-start gap-3 rounded-2xl px-4 py-3 text-sm ring-1 ring-inset ${t.ring} ${className}`.trim()}
       style={{ background: `linear-gradient(${tint}, ${tint}), var(--glass-fill)` }}
     >

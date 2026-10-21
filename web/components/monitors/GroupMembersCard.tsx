@@ -7,6 +7,7 @@ import { getGroupMembers } from '@/lib/api';
 import { monitorStateColors } from '@/lib/monitor-utils';
 import Panel from '@/components/ui/Panel';
 import TypeBadge from '@/components/ui/TypeBadge';
+import { FOCUS_RING_INSET } from '@/components/ui/focus';
 
 // The monitors a group rolls up, with each one's persisted state.
 export function GroupMembersCard({ groupId }: { groupId: string }) {
@@ -36,10 +37,11 @@ export function GroupMembersCard({ groupId }: { groupId: string }) {
               <Link
                 key={member.id}
                 href={`/monitors/${member.id}`}
-                className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-well focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
+                className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-well active:bg-well-hover ${FOCUS_RING_INSET}`}
               >
                 <span className={`h-2 w-2 shrink-0 rounded-full ${colors.dot}`} aria-hidden="true" />
                 <span className="min-w-0 flex-1 truncate text-sm text-slate-200">{member.name}</span>
+                {member.enabled && <span className="sr-only">, {member.current_state ?? 'unknown'}</span>}
                 {member.enabled ? (
                   <TypeBadge type={member.type} config={member.config} />
                 ) : (

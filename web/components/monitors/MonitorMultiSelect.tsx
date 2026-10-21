@@ -9,6 +9,7 @@ import SelectCheckbox from '@/components/ui/SelectCheckbox';
 import TagPill from '@/components/monitors/TagPill';
 import TagFilter from '@/components/monitors/TagFilter';
 import TypeBadge from '@/components/ui/TypeBadge';
+import { FOCUS_RING } from '@/components/ui/focus';
 
 interface MonitorMultiSelectProps {
   monitors: Monitor[];
@@ -209,8 +210,12 @@ export function MonitorMultiSelect({
           onChange={() => toggle(mon.id)}
           label={`Select ${mon.name}`}
         />
+        {/* A bigger pointer target for the checkbox beside it; keyboard and
+            screen-reader users get the checkbox itself (one stop per row). */}
         <button
           type="button"
+          tabIndex={-1}
+          aria-hidden="true"
           disabled={covered}
           onClick={() => toggle(mon.id)}
           className={`flex min-w-0 flex-1 items-center gap-3 text-left ${covered ? 'cursor-default' : 'cursor-pointer'}`}
@@ -253,6 +258,7 @@ export function MonitorMultiSelect({
         <Search
           className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
           strokeWidth={1.75}
+          aria-hidden="true"
         />
         <input
           type="text"
@@ -276,7 +282,7 @@ export function MonitorMultiSelect({
       )}
 
       <div className="flex items-center justify-between">
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-slate-400" role="status">
           {grouped ? (
             <>
               {selectedIds.length} selected
@@ -330,6 +336,8 @@ export function MonitorMultiSelect({
                         />
                         <button
                           type="button"
+                          tabIndex={-1}
+                          aria-hidden="true"
                           onClick={() => toggle(group.id)}
                           className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
                         >
@@ -348,8 +356,9 @@ export function MonitorMultiSelect({
                             type="button"
                             onClick={() => toggleExpanded(group.id)}
                             aria-expanded={isOpen}
+                            aria-controls={`mms-members-${group.id}`}
                             aria-label={`${isOpen ? 'Hide' : 'Show'} members of ${group.name}`}
-                            className="flex-shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-well-hover hover:text-white"
+                            className={`flex-shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-well-hover hover:text-white active:bg-control-hover ${FOCUS_RING}`}
                           >
                             {isOpen ? (
                               <ChevronDown className="h-4 w-4" strokeWidth={1.75} />
@@ -360,7 +369,7 @@ export function MonitorMultiSelect({
                         )}
                       </div>
                       {isOpen && members.length > 0 && (
-                        <div className="ml-5 mt-1 space-y-1 border-l border-divider pl-2">
+                        <div id={`mms-members-${group.id}`} className="ml-5 mt-1 space-y-1 border-l border-divider pl-2">
                           {members.map((member) =>
                             monitorRow(member, { covered: isSelected, coveredBy: group.name })
                           )}

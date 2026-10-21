@@ -1,13 +1,17 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { MapPin, Plus, Rocket, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { MapPin, Plus, Rocket, Pencil, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import Callout from '@/components/ui/Callout';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import EmptyState from '@/components/ui/EmptyState';
 import TableSkeleton from '@/components/ui/TableSkeleton';
+import LiveStatus from '@/components/ui/LiveStatus';
+import { RelativeTime } from '@/components/ui/RelativeTime';
+import SortableHeader, { useUrlSort } from '@/components/ui/SortableHeader';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
@@ -17,9 +21,33 @@ import MeshMatrix from '@/components/locations/MeshMatrix';
 import Tabs, { useUrlTab } from '@/components/ui/Tabs';
 import { Location } from '@/lib/types';
 import { deleteLocation, getLocations } from '@/lib/api';
-import { formatDateTimeFull, formatRelativeTime, pluralize } from '@/lib/format';
+import { pluralize } from '@/lib/format';
+import { sortRows, type SortState, type SortValue } from '@/lib/sort';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
 
 const REFRESH_MS = 30_000;
+
+const SORT_KEYS = ['name', 'status', 'endpoint', 'monitors', 'last_seen'] as const;
+type LocationSortKey = (typeof SORT_KEYS)[number];
+const DEFAULT_SORT: SortState<LocationSortKey> = { key: 'name', dir: 'asc' };
+// Most monitors first; Status ascending is worst first, Last seen stalest first.
+const DEFAULT_DIR = { monitors: 'desc' } as const;
+
+// Worst first, in the order ConnectionStatus words them: stranded monitors,
+// offline, never connected, connected.
+function connectionRank(location: Location): number {
+  if (location.connected) return 3;
+  if (!location.last_seen_at) return 2;
+  return location.monitor_count > 0 ? 0 : 1;
+}
+
+const SORT_VALUE: Record<LocationSortKey, (location: Location) => SortValue> = {
+  name: (location) => location.name,
+  status: connectionRank,
+  endpoint: (location) => location.mesh_endpoint || null,
+  monitors: (location) => location.monitor_count,
+  last_seen: (location) => (location.last_seen_at ? Date.parse(location.last_seen_at) : null),
+};
 
 function StatusDot({ className }: { className: string }) {
   return <span className={`h-2 w-2 flex-shrink-0 rounded-full ${className}`} aria-hidden="true" />;
@@ -76,9 +104,6 @@ export default function LocationsPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
   // undefined = closed, null = create, a location = edit.
   const [formLocation, setFormLocation] = useState<Location | null | undefined>(undefined);
   const [pendingDelete, setPendingDelete] = useState<Location | null>(null);
@@ -86,44 +111,42 @@ export default function LocationsPage() {
   const [deployLocation, setDeployLocation] = useState<Location | null>(null);
   const initialLoadDone = useRef(false);
   const [tab, setTab] = useUrlTab(['locations', 'mesh'] as const);
+  const [sort, setSort] = useUrlSort(SORT_KEYS, DEFAULT_SORT, DEFAULT_DIR);
 
-  const loadLocations = async (showSpinner = true) => {
+  // `silent` loads (the poll, a tab return) keep the last good list and stay
+  // quiet on failure; LiveStatus says the update failed instead.
+  const loadLocations = useCallback(async ({ silent }: { silent: boolean }) => {
     try {
-      if (showSpinner) setLoading(true);
+      if (!silent && !initialLoadDone.current) setLoading(true);
       const response = await getLocations({ page_size: 100 });
       setLocations(response.items || []);
-      setLastLoadedAt(Date.now());
       setError('');
+      return true;
     } catch (err: any) {
-      // Background refreshes keep showing the last good list on failure.
-      if (showSpinner || !initialLoadDone.current) {
+      if (!silent || !initialLoadDone.current) {
         setError(err.message || 'Failed to load locations');
       }
-      if (!initialLoadDone.current) setLocations([]);
+      return false;
     } finally {
       initialLoadDone.current = true;
-      if (showSpinner) setLoading(false);
+      setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadLocations();
-    // Refresh connected status while the page is open; the tick keeps the
-    // "updated …" caption honest between refreshes.
-    const interval = setInterval(() => loadLocations(false), REFRESH_MS);
-    const tick = setInterval(() => setNow(Date.now()), 10_000);
-    return () => {
-      clearInterval(interval);
-      clearInterval(tick);
-    };
   }, []);
+
+  // Connected status refreshes every 30s while the tab is visible; worker
+  // connections are not on the alert stream, so stream events don't reload.
+  const live = useLiveRefresh(loadLocations, { intervalMs: REFRESH_MS, streamDebounceMs: 0 });
+  const sorted = useMemo(
+    () => sortRows(locations, SORT_VALUE[sort.key], sort.dir, (location) => location.name),
+    [locations, sort]
+  );
 
   const handleSaved = async (saved: Location) => {
     const created = formLocation === null;
     setFormLocation(undefined);
     if (created) {
       showToast('Location created', 'success');
-      await loadLocations(false);
+      await loadLocations({ silent: true });
       setDeployLocation(saved);
     } else {
       setLocations((prev) => prev.map((item) => (item.id === saved.id ? saved : item)));
@@ -151,22 +174,11 @@ export default function LocationsPage() {
     }
   };
 
-  // A manual refresh (after deploying a worker) without the 30s wait; the
-  // list stays on screen meanwhile.
-  const refreshLocations = async () => {
-    setRefreshing(true);
-    try {
-      await loadLocations(false);
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
   const openCreate = () => setFormLocation(null);
   const isEmpty = !loading && !error && locations.length === 0;
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         title="Locations"
         subtitle="Run checks from your own networks through private workers, and probe between them."
@@ -187,18 +199,16 @@ export default function LocationsPage() {
         active={tab}
         onChange={setTab}
         trailing={
-          tab === 'locations' && lastLoadedAt !== null ? (
-            <>
-              <span className="text-xs text-slate-500" title={formatDateTimeFull(lastLoadedAt)}>
-                Updated {formatRelativeTime(lastLoadedAt, new Date(Math.max(now, lastLoadedAt)))}
-              </span>
-              <IconButton
-                icon={<RefreshCw strokeWidth={1.75} />}
-                label="Refresh locations"
-                onClick={refreshLocations}
-                loading={refreshing}
-              />
-            </>
+          tab === 'locations' && live.updatedAt !== null ? (
+            // A manual refresh (after deploying a worker) skips the 30s wait;
+            // the list stays on screen meanwhile.
+            <LiveStatus
+              updatedAt={live.updatedAt}
+              refreshing={live.refreshing}
+              failed={live.failed && !error}
+              onRefresh={live.refresh}
+              refreshLabel="Refresh locations"
+            />
           ) : undefined
         }
       />
@@ -211,7 +221,11 @@ export default function LocationsPage() {
         ) : error ? (
           <Callout
             tone="danger"
-            action={<Button variant="ghost" size="xs" onClick={() => loadLocations()}>Retry</Button>}
+            action={
+              <Button variant="ghost" size="xs" onClick={live.refresh} loading={live.refreshing}>
+                Retry
+              </Button>
+            }
           >
             {error}
           </Callout>
@@ -232,16 +246,38 @@ export default function LocationsPage() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Status</th>
-                    <th>Mesh endpoint</th>
-                    <th className="text-right">Monitors</th>
-                    <th>Last seen</th>
+                    <SortableHeader label="Name" sortKey="name" sort={sort} onSort={setSort} defaultDir={DEFAULT_DIR} />
+                    <SortableHeader
+                      label="Status"
+                      sortKey="status"
+                      sort={sort}
+                      onSort={setSort}
+                      defaultDir={DEFAULT_DIR}
+                      title="Disconnected first"
+                    />
+                    <SortableHeader label="Mesh endpoint" sortKey="endpoint" sort={sort} onSort={setSort} defaultDir={DEFAULT_DIR} />
+                    <SortableHeader
+                      label="Monitors"
+                      sortKey="monitors"
+                      sort={sort}
+                      onSort={setSort}
+                      defaultDir={DEFAULT_DIR}
+                      align="right"
+                      title="Most monitors first"
+                    />
+                    <SortableHeader
+                      label="Last seen"
+                      sortKey="last_seen"
+                      sort={sort}
+                      onSort={setSort}
+                      defaultDir={DEFAULT_DIR}
+                      title="Longest unseen first"
+                    />
                     <th><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody className="text-sm text-slate-200">
-                  {locations.map((location) => {
+                  {sorted.map((location) => {
                     // The slug is derived from the name, so it only goes in
                     // the tooltip; the description shows when it adds something.
                     const description =
@@ -278,13 +314,7 @@ export default function LocationsPage() {
                           {location.monitor_count}
                         </td>
                         <td className="whitespace-nowrap text-ui text-slate-400">
-                          {location.last_seen_at ? (
-                            <span title={formatDateTimeFull(location.last_seen_at)}>
-                              {formatRelativeTime(location.last_seen_at)}
-                            </span>
-                          ) : (
-                            '—'
-                          )}
+                          <RelativeTime value={location.last_seen_at} />
                         </td>
                         <td className="!py-2">
                           {canManageLocations && <div className="flex items-center justify-end gap-0.5">
@@ -346,6 +376,6 @@ export default function LocationsPage() {
       {canManageLocations && deployLocation && (
         <LocationDeployModal location={deployLocation} onClose={() => setDeployLocation(null)} />
       )}
-    </div>
+    </Page>
   );
 }

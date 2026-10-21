@@ -8,6 +8,7 @@ import type { IncidentDetail, StatusPage } from '@/lib/types';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
+import Checkbox from '@/components/ui/Checkbox';
 import IconButton from '@/components/ui/IconButton';
 import Select from '@/components/ui/Select';
 import TypeBadge from '@/components/ui/TypeBadge';
@@ -164,9 +165,9 @@ export default function IncidentPublicationEditor({
               </Select>
             </div>
 
-            <div>
-              <div className="text-ui font-medium text-slate-300">Affected components</div>
-              <div className="mt-0.5 text-xs text-slate-500">
+            <fieldset aria-describedby="incident-components-hint">
+              <legend className="text-ui font-medium text-slate-300">Affected components</legend>
+              <div id="incident-components-hint" className="mt-0.5 text-xs text-slate-500">
                 Leave all unchecked to publish the incident platform-wide.
               </div>
               {availableComponentOptions.length === 0 ? (
@@ -174,23 +175,24 @@ export default function IncidentPublicationEditor({
                   No linked incident monitors are present on the selected status page.
                 </div>
               ) : (
-                <div className="mt-3 space-y-2">
+                <div className="mt-2 flex flex-col items-start">
                   {availableComponentOptions.map((monitor) => (
-                    <label key={monitor.id} className="flex items-center gap-2.5 text-sm text-slate-300">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 accent-cyan-500"
-                        checked={selectedMonitorIds.includes(monitor.id)}
-                        onChange={() => toggleMonitorSelection(monitor.id)}
-                        disabled={saving}
-                      />
-                      <TypeBadge type={monitor.type} />
-                      <span>{monitor.name}</span>
-                    </label>
+                    <Checkbox
+                      key={monitor.id}
+                      checked={selectedMonitorIds.includes(monitor.id)}
+                      onChange={() => toggleMonitorSelection(monitor.id)}
+                      disabled={saving}
+                      label={
+                        <span className="flex items-center gap-2.5 text-slate-300">
+                          <TypeBadge type={monitor.type} />
+                          <span>{monitor.name}</span>
+                        </span>
+                      }
+                    />
                   ))}
                 </div>
               )}
-            </div>
+            </fieldset>
 
             <div className="flex flex-wrap gap-2">
               <Button
@@ -203,9 +205,11 @@ export default function IncidentPublicationEditor({
               >
                 {saving ? 'Saving…' : 'Publish incident'}
               </Button>
+              {/* ghost, not subtle: a borderless button next to bordered
+                  ones reads as disabled. */}
               <Button
                 type="button"
-                variant="subtle"
+                variant="ghost"
                 size="sm"
                 onClick={handleUnpublish}
                 disabled={saving || !selectedStatusPageId}

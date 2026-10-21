@@ -6,6 +6,7 @@ import { Bot, Eye, PencilLine } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import BrandMark from '@/components/ui/BrandMark';
 import Callout from '@/components/ui/Callout';
+import Radio from '@/components/ui/Radio';
 import Select from '@/components/ui/Select';
 import { getSelectedTenantId } from '@/lib/tenant';
 import type { Tenant, TenantListResponse } from '@/lib/types';
@@ -211,27 +212,25 @@ function AccessOption({
   title: string;
   text: string;
 }) {
+  // The whole card is the radio's label; the selected card gets a neutral
+  // ring (selection is never orange).
   return (
-    <label
-      className={`glass-well flex cursor-pointer gap-3 p-3 ${checked ? 'ring-1 ring-slate-400/60' : ''} ${
-        disabled ? 'cursor-not-allowed opacity-50' : ''
+    <Radio
+      name="scope"
+      value={title}
+      checked={checked}
+      disabled={disabled}
+      onChange={onSelect}
+      className={`glass-well flex w-full gap-3 !py-3 px-3 transition-shadow duration-fast ${
+        checked ? 'ring-1 ring-slate-400/60' : ''
       }`}
-    >
-      <input
-        type="radio"
-        name="scope"
-        className="mt-1"
-        checked={checked}
-        disabled={disabled}
-        onChange={onSelect}
-      />
-      <span className="min-w-0">
-        <span className="flex items-center gap-1.5 text-sm font-medium text-white">
+      label={
+        <span className="flex items-center gap-1.5 font-medium text-white">
           {icon}
           {title}
         </span>
-        <span className="mt-0.5 block text-xs text-slate-400">{text}</span>
-      </span>
-    </label>
+      }
+      description={<span className="text-slate-400">{text}</span>}
+    />
   );
 }

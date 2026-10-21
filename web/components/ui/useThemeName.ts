@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Reactive name of the active theme. Tracks the `data-theme` attribute that
- * the boot script (app/layout.tsx) and ThemeToggle maintain on <html>, so
- * canvas-style components (charts, graph views) can re-render on switch.
+ * Reactive name of the active (resolved) theme. Tracks the `data-theme`
+ * attribute that the boot script (app/layout.tsx) and ThemeToggle maintain on
+ * <html> (in "system" mode the boot script rewrites it when the OS scheme
+ * changes), so canvas-style components (charts, graph views) can re-render on
+ * switch.
  */
 export function useThemeName(): 'dark' | 'light' {
   const [theme, setTheme] = useState<'dark' | 'light'>('light');

@@ -7,6 +7,8 @@ import Pill from '@/components/ui/Pill';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import Callout from '@/components/ui/Callout';
+import { FOCUS_RING } from '@/components/ui/focus';
+import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from '@/components/ui/roving';
 import { useToast } from '@/components/ui/ToastProvider';
 import { formatDateTimeFull } from '@/lib/format';
 import {
@@ -22,9 +24,13 @@ const TENANT_ROLES = ['admin', 'editor', 'viewer'] as const;
 
 const LABEL_CLASS = 'mb-1.5 block text-ui font-medium text-slate-300';
 
-const SEGMENT_CLASS = 'cursor-pointer rounded-lg px-3 py-1.5 text-ui font-medium transition-colors';
-const SEGMENT_ACTIVE = 'bg-glass-strong text-white shadow-glass';
+const SEGMENT_CLASS = `cursor-pointer rounded-lg px-3 py-1.5 text-ui font-medium ${SEGMENT_ITEM} ${FOCUS_RING}`;
 const SEGMENT_IDLE = 'text-slate-400 hover:text-slate-100';
+const MAPPING_MODES = [
+  { id: 'tenant', label: 'Tenant role' },
+  { id: 'platform', label: 'Platform superadmin' },
+] as const;
+const MAPPING_MODE_IDS = MAPPING_MODES.map((m) => m.id);
 
 // Superadmin editor for IdP group→role mappings. Any saved mapping makes the
 // IdP the source of truth: SSO users' roles are re-derived from their groups
@@ -187,7 +193,9 @@ export function OidcGroupMappingsPanel() {
                   <tr className="border-b border-divider text-xs text-slate-500">
                     <th className="py-2 pr-4 font-medium">Identity-provider group</th>
                     <th className="py-2 pr-4 font-medium">Grants</th>
-                    <th className="w-10 py-2 font-medium" />
+                    <th className="w-10 py-2 font-medium">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-divider">
@@ -311,7 +319,7 @@ export function OidcGroupMappingsPanel() {
                   type="text"
                   value={newGroup}
                   onChange={(e) => setNewGroup(e.target.value)}
-                  placeholder="engineering"
+                  placeholder="e.g. engineering"
                   className="input !w-52 font-mono"
                   list="seen-oidc-groups"
                 />
@@ -330,7 +338,7 @@ export function OidcGroupMappingsPanel() {
                   type="text"
                   value={newLabel}
                   onChange={(e) => setNewLabel(e.target.value)}
-                  placeholder="Engineering"
+                  placeholder="e.g. Engineering"
                   maxLength={100}
                   className="input !w-44"
                 />
@@ -338,27 +346,27 @@ export function OidcGroupMappingsPanel() {
 
               <div>
                 <span className={LABEL_CLASS}>Grants</span>
+                {/* One choice of two: a radiogroup with arrow keys, like RangePicker. */}
                 <div
                   className="inline-flex h-10 items-center gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
-                  role="group"
+                  role="radiogroup"
                   aria-label="Mapping target"
+                  onKeyDown={(e) => handleRovingKeyDown(e, MAPPING_MODE_IDS, newMode, setNewMode)}
                 >
-                  <button
-                    type="button"
-                    onClick={() => setNewMode('tenant')}
-                    aria-pressed={newMode === 'tenant'}
-                    className={`${SEGMENT_CLASS} ${newMode === 'tenant' ? SEGMENT_ACTIVE : SEGMENT_IDLE}`}
-                  >
-                    Tenant role
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewMode('platform')}
-                    aria-pressed={newMode === 'platform'}
-                    className={`${SEGMENT_CLASS} ${newMode === 'platform' ? SEGMENT_ACTIVE : SEGMENT_IDLE}`}
-                  >
-                    Platform superadmin
-                  </button>
+                  {MAPPING_MODES.map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={newMode === mode.id}
+                      data-roving-id={mode.id}
+                      tabIndex={newMode === mode.id ? 0 : -1}
+                      onClick={() => setNewMode(mode.id)}
+                      className={`${SEGMENT_CLASS} ${newMode === mode.id ? SELECTED_SEGMENT : SEGMENT_IDLE}`}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -411,9 +419,12 @@ export function OidcGroupMappingsPanel() {
                   </p>
                 )}
               </div>
+              {/* ml-auto keeps the action at the right edge whether it shares
+                  the help text's row or wraps below it. */}
               <Button
                 variant="accent"
                 size="sm"
+                className="ml-auto"
                 onClick={handleCreate}
                 disabled={creating || newGroup.trim() === '' || (newMode === 'tenant' && !newTenantId)}
                 loading={creating}

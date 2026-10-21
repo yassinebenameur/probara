@@ -26,8 +26,12 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
   return (
     <div
       className={[
-        'group relative w-[216px] rounded-xl border bg-glass-strong shadow-[0_1px_2px_rgb(0_0_0/0.12)] transition-[opacity,border-color] duration-200',
-        emphasized ? 'border-cyan-500/70' : `${s.card} hover:border-cyan-500/40`,
+        'group relative w-[216px] rounded-xl border bg-glass-strong shadow-[0_1px_2px_rgb(0_0_0/0.12)] transition-[opacity,border-color] duration-base',
+        // Emphasis (focus, highlighted path, drop target) is neutral: an
+        // orange edge beside a red Down state reads as one warm blur.
+        emphasized
+          ? 'border-[var(--input-edge)] ring-2 ring-white/20'
+          : `${s.card} hover:border-[var(--control-edge-strong)]`,
         dimmed ? 'opacity-20' : 'opacity-100',
       ].join(' ')}
     >
@@ -87,7 +91,7 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
             e.stopPropagation();
             expandFrontier(id);
           }}
-          className="nodrag nopan absolute -bottom-3 left-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-0.5 pr-1.5 text-2xs font-medium tabular-nums text-cyan-300 transition-colors hover:border-cyan-500/60"
+          className="nodrag nopan absolute -bottom-3 left-2 z-10 flex items-center gap-0.5 rounded-full border border-edge-control bg-slate-900 py-px pl-0.5 pr-1.5 text-2xs font-medium tabular-nums text-slate-300 transition-colors hover:border-edge-strong hover:text-white"
         >
           <ChevronLeft className="h-3 w-3" strokeWidth={2} />
           {data.hiddenIn}
@@ -101,7 +105,7 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
             e.stopPropagation();
             expandFrontier(id);
           }}
-          className="nodrag nopan absolute -bottom-3 right-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-1.5 pr-0.5 text-2xs font-medium tabular-nums text-cyan-300 transition-colors hover:border-cyan-500/60"
+          className="nodrag nopan absolute -bottom-3 right-2 z-10 flex items-center gap-0.5 rounded-full border border-edge-control bg-slate-900 py-px pl-1.5 pr-0.5 text-2xs font-medium tabular-nums text-slate-300 transition-colors hover:border-edge-strong hover:text-white"
         >
           {data.hiddenOut}
           <ChevronRight className="h-3 w-3" strokeWidth={2} />

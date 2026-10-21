@@ -2,7 +2,8 @@
 
 import type { MonitorLocationStatus } from '@/lib/types';
 import { monitorStateColors } from '@/lib/monitor-utils';
-import { formatDateTimeFull, formatLatency, formatRelativeTime } from '@/lib/format';
+import { formatLatency } from '@/lib/format';
+import { RelativeTime } from '@/components/ui/RelativeTime';
 
 interface MonitorLocationStripProps {
   locations: MonitorLocationStatus[];
@@ -53,12 +54,10 @@ export function MonitorLocationStrip({ locations, quorum }: MonitorLocationStrip
               </span>
             )}
             {loc.last_check_at && (
-              <span
+              <RelativeTime
+                value={loc.last_check_at}
                 className="shrink-0 whitespace-nowrap text-xs tabular-nums text-slate-500"
-                title={formatDateTimeFull(loc.last_check_at)}
-              >
-                {formatRelativeTime(loc.last_check_at)}
-              </span>
+              />
             )}
             {!loc.connected && (
               <span className="shrink-0 whitespace-nowrap text-xs text-amber-300">worker offline</span>

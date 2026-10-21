@@ -2,6 +2,8 @@
 
 import type { PluginManifest } from '@/lib/types';
 import { iconFor } from './icons';
+import { FOCUS_RING } from '@/components/ui/focus';
+import { SELECTED_SEGMENT } from '@/components/ui/roving';
 
 interface PluginCatalogProps {
   manifests: PluginManifest[];
@@ -33,8 +35,10 @@ export default function PluginCatalog({
             key={manifest.type}
             disabled={disabled}
             onClick={() => onSelect(manifest)}
-            className={`glass-well flex items-start gap-3 p-3 text-left transition-colors ${
-              selected ? 'bg-cyan-500/[0.08] ring-1 ring-inset ring-cyan-500/45' : ''
+            aria-pressed={selected}
+            className={`glass-well flex items-start gap-3 p-3 text-left transition-colors ${FOCUS_RING} ${
+              // Selected is neutral raised glass, never orange (orange = act).
+              selected ? SELECTED_SEGMENT : ''
             } ${
               disabled
                 ? `cursor-not-allowed ${selected ? '' : 'opacity-40'}`
@@ -42,7 +46,7 @@ export default function PluginCatalog({
             }`}
           >
             <Icon
-              className={`mt-0.5 h-4 w-4 shrink-0 ${selected ? 'text-cyan-400' : 'text-slate-400'}`}
+              className={`mt-0.5 h-4 w-4 shrink-0 ${selected ? 'text-white' : 'text-slate-400'}`}
               strokeWidth={1.75}
             />
             <div className="min-w-0">

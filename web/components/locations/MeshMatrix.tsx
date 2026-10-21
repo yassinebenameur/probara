@@ -7,6 +7,7 @@ import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import Callout from '@/components/ui/Callout';
+import { FOCUS_RING } from '@/components/ui/focus';
 import EmptyState from '@/components/ui/EmptyState';
 import TableSkeleton from '@/components/ui/TableSkeleton';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -188,8 +189,10 @@ export default function MeshMatrix() {
                       <div className="flex items-center justify-center gap-1.5">
                         <span
                           className={`h-2 w-2 shrink-0 rounded-full ${target.connected ? 'bg-emerald-500' : 'bg-slate-500'}`}
+                          aria-hidden="true"
                         />
                         <span className="truncate" title={target.name}>{target.name}</span>
+                        <span className="sr-only">{target.connected ? ' (connected)' : ' (offline)'}</span>
                       </div>
                     </th>
                   ))}
@@ -204,6 +207,7 @@ export default function MeshMatrix() {
                       <div className="flex items-center gap-1.5">
                         <span
                           className={`h-2 w-2 shrink-0 rounded-full ${source.connected ? 'bg-emerald-500' : 'bg-slate-500'}`}
+                          aria-hidden="true"
                         />
                         <span className="min-w-0 sm:flex sm:items-center sm:gap-1.5">
                           <span className="block truncate" title={source.name}>{source.name}</span>
@@ -230,19 +234,25 @@ export default function MeshMatrix() {
                             className={`group relative flex items-center justify-center gap-1 rounded-lg px-3 py-2.5 text-center text-sm tabular-nums ${cellClasses(edge)}`}
                           >
                             {edge?.alert_open && (
-                              <span className="absolute left-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-rose-500" />
+                              <span className="absolute left-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-rose-500">
+                                <span className="sr-only">Alert open: </span>
+                              </span>
                             )}
                             {cellLabel(edge)}
+                            {/* Revealed on hover, and on keyboard focus (opacity, not
+                                display:none, so it stays in the tab order). */}
                             <button
                               type="button"
                               title={`Probe ${source.name} → ${target.name} now`}
+                              aria-label={`Probe ${source.name} → ${target.name} now`}
                               onClick={() => handleProbe(source, target)}
                               disabled={probing !== null}
-                              className="absolute right-1 top-1 hidden rounded-md p-0.5 text-slate-400 hover:text-white group-hover:block disabled:opacity-50"
+                              className={`absolute right-1 top-1 rounded-md p-0.5 text-slate-400 opacity-0 transition-opacity duration-fast hover:text-white focus-visible:opacity-100 group-hover:opacity-100 group-hover:disabled:opacity-50 disabled:cursor-not-allowed ${FOCUS_RING}`}
                             >
                               <Zap
                                 className={`h-3 w-3 ${probing === key ? 'animate-pulse text-amber-400' : ''}`}
                                 strokeWidth={1.75}
+                                aria-hidden="true"
                               />
                             </button>
                           </div>

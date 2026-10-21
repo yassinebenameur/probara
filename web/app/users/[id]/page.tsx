@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import FormCard from '@/components/ui/FormCard';
 import FormField from '@/components/ui/FormField';
 import FormActions from '@/components/ui/FormActions';
@@ -13,6 +14,7 @@ import Callout from '@/components/ui/Callout';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
 import { getTenants, getUser, listOidcGroupMappings, updateUser } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
+import useDocumentTitle from '@/lib/useDocumentTitle';
 import type { AdminUser, MembershipInput, PlatformRole, Tenant } from '@/lib/types';
 
 export default function EditUserPage() {
@@ -21,6 +23,7 @@ export default function EditUserPage() {
   const id = params.id as string;
 
   const [user, setUser] = useState<AdminUser | null>(null);
+  useDocumentTitle(user?.username);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -108,7 +111,7 @@ export default function EditUserPage() {
   const isOidcUser = user.auth_method === 'oidc';
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <Page width="reading">
       <PageHeader
         breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'Edit' }]}
         title="Edit user"
@@ -220,6 +223,6 @@ export default function EditUserPage() {
           </dl>
         </Panel>
       </div>
-    </div>
+    </Page>
   );
 }

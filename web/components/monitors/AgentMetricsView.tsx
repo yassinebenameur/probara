@@ -14,7 +14,7 @@ import {
 } from '@/lib/types';
 import { getMonitorMetricSeries, queryMonitorMetrics } from '@/lib/api';
 import { displayAttr, formatBytes, formatDurationSeconds, ratioToPercent } from '@/lib/metrics';
-import { formatDateTimeFull, formatRelativeTime } from '@/lib/format';
+import { useNow } from '@/lib/useNow';
 import {
   DEFAULT_UTILIZATION_ALERT,
   matchingMetricRules,
@@ -24,6 +24,7 @@ import {
   type UptimeTone,
 } from '@/lib/status-tones';
 import Callout from '@/components/ui/Callout';
+import { RelativeTime } from '@/components/ui/RelativeTime';
 import EmptyState from '@/components/ui/EmptyState';
 import RangePicker from '@/components/ui/RangePicker';
 import {
@@ -150,7 +151,7 @@ function CircularProgress({
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={strokeDashoffset}
-            className="transition-all duration-500"
+            className="transition-[stroke-dashoffset,stroke] duration-slow ease-emphasized"
           />
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
@@ -203,7 +204,7 @@ function ChartTile({
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
           {legend.map((entry) => (
             <span key={entry.key} className="flex items-center gap-1.5">
-              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />
+              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} aria-hidden="true" />
               {entry.name}
             </span>
           ))}
@@ -258,6 +259,8 @@ export default function AgentMetricsView({
 }: AgentMetricsViewProps) {
   const [localTimeRange, setLocalTimeRange] = useState<TimeRange>('24h');
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // The shared 15s clock keeps "stale" honest between polls.
+  const clockMs = useNow('minute');
   const [chartResponse, setChartResponse] = useState<MetricQueryResponse | null>(null);
   const [statsResponse, setStatsResponse] = useState<MetricQueryResponse | null>(null);
   // Real ingest recency: newest last_seen_at across discovered series. Chart
@@ -488,7 +491,7 @@ export default function AgentMetricsView({
   const latestInRate = latestRow?.netIn ?? 0;
   const latestOutRate = latestRow?.netOut ?? 0;
 
-  const timeSinceReportSec = Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000));
+  const timeSinceReportSec = Math.max(0, Math.floor((Math.max(nowMs, clockMs) - lastSeenMs) / 1000));
   const staleAfterSec = Math.max(3 * safeInterval, 120);
   const isStale = timeSinceReportSec > staleAfterSec;
 
@@ -543,12 +546,15 @@ export default function AgentMetricsView({
       <div className="glass p-5">
         <div className="mb-5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <span className={`h-2 w-2 shrink-0 rounded-full ${isStale ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+            <span className={`h-2 w-2 shrink-0 rounded-full ${isStale ? 'bg-amber-500' : 'bg-emerald-500'}`} aria-hidden="true" />
             <h3 className="text-title font-semibold text-white">{isStale ? 'Agent stale' : 'Agent healthy'}</h3>
           </div>
-          <span className="text-xs text-slate-500" title={formatDateTimeFull(lastSeenMs)}>
-            Last report {formatRelativeTime(lastSeenMs, new Date(Math.max(nowMs, lastSeenMs)))}
-          </span>
+          <RelativeTime
+            value={lastSeenMs > 0 ? lastSeenMs : null}
+            prefix="Last report "
+            fallback="No report yet"
+            className="text-xs text-slate-500"
+          />
         </div>
 
         <div className="grid grid-cols-3 gap-6">
@@ -634,7 +640,7 @@ export default function AgentMetricsView({
             <ChartTile title="CPU usage" headline={cpuAvailable ? `${cpuPercent.toFixed(1)}%` : '—'}>
               <MetricChart
                 data={chartRows}
-                series={[{ key: 'cpu', name: 'CPU', color: '#ff8a5c' }]}
+                series={[{ key: 'cpu', name: 'CPU', color: SERIES_COLORS[0] }]}
                 range={timeRange}
                 yDomain={[0, 100]}
                 yTickFormatter={percentTick}
@@ -655,8 +661,8 @@ export default function AgentMetricsView({
               <MetricChart
                 data={chartRows}
                 series={[
-                  { key: 'mem', name: 'Memory', color: '#6fb5dd' },
-                  { key: 'swap', name: 'Swap', color: '#f472b6' },
+                  { key: 'mem', name: 'Memory', color: SERIES_COLORS[0] },
+                  { key: 'swap', name: 'Swap', color: SERIES_COLORS[1] },
                 ]}
                 range={timeRange}
                 yDomain={[0, 100]}
@@ -697,8 +703,8 @@ export default function AgentMetricsView({
               <MetricChart
                 data={chartRows}
                 series={[
-                  { key: 'diskRead', name: 'Read', color: '#2fbd6a' },
-                  { key: 'diskWrite', name: 'Write', color: '#3b82f6' },
+                  { key: 'diskRead', name: 'Read', color: SERIES_COLORS[2] },
+                  { key: 'diskWrite', name: 'Write', color: SERIES_COLORS[3] },
                 ]}
                 range={timeRange}
                 yDomain={[0, 'auto']}
@@ -721,8 +727,8 @@ export default function AgentMetricsView({
               <MetricChart
                 data={chartRows}
                 series={[
-                  { key: 'netIn', name: 'In', color: '#2fbd6a' },
-                  { key: 'netOut', name: 'Out', color: '#3b82f6' },
+                  { key: 'netIn', name: 'In', color: SERIES_COLORS[2] },
+                  { key: 'netOut', name: 'Out', color: SERIES_COLORS[3] },
                 ]}
                 range={timeRange}
                 yDomain={[0, 'auto']}

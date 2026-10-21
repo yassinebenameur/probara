@@ -39,7 +39,7 @@ function DependencyEdgeImpl({
   });
 
   return (
-    <g style={{ opacity: faded ? 0.12 : 1, transition: 'opacity 150ms ease' }}>
+    <g style={{ opacity: faded ? 0.12 : 1, transition: 'opacity var(--dur-fast) var(--ease-standard)' }}>
       <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd as string | undefined} />
       {selected && (
         <EdgeLabelRenderer>

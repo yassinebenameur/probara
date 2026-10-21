@@ -86,6 +86,16 @@ interface UseAlertStreamOptions {
   onAlertResolved?: (alert: Alert) => void;
   onError?: (error: Error) => void;
   onConnected?: () => void;
+  /**
+   * The stream went down (the server closed it, or the connection failed);
+   * a reconnect is scheduled unless onStalled follows.
+   */
+  onDisconnected?: (reason: 'closed' | 'error') => void;
+  /**
+   * Reconnect attempts ran out. The hook tries again by itself when the
+   * browser comes back online or the tab becomes visible.
+   */
+  onStalled?: () => void;
   enabled?: boolean;
 }
 
@@ -96,6 +106,8 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
     onAlertResolved,
     onError,
     onConnected,
+    onDisconnected,
+    onStalled,
     enabled = true,
   } = options;
 
@@ -105,6 +117,8 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
     onAlertResolved,
     onError,
     onConnected,
+    onDisconnected,
+    onStalled,
   });
 
   useEffect(() => {
@@ -114,13 +128,19 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
       onAlertResolved,
       onError,
       onConnected,
+      onDisconnected,
+      onStalled,
     };
-  }, [onAlertCreated, onAlertAcknowledged, onAlertResolved, onError, onConnected]);
+  }, [onAlertCreated, onAlertAcknowledged, onAlertResolved, onError, onConnected, onDisconnected, onStalled]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
   const isConnectedRef = useRef(false);
+  // A connect() is in flight (request sent, stream not yet open).
+  const connectingRef = useRef(false);
+  // Attempts ran out; online/visibility restart from zero.
+  const stalledRef = useRef(false);
   const maxReconnectAttempts = 10;
   const baseReconnectDelay = 1000;
   const connectRef = useRef<(() => Promise<void>) | undefined>(undefined);
@@ -128,7 +148,9 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
   const scheduleReconnect = useCallback(() => {
     if (reconnectAttempts.current >= maxReconnectAttempts) {
       console.error('SSE: Max reconnection attempts reached');
+      stalledRef.current = true;
       callbacksRef.current.onError?.(new Error('Max reconnection attempts reached'));
+      callbacksRef.current.onStalled?.();
       return;
     }
 
@@ -182,6 +204,8 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
 
     abortControllerRef.current = new AbortController();
     isConnectedRef.current = false;
+    connectingRef.current = true;
+    stalledRef.current = false;
 
     try {
       let requestConfig = await buildStreamRequestConfig();
@@ -215,6 +239,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
       console.log('SSE: Connection established');
       reconnectAttempts.current = 0;
       isConnectedRef.current = true;
+      connectingRef.current = false;
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -226,6 +251,9 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
         if (done) {
           console.log('SSE: Connection closed by server');
           isConnectedRef.current = false;
+          // The connection is gone even though nothing threw: say so, or
+          // the UI keeps claiming "live" while it waits to reconnect.
+          callbacksRef.current.onDisconnected?.('closed');
           scheduleReconnect();
           break;
         }
@@ -234,6 +262,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
       }
     } catch (error) {
       isConnectedRef.current = false;
+      connectingRef.current = false;
 
       if (error instanceof Error && error.name === 'AbortError') {
         console.log('SSE: Connection aborted');
@@ -242,6 +271,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
 
       console.error('SSE: Connection error:', error);
       callbacksRef.current.onError?.(error instanceof Error ? error : new Error('SSE connection failed'));
+      callbacksRef.current.onDisconnected?.('error');
       scheduleReconnect();
     }
   }, [handleEvent, scheduleReconnect]);
@@ -261,6 +291,8 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
       abortControllerRef.current = null;
     }
     isConnectedRef.current = false;
+    connectingRef.current = false;
+    stalledRef.current = false;
     reconnectAttempts.current = 0;
   }, []);
 
@@ -278,10 +310,35 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
     };
   }, [enabled, connect, disconnect]);
 
+  // Coming back online or to the tab is the moment to retry at once: after
+  // giving up, or instead of waiting out a long backoff.
+  useEffect(() => {
+    if (!enabled) return;
+    const retryNow = () => {
+      if (isConnectedRef.current || connectingRef.current) return;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      reconnectAttempts.current = 0;
+      void connectRef.current?.();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') retryNow();
+    };
+    window.addEventListener('online', retryNow);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('online', retryNow);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [enabled]);
+
   return {
     disconnect,
     reconnect: connect,
     isConnected: () => isConnectedRef.current,
+    isStalled: () => stalledRef.current,
   };
 }
 

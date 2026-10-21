@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Search, Workflow } from 'lucide-react';
 import { stateStyle, TYPE_ICONS } from './graphTheme';
 import { type RailEntry } from './graphModel';
+import { FOCUS_RING_INSET } from '@/components/ui/focus';
 
 const MAX_ROWS = 400;
 
@@ -50,6 +51,7 @@ export function ServiceRail({
               if (e.key === 'Escape') onQueryChange('');
             }}
             placeholder="Find a service…"
+            aria-label="Find a service"
             className="input input-sm h-8 !py-0 !pl-8"
           />
         </div>
@@ -79,32 +81,40 @@ export function ServiceRail({
                 key={monitor.id}
                 type="button"
                 onClick={() => onSelect(monitor.id)}
+                aria-pressed={active}
                 className={[
-                  'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                  `flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors active:bg-control-hover ${FOCUS_RING_INSET}`,
                   active
                     ? 'bg-control-hover shadow-[inset_0_0_0_1px_var(--control-edge)]'
                     : 'hover:bg-well-hover',
                 ].join(' ')}
               >
-                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.dot}`} />
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.dot}`} aria-hidden="true" />
                 <Icon
-                  className={`h-3.5 w-3.5 shrink-0 ${active ? 'text-cyan-500' : 'text-slate-500'}`}
+                  className={`h-3.5 w-3.5 shrink-0 ${active ? 'text-white' : 'text-slate-500'}`}
                   strokeWidth={1.75}
+                  aria-hidden="true"
                 />
                 <span
                   className={`min-w-0 flex-1 truncate text-ui ${active ? 'font-medium text-white' : 'text-slate-300'}`}
                   title={monitor.name}
                 >
                   {monitor.name}
+                  <span className="sr-only">, {monitor.current_state ?? 'unknown'}</span>
                 </span>
-                <span className="flex shrink-0 items-center gap-1.5 text-2xs tabular-nums text-slate-500">
+                <span
+                  className={`flex shrink-0 items-center gap-1.5 text-2xs tabular-nums ${
+                    active ? 'text-slate-400' : 'text-slate-500'
+                  }`}
+                >
                   {dependents > 0 && (
                     <span
                       className="flex items-center"
                       title={`${dependents} service${dependents === 1 ? '' : 's'} depend${dependents === 1 ? 's' : ''} on this`}
                     >
-                      <ChevronLeft className="h-3 w-3" strokeWidth={2} />
+                      <ChevronLeft className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
                       {dependents}
+                      <span className="sr-only"> dependent{dependents === 1 ? '' : 's'},</span>
                     </span>
                   )}
                   {dependencies > 0 && (
@@ -113,7 +123,8 @@ export function ServiceRail({
                       title={`depends on ${dependencies} service${dependencies === 1 ? '' : 's'}`}
                     >
                       {dependencies}
-                      <ChevronRight className="h-3 w-3" strokeWidth={2} />
+                      <span className="sr-only"> dependenc{dependencies === 1 ? 'y' : 'ies'}</span>
+                      <ChevronRight className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
                     </span>
                   )}
                 </span>

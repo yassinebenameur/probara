@@ -24,6 +24,7 @@ import IncidentTimeline from '@/components/incidents/IncidentTimeline';
 import Panel from '@/components/ui/Panel';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
@@ -41,6 +42,8 @@ import {
 import Link from 'next/link';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 import TypeBadge from '@/components/ui/TypeBadge';
+import { ElapsedTime } from '@/components/ui/RelativeTime';
+import useDocumentTitle from '@/lib/useDocumentTitle';
 
 const ATTACH_SELECT = 'input h-9 min-w-0 flex-1 py-0 text-ui';
 
@@ -56,6 +59,7 @@ export default function IncidentDetailPage() {
   const [selectedAlertId, setSelectedAlertId] = useState('');
   const [selectedMonitorId, setSelectedMonitorId] = useState('');
   const { showToast } = useToast();
+  useDocumentTitle(incident?.title);
 
   const loadIncident = useCallback(async () => {
     if (!incidentId) {
@@ -203,7 +207,7 @@ export default function IncidentDetailPage() {
 
   if (loading) {
     return (
-      <div className="glass p-8 text-center text-sm text-slate-500">
+      <div className="glass mx-auto w-full max-w-[100rem] p-8 text-center text-sm text-slate-500" role="status">
         Loading incident…
       </div>
     );
@@ -229,7 +233,7 @@ export default function IncidentDetailPage() {
   const availableMonitors = monitors.filter((monitor) => !linkedMonitorIDs.has(monitor.id));
 
   return (
-    <div className="space-y-6">
+    <Page width="detail">
       <PageHeader
         breadcrumb={[{ label: 'Incidents', href: '/incidents' }, { label: incident.title }]}
         title={incident.title}
@@ -244,7 +248,11 @@ export default function IncidentDetailPage() {
           </span>,
           incident.resolved_at
             ? `resolved after ${formatDurationBetween(incident.created_at, incident.resolved_at)}`
-            : `open ${formatDurationBetween(incident.created_at)}`,
+            : (
+                <span key="open">
+                  open <ElapsedTime start={incident.created_at} />
+                </span>
+              ),
           // Owner and source live in the Details panel beside this.
           <Pill key="sev" size="xs" tone={incidentSeverityTone(incident.severity)}>
             {incidentSeverityLabel(incident.severity)} severity
@@ -357,7 +365,7 @@ export default function IncidentDetailPage() {
                 value={selectedAlertId}
                 onChange={(event) => setSelectedAlertId(event.target.value)}
               >
-                <option value="">Select alert</option>
+                <option value="" data-prompt>Select alert</option>
                 {availableAlerts.map((alert) => (
                   <option key={alert.id} value={alert.id}>
                     {alert.monitor_name || alert.id} ({ALERT_STATUS_LABEL[alert.status].toLowerCase()})
@@ -401,7 +409,7 @@ export default function IncidentDetailPage() {
                 value={selectedMonitorId}
                 onChange={(event) => setSelectedMonitorId(event.target.value)}
               >
-                <option value="">Select monitor</option>
+                <option value="" data-prompt>Select monitor</option>
                 {availableMonitors.map((monitor) => (
                   <option key={monitor.id} value={monitor.id}>
                     {monitor.name} ({monitorTypeLabel(monitor.type)})
@@ -425,6 +433,6 @@ export default function IncidentDetailPage() {
           />
         </div>
       </div>
-    </div>
+    </Page>
   );
 }
