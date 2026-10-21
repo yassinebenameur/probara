@@ -334,6 +334,110 @@ func TestProgressHeartbeatToleratesMissingInProgress(t *testing.T) {
 	stop()
 }
 
+// gatedCallChecker holds every "call" (an invite config) open until release
+// is closed; other configs return at once.
+type gatedCallChecker struct {
+	fakeCallChecker
+	release chan struct{}
+}
+
+func (c *gatedCallChecker) Check(ctx context.Context, config json.RawMessage, _ int) CheckResult {
+	c.runs.Add(1)
+	if c.SideEffecting(config) {
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+		}
+	}
+	return CheckResult{Status: "success"}
+}
+
+func testCheckRequest(t *testing.T, method string) []byte {
+	t.Helper()
+	data, err := json.Marshal(models.CheckJobPayload{
+		Type: fakeCallType, Config: json.RawMessage(`{"method":"` + method + `"}`), TimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func decodeTestCheckResponse(t *testing.T, data []byte) models.TestCheckResponse {
+	t.Helper()
+	var resp models.TestCheckResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("decode test-check response %s: %v", data, err)
+	}
+	return resp
+}
+
+// Test checks arrive one goroutine per request, so the worker bounds the
+// side-effecting ones itself: with every slot taken the next test call is
+// refused without running, ordinary tests are not bounded, and a finished
+// test frees its slot.
+func TestHandleTestCheck_BoundsConcurrentSideEffectingTests(t *testing.T) {
+	checker := &gatedCallChecker{release: make(chan struct{})}
+	w := newProcessTestWorker(t, &flakyPublisher{}, checker)
+
+	var wg sync.WaitGroup
+	responses := make([][]byte, maxSideEffectTestChecks)
+	for i := range maxSideEffectTestChecks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			responses[i] = w.handleTestCheck(testCheckRequest(t, "invite"))
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for checker.runs.Load() < maxSideEffectTestChecks {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d test calls started", checker.runs.Load(), maxSideEffectTestChecks)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	resp := decodeTestCheckResponse(t, w.handleTestCheck(testCheckRequest(t, "invite")))
+	if resp.Status != "error" || resp.ErrorMessage == nil || *resp.ErrorMessage != errSideEffectTestChecksFull {
+		t.Fatalf("test call beyond the bound = %+v, want error %q", resp, errSideEffectTestChecksFull)
+	}
+	if n := checker.runs.Load(); n != maxSideEffectTestChecks {
+		t.Fatalf("Check ran %d times, want %d (the refused test must not run)", n, maxSideEffectTestChecks)
+	}
+	if got := counterValue(t, w.sideEffectTestRejected, fakeCallType); got != 1 {
+		t.Fatalf("test_check_side_effect_rejected_total = %v, want 1", got)
+	}
+	if resp := decodeTestCheckResponse(t, w.handleTestCheck(testCheckRequest(t, "options"))); resp.Status != "success" {
+		t.Fatalf("ordinary test while the bound is full = %+v, want success", resp)
+	}
+	// Scheduled checks never share the bound: a scheduled call still runs.
+	scheduled := make(chan error, 1)
+	go func() {
+		msg, _ := newJobMessage(t, "invite", 1, nil)
+		scheduled <- w.processJob(context.Background(), msg)
+	}()
+	for checker.runs.Load() < maxSideEffectTestChecks+2 {
+		if time.Now().After(deadline) {
+			t.Fatal("a scheduled call did not start while the test-check bound was full")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	close(checker.release)
+	if err := <-scheduled; err != nil {
+		t.Fatalf("scheduled call: processJob = %v", err)
+	}
+	wg.Wait()
+	for i, data := range responses {
+		if resp := decodeTestCheckResponse(t, data); resp.Status != "success" {
+			t.Fatalf("held test call %d = %+v, want success", i, resp)
+		}
+	}
+	if resp := decodeTestCheckResponse(t, w.handleTestCheck(testCheckRequest(t, "invite"))); resp.Status != "success" {
+		t.Fatalf("test call after the slots freed = %+v, want success", resp)
+	}
+}
+
 // The real SIP checker marks INVITE configs side-effecting: a redelivered
 // test-call job is acked without placing the call (no packet reaches the
 // callee) and without publishing; an OPTIONS job is still re-run.
@@ -380,6 +484,13 @@ func TestProcessJob_RedeliveredSIPCallIsNotPlacedAgain(t *testing.T) {
 	if !isSideEffecting(sip, json.RawMessage(`{"host":"x","method":"invite","password":"{\"alg\":\"aes-256-gcm\",\"ct\":\"…\"}","call":{"number":"1"}}`)) {
 		t.Fatal("an INVITE with an encrypted password must be side-effecting")
 	}
+	// A media call is a call, a media key this worker does not know
+	// included: the config is refused at run time, never run twice.
+	for _, media := range []string{`{"expect":"echo"}`, `{"expect":"audio","dtmf":"1"}`, `"on"`} {
+		if !isSideEffecting(sip, json.RawMessage(`{"host":"x","method":"invite","call":{"number":"1","hold_ms":3000,"media":`+media+`}}`)) {
+			t.Fatalf("an INVITE with media %s must be side-effecting", media)
+		}
+	}
 }
 
 // NewWorker applies SIP_CALL_ENABLED / SIP_CALL_ALLOWED_DESTINATIONS to the
@@ -391,8 +502,12 @@ func TestNewWorker_ConfiguresSIPCalls(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := checker.(*SIPChecker).callsEnabled; got != enabled {
+		sip := checker.(*SIPChecker)
+		if got := sip.callsEnabled; got != enabled {
 			t.Fatalf("SIPCallEnabled=%v: checker calls enabled = %v", enabled, got)
+		}
+		if c := sip.mediaCounters; c.session == nil || c.refused == nil || c.rxDropped == nil || c.unreliable == nil || c.teardownUnconfirmed == nil {
+			t.Fatal("the media counters are not wired")
 		}
 	}
 }

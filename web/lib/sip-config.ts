@@ -1,4 +1,4 @@
-import { SIPCallConfig, SIPMonitorConfig } from './types';
+import { SIPCallConfig, SIPMediaConfig, SIPMediaExpect, SIPMonitorConfig } from './types';
 
 /** The SIP config fields SipForm edits, in their form-state shapes. */
 export interface SipFormFields {
@@ -32,7 +32,25 @@ export interface SipFormFields {
   call_max_answer_ms: string;
   call_sdp_address: string;
   call_probe_header: boolean;
+  // Call quality (call.media), answer mode only. The thresholds are input
+  // strings; '' is unset.
+  call_media: boolean;
+  call_media_expect: SIPMediaExpect;
+  call_media_warn_loss_pct: string;
+  call_media_max_loss_pct: string;
+  call_media_warn_jitter_ms: string;
+  call_media_max_jitter_ms: string;
+  call_media_warn_mos: string;
+  call_media_min_mos: string;
+  call_media_warn_rtt_ms: string;
+  call_media_max_rtt_ms: string;
 }
+
+/** The form fields of the test call itself (every `call_*` field). */
+export type SipCallFormFields = Pick<SipFormFields, Extract<keyof SipFormFields, `call_${string}`>>;
+
+/** A call-quality threshold field of the form. */
+export type SipMediaThresholdField = Exclude<Extract<keyof SipFormFields, `call_media_${string}`>, 'call_media_expect'>;
 
 // Keys SipForm owns: each is rewritten from form state on save, so a field
 // the user cleared is dropped rather than resurrected from the loaded config.
@@ -68,6 +86,22 @@ const CALL_FORM_OWNED_KEYS = [
   'max_answer_ms',
   'sdp_address',
   'probe_header',
+  'media',
+] as const;
+
+// Keys of `call.media` the form owns. Any other key of a loaded media object
+// is kept, so the API refuses it on save (media keys are strict) rather than
+// the form silently dropping an assertion it does not know.
+const MEDIA_FORM_OWNED_KEYS = [
+  'expect',
+  'warn_loss_pct',
+  'max_loss_pct',
+  'warn_jitter_ms',
+  'max_jitter_ms',
+  'warn_mos',
+  'min_mos',
+  'warn_rtt_ms',
+  'max_rtt_ms',
 ] as const;
 
 // Test-call bounds, mirroring shared/models/sip_call.go (the API enforces
@@ -75,7 +109,15 @@ const CALL_FORM_OWNED_KEYS = [
 export const SIP_CALL_MIN_INTERVAL_SECONDS = 60;
 export const SIP_CALL_MAX_TIMEOUT_SECONDS = 20;
 export const SIP_CALL_MAX_HOLD_MS = 10000;
-const SIP_CALL_MIN_ANSWER_BUDGET_MS = 2000;
+export const SIP_CALL_MIN_ANSWER_BUDGET_MS = 2000;
+// Call-quality bounds, mirroring shared/models/sip_media.go.
+export const SIP_MEDIA_MIN_HOLD_MS = 3000;
+export const SIP_MEDIA_TWO_WAY_MIN_HOLD_MS = 6000;
+export const SIP_MEDIA_MIN_MOS = 1;
+export const SIP_MEDIA_MAX_MOS = 4.3;
+export const SIP_MEDIA_MAX_JITTER_MS = 1000;
+export const SIP_MEDIA_MAX_RTT_MS = 5000;
+const SIP_MEDIA_EXPECTS: readonly SIPMediaExpect[] = ['none', 'audio', 'two_way', 'echo'];
 const SIP_CALL_USER = /^[0-9A-Za-z+*#._~-]{1,64}$/;
 // How a target_uri user part may be written (Go's sipCallURIUserRaw): the
 // unescaped number characters but '#', or percent-escapes.
@@ -196,25 +238,16 @@ export function sipCallsPerDay(intervalSeconds: number, locationCount: number): 
   return Math.round((86400 / intervalSeconds) * Math.max(1, locationCount));
 }
 
-/** The call form fields for a loaded call config (or blank ones for none). */
-export function sipCallFormFields(call: SIPCallConfig | undefined): Pick<
-  SipFormFields,
-  | 'call_target_kind'
-  | 'call_number'
-  | 'call_target_uri'
-  | 'call_from_user'
-  | 'call_from_display'
-  | 'call_from_domain'
-  | 'call_mode'
-  | 'call_hold_ms'
-  | 'call_warn_pdd_ms'
-  | 'call_max_pdd_ms'
-  | 'call_warn_answer_ms'
-  | 'call_max_answer_ms'
-  | 'call_sdp_address'
-  | 'call_probe_header'
-> {
+/**
+ * The call form fields for a loaded call config (or blank ones for none).
+ * Without media the call-quality toggle is off, and Expect preselects
+ * `audio` for when it is turned on: a far end whose audio never reaches the
+ * probe then fails the check.
+ */
+export function sipCallFormFields(call: SIPCallConfig | undefined): SipCallFormFields {
   const num = (n: number | undefined) => (n === undefined || n === null ? '' : String(n));
+  const media = call?.media && typeof call.media === 'object' && !Array.isArray(call.media) ? call.media : undefined;
+  const expect = SIP_MEDIA_EXPECTS.find((e) => e === media?.expect) ?? 'audio';
   return {
     call_target_kind: call?.target_uri ? 'uri' : 'number',
     call_number: call?.number ?? '',
@@ -230,7 +263,22 @@ export function sipCallFormFields(call: SIPCallConfig | undefined): Pick<
     call_max_answer_ms: num(call?.max_answer_ms),
     call_sdp_address: call?.sdp_address ?? '',
     call_probe_header: call?.probe_header ?? false,
+    call_media: Boolean(media),
+    call_media_expect: expect,
+    call_media_warn_loss_pct: num(media?.warn_loss_pct),
+    call_media_max_loss_pct: num(media?.max_loss_pct),
+    call_media_warn_jitter_ms: num(media?.warn_jitter_ms),
+    call_media_max_jitter_ms: num(media?.max_jitter_ms),
+    call_media_warn_mos: num(media?.warn_mos),
+    call_media_min_mos: num(media?.min_mos),
+    call_media_warn_rtt_ms: num(media?.warn_rtt_ms),
+    call_media_max_rtt_ms: num(media?.max_rtt_ms),
   };
+}
+
+/** The shortest hold a measured call may have for an Expect choice. */
+export function sipMediaMinHoldMs(expect: SIPMediaExpect): number {
+  return expect === 'two_way' ? SIP_MEDIA_TWO_WAY_MIN_HOLD_MS : SIP_MEDIA_MIN_HOLD_MS;
 }
 
 /** A whole number of 0 or more as typed (digits only), else null. */
@@ -238,6 +286,13 @@ export const parseWhole = (value: string): number | null => {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) return null;
   return parseInt(trimmed, 10);
+};
+
+/** A plain decimal of 0 or more as typed (`2`, `0.5`), else null. */
+export const parseDecimal = (value: string): number | null => {
+  const trimmed = value.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return null;
+  return Number(trimmed);
 };
 
 /**
@@ -312,8 +367,11 @@ export function validateSipCallFields(
     const status = parseWhole(form.expected_status);
     if (status === null || status < 200 || status > 699) {
       errors.expected_status = 'A final response, 200 to 699';
+    } else if (form.call_media && status > 299) {
+      errors.expected_status = 'Call quality needs an answered call: leave empty or set a 2xx';
     }
   }
+  if (!ring && form.call_media) Object.assign(errors, validateSipMediaFields(form, hold, Boolean(errors.call_hold_ms)));
 
   if (intervalSeconds < SIP_CALL_MIN_INTERVAL_SECONDS) {
     errors.interval_seconds = `At least ${SIP_CALL_MIN_INTERVAL_SECONDS} seconds for a test call: each check places a real call`;
@@ -327,10 +385,111 @@ export function validateSipCallFields(
 }
 
 /**
+ * The call-quality rules of shared/models/sip_media.go and
+ * SIPCallConfig.validate, keyed by form field: the hold floor (higher for
+ * two_way), and each threshold's range and warn/max order. Thresholds are
+ * not checked under Expect "Measure only", which hides and drops them.
+ */
+function validateSipMediaFields(form: SipFormFields, hold: number, holdInvalid: boolean): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const minHold = sipMediaMinHoldMs(form.call_media_expect);
+  if (!holdInvalid && hold < minHold) {
+    errors.call_hold_ms =
+      form.call_media_expect === 'two_way'
+        ? `At least ${minHold} ms for two-way audio: the far end's first RTCP report can take that long`
+        : `At least ${minHold} ms when call quality is measured`;
+  }
+  if (form.call_media_expect === 'none') return errors;
+
+  // Each pair: parse and bound both, then order them. Lower is worse for
+  // MOS, so its warning must sit above the failure.
+  const pair = (
+    warnKey: SipMediaThresholdField,
+    failKey: SipMediaThresholdField,
+    parse: (value: string) => number | null,
+    inRange: (n: number) => boolean,
+    rangeMessage: string,
+    ordered: (warn: number, fail: number) => boolean,
+    orderMessage: string,
+  ) => {
+    const read = (key: SipMediaThresholdField) => {
+      const raw = form[key].trim();
+      if (!raw) return undefined;
+      const n = parse(raw);
+      if (n === null || !inRange(n)) {
+        errors[key] = rangeMessage;
+        return undefined;
+      }
+      return n;
+    };
+    const warn = read(warnKey);
+    const fail = read(failKey);
+    if (warn !== undefined && fail !== undefined && !ordered(warn, fail)) errors[warnKey] = orderMessage;
+  };
+  const below = (warn: number, fail: number) => warn < fail;
+  const belowMessage = 'Must be less than the failure threshold';
+  pair(
+    'call_media_warn_loss_pct', 'call_media_max_loss_pct', parseDecimal,
+    (n) => n > 0 && n < 100, 'A percentage above 0 and below 100',
+    below, belowMessage,
+  );
+  pair(
+    'call_media_warn_jitter_ms', 'call_media_max_jitter_ms', parseWhole,
+    (n) => n >= 1 && n <= SIP_MEDIA_MAX_JITTER_MS, `A whole number of milliseconds, 1 to ${SIP_MEDIA_MAX_JITTER_MS}`,
+    below, belowMessage,
+  );
+  pair(
+    'call_media_warn_mos', 'call_media_min_mos', parseDecimal,
+    (n) => n >= SIP_MEDIA_MIN_MOS && n <= SIP_MEDIA_MAX_MOS, `Between ${SIP_MEDIA_MIN_MOS} and ${SIP_MEDIA_MAX_MOS}`,
+    (warn, min) => warn > min, 'Must be above the failure threshold: a lower MOS is worse',
+  );
+  pair(
+    'call_media_warn_rtt_ms', 'call_media_max_rtt_ms', parseWhole,
+    (n) => n >= 1 && n <= SIP_MEDIA_MAX_RTT_MS, `A whole number of milliseconds, 1 to ${SIP_MEDIA_MAX_RTT_MS}`,
+    below, belowMessage,
+  );
+  return errors;
+}
+
+/**
+ * The media object for a test-call save, built on the loaded one so a key
+ * the form does not own reaches the API, which refuses it (media keys are
+ * strict) rather than the form dropping an assertion it does not know.
+ * Expect "none" carries no thresholds, as the API refuses them there.
+ */
+function buildSipMediaConfig(loaded: SIPMediaConfig | undefined, form: SipFormFields): SIPMediaConfig {
+  const rest: Record<string, unknown> =
+    loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? { ...loaded } : {};
+  for (const key of MEDIA_FORM_OWNED_KEYS) delete rest[key];
+  const media = { ...rest, expect: form.call_media_expect } as SIPMediaConfig;
+  if (form.call_media_expect === 'none') return media;
+
+  // Loss and MOS take decimals; jitter and RTT are whole milliseconds, as
+  // the API decodes them.
+  const set = (
+    key: Exclude<(typeof MEDIA_FORM_OWNED_KEYS)[number], 'expect'>,
+    value: string,
+    parse: (value: string) => number | null,
+  ) => {
+    const n = parse(value);
+    if (n !== null) media[key] = n;
+  };
+  set('warn_loss_pct', form.call_media_warn_loss_pct, parseDecimal);
+  set('max_loss_pct', form.call_media_max_loss_pct, parseDecimal);
+  set('warn_jitter_ms', form.call_media_warn_jitter_ms, parseWhole);
+  set('max_jitter_ms', form.call_media_max_jitter_ms, parseWhole);
+  set('warn_mos', form.call_media_warn_mos, parseDecimal);
+  set('min_mos', form.call_media_min_mos, parseDecimal);
+  set('warn_rtt_ms', form.call_media_warn_rtt_ms, parseWhole);
+  set('max_rtt_ms', form.call_media_max_rtt_ms, parseWhole);
+  return media;
+}
+
+/**
  * The call object for a test-call save, built on the loaded call so keys the
  * form does not render survive. Mode is always explicit; fields the mode
- * cannot use (ring mode's hold and answer thresholds) are dropped, as the
- * API refuses them.
+ * cannot use (ring mode's hold, answer thresholds and call quality) are
+ * dropped, as the API refuses them.
  */
 function buildSipCallConfig(loaded: SIPCallConfig | undefined, form: SipFormFields): SIPCallConfig {
   const rest: Record<string, unknown> = { ...(loaded ?? {}) };
@@ -365,6 +524,7 @@ function buildSipCallConfig(loaded: SIPCallConfig | undefined, form: SipFormFiel
   }
   if (form.call_sdp_address.trim()) call.sdp_address = form.call_sdp_address.trim();
   if (form.call_probe_header) call.probe_header = true;
+  if (!ring && form.call_media) call.media = buildSipMediaConfig(loaded?.media, form);
   return call;
 }
 

@@ -6,7 +6,10 @@ import {
   formatDateTimeFull,
   formatDuration,
   formatDurationBetween,
+  formatJitter,
   formatLatency,
+  formatLossPct,
+  formatMOS,
   formatRelativeTime,
   formatTimestamp,
   formatUptime,
@@ -109,4 +112,24 @@ test('formatLatency picks the unit after rounding', () => {
   assert.equal(formatLatency(999.6), '1.0 s');
   assert.equal(formatLatency(9949), '9.9 s');
   assert.equal(formatLatency(9960), '10 s');
+});
+
+test('call-quality figures: MOS to two decimals, loss as the worker prints it, fine jitter', () => {
+  assert.equal(formatMOS(4.3), '4.30');
+  assert.equal(formatMOS(4.314), '4.31');
+  assert.equal(formatMOS(undefined), '—');
+  assert.equal(formatMOS(Number.NaN), '—');
+
+  assert.equal(formatLossPct(0), '0%');
+  assert.equal(formatLossPct(0.44), '0.44%');
+  assert.equal(formatLossPct(5), '5.00%');
+  assert.equal(formatLossPct(-1), '—');
+  assert.equal(formatLossPct(null), '—');
+
+  assert.equal(formatJitter(2.14), '2.1 ms');
+  assert.equal(formatJitter(0), '0.0 ms');
+  // 9.96 rounds to 10.0: past the fine band, so whole milliseconds.
+  assert.equal(formatJitter(9.96), '10 ms');
+  assert.equal(formatJitter(34.4), '34 ms');
+  assert.equal(formatJitter(undefined), '—');
 });

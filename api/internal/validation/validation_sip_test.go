@@ -2,6 +2,7 @@ package validation
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -23,6 +24,9 @@ func TestSIPConfigValidatorDelegatesToSharedConfig(t *testing.T) {
 		`{"host":"sip.example.com","expected_status":42}`,
 		`{"host":"sip.example.com","domain":"example.com\r\nX-Injected: 1"}`,
 		`{"transport":"udp"}`,
+		`{"host":"sip.example.com","method":"invite","call":{"number":"1","hold_ms":3000,"media":{"expect":"audio","max_loss_pct":2}}}`,
+		`{"host":"sip.example.com","method":"invite","call":{"number":"1","hold_ms":3000,"media":{"expect":"audio","dtmf":"1"}}}`,
+		`{"host":"sip.example.com","method":"invite","call":{"number":"1","hold_ms":3000,"media":"on"}}`,
 	}
 	for _, raw := range configs {
 		var cfg sharedmodels.SIPMonitorConfig
@@ -144,6 +148,67 @@ func TestValidateMonitorUpdate_SIPCallEffectiveSchedule(t *testing.T) {
 				t.Fatalf("ValidateMonitorUpdate() = %v, want error containing %q", err, tt.errContains)
 			}
 		})
+	}
+}
+
+// call.media is validated on save with the rest of the call: answer mode, a
+// hold long enough to measure (and, for two_way, for the far end's RTCP to
+// report), an answered call, and strict keys inside it.
+func TestValidateMonitorUpdate_SIPCallMedia(t *testing.T) {
+	const media = `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":5000,"media":{"expect":"echo","min_mos":3.6}}}`
+	existing := sipMonitor(media, 60, 10)
+	tests := []struct {
+		name, config, errContains string
+	}{
+		{name: "unchanged", config: media},
+		{name: "switched to ring mode", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","mode":"ring","media":{"expect":"echo"}}}`, errContains: "call.media requires answer mode"},
+		{name: "busy line expected", config: `{"host":"trunk.example.com","method":"invite","expected_status":486,"call":{"number":"1","hold_ms":5000,"media":{"expect":"audio"}}}`, errContains: "expected_status must be unset or 2xx"},
+		{name: "hold too short", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":2999,"media":{"expect":"audio"}}}`, errContains: "call.hold_ms must be at least 3000"},
+		{name: "unknown media key", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":5000,"media":{"expect":"audio","DTMF":"1"}}}`, errContains: `call.media: unknown key "DTMF"`},
+		{name: "two way", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":6000,"media":{"expect":"two_way","max_rtt_ms":300}}}`},
+		{name: "two way with a short hold", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":5000,"media":{"expect":"two_way"}}}`, errContains: "call.hold_ms must be at least 6000 when call.media.expect is two_way"},
+		{name: "media removed", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":5000}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateMonitorUpdate(&models.UpdateMonitorRequest{Config: json.RawMessage(tt.config)}, existing)
+			if tt.errContains == "" {
+				if err != nil {
+					t.Fatalf("ValidateMonitorUpdate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.errContains) {
+				t.Fatalf("ValidateMonitorUpdate() = %v, want error containing %q", err, tt.errContains)
+			}
+		})
+	}
+}
+
+// The MCP describe_monitor_type schema reflects the struct the validator
+// decodes, so agents see call.media's fields; the unexported strict-key
+// state stays out of it.
+func TestSIPConfigTypeCarriesMedia(t *testing.T) {
+	typ, ok := DefaultRegistry.ConfigType(models.MonitorTypeSIP)
+	if !ok {
+		t.Fatal("no SIP config type")
+	}
+	call, ok := typ.FieldByName("Call")
+	if !ok {
+		t.Fatal("SIPMonitorConfig has no Call")
+	}
+	media, ok := call.Type.Elem().FieldByName("Media")
+	if !ok || media.Tag.Get("json") != "media,omitempty" || media.Type.Elem() != reflect.TypeFor[sharedmodels.SIPMediaConfig]() {
+		t.Fatalf("call.media = %+v, want *SIPMediaConfig", media)
+	}
+	var tags []string
+	for i := range media.Type.Elem().NumField() {
+		if f := media.Type.Elem().Field(i); f.IsExported() {
+			tags = append(tags, f.Tag.Get("json"))
+		}
+	}
+	if !strings.Contains(strings.Join(tags, ","), "expect,warn_loss_pct,omitempty,max_loss_pct,omitempty") {
+		t.Fatalf("media json fields = %q", tags)
 	}
 }
 

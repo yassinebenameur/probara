@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,10 +54,17 @@ type fakeUASMsg struct {
 
 func startFakeUAS(t *testing.T, transport string, handler func(u *fakeUAS, msg string)) *fakeUAS {
 	t.Helper()
+	return startFakeUASOn(t, transport, "127.0.0.1", handler)
+}
+
+// startFakeUASOn is startFakeUAS listening on ip (127.0.0.1 or ::1).
+func startFakeUASOn(t *testing.T, transport, ip string, handler func(u *fakeUAS, msg string)) *fakeUAS {
+	t.Helper()
 	u := &fakeUAS{t: t, transport: transport, handler: handler, dropNth: map[int]bool{}}
+	listenAddr := net.JoinHostPort(ip, "0")
 	switch transport {
 	case "udp":
-		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		pc, err := net.ListenPacket("udp", listenAddr)
 		if err != nil {
 			t.Fatalf("ListenPacket: %v", err)
 		}
@@ -83,9 +91,9 @@ func startFakeUAS(t *testing.T, transport string, handler func(u *fakeUAS, msg s
 		)
 		if transport == "tls" {
 			cert := newSelfSignedTestCert(t, time.Now().Add(30*24*time.Hour))
-			listener, err = tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+			listener, err = tls.Listen("tcp", listenAddr, &tls.Config{Certificates: []tls.Certificate{cert}})
 		} else {
-			listener, err = net.Listen("tcp", "127.0.0.1:0")
+			listener, err = net.Listen("tcp", listenAddr)
 		}
 		if err != nil {
 			t.Fatalf("Listen: %v", err)
@@ -1141,9 +1149,16 @@ func TestSIPInvite_RemoteBye(t *testing.T) {
 	if n := len(u.requests("BYE")); n != 0 {
 		t.Fatalf("the probe sent %d BYEs after the callee hung up", n)
 	}
+	// The UAS reports the callee's BYE to the call before it writes the 200,
+	// so the result can be back before that 200 reaches the fake UAS: wait.
 	codes := map[string]bool{}
-	for _, r := range u.responses() {
-		codes[strings.Fields(r.raw)[1]] = true
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		for _, r := range u.responses() {
+			codes[strings.Fields(r.raw)[1]] = true
+		}
+		if codes["481"] && codes["200"] || time.Now().After(deadline) {
+			break
+		}
 	}
 	if !codes["481"] || !codes["200"] {
 		t.Fatalf("responses to the callee's BYEs = %v, want 481 (unknown dialog) and 200", codes)
@@ -1485,6 +1500,143 @@ func TestSIPInvite_Linger(t *testing.T) {
 			t.Fatalf("ACKs = %d on a flow that was closed", n)
 		}
 	})
+}
+
+// 19a. A teardown BYE that drew no response is sent once more from the
+// linger, as a new request in the same dialog with the next CSeq; the
+// published result is the teardown's (bye_unconfirmed and its warning), and
+// the second BYE's fate is only the linger's outcome. A confirmed BYE is
+// never sent again.
+func TestSIPInvite_LingerRetriesUnansweredBye(t *testing.T) {
+	challenge := `Proxy-Authenticate: Digest realm="trunk", nonce="n1", qop="auth"`
+	// answerBye returns the code for a BYE (0: no response), by its CSeq
+	// number and whether it carried credentials.
+	cases := []struct {
+		name        string
+		credentials bool
+		answerBye   func(cseq int, authorized bool) int
+		teardown    string
+		outcome     string
+		wantCSeqs   []int // the BYE requests, retransmissions folded
+	}{
+		{
+			name:      "second bye confirmed",
+			answerBye: func(cseq int, _ bool) int { return map[int]int{3: 200}[cseq] },
+			teardown:  "bye_unconfirmed", outcome: "late_bye_ok", wantCSeqs: []int{2, 3},
+		},
+		{
+			name:      "481 to the second bye",
+			answerBye: func(cseq int, _ bool) int { return map[int]int{3: 481}[cseq] },
+			teardown:  "bye_unconfirmed", outcome: "late_bye_ok", wantCSeqs: []int{2, 3},
+		},
+		{
+			name:      "second bye unanswered",
+			answerBye: func(int, bool) int { return 0 },
+			teardown:  "bye_unconfirmed", outcome: "late_bye_unconfirmed", wantCSeqs: []int{2, 3},
+		},
+		{
+			name:      "second bye refused",
+			answerBye: func(cseq int, _ bool) int { return map[int]int{3: 500}[cseq] },
+			teardown:  "bye_unconfirmed", outcome: "late_bye_unconfirmed", wantCSeqs: []int{2, 3},
+		},
+		{
+			// The INVITE is challenged too (CSeq 2 answers it). Each BYE is
+			// challenged and sent again with credentials at the next CSeq,
+			// and the linger's BYE continues from the last number sent.
+			name:        "challenged byes",
+			credentials: true,
+			answerBye: func(cseq int, authorized bool) int {
+				switch {
+				case !authorized:
+					return 407
+				case cseq == 6:
+					return 200
+				}
+				return 0
+			},
+			teardown: "bye_unconfirmed", outcome: "late_bye_ok", wantCSeqs: []int{3, 4, 5, 6},
+		},
+		{
+			name:      "confirmed bye",
+			answerBye: func(int, bool) int { return 200 },
+			teardown:  "bye_ok", outcome: "quiet", wantCSeqs: []int{2},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var invites, byes branchSet
+			u := startFakeUAS(t, "udp", func(u *fakeUAS, msg string) {
+				switch fMethod(msg) {
+				case "INVITE":
+					if !invites.first(msg) {
+						return
+					}
+					if tc.credentials && sipTestHeader(msg, "Proxy-Authorization") == "" {
+						u.send(uasReply(msg, 407, "Proxy Auth", "p", "", challenge))
+						return
+					}
+					u.send(uasReply(msg, 200, "OK", "srv1", uasSDPAnswer, u.contact()))
+				case "BYE":
+					if !byes.first(msg) {
+						return // a retransmission of a BYE already decided
+					}
+					cseq, _ := strconv.Atoi(strings.Fields(sipTestHeader(msg, "CSeq"))[0])
+					authorized := sipTestHeader(msg, "Proxy-Authorization") != ""
+					switch code := tc.answerBye(cseq, authorized); code {
+					case 0:
+					case 407:
+						u.send(uasReply(msg, 407, "Proxy Auth", "", "", challenge))
+					default:
+						u.send(uasReply(msg, code, "Reason", "", ""))
+					}
+				}
+			})
+			c := newInviteTestChecker()
+			c.callTimers = sipCallTimers{teardown: 300 * time.Millisecond, linger: 1500 * time.Millisecond}
+			outcomes := make(chan string, 1)
+			c.ConfigureCallMetrics(func(o string) { outcomes <- o }, func() { t.Error("linger dropped") })
+			var extra map[string]any
+			if tc.credentials {
+				extra = map[string]any{"username": "u", "password": "p"}
+			}
+			result, m := runInvite(t, c, inviteConfig(u, map[string]any{"number": "100"}, extra), 5)
+			requireStatus(t, result, "success")
+			if m.Call.Teardown != tc.teardown {
+				t.Fatalf("teardown = %q, want %q", m.Call.Teardown, tc.teardown)
+			}
+			if unconfirmed := slices.Contains(m.Warnings, sipByeUnconfirmedWarning); unconfirmed != (tc.teardown == "bye_unconfirmed") {
+				t.Fatalf("warnings = %q", m.Warnings)
+			}
+
+			var outcome string
+			select {
+			case outcome = <-outcomes:
+			case <-time.After(5 * time.Second):
+				t.Fatal("linger never ended")
+			}
+			if outcome != tc.outcome {
+				t.Fatalf("linger outcome = %q, want %q", outcome, tc.outcome)
+			}
+			// Each CSeq is one transaction (its retransmissions share the
+			// branch), in the call's one dialog.
+			var cseqs []int
+			branches := map[string]bool{}
+			for _, bye := range u.requests("BYE") {
+				cseq, _ := strconv.Atoi(strings.Fields(sipTestHeader(bye.raw, "CSeq"))[0])
+				if len(cseqs) > 0 && cseqs[len(cseqs)-1] == cseq {
+					continue
+				}
+				cseqs = append(cseqs, cseq)
+				branches[fBranch(bye.raw)] = true
+				if sipHeaderTag(sipTestHeader(bye.raw, "To")) != "srv1" || fRequestURI(bye.raw) != "sip:callee@127.0.0.1:"+strconv.Itoa(u.port) {
+					t.Fatalf("BYE outside the dialog:\n%s", bye.raw)
+				}
+			}
+			if !slices.Equal(cseqs, tc.wantCSeqs) || len(branches) != len(cseqs) {
+				t.Fatalf("BYE CSeqs = %v over %d branches, want %v, a new transaction each", cseqs, len(branches), tc.wantCSeqs)
+			}
+		})
+	}
 }
 
 // 20. The worker clamps a payload's timeout to 20 s and hold to 10 s.

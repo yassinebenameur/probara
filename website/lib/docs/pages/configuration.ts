@@ -542,7 +542,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`HTTP_ALLOWED_CIDRS`',
               'Empty; comma-separated CIDRs',
-              'Narrow exceptions to the block policy. Any invalid CIDR fails startup.',
+              'Narrow exceptions to the block policy. Entries also admit a private media address that a public SIP peer names in its SDP answer, which a [test call with `call.media`](/docs/security/#ssrf-network-policy) otherwise refuses even with blocking off. Any invalid CIDR fails startup.',
             ],
             [
               '`CHROME_BIN`',
@@ -557,7 +557,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`SIP_CALL_ENABLED`',
               '`true` on platform workers, `false` on private-location workers (`WORKER_LOCATION_ID` set)',
-              'Lets the worker place [SIP test calls](/docs/monitors/#network-protocols) (`method: invite`), which are real and possibly billed. A disabled worker fails each one with `sip_call: disabled on this worker` before sending anything. A private-location operator opts in with `SIP_CALL_ENABLED=true` (Helm: `worker.locations[].extraEnv`). Any value `strconv.ParseBool` rejects fails startup.',
+              'Lets the worker place [SIP test calls](/docs/monitors/#network-protocols) (`method: invite`), which are real and possibly billed. A disabled worker fails each one with `sip_call: disabled on this worker` before sending anything. It also gates call quality (`call.media`, which sends RTP and RTCP during the hold): there is no separate media switch. A private-location operator opts in with `SIP_CALL_ENABLED=true` (Helm: `worker.locations[].extraEnv`). Any value `strconv.ParseBool` rejects fails startup.',
             ],
             [
               '`SIP_CALL_ALLOWED_DESTINATIONS`',

@@ -4,8 +4,10 @@ import {
   buildSipConfig,
   isHostOrIP,
   isSipCall,
+  parseDecimal,
   parseWhole,
   sipCallFormFields,
+  sipMediaMinHoldMs,
   sipCallsPerDay,
   sipCallTarget,
   sipCallURIError,
@@ -348,4 +350,194 @@ test('host fields of a test call must be bare hosts', () => {
   assert.ok(errors.call_sdp_address);
   // OPTIONS and REGISTER keep their looser domain.
   assert.equal(validateSipCallFields({ ...ok, method: 'register', domain: 'example.com:5060' }, 60, 10).domain, undefined);
+});
+
+const storedMediaCall = {
+  ...storedCall,
+  call: {
+    ...storedCall.call,
+    hold_ms: 6000,
+    media: { expect: 'two_way', max_loss_pct: 2.5, warn_jitter_ms: 30, min_mos: 3.6, warn_mos: 4, future_media_field: true },
+  },
+} as unknown as SIPMonitorConfig;
+
+test('a call-quality save round-trips the stored media, unknown media keys included', () => {
+  // Kept, not dropped: the API refuses an unknown media key, which is the
+  // fail-closed intent, rather than the form silently losing an assertion.
+  assert.deepEqual(buildSipConfig(storedMediaCall, callFormFrom(storedMediaCall)), storedMediaCall);
+});
+
+test('the call-quality form fields: off without media, Expect preselecting audio', () => {
+  const blank = sipCallFormFields(undefined);
+  assert.equal(blank.call_media, false);
+  assert.equal(blank.call_media_expect, 'audio');
+  assert.equal(blank.call_media_min_mos, '');
+
+  const loaded = sipCallFormFields(storedMediaCall.call);
+  assert.equal(loaded.call_media, true);
+  assert.equal(loaded.call_media_expect, 'two_way');
+  assert.equal(loaded.call_media_max_loss_pct, '2.5');
+  assert.equal(loaded.call_media_warn_jitter_ms, '30');
+  assert.equal(loaded.call_media_warn_mos, '4');
+  assert.equal(loaded.call_media_warn_rtt_ms, '');
+
+  // An expect this release does not know still shows the section; Expect
+  // falls back to the preselection.
+  const unknown = sipCallFormFields({ mode: 'answer', media: { expect: 'dtmf' } } as unknown as SIPMonitorConfig['call']);
+  assert.equal(unknown.call_media, true);
+  assert.equal(unknown.call_media_expect, 'audio');
+});
+
+test('a new measured call submits every threshold, parsed as the API decodes them', () => {
+  const config = buildSipConfig(
+    undefined,
+    callFormFrom(storedCall, {
+      call_number: '1000',
+      call_hold_ms: '5000',
+      call_media: true,
+      call_media_expect: 'audio',
+      call_media_warn_loss_pct: ' 1 ',
+      call_media_max_loss_pct: '5.5',
+      call_media_warn_jitter_ms: '20',
+      call_media_max_jitter_ms: '50',
+      call_media_warn_mos: '4.1',
+      call_media_min_mos: '3.6',
+      call_media_warn_rtt_ms: '250',
+      call_media_max_rtt_ms: '400',
+    }),
+  );
+  assert.deepEqual(config.call, {
+    number: '1000',
+    from_display: 'Probara probe',
+    mode: 'answer',
+    hold_ms: 5000,
+    warn_pdd_ms: 3000,
+    max_pdd_ms: 5000,
+    probe_header: true,
+    media: {
+      expect: 'audio',
+      warn_loss_pct: 1,
+      max_loss_pct: 5.5,
+      warn_jitter_ms: 20,
+      max_jitter_ms: 50,
+      warn_mos: 4.1,
+      min_mos: 3.6,
+      warn_rtt_ms: 250,
+      max_rtt_ms: 400,
+    },
+  });
+});
+
+test('call quality is dropped when turned off or in ring mode, and Measure only carries no thresholds', () => {
+  const off = buildSipConfig(storedMediaCall, callFormFrom(storedMediaCall, { call_media: false }));
+  assert.equal(off.call?.media, undefined);
+
+  const ring = buildSipConfig(storedMediaCall, callFormFrom(storedMediaCall, { call_mode: 'ring' }));
+  assert.equal(ring.call?.media, undefined);
+
+  const none = buildSipConfig(storedMediaCall, callFormFrom(storedMediaCall, { call_media_expect: 'none' }));
+  assert.deepEqual(none.call?.media, { future_media_field: true, expect: 'none' });
+
+  // A cleared threshold is dropped, not resurrected from the loaded media.
+  const cleared = buildSipConfig(storedMediaCall, callFormFrom(storedMediaCall, { call_media_min_mos: '' }));
+  assert.equal(cleared.call?.media?.min_mos, undefined);
+  assert.equal(cleared.call?.media?.warn_mos, 4);
+});
+
+test('a measured call needs a 3 s hold, 6 s for two-way audio, and an answered call', () => {
+  const measured = callFormFrom(storedCall, { call_media: true, call_media_expect: 'audio', call_hold_ms: '3000' });
+  assert.deepEqual(validateSipCallFields(measured, 60, 10), {});
+  assert.ok(validateSipCallFields({ ...measured, call_hold_ms: '2999' }, 60, 10).call_hold_ms?.includes('3000'));
+  assert.ok(validateSipCallFields({ ...measured, call_hold_ms: '' }, 60, 10).call_hold_ms);
+  // The hold still has to fit in the timeout.
+  assert.ok(validateSipCallFields(measured, 60, 4).call_hold_ms?.includes('timeout'));
+
+  const twoWay = { ...measured, call_media_expect: 'two_way' as const };
+  assert.ok(validateSipCallFields(twoWay, 60, 10).call_hold_ms?.includes('6000'));
+  assert.deepEqual(validateSipCallFields({ ...twoWay, call_hold_ms: '6000' }, 60, 10), {});
+  assert.equal(sipMediaMinHoldMs('two_way'), 6000);
+  assert.equal(sipMediaMinHoldMs('echo'), 3000);
+  assert.equal(sipMediaMinHoldMs('none'), 3000);
+
+  assert.ok(validateSipCallFields({ ...measured, expected_status: '486' }, 60, 10).expected_status);
+  assert.deepEqual(validateSipCallFields({ ...measured, expected_status: '200' }, 60, 10), {});
+  // Ring mode and an unmeasured call keep their own rules.
+  assert.deepEqual(validateSipCallFields({ ...measured, call_mode: 'ring', call_hold_ms: '' }, 60, 10), {});
+  assert.deepEqual(
+    validateSipCallFields({ ...measured, call_media: false, call_hold_ms: '0', expected_status: '486' }, 60, 10),
+    {},
+  );
+});
+
+test('call-quality thresholds follow the server ranges and orders', () => {
+  const measured = callFormFrom(storedCall, { call_media: true, call_media_expect: 'echo', call_hold_ms: '5000' });
+  const errors = validateSipCallFields(
+    {
+      ...measured,
+      call_media_warn_loss_pct: '0',
+      call_media_max_loss_pct: '100',
+      call_media_warn_jitter_ms: '1.5',
+      call_media_max_jitter_ms: '1001',
+      call_media_warn_mos: '4.4',
+      call_media_min_mos: '0.9',
+      call_media_warn_rtt_ms: '0',
+      call_media_max_rtt_ms: '5001',
+    },
+    60,
+    10,
+  );
+  for (const key of [
+    'call_media_warn_loss_pct',
+    'call_media_max_loss_pct',
+    'call_media_warn_jitter_ms',
+    'call_media_max_jitter_ms',
+    'call_media_warn_mos',
+    'call_media_min_mos',
+    'call_media_warn_rtt_ms',
+    'call_media_max_rtt_ms',
+  ]) {
+    assert.ok(errors[key], key);
+  }
+
+  const order = validateSipCallFields(
+    {
+      ...measured,
+      call_media_warn_loss_pct: '2',
+      call_media_max_loss_pct: '2',
+      call_media_warn_jitter_ms: '40',
+      call_media_max_jitter_ms: '30',
+      call_media_warn_mos: '3.6',
+      call_media_min_mos: '3.6',
+      call_media_warn_rtt_ms: '300',
+      call_media_max_rtt_ms: '300',
+    },
+    60,
+    10,
+  );
+  assert.deepEqual(Object.keys(order).sort(), [
+    'call_media_warn_jitter_ms',
+    'call_media_warn_loss_pct',
+    'call_media_warn_mos',
+    'call_media_warn_rtt_ms',
+  ]);
+  assert.ok(order.call_media_warn_mos.includes('above'));
+
+  const good = {
+    ...measured,
+    call_media_warn_loss_pct: '0.5',
+    call_media_max_loss_pct: '99.9',
+    call_media_warn_mos: '4.3',
+    call_media_min_mos: '1',
+    call_media_warn_rtt_ms: '1',
+    call_media_max_rtt_ms: '5000',
+  };
+  assert.deepEqual(validateSipCallFields(good, 60, 10), {});
+  // Measure only hides and drops the thresholds, so they are not checked.
+  assert.deepEqual(validateSipCallFields({ ...good, call_media_expect: 'none', call_media_min_mos: '9' }, 60, 10), {});
+});
+
+test('parseDecimal reads plain decimals only', () => {
+  assert.equal(parseDecimal(' 2.5 '), 2.5);
+  assert.equal(parseDecimal('4'), 4);
+  for (const typed of ['', '-1', '1e2', '.5', '1.', '2 %']) assert.equal(parseDecimal(typed), null, typed);
 });

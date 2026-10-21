@@ -35,6 +35,14 @@ type sipDialog struct {
 	// Set under the call's mutex.
 	remoteBye bool // the callee hung up first
 	byeDone   bool // a BYE was sent and settled (or abandoned)
+
+	// Owned by whichever goroutine BYEs the dialog: teardown, then the
+	// linger. byeCSeq is the CSeq of the last BYE sent (0 before any), so a
+	// later one is a new request with the next number (§12.2.1.1);
+	// byeUnanswered marks a teardown BYE that drew no response at all,
+	// which the linger sends once more (sipCall.retryUnansweredByes).
+	byeCSeq       int
+	byeUnanswered bool
 }
 
 // newSIPDialog creates the dialog a 2xx to invite establishes.
@@ -123,7 +131,8 @@ func (d *sipDialog) buildAck2xx(flow *sipFlow) *sipMessage {
 }
 
 // buildBye ends the dialog: the next CSeq after the INVITE's, one more for
-// each authenticated retry (extra carries the credentials then).
+// each authenticated retry (extra carries the credentials then) and for the
+// linger's second BYE.
 func (d *sipDialog) buildBye(flow *sipFlow, cseq int, extra []sipHeader) *sipMessage {
 	return d.request(flow, "BYE", cseq, extra)
 }

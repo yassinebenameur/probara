@@ -26,7 +26,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `scheduler/` — cron-style dispatch, JetStream stream provisioning, results
   ingest (`internal/ingest/`)
 - `worker/` — check execution (all monitor types); checkers dial through
-  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`)
+  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`);
+  SIP call-quality math (RTP and RTCP codecs, RFC 3550 statistics, the G.107
+  E-model, G.711 frames) is the I/O-free `internal/rtp`
 - `alerter/` — alert evaluation and notification delivery
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
@@ -120,6 +122,11 @@ when a boundary or messaging contract moves. The rules that are easy to break:
 - **Passive types** (never dispatched, refused by run-now, skipped by the
   worker): `shared/models.PassiveMonitorTypes`; the monitor page's
   `PASSIVE_TYPES` is its UI mirror.
+- **Server-chosen destinations**: `netguard.Policy.AllowsServerChosen`
+  (`shared/netguard`) vets every address a remote server chose rather than
+  the operator (SDP media, latch targets, RTCP); never send to one without
+  it. Its extra ranges (`0.0.0.0/8`, NAT64/6to4 embedded IPv4, Teredo,
+  documentation) stay out of the shared `privateCIDRs` table.
 - **Monitor config secrets**: `shared/secrets/monitor_config.go`
   (`MonitorSecretFields` / `MonitorSecretMapFields`). One entry gives
   encryption at rest, `***` masking on reads, write-only merge on updates,
@@ -309,7 +316,11 @@ or imported groups come back empty. Any other path that creates groups through
   without running, a failed publish retries in place, never NAKs, and a result
   the worker's own shutdown produced (`CheckResult.Interrupted`) is acked
   unpublished. A checker that acts on the world (places calls, sends messages)
-  must implement it, deciding from non-secret config fields only. Scheduled
+  must implement it, deciding from non-secret config fields only. Test
+  checks (core-NATS request/reply, one goroutine per request) are not bounded
+  by `WORKER_CONCURRENCY`, so `handleTestCheck` refuses a side-effecting one
+  beyond `maxSideEffectTestChecks` (16) in flight; scheduled checks never
+  share that bound. Scheduled
   jobs carry a per-slot `Nats-Msg-Id` (`checkJobMsgID`, used by
   `publishMonitorJobs`), so a dispatch retried for the same `next_run_at` is a
   stream duplicate; keep the id deterministic per slot.
@@ -327,7 +338,12 @@ or imported groups come back empty. Any other path that creates groups through
   type/config/interval/timeout on every update. Workers read
   `SIP_CALL_ENABLED` (default true, false with `WORKER_LOCATION_ID`) and
   `SIP_CALL_ALLOWED_DESTINATIONS`; a `SIPChecker` never configured
-  (`ConfigureCalls`) places no call. Its web twin is `isSipCall`
+  (`ConfigureCalls`) places no call. `call.media` (`shared/models/sip_media.go`,
+  orchestrated by `worker/internal/worker/sip_media.go`) measures the hold's
+  audio; it rides `SIP_CALL_ENABLED` (no second switch), its keys are strict
+  (`UnmarshalJSON` records, never returns, what `Validate` refuses, so other
+  decoders of a SIP config never break), and a worker that predates a media
+  field fails the check closed before dialing. Its web twin is `isSipCall`
   (`web/lib/sip-config.ts`): the UI hides call run/pause/clone and locks the
   form for non-admins (`useIsTenantAdmin`), and confirms every Test and run.
 - **Compose and Helm move together**: a port, queue subject or credential
@@ -592,13 +608,16 @@ or imported groups come back empty. Any other path that creates groups through
   degraded right now — never pulse whole traces or lists. Reduced motion is
   handled globally in `globals.css`; never hard-code a duration.
 - **Formatting and tones have one home each**: dates, recency, durations,
-  uptime %, latency and the `RANGES` table live in `lib/format.ts`
-  (`formatDateTime`, `formatTimestamp`, `formatRelativeTime`, `formatUptime`,
-  `formatLatency`, …); what colour a state or number gets lives in
+  uptime %, latency, call quality and the `RANGES` table live in
+  `lib/format.ts` (`formatDateTime`, `formatTimestamp`, `formatRelativeTime`,
+  `formatUptime`, `formatLatency`, `formatMOS`/`formatLossPct`/
+  `formatJitter`, …); what colour a state or number gets lives in
   `lib/status-tones.ts` (`uptimeTone(pct, target)` for availability only;
   `failedChecksTone` for check-bucket trace bars, `utilizationTone` for
-  agent gauges from the monitor's `metric_rules`; alert/incident/check/
-  monitor-status tones). Never `toLocaleString()`, `toFixed()` on a percent,
+  agent gauges from the monitor's `metric_rules`, `mosTone`/`lossTone` for
+  SIP call quality from the monitor's `call.media` thresholds (with default
+  bands), `thresholdTone` for its jitter and round trip (own thresholds only);
+  alert/incident/check/monitor-status tones). Never `toLocaleString()`, `toFixed()` on a percent,
   or an inline uptime threshold in a component. Severity order, monitor
   target and short failure reasons are `STATUS_RANK`/`sortBySeverity`,
   `monitorTarget`, `shortFailureReason` in `lib/monitor-utils.ts`.
@@ -710,7 +729,11 @@ or imported groups come back empty. Any other path that creates groups through
   `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`
   (role needs CREATEDB) and each test gets a scratch database on that server.
   The SIPp INVITE test (`worker/.../sip_invite_integration_test.go`) is no
-  database test and skips instead when no Docker provider is reachable.
+  database test and skips instead when no Docker provider is reachable (CI
+  still fails that skip). Its `media/*` subtests run SIPp's `-rtp_echo` on a
+  fixed UDP port published on the host's `127.0.0.1` (the templated
+  `uas_echo.xml.tmpl` names it), so they need a local daemon (Docker Desktop
+  or the runner's dockerd); a remote `DOCKER_HOST` fails them, never skips.
 - CI runs a fast Go job and three complete package groups with `-race`;
   each full group gets one Postgres service via `PROBARA_TEST_POSTGRES_DSN`.
   `scripts/ci.py` under `.github/workflows/` owns package assignment, JSON
@@ -843,9 +866,16 @@ or imported groups come back empty. Any other path that creates groups through
 - SIP signalling rides one flow per attempt: every request, response and
   answer to a server-sent request goes over the connection `dialSIP` opened
   through `dialGuard` (`worker/internal/worker/sip_flow.go`); never dial a
-  Contact, Via, Record-Route or SDP address (in a call's dialogs they only
-  fill the Request-URI and Route headers). Requests are client transactions in
-  `sip_txn.go` (Timer E on UDP, matched by Via branch + CSeq method).
+  Contact, Via, Record-Route or SDP address for signalling (in a call's
+  dialogs they only fill the Request-URI and Route headers). Call media
+  writes RTP/RTCP only from the call's bound, unconnected pair, only to
+  addresses `netguard.Policy.AllowsServerChosen` admits (`prepareMedia`, the
+  latch; RTCP only to the media destination's IP),
+  starts only at HOLDING entry and stops first thing in `teardown`, so no
+  RTP follows a BYE; its error and warning text never names an address
+  (`present.Build` copies it into every notification). Requests are client
+  transactions in `sip_txn.go` (Timer E on UDP, matched by Via branch + CSeq
+  method).
 - INVITE responses reach `sipCall.onResponse` on the dispatcher goroutine,
   which sends every ACK itself (non-2xx in-transaction, each 2xx per To tag,
   re-sent for retransmissions) so ACKs go out during CANCEL/BYE waits and the
@@ -920,6 +950,12 @@ or imported groups come back empty. Any other path that creates groups through
   validation corpus must use. Add a new format for any wording change, never
   edit an existing renderer (`training/history/` regenerates old corpora
   byte for byte).
+- **Signed NATS structs** (`LocationHeartbeat`, `CheckResultMessage` and
+  its `MeshResultInfo`) are verified by re-marshalling the receiver's struct
+  (`locationauth.VerifyJSON`), so a new non-empty field breaks older
+  verifiers (an omitempty field left empty does not). Extend inside
+  `metrics_data` or reuse `LocationHeartbeat.Version`;
+  `TestSignedNATSStructsFrozen` (`scheduler/internal/ingest`) pins them.
 - **`monitor_state_intervals` is SLA history.** Nothing prunes it by time,
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what

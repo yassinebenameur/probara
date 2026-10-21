@@ -470,6 +470,136 @@ test('sip: edit round trip of a stored test call', () => {
   });
 });
 
+test('sip: create from a filled test-call form that measures call quality', () => {
+  const form = {
+    ...initialSipFormState(),
+    name: 'Call quality',
+    host: 'sbc.example.com',
+    method: 'invite' as const,
+    call_number: '1000',
+    call_hold_ms: '5000',
+    call_media: true,
+    call_media_expect: 'echo' as const,
+    call_media_warn_loss_pct: '1',
+    call_media_max_loss_pct: '2.5',
+    call_media_warn_jitter_ms: '30',
+    call_media_max_jitter_ms: '60',
+    call_media_warn_mos: '4',
+    call_media_min_mos: '3.6',
+    call_media_warn_rtt_ms: '300',
+    call_media_max_rtt_ms: '500',
+    interval_seconds: 300,
+  };
+  assertWire(buildSipRequest(form, undefined), {
+    name: 'Call quality',
+    type: 'sip',
+    config: {
+      host: 'sbc.example.com',
+      port: 5060,
+      transport: 'udp',
+      method: 'invite',
+      call: {
+        number: '1000',
+        mode: 'answer',
+        hold_ms: 5000,
+        media: {
+          expect: 'echo',
+          warn_loss_pct: 1,
+          max_loss_pct: 2.5,
+          warn_jitter_ms: 30,
+          max_jitter_ms: 60,
+          warn_mos: 4,
+          min_mos: 3.6,
+          warn_rtt_ms: 300,
+          max_rtt_ms: 500,
+        },
+      },
+    },
+    interval_seconds: 300,
+    timeout_seconds: 10,
+    enabled: true,
+    ...DEFAULT_ALERTING,
+    ...NEW_TAIL,
+  });
+});
+
+test('sip: a test call turned to Measure only submits expect alone', () => {
+  const form = {
+    ...initialSipFormState(),
+    name: 'Measure only',
+    host: 'sbc.example.com',
+    method: 'invite' as const,
+    call_number: '1000',
+    call_hold_ms: '3000',
+    call_media: true,
+    call_media_expect: 'none' as const,
+    // Typed under another Expect, then hidden: never sent.
+    call_media_min_mos: '3.6',
+  };
+  assertWire((buildSipRequest(form, undefined).config as SIPMonitorConfig).call, {
+    number: '1000',
+    mode: 'answer',
+    hold_ms: 3000,
+    media: { expect: 'none' },
+  });
+});
+
+test('sip: edit round trip of a stored test call that measures call quality', () => {
+  // Every call field the form hydrates, media included; the unknown media key
+  // stays for the API to refuse (media keys are strict).
+  const config = {
+    host: 'sbc.example.com',
+    port: 5060,
+    transport: 'udp',
+    method: 'invite',
+    expected_status: 200,
+    call: {
+      number: '+33123456789',
+      from_user: 'probe',
+      from_display: 'Probara probe',
+      from_domain: 'example.com',
+      mode: 'answer',
+      hold_ms: 6000,
+      warn_pdd_ms: 3000,
+      max_pdd_ms: 5000,
+      warn_answer_ms: 8000,
+      max_answer_ms: 12000,
+      sdp_address: '203.0.113.10',
+      probe_header: true,
+      media: {
+        future_media_field: 1,
+        expect: 'two_way',
+        warn_loss_pct: 1,
+        max_loss_pct: 2.5,
+        warn_jitter_ms: 30,
+        max_jitter_ms: 60,
+        warn_mos: 4,
+        min_mos: 3.6,
+        warn_rtt_ms: 300,
+        max_rtt_ms: 500,
+      },
+    },
+  } as unknown as SIPMonitorConfig;
+  const monitor = storedMonitor('sip', config);
+  const form = initialSipFormState(monitor);
+  assert.equal(form.call_media, true);
+  assert.equal(form.call_media_expect, 'two_way');
+  assert.equal(form.call_media_min_mos, '3.6');
+  assertWire(buildSipRequest(form, sipLoadedConfig(monitor)), {
+    name: 'Stored monitor',
+    type: 'sip',
+    config,
+    ...STORED_ENVELOPE,
+    ...STORED_ALERTING,
+    ...STORED_TAIL,
+  });
+
+  // Turning call quality off drops the whole media object.
+  const off = buildSipRequest({ ...form, call_media: false }, sipLoadedConfig(monitor)).config as SIPMonitorConfig;
+  assert.equal(off.call?.media, undefined);
+  assert.equal(off.call?.hold_ms, 6000);
+});
+
 test('sip: edit round trip of a stored RFC 3263 monitor keeps SRV resolution', () => {
   // As the API may store it: resolution in any case, port and transport left
   // to SRV (0 and '').

@@ -29,9 +29,12 @@ import (
 // the result is 24 s, inside the check-job AckWait, and the check-job
 // consumer never runs a call twice (SideEffecting, worker.go).
 //
-// Everything rides the one flow dialed through dialGuard: the Contact and
+// Signalling rides the one flow dialed through dialGuard: the Contact and
 // Record-Route of the answer only fill in-dialog Request-URIs and Route
-// headers, and the SDP answer's media address is recorded, never contacted.
+// headers. The SDP answer's media address is recorded and, only with
+// call.media, sent RTP and RTCP during the hold (sip_media.go): from the
+// bound pair, and only to an address netguard.Policy.AllowsServerChosen
+// admits.
 const (
 	sipCallTeardownBudget = 4 * time.Second
 	// sipCallLingerFor is Timer B / the 2xx retransmission window: 64·T1.
@@ -157,7 +160,7 @@ func newSIPCallTarget(config *models.SIPMonitorConfig) (sipCallTarget, error) {
 }
 
 // sipCallBudgets is the call's timeout and hold after the worker's own
-// clamps (D12), whatever the payload says (the test-check path allows 60 s,
+// clamps (D12), whatever the payload says (the test-check path allows 120 s,
 // and a payload may predate a rule): the timeout at most 20 s, the hold at
 // most 10 s and never more than leaves 2 s to ring and answer.
 func sipCallBudgets(timeoutSeconds, holdMs int) (timeout, hold time.Duration) {
@@ -362,6 +365,7 @@ type sipCall struct {
 	ep           *sipEndpoint
 	auth         *sipAuthState // nil without credentials
 	rtp          *sipRTPPair
+	media        *sipMediaSession // nil without call.media
 	metrics      *sipMetrics
 	cm           *sipCallMetrics
 	checkStart   time.Time
@@ -396,7 +400,20 @@ type sipCall struct {
 	failover       bool
 	restartTimerA  bool
 	cancelSent     bool
+	// earlyAnswers is the SDP of the last 18x on each early dialog, by To
+	// tag (nil for an SDP without an audio stream), for at most
+	// sipCallMaxEarlyAnswers tags: see answerSDP.
+	earlyAnswers map[string]*sipSDPAnswer
 }
+
+// sipCallMaxEarlyAnswers bounds the early dialogs whose 18x SDP a call keeps.
+const sipCallMaxEarlyAnswers = 4
+
+// Where the SDP answer a call's media is planned from came from (answerSDP).
+const (
+	sipAnswerFrom2xx = "2xx"
+	sipAnswerFrom18x = "18x"
+)
 
 // sipCallOutcome is how a call on one flow ended.
 type sipCallOutcome struct {
@@ -434,13 +451,17 @@ func (c *SIPChecker) runInviteCall(parent, callCtx context.Context, flow *sipFlo
 	if localIP == nil {
 		localIP = net.IPv4zero
 	}
-	rtp, err := bindSIPRTPPair(localIP)
+	rtp, err := c.rtpPorts.bind(localIP)
 	if err != nil {
 		s.ep.Close()
 		msg := fmt.Sprintf("media: %v", err)
 		return sipCallOutcome{result: CheckResult{Status: "error", ErrorMessage: &msg}}
 	}
 	s.rtp = rtp
+	s.media = s.newMediaSession(rtp, localIP)
+	// Teardown stops the sender first; this covers a call that never gets
+	// there, so a sender cannot outlive it.
+	defer func() { s.media.stop(time.Now()) }()
 	sdpAddr := localIP.String()
 	if config.Call.SDPAddress != "" {
 		sdpAddr = config.Call.SDPAddress
@@ -471,8 +492,26 @@ func (c *SIPChecker) runInviteCall(parent, callCtx context.Context, flow *sipFlo
 	cancelTeardown()
 	rtp.Close()
 	s.cm.RTPRxPackets = rtp.packets.Load()
+	// A verdict reached before a shutdown stands, but its media is
+	// interrupted: a deploy never records a quality failure.
+	s.cm.Media = s.media.finish(parent.Err() != nil)
+	if !s.failover {
+		// A 503 failover attempt's media block is overwritten by the next
+		// attempt's, so only the attempt that decides the check counts.
+		s.media.count()
+	}
 	metrics.recordEndpoint(s.ep)
 	s.applyThresholds()
+	s.applyMediaRules()
+	if s.cm.Teardown == "bye_unconfirmed" {
+		if count := c.mediaCounters.teardownUnconfirmed; count != nil {
+			evidence := "none"
+			if s.media.afterByeEvidence() {
+				evidence = "audio_after_bye"
+			}
+			count(evidence)
+		}
+	}
 
 	out := sipCallOutcome{result: s.result, err: s.resultErr, decisive: s.decisiveAt, failover: s.failover}
 	if !s.decided && !s.failover {
@@ -710,6 +749,10 @@ func (s *sipCall) drive(parent, callCtx context.Context) {
 			}
 			if s.phase == sipCallHolding && holdC == nil {
 				answerC = nil
+				// Media starts here, the one place the call is known to
+				// hold: never for a 2xx that crossed a CANCEL, a ring-mode
+				// answer or a status mismatch.
+				s.media.start(time.Now())
 				s.hook("holding")
 				holdTimer := time.NewTimer(min(s.hold, time.Until(s.callDeadline)))
 				defer holdTimer.Stop()
@@ -862,6 +905,7 @@ func (s *sipCall) onProvisional(inv *sipInviteTxn, in sipInbound) {
 	}
 	if code >= 180 && code <= 189 && sipBodyIsSDP(msg) {
 		s.cm.EarlyMedia = true
+		s.keepEarlyAnswer(msg)
 	}
 	s.anyProvisional = true
 	s.proceeding = true
@@ -1000,9 +1044,11 @@ func (s *sipCall) onAnswered(inv *sipInviteTxn, d *sipDialog, in sipInbound) {
 			s.cm.PDDSource = strconv.Itoa(code)
 			s.cm.SetupPDDMs = s.cm.SetupMs
 		}
-		if sipBodyIsSDP(msg) {
-			s.cm.SDPAnswer = parseSDPAnswer(msg.Body)
-			s.onMediaReady(s.cm.SDPAnswer)
+		if answer, source, ok := s.answerSDP(d, msg); ok {
+			if source == sipAnswerFrom2xx {
+				s.cm.SDPAnswer = answer // sdp_answer is always the 2xx's
+			}
+			s.onMediaReady(answer, source)
 		}
 		by := &sipAnsweredBy{ContactHost: sipContactHost(msg)}
 		if s.flow.peer != nil {
@@ -1059,14 +1105,58 @@ func (s *sipCall) onAnswered(inv *sipInviteTxn, d *sipDialog, in sipInbound) {
 	}
 }
 
-// onMediaReady is where RTP quality measurement will start, once the answer
-// names the far end's media. No media is sent or analysed yet.
-func (s *sipCall) onMediaReady(*sipSDPAnswer) {}
+// onMediaReady plans the call's media from the answered dialog's SDP answer
+// (source: sipAnswerFrom2xx or sipAnswerFrom18x). It sends nothing: media
+// starts with the hold (drive), which a CANCEL race, ring mode or a status
+// mismatch never reaches. An answer taken from the 18x is worth a warning.
+func (s *sipCall) onMediaReady(answer *sipSDPAnswer, source string) {
+	if s.media == nil {
+		return
+	}
+	s.media.prepare(answer, source)
+	if source == sipAnswerFrom18x {
+		s.metrics.warn("media: answer taken from the 18x (the 200 carried no SDP)")
+	}
+}
+
+// keepEarlyAnswer records an 18x's SDP as the latest answer of its early
+// dialog. An 18x without a To tag opens no dialog and is not kept.
+func (s *sipCall) keepEarlyAnswer(msg *sipMessage) {
+	tag := sipHeaderTag(msg.Get("To"))
+	if tag == "" {
+		return
+	}
+	if _, known := s.earlyAnswers[tag]; !known && len(s.earlyAnswers) >= sipCallMaxEarlyAnswers {
+		return
+	}
+	if s.earlyAnswers == nil {
+		s.earlyAnswers = make(map[string]*sipSDPAnswer, sipCallMaxEarlyAnswers)
+	}
+	s.earlyAnswers[tag] = parseSDPAnswer(msg.Body)
+}
+
+// answerSDP is the SDP answer of the answered dialog d: the 2xx's own when it
+// carries one, else the last 18x SDP of the same dialog (same To tag). RFC
+// 3264 puts the answer in the 2xx when there is no reliable provisional, but
+// SBCs that treat a 183's SDP as the answer and send a bare 200 are common,
+// so the dialog's 18x stands in. An 18x of another dialog (another fork)
+// never does. ok is false when neither carried SDP.
+func (s *sipCall) answerSDP(d *sipDialog, msg *sipMessage) (answer *sipSDPAnswer, source string, ok bool) {
+	if sipBodyIsSDP(msg) {
+		return parseSDPAnswer(msg.Body), sipAnswerFrom2xx, true
+	}
+	if early, found := s.earlyAnswers[d.remoteTag]; found {
+		return early, sipAnswerFrom18x, true
+	}
+	return nil, "", false
+}
 
 // teardown always runs after drive, under its own budget: it settles a
 // pending INVITE (CANCEL once a provisional came, or listens for a late
 // answer), then BYEs every confirmed dialog, forks included.
 func (s *sipCall) teardown(ctx context.Context) {
+	// First, before any CANCEL or BYE: no RTP ever follows the hang-up.
+	s.media.stop(time.Now())
 	defer func() {
 		if r := recover(); r != nil {
 			s.decided = false
@@ -1079,9 +1169,13 @@ func (s *sipCall) teardown(ctx context.Context) {
 	}
 	s.byeAll(ctx)
 	if s.cm.Teardown == "bye_unconfirmed" {
-		s.metrics.warn("teardown: BYE unconfirmed")
+		s.metrics.warn(sipByeUnconfirmedWarning)
 	}
 }
+
+// sipByeUnconfirmedWarning is the warning an unanswered BYE adds; media
+// evidence that the far end kept sending rewrites it (addMediaNotes).
+const sipByeUnconfirmedWarning = "teardown: BYE unconfirmed"
 
 // settleInvite waits out a pending INVITE that was given up on.
 func (s *sipCall) settleInvite(ctx context.Context) {
@@ -1143,6 +1237,9 @@ func (s *sipCall) byeAll(ctx context.Context) {
 		if d == nil {
 			return
 		}
+		if d == s.primary {
+			s.media.markBye(time.Now())
+		}
 		outcome, status, ms := s.bye(ctx, d)
 		if d == s.primary {
 			if s.cm.Teardown == "none" || s.cm.Teardown == "" {
@@ -1154,7 +1251,8 @@ func (s *sipCall) byeAll(ctx context.Context) {
 			s.cm.ByeMs = ms
 		}
 		if outcome == "bye_unconfirmed" {
-			s.metrics.warn("teardown: BYE unconfirmed")
+			d.byeUnanswered = true
+			s.metrics.warn(sipByeUnconfirmedWarning)
 		}
 	}
 }
@@ -1174,12 +1272,15 @@ func (s *sipCall) nextUnended() *sipDialog {
 
 // bye ends one dialog: 2xx is bye_ok, 481 bye_481 (the far end had already
 // ended it), a challenge is answered once, no answer within the budget is
-// bye_unconfirmed, anything else bye_<code>.
+// bye_unconfirmed, anything else bye_<code>. Each BYE takes the dialog's
+// next CSeq (RFC 3261 §12.2.1.1), so the linger's second one is a new
+// request a far end cannot take for a copy of the first.
 func (s *sipCall) bye(ctx context.Context, d *sipDialog) (outcome string, status int, ms *int64) {
-	cseq := d.inviteCSeq + 1
+	cseq := max(d.inviteCSeq, d.byeCSeq) + 1
 	var credentials []sipHeader
 	for round := 0; ; round++ {
 		req := d.buildBye(s.flow, cseq, credentials)
+		d.byeCSeq = cseq
 		sent := time.Now()
 		in, err := s.ep.roundTripNonInvite(ctx, req, nil)
 		if err != nil {

@@ -37,7 +37,7 @@ export const SLAS_PAGE: DocPage = {
       blocks: [
         {
           type: "paragraph",
-          text: "Every number comes from the monitors' state history (the timeline behind the monitor detail headline), never from counting check results. For each monitor, time in the period falls into exactly one class. Available: up, suspect, or degraded unless the SLA counts it as down. Unplanned down: down outside every maintenance window that covers the monitor, directly or through one of its groups. Planned down: down inside such a window. Paused. Unknown: no fresh evidence. Untracked: no state history yet.",
+          text: "Every number comes from the monitors' state history (the timeline behind the monitor detail headline), never from counting check results. For each monitor, time in the period falls into exactly one class. Available: up, suspect, or degraded unless the SLA counts it as down. Unplanned down: down outside every maintenance window that covers the monitor, directly or through one of its groups. Planned down: down inside such a window. Paused. Unknown: no fresh evidence. Untracked: no state history yet. A monitor is down for whatever failed its checks, its own assertions included: a SIP test call failing a call-quality threshold counts as downtime like one that was not answered, and its warnings never do.",
         },
         {
           type: "paragraph",

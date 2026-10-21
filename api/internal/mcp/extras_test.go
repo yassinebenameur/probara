@@ -46,3 +46,21 @@ func TestWaitForAlertEventsTimeout(t *testing.T) {
 		}
 	})
 }
+
+// describe_monitor_type shows agents a test call's call.media fields.
+func TestDescribeSIPMonitorTypeShowsMedia(t *testing.T) {
+	info, err := typeInfo("sip", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := info.ConfigSchema.Properties["call"]
+	if call == nil || call.Properties["media"] == nil {
+		t.Fatalf("schema = %+v, want call.media", info.ConfigSchema)
+	}
+	media := call.Properties["media"]
+	for _, field := range []string{"expect", "max_loss_pct", "min_mos", "max_jitter_ms", "max_rtt_ms"} {
+		if media.Properties[field] == nil {
+			t.Errorf("call.media has no %q in %+v", field, media.Properties)
+		}
+	}
+}

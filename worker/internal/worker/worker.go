@@ -43,6 +43,19 @@ var sideEffectPublishBackoff = []time.Duration{time.Second, 2 * time.Second, 4 *
 
 const sideEffectPublishAttemptTimeout = 5 * time.Second
 
+// maxSideEffectTestChecks bounds the side-effecting test checks (a SIP test
+// call's Test) one worker runs at once. Scheduled checks are already bounded
+// by WORKER_CONCURRENCY, but test checks arrive on a core-NATS request/reply
+// subscription that starts one goroutine per request, so without this a burst
+// of Test clicks would place an unbounded number of concurrent real calls. A
+// full bound refuses the test rather than queueing it, and scheduled checks
+// never share it, so a test flood cannot make a scheduled check fail.
+const maxSideEffectTestChecks = 16
+
+// errSideEffectTestChecksFull is the test-check reply when every
+// maxSideEffectTestChecks slot is taken. Nothing is dialed or published.
+const errSideEffectTestChecksFull = "sip_call: too many test calls running on this worker; try again"
+
 // resultPublisher is the minimal publishing surface the worker needs to hand
 // results back to the platform. Satisfied by *queue.Client and test spies.
 type resultPublisher interface {
@@ -83,6 +96,13 @@ type Worker struct {
 	// sideEffectInterrupted counts side-effecting results the worker's own
 	// shutdown produced, acked and never published.
 	sideEffectInterrupted *prometheus.CounterVec
+	// sideEffectTestRejected counts side-effecting test checks refused
+	// because every sideEffectTestSlots slot was taken.
+	sideEffectTestRejected *prometheus.CounterVec
+
+	// sideEffectTestSlots holds one token per side-effecting test check in
+	// flight (capacity maxSideEffectTestChecks).
+	sideEffectTestSlots chan struct{}
 
 	// Zero values use checkProgressInterval / sideEffectPublishBackoff;
 	// tests shrink them.
@@ -105,6 +125,8 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 		secretsEncryptor: secrets.NoOpEncryptor{},
 		checkerRegistry:  NewDefaultRegistry(cfg.MaxBodySizeBytes, cfg.HTTPBlockPrivateIPs, cfg.HTTPAllowedCIDRs, cfg.SyntheticArtifactsDir),
 		passiveTypes:     map[string]bool{},
+
+		sideEffectTestSlots: make(chan struct{}, maxSideEffectTestChecks),
 	}
 	for _, t := range models.PassiveMonitorTypes {
 		w.passiveTypes[t] = true
@@ -169,16 +191,22 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 		"Side-effecting checks interrupted by worker shutdown, acked without publishing",
 		[]string{"type"},
 	)
+	w.sideEffectTestRejected = metricsRegistry.NewCounter(
+		"test_check_side_effect_rejected_total",
+		"Side-effecting test checks refused because the worker's test-check bound was full",
+		[]string{"type"},
+	)
 
 	// SIP test calls: whether this worker places them (SIP_CALL_ENABLED,
-	// off by default on private-location workers) and to which numbers
-	// (SIP_CALL_ALLOWED_DESTINATIONS), plus the post-call linger counters.
+	// off by default on private-location workers, which also gates their
+	// media) and to which numbers (SIP_CALL_ALLOWED_DESTINATIONS), plus the
+	// post-call linger and media counters.
 	if checker, err := w.checkerRegistry.Get("sip"); err == nil {
 		if sip, ok := checker.(*SIPChecker); ok {
 			sip.ConfigureCalls(cfg.SIPCallEnabled, cfg.SIPCallAllowedDestinations)
 			lingers := metricsRegistry.NewCounter(
 				"sip_linger_total",
-				"SIP test-call lingers by outcome (late answers BYE'd, late provisionals CANCELled, quiet)",
+				"SIP test-call lingers by outcome (late answers BYE'd, unanswered BYEs sent again, late provisionals CANCELled, quiet)",
 				[]string{"outcome"},
 			)
 			dropped := metricsRegistry.NewCounter(
@@ -190,6 +218,40 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 				func(outcome string) { lingers.With(prometheus.Labels{"outcome": outcome}).Inc() },
 				dropped.Inc,
 			)
+			sessions := metricsRegistry.NewCounter(
+				"sip_media_sessions_total",
+				"SIP test calls with call.media, by media status (measured, truncated, refused, unusable_answer, not_held, interrupted)",
+				[]string{"outcome"},
+			)
+			refused := metricsRegistry.NewCounter(
+				"sip_media_refused_total",
+				"SIP test calls whose far-end media address the worker refused to send to, by reason",
+				[]string{"reason"},
+			)
+			rxDropped := metricsRegistry.NewCounter(
+				"sip_media_rx_dropped_total",
+				"Inbound RTP packets of SIP test calls left out of the analysis (invalid, foreign source, record cap overflow)",
+				[]string{"reason"},
+			)
+			unreliable := metricsRegistry.NewCounter(
+				"sip_media_unreliable_total",
+				"SIP test calls whose media timing the worker could not trust (late sender, slow goroutine scheduling); quality not judged",
+				[]string{},
+			).With(prometheus.Labels{})
+			unconfirmed := metricsRegistry.NewCounter(
+				"sip_call_teardown_unconfirmed_total",
+				"SIP test calls whose BYE went unconfirmed, by whether the far end kept sending audio after it",
+				[]string{"evidence"},
+			)
+			sip.ConfigureMediaMetrics(sipMediaCounters{
+				session:    func(status string) { sessions.With(prometheus.Labels{"outcome": status}).Inc() },
+				refused:    func(reason string) { refused.With(prometheus.Labels{"reason": reason}).Inc() },
+				rxDropped:  func(reason string, n int) { rxDropped.With(prometheus.Labels{"reason": reason}).Add(float64(n)) },
+				unreliable: unreliable.Inc,
+				teardownUnconfirmed: func(evidence string) {
+					unconfirmed.With(prometheus.Labels{"evidence": evidence}).Inc()
+				},
+			})
 		}
 	}
 
@@ -625,6 +687,17 @@ func (w *Worker) handleTestCheck(data []byte) []byte {
 	checker, err := w.checkerRegistry.Get(payload.Type)
 	if err != nil {
 		return errorResponse(fmt.Sprintf("unknown monitor type: %s", payload.Type))
+	}
+	// Decided on the config as sent, before decryption, like the check-job
+	// consumer's at-most-once test (SideEffectingChecker).
+	if isSideEffecting(checker, payload.Config) {
+		select {
+		case w.sideEffectTestSlots <- struct{}{}:
+			defer func() { <-w.sideEffectTestSlots }()
+		default:
+			w.sideEffectTestRejected.With(prometheus.Labels{"type": payload.Type}).Inc()
+			return errorResponse(errSideEffectTestChecksFull)
+		}
 	}
 
 	config, err := secrets.DecryptMonitorConfig(w.secretsEncryptor, payload.Type, payload.Config)
