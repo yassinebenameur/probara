@@ -13,7 +13,6 @@ import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
 import Callout from '@/components/ui/Callout';
 import Checkbox from '@/components/ui/Checkbox';
 import IconButton from '@/components/ui/IconButton';
-import Pill from '@/components/ui/Pill';
 import { usePluginNames } from '@/components/alert-channels/usePluginNames';
 import { formatDuration } from '@/lib/format';
 
@@ -199,10 +198,14 @@ export default function ChannelPicker({
                 // Wraps instead of squeezing: once the name column would drop
                 // below 12rem the delay select moves to its own line, where
                 // justify-between leaves it at the start, under the name.
+                // A checked row takes one --well step over the list's own
+                // well, and any row a --well-hover on hover: the checkbox and
+                // delay select already carry the state, and a heavier fill
+                // split the list into a bright block and a dim one.
                 <li
                   key={channel.id}
-                  className={`flex items-start gap-3 px-4 py-2.5 transition-colors ${
-                    isSelected ? 'bg-well-strong' : 'hover:bg-well-hover'
+                  className={`flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-well-hover ${
+                    isSelected ? 'bg-well' : ''
                   }`}
                 >
                   {/* Centred on the name's line, not on the whole row. */}
@@ -229,9 +232,15 @@ export default function ChannelPicker({
                         <span>{pluginName(channel.type)}</span>
                         {isDefault && <span className="text-slate-400">(default)</span>}
                         {channel.is_active === false && (
-                          // Same wording and tone as the channel list's Status column.
-                          <span title="This channel is inactive — selecting it delivers nothing">
-                            <Pill tone="neutral" size="xs" dot>Inactive</Pill>
+                          // Same wording as the channel list's Status column,
+                          // as plain caption text: a chip here made inactive
+                          // rows taller and louder than the active ones.
+                          <span
+                            title="This channel is inactive — selecting it delivers nothing"
+                            className="inline-flex items-center gap-1.5"
+                          >
+                            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-slate-500" />
+                            Inactive
                           </span>
                         )}
                       </span>

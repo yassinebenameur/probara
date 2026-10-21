@@ -16,12 +16,19 @@ export const SETTINGS_COLUMNS =
 export const SETTINGS_COLUMNS_WIDE =
   'grid gap-6 grid-cols-[repeat(auto-fit,minmax(min(100%,max(44rem,calc((100%_-_1.5rem)/2))),1fr))]';
 
-// Notifications: two stacks of section cards (Routing + Incidents, Latency +
-// Dependency), side by side once each stack gets 30rem, one stack otherwise.
-// Stacks rather than four grid cells so a short card never leaves a hole
-// beside a tall one.
-export const SETTINGS_SECTION_COLUMNS =
-  'grid items-start gap-6 grid-cols-[repeat(auto-fit,minmax(min(100%,max(30rem,calc((100%_-_1.5rem)/2))),1fr))]';
+// Notifications: its section cards sit in explicit column stacks
+// (NotificationsPanel), not grid cells, so a short card never leaves a hole
+// beside a tall one and each card is only as wide as its column. The count
+// comes from the panel's own width (it moves with the sidebar): three
+// columns once each gets 35rem, two once each gets about 34rem (where a
+// parameter row keeps its segmented control beside its text), one
+// below that. gap-6 between columns.
+export const SECTION_GAP_PX = 24;
+export function sectionColumnCount(width: number): 1 | 2 | 3 {
+  if (width >= 3 * 560 + 2 * SECTION_GAP_PX) return 3;
+  if (width >= 2 * 540 + SECTION_GAP_PX) return 2;
+  return 1;
+}
 
 // The same flow inside one wide panel (AI): two sections side
 // by side once each gets 26rem, so a full-width panel never stretches one
