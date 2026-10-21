@@ -1,3 +1,22 @@
+# [2.0.0-alpha.6](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.5...v2.0.0-alpha.6) (2026-10-21)
+
+
+### Bug Fixes
+
+* **sip:** send one more BYE from the linger after an unconfirmed hang-up ([d64ae15](https://github.com/yassinebenameur/probara/commit/d64ae1537aab63c43f95fa17e50040149d024891))
+* **web:** use the shared segmented control for SIP call mode and audio expectation ([6fd55ac](https://github.com/yassinebenameur/probara/commit/6fd55ac433f0cb33e53ab6c486b29d02986188a1))
+* **worker:** bound concurrent side-effecting test checks ([8b56958](https://github.com/yassinebenameur/probara/commit/8b56958a6d22eb7713b8dcd872aca8dfec8ccd97))
+
+
+### Features
+
+* **netguard:** vet server-chosen media destinations ([1f62e57](https://github.com/yassinebenameur/probara/commit/1f62e5747f4492d0b5d26a95229fe502efc626fc))
+* **sip:** exchange RTP and measure call quality on test calls ([c6ee9c0](https://github.com/yassinebenameur/probara/commit/c6ee9c0cdcb5eda21f12b354fc6f3d52ae01eeb2))
+* **sip:** RTCP sender reports, far-end reception reports and RTT ([19a0213](https://github.com/yassinebenameur/probara/commit/19a0213bed6fd4ac642c68d37ed8f983dd708ed1))
+* **web:** call-quality facts and MOS, loss and jitter panels ([45ad776](https://github.com/yassinebenameur/probara/commit/45ad776e19da7f30d245200676c4bba542046faa))
+* **web:** call-quality settings in the test-call form ([8798c79](https://github.com/yassinebenameur/probara/commit/8798c79e3fe632800bd2237cabe8392e6de53979))
+* **worker:** RTP statistics and E-model estimate package ([f58c958](https://github.com/yassinebenameur/probara/commit/f58c9583259262c7baae75d49fba96df4c0063ac))
+
 # [2.0.0-alpha.5](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.4...v2.0.0-alpha.5) (2026-10-21)
 
 
