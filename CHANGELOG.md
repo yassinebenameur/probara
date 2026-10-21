@@ -1,3 +1,24 @@
+# [2.0.0-alpha.7](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.6...v2.0.0-alpha.7) (2026-10-21)
+
+
+### Bug Fixes
+
+* **agent:** restart on re-run, fail closed on checksums and refuse keyless installers ([e4503ad](https://github.com/yassinebenameur/probara/commit/e4503ade9b23815c4ed71ef15e824d994da29b3b))
+* **web:** move every tag picker onto FilterPopover and make the sidebar shortcut Ctrl+B / ⌘B ([131e091](https://github.com/yassinebenameur/probara/commit/131e091a2280a04915014307b37d7a2daada98a3))
+
+
+### Features
+
+* **alerts:** bulk acknowledge and resolve with hover selection and server-side sorting ([dbccb5a](https://github.com/yassinebenameur/probara/commit/dbccb5a6242aa89a4ac35e7e144edc916d3c42be))
+* **web:** lay monitor forms out as section rows with setting-row alerting ([aa7dee6](https://github.com/yassinebenameur/probara/commit/aa7dee694fd03cd95d5d73cc2cab30c48e9bbfd0))
+* **web:** polish incident detail and the status page editor ([f8a6a2e](https://github.com/yassinebenameur/probara/commit/f8a6a2e697c3ac749dfd85892aa779690936caa4))
+* **web:** polish the monitor detail page ([78e30e0](https://github.com/yassinebenameur/probara/commit/78e30e01e2362765a80160514e5a860eaa13c95b))
+
+
+### Performance Improvements
+
+* **monitors:** load recent results for the whole list in one batch request ([6d10427](https://github.com/yassinebenameur/probara/commit/6d104272572a0456f3fa2c0331eb6bf68dfb8245))
+
 # [2.0.0-alpha.6](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.5...v2.0.0-alpha.6) (2026-10-21)
 
 
