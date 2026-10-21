@@ -140,7 +140,7 @@ fewer failing locations show as **Degraded** (amber, no alert).
 - Docker & Docker Compose v2
 - Go `1.26.5`
 - Git LFS, to build the local AI image from source: `git lfs install && git lfs pull --include 'ai-service/artifacts/*/head.safetensors'` once after cloning (`LOCAL_AI_DISABLED=true` skips local AI)
-- Node.js via nvm — use the current LTS release selected by `.nvmrc`
+- Node.js 20.9 or newer; with nvm, the current LTS release selected by `.nvmrc`
 - Make
 - Bash
 
@@ -154,7 +154,7 @@ All backend services run in Docker containers with health checks and automatic r
 
 ## Notes
 
-- The `start-all` command automatically uses nvm LTS for the UI
+- The `start-all` command uses nvm's LTS for the UI when installed, else nvm's default alias, else the newest nvm-installed Node, else the `node` on PATH; the script refuses Node older than 20.9
 - All backend services run in Docker containers
 - The UI runs locally using npm/next for hot-reload support
 - `start-all-local` keeps Postgres, NATS and the `local-ai` container in Docker and runs app services with local Go

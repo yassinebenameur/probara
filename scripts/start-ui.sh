@@ -10,13 +10,21 @@ export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then
   set +u
   . "$NVM_DIR/nvm.sh"
-  nvm use --lts >/dev/null
+  # Prefer the newest installed LTS, then the default alias, then the newest
+  # installed version. When none resolves (nvm use exits non-zero), keep
+  # whatever node is already on PATH rather than aborting under set -e.
+  nvm use --lts >/dev/null 2>&1 || nvm use default >/dev/null 2>&1 || nvm use node >/dev/null 2>&1 || true
   set -u
 fi
 
-# Ensure nvm was available before continuing.
 if ! command -v node >/dev/null 2>&1; then
-  echo "Node.js is not available. Install nvm or Node before starting the UI." >&2
+  echo "Node.js is not available. Install Node.js 20.9 or newer (or nvm) before starting the UI." >&2
+  exit 1
+fi
+
+# Next.js 16 needs Node >= 20.9 (web/package.json engines).
+if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>20||(a===20&&b>=9)?0:1)'; then
+  echo "Node.js $(node --version) is too old for the UI; install 20.9 or newer." >&2
   exit 1
 fi
 
