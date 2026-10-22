@@ -13,6 +13,9 @@ import {
   formatMetricValue,
   metricUnitKind,
 } from '@/lib/metrics';
+import Callout from '@/components/ui/Callout';
+import Checkbox from '@/components/ui/Checkbox';
+import { FOCUS_RING_INSET } from '@/components/ui/focus';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import {
   ChartSeriesInput,
@@ -210,76 +213,84 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
       onToggle={setOpened}
     >
       {seriesLoading ? (
-        <p className="text-xs text-slate-500">Loading series…</p>
+        <p className="text-ui text-slate-500">Loading series…</p>
       ) : seriesError ? (
-        <p className="text-xs text-rose-400">{seriesError}</p>
+        <Callout tone="danger">{seriesError}</Callout>
       ) : seriesList.length === 0 ? (
-        <p className="text-xs text-slate-500">No metric series recorded yet.</p>
+        <p className="text-ui text-slate-500">No metric series recorded yet.</p>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+        <div className="grid gap-6 2xl:grid-cols-[280px_1fr]">
           <div className="space-y-2">
             <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search metrics"
                 placeholder="Search metrics"
-                className="input input-xs w-full !pl-8"
+                className="input input-sm !pl-8"
               />
             </div>
-            <p className="text-[10px] text-slate-600">
-              Select up to {MAX_SELECTED_SERIES} series · {selectedKeys.length} selected
+            <p className="text-xs text-slate-500">
+              {selectedKeys.length} of up to {MAX_SELECTED_SERIES} series selected
             </p>
-            <div className="max-h-80 space-y-1 overflow-y-auto pr-1">
+            <div className="max-h-80 space-y-0.5 overflow-y-auto pr-1">
               {grouped.map(([metricName, members]) => {
                 const expanded = expandedMetrics.has(metricName) || Boolean(search.trim());
                 const meta = METRIC_META[metricName];
                 const selectedInGroup = members.filter((s) => selectedKeys.includes(s.series_key)).length;
                 return (
-                  <div key={metricName} className="rounded-lg border border-white/[0.05] bg-slate-900/40">
+                  <div key={metricName}>
                     <button
                       type="button"
                       onClick={() => toggleMetricExpanded(metricName)}
-                      className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left"
+                      aria-expanded={expanded}
+                      className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well active:bg-well-hover ${FOCUS_RING_INSET}`}
                     >
                       {expanded ? (
-                        <ChevronDown className="h-3 w-3 shrink-0 text-slate-500" strokeWidth={1.75} />
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" strokeWidth={1.75} />
                       ) : (
-                        <ChevronRight className="h-3 w-3 shrink-0 text-slate-500" strokeWidth={1.75} />
+                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" strokeWidth={1.75} />
                       )}
-                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-300">
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-200">
                         {metricName}
                       </span>
-                      {meta && <span className="shrink-0 text-[10px] text-slate-500">{meta.short}</span>}
+                      {meta && <span className="shrink-0 text-2xs text-slate-500">{meta.short}</span>}
                       {selectedInGroup > 0 && (
-                        <span className="shrink-0 rounded-full bg-cyan-500/20 px-1.5 text-[10px] text-cyan-300">
+                        <span className="shrink-0 rounded-full bg-well-hover px-1.5 text-2xs tabular-nums text-slate-300">
                           {selectedInGroup}
+                          <span className="sr-only"> selected</span>
                         </span>
                       )}
                     </button>
                     {expanded && (
-                      <div className="space-y-0.5 px-2 pb-2">
+                      <div className="space-y-0.5 pb-1 pl-5">
                         {members.map((series) => {
                           const selected = selectedKeys.includes(series.series_key);
                           const disabled = !selected && selectedKeys.length >= MAX_SELECTED_SERIES;
                           return (
-                            <label
+                            <Checkbox
                               key={series.series_key}
-                              className={`flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] ${
-                                selected ? 'bg-cyan-500/10 text-cyan-200' : 'text-slate-400 hover:text-white'
-                              } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selected}
-                                disabled={disabled}
-                                onChange={() => toggleSeries(series.series_key)}
-                                className="h-3 w-3 accent-cyan-500"
-                              />
-                              <span className="min-w-0 flex-1 truncate font-mono">{seriesLabel(series)}</span>
-                              <span className="shrink-0 text-[10px] text-slate-600">{series.metric_type}</span>
-                            </label>
+                              size="sm"
+                              checked={selected}
+                              disabled={disabled}
+                              onChange={() => toggleSeries(series.series_key)}
+                              stretch
+                              className={`w-full !items-center !gap-2 rounded-lg px-2 !py-1 transition-colors ${
+                                selected ? 'bg-well' : 'hover:bg-well'
+                              }`}
+                              label={
+                                <span
+                                  className={`flex items-center gap-2 text-xs ${
+                                    selected ? 'text-white' : 'text-slate-400 hover:text-white'
+                                  }`}
+                                >
+                                  <span className="min-w-0 flex-1 truncate font-mono">{seriesLabel(series)}</span>
+                                  <span className="shrink-0 text-2xs text-slate-500">{series.metric_type}</span>
+                                </span>
+                              }
+                            />
                           );
                         })}
                       </div>
@@ -288,69 +299,62 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                 );
               })}
               {grouped.length === 0 && (
-                <p className="px-2 py-3 text-xs text-slate-500">No metrics match the search.</p>
+                <p className="px-2 py-3 text-ui text-slate-500">No metrics match the search.</p>
               )}
             </div>
           </div>
 
           <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-slate-400">
                 Aggregation
                 <select
                   value={agg}
                   onChange={(e) => setAgg(e.target.value as ExplorerAgg)}
-                  className="input input-xs"
+                  className="input input-sm"
                 >
                   <option value="avg">avg</option>
                   <option value="min">min</option>
                   <option value="max">max</option>
                 </select>
               </label>
-              <label
-                className="flex items-center gap-1.5 text-[11px] text-slate-500"
+              <Checkbox
+                size="sm"
+                checked={hasCounterSelected}
+                disabled
                 title="Counters always render as per-second rates; gauges never do."
-              >
-                <input
-                  type="checkbox"
-                  checked={hasCounterSelected}
-                  disabled
-                  readOnly
-                  className="h-3 w-3 accent-cyan-500"
-                />
-                per-second rate (auto for counters)
-              </label>
-              {queryLoading && <span className="text-[11px] text-slate-500">Loading…</span>}
-              {queryError && <span className="text-[11px] text-rose-400">{queryError}</span>}
+                className="!items-center !py-0"
+                label={<span className="text-xs text-slate-400">Per-second rate (auto for counters)</span>}
+              />
+              {queryLoading && <span role="status" className="text-xs text-slate-500">Loading…</span>}
+              {queryError && <span role="alert" className="text-xs text-rose-300">{queryError}</span>}
             </div>
 
             {selectedSeries.length === 0 ? (
-              <div className="flex h-56 items-center justify-center rounded-lg border border-white/[0.06] bg-slate-950/50 text-xs text-slate-500">
+              <div className="glass-well px-4 py-6 text-center text-sm text-slate-500">
                 Select series to chart them
               </div>
             ) : (
-              <>
-                <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
-                  <MetricChart
-                    data={chartRows}
-                    series={chartSeries.map(({ key, name, color }) => ({ key, name, color }))}
-                    range={timeRange}
-                    yDomain={[0, 'auto']}
-                    yTickFormatter={formatValue}
-                    valueFormatter={formatValue}
-                    height={240}
-                    syncId="metric-explorer"
-                  />
-                </div>
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+              <div className="glass-well p-4">
+                <MetricChart
+                  data={chartRows}
+                  series={chartSeries.map(({ key, name, color }) => ({ key, name, color }))}
+                  range={timeRange}
+                  yDomain={[0, 'auto']}
+                  yTickFormatter={formatValue}
+                  valueFormatter={formatValue}
+                  height={240}
+                  syncId="metric-explorer"
+                />
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                   {chartSeries.map((series) => (
                     <span key={series.key} className="flex items-center gap-1.5">
-                      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: series.color }} />
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: series.color }} aria-hidden="true" />
                       <span className="max-w-[320px] truncate font-mono">{series.name}</span>
                     </span>
                   ))}
                 </div>
-              </>
+              </div>
             )}
           </div>
         </div>

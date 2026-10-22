@@ -1,0 +1,172 @@
+{{- /*
+Bundled CPU inference for incident analysis (default-on). Receives only its
+bearer token: no database, NATS or platform credentials, no service-account
+token, no egress. Clients (api, platform worker) get LOCAL_AI_URL/TOKEN from
+the localAIEnv helper; token validation lives in secret.yaml.
+*/}}
+{{- if .Values.localAI.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-local-ai
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: local-ai
+spec:
+  # One replica, Recreate: a rolling update would hold two copies of the model
+  # in memory at once.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "monitoring-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: local-ai
+  template:
+    metadata:
+      {{- with .Values.localAI.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "monitoring-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: local-ai
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.localAI.podSecurityContext | nindent 8 }}
+      {{- with .Values.localAI.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.localAI.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.localAI.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: local-ai
+          image: "{{ .Values.localAI.image.repository | default (printf "%s-local-ai" .Values.image.repository) }}:{{ .Values.localAI.image.tag | default (include "monitoring-platform.imageTag" .) }}"
+          imagePullPolicy: {{ .Values.localAI.image.pullPolicy | default .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          env:
+            {{- include "monitoring-platform.localAITokenEnv" (dict "ctx" . "optional" false) | nindent 12 }}
+            - name: LOCAL_AI_THREADS
+              value: {{ .Values.localAI.threads | quote }}
+            - name: LOCAL_AI_QUEUE_CAPACITY
+              value: {{ .Values.localAI.queueCapacity | quote }}
+            - name: LOCAL_AI_QUEUE_TIMEOUT_SECONDS
+              value: {{ .Values.localAI.queueTimeoutSeconds | quote }}
+            - name: LOCAL_AI_MAX_INFERENCE_SECONDS
+              value: {{ .Values.localAI.maxInferenceSeconds | quote }}
+            {{- /* Deliberately not the top-level extraEnv: that is where shared
+            credentials such as PROBARA_SECRETS_KEY_V2 go, and this pod holds none. */}}
+            {{- with .Values.localAI.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.localAI.resources | nindent 12 }}
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          # /healthz turns 503 once a batch has run past maxInferenceSeconds
+          # (a hung kernel cannot be cancelled, and with one replica only a
+          # restart recovers), so the restart lands within about that bound
+          # plus periodSeconds x failureThreshold.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # /readyz needs the bearer token, which an httpGet probe cannot read
+          # from a Secret, so the probe execs the image's own Python.
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8090/readyz',headers={'Authorization':'Bearer '+os.environ['LOCAL_AI_TOKEN'].strip()}),timeout=3)"
+            periodSeconds: 15
+            timeoutSeconds: 5
+      volumes:
+        - name: temporary
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-local-ai
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: local-ai
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "monitoring-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: local-ai
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+      protocol: TCP
+{{- if .Values.localAI.networkPolicy.enabled }}
+---
+# Enforced only by a CNI that implements NetworkPolicy (Calico, Cilium, ...);
+# elsewhere it is accepted and ignored, leaving the bearer token as the only
+# barrier. Location workers carry component=worker-location and are excluded.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-local-ai
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: local-ai
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitoring-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: local-ai
+  policyTypes: [Ingress, Egress]
+  egress: []
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitoring-platform.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api
+        - podSelector:
+            matchLabels:
+              {{- include "monitoring-platform.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: worker
+      ports:
+        - port: 8090
+          protocol: TCP
+    {{- with .Values.localAI.networkPolicy.extraIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

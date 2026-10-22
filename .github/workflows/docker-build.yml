@@ -9,15 +9,76 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ${{ github.repository_owner }}/probara
+  # Third-party sources of the local-ai build (ai-service/Dockerfile). Set the
+  # repository variables to a mirror if upstream disappears; the build still
+  # checks the pinned commit and every locked sha256, so a mirror cannot swap
+  # content.
+  LAYA_GIT_URL: ${{ vars.LAYA_GIT_URL || 'https://github.com/NandhaKishorM/laya.git' }}
+  HF_ENDPOINT: ${{ vars.HF_ENDPOINT || 'https://huggingface.co' }}
 
 jobs:
+  # Release rule: the local-ai image is built only from a checkpoint whose
+  # manifest.json and cpu-evaluation.json say release_approved on cpu (the
+  # Dockerfile's verify_artifact enforces the same, on the composed weights).
+  # Every image needs this job, so on a release tag an unapproved checkpoint
+  # pushes nothing at all: the chart deploys the bundled service by default,
+  # and a tag whose api/worker/... images exist without its local-ai image is
+  # a broken release, not a partial one. release.yml refuses to create such a
+  # tag in the first place; this covers tags pushed by other means. The
+  # local-ai image is built only on release tags: branch pushes push no image,
+  # and local-ai-pr.yml (image build + offline smoke test) and build-test.yml
+  # (compose + verify) already validate it, so a branch build would only spend
+  # metered LFS bandwidth and runner time on a ~1.6 GB image.
+  local-ai-gate:
+    name: Local AI release gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      approved: ${{ steps.gate.outputs.approved }}
+      version: ${{ steps.gate.outputs.version }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        # Stdlib only: reads manifest.json and cpu-evaluation.json.
+        lfs: false
+
+    - name: Check local AI release gate
+      id: gate
+      run: python3 .github/workflows/scripts/local_ai_artifact.py gate
+
+    - name: Refuse to release an unapproved local AI checkpoint
+      if: steps.gate.outputs.approved != 'true' && startsWith(github.ref, 'refs/tags/v')
+      env:
+        VERSION: ${{ steps.gate.outputs.version }}
+        REASON: ${{ steps.gate.outputs.reason }}
+      run: |
+        echo "::error title=Local AI checkpoint not release-approved::$VERSION: $REASON A release needs manifest.json and cpu-evaluation.json with release_approved true on cpu; no image is pushed for this tag."
+        exit 1
+
+    - name: Skip unapproved local AI checkpoint
+      if: steps.gate.outputs.approved != 'true' && !startsWith(github.ref, 'refs/tags/v')
+      env:
+        VERSION: ${{ steps.gate.outputs.version }}
+        REASON: ${{ steps.gate.outputs.reason }}
+      run: echo "::notice title=Local AI checkpoint not release-approved::$VERSION is not release-approved ($REASON); a release tag would push no image."
+
   build:
+    needs: local-ai-gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    env:
+      # Every image builds on every push (pushed on tags only); local-ai only
+      # on a release tag from an approved checkpoint (see local-ai-gate).
+      BUILD_IMAGE: ${{ matrix.image_suffix != 'local-ai' || (needs.local-ai-gate.outputs.approved == 'true' && startsWith(github.ref, 'refs/tags/v')) }}
 
     strategy:
+      # Independent images: one failing build must not cancel the others
+      # mid-push (the local AI release gate runs before any of them).
+      fail-fast: false
       matrix:
         include:
           - image_suffix: api
@@ -38,6 +99,13 @@ jobs:
           - image_suffix: frontend
             dockerfile: ./web/Dockerfile
             context: ./web
+          # Carries the model weights (air-gapped at runtime), so it is the
+          # only entry that pulls Git LFS and the only large image: mode=min
+          # keeps its GHA cache to the final image's layers.
+          - image_suffix: local-ai
+            dockerfile: ./ai-service/Dockerfile
+            context: .
+            cache_mode: min
           - image_suffix: migrations
             dockerfile: ./Dockerfile.migrations
             context: .
@@ -45,12 +113,39 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
+      with:
+        # LFS bandwidth is metered: only the local-ai build pulls, and only
+        # the shipped checkpoint's head (the Dockerfile copies nothing else).
+        lfs: false
+
+    - name: Pull Git LFS head weights
+      if: matrix.image_suffix == 'local-ai' && env.BUILD_IMAGE == 'true'
+      env:
+        VERSION: ${{ needs.local-ai-gate.outputs.version }}
+      run: |
+        head="ai-service/artifacts/$VERSION/head.safetensors"
+        git lfs pull --include "$head"
+        if [ "$(stat -c%s "$head")" -le 1024 ]; then
+          echo "::error title=Local AI head weights missing::$head is still a Git LFS pointer after git lfs pull."
+          exit 1
+        fi
+
+    # The image holds torch, the composed checkpoint and its build stages
+    # (pinned base, laya wheel); the stock runner disk is too tight for that.
+    - name: Free runner disk for the local AI image
+      if: matrix.image_suffix == 'local-ai' && env.BUILD_IMAGE == 'true'
+      run: |
+        df -h /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        df -h /
 
     - name: Set up Docker Buildx
+      if: env.BUILD_IMAGE == 'true'
       uses: docker/setup-buildx-action@v3
 
     - name: Log in to Container Registry
-      if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      if: startsWith(github.ref, 'refs/tags/v') && env.BUILD_IMAGE == 'true'
       uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY }}
@@ -59,6 +154,7 @@ jobs:
 
     - name: Extract metadata
       id: meta
+      if: env.BUILD_IMAGE == 'true'
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.image_suffix }}
@@ -72,6 +168,7 @@ jobs:
           type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
 
     - name: Build and push Docker image
+      if: env.BUILD_IMAGE == 'true'
       uses: docker/build-push-action@v5
       with:
         context: ${{ matrix.context }}
@@ -79,7 +176,34 @@ jobs:
         push: ${{ startsWith(github.ref, 'refs/tags/v') }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        # One cache scope per image: a shared scope makes every matrix entry
+        # overwrite the others' cache manifest.
+        cache-from: type=gha,scope=${{ matrix.image_suffix }}
+        cache-to: type=gha,scope=${{ matrix.image_suffix }},mode=${{ matrix.cache_mode || 'max' }}
         build-args: |
           BUILDKIT_INLINE_CACHE=1
+          ${{ matrix.image_suffix == 'local-ai' && format('LAYA_GIT_URL={0}', env.LAYA_GIT_URL) || '' }}
+          ${{ matrix.image_suffix == 'local-ai' && format('HF_ENDPOINT={0}', env.HF_ENDPOINT) || '' }}
+
+    # A new GHCR package in a personal account starts private, unlike the
+    # existing public probara-* packages, so the first tag that pushes one
+    # (probara-local-ai) would publish a chart whose default install cannot
+    # pull it. Fail the release loudly instead: pull the version tag
+    # anonymously, as a cluster without pull secrets does.
+    - name: Check the image is publicly pullable
+      if: startsWith(github.ref, 'refs/tags/v') && env.BUILD_IMAGE == 'true'
+      env:
+        REPOSITORY: ${{ env.IMAGE_PREFIX }}-${{ matrix.image_suffix }}
+        TAG: ${{ steps.meta.outputs.version }}
+      run: |
+        repository="${REPOSITORY,,}"
+        accept="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
+        for attempt in 1 2 3; do
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${repository}:pull" | jq -r '.token // empty' || true)"
+          status="$(curl -sS -o "$RUNNER_TEMP/manifest.json" -w '%{http_code}' -H "Authorization: Bearer ${token}" -H "Accept: ${accept}" \
+            "https://ghcr.io/v2/${repository}/manifests/${TAG}" || true)"
+          [ "$status" = "200" ] && { echo "ghcr.io/${repository}:${TAG} is publicly pullable"; exit 0; }
+          sleep 10
+        done
+        echo "::error title=Image not publicly pullable::ghcr.io/${repository}:${TAG} answered HTTP ${status} to an anonymous pull ($(head -c 300 "$RUNNER_TEMP/manifest.json" 2>/dev/null)). Set the package visibility to Public (github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/${repository#*/}/settings) and link it to the repository, then re-run this job; default installs cannot pull it until then."
+        exit 1

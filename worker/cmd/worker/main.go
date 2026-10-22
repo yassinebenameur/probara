@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,8 +44,8 @@ func main() {
 	metricsRegistry := metrics.NewRegistry(cfg.ServiceName)
 
 	// Initialize database client — optional. The check path publishes results
-	// over NATS and never touches Postgres; only the notifications and AI-RCA
-	// side consumers need a DB. Remote location workers run without one.
+	// over NATS and never touches Postgres; only the notifications, AI-RCA and
+	// AI triage side consumers need a DB. Remote location workers run without one.
 	var dbClient *db.Client
 	if cfg.PostgresURL != "" {
 		dbClient, err = db.NewClient(cfg.PostgresURL)
@@ -54,7 +54,7 @@ func main() {
 		}
 		defer dbClient.Close()
 	} else {
-		log.Info("POSTGRES_URL not set; notifications and AI-RCA consumers disabled (expected for location workers)")
+		log.Info("POSTGRES_URL not set; notifications, AI-RCA and AI triage consumers disabled (expected for location workers)")
 	}
 
 	// Initialize NATS queue client
@@ -134,36 +134,63 @@ func main() {
 		}()
 	}
 
-	// Start the AI root cause consumer. It always runs (per-tenant ai_settings
-	// rows may configure an LLM even with no env default); the env LLM, when
-	// configured, is the fallback for tenants without their own row.
+	// Only database-connected platform workers resolve local AI; private
+	// workers execute checks independently and never receive its credentials.
 	var envAnalyzer ai.RootCauseAnalyzer
-	switch a, aerr := ai.NewAnalyzer(ai.Config{
-		Provider:  cfg.LLMProvider,
-		BaseURL:   cfg.LLMBaseURL,
-		APIKey:    cfg.LLMAPIKey,
-		Model:     cfg.LLMModel,
-		JSONMode:  cfg.LLMJSONMode,
-		MaxTokens: cfg.LLMMaxTokens,
-		Timeout:   time.Duration(cfg.LLMTimeoutSeconds) * time.Second,
-	}); {
-	case aerr == nil:
-		envAnalyzer = a
-		log.Info("AI root cause analysis: env LLM default configured")
-	case errors.Is(aerr, ai.ErrNotConfigured):
-		log.Info("AI root cause analysis: no env LLM default; tenants may configure their own")
-	default:
-		log.WithError(aerr).Warn("AI root cause analysis: invalid env LLM config; ignoring env default")
+	if dbClient != nil && !cfg.LocalAI.Disabled {
+		a, aerr := ai.NewAnalyzer(cfg.LocalAI)
+		if aerr != nil {
+			log.WithError(aerr).Warn("Local AI configuration unavailable")
+		} else {
+			envAnalyzer = a
+		}
 	}
 
+	// AI-RCA consumer and its stale-pending sweep run on DB-connected workers
+	// under RunWithRestart, so a Consume error or a dropped stream restarts
+	// them with backoff instead of leaving the queue silently unconsumed.
+	// Cancelled on shutdown; aiWG lets main wait for them (bounded) before
+	// its deferred DB/NATS Close calls, so an in-flight NAK or write lands.
+	aiCtx, aiCancel := context.WithCancel(context.Background())
+	defer aiCancel()
+	var aiWG sync.WaitGroup
 	if dbClient != nil {
-		aircaConsumer := airca.New(cfg, log, dbClient, queueClient, envAnalyzer, secretsEncryptor)
+		if err := airca.ValidateSweepWindow(cfg.LocalAI.Timeout); err != nil {
+			log.WithError(err).Fatal("Invalid local AI timeout")
+		}
+		aircaConsumer := airca.New(cfg, log, dbClient, queueClient, envAnalyzer)
+		aiWG.Add(2)
 		go func() {
-			ctx := context.Background()
-			if err := aircaConsumer.Start(ctx); err != nil && err != context.Canceled {
-				log.WithError(err).Error("AI root cause consumer exited with error")
-			}
+			defer aiWG.Done()
+			airca.RunWithRestart(aiCtx, log, "ai-rca-consumer", airca.DefaultRestartPolicy(), aircaConsumer.Start)
 		}()
+		go func() {
+			defer aiWG.Done()
+			airca.RunWithRestart(aiCtx, log, "ai-rca-stale-sweep", airca.DefaultRestartPolicy(), func(ctx context.Context) error {
+				return airca.RunStaleSweep(ctx, log, dbClient, airca.SweepInterval)
+			})
+		}()
+
+		// Automatic alert triage (never changes paging): the relay claims
+		// open alerts and publishes AI_TRIAGE jobs; the triage consumer
+		// analyses them.
+		// Platform workers only. Both keep running with AI_TRIAGE_ENABLED=false
+		// or LOCAL_AI_DISABLED=true so already-claimed rows drain (skipped,
+		// without a model call) instead of showing as pending forever. Without
+		// an analyzer (rejected client config) the relay claims nothing.
+		if cfg.LocationID == "" {
+			triage := airca.NewTriageConsumer(cfg, log, dbClient, queueClient, envAnalyzer)
+			relay := airca.NewRelay(cfg, log, dbClient, queueClient, envAnalyzer != nil)
+			aiWG.Add(2)
+			go func() {
+				defer aiWG.Done()
+				airca.RunWithRestart(aiCtx, log, "ai-triage-consumer", airca.DefaultRestartPolicy(), triage.Start)
+			}()
+			go func() {
+				defer aiWG.Done()
+				airca.RunWithRestart(aiCtx, log, "ai-triage-relay", airca.DefaultRestartPolicy(), relay.Run)
+			}()
+		}
 	}
 
 	// Start minimal HTTP server for health/metrics
@@ -243,6 +270,7 @@ func main() {
 	<-quit
 
 	log.Info("Shutting down worker...")
+	aiCancel()
 
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -251,6 +279,17 @@ func main() {
 	if err := w.Shutdown(ctx); err != nil {
 		log.WithError(err).Error("Worker forced to shutdown")
 		os.Exit(1)
+	}
+
+	aiDone := make(chan struct{})
+	go func() {
+		aiWG.Wait()
+		close(aiDone)
+	}()
+	select {
+	case <-aiDone:
+	case <-ctx.Done():
+		log.Warn("AI RCA consumer did not stop within the shutdown window")
 	}
 
 	log.Info("Worker exited")

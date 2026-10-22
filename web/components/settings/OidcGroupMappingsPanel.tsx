@@ -5,7 +5,12 @@ import { Trash2 } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Pill from '@/components/ui/Pill';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
+import Callout from '@/components/ui/Callout';
+import { FOCUS_RING } from '@/components/ui/focus';
+import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from '@/components/ui/roving';
 import { useToast } from '@/components/ui/ToastProvider';
+import { formatDateTimeFull } from '@/lib/format';
 import {
   createOidcGroupMapping,
   deleteOidcGroupMapping,
@@ -17,8 +22,15 @@ import type { OidcGroupMapping, OidcSeenGroup, Tenant } from '@/lib/types';
 
 const TENANT_ROLES = ['admin', 'editor', 'viewer'] as const;
 
-const inputClass =
-  'rounded border border-white/[0.08] bg-slate-800 px-3 py-2 text-xs text-slate-300 focus:border-cyan-500/50 focus:outline-none';
+const LABEL_CLASS = 'mb-1.5 block text-ui font-medium text-slate-300';
+
+const SEGMENT_CLASS = `cursor-pointer rounded-lg px-3 py-1.5 text-ui font-medium ${SEGMENT_ITEM} ${FOCUS_RING}`;
+const SEGMENT_IDLE = 'text-slate-400 hover:text-slate-100';
+const MAPPING_MODES = [
+  { id: 'tenant', label: 'Tenant role' },
+  { id: 'platform', label: 'Platform superadmin' },
+] as const;
+const MAPPING_MODE_IDS = MAPPING_MODES.map((m) => m.id);
 
 // Superadmin editor for IdP group→role mappings. Any saved mapping makes the
 // IdP the source of truth: SSO users' roles are re-derived from their groups
@@ -75,7 +87,6 @@ export function OidcGroupMappingsPanel() {
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCreate = async () => {
@@ -148,28 +159,28 @@ export function OidcGroupMappingsPanel() {
       subtitle="Give roles to SSO users based on their identity-provider groups. Mappings re-apply at every SSO login and overwrite manually assigned roles."
     >
       {loading ? (
-        <div className="text-sm text-slate-500">Loading group mappings…</div>
+        <p className="text-sm text-slate-500">Loading group mappings…</p>
       ) : error ? (
-        <div className="space-y-3">
-          <p className="text-sm text-rose-400">{error}</p>
-          <Button variant="ghost" size="sm" onClick={load}>Retry</Button>
-        </div>
+        <Callout
+          tone="danger"
+          action={<Button variant="ghost" size="xs" onClick={load}>Retry</Button>}
+        >
+          {error}
+        </Callout>
       ) : (
         <div className="space-y-5">
           {!scopeRequested && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
-              <span className="font-medium">The groups claim is not being requested.</span> Add{' '}
-              <code className="font-mono">groups</code> to <code className="font-mono">OIDC_SCOPES</code>{' '}
-              — without it most identity providers never send group membership, and mapped users
-              would sign in with no roles.
-            </div>
+            <Callout tone="warning" title="The groups claim is not being requested.">
+              Add <code className="font-mono text-xs">groups</code> to{' '}
+              <code className="font-mono text-xs">OIDC_SCOPES</code> — without it most identity providers
+              never send group membership, and mapped users would sign in with no roles.
+            </Callout>
           )}
 
-          {/* Current mappings */}
           {mappings.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-white/[0.08] px-4 py-5 text-center">
-              <p className="text-sm text-slate-400">No group mappings yet</p>
-              <p className="mx-auto mt-1 max-w-md text-xs text-slate-500">
+            <div className="glass-well px-4 py-6 text-center">
+              <p className="text-sm font-medium text-white">No group mappings yet</p>
+              <p className="mx-auto mt-1 max-w-md text-ui text-slate-400">
                 Roles stay manually managed until you add one. Once a mapping exists, the identity
                 provider decides SSO users&apos; roles — removing someone from a group revokes the
                 role at their next sign-in.
@@ -179,16 +190,18 @@ export function OidcGroupMappingsPanel() {
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b border-white/[0.06] text-xs text-slate-500">
+                  <tr className="border-b border-divider text-xs text-slate-500">
                     <th className="py-2 pr-4 font-medium">Identity-provider group</th>
                     <th className="py-2 pr-4 font-medium">Grants</th>
-                    <th className="w-10 py-2 font-medium" />
+                    <th className="w-10 py-2 font-medium">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-divider">
                   {mappings.map((m) => (
-                    <tr key={m.id} className="border-b border-white/[0.04]">
-                      <td className="py-2.5 pr-4">
+                    <tr key={m.id}>
+                      <td className="py-3 pr-4">
                         {editingLabelId === m.id ? (
                           <input
                             type="text"
@@ -203,7 +216,7 @@ export function OidcGroupMappingsPanel() {
                             maxLength={100}
                             aria-label={`Label for group ${m.group_name}`}
                             autoFocus
-                            className={`${inputClass} w-48`}
+                            className="input input-sm !w-48"
                           />
                         ) : (
                           <button
@@ -217,19 +230,19 @@ export function OidcGroupMappingsPanel() {
                           >
                             {m.label ? (
                               <>
-                                <span className="block text-sm text-white group-hover:text-cyan-300">
+                                <span className="block text-sm font-medium text-white group-hover:text-cyan-300">
                                   {m.label}
                                 </span>
-                                <span className="block font-mono text-[11px] text-slate-500">
+                                <span className="block font-mono text-xs text-slate-500">
                                   {m.group_name}
                                 </span>
                               </>
                             ) : (
                               <>
-                                <span className="block font-mono text-xs text-slate-300 group-hover:text-cyan-300">
+                                <span className="block font-mono text-xs text-slate-200 group-hover:text-cyan-300">
                                   {m.group_name}
                                 </span>
-                                <span className="block text-[11px] text-slate-600 opacity-0 transition-opacity group-hover:opacity-100">
+                                <span className="block text-xs text-slate-500 opacity-0 transition-opacity group-hover:opacity-100">
                                   + add label
                                 </span>
                               </>
@@ -238,15 +251,15 @@ export function OidcGroupMappingsPanel() {
                         )}
                         {seenGroups.length > 0 && !seenGroupNames.has(m.group_name) && (
                           <span
-                            className="mt-1 flex items-center gap-1 text-[11px] text-amber-400/90"
+                            className="mt-1 flex items-center gap-1.5 text-xs text-amber-300"
                             title="No SSO login has presented this group so far. Check the spelling against the identity provider — matching is exact and case-sensitive."
                           >
-                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                             never seen at a login
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 pr-4">
+                      <td className="py-3 pr-4">
                         {m.tenant_id ? (
                           <span className="inline-flex flex-wrap items-center gap-2">
                             <Pill tone="neutral" size="xs">{m.tenant_name ?? m.tenant_id}</Pill>
@@ -254,7 +267,7 @@ export function OidcGroupMappingsPanel() {
                               value={m.role}
                               onChange={(e) => handleRoleChange(m, e.target.value)}
                               aria-label={`Role for group ${m.group_name}`}
-                              className={`${inputClass} cursor-pointer`}
+                              className="input input-sm !w-auto cursor-pointer"
                             >
                               {TENANT_ROLES.map((role) => (
                                 <option key={role} value={role}>{role}</option>
@@ -262,24 +275,28 @@ export function OidcGroupMappingsPanel() {
                             </select>
                           </span>
                         ) : (
-                          <Pill tone="warning" size="xs" dot>Platform · superadmin</Pill>
+                          <Pill tone="warning" size="xs" dot>Platform superadmin</Pill>
                         )}
                       </td>
-                      <td className="py-2.5 text-right">
-                        <Button
-                          variant="subtle"
-                          size="xs"
-                          onClick={() => handleDelete(m.id)}
-                          icon={confirmDeleteId === m.id ? undefined : <Trash2 strokeWidth={1.75} />}
-                          className={confirmDeleteId === m.id ? 'text-rose-400 hover:text-rose-300' : ''}
-                          aria-label={
-                            confirmDeleteId === m.id
-                              ? `Confirm deleting mapping for ${m.group_name}`
-                              : `Delete mapping for ${m.group_name}`
-                          }
-                        >
-                          {confirmDeleteId === m.id ? 'Delete?' : ''}
-                        </Button>
+                      <td className="py-3 text-right">
+                        {confirmDeleteId === m.id ? (
+                          <Button
+                            variant="subtle"
+                            size="xs"
+                            onClick={() => handleDelete(m.id)}
+                            className="!text-rose-300 hover:!bg-rose-500/10"
+                            aria-label={`Confirm deleting mapping for ${m.group_name}`}
+                          >
+                            Delete?
+                          </Button>
+                        ) : (
+                          <IconButton
+                            icon={<Trash2 strokeWidth={1.75} />}
+                            label={`Delete mapping for ${m.group_name}`}
+                            onClick={() => handleDelete(m.id)}
+                            danger
+                          />
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -288,13 +305,12 @@ export function OidcGroupMappingsPanel() {
             </div>
           )}
 
-          {/* Add a mapping */}
-          <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 p-4">
-            <p className="text-xs font-medium text-slate-300">Add a mapping</p>
+          <div className="glass-well p-4">
+            <p className="text-sm font-medium text-white">Add a mapping</p>
 
             <div className="mt-3 flex flex-wrap items-end gap-3">
               <div>
-                <label htmlFor="new-mapping-group" className="mb-1.5 block text-xs font-medium text-slate-400">
+                <label htmlFor="new-mapping-group" className={LABEL_CLASS}>
                   Identity-provider group
                 </label>
                 <input
@@ -303,8 +319,8 @@ export function OidcGroupMappingsPanel() {
                   type="text"
                   value={newGroup}
                   onChange={(e) => setNewGroup(e.target.value)}
-                  placeholder="engineering"
-                  className={`${inputClass} w-52 font-mono`}
+                  placeholder="e.g. engineering"
+                  className="input !w-52 font-mono"
                   list="seen-oidc-groups"
                 />
                 <datalist id="seen-oidc-groups">
@@ -314,61 +330,57 @@ export function OidcGroupMappingsPanel() {
                 </datalist>
               </div>
               <div>
-                <label htmlFor="new-mapping-label" className="mb-1.5 block text-xs font-medium text-slate-400">
-                  Label <span className="font-normal text-slate-600">(optional)</span>
+                <label htmlFor="new-mapping-label" className={LABEL_CLASS}>
+                  Label <span className="font-normal text-slate-500">(optional)</span>
                 </label>
                 <input
                   id="new-mapping-label"
                   type="text"
                   value={newLabel}
                   onChange={(e) => setNewLabel(e.target.value)}
-                  placeholder="Engineering"
+                  placeholder="e.g. Engineering"
                   maxLength={100}
-                  className={inputClass}
+                  className="input !w-44"
                 />
               </div>
 
               <div>
-                <span className="mb-1.5 block text-xs font-medium text-slate-400">Grants</span>
-                <div className="inline-flex overflow-hidden rounded border border-white/[0.08]" role="group" aria-label="Mapping target">
-                  <button
-                    type="button"
-                    onClick={() => setNewMode('tenant')}
-                    aria-pressed={newMode === 'tenant'}
-                    className={`cursor-pointer px-3 py-2 text-xs transition-colors ${
-                      newMode === 'tenant'
-                        ? 'bg-cyan-500/15 text-cyan-300'
-                        : 'bg-slate-800 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Tenant role
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewMode('platform')}
-                    aria-pressed={newMode === 'platform'}
-                    className={`cursor-pointer border-l border-white/[0.08] px-3 py-2 text-xs transition-colors ${
-                      newMode === 'platform'
-                        ? 'bg-amber-500/15 text-amber-300'
-                        : 'bg-slate-800 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Platform superadmin
-                  </button>
+                <span className={LABEL_CLASS}>Grants</span>
+                {/* One choice of two: a radiogroup with arrow keys, like RangePicker. */}
+                <div
+                  className="inline-flex h-10 items-center gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
+                  role="radiogroup"
+                  aria-label="Mapping target"
+                  onKeyDown={(e) => handleRovingKeyDown(e, MAPPING_MODE_IDS, newMode, setNewMode)}
+                >
+                  {MAPPING_MODES.map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={newMode === mode.id}
+                      data-roving-id={mode.id}
+                      tabIndex={newMode === mode.id ? 0 : -1}
+                      onClick={() => setNewMode(mode.id)}
+                      className={`${SEGMENT_CLASS} ${newMode === mode.id ? SELECTED_SEGMENT : SEGMENT_IDLE}`}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               {newMode === 'tenant' && (
                 <>
                   <div>
-                    <label htmlFor="new-mapping-tenant" className="mb-1.5 block text-xs font-medium text-slate-400">
+                    <label htmlFor="new-mapping-tenant" className={LABEL_CLASS}>
                       Tenant
                     </label>
                     <select
                       id="new-mapping-tenant"
                       value={newTenantId}
                       onChange={(e) => setNewTenantId(e.target.value)}
-                      className={`${inputClass} cursor-pointer`}
+                      className="input h-10 !w-44 cursor-pointer"
                     >
                       {tenants.map((t) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
@@ -376,14 +388,14 @@ export function OidcGroupMappingsPanel() {
                     </select>
                   </div>
                   <div>
-                    <label htmlFor="new-mapping-role" className="mb-1.5 block text-xs font-medium text-slate-400">
+                    <label htmlFor="new-mapping-role" className={LABEL_CLASS}>
                       Role
                     </label>
                     <select
                       id="new-mapping-role"
                       value={newRole}
                       onChange={(e) => setNewRole(e.target.value)}
-                      className={`${inputClass} cursor-pointer`}
+                      className="input h-10 !w-32 cursor-pointer"
                     >
                       {TENANT_ROLES.map((role) => (
                         <option key={role} value={role}>{role}</option>
@@ -393,9 +405,26 @@ export function OidcGroupMappingsPanel() {
                 </>
               )}
 
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 max-w-2xl space-y-1">
+                <p className="text-xs text-slate-500">
+                  Must match the value in the “{groupsClaim}” claim exactly — matching is
+                  case-sensitive. Azure AD sends group IDs (GUIDs) here, not names.
+                </p>
+                {newMode === 'platform' && (
+                  <p className="text-xs text-amber-300">
+                    Everyone in this group becomes a platform superadmin with full access to all tenants.
+                  </p>
+                )}
+              </div>
+              {/* ml-auto keeps the action at the right edge whether it shares
+                  the help text's row or wraps below it. */}
               <Button
                 variant="accent"
                 size="sm"
+                className="ml-auto"
                 onClick={handleCreate}
                 disabled={creating || newGroup.trim() === '' || (newMode === 'tenant' && !newTenantId)}
                 loading={creating}
@@ -404,19 +433,8 @@ export function OidcGroupMappingsPanel() {
               </Button>
             </div>
 
-            <p className="mt-2 text-[11px] text-slate-600">
-              Must match the value in the “{groupsClaim}” claim exactly — matching is
-              case-sensitive. Azure AD sends group IDs (GUIDs) here, not names.
-            </p>
-
-            {newMode === 'platform' && (
-              <p className="mt-1 text-[11px] text-amber-400/80">
-                Everyone in this group becomes a platform superadmin with full access to all tenants.
-              </p>
-            )}
-
             {unmappedSeenGroups.length > 0 && (
-              <div className="mt-3 border-t border-white/[0.06] pt-3">
+              <div className="mt-4">
                 <p className="mb-1.5 text-xs text-slate-500">
                   Seen at recent SSO logins, not mapped yet — select to fill in:
                 </p>
@@ -426,8 +444,8 @@ export function OidcGroupMappingsPanel() {
                       key={g.group_name}
                       type="button"
                       onClick={() => prefillGroup(g.group_name)}
-                      title={`Last seen ${new Date(g.last_seen_at).toLocaleString()}`}
-                      className="cursor-pointer rounded-full border border-white/[0.08] bg-slate-800 px-2.5 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:border-cyan-500/50 hover:text-cyan-300"
+                      title={`Last seen ${formatDateTimeFull(g.last_seen_at)}`}
+                      className="cursor-pointer rounded-full bg-well-hover px-2.5 py-1 font-mono text-2xs text-slate-300 transition-colors hover:bg-control-hover hover:text-white"
                     >
                       {g.group_name}
                     </button>
@@ -438,9 +456,9 @@ export function OidcGroupMappingsPanel() {
           </div>
 
           {scopeRequested && (
-            <p className="text-[11px] text-slate-600">
-              Reading the “{groupsClaim}” claim · groups scope requested ✓ · changes are recorded
-              in the audit log
+            <p className="text-xs text-slate-500">
+              Reading the “{groupsClaim}” claim with the groups scope requested. Changes are
+              recorded in the audit log.
             </p>
           )}
         </div>

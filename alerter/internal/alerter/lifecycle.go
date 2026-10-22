@@ -60,7 +60,40 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	}
 	// Independent phases: a failing open-alert dispatch must not also stop
 	// the acknowledgements that halt a paging provider's escalation.
-	return errors.Join(a.dispatchOpenAlerts(ctx), a.dispatchAcknowledgements(ctx))
+	err := errors.Join(a.dispatchOpenAlerts(ctx), a.dispatchAcknowledgements(ctx))
+	// Advisory, so last and bounded: it runs on its own sub-deadline that
+	// leaves the deferred recovery sweep its full budget, and a failure here
+	// never fails the tick.
+	if scErr := a.runSuspectedCauses(ctx); scErr != nil && ctx.Err() == nil {
+		a.logger.WithError(scErr).Error("Suspected-cause follow-up dispatch failed")
+	}
+	return err
+}
+
+// openAlertDispatchablePredicate is the WHERE body (aliases al, m, te) that
+// decides whether an open alert may notify right now: dispatchOpenAlerts
+// (escalation tiers, reminders) and dispatchSuspectedCauses share it, so an
+// advisory follow-up is muted exactly when a reminder would be.
+func openAlertDispatchablePredicate() string {
+	return `al.status IN ('active', 'acknowledged')
+		  AND m.deleted_at IS NULL
+		  AND (
+			-- 'degraded' keeps an open alert's reminders flowing: the outage
+			-- shrank below quorum but has not fully recovered.
+			(al.kind = 'availability' AND m.current_state IN ('down', 'degraded'))
+			OR al.kind = 'latency_anomaly'
+			OR al.kind = 'host_metric'
+			OR al.kind = 'tls_expiry'
+		  )
+		  AND NOT ` + maintenance.InMaintenancePredicate("m") + `
+		  -- A 'per_monitor' group does not dispatch its own alert (if one is still
+		  -- open from before the mode was changed, stay quiet on it).
+		  AND NOT ` + alertrouting.SelfSilentGroupPredicate("m") + `
+		  -- Suppress a member only when its group rolls members up into one alert.
+		  AND NOT ` + alertrouting.SuppressedByRollupPredicate("al.monitor_id") + `
+		  -- Suppress a downstream while an upstream dependency explains it (and
+		  -- for the grace period after that upstream recovers).
+		  AND NOT ` + alertrouting.SuppressedByDependencyPredicate("al", "m", "te")
 }
 
 // failingLocationsSubquery selects the JSON breakdown of the monitor's
@@ -525,25 +558,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		JOIN monitors m ON m.id = al.monitor_id
 		JOIN tenants te ON te.id = al.tenant_id
 		LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
-		WHERE al.status IN ('active', 'acknowledged')
-		  AND m.deleted_at IS NULL
-		  AND (
-			-- 'degraded' keeps an open alert's reminders flowing: the outage
-			-- shrank below quorum but has not fully recovered.
-			(al.kind = 'availability' AND m.current_state IN ('down', 'degraded'))
-			OR al.kind = 'latency_anomaly'
-			OR al.kind = 'host_metric'
-			OR al.kind = 'tls_expiry'
-		  )
-		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
-		  -- A 'per_monitor' group does not dispatch its own alert (if one is still
-		  -- open from before the mode was changed, stay quiet on it).
-		  AND NOT `+alertrouting.SelfSilentGroupPredicate("m")+`
-		  -- Suppress a member only when its group rolls members up into one alert.
-		  AND NOT `+alertrouting.SuppressedByRollupPredicate("al.monitor_id")+`
-		  -- Suppress a downstream while an upstream dependency explains it (and
-		  -- for the grace period after that upstream recovers).
-		  AND NOT `+alertrouting.SuppressedByDependencyPredicate("al", "m", "te")+`
+		WHERE `+openAlertDispatchablePredicate()+`
 	`)
 	if err != nil {
 		return fmt.Errorf("query open alerts: %w", err)

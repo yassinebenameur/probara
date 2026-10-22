@@ -59,7 +59,7 @@ func TestGenerateInstallCommandCreatesUnixServiceInstaller(t *testing.T) {
 	assertContains(t, cmd.InstallScript, "install_systemd_system")
 	assertContains(t, cmd.InstallScript, "Probara Collector must be installed as root.")
 	assertContains(t, cmd.InstallScript, "Restart=always")
-	assertContains(t, cmd.InstallScript, "systemctl enable --now probara-collector.service")
+	assertContains(t, cmd.InstallScript, "systemctl restart probara-collector.service")
 	assertContains(t, cmd.InstallScript, "install_launchd")
 	assertContains(t, cmd.InstallScript, "KeepAlive")
 	assertContains(t, cmd.InstallScript, "launchctl")
@@ -114,7 +114,7 @@ func TestGenerateInstallCommandCreatesWindowsServiceInstaller(t *testing.T) {
 	// a native Windows service (no nssm.cc download).
 	assertContains(t, cmd.WindowsInstallScript, "ProbaraAgent")
 	assertNotContains(t, cmd.WindowsInstallScript, "nssm.cc")
-	assertContains(t, cmd.WindowsInstallScript, "sc.exe create $ServiceName")
+	assertContains(t, cmd.WindowsInstallScript, "New-Service -Name $ServiceName")
 	assertContains(t, cmd.WindowsInstallScript, "Start-Service -Name $ServiceName")
 	assertContains(t, cmd.WindowsInstallScript, `$BackendURL = "https://api.example.test"`)
 	assertContains(t, cmd.WindowsInstallScript, `$DownloadURL = "$BackendURL/static/collector/probara-collector-windows-amd64.exe"`)

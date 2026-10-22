@@ -1,0 +1,8 @@
+# Git LFS: only trained decision-head weights. Everything else in a model
+# artifact (metadata, manifests) is small text; tokenizer and encoder come from
+# the pinned base at build time (ai-service/training/compose_artifact.py).
+ai-service/artifacts/*/head.safetensors filter=lfs diff=lfs merge=lfs -text
+
+# Golden exports are compared byte for byte; encoding/csv writes CRLF, so the
+# files must be stored exactly as written (core.autocrlf=input would strip it).
+api/internal/services/slas/testdata/*.csv -text

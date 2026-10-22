@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
 func TestShouldSendNotification(t *testing.T) {
@@ -32,6 +34,11 @@ func TestShouldSendNotification(t *testing.T) {
 		{"acknowledged_after_reminder", "acknowledged", &notificationState{LastEventType: "reminder"}, now, true},
 		{"acknowledged_twice", "acknowledged", &notificationState{LastEventType: "created", AcknowledgedSentAt: &now}, now, false},
 		{"acknowledged_after_resolved", "acknowledged", &notificationState{LastEventType: "resolved"}, now, false},
+		{"suspected_cause_never_paged", "suspected_cause", nil, now, false},
+		{"suspected_cause_after_created", "suspected_cause", &notificationState{LastEventType: "created"}, now, true},
+		{"suspected_cause_after_ack_sent", "suspected_cause", &notificationState{LastEventType: "reminder", AcknowledgedSentAt: &now}, now, true},
+		{"suspected_cause_twice", "suspected_cause", &notificationState{LastEventType: "created", SuspectedCauseSentAt: &now}, now, false},
+		{"suspected_cause_after_resolved", "suspected_cause", &notificationState{LastEventType: "resolved"}, now, false},
 	}
 
 	for _, test := range tests {
@@ -117,5 +124,22 @@ func TestBuildAlertEvent_RootCause(t *testing.T) {
 	}
 	if event.Alert.RootCauseDownSince == nil || !event.Alert.RootCauseDownSince.Equal(rcDownSince) {
 		t.Fatalf("root cause down since = %v, want %s", event.Alert.RootCauseDownSince, rcDownSince)
+	}
+}
+
+// A follow-up keeps the alert's own status and carries the hint.
+func TestBuildAlertEvent_SuspectedCause(t *testing.T) {
+	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
+	binding := policyBinding{MonitorID: uuid.New(), TenantID: uuid.New(), MonitorName: "api"}
+	sc := &notifications.SuspectedCause{TriageID: "t", Key: "dns_failure", Title: "DNS resolution failure", Confidence: "high"}
+	for _, status := range []string{"active", "acknowledged"} {
+		alert := &alertRecord{ID: uuid.New(), Status: status, TriggeredAt: now.Add(-time.Hour), SuspectedCause: sc}
+		event := buildAlertEvent("suspected_cause", binding, alert, nil, now)
+		if event.Type != "suspected_cause" || event.Alert.Status != status || event.Alert.SuspectedCause != sc {
+			t.Fatalf("status %s: got type=%q status=%q cause=%v", status, event.Type, event.Alert.Status, event.Alert.SuspectedCause)
+		}
+	}
+	if event := buildAlertEvent("created", binding, &alertRecord{ID: uuid.New()}, nil, now); event.Alert.SuspectedCause != nil {
+		t.Fatal("a page must not carry a suspected cause")
 	}
 }

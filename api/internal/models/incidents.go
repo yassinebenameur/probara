@@ -88,6 +88,8 @@ type IncidentAlertSummary struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 	MonitorName    string     `json:"monitor_name"`
 	PolicyName     *string    `json:"policy_name,omitempty"`
+	// Triage is the alert's read-only AI triage (no label_context here).
+	Triage *AlertTriage `json:"triage,omitempty"`
 }
 
 // IncidentMonitorSummary represents a monitor linked to an incident.
@@ -146,11 +148,21 @@ type IncidentAIAnalysis struct {
 	ContributingFactors []string                 `json:"contributing_factors,omitempty"`
 	RecommendedActions  []string                 `json:"recommended_actions,omitempty"`
 	Confidence          string                   `json:"confidence,omitempty"`
+	Metadata            json.RawMessage          `json:"metadata,omitempty"`
 	Evidence            json.RawMessage          `json:"evidence,omitempty"`
 	ErrorMessage        string                   `json:"error_message,omitempty"`
 	RequestedBy         *uuid.UUID               `json:"requested_by,omitempty"`
 	CreatedAt           time.Time                `json:"created_at"`
 	CompletedAt         *time.Time               `json:"completed_at,omitempty"`
+	// DecisionSnapshot is the stored model exchange (never serialized).
+	DecisionSnapshot json.RawMessage `json:"-"`
+	// LabelContext drives the operator label control; omitted when the
+	// analysis cannot be labelled (not ready, or no decision snapshot).
+	LabelContext *AILabelContext `json:"label_context,omitempty"`
+	// MonitorNames maps the monitor IDs the metadata cites (evidence
+	// references, incomplete-evidence notes) to current names, resolved on
+	// read. Purged monitors are absent.
+	MonitorNames map[string]string `json:"monitor_names,omitempty"`
 }
 
 // IncidentListResponse represents a paginated list of incidents.

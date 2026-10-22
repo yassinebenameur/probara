@@ -1,28 +1,61 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { ArrowUpRight, Globe, Plus, Trash2 } from 'lucide-react';
+import { ArrowUpRight, Globe, Pencil, Plus, Trash2 } from 'lucide-react';
 import { StatusPage } from '@/lib/types';
 import { getStatusPages, deleteStatusPage } from '@/lib/api';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import { pluralize } from '@/lib/format';
+import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
+import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
+import Select from '@/components/ui/Select';
+import { useUrlSort } from '@/components/ui/SortableHeader';
 import EmptyState from '@/components/ui/EmptyState';
+import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
-import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
+import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+
+const GRID = 'sm:grid-cols-2 lg:grid-cols-3 3xl:grid-cols-4 4xl:grid-cols-5';
+
+const SORT_KEYS = ['name', 'monitors', 'updated'] as const;
+type StatusPageSortKey = (typeof SORT_KEYS)[number];
+const DEFAULT_SORT: SortState<StatusPageSortKey> = { key: 'name', dir: 'asc' };
+const DEFAULT_DIR = { monitors: 'desc', updated: 'desc' } as const;
+
+// Cards have no column headers, so the order is a select (same URL state).
+const SORT_OPTIONS: { value: string; label: string; sort: SortState<StatusPageSortKey> }[] = [
+  { value: 'name:asc', label: 'Name, A–Z', sort: { key: 'name', dir: 'asc' } },
+  { value: 'name:desc', label: 'Name, Z–A', sort: { key: 'name', dir: 'desc' } },
+  { value: 'monitors:desc', label: 'Most monitors', sort: { key: 'monitors', dir: 'desc' } },
+  { value: 'monitors:asc', label: 'Fewest monitors', sort: { key: 'monitors', dir: 'asc' } },
+  { value: 'updated:desc', label: 'Recently updated', sort: { key: 'updated', dir: 'desc' } },
+];
+
+const SORT_VALUE: Record<StatusPageSortKey, (page: StatusPage) => SortValue> = {
+  name: (page) => page.title,
+  monitors: (page) => page.monitor_ids?.length || 0,
+  updated: (page) => Date.parse(page.updated_at),
+};
 
 export default function StatusPagesPage() {
   const { showToast } = useToast();
-  const { canWrite } = useCurrentUser();
+  const canWrite = useCanWrite();
   const [statusPages, setStatusPages] = useState<StatusPage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [pendingDelete, setPendingDelete] = useState<StatusPage | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [sort, setSort] = useUrlSort(SORT_KEYS, DEFAULT_SORT, DEFAULT_DIR);
+  const sorted = useMemo(
+    () => sortRows(statusPages, SORT_VALUE[sort.key], sort.dir, (page) => page.title),
+    [statusPages, sort]
+  );
 
   useEffect(() => {
     loadStatusPages();
@@ -36,7 +69,6 @@ export default function StatusPagesPage() {
       setStatusPages(response?.items || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load status pages');
-      setStatusPages([]);
     } finally {
       setLoading(false);
     }
@@ -57,106 +89,163 @@ export default function StatusPagesPage() {
     }
   };
 
+  const sortControl =
+    statusPages.length > 1 ? (
+      <div className="flex items-center gap-2">
+        <label htmlFor="status-pages-sort" className="text-xs font-medium text-slate-400">
+          Sort
+        </label>
+        <Select
+          id="status-pages-sort"
+          className="input-xs w-auto rounded-lg py-0 pl-2.5 text-xs"
+          value={`${sort.key}:${sort.dir}`}
+          onChange={(e) => {
+            const option = SORT_OPTIONS.find((o) => o.value === e.target.value);
+            if (option) setSort(option.sort);
+          }}
+        >
+          {SORT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </Select>
+      </div>
+    ) : null;
+
+  // While the list is empty the empty state carries the one CTA.
   const header = (
     <PageHeader
       title="Status pages"
+      subtitle="Public pages that show your customers live service health."
       action={
-        canWrite ? (
-          <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-            <Link href="/status-pages/new">Create status page</Link>
-          </Button>
+        sortControl || (canWrite && !loading && !error && statusPages.length > 0) ? (
+          <>
+            {sortControl}
+            {canWrite && !loading && !error && statusPages.length > 0 && (
+              <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+                <Link href="/status-pages/new">New status page</Link>
+              </Button>
+            )}
+          </>
         ) : undefined
       }
     />
   );
 
-  if (loading) {
+  if (loading && statusPages.length === 0) {
     return (
-      <div className="space-y-6">
+      <Page width="data">
         {header}
-        <div className="text-sm text-slate-500">Loading status pages…</div>
-      </div>
+        <div
+          role="status"
+          aria-label="Loading status pages"
+          className={`grid animate-pulse gap-4 ${GRID}`}
+        >
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="glass h-[146px]" aria-hidden="true" />
+          ))}
+        </div>
+      </Page>
     );
   }
 
-  if (error) {
+  if (error && statusPages.length === 0) {
     return (
-      <div className="space-y-6">
+      <Page width="data">
         {header}
-        <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+        <Callout
+          tone="danger"
+          action={
+            <Button variant="ghost" size="xs" onClick={loadStatusPages}>
+              Retry
+            </Button>
+          }
+        >
           {error}
-          <Button variant="ghost" size="xs" className="ml-3" onClick={loadStatusPages}>
-            Retry
-          </Button>
-        </div>
-      </div>
+        </Callout>
+      </Page>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       {header}
 
       {statusPages.length === 0 ? (
         <EmptyState
           icon={<Globe strokeWidth={1.5} />}
           title="No status pages yet"
-          description="Create a public status page to display your service availability."
+          description="Create a public status page to show your customers the availability of your services."
           action={
-            canWrite ? (
-              <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-                <Link href="/status-pages/new">Create status page</Link>
-              </Button>
-            ) : undefined
+            canWrite
+              ? { label: 'New status page', href: '/status-pages/new', icon: <Plus strokeWidth={1.75} /> }
+              : undefined
           }
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {statusPages.map((page) => (
-            <div
-              key={page.id}
-              className="group rounded-xl border border-white/[0.06] bg-slate-900/50 p-5 transition-colors hover:border-white/[0.1]"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/status-pages/${page.id}`}
-                    className="block truncate text-sm font-medium text-white hover:text-cyan-400"
-                  >
-                    {page.title}
-                  </Link>
-                  <a
-                    href={resolveStatusPagePublicUrl(page)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-0.5 inline-flex items-center gap-1 font-mono text-xs text-slate-500 hover:text-slate-300"
-                  >
-                    /{page.slug}
-                    <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
-                  </a>
+        <div className={`grid gap-4 ${GRID}`}>
+          {sorted.map((page) => {
+            const monitorCount = page.monitor_ids?.length || 0;
+            const publicUrl = resolveStatusPagePublicUrl(page);
+            return (
+              // The title link stretches over the card; the footer controls sit
+              // above that overlay (relative) so each keeps its own target.
+              <div key={page.id} className="glass glass-hover relative flex flex-col p-5">
+                <Link
+                  href={`/status-pages/${page.id}`}
+                  className="block truncate text-title font-semibold text-white after:absolute after:inset-0 after:rounded-2xl hover:text-cyan-300 focus:outline-none focus-visible:after:ring-2 focus-visible:after:ring-focus"
+                >
+                  {page.title}
+                </Link>
+                <p className="mt-0.5 truncate font-mono text-xs text-slate-500">/{page.slug}</p>
+
+                <div className="flex-1">
+                  {page.description && (
+                    <p className="mt-3 line-clamp-2 text-ui text-slate-400">{page.description}</p>
+                  )}
                 </div>
-                <IconButton
-                  icon={<Trash2 strokeWidth={1.75} />}
-                  label="Delete"
-                  onClick={() => setPendingDelete(page)}
-                  danger
-                />
+
+                <div className="mt-4 flex items-center justify-between gap-2">
+                  {monitorCount === 0 ? (
+                    <span title="Published, but it lists no monitors">
+                      <Pill tone="warning" size="xs">No monitors</Pill>
+                    </span>
+                  ) : (
+                    <span className="text-xs tabular-nums text-slate-500">{pluralize(monitorCount, 'monitor')}</span>
+                  )}
+                  <div className="relative -mb-1.5 -mr-1.5 flex items-center gap-0.5">
+                    <IconButton
+                      icon={<ArrowUpRight strokeWidth={1.75} />}
+                      label={`Open the public page of ${page.title}`}
+                      href={publicUrl}
+                      external
+                    />
+                    {canWrite && (
+                      <>
+                        <IconButton
+                          icon={<Pencil strokeWidth={1.75} />}
+                          label="Edit"
+                          href={`/status-pages/${page.id}`}
+                        />
+                        <IconButton
+                          icon={<Trash2 strokeWidth={1.75} />}
+                          label="Delete"
+                          danger
+                          onClick={() => setPendingDelete(page)}
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
-
-              {page.description && (
-                <p className="mt-3 text-xs text-slate-400 line-clamp-2">{page.description}</p>
-              )}
-
-              <p className="mt-3 text-xs text-slate-500">
-                {pluralize(page.monitor_ids?.length || 0, 'monitor')}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       <ConfirmDialog
-        open={pendingDelete !== null}
+        open={canWrite && pendingDelete !== null}
         title="Delete status page"
         description={
           pendingDelete
@@ -168,6 +257,6 @@ export default function StatusPagesPage() {
         onConfirm={handleDelete}
         onCancel={() => !deleting && setPendingDelete(null)}
       />
-    </div>
+    </Page>
   );
 }

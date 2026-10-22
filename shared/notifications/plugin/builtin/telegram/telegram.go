@@ -64,6 +64,7 @@ func (p *Plugin) Manifest() plugin.Manifest {
 		Version:     "1.0.0",
 		Capabilities: []plugin.Capability{
 			plugin.CapabilityTestable,
+			plugin.CapabilityFollowUp,
 		},
 		Fields: []plugin.Field{
 			{

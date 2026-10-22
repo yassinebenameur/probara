@@ -4,14 +4,17 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import FormCard from '@/components/ui/FormCard';
 import FormField from '@/components/ui/FormField';
 import FormActions from '@/components/ui/FormActions';
 import Select from '@/components/ui/Select';
-import Pill from '@/components/ui/Pill';
+import Panel from '@/components/ui/Panel';
+import Callout from '@/components/ui/Callout';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
 import { getTenants, getUser, listOidcGroupMappings, updateUser } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
+import useDocumentTitle from '@/lib/useDocumentTitle';
 import type { AdminUser, MembershipInput, PlatformRole, Tenant } from '@/lib/types';
 
 export default function EditUserPage() {
@@ -20,6 +23,7 @@ export default function EditUserPage() {
   const id = params.id as string;
 
   const [user, setUser] = useState<AdminUser | null>(null);
+  useDocumentTitle(user?.username);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -93,31 +97,28 @@ export default function EditUserPage() {
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="text-slate-500">Loading user…</div>
+        <p className="text-sm text-slate-500">Loading user…</p>
       </div>
     );
   }
 
   if (error || !user) {
     return (
-      <FormCard>
-        <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
-          {error || 'User not found'}
-        </div>
-      </FormCard>
+      <Callout tone="danger">{error || 'User not found'}</Callout>
     );
   }
 
   const isOidcUser = user.auth_method === 'oidc';
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <Page width="reading">
       <PageHeader
         breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'Edit' }]}
         title="Edit user"
+        subtitle="Change the account's details and its role in each workspace."
       />
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <FormCard>
           <form onSubmit={handleSubmit} className="space-y-4">
             <FormField label="Username">
@@ -155,14 +156,15 @@ export default function EditUserPage() {
               />
             </FormField>
             {isOidcUser && groupMappingsActive && (
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+              <Callout tone="warning">
                 This user signs in via SSO and OIDC group mappings are active: the platform
                 role and tenant memberships below are re-derived from their IdP groups on
                 every login. Edits here last only until their next sign-in.
-              </div>
+              </Callout>
             )}
             <FormField label="Platform role">
               <Select
+                className="h-10"
                 value={platformRole}
                 onChange={(event) => setPlatformRole(event.target.value as PlatformRole)}
               >
@@ -194,37 +196,33 @@ export default function EditUserPage() {
           </form>
         </FormCard>
 
-        <FormCard>
-          <h3 className="text-sm font-medium text-white">User details</h3>
-          <dl className="mt-4 space-y-4">
+        <Panel title="User details">
+          <dl className="space-y-3">
             <div>
-              <dt className="text-xs font-medium text-slate-500">User ID</dt>
-              <dd className="mt-1 break-all font-mono text-xs text-slate-300">{user.id}</dd>
+              <dt className="text-xs text-slate-500">User ID</dt>
+              <dd className="mt-0.5 break-all font-mono text-xs text-slate-300">{user.id}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Sign-in method</dt>
-              <dd className="mt-1">
-                <Pill tone={isOidcUser ? 'info' : 'neutral'}>
-                  {isOidcUser ? 'SSO (OIDC)' : 'Password'}
-                </Pill>
+              <dt className="text-xs text-slate-500">Sign-in method</dt>
+              <dd className="mt-0.5 text-ui text-slate-300">
+                {isOidcUser ? 'SSO (OIDC)' : 'Password'}
               </dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Created</dt>
-              <dd className="mt-1 text-sm text-slate-300">{formatDateTime(user.created_at, "-")}</dd>
+              <dt className="text-xs text-slate-500">Created</dt>
+              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.created_at, "-")}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Last updated</dt>
-              <dd className="mt-1 text-sm text-slate-300">{formatDateTime(user.updated_at, "-")}</dd>
+              <dt className="text-xs text-slate-500">Last updated</dt>
+              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.updated_at, "-")}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Last login</dt>
-              <dd className="mt-1 text-sm text-slate-300">{formatDateTime(user.last_login_at, "-")}</dd>
+              <dt className="text-xs text-slate-500">Last login</dt>
+              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.last_login_at, "-")}</dd>
             </div>
           </dl>
-        </FormCard>
+        </Panel>
       </div>
-
-    </div>
+    </Page>
   );
 }

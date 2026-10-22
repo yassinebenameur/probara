@@ -42,7 +42,7 @@ spec:
       {{- end }}
       containers:
       - name: status-page
-        image: "{{ .Values.image.repository }}-status-page:{{ .Values.image.tag }}"
+        image: "{{ .Values.image.repository }}-status-page:{{ include "monitoring-platform.imageTag" . }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         command: ["./status-page"]
         ports:

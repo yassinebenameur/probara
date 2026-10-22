@@ -13,6 +13,7 @@ import (
 	callout "github.com/synadia-io/callout.go"
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
+	ailabelshandlers "github.com/yassinebenameur/probara/api/internal/handlers/ailabels"
 	aisettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/aisettings"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
@@ -29,6 +30,7 @@ import (
 	metricsqueryhandlers "github.com/yassinebenameur/probara/api/internal/handlers/metricsquery"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
+	oauthhandlers "github.com/yassinebenameur/probara/api/internal/handlers/oauth"
 	oidcmappinghandlers "github.com/yassinebenameur/probara/api/internal/handlers/oidcmappings"
 	otlphandlers "github.com/yassinebenameur/probara/api/internal/handlers/otlp"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
@@ -36,10 +38,12 @@ import (
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
 	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
 	userhandlers "github.com/yassinebenameur/probara/api/internal/handlers/users"
+	mcpserver "github.com/yassinebenameur/probara/api/internal/mcp"
 	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
 	adminauthservice "github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
+	ailabelsservice "github.com/yassinebenameur/probara/api/internal/services/ailabels"
 	aisettingsservice "github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
@@ -54,6 +58,7 @@ import (
 	locationnatsauthservice "github.com/yassinebenameur/probara/api/internal/services/locationnatsauth"
 	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
+	mcpoauthservice "github.com/yassinebenameur/probara/api/internal/services/mcpoauth"
 	meshservice "github.com/yassinebenameur/probara/api/internal/services/mesh"
 	metricsqueryservice "github.com/yassinebenameur/probara/api/internal/services/metricsquery"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
@@ -66,7 +71,6 @@ import (
 	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
-	"github.com/yassinebenameur/probara/shared/ai"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -93,6 +97,7 @@ type Server struct {
 	locationAuth       *callout.AuthorizationService
 	locationAuthConn   *nats.Conn
 	locationAuthErr    error
+	mcpErr             error
 }
 
 type monitorStatusNotifier struct {
@@ -198,8 +203,52 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.Post("/{token}", pushHandlers.HandlePushPost)
 	})
 
+	// MCP: OAuth authorization server discovery at the well-known paths
+	// clients probe (path insertion and appending, OAuth and OpenID names).
+	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret)
+	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL)
+	mcpHandler := mcpserver.NewHandler(log, oauthHandlers.ResourceMetadataURL)
+	r.Group(func(r chi.Router) {
+		r.Use(oauthhandlers.PublicCORS)
+		r.Get("/.well-known/oauth-protected-resource", oauthHandlers.ProtectedResourceMetadata)
+		r.Get("/.well-known/oauth-protected-resource/*", oauthHandlers.ProtectedResourceMetadata)
+		r.Get("/.well-known/oauth-authorization-server", oauthHandlers.AuthorizationServerMetadata)
+		r.Get("/.well-known/oauth-authorization-server/*", oauthHandlers.AuthorizationServerMetadata)
+		r.Get("/.well-known/openid-configuration/*", oauthHandlers.AuthorizationServerMetadata)
+	})
+
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
+		// MCP endpoint: bearer credentials only (API key or MCP OAuth
+		// token). It sits outside the protected group because the outer
+		// request is not itself a write: every tool call is dispatched as
+		// its own REST request through the full middleware chain.
+		r.With(oauthhandlers.PublicCORS).Handle("/mcp", mcpHandler.Protect(authMiddleware))
+
+		// MCP OAuth authorization server.
+		r.Route("/oauth", func(r chi.Router) {
+			r.Group(func(r chi.Router) {
+				r.Use(oauthhandlers.PublicCORS)
+				r.Get("/.well-known/oauth-authorization-server", oauthHandlers.AuthorizationServerMetadata)
+				r.Get("/.well-known/openid-configuration", oauthHandlers.AuthorizationServerMetadata)
+				r.Post("/register", oauthHandlers.Register)
+				r.Get("/authorize", oauthHandlers.Authorize)
+				r.Post("/token", oauthHandlers.Token)
+				r.Post("/revoke", oauthHandlers.Revoke)
+			})
+			// Consent and connection management for the operator UI: a
+			// signed-in user session only, outside the write gate (a viewer
+			// may connect a read-only agent and revoke their own
+			// connections) and outside generic audit (they record their own).
+			r.Group(func(r chi.Router) {
+				r.Use(authMiddleware)
+				r.Get("/authorize/request", oauthHandlers.AuthorizationRequest)
+				r.Post("/authorize/decision", oauthHandlers.Decide)
+				r.Get("/grants", oauthHandlers.ListGrants)
+				r.Delete("/grants/{id}", oauthHandlers.RevokeGrant)
+			})
+		})
+
 		adminUsersSvc := adminusersservice.NewService(dbClient, cfg.AdminBcryptCost)
 		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder)
 
@@ -224,7 +273,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
 			// Apply auth middleware to all API routes
-			r.Use(apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret))
+			r.Use(authMiddleware)
 			// Audit wraps the write gate so denied mutations are recorded too
 			// (RequireWrite 403s surface as outcome=denied).
 			r.Use(apimiddleware.AuditMutations(auditRecorder))
@@ -248,21 +297,15 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			metricsQueryService := metricsqueryservice.NewService(dbClient.DB)
 			metricsQueryHandlers := metricsqueryhandlers.NewHandler(metricsQueryService, log)
 
-			// AI settings (per-tenant LLM config). The env LLM_* values are the
-			// global fallback so analysis works before a tenant configures a row.
-			aiEnvConfig := ai.Config{
-				Provider:  cfg.LLMProvider,
-				BaseURL:   cfg.LLMBaseURL,
-				APIKey:    cfg.LLMAPIKey,
-				Model:     cfg.LLMModel,
-				JSONMode:  cfg.LLMJSONMode,
-				MaxTokens: cfg.LLMMaxTokens,
-				Timeout:   time.Duration(cfg.LLMTimeoutSeconds) * time.Second,
-			}
-			aiSettingsSvc := aisettingsservice.NewService(dbClient, secretsEncryptor, aiEnvConfig)
+			// Workspace enablement and installation-owned local service status.
+			aiSettingsSvc := aisettingsservice.NewService(dbClient, cfg.LocalAI)
 
 			// AI dependency suggestions (co-firing alerts -> proposed edges)
-			depSuggestHdlrs := depsuggesthandlers.NewHandlers(depsuggestservice.NewService(dbClient, aiSettingsSvc), log)
+			depSuggestSvc := depsuggestservice.NewService(dbClient, aiSettingsSvc)
+			depSuggestHdlrs := depsuggesthandlers.NewHandlers(depSuggestSvc, log)
+			// Operator verdicts on AI output (writes: NOT in postReadPaths) and
+			// their training export. No model call, so local AI may be off.
+			aiLabelHdlrs := ailabelshandlers.NewHandlers(ailabelsservice.NewService(dbClient, depSuggestSvc), log)
 			aiSettingsHdlrs := aisettingshandlers.NewHandlers(aiSettingsSvc, log)
 			r.Route("/ai-settings", func(r chi.Router) {
 				r.Get("/", aiSettingsHdlrs.GetSettings)
@@ -274,13 +317,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			incidentService := incidentservice.NewService(dbClient, statusPublisher)
 			incidentHandlers := incidenthandlers.NewHandlers(incidentService, log)
 			// AI root cause analysis: enqueue jobs onto the AI_RCA subject. The
-			// feature is gated per-tenant (config row or env fallback).
+			// feature uses shared installation/workspace enablement.
 			incidentHandlers.ConfigureAIAnalysis(checkJobQueue, cfg.AIRCASubject, aiSettingsSvc)
 
 			// Alert service and handlers (shared across alerts + dashboard routes)
 			alertSvc := alertservice.NewService(dbClient, incidentService)
 			analyticsRepo := sharedanalytics.NewRepository(dbClient)
-			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log)
+			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log).WithAudit(auditRecorder)
 
 			// Tenant service (constructed early so dashboardSvc can read group tags)
 			tenantSvc := tenantservice.NewService(dbClient)
@@ -328,7 +371,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			})
 
 			// SLAs and their reports (live, issued, exported)
-			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo), Log: log}
+			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo, cfg.LocalAI.Disabled || !cfg.AITriageEnabled), Log: log}
 			r.Route("/slas", slaHandlers.Routes)
 			r.Route("/sla-reports", slaHandlers.ReportRoutes)
 
@@ -356,7 +399,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
 				// Dependency graph (must be before /{id} to avoid conflicts)
 				r.Get("/dependency-graph", monitorHandlers.GetDependencyGraph)
+				// Recent results for many monitors (the list's one round trip)
+				r.Get("/results/batch", monitorHandlers.GetMonitorResultsBatch)
 				r.Post("/dependency-suggestions", depSuggestHdlrs.Suggest)
+				r.Post("/dependency-suggestions/label", aiLabelHdlrs.LabelDependencySuggestion)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
@@ -419,6 +465,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", alertHandlers.GetAlert)
 				r.Post("/{id}/acknowledge", alertHandlers.AcknowledgeAlert)
 				r.Post("/{id}/resolve", alertHandlers.ResolveAlert)
+				// Bulk triage: per-alert results and one audit event per alert.
+				r.Post("/bulk/acknowledge", alertHandlers.BulkAcknowledgeAlerts)
+				r.Post("/bulk/resolve", alertHandlers.BulkResolveAlerts)
+				// Triage training label (audited write; not in postReadPaths).
+				// A corrected label also stops the alert's pending
+				// suspected-cause follow-ups.
+				r.Post("/{id}/triage/label", aiLabelHdlrs.LabelAlertTriage)
 			})
 
 			// Incidents
@@ -437,6 +490,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Delete("/{id}/status-pages/{statusPageId}", incidentHandlers.UnpublishIncidentFromStatusPage)
 				r.Post("/{id}/ai-analysis", incidentHandlers.RequestIncidentAIAnalysis)
 				r.Get("/{id}/ai-analysis", incidentHandlers.GetIncidentAIAnalysis)
+				r.Post("/{id}/ai-analysis/label", aiLabelHdlrs.LabelIncidentAnalysis)
+			})
+
+			// AI label training export (tenant admins and superadmins only).
+			r.Route("/ai-labels", func(r chi.Router) {
+				r.Use(apimiddleware.RequireTenantAdmin)
+				r.Post("/export", aiLabelHdlrs.Export)
 			})
 
 			// Alert policies — retired; all endpoints return 410 Gone.
@@ -569,6 +629,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		})
 	})
 
+	// Resolve the MCP tool catalog against the finished router: a tool whose
+	// route is gone is a startup error, never a tool that always 404s.
+	mcpErr := mcpHandler.Bind(r, mcpHandler.Extras())
+
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler:      r,
@@ -590,6 +654,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		auditPruner:        auditPruner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
+		mcpErr:             mcpErr,
 	}
 }
 
@@ -600,6 +665,9 @@ func (s *Server) Start() error {
 	}).Info("Starting HTTP server")
 	if s.locationAuthErr != nil {
 		return fmt.Errorf("configure NATS location authorization: %w", s.locationAuthErr)
+	}
+	if s.mcpErr != nil {
+		return fmt.Errorf("configure MCP server: %w", s.mcpErr)
 	}
 	if s.locationAuthorizer != nil {
 		nc, err := nats.Connect(s.config.NATSURL,

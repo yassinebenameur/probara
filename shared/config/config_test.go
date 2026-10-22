@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func setRequiredAPIEnv(t *testing.T) {
 	t.Helper()
@@ -188,5 +191,145 @@ func TestLoadNotificationEgressConfig(t *testing.T) {
 	t.Setenv("NOTIFICATION_BLOCK_PRIVATE_IPS", "maybe")
 	if _, err := loadNotificationEgressConfig(); err == nil {
 		t.Fatal("an invalid boolean must fail startup")
+	}
+}
+
+func TestLoadWorkerConfig_AITriageDefaults(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8083")
+	t.Setenv("METRICS_PORT", "9092")
+	cfg, err := LoadWorkerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AITriageEnabled || cfg.AITriageStream != "AI_TRIAGE" || cfg.AITriageSubject != "ai.triage.jobs" || cfg.AITriageConsumerName != "ai-triage-workers" {
+		t.Fatalf("unexpected triage defaults: enabled=%t stream=%q subject=%q consumer=%q",
+			cfg.AITriageEnabled, cfg.AITriageStream, cfg.AITriageSubject, cfg.AITriageConsumerName)
+	}
+
+	t.Setenv("AI_TRIAGE_ENABLED", "false")
+	if cfg, err = LoadWorkerConfig(); err != nil || cfg.AITriageEnabled {
+		t.Fatalf("AI_TRIAGE_ENABLED=false: enabled=%t err=%v", cfg != nil && cfg.AITriageEnabled, err)
+	}
+}
+
+func TestLoadWorkerConfig_AITriageRejectsBadValues(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8083")
+	t.Setenv("METRICS_PORT", "9092")
+
+	t.Setenv("AI_TRIAGE_ENABLED", "sometimes")
+	if _, err := LoadWorkerConfig(); err == nil || !strings.Contains(err.Error(), "invalid AI_TRIAGE_ENABLED") {
+		t.Fatalf("invalid AI_TRIAGE_ENABLED accepted: %v", err)
+	}
+	t.Setenv("AI_TRIAGE_ENABLED", "")
+
+	const clash = "AI_TRIAGE_STREAM/AI_TRIAGE_SUBJECT must differ from AI_RCA_STREAM/AI_RCA_SUBJECT"
+	t.Setenv("AI_TRIAGE_STREAM", "AI_RCA")
+	if _, err := LoadWorkerConfig(); err == nil || err.Error() != clash {
+		t.Fatalf("shared stream accepted: %v", err)
+	}
+	t.Setenv("AI_TRIAGE_STREAM", "")
+	t.Setenv("AI_TRIAGE_SUBJECT", "ai.rca.jobs")
+	if _, err := LoadWorkerConfig(); err == nil || err.Error() != clash {
+		t.Fatalf("shared subject accepted: %v", err)
+	}
+}
+
+// The alerter honours the installation's local AI kill switches for its
+// suspected-cause follow-ups, so disabling AI also stops follow-ups from
+// triages that were already ready.
+func TestLoadAlerterConfig_SuspectedCauseKillSwitches(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8084")
+	t.Setenv("METRICS_PORT", "9094")
+	cases := []struct {
+		localAIDisabled, triageEnabled string
+		wantDisabled                   bool
+	}{
+		{"", "", false},
+		{"false", "true", false},
+		{"true", "", true},
+		{"", "false", true},
+		{"true", "false", true},
+	}
+	for _, tc := range cases {
+		t.Setenv("LOCAL_AI_DISABLED", tc.localAIDisabled)
+		t.Setenv("AI_TRIAGE_ENABLED", tc.triageEnabled)
+		cfg, err := LoadAlerterConfig()
+		if err != nil {
+			t.Fatalf("LOCAL_AI_DISABLED=%q AI_TRIAGE_ENABLED=%q: %v", tc.localAIDisabled, tc.triageEnabled, err)
+		}
+		if cfg.SuspectedCausesDisabled != tc.wantDisabled {
+			t.Fatalf("LOCAL_AI_DISABLED=%q AI_TRIAGE_ENABLED=%q: disabled=%t, want %t",
+				tc.localAIDisabled, tc.triageEnabled, cfg.SuspectedCausesDisabled, tc.wantDisabled)
+		}
+	}
+
+	t.Setenv("LOCAL_AI_DISABLED", "")
+	t.Setenv("AI_TRIAGE_ENABLED", "sometimes")
+	if _, err := LoadAlerterConfig(); err == nil || !strings.Contains(err.Error(), "invalid AI_TRIAGE_ENABLED") {
+		t.Fatalf("invalid AI_TRIAGE_ENABLED accepted: %v", err)
+	}
+	t.Setenv("AI_TRIAGE_ENABLED", "")
+	t.Setenv("LOCAL_AI_DISABLED", "maybe")
+	if _, err := LoadAlerterConfig(); err == nil || !strings.Contains(err.Error(), "invalid LOCAL_AI_DISABLED") {
+		t.Fatalf("invalid LOCAL_AI_DISABLED accepted: %v", err)
+	}
+}
+
+// Test calls are on by default on platform workers and off on private-location
+// workers, whose operators opt in; the destination allow-list is anchored.
+func TestLoadWorkerConfig_SIPCall(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8083")
+	t.Setenv("METRICS_PORT", "9092")
+
+	cfg, err := LoadWorkerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SIPCallEnabled || len(cfg.SIPCallAllowedDestinations) != 0 {
+		t.Fatalf("platform defaults: enabled=%t allowed=%d", cfg.SIPCallEnabled, len(cfg.SIPCallAllowedDestinations))
+	}
+
+	t.Setenv("WORKER_LOCATION_ID", "6f1c2b8e-2f43-4c0e-9d41-0c3b3e0a9a11")
+	t.Setenv("LOCATION_CREDENTIAL", "secret")
+	if cfg, err = LoadWorkerConfig(); err != nil || cfg.SIPCallEnabled {
+		t.Fatalf("location worker default: enabled=%t err=%v", cfg != nil && cfg.SIPCallEnabled, err)
+	}
+	t.Setenv("SIP_CALL_ENABLED", "true")
+	if cfg, err = LoadWorkerConfig(); err != nil || !cfg.SIPCallEnabled {
+		t.Fatalf("location worker opt-in: enabled=%t err=%v", cfg != nil && cfg.SIPCallEnabled, err)
+	}
+	t.Setenv("WORKER_LOCATION_ID", "")
+	t.Setenv("LOCATION_CREDENTIAL", "")
+	t.Setenv("SIP_CALL_ENABLED", "false")
+	if cfg, err = LoadWorkerConfig(); err != nil || cfg.SIPCallEnabled {
+		t.Fatalf("platform opt-out: enabled=%t err=%v", cfg != nil && cfg.SIPCallEnabled, err)
+	}
+	t.Setenv("SIP_CALL_ENABLED", "perhaps")
+	if _, err := LoadWorkerConfig(); err == nil || !strings.Contains(err.Error(), "invalid SIP_CALL_ENABLED") {
+		t.Fatalf("invalid SIP_CALL_ENABLED accepted: %v", err)
+	}
+	t.Setenv("SIP_CALL_ENABLED", "")
+
+	t.Setenv("SIP_CALL_ALLOWED_DESTINATIONS", ` \+331[0-9]+ , ,ivr-test`)
+	cfg, err = LoadWorkerConfig()
+	if err != nil || len(cfg.SIPCallAllowedDestinations) != 2 {
+		t.Fatalf("allow-list = %v, %v", cfg, err)
+	}
+	match := func(user string) bool {
+		for _, re := range cfg.SIPCallAllowedDestinations {
+			if re.MatchString(user) {
+				return true
+			}
+		}
+		return false
+	}
+	for user, want := range map[string]bool{"+33123": true, "ivr-test": true, "0033123": false, "+33123x": false, "my-ivr-test": false} {
+		if got := match(user); got != want {
+			t.Errorf("allow-list match %q = %t, want %t", user, got, want)
+		}
+	}
+	t.Setenv("SIP_CALL_ALLOWED_DESTINATIONS", "([")
+	if _, err := LoadWorkerConfig(); err == nil || !strings.Contains(err.Error(), "invalid SIP_CALL_ALLOWED_DESTINATIONS") {
+		t.Fatalf("invalid pattern accepted: %v", err)
 	}
 }

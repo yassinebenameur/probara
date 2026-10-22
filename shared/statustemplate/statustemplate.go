@@ -39,12 +39,19 @@ const MaxSourceSize = 512 * 1024
 // Uptime strip cell counts. These are both defaults baked into the render
 // view and the values returned by the template functions below, so custom
 // templates draw strips with the same resolution as the built-in one.
+//
+// The 1h range has 60 one-minute buckets, so its cell counts divide 60
+// exactly: one cell per minute on the page-level and expanded strips, one cell
+// per two minutes on a monitor row.
 const (
-	GlobalUptimeStripCells      = 48
-	GlobalUptime7dStripCells    = 70
-	MonitorUptimeStripCells     = 36
-	LongRangeMonitorStripCells  = 60
-	LongRangeExpandedStripCells = 90
+	GlobalUptimeStripCells       = 48
+	GlobalUptime7dStripCells     = 70
+	MonitorUptimeStripCells      = 36
+	LongRangeMonitorStripCells   = 60
+	LongRangeExpandedStripCells  = 90
+	ShortRangeGlobalStripCells   = 60
+	ShortRangeMonitorStripCells  = 30
+	ShortRangeExpandedStripCells = 60
 )
 
 // TypeIcon maps a monitor type to the feather-style icon name used by the
@@ -79,9 +86,12 @@ func TypeIcon(kind string) string {
 }
 
 // GlobalStripCells returns the number of cells in the page-level uptime strip
-// for a range name ("24h", "7d", "30d", "90d").
+// for a range name ("1h", "24h", "7d", "30d", "90d"). Unknown names get the
+// 24h count.
 func GlobalStripCells(rangeName string) int {
 	switch rangeName {
+	case "1h":
+		return ShortRangeGlobalStripCells
 	case "7d":
 		return GlobalUptime7dStripCells
 	case "30d", "90d":
@@ -95,6 +105,8 @@ func GlobalStripCells(rangeName string) int {
 // strip for a range name.
 func MonitorStripCells(rangeName string) int {
 	switch rangeName {
+	case "1h":
+		return ShortRangeMonitorStripCells
 	case "30d", "90d":
 		return LongRangeMonitorStripCells
 	default:
@@ -106,6 +118,8 @@ func MonitorStripCells(rangeName string) int {
 // detail uptime strip for a range name.
 func ExpandedStripCells(rangeName string) int {
 	switch rangeName {
+	case "1h":
+		return ShortRangeExpandedStripCells
 	case "30d", "90d":
 		return LongRangeExpandedStripCells
 	default:

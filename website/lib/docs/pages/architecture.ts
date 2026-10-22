@@ -14,6 +14,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
     "PostgreSQL",
     "NATS JetStream",
     "monitor state",
+    "local AI",
   ],
   sections: [
     {
@@ -27,12 +28,12 @@ export const ARCHITECTURE_PAGE: DocPage = {
           language: "text",
           title: "Primary data flow",
           code:
-            "Web / API client\n      │\n      ▼\n     API ───────────────► PostgreSQL ◄────────────── Alerter\n      │                         ▲                        │\n      │                         │                        ├─ notifications\n      ▼                         │                        └─ incidents\nScheduler ── check.jobs ──► Worker(s)\n      ▲                         │\n      └──── check.results ◄─────┘\n\nPostgreSQL + statuspage.updates ──► Status-page service ──► Public visitors",
+            "Web / API client\n      │\n      ▼\n     API ───────────────► PostgreSQL ◄────────────── Alerter\n      │                         ▲                        │\n      │                         │                        ├─ notifications\n      ▼                         │                        └─ incidents\nScheduler ── check.jobs ──► Worker(s)\n      ▲                         │\n      └──── check.results ◄─────┘\n\nPostgreSQL + statuspage.updates ──► Status-page service ──► Public visitors\n\nAPI / platform worker ──► ai-service (POST /v1/decisions; no DB, NATS or egress)",
         },
         {
           type: "paragraph",
           text:
-            "The boundaries are deliberate. The scheduler does not execute checks or evaluate alert policies. Workers do not need direct PostgreSQL access. The alerter derives lifecycle decisions from stored state rather than from an in-memory result stream alone.",
+            "The boundaries are deliberate. The scheduler does not execute checks or evaluate alert policies. Check execution does not need direct PostgreSQL access. The local AI service holds no database, broker or platform credentials. The alerter derives lifecycle decisions from stored state rather than from an in-memory result stream alone.",
         },
       ],
     },
@@ -57,12 +58,17 @@ export const ARCHITECTURE_PAGE: DocPage = {
             [
               "`worker/`",
               "HTTP, ping, DNS, gRPC, SIP, TCP, database, broker, WebSocket, Prometheus query, and synthetic execution",
-              "Application CRUD or direct database state mutation",
+              "Application CRUD. Check execution never touches PostgreSQL; only platform workers' optional notification and AI consumers and the AI triage relay write to it (private-location workers get no database credentials)",
             ],
             [
               "`alerter/`",
               "Availability, anomaly, host-metric, and mesh alert lifecycle; routing; reminders; notification deduplication; incidents",
               "Running monitors",
+            ],
+            [
+              "`ai-service/`",
+              "Local CPU inference (Python, FastAPI) for incident analysis, automatic alert triage and dependency suggestions: bearer-authenticated `POST /v1/decisions` returning probabilities over a closed catalogue, from a bundled fine-tuned model running offline",
+              "Any database, NATS, outbound network or tenant data at rest; only the API and the database-connected platform worker call it",
             ],
             [
               "`status-page/`",
@@ -105,7 +111,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
             {
               term: "NATS JetStream",
               description:
-                "Provides durable streams for check jobs, check results, alert events, and optional asynchronous analysis jobs.",
+                "Provides durable streams for check jobs, check results, alert events, and asynchronous local AI jobs (incident analysis and alert triage).",
             },
             {
               term: "Core NATS",
@@ -117,7 +123,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Schedulers claim due rows with database locking that skips rows already claimed by another scheduler. The queue path is at-least-once, so result ingestion is designed to deduplicate repeated job/location results. Clients must not infer exactly-once execution from a single successful publish.",
+            "Schedulers claim due rows with database locking that skips rows already claimed by another scheduler. The queue path is at-least-once, so result ingestion is designed to deduplicate repeated job/location results. Clients must not infer exactly-once execution from a single successful publish. Workers extend a running check's acknowledgement deadline every 10 seconds, so a slow check is not handed to a second worker while it is still running. Checks that act on the outside world rather than only observe it are at-most-once instead, across redelivery and dispatch retries: a redelivered job is acknowledged without running, a result that cannot be published is retried briefly and then dropped, leaving a missing sample rather than a repeated side effect, and every scheduled job carries a message id per monitor, location and due slot, so a dispatch the scheduler retries for the same slot (a lost publish acknowledgement, or a failed reschedule) is dropped by the stream's 2-minute duplicate window instead of queueing the check twice.",
         },
         {
           type: "callout",

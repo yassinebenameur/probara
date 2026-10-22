@@ -10,8 +10,8 @@ import (
 
 // AlertService defines the interface for alert operations
 type AlertService interface {
-	// ListAlerts lists alerts with filtering and pagination
-	ListAlerts(ctx context.Context, tenantID uuid.UUID, params *models.AlertListParams) (*models.AlertListResponse, error)
+	// ListAlerts lists alerts with filtering, sorting and pagination
+	ListAlerts(ctx context.Context, tenantID uuid.UUID, params *models.AlertListParams, sort ListSort) (*models.AlertListResponse, error)
 
 	// GetAlert retrieves an alert by ID
 	GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error)
@@ -27,6 +27,13 @@ type AlertService interface {
 
 	// ResolveAlert marks an alert as resolved
 	ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error)
+
+	// BulkAcknowledge acknowledges each listed active alert; the rest are
+	// reported per id, never failing the batch.
+	BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error)
+
+	// BulkResolve resolves each listed open alert; the rest are reported per id.
+	BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error)
 
 	// CreateAlert creates a new alert (used by alerter service)
 	CreateAlert(ctx context.Context, tenantID, monitorID, policyID uuid.UUID, failureCount int, lastError *string) (*models.AlertWithDetails, error)

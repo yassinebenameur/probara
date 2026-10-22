@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   AlertChannel,
@@ -10,6 +10,11 @@ import {
 } from '@/lib/types';
 import { createAlertChannel, getAlertChannels } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
+import Callout from '@/components/ui/Callout';
+import Checkbox from '@/components/ui/Checkbox';
+import IconButton from '@/components/ui/IconButton';
+import { usePluginNames } from '@/components/alert-channels/usePluginNames';
+import { formatDuration } from '@/lib/format';
 
 const DELAY_PRESETS = [
   { label: 'Immediately', value: 0 },
@@ -17,6 +22,21 @@ const DELAY_PRESETS = [
   { label: 'If still down 10 min', value: 600 },
   { label: 'If still down 30 min', value: 1800 },
 ] as const;
+
+// A delay saved outside the presets (API, import, an older UI) stays a
+// selectable option of its own; without it the select would show the first
+// preset while the stored delay stays in place.
+function delayText(seconds: number): string {
+  // Whole minutes under an hour read like the presets ("15 min").
+  return seconds % 60 === 0 && seconds < 3600 ? `${seconds / 60} min` : formatDuration(seconds);
+}
+
+function delayOptions(current: number): { label: string; value: number }[] {
+  if (DELAY_PRESETS.some((p) => p.value === current)) return [...DELAY_PRESETS];
+  return [...DELAY_PRESETS, { label: `If still down ${delayText(current)}`, value: current }].sort(
+    (a, b) => a.value - b.value
+  );
+}
 
 export interface ChannelPickerProps {
   value: ChannelAssignment[];
@@ -29,6 +49,17 @@ export interface ChannelPickerProps {
    * without fetching the channels a second time.
    */
   onChannelsLoaded?: (channels: AlertChannel[]) => void;
+  /** Read-only: selection and delays are shown but cannot change. */
+  disabled?: boolean;
+  /** Id of the visible label naming the channel list. */
+  ariaLabelledBy?: string;
+  /**
+   * Offer the inline "New channel" form (default on). Off where the page
+   * already has its own channel management (Settings → Notifications).
+   */
+  allowCreate?: boolean;
+  /** Replaces the "No channels yet" line, e.g. with a pointer to where channels are made. */
+  emptyState?: ReactNode;
 }
 
 export default function ChannelPicker({
@@ -37,7 +68,12 @@ export default function ChannelPicker({
   defaultChannelIds = [],
   showDelays = true,
   onChannelsLoaded,
+  disabled = false,
+  ariaLabelledBy,
+  allowCreate = true,
+  emptyState,
 }: ChannelPickerProps) {
+  const pluginName = usePluginNames();
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -74,19 +110,28 @@ export default function ChannelPicker({
 
   const selectedIds = new Set(value.map((a) => a.channel_id));
 
+  // An unchecked channel's assignment and position, so checking it again
+  // in the same session restores its delay where it was instead of
+  // appending it at delay 0 (which also left the parent form dirty).
+  const removedRef = useRef(new Map<string, { assignment: ChannelAssignment; index: number }>());
+
   const handleToggle = (channel: AlertChannel) => {
     if (selectedIds.has(channel.id)) {
+      const index = value.findIndex((a) => a.channel_id === channel.id);
+      removedRef.current.set(channel.id, { assignment: value[index], index });
       onChange(value.filter((a) => a.channel_id !== channel.id));
     } else {
-      onChange([
-        ...value,
-        {
-          channel_id: channel.id,
-          channel_name: channel.name,
-          channel_type: channel.type,
-          delay_seconds: 0,
-        },
-      ]);
+      const removed = removedRef.current.get(channel.id);
+      removedRef.current.delete(channel.id);
+      const assignment: ChannelAssignment = removed?.assignment ?? {
+        channel_id: channel.id,
+        channel_name: channel.name,
+        channel_type: channel.type,
+        delay_seconds: 0,
+      };
+      const next = [...value];
+      next.splice(removed ? Math.min(removed.index, next.length) : next.length, 0, assignment);
+      onChange(next);
     }
   };
 
@@ -132,78 +177,95 @@ export default function ChannelPicker({
 
   return (
     <div className="space-y-2">
-      {/* Channel list */}
-      <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 overflow-hidden">
+      <div className="glass-well overflow-hidden">
         {loadingChannels ? (
-          <div className="px-4 py-3 text-xs text-slate-500">Loading channels…</div>
+          <div role="status" className="px-4 py-3 text-ui text-slate-500">Loading channels…</div>
         ) : loadError ? (
-          <div className="px-4 py-3 text-xs text-rose-400">{loadError}</div>
+          <div role="alert" className="px-4 py-3 text-ui text-rose-300">{loadError}</div>
         ) : channels.length === 0 ? (
-          <div className="px-4 py-3 text-xs text-slate-500">
-            No channels configured yet. Create one below.
+          <div className="px-4 py-3 text-ui text-slate-500">
+            {emptyState ??
+              (disabled || !allowCreate ? 'No channels yet.' : 'No channels yet. Add one below to start receiving alerts.')}
           </div>
         ) : (
-          <ul className="divide-y divide-white/[0.04]">
+          <ul className="divide-y divide-divider" aria-labelledby={ariaLabelledBy}>
             {channels.map((channel) => {
               const isSelected = selectedIds.has(channel.id);
               const assignment = value.find((a) => a.channel_id === channel.id);
               const isDefault = defaultChannelIds.includes(channel.id);
 
               return (
+                // Wraps instead of squeezing: once the name column would drop
+                // below 10rem the delay select moves to its own line, where
+                // justify-between leaves it at the start, under the name.
+                // A checked row takes one --well step over the list's own
+                // well, and any row a --well-hover on hover: the checkbox and
+                // delay select already carry the state, and a heavier fill
+                // split the list into a bright block and a dim one.
                 <li
                   key={channel.id}
-                  className={`flex items-center gap-3 px-4 py-2.5 transition-colors ${
-                    isSelected ? 'bg-cyan-500/5' : 'hover:bg-slate-800/40'
+                  className={`flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-well-hover ${
+                    isSelected ? 'bg-well' : ''
                   }`}
                 >
-                  {/* Checkbox */}
-                  <input
-                    type="checkbox"
-                    id={`channel-${channel.id}`}
-                    checked={isSelected}
-                    onChange={() => handleToggle(channel)}
-                    className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
-                  />
+                  {/* Centred on the name's line, not on the whole row. */}
+                  <span className="flex h-5 shrink-0 items-center">
+                    <Checkbox
+                      id={`channel-${channel.id}`}
+                      checked={isSelected}
+                      onChange={() => handleToggle(channel)}
+                      disabled={disabled}
+                    />
+                  </span>
 
-                  {/* Name + type */}
-                  <label
-                    htmlFor={`channel-${channel.id}`}
-                    className="flex flex-1 items-center gap-2 cursor-pointer min-w-0"
-                  >
-                    <span className="text-sm text-slate-200 truncate">{channel.name}</span>
-                    <span className="text-xs text-slate-500 uppercase tracking-wide flex-shrink-0">
-                      {channel.type}
-                    </span>
-                    {isDefault && (
-                      <span className="text-xs text-cyan-400/70 flex-shrink-0">(default)</span>
-                    )}
-                    {channel.is_active === false && (
-                      <span
-                        className="flex-shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1 text-[10px] uppercase tracking-wide text-amber-300"
-                        title="This channel is disabled — selecting it delivers nothing"
-                      >
-                        Disabled
-                      </span>
-                    )}
-                  </label>
-
-                  {/* Delay dropdown */}
-                  {showDelays && isSelected && assignment && (
-                    <select
-                      value={assignment.delay_seconds}
-                      onChange={(e) =>
-                        handleDelayChange(channel.id, Number(e.target.value))
-                      }
-                      className="ml-auto flex-shrink-0 rounded border border-white/[0.08] bg-slate-800 px-2 py-1 text-xs text-slate-300 focus:border-cyan-500/50 focus:outline-none cursor-pointer"
-                      aria-label={`Delay for ${channel.name}`}
+                  <div className="flex min-w-0 grow flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                    {/* Name over a muted meta line (plugin, default, status), so
+                        the name keeps the width beside a delay select. */}
+                    <label
+                      htmlFor={`channel-${channel.id}`}
+                      className={`min-w-0 grow basis-40 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     >
-                      {DELAY_PRESETS.map((preset) => (
-                        <option key={preset.value} value={preset.value}>
-                          {preset.label}
-                        </option>
-                      ))}
-                    </select>
-                  )}
+                      <span className={`block truncate text-ui ${channel.is_active === false ? 'text-slate-400' : 'text-slate-200'}`}>
+                        {channel.name}
+                      </span>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                        <span>{pluginName(channel.type)}</span>
+                        {isDefault && <span className="text-slate-400">(default)</span>}
+                        {channel.is_active === false && (
+                          // Same wording as the channel list's Status column,
+                          // but deliberately caption text rather than its Pill:
+                          // a chip here made inactive rows taller and louder
+                          // than the active ones. The table keeps the Pill, as
+                          // every Status column in the app does.
+                          <span
+                            title="This channel is inactive — selecting it delivers nothing"
+                            className="inline-flex items-center gap-1.5"
+                          >
+                            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-slate-500" />
+                            Inactive
+                          </span>
+                        )}
+                      </span>
+                    </label>
+
+                    {showDelays && isSelected && assignment && (
+                      <select
+                        value={assignment.delay_seconds}
+                        onChange={(e) =>
+                          handleDelayChange(channel.id, Number(e.target.value))
+                        }
+                        className="input input-sm !w-44 flex-shrink-0 cursor-pointer"
+                        aria-label={`Delay for ${channel.name}`}
+                        disabled={disabled}
+                      >
+                        {delayOptions(assignment.delay_seconds).map((preset) => (
+                          <option key={preset.value} value={preset.value}>
+                            {preset.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 </li>
               );
             })}
@@ -211,27 +273,21 @@ export default function ChannelPicker({
         )}
       </div>
 
-      {/* Inline create panel */}
-      {showCreate ? (
-        <div className="rounded-lg border border-white/[0.08] bg-slate-900/60 p-4 space-y-4">
+      {disabled || !allowCreate ? null : showCreate ? (
+        <div className="glass-well space-y-4 p-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-300">New channel</span>
-            <button
-              type="button"
+            <span className="text-title font-semibold text-white">New channel</span>
+            <IconButton
+              icon={<X strokeWidth={1.75} />}
+              label="Close new channel panel"
               onClick={() => {
                 setShowCreate(false);
                 setCreateError(null);
               }}
-              className="text-slate-500 hover:text-slate-300 transition-colors"
-              aria-label="Close new channel panel"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            />
           </div>
 
-          {createError && (
-            <p className="text-xs text-rose-400">{createError}</p>
-          )}
+          {createError && <Callout tone="danger">{createError}</Callout>}
 
           <AlertChannelForm
             onSubmit={handleCreateSubmit}
@@ -246,9 +302,9 @@ export default function ChannelPicker({
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+          className="inline-flex items-center gap-1.5 text-ui font-medium text-cyan-300 transition-colors hover:text-cyan-200"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-4 w-4" strokeWidth={1.75} />
           New channel
         </button>
       )}

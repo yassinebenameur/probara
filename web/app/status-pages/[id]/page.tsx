@@ -8,8 +8,12 @@ import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import { useToast } from '@/components/ui/ToastProvider';
+import useDocumentTitle from '@/lib/useDocumentTitle';
+import { RelativeTime } from '@/components/ui/RelativeTime';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
@@ -17,6 +21,7 @@ export default function EditStatusPagePage() {
   const id = params.id as string;
 
   const [statusPage, setStatusPage] = useState<StatusPage | null>(null);
+  useDocumentTitle(statusPage?.title);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
@@ -54,33 +59,50 @@ export default function EditStatusPagePage() {
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="text-slate-500">Loading status page…</div>
+      <div className="mx-auto w-full max-w-[100rem] animate-pulse space-y-6" role="status" aria-label="Loading status page">
+        <div className="space-y-2" aria-hidden="true">
+          <div className="h-4 w-40 rounded-md bg-well-hover" />
+          <div className="h-8 w-64 rounded-lg bg-well-hover" />
+        </div>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_440px]" aria-hidden="true">
+          <div className="space-y-6">
+            <div className="glass h-[460px]" />
+            <div className="glass h-64" />
+          </div>
+          <div className="glass hidden h-[520px] xl:block" />
+        </div>
       </div>
     );
   }
 
   if (error || !statusPage) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center gap-4">
-        <p className="text-rose-400">{error || 'Status page not found'}</p>
-        <Button variant="ghost" size="sm" onClick={() => router.push('/status-pages')}>
-          ← Back to status pages
-        </Button>
-      </div>
+      <Callout
+        tone="danger"
+        action={
+          <Button variant="ghost" size="xs" onClick={() => router.push('/status-pages')}>
+            ← Back to status pages
+          </Button>
+        }
+      >
+        {error || 'Status page not found'}
+      </Callout>
     );
   }
 
   const publicUrl = resolveStatusPagePublicUrl(statusPage);
 
   return (
-    <div className="space-y-6">
+    <Page width="detail">
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: statusPage.title }]}
         title={statusPage.title}
-        subtitle={`/${statusPage.slug}`}
+        subtitle={[
+          <span key="slug" className="font-mono text-ui">/{statusPage.slug}</span>,
+          <RelativeTime key="updated" prefix="Updated " value={statusPage.updated_at} />,
+        ]}
         action={
-          <div className="flex items-center gap-2">
+          <>
             <Button
               variant="ghost"
               size="sm"
@@ -89,26 +111,20 @@ export default function EditStatusPagePage() {
             >
               Customize template
             </Button>
-            <Button
-              variant="accent"
-              size="sm"
-              icon={<ArrowUpRight strokeWidth={1.75} />}
-              asChild
-            >
+            <Button variant="ghost" size="sm" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
               <a href={publicUrl} target="_blank" rel="noopener noreferrer">
                 Open public page
               </a>
             </Button>
-          </div>
+          </>
         }
       />
 
       <StatusPageForm
         statusPage={statusPage}
         onSubmit={handleSubmit}
-        onCancel={() => router.push('/status-pages')}
         loading={saving}
       />
-    </div>
+    </Page>
   );
 }

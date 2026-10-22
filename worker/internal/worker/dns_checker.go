@@ -138,7 +138,7 @@ func buildDNSResolver(nameserver string, timeout time.Duration) (*net.Resolver, 
 		return net.DefaultResolver, nil
 	}
 
-	addr, err := normalizeNameserverAddr(nameserver)
+	addr, err := models.NormalizeNameserverAddr(nameserver)
 	if err != nil {
 		return nil, err
 	}
@@ -150,23 +150,6 @@ func buildDNSResolver(nameserver string, timeout time.Duration) (*net.Resolver, 
 			return d.DialContext(ctx, network, addr)
 		},
 	}, nil
-}
-
-// normalizeNameserverAddr turns a nameserver value (host, host:port, bare
-// IPv6 literal) into a dialable host:port with a default port of 53.
-func normalizeNameserverAddr(nameserver string) (string, error) {
-	addr := nameserver
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		if ip := net.ParseIP(addr); ip != nil && ip.To4() == nil {
-			// Bare IPv6 literal — bracket it before appending the port.
-			addr = "[" + addr + "]"
-		}
-		addr = addr + ":53"
-	}
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		return "", err
-	}
-	return addr, nil
 }
 
 func (c *DNSChecker) lookup(ctx context.Context, resolver *net.Resolver, recordType, host string) ([]string, error) {

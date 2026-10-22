@@ -259,7 +259,7 @@ func TestSend_KeepsLongestRetryAfter(t *testing.T) {
 
 // A slow Messages API must not serialize the fan-out: with recipients texted
 // one after another, the dispatch deadline runs out part-way through and the
-// redelivery re-texts everyone who already got the message.
+// rest wait a whole backoff step for the redelivery.
 func TestSend_TextsRecipientsConcurrently(t *testing.T) {
 	var inFlight, peak atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -285,5 +285,288 @@ func TestSend_TextsRecipientsConcurrently(t *testing.T) {
 	}
 	if peak.Load() < 2 {
 		t.Fatalf("peak concurrent sends = %d, want recipients texted in parallel", peak.Load())
+	}
+}
+
+func TestSend_SuspectedCauseTextsShortForm(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(raw))
+		mu.Lock()
+		bodies = append(bodies, form.Get("Body"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	event := sampleEvent()
+	event.Type = "suspected_cause"
+	event.Alert.SuspectedCause = &notifications.SuspectedCause{Key: "dns_failure", Title: "DNS resolution failure", Confidence: "medium"}
+	p := New()
+	p.base = srv.URL
+	if err := p.Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: config(nil)}, Event: event, EventType: "suspected_cause",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("texts = %d, want one per recipient", len(bodies))
+	}
+	b := bodies[0]
+	if !strings.HasPrefix(b, "AI TRIAGE · Suspected Cause: API health") || !strings.Contains(b, "DNS resolution failure (medium confidence)") ||
+		!strings.Contains(b, "https://probara.example.com/alerts?alert=a-1&tenant=tenant-1") {
+		t.Fatalf("Body = %q", b)
+	}
+}
+
+// memLedger is an in-memory plugin.RecipientLedger shared across Send calls,
+// standing in for the Postgres ledger every retry path reads.
+type memLedger struct {
+	mu        sync.Mutex
+	delivered map[string]bool
+	loadErr   error
+	recordErr error
+}
+
+func newMemLedger() *memLedger { return &memLedger{delivered: map[string]bool{}} }
+
+func (l *memLedger) Delivered(_ context.Context, recipients []string) (map[string]bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.loadErr != nil {
+		return nil, l.loadErr
+	}
+	out := map[string]bool{}
+	for _, r := range recipients {
+		if l.delivered[r] {
+			out[r] = true
+		}
+	}
+	return out, nil
+}
+
+func (l *memLedger) Record(_ context.Context, recipient string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.recordErr != nil {
+		return l.recordErr
+	}
+	l.delivered[recipient] = true
+	return nil
+}
+
+func (l *memLedger) has(r string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.delivered[r]
+}
+
+const (
+	numA = "+15557654321"
+	numB = "+447700900123"
+	numC = "+15550000001"
+)
+
+// statusServer answers each recipient with the status in byTo (default 201)
+// and counts the texts each recipient received.
+type statusServer struct {
+	mu    sync.Mutex
+	byTo  map[string]int
+	texts map[string]int
+	srv   *httptest.Server
+}
+
+func newStatusServer(t *testing.T, byTo map[string]int) *statusServer {
+	s := &statusServer{byTo: byTo, texts: map[string]int{}}
+	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(raw))
+		to := form.Get("To")
+		s.mu.Lock()
+		code, ok := s.byTo[to]
+		if !ok {
+			code = http.StatusCreated
+		}
+		if code == http.StatusCreated {
+			s.texts[to]++
+		}
+		s.mu.Unlock()
+		w.WriteHeader(code)
+	}))
+	t.Cleanup(s.srv.Close)
+	return s
+}
+
+func (s *statusServer) set(to string, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.byTo[to] = code
+}
+
+func (s *statusServer) count(to string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.texts[to]
+}
+
+func sendWithLedger(t *testing.T, s *statusServer, l plugin.RecipientLedger, attempt int) error {
+	t.Helper()
+	p := New()
+	p.base = s.srv.URL
+	return p.Send(context.Background(), plugin.DispatchRequest{
+		Channel:    plugin.ChannelRef{Config: config(map[string]any{"to": numA + "," + numB + "," + numC})},
+		Event:      sampleEvent(),
+		Attempt:    attempt,
+		Recipients: l,
+	})
+}
+
+// The regression: one recipient fails transiently, and the retry must text
+// only that recipient — never again the two the provider already accepted.
+func TestSend_RetryAfterPartialFailureSkipsDeliveredRecipients(t *testing.T) {
+	s := newStatusServer(t, map[string]int{numB: http.StatusServiceUnavailable})
+	l := newMemLedger()
+
+	err := sendWithLedger(t, s, l, 1)
+	if err == nil || plugin.IsPermanent(err) {
+		t.Fatalf("first attempt err = %v, want transient", err)
+	}
+	if !l.has(numA) || !l.has(numC) || l.has(numB) {
+		t.Errorf("ledger = %v, want A and C recorded, B not", l.delivered)
+	}
+
+	s.set(numB, http.StatusCreated)
+	if err := sendWithLedger(t, s, l, 2); err != nil {
+		t.Fatalf("retry err = %v", err)
+	}
+	for _, n := range []string{numA, numB, numC} {
+		if got := s.count(n); got != 1 {
+			t.Errorf("%s received %d texts, want exactly 1", n, got)
+		}
+	}
+
+	// A further redelivery (a Send that succeeded but whose ack was lost)
+	// reaches nobody.
+	if err := sendWithLedger(t, s, l, 3); err != nil {
+		t.Fatalf("redelivery err = %v", err)
+	}
+	for _, n := range []string{numA, numB, numC} {
+		if got := s.count(n); got != 1 {
+			t.Errorf("after redelivery %s received %d texts, want 1", n, got)
+		}
+	}
+}
+
+func TestSend_LedgerOutcomes(t *testing.T) {
+	cases := []struct {
+		name          string
+		byTo          map[string]int
+		wantErr       bool
+		wantPermanent bool
+		wantRecorded  []string
+	}{
+		{"all ok", map[string]int{}, false, false, []string{numA, numB, numC}},
+		{"one transient", map[string]int{numA: 503}, true, false, []string{numB, numC}},
+		{"all transient", map[string]int{numA: 503, numB: 500, numC: 429}, true, false, nil},
+		{"one permanent", map[string]int{numA: 400}, true, true, []string{numB, numC}},
+		{"all permanent", map[string]int{numA: 401, numB: 401, numC: 401}, true, true, nil},
+		{"mixed permanent and transient", map[string]int{numA: 400, numB: 503}, true, false, []string{numC}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStatusServer(t, tc.byTo)
+			l := newMemLedger()
+			err := sendWithLedger(t, s, l, 1)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if plugin.IsPermanent(err) != tc.wantPermanent {
+				t.Fatalf("IsPermanent(%v) = %v, want %v", err, plugin.IsPermanent(err), tc.wantPermanent)
+			}
+			want := map[string]bool{}
+			for _, n := range tc.wantRecorded {
+				want[n] = true
+			}
+			for _, n := range []string{numA, numB, numC} {
+				if l.has(n) != want[n] {
+					t.Errorf("recorded[%s] = %v, want %v", n, l.has(n), want[n])
+				}
+			}
+		})
+	}
+}
+
+// After a partial failure only the unreached recipients are tried again, so
+// their classification alone decides the retry: a recipient that is now
+// rejected for good ends it, even though an earlier attempt was transient.
+func TestSend_RetryClassifiesOnlyRemainingRecipients(t *testing.T) {
+	s := newStatusServer(t, map[string]int{numA: 503})
+	l := newMemLedger()
+	if err := sendWithLedger(t, s, l, 1); err == nil || plugin.IsPermanent(err) {
+		t.Fatalf("first attempt err = %v, want transient", err)
+	}
+	s.set(numA, http.StatusBadRequest)
+	err := sendWithLedger(t, s, l, 2)
+	if !plugin.IsPermanent(err) {
+		t.Fatalf("retry err = %v, want permanent (only the rejected recipient was left)", err)
+	}
+	if s.count(numB) != 1 || s.count(numC) != 1 {
+		t.Fatalf("texts = %v, want B and C once each", s.texts)
+	}
+}
+
+func TestSend_EveryoneAlreadyDeliveredSendsNothing(t *testing.T) {
+	s := newStatusServer(t, map[string]int{})
+	l := newMemLedger()
+	for _, n := range []string{numA, numB, numC} {
+		l.delivered[n] = true
+	}
+	if err := sendWithLedger(t, s, l, 4); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(s.texts) != 0 {
+		t.Fatalf("texts = %v, want none", s.texts)
+	}
+}
+
+// Unreadable progress must not turn into a re-text of everyone: the send
+// fails transiently and the retry tries again.
+func TestSend_LedgerLoadErrorRetriesWithoutTexting(t *testing.T) {
+	s := newStatusServer(t, map[string]int{})
+	l := newMemLedger()
+	l.loadErr = context.DeadlineExceeded
+	err := sendWithLedger(t, s, l, 2)
+	if err == nil || plugin.IsPermanent(err) {
+		t.Fatalf("err = %v, want transient", err)
+	}
+	if len(s.texts) != 0 {
+		t.Fatalf("texts = %v, want none", s.texts)
+	}
+}
+
+// A failed Record does not fail a send that otherwise succeeded (nothing is
+// retried), and only rides along in the message when something else failed.
+func TestSend_RecordErrorDoesNotChangeOutcome(t *testing.T) {
+	s := newStatusServer(t, map[string]int{})
+	l := newMemLedger()
+	l.recordErr = context.DeadlineExceeded
+	if err := sendWithLedger(t, s, l, 1); err != nil {
+		t.Fatalf("all delivered, err = %v, want nil", err)
+	}
+
+	s = newStatusServer(t, map[string]int{numA: 503})
+	err := sendWithLedger(t, s, l, 1)
+	if err == nil || plugin.IsPermanent(err) {
+		t.Fatalf("err = %v, want transient", err)
+	}
+	if !strings.Contains(err.Error(), "not recorded") {
+		t.Fatalf("err = %v, want the unrecorded deliveries named", err)
+	}
+
+	s = newStatusServer(t, map[string]int{numA: 400})
+	if err := sendWithLedger(t, s, l, 1); !plugin.IsPermanent(err) {
+		t.Fatalf("err = %v, want permanent: a record failure is not a retryable send failure", err)
 	}
 }

@@ -7,7 +7,7 @@ export const DEPLOYMENT_PAGE: DocPage = {
   description:
     'Run Probara with local processes, Docker Compose, or Kubernetes and Helm, with explicit guidance for databases, NATS, ingress, private locations, migrations, scaling, and current packaging limitations.',
   eyebrow: 'Deployment guide',
-  readingTime: '22 min read',
+  readingTime: '25 min read',
   keywords: [
     'deployment',
     'Docker Compose',
@@ -30,12 +30,12 @@ export const DEPLOYMENT_PAGE: DocPage = {
             [
               '`make start-all-local`',
               'Feature development and debugging',
-              'PostgreSQL and NATS in Docker; locally built Go services and Next.js UI on the host.',
+              'PostgreSQL, NATS and the local AI container in Docker; locally built Go services and Next.js UI on the host.',
             ],
             [
               '`make start-all`',
               'Testing backend container images locally',
-              'PostgreSQL, NATS, and Go services in Compose; Next.js UI still runs on the host.',
+              'PostgreSQL, NATS, local AI, and Go services in Compose; Next.js UI still runs on the host.',
             ],
             [
               '`docker compose up -d` / `make up`',
@@ -45,7 +45,7 @@ export const DEPLOYMENT_PAGE: DocPage = {
             [
               'Helm chart',
               'Kubernetes staging and production',
-              'Frontend, services, migration hook, and optionally embedded PostgreSQL/NATS in the cluster.',
+              'Frontend, services, local AI inference, migration hook, and optionally embedded PostgreSQL/NATS in the cluster.',
             ],
           ],
         },
@@ -67,6 +67,7 @@ export const DEPLOYMENT_PAGE: DocPage = {
           items: [
             'Docker with Compose v2 for PostgreSQL, NATS, migrations, and container workflows.',
             'GNU Make and a Bash-compatible environment for repository scripts. On Windows, use WSL or another environment that can execute the Makefile’s Bash commands.',
+            'Git LFS to build the local AI image from source: run `git lfs install` and `git lfs pull --include \'ai-service/artifacts/*/head.safetensors\'` once after cloning. Not needed when a release image is pulled or with `LOCAL_AI_DISABLED=true`.',
             'Go 1.26.5 for the main monorepo. The local launcher compares the installed major/minor version with the root `go.mod` directive.',
             'Node.js LTS and npm for the frontend. `scripts/start-ui.sh` can use nvm when it is available.',
             'Helm 3 and `kubectl` for Kubernetes deployment.',
@@ -108,7 +109,7 @@ openssl rand -base64 32    # PROBARA_SECRETS_KEY`,
           tone: 'warning',
           title: 'Compose ships an insecure hardcoded secret',
           text:
-            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the only interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`) all carry `:-` defaults. Populate `.env` anyway so the platform runs on real values instead of placeholders.',
+            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `LOCAL_AI_*`) are optional, and `LOCAL_AI_TOKEN` falls back to a public development token. Populate `.env` anyway so the platform runs on real values instead of placeholders.',
         },
       ],
     },
@@ -133,7 +134,7 @@ make stop-all-local`,
         {
           type: 'paragraph',
           text:
-            'The target starts PostgreSQL and NATS, bootstraps local database access, validates Go, runs migrations, builds downloadable collector binaries, builds and launches each Go service, and starts Next.js on `0.0.0.0:3000`.',
+            'The target starts PostgreSQL and NATS, bootstraps local database access, validates Go, runs migrations, builds downloadable collector binaries, builds and launches each Go service, starts the `local-ai` container in the background (the first image build takes several minutes; progress in `/tmp/probara-local-start.log`), and starts Next.js on `0.0.0.0:3000`. Until the container is up, or if it fails to start, API and worker report the model unavailable; the platform is never blocked. With no local image and the head weights still a Git LFS pointer, it only tries a pull. A local build is reused as is, so rebuild it with `docker compose build local-ai` after an `ai-service/` change. `LOCAL_AI_DISABLED=true` skips the container and turns the feature off.',
         },
         {
           type: 'definitions',
@@ -142,6 +143,11 @@ make stop-all-local`,
               term: '`.dev-secrets.key`',
               description:
                 'Gitignored, persistent local encryption key created by the launcher.',
+            },
+            {
+              term: '`.dev-local-ai-token`',
+              description:
+                'Gitignored per-checkout local AI bearer token, created on first start when `LOCAL_AI_TOKEN` is not exported, and passed to the container, API and worker.',
             },
             {
               term: '`/tmp/probara-*.pid` and `/tmp/probara-*.log`',
@@ -211,7 +217,13 @@ docker compose down`,
             ['PostgreSQL', '`5432`', 'Development database, user/database/password `probara`.'],
             ['NATS', '`4222`', 'Client connection; no local authentication or TLS.'],
             ['NATS monitor', '`8222`', 'NATS HTTP monitoring endpoint.'],
+            ['Local AI inference', '`8090` on `127.0.0.1` only', 'CPU inference for API and worker; `/healthz`, authenticated `/readyz`, `/metrics`.'],
           ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Local AI is on by default. Compose pulls `LOCAL_AI_IMAGE` and builds it from `ai-service/` only when the pull fails; that build fails on purpose unless the committed artifact is release-approved, and a failed build aborts a whole `docker compose up`. The Make targets (`up`, `build`, `rebuild`, `scale-workers`, `start-all`, `start-all-local`) therefore start the platform first and `local-ai` separately, tolerating its failure. With plain Compose and no pullable approved image, name the services you want (`docker compose up -d postgres nats migrations api scheduler worker status-page alerter`) or set `LOCAL_AI_IMAGE` to an image you already have. `LOCAL_AI_DISABLED=true` turns the feature off and makes the Make targets skip `local-ai`, but plain `docker compose up` still pulls or builds the service.',
         },
         {
           type: 'callout',
@@ -231,7 +243,8 @@ docker compose down`,
           items: [
             'API, scheduler, and worker all use stream `check-jobs` and subject `check.job`, so scheduled and on-demand jobs share one subject contract. If you change these values, change them on all three services together.',
             'The root `.env` file is not passed as a service `env_file`; only variables explicitly declared in Compose reach containers. `PROBARA_SECRETS_KEY` is forwarded from the shell environment to the api, scheduler, worker, and alerter services.',
-            'AI, SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired.',
+            'SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired.',
+            'Without an exported `LOCAL_AI_TOKEN` (shell or `.env`), `local-ai`, API and worker share a fixed development token that is public in the repository. That is tolerable only because port 8090 is bound to loopback; set your own (`openssl rand -hex 32`) on any shared host. `make start-all-local` generates a per-checkout token instead.',
             'The commented private-location worker example omits required `LOCATION_CREDENTIAL` and should not be enabled as written.',
             'The API and worker correctly share the `synthetic_artifacts` volume used for failure screenshots. Trace and HAR capture are configured by the schema but are not implemented by the current worker.',
           ],
@@ -295,9 +308,9 @@ kubectl -n probara get jobs`,
         {
           type: 'callout',
           tone: 'warning',
-          title: 'Do not deploy the default latest tags to production',
+          title: 'Pin image tags in production',
           text:
-            'Pin immutable backend, frontend, and migration image tags. Retain JWT and encryption keys across every upgrade; changing them invalidates sessions or makes stored ciphertext unreadable.',
+            'The default image tag follows the chart’s `appVersion`, so a chart upgrade also moves every image. Pin immutable backend, frontend, migration and local AI image tags so images change only when you decide. Retain JWT and encryption keys across every upgrade; changing them invalidates sessions or makes stored ciphertext unreadable.',
         },
       ],
     },
@@ -320,7 +333,7 @@ kubectl -n probara get jobs`,
               'Global backend pull policy; also wins over the frontend-specific pull policy in current templates.',
             ],
             ['`image.repository`', '`ghcr.io/yassinebenameur/probara`', 'Backend image base repository.'],
-            ['`image.tag`', '`latest`', 'Backend image tag. Pin for production.'],
+            ['`image.tag`', 'Empty: the chart’s `appVersion`', 'Tag for every Probara image (backend services, migrations, frontend and local AI, unless their own `tag` is set). Each release pushes all images under its version, so the chart’s own version always resolves; `latest` exists only for stable releases, never on the prerelease line. Pin for production.'],
             ['`image.pullSecrets`', '`[]`', 'Backend registry pull secrets.'],
             ['`postgresql.enabled`', '`true`', 'Deploy embedded PostgreSQL StatefulSet.'],
             ['`postgresql.externalUrl`', 'Empty', 'Used when embedded PostgreSQL is disabled. Required in that mode unless an existing Secret supplies the DSN — an empty external URL now fails the render instead of starting pods with a blank DSN.'],
@@ -379,7 +392,7 @@ kubectl -n probara get jobs`,
             [
               '`extraEnv`, `<service>.extraEnv`',
               '`[]`',
-              'Standard EnvVar entries appended to workloads: top-level `extraEnv` reaches every workload (including the migrations job); per-service lists (`api`, `scheduler`, `worker`, `alerter`, `statusPage`, `frontend`, `migrations`) reach one. `worker.extraEnv` also applies to location workers, and each `worker.locations` entry may carry its own `extraEnv`. Use this for any supported runtime variable without a dedicated chart value (LLM, rotation keys, SSRF policy). Notification egress (`NOTIFICATION_BLOCK_PRIVATE_IPS`, `NOTIFICATION_ALLOWED_CIDRS`) blocks private destinations by default; to let channels reach an internal receiver, set the allow-list through top-level `extraEnv` so the API, worker and alerter all get it.',
+              'Standard EnvVar entries appended to workloads: top-level `extraEnv` reaches every workload (including the migrations job); per-service lists (`api`, `scheduler`, `worker`, `alerter`, `statusPage`, `frontend`, `migrations`) reach one. `worker.extraEnv` also applies to location workers, and each `worker.locations` entry may carry its own `extraEnv`. Use this for any supported runtime variable without a dedicated chart value (rotation keys, SSRF policy). Top-level `extraEnv` never reaches the local AI pod, which holds no platform credentials; it has its own `localAI.extraEnv`. Notification egress (`NOTIFICATION_BLOCK_PRIVATE_IPS`, `NOTIFICATION_ALLOWED_CIDRS`) blocks private destinations by default; to let channels reach an internal receiver, set the allow-list through top-level `extraEnv` so the API, worker and alerter all get it.',
             ],
             [
               '`smtp.host`, `.port`, `.useTLS`, `.from`, `.username`, `.password`, `.existingSecret`, `.existingSecretKey`',
@@ -409,7 +422,7 @@ kubectl -n probara get jobs`,
             [
               '`secrets.initialApiKey`',
               'Insecure placeholder',
-              'Stored and printed by notes but not consumed by any bootstrap path. It does not create an API key.',
+              'Stored in the chart Secret but not consumed by any bootstrap path. It does not create an API key.',
             ],
             [
               '`secrets.probaraSecretsKey`',
@@ -525,7 +538,7 @@ kubectl -n probara get jobs`,
             ],
             [
               '`frontend.image.*`',
-              'Dedicated frontend repository, latest tag, IfNotPresent, no secrets',
+              'Dedicated frontend repository, empty tag (`image.tag`, then the chart’s `appVersion`), IfNotPresent, no secrets',
               'Pin tag. Global pull policy currently masks the frontend-specific pull policy.',
             ],
             [
@@ -566,6 +579,55 @@ kubectl -n probara get jobs`,
           title: 'The example status host does not route / to the status service',
           text:
             'The ingress template always routes `/` to frontend and `/api` to API. Only additional paths other than `/` and `/api` are sent to status-page. A second host with path `/`, as shown in default values, therefore serves the frontend. Use a dedicated ingress/resource or repair the template for a status-site root host.',
+        },
+      ],
+    },
+    {
+      id: 'helm-values-local-ai',
+      title: 'Helm values: local AI',
+      intro:
+        'The chart deploys the bundled CPU inference service by default and configures only the API and the platform worker to call it. The alerter never calls it and receives only the `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` kill switches; scheduler, status page and location workers never receive `LOCAL_AI_*`.',
+      blocks: [
+        {
+          type: 'table',
+          columns: ['Value', 'Default', 'Meaning'],
+          rows: [
+            ['`localAI.enabled`', '`true`', 'Deploy `<release>-local-ai` (Deployment, ClusterIP Service on 8090, NetworkPolicy). `false` without `externalUrl` renders `LOCAL_AI_DISABLED=true` on API, worker and alerter, which overrides every workspace setting (on the alerter it stops suspected-cause follow-ups).'],
+            ['`localAI.externalUrl`', 'Empty', 'An operator-run service speaking the same `/v1/decisions` protocol. Requires `enabled=false` and an explicit token; must be `http(s)://host[:port]` with no path, query or credentials. Each rule fails the render.'],
+            ['`localAI.image.repository`, `.tag`, `.pullPolicy`', 'Empty: `<image.repository>-local-ai`, `image.tag` (then the chart’s `appVersion`), `global.imagePullPolicy`', 'The image carries the model weights and runs offline. A private registry needs `image.pullSecrets`, which this pod also uses.'],
+            ['`localAI.threads`', '`4`; 1–4', '`LOCAL_AI_THREADS`. Keep it at or below the CPU limit; the model is CPU-validated at 4.'],
+            ['`localAI.queueCapacity`', '`4`; 1–32', '`LOCAL_AI_QUEUE_CAPACITY`: batches waiting behind the executing one before 429.'],
+            ['`localAI.queueTimeoutSeconds`', '`60`; 1–300, below `timeoutSeconds`', '`LOCAL_AI_QUEUE_TIMEOUT_SECONDS`: how long a waiting batch waits for the executing one before 429. A full 50-decision batch takes about 15–20 s on 4 threads. The render fails unless it is lower than `localAI.timeoutSeconds`, so a queued caller gets a retryable 429 before its own client gives up.'],
+            ['`localAI.maxInferenceSeconds`', '`120`; 1–600', '`LOCAL_AI_MAX_INFERENCE_SECONDS`: a batch running longer is wedged; `/healthz` answers 503 and the liveness probe restarts the pod.'],
+            ['`localAI.timeoutSeconds`', '`90`; 1–300', '`LOCAL_AI_TIMEOUT_SECONDS` on API and worker.'],
+            ['`localAI.triageEnabled`', '`true`', '`AI_TRIAGE_ENABLED` on the platform worker, the alerter and the API. `false` stops new [alert triages](/docs/alerting/#ai-triage) (queued ones drain as skipped) and every suspected-cause follow-up, whatever the workspace settings say, and SLA reports then list no alert as Triage pending.'],
+            ['`localAI.resources`', '1 CPU/2Gi request; 4 CPU/4Gi limit', 'One process, one replica, `Recreate` strategy, so two copies of the model never run at once during a rollout.'],
+            ['`localAI.podSecurityContext`', 'uid/gid 1000, non-root, `RuntimeDefault` seccomp', 'The container also runs with a read-only root filesystem, no privilege escalation, all capabilities dropped, no service-account token and a 64Mi `/tmp`.'],
+            ['`localAI.podAnnotations`, `.nodeSelector`, `.tolerations`, `.affinity`', 'Empty', 'Not merged with the top-level values: the top-level scrape annotation names port 9090, while this pod serves `/metrics` on 8090.'],
+            ['`localAI.networkPolicy.enabled`, `.extraIngress`', '`true`, `[]`', 'Ingress only from this release’s API and worker pods on 8090, and no egress at all, not even DNS. Add a Prometheus rule through `extraIngress`.'],
+            ['`localAI.extraEnv`', '`[]`', 'The only extra environment the pod gets (the top-level `extraEnv` does not reach it). Every `LOCAL_AI_*` setting the service reads has its own value above.'],
+            ['`secrets.localAiToken`, `.localAiTokenExistingSecret`, `.localAiTokenExistingSecretKey`', 'Empty, empty, `local_ai_token`', 'Bearer token shared by API, worker and the service; at least 16 characters.'],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The token resolves like every other chart credential: `secrets.localAiTokenExistingSecret`, then the chart-wide `secrets.existingSecret`, then the chart-managed Secret. When chart-managed and left empty, the chart derives it from `secrets.adminJwtSecret` (a SHA-256 over a domain-separated copy) instead of generating a random value, so `helm template` and GitOps renderers produce the same Secret on every render. The derived token is as private as your JWT secret: with the shipped placeholder JWT secret it is a well-known value, and rotating `adminJwtSecret` rotates it, after which API, worker and `local-ai` need a restart together.',
+        },
+        {
+          type: 'list',
+          items: [
+            'The render fails, asking for `secrets.localAiToken` or an existing Secret, when `localAI.externalUrl` is set (the operator-run service must hold the same token) or when `adminJwtSecret` is empty or supplied by an existing Secret (the chart cannot read it to derive from).',
+            'API and worker reference the token as optional, so an existing Secret that predates local AI does not stop them on upgrade: they start and report local AI as not configured correctly. The local AI pod’s reference is required and it waits in `CreateContainerConfigError` until the key exists. The chart’s install/upgrade notes print this warning when `secrets.existingSecret` is set without a per-field token Secret.',
+            'Readiness execs the image’s Python against the authenticated `/readyz`, because an `httpGet` probe cannot read the token from a Secret; like the service and the clients, it ignores whitespace around the token. The startup probe allows five minutes for the model to load. Liveness polls `/healthz` every 15 seconds and restarts the pod after three failures, which happens once a batch has run past `maxInferenceSeconds`: a hung inference cannot be cancelled in the process, and with one replica only a restart recovers.',
+          ],
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'A NetworkPolicy only works where the CNI enforces it',
+          text:
+            'Calico, Cilium and similar CNIs enforce the rendered policy. On a CNI without NetworkPolicy support it is accepted and silently ignored, and the bearer token is then the only barrier between other pods and the service. Verify enforcement in your cluster; rendering the object proves nothing.',
         },
       ],
     },
@@ -630,6 +692,7 @@ worker:
             ['`nats_platform_password`', '`nats.auth.enabled` on the embedded broker', 'Embedded NATS server, as a `--pass` argument substituted by Kubernetes'],
             ['`nats_location_auth_issuer_seed`', '`nats.auth.enabled`', 'API'],
             ['`oidc_client_secret`', '`auth.oidc.enabled`', 'API'],
+            ['`local_ai_token`', '`localAI.enabled` or `localAI.externalUrl`', 'API and platform worker (optional reference), local AI pod (required)'],
           ],
         },
         {
@@ -755,6 +818,10 @@ api:
               'Stateless application replicas; status cache invalidation benefits from NATS updates.',
             ],
             [
+              'Local AI',
+              'Exactly one replica with one inference process; a restart makes analyses and suggestions wait or fail until it is ready again. Size throughput with `localAI.threads`, `queueCapacity` and CPU limits, not replicas.',
+            ],
+            [
               'PostgreSQL and NATS',
               'Bundled dependencies are simple single StatefulSets, not production HA operators. Use managed or operator-backed systems for stronger recovery objectives.',
             ],
@@ -791,6 +858,13 @@ api:
           text:
             'The migration hook changes shared PostgreSQL state. Keep backups and review migration compatibility before upgrading; never assume an application rollback will undo schema or data changes.',
         },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading from 1.0.x: AI is local and on by default',
+          text:
+            'The external LLM path is gone: `LLM_*` variables and workspace provider settings are no longer read (the old columns stay for rollback), and workspaces without an explicit AI setting are enabled. The chart now deploys `<release>-local-ai` (1 CPU/2 GiB request) and wires API and worker to it (the alerter gets only its kill switches); with `secrets.existingSecret`, add a `local_ai_token` key (see [local AI values](/docs/deployment/#helm-values-local-ai)). Deployments that do not use this chart need the `probara-local-ai` workload plus `LOCAL_AI_URL` and `LOCAL_AI_TOKEN` on API and worker, or `LOCAL_AI_DISABLED=true` on API, worker and alerter; otherwise analyses and alert triages fail with local AI reported unavailable, while alerting and paging are unaffected. Set `localAI.enabled=false` to opt out.',
+        },
       ],
     },
     {
@@ -807,7 +881,7 @@ api:
             ],
             [
               '`initialApiKey` is unused',
-              'Installation notes show a credential that authentication never recognizes.',
+              'The chart Secret carries a credential that authentication never recognizes; the install notes point to the first-administrator form instead.',
             ],
             [
               'Public Next variables are runtime-only',
@@ -829,6 +903,18 @@ api:
               'Embedded NATS is ClusterIP-only',
               'Private locations outside the cluster cannot connect without an additional secure exposure.',
             ],
+            [
+              'Local AI accuracy is measured on a controlled corpus only',
+              'The shipped checkpoint passed its CPU release gates on synthetic scenarios whose labels come from the same rules that guard its answers, so no real-world accuracy is claimed. The `-local-ai` image is published only on a release tag, and only from a release-approved checkpoint. `docs/local-ai-validation.md` in the repository records the results and their limits.',
+            ],
+            [
+              'Local AI is a single replica',
+              'No HA for inference; analyses retry on the worker and then fail with a retry action while the pod restarts.',
+            ],
+            [
+              'NetworkPolicy enforcement depends on the CNI',
+              'Without an enforcing CNI the local AI service is reachable from any pod that holds the token.',
+            ],
           ],
         },
         {
@@ -847,10 +933,11 @@ api:
         {
           type: 'list',
           items: [
-            'Pin immutable backend, frontend, collector, migration, PostgreSQL, and NATS versions.',
+            'Pin immutable backend, frontend, local AI, collector, migration, PostgreSQL, and NATS versions.',
             'Use managed/HA PostgreSQL and NATS or define tested backup and restore objectives for embedded state.',
             'Configure HTTPS, `ADMIN_COOKIE_SECURE=true`, a correct `PUBLIC_BASE_URL`, and trusted reverse-proxy headers.',
-            'Use stable random JWT, encryption, OIDC, preview, SMTP, webhook, database, and NATS secrets, sourced [from your secret manager](#external-secrets) rather than written into the values file.',
+            'Use stable random JWT, encryption, local AI token, OIDC, preview, SMTP, webhook, database, and NATS secrets, sourced [from your secret manager](#external-secrets) rather than written into the values file.',
+            'Confirm the cluster CNI enforces the [local AI NetworkPolicy](#helm-values-local-ai), or isolate the service another way.',
             'Align every NATS stream, subject, consumer, and status-update subject across services.',
             'Keep [private-destination blocking](/docs/security/#ssrf-network-policy) enabled and allow only narrowly scoped CIDRs.',
             'Share or externalize synthetic-browser artifact storage.',

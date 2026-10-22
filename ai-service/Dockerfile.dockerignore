@@ -1,0 +1,13 @@
+**
+!ai-service/probara_ai/**
+!ai-service/requirements.lock
+!ai-service/requirements-build.lock
+!ai-service/requirements-fetch.lock
+!ai-service/UPSTREAM-LICENSE
+!ai-service/training/base-lock.json
+!ai-service/training/upstream.py
+!ai-service/training/compose_artifact.py
+!ai-service/artifacts/probara-laya-*/**
+!shared/ai/catalogue.json
+**/__pycache__
+**/.DS_Store

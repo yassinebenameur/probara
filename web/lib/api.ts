@@ -1,5 +1,6 @@
 import { getApiKey, clearApiKey } from './auth';
 import { slaReportQueryString } from './sla';
+import { parseExportCount } from './ai-labels';
 import {
   clearSelectedTenantId,
   emitTenantChange,
@@ -13,8 +14,11 @@ import type {
   MonitorListResponse,
   DBMetricsEnvelope,
   PrometheusMetrics,
+  SIPMetricsEnvelope,
   Alert,
   AlertListResponse,
+  AlertBulkResult,
+  AlertSortColumn,
   AlertChannel,
   CreateAlertChannelRequest,
   UpdateAlertChannelRequest,
@@ -27,6 +31,7 @@ import type {
   StatusPageLibraryTemplate,
   StatusPageLibraryTemplateListResponse,
   MonitorResultsResponse,
+  MonitorResultsBatchResponse,
   MonitorAnalyticsResponse,
   MonitorMetricsSnapshotsResponse,
   MonitorAnalyticsRange,
@@ -64,12 +69,19 @@ import type {
   OidcGroupMappingListResponse,
   CreateOidcGroupMappingRequest,
   AuditListResponse,
+  AuditSortColumn,
   IncidentListResponse,
   AISettings,
   AISettingsUpdate,
   AITestRequest,
   AITestResult,
   IncidentAIAnalysis,
+  IncidentAILabelRequest,
+  AlertTriageLabelRequest,
+  AILabel,
+  AILabelExportFilter,
+  AILabelExportResult,
+  DependencyLabelRequest,
   IncidentDetail,
   CreateIncidentRequest,
   UpdateIncidentRequest,
@@ -97,6 +109,7 @@ import type {
   MetricSeriesListResponse,
   MetricQueryRequest,
   MetricQueryResponse,
+  McpConnectionListResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -341,7 +354,7 @@ export interface TestMonitorConfigResponse {
   error_message?: string;
   // Structured extras from the checker, same envelope as check results
   // (e.g. metrics_data.mongodb.unavailable for skipped cluster checks).
-  metrics_data?: DBMetricsEnvelope & { prometheus?: PrometheusMetrics };
+  metrics_data?: DBMetricsEnvelope & SIPMetricsEnvelope & { prometheus?: PrometheusMetrics };
 }
 
 // Runs one ephemeral check on a worker so a config can be validated before
@@ -425,6 +438,12 @@ export async function suggestDependencies(): Promise<DependencySuggestionResult>
   return apiRequest<DependencySuggestionResult>('POST', '/v1/monitors/dependency-suggestions');
 }
 
+// Records the operator's verdict on a dependency suggestion as a training
+// label. The server recomputes the pair evidence; only the verdict is sent.
+export async function labelDependencySuggestion(req: DependencyLabelRequest): Promise<AILabel> {
+  return apiRequest<AILabel>('POST', '/v1/monitors/dependency-suggestions/label', req);
+}
+
 export async function removeMonitorDependency(id: string, dependsOnId: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/monitors/${id}/dependencies/${dependsOnId}`);
 }
@@ -451,8 +470,10 @@ export async function createIncident(data: CreateIncidentRequest): Promise<Incid
   return apiRequest<IncidentDetail>('POST', '/v1/incidents', data);
 }
 
-// requestIncidentAIAnalysis enqueues an AI root cause analysis and returns the
-// pending record. Throws on 503 when the LLM provider is not configured.
+// requestIncidentAIAnalysis enqueues a local AI root cause analysis and returns
+// the pending record. Throws on 503 when local AI is disabled for the workspace
+// or installation, or when the analysis queue is not configured or the enqueue
+// fails.
 export async function requestIncidentAIAnalysis(id: string): Promise<IncidentAIAnalysis> {
   return apiRequest<IncidentAIAnalysis>('POST', `/v1/incidents/${id}/ai-analysis`);
 }
@@ -462,7 +483,27 @@ export async function getIncidentAIAnalysis(id: string): Promise<IncidentAIAnaly
   return apiRequest<IncidentAIAnalysis | null>('GET', `/v1/incidents/${id}/ai-analysis`);
 }
 
-// --- AI settings (per-tenant LLM config) ---
+// Confirms or corrects a ready analysis as a training label (a write: viewers
+// and read-scope keys get 403). 409 when the analysis is not labelable.
+export async function labelIncidentAIAnalysis(incidentId: string, req: IncidentAILabelRequest): Promise<AILabel> {
+  return apiRequest<AILabel>('POST', `/v1/incidents/${incidentId}/ai-analysis/label`, req);
+}
+
+// Downloads the workspace's labels as JSONL training rows (tenant admins only).
+// rows/skipped come from X-Probara-Export-Rows/-Skipped (null when absent):
+// an empty export is a 200 with a 0-byte body, so the counts are the only
+// way the UI can tell "nothing to export" from a real file.
+export async function exportAILabels(filter: AILabelExportFilter = {}): Promise<AILabelExportResult> {
+  const { blob, filename, headers } = await apiDownload('/v1/ai-labels/export', 'probara-ai-labels.jsonl', { method: 'POST', body: filter });
+  return {
+    blob,
+    filename,
+    rows: parseExportCount(headers.get('x-probara-export-rows')),
+    skipped: parseExportCount(headers.get('x-probara-export-skipped')),
+  };
+}
+
+// --- AI settings (workspace local-AI switch + automatic triage) ---
 
 export async function getAISettings(): Promise<AISettings> {
   return apiRequest<AISettings>('GET', '/v1/ai-settings');
@@ -472,7 +513,7 @@ export async function updateAISettings(data: AISettingsUpdate): Promise<AISettin
   return apiRequest<AISettings>('PUT', '/v1/ai-settings', data);
 }
 
-export async function testAISettings(data: AITestRequest): Promise<AITestResult> {
+export async function testAISettings(data: AITestRequest = {}): Promise<AITestResult> {
   return apiRequest<AITestResult>('POST', '/v1/ai-settings/test', data);
 }
 
@@ -537,6 +578,9 @@ export async function getAlerts(params?: {
   since?: string;
   page?: number;
   page_size?: number;
+  /** Server-side order for paged views (default triggered_at, newest first). */
+  sort?: AlertSortColumn;
+  dir?: 'asc' | 'desc';
 }): Promise<AlertListResponse> {
   const queryParams = new URLSearchParams();
   if (params?.status) queryParams.append('status', params.status);
@@ -544,6 +588,8 @@ export async function getAlerts(params?: {
   if (params?.since) queryParams.append('since', params.since);
   if (params?.page) queryParams.append('page', String(params.page));
   if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+  if (params?.sort) queryParams.append('sort', params.sort);
+  if (params?.dir) queryParams.append('dir', params.dir);
 
   const queryString = queryParams.toString();
   const path = `/v1/alerts${queryString ? `?${queryString}` : ''}`;
@@ -556,12 +602,34 @@ export async function getRecentAlerts(limit = 10): Promise<Alert[]> {
   return apiRequest<Alert[]>('GET', `/v1/alerts/recent?${queryParams.toString()}`);
 }
 
+// One alert; carries triage.label_context when its triage is labelable.
+export async function getAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('GET', `/v1/alerts/${id}`);
+}
+
+// Confirms or corrects an alert's ready triage as a training label (a write:
+// viewers and read-scope keys get 403). 409 when the triage is not ready or
+// sent the model no decisions.
+export async function labelAlertTriage(alertId: string, req: AlertTriageLabelRequest): Promise<AILabel> {
+  return apiRequest<AILabel>('POST', `/v1/alerts/${alertId}/triage/label`, req);
+}
+
 export async function acknowledgeAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/acknowledge`);
 }
 
 export async function resolveAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/resolve`);
+}
+
+// Bulk triage (writes; at most 500 ids). Never all-or-nothing: `items` are
+// the alerts changed, `failed` the rest with a reason.
+export async function bulkAcknowledgeAlerts(ids: string[]): Promise<AlertBulkResult> {
+  return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/acknowledge', { ids });
+}
+
+export async function bulkResolveAlerts(ids: string[]): Promise<AlertBulkResult> {
+  return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/resolve', { ids });
 }
 
 // Alert Channel API functions
@@ -633,6 +701,23 @@ export async function createApiKey(
 
 export async function revokeApiKey(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/api-keys/${id}`);
+}
+
+// MCP: the agent endpoint and the signed-in user's OAuth connections to it.
+export function getMcpEndpointUrl(): string {
+  const path = getApiUrl('/v1/mcp');
+  if (path.startsWith('/') && typeof window !== 'undefined') {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
+export async function getMcpConnections(): Promise<McpConnectionListResponse> {
+  return apiRequest<McpConnectionListResponse>('GET', '/v1/oauth/grants');
+}
+
+export async function revokeMcpConnection(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oauth/grants/${id}`);
 }
 
 // Status Page API functions
@@ -744,6 +829,9 @@ export interface GetAuditLogParams {
   to?: string;
   page?: number;
   page_size?: number;
+  /** Server-side order (default occurred_at, newest first). */
+  sort?: AuditSortColumn;
+  dir?: 'asc' | 'desc';
 }
 
 export async function getAuditLog(params?: GetAuditLogParams): Promise<AuditListResponse> {
@@ -755,6 +843,8 @@ export async function getAuditLog(params?: GetAuditLogParams): Promise<AuditList
   if (params?.to) queryParams.append('to', params.to);
   if (params?.page) queryParams.append('page', String(params.page));
   if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+  if (params?.sort) queryParams.append('sort', params.sort);
+  if (params?.dir) queryParams.append('dir', params.dir);
 
   const queryString = queryParams.toString();
   const path = `/v1/audit-log${queryString ? `?${queryString}` : ''}`;
@@ -898,6 +988,21 @@ export async function getMonitorResults(
   const queryString = queryParams.toString();
   const path = `/v1/monitors/${id}/results${queryString ? `?${queryString}` : ''}`;
   return apiRequest<MonitorResultsResponse>('GET', path);
+}
+
+// Monitor ids per GET /monitors/results/batch call (the server's cap; it
+// keeps the URL well under proxy request-line limits).
+export const MONITOR_RESULTS_BATCH_MAX_IDS = 100;
+
+/** The newest `limit` results for up to MONITOR_RESULTS_BATCH_MAX_IDS
+ * monitors, plus each group's direct member ids, in one request. */
+export async function getMonitorResultsBatch(
+  ids: string[],
+  params?: { limit?: number }
+): Promise<MonitorResultsBatchResponse> {
+  const queryParams = new URLSearchParams({ ids: ids.join(',') });
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  return apiRequest<MonitorResultsBatchResponse>('GET', `/v1/monitors/results/batch?${queryParams.toString()}`);
 }
 
 export async function getMonitorAnalytics(
@@ -1246,16 +1351,21 @@ export async function exportMonitors(): Promise<{ blob: Blob; filename: string }
   return apiDownload('/v1/monitors/export', 'monitors-export.yaml');
 }
 
-// GETs a file attachment with the same auth, tenant and refresh handling as
+// Fetches a file attachment (GET by default; POST with a JSON body for exports
+// that take filters) with the same auth, tenant and refresh handling as
 // apiRequest, and returns it with the server's Content-Disposition filename.
-async function apiDownload(path: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> {
+async function apiDownload(
+  path: string,
+  fallbackFilename: string,
+  init: { method?: 'GET' | 'POST'; body?: unknown } = {}
+): Promise<{ blob: Blob; filename: string; headers: Headers }> {
   const apiKey = getApiKey();
   if (!apiKey) {
     await ensureTenantSelected();
   }
 
   const makeRequest = async (): Promise<Response> => {
-    const headers: HeadersInit = {};
+    const headers: Record<string, string> = {};
 
     if (apiKey) {
       headers.Authorization = `Bearer ${apiKey}`;
@@ -1266,10 +1376,16 @@ async function apiDownload(path: string, fallbackFilename: string): Promise<{ bl
       }
     }
 
+    const hasBody = init.body !== undefined;
+    if (hasBody) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     return fetch(getApiUrl(path), {
-      method: 'GET',
+      method: init.method ?? 'GET',
       headers,
       credentials: 'include',
+      body: hasBody ? JSON.stringify(init.body) : undefined,
     });
   };
 
@@ -1312,6 +1428,7 @@ async function apiDownload(path: string, fallbackFilename: string): Promise<{ bl
   return {
     blob: await response.blob(),
     filename: filenameMatch?.[1] || fallbackFilename,
+    headers: response.headers,
   };
 }
 

@@ -1,0 +1,46 @@
+{
+  "version": "probara-laya-v1",
+  "catalogue": "probara-evidence-v1",
+  "release_approved": false,
+  "base": {
+    "repo": "convaiinnovations/laya-multilingual",
+    "revision": "1720e3e3357cfe1e281542e223f8273b0890ca34",
+    "model_sha256": "9d628fd971b700382ac6f65920a86f149777b2e748e0c955fb3b19695aa8f204"
+  },
+  "upstream_commit": "68804629e8ccd9d616d48a40e87de9fabbeae069",
+  "head_sha256": "0a8a0976e5b21ec47c884bbdaf1c366c3feb1f4133580bf7a805b1bb8bf5f379",
+  "cpu_format": {
+    "encoder": "dynamic-int8-linear",
+    "head": "float32",
+    "backend": "qnnpack",
+    "torch": "2.8.0"
+  },
+  "history": {
+    "scope": "Rejected accelerator-tuned predecessor; training reproducibility only. Never a deployment artifact.",
+    "original_generator_sha256": "d112b2bbf57c08114f5560201b7bef7996b5855ccefdf2aefcc9920727373c20",
+    "release_gate": "Failed CPU held-out release gates (cpu-evaluation.json); kept as the head-adaptation predecessor.",
+    "evaluated_model_sha256": "b8ca791b7e57671d01ee86f4cbc832493846557f43bba3a2aef0c4abab0ecb49: the full checkpoint the CPU validator scored before the head-only layout (cpu-calibration-audit-initial.json model_sha256); `compose_artifact.py record --expect-model-sha256` reproduced it bit for bit as composed model.safetensors.",
+    "corpus_generator": "training/history/generate_v1.py renders evidence state format 1 and regenerates provenance.json exactly; original_generator_sha256 is the file as first run, before it moved under history/ (fixture path) and pinned state_format=1 explicitly."
+  },
+  "files": {
+    "LICENSE": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+    "base-model-card.md": "e85d16c3fe35fe7094ef51a7cfa81144a5cc07558e5faddcff753a8153e38a0b",
+    "calibration.json": "fe8cc5e9e3bdd860d06c381f24b11a49c6e65e54dd88761fc9374f66bf386b01",
+    "cpu-calibration-audit-initial.json": "7c45006a57950077d6e64b3f0804a967075c8c7def3a1e1514f6777434d56797",
+    "cpu-evaluation-initial.json": "5b7459f35569ff62e23856c291a3f6d3c9779d721e4545db7a3542a530e213ed",
+    "cpu-evaluation.json": "686847997e9c61fd2fee41a7bba66069e0e83351d2035d29bc8f8ef3d401138d",
+    "evaluation.json": "79ccebae1c21319f519900e39edc1d3bec7426bfcd11bdaad164c568644d6f68",
+    "head.safetensors": "0a8a0976e5b21ec47c884bbdaf1c366c3feb1f4133580bf7a805b1bb8bf5f379",
+    "provenance.json": "e8d5ea9ed84062b21d33f00b1f1e04e20684c8ba5fe370c958a4b65f5f9dd4d6",
+    "rl_agent_config.json": "6d343a76e78720c46082e34c1366e078f167cabfbb5c1467b74f2e8f68c7f433",
+    "training-config.json": "9f27ed726206a8e3b756591358605a7ca509c902a69a5668bea15f0c2d93512d",
+    "upstream.json": "8b31acdc3f8c069dbae948a6330654494625ac920df085e050d1b67844e64acb"
+  },
+  "composed": {
+    "encoder/config.json": "8883c64931d72df518bc39b0a883f90123d5390a65037b29569ca615b9b5ff61",
+    "model.safetensors": "b8ca791b7e57671d01ee86f4cbc832493846557f43bba3a2aef0c4abab0ecb49",
+    "tokenizer/special_tokens_map.json": "501906df38f65ffa6f7b77b8650448e1b95f2cc6eded074fec6213bf8c951be4",
+    "tokenizer/tokenizer.json": "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f",
+    "tokenizer/tokenizer_config.json": "fbde3483bdffa2d869c7e8d45950efd8f1389ca986b604a38a0cef0b79b2c889"
+  }
+}

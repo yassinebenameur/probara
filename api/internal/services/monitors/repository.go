@@ -182,7 +182,11 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 		return nil, 0, fmt.Errorf("failed to count monitors: %w", err)
 	}
 
-	// Get monitors
+	// Get monitors. The id tiebreak makes the order total: monitors created
+	// together (imports, seeds) share created_at, and ties have no defined
+	// order between separate queries — least of all while rows are being
+	// rewritten between page fetches — so a monitor could appear on two
+	// pages (and another on none).
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
@@ -192,7 +196,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			%s AS maintenance_until
 		FROM monitors
 		%s
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id DESC
 		LIMIT $%d OFFSET $%d
 	`, maintenance.InMaintenancePredicate("monitors"), maintenance.MaintenanceUntilExpr("monitors"), whereClause, argIndex, argIndex+1)
 

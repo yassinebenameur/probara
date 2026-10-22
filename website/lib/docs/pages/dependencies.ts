@@ -106,7 +106,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "With an effective [tenant AI configuration](/docs/administration/#ai-settings), the suggestion endpoint analyzes recent alert co-occurrence and asks the configured model for plausible upstream relationships. The current analysis window is 30 days, co-firing events are paired within 10 minutes, and a candidate pair needs at least two observations.",
+            "With [workspace local AI](/docs/administration/#ai-settings) enabled, at most 50 candidates are prioritized by co-firing alerts, shared service tags/groups, then naming signals. The alert lookback is 30 days, with co-firing measured in fixed 10-minute buckets. Proposals require repeated directional timing, service corroboration and a calibrated score threshold; conflicting directions and known common upstreams abstain. Correlation alone does not prove a dependency.",
         },
         {
           type: "table",
@@ -121,7 +121,12 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Suggestions include a reason, confidence, model information, and analyzed-pair context. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it.",
+            "Suggestions include measured counts, median timing, corroborating signals, calibrated score, model identity, evidence references and abstained-pair context. Duplicate, existing, self and cycle-producing proposals are rejected, including paths through monitors outside the candidate set. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it. The **Suggest with AI** button is disabled while local AI is off for the workspace or installation, or the local service is unavailable (see [Settings → AI](/docs/administration/#ai-settings)); the page rechecks every 30 seconds and when you return to the tab, and re-enables the button once local AI is ready. The endpoint itself answers 503 while local AI is off, or busy or restarting (with `Retry-After`).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Each operator decision on a suggestion is recorded as a training label for the local model. **Accept and add dependency** saves the edge first, then records a confirmed label; if the edge cannot be saved, nothing is recorded. **Dismiss** records a rejection as not a dependency, and the row menu offers the reasons wrong direction, shared upstream explains both, and not enough evidence. The server recomputes the pair's evidence when the label is saved, so it is what the advisor would send at that moment rather than anything from the browser; a pair that is no longer a candidate cannot be labelled. Viewers cannot accept or dismiss. See [AI label endpoints](/docs/api/#ai-labels).",
         },
         {
           type: "callout",

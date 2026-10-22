@@ -1,10 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { bulkUpdateAlerting } from '@/lib/api';
 import type { ChannelAssignment, NotificationMode } from '@/lib/types';
 import ChannelPicker from '@/components/channels/ChannelPicker';
+import { BellOff } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import Checkbox from '@/components/ui/Checkbox';
+import Dialog from '@/components/ui/Dialog';
+import SegmentedControl from '@/components/ui/SegmentedControl';
+import { FormRow } from './form-kit';
+
+const NOTIFY_OPTIONS = [
+  { value: 'default', label: 'Workspace default' },
+  { value: 'custom', label: 'Custom' },
+] as const satisfies readonly { value: NotificationMode; label: string }[];
 
 interface BulkAlertingModalProps {
   monitorIds: string[];
@@ -20,6 +31,7 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
   const [channels, setChannels] = useState<ChannelAssignment[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const notifyTitleId = useId();
 
   const canApply = !saving && (touchSensitivity || touchRouting);
 
@@ -43,146 +55,107 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
     }
   };
 
+  const count = `${monitorIds.length} monitor${monitorIds.length === 1 ? '' : 's'}`;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-xl border border-white/[0.08] bg-slate-900/95 p-6 shadow-2xl">
-        {/* Header */}
-        <div className="mb-5 flex items-start justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-white">
-              Edit alerting — {monitorIds.length} monitor{monitorIds.length === 1 ? '' : 's'}
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              Unchecked sections are left unchanged.
-            </p>
-          </div>
-          <button
-            onClick={onCancel}
-            className="text-slate-400 hover:text-white transition-colors"
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="space-y-5">
-          {/* Sensitivity section */}
-          <div className="rounded-lg border border-white/[0.06] bg-slate-950/40 p-4">
-            <label className="flex items-center gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={touchSensitivity}
-                onChange={(e) => setTouchSensitivity(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
-              />
-              <span className="text-sm font-medium text-slate-200">Set sensitivity</span>
-            </label>
-
-            {touchSensitivity && (
-              <div className="mt-3 pl-6">
-                <label className="text-xs text-slate-400">
-                  Mark down after{' '}
-                  <select
-                    value={threshold}
-                    onChange={(e) => setThreshold(Number(e.target.value))}
-                    className="mx-1 rounded border border-white/[0.08] bg-slate-800 px-2 py-0.5 text-xs text-slate-200 focus:border-cyan-500/50 focus:outline-none cursor-pointer"
-                    aria-label="Consecutive failures threshold"
-                  >
-                    {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
-                  consecutive failed check{threshold === 1 ? '' : 's'}
-                </label>
-              </div>
-            )}
-          </div>
-
-          {/* Notification routing section */}
-          <div className="rounded-lg border border-white/[0.06] bg-slate-950/40 p-4">
-            <label className="flex items-center gap-2.5 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={touchRouting}
-                onChange={(e) => setTouchRouting(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
-              />
-              <span className="text-sm font-medium text-slate-200">Set notifications</span>
-            </label>
-
-            {touchRouting && (
-              <div className="mt-3 pl-6 space-y-3">
-                {/* Mode radios */}
-                <div className="flex flex-col gap-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="bulk-notification-mode"
-                      value="default"
-                      checked={mode === 'default'}
-                      onChange={() => setMode('default')}
-                      className="h-3.5 w-3.5 border-slate-600 text-cyan-500 accent-cyan-500 cursor-pointer"
-                    />
-                    <span className="text-xs text-slate-300">Workspace default</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="bulk-notification-mode"
-                      value="custom"
-                      checked={mode === 'custom'}
-                      onChange={() => setMode('custom')}
-                      className="h-3.5 w-3.5 border-slate-600 text-cyan-500 accent-cyan-500 cursor-pointer"
-                    />
-                    <span className="text-xs text-slate-300">Custom channel list</span>
-                  </label>
-                </div>
-
-                {/* Channel picker when custom */}
-                {mode === 'custom' && (
-                  <div className="pt-1 space-y-2">
-                    <ChannelPicker value={channels} onChange={setChannels} />
-                    {channels.length === 0 && (
-                      <div className="rounded-lg border border-rose-700/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
-                        🔕 This will mute all {monitorIds.length} selected monitors — alerts fire but notify no one.
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {error && (
-          <p className="mt-4 rounded border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {error}
-          </p>
-        )}
-
-        {/* Footer */}
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onCancel}
-            disabled={saving}
-          >
+    <Dialog
+      onClose={onCancel}
+      busy={saving}
+      title={`Edit alerting — ${count}`}
+      description="Unchecked sections are left unchanged."
+      bodyClassName="space-y-3"
+      footer={
+        <>
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
             Cancel
           </Button>
-          <Button
-            type="button"
-            variant="accent"
-            size="sm"
-            onClick={apply}
-            disabled={!canApply}
-            loading={saving}
-          >
-            Apply to {monitorIds.length} monitor{monitorIds.length === 1 ? '' : 's'}
+          <Button type="button" variant="accent" size="sm" onClick={apply} disabled={!canApply} loading={saving}>
+            Apply to {count}
           </Button>
-        </div>
+        </>
+      }
+    >
+      {/* Sensitivity section */}
+      <div className="glass-well p-4">
+        <Checkbox
+          checked={touchSensitivity}
+          onChange={setTouchSensitivity}
+          label={<span className="font-medium text-white">Set sensitivity</span>}
+          className="select-none"
+        />
+
+        {touchSensitivity && (
+          <div className="mt-3 pl-[26px]">
+            <FormRow
+              title="Mark down after"
+              description="Consecutive failed checks before a monitor counts as down."
+              control={({ titleId, descriptionId }) => (
+                <select
+                  value={threshold}
+                  onChange={(e) => setThreshold(Number(e.target.value))}
+                  className="input input-sm !w-44 cursor-pointer"
+                  aria-labelledby={titleId}
+                  aria-describedby={descriptionId}
+                >
+                  {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={n}>
+                      {n} failed check{n === 1 ? '' : 's'}
+                    </option>
+                  ))}
+                </select>
+              )}
+            />
+          </div>
+        )}
       </div>
-    </div>
+
+      {/* Notification routing section */}
+      <div className="glass-well p-4">
+        <Checkbox
+          checked={touchRouting}
+          onChange={setTouchRouting}
+          label={<span className="font-medium text-white">Set notifications</span>}
+          className="select-none"
+        />
+
+        {touchRouting && (
+          <div className="mt-3 pl-[26px]">
+            {/* The monitor form's Notify row (AlertingSection), so the two read the same. */}
+            <FormRow
+              title="Notify"
+              titleId={notifyTitleId}
+              description={
+                mode === 'custom'
+                  ? 'Only the channels picked below, on every selected monitor.'
+                  : 'The workspace default channels.'
+              }
+              control={({ titleId, descriptionId }) => (
+                <SegmentedControl
+                  options={NOTIFY_OPTIONS}
+                  value={mode}
+                  onChange={setMode}
+                  labelledBy={titleId}
+                  describedBy={descriptionId}
+                  equalWidth
+                />
+              )}
+            >
+              {mode === 'custom' && (
+                <div className="mt-3 space-y-2">
+                  <ChannelPicker value={channels} onChange={setChannels} ariaLabelledBy={notifyTitleId} />
+                  {channels.length === 0 && (
+                    <Callout tone="danger" icon={<BellOff strokeWidth={1.75} />}>
+                      This will mute all {monitorIds.length} selected monitors: alerts fire but notify no one.
+                    </Callout>
+                  )}
+                </div>
+              )}
+            </FormRow>
+          </div>
+        )}
+      </div>
+
+      {error && <Callout tone="danger">{error}</Callout>}
+    </Dialog>
   );
 }

@@ -56,7 +56,7 @@ spec:
       {{- end }}
       containers:
       - name: worker
-        image: "{{ .Values.image.repository }}-worker:{{ .Values.image.tag }}"
+        image: "{{ .Values.image.repository }}-worker:{{ include "monitoring-platform.imageTag" . }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         command: ["./worker"]
         ports:
@@ -67,6 +67,8 @@ spec:
           containerPort: {{ .Values.worker.httpPort }}
           protocol: TCP
         env:
+        {{- include "monitoring-platform.localAIEnv" . | nindent 8 }}
+        {{- include "monitoring-platform.aiTriageEnv" . | nindent 8 }}
         - name: SERVICE_NAME
           value: "worker"
         - name: HTTP_PORT

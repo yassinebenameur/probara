@@ -1,3 +1,5 @@
+//go:build !unit
+
 package alerts_test
 
 import (
@@ -43,7 +45,7 @@ func TestListAlerts_ExcludesAlertsForSoftDeletedMonitors(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := alertsvc.NewService(dbClient, nil)
-	resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{})
+	resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{}, alertsvc.ListSort{})
 	require.NoError(t, err)
 
 	for _, a := range resp.Items {
@@ -84,7 +86,7 @@ func TestListAlerts_SinceKeepsAlertsOpenDuringTheWindow(t *testing.T) {
 
 	since := time.Now().Add(-7 * 24 * time.Hour)
 	svc := alertsvc.NewService(dbClient, nil)
-	resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{Since: &since})
+	resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{Since: &since}, alertsvc.ListSort{})
 	require.NoError(t, err)
 
 	got := map[uuid.UUID]bool{}

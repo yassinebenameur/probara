@@ -168,16 +168,35 @@ func Classify(c Counts) Status {
 // is_active — so a caller that cares about delivery must join alert_channels
 // and check it (as ChannelCountExpr with activeOnly does).
 func TargetsSQL() string {
+	return targetsSQL("$1", func(col string) string { return col + " = ANY($2)" })
+}
+
+// RoutesToChannelPredicate returns a SQL boolean that is TRUE when the monitor
+// aliased by monAlias currently routes to the channel channelIDExpr, i.e. when
+// TargetsSQL for that monitor would emit the channel. It is TargetsSQL's own
+// text correlated to one row instead of bound to $1/$2, for batch queries over
+// many (alert, channel) pairs that must drop unrouted channels in SQL rather
+// than after a LIMIT. Like TargetsSQL it ignores is_active.
+func RoutesToChannelPredicate(monAlias, channelIDExpr string) string {
+	return `EXISTS (SELECT 1 FROM (` +
+		targetsSQL(monAlias+".tenant_id", func(col string) string { return col + " = " + monAlias + ".id" }) +
+		`) routed WHERE routed.channel_id = ` + channelIDExpr + `)`
+}
+
+// targetsSQL is the one routing union behind TargetsSQL and
+// RoutesToChannelPredicate. The inner monitors alias (rtm) must not collide
+// with a caller's correlated alias.
+func targetsSQL(tenantExpr string, monitorMatch func(col string) string) string {
 	return `
 		SELECT mc.monitor_id, mc.channel_id, mc.delay_seconds, 0 AS pos
 		FROM monitor_channels mc
-		JOIN monitors m ON m.id = mc.monitor_id
-		WHERE mc.monitor_id = ANY($2) AND m.notification_mode = 'custom'
+		JOIN monitors rtm ON rtm.id = mc.monitor_id
+		WHERE ` + monitorMatch("mc.monitor_id") + ` AND rtm.notification_mode = 'custom'
 		UNION ALL
-		SELECT m.id, tdc.channel_id, tdc.delay_seconds, tdc.position
+		SELECT rtm.id, tdc.channel_id, tdc.delay_seconds, tdc.position
 		FROM tenant_default_channels tdc
-		JOIN monitors m ON m.tenant_id = tdc.tenant_id
-		WHERE tdc.tenant_id = $1 AND m.id = ANY($2) AND m.notification_mode = 'default'`
+		JOIN monitors rtm ON rtm.tenant_id = tdc.tenant_id
+		WHERE tdc.tenant_id = ` + tenantExpr + ` AND ` + monitorMatch("rtm.id") + ` AND rtm.notification_mode = 'default'`
 }
 
 // ChannelCountExpr returns a SQL scalar subquery counting the channels routed

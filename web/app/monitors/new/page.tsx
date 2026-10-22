@@ -7,7 +7,7 @@ import { createMonitor, getMonitor } from '@/lib/api';
 import { buildClonedMonitorInitialData } from '@/lib/monitor-clone';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import PageHeader from '@/components/ui/PageHeader';
-import FormCard from '@/components/ui/FormCard';
+import Page from '@/components/ui/Page';
 import { useToast } from '@/components/ui/ToastProvider';
 
 export default function NewMonitorPage() {
@@ -53,16 +53,17 @@ export default function NewMonitorPage() {
     return () => {
       cancelled = true;
     };
-  }, [cloneMonitorId]);
+  }, [cloneMonitorId, showToast]);
 
   const handleSubmit = async (data: CreateMonitorRequest | UpdateMonitorRequest) => {
     try {
       setLoading(true);
       const created = await createMonitor(data as CreateMonitorRequest);
-      showToast('Monitor created successfully', 'success');
-      setTimeout(() => {
-        router.push(`/monitors/${created.id}`);
-      }, 1000);
+      showToast('Monitor created', 'success');
+      // The toast lives in the layout and survives the navigation, so there is
+      // no need to hold the form on "Saving…" first. `loading` stays on until
+      // the detail page replaces this one.
+      router.push(`/monitors/${created.id}`);
     } catch (err: any) {
       showToast(err.message || 'Failed to create monitor', 'error');
       setLoading(false);
@@ -70,7 +71,7 @@ export default function NewMonitorPage() {
   };
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <Page width="wide">
       <PageHeader
         breadcrumb={[
           { label: 'Monitors', href: '/monitors' },
@@ -80,27 +81,24 @@ export default function NewMonitorPage() {
         subtitle={
           isCloneMode
             ? cloneSourceName
-              ? `Cloning "${cloneSourceName}". Update anything before creating the new monitor.`
+              ? `A copy of ${cloneSourceName}. Change anything before creating it.`
               : 'Loading monitor details to clone…'
             : undefined
         }
       />
 
-      <FormCard>
-        {isCloneMode && cloneLoading ? (
-          <div className="flex h-40 items-center justify-center text-sm text-slate-500">
-            Loading clone form…
-          </div>
-        ) : (
-          <MonitorForm
-            initialData={initialData || undefined}
-            onSubmit={handleSubmit}
-            onCancel={() => router.push('/monitors')}
-            loading={loading}
-          />
-        )}
-      </FormCard>
-
-    </div>
+      {isCloneMode && cloneLoading ? (
+        <div className="glass flex h-40 items-center justify-center text-sm text-slate-500">
+          Loading clone form…
+        </div>
+      ) : (
+        <MonitorForm
+          initialData={initialData || undefined}
+          onSubmit={handleSubmit}
+          onCancel={() => router.push('/monitors')}
+          loading={loading}
+        />
+      )}
+    </Page>
   );
 }

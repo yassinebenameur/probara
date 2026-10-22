@@ -16,7 +16,7 @@ export const CONFIGURATION_PAGE: DocPage = {
     'OIDC',
     'NATS',
     'SMTP',
-    'LLM',
+    'local AI',
   ],
   sections: [
     {
@@ -55,7 +55,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A populated .env file does not configure every Docker service',
           text:
-            'Compose has no `env_file` declaration. LLM, SMTP, notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services.',
+            'Compose has no `env_file` declaration. SMTP, notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services.',
         },
         {
           type: 'callout',
@@ -101,7 +101,7 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`POSTGRES_URL`',
               'Empty',
               'API, scheduler, worker, alerter, status page, CLIs',
-              'Required by API, scheduler, alerter, and status page. Optional for workers; a worker without it cannot run notification or AI-RCA side consumers.',
+              'Required by API, scheduler, alerter, and status page. Optional for workers; a worker without it cannot run the notification, AI-RCA or alert-triage (relay and consumer) side consumers.',
             ],
             [
               '`NATS_URL`',
@@ -178,7 +178,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PUBLIC_BASE_URL`',
               'Empty; surrounding whitespace and trailing slash removed',
-              'Externally reachable API origin used in agent installers, push webhooks, and the default OIDC callback. Compose and Helm require it for normal deployment.',
+              'Externally reachable API origin used in agent installers, push webhooks, the default OIDC callback, and the [MCP](/docs/mcp/#authentication) OAuth issuer and discovery metadata (derived from the request when empty). Compose and Helm require it for normal deployment.',
             ],
             [
               '`PUBLIC_NATS_URL`',
@@ -286,7 +286,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY`',
               'Base64 encoding of exactly 32 bytes',
-              'Version 1 key for encrypted channel, monitor, location, and AI credentials.',
+              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback).',
             ],
             [
               '`PROBARA_SECRETS_KEY_V2` … `PROBARA_SECRETS_KEY_V100`',
@@ -312,7 +312,7 @@ export const CONFIGURATION_PAGE: DocPage = {
     },
     {
       id: 'api-queue-ai-artifacts',
-      title: 'API queues, AI fallback, mesh, and artifacts',
+      title: 'API queues, local AI, mesh, and artifacts',
       blocks: [
         {
           type: 'table',
@@ -372,25 +372,22 @@ export const CONFIGURATION_PAGE: DocPage = {
         },
         {
           type: 'table',
-          columns: ['Global AI fallback variable', 'Default / validation', 'Notes'],
+          columns: ['Local AI variable', 'Default / validation', 'Read by and deployment wiring'],
           rows: [
-            ['`LLM_PROVIDER`', '`openai_compat`', 'Accepted runtime providers: `openai_compat` and `openai`.'],
-            ['`LLM_BASE_URL`', 'Empty', 'Base endpoint for an OpenAI-compatible provider.'],
-            ['`LLM_API_KEY`', 'Empty', 'Provider secret.'],
-            ['`LLM_MODEL`', 'Empty', 'Required when a base URL is configured.'],
-            [
-              '`LLM_JSON_MODE`',
-              'Empty',
-              'Product settings support empty/off, `json_object`, and `json_schema`.',
-            ],
-            ['`LLM_MAX_TOKENS`', '`1024`; positive integer', 'Maximum response tokens.'],
-            ['`LLM_TIMEOUT_SECONDS`', '`60`; positive integer', 'Provider request timeout.'],
+            ['`LOCAL_AI_DISABLED`', '`false`', 'API, worker, alerter and the inference service. `true` overrides every workspace switch, and the service then loads no model (readiness answers 503); the alerter only reads it to stop [suspected-cause follow-ups](/docs/alerting/#ai-triage). Compose forwards the shell value to all four; Helm renders `true` on API, worker and alerter when `localAI.enabled=false` and no `localAI.externalUrl` is set.'],
+            ['`LOCAL_AI_URL`', '`http://127.0.0.1:8090`; `http(s)://host[:port]` with no path, query or credentials', 'API and worker. Compose sets `http://local-ai:8090`; Helm sets `http://<release>-local-ai:8090` or `localAI.externalUrl`; the local-process stack uses the default (the container is published on loopback).'],
+            ['`LOCAL_AI_TOKEN`', 'At least 16 characters', 'API, worker and the inference service, which must all hold the same value. Surrounding whitespace, such as the trailing newline of a Secret created from a file, is ignored on every side. The service refuses to start without a valid token; API and worker start anyway and report local AI as not configured correctly. See [token handling](/docs/deployment/#helm-values-local-ai) for Compose, local and Helm defaults.'],
+            ['`LOCAL_AI_TIMEOUT_SECONDS`', '`90`; 1–300', 'API and worker request timeout. An out-of-range value stops startup. Helm: `localAI.timeoutSeconds`.'],
+            ['`LOCAL_AI_THREADS`', '`4`; 1–4', 'Inference service only: CPU threads for the single inference process. The model is CPU-validated at 4. Compose defaults to 4 and the Make targets to min(host CPUs, 4); Helm: `localAI.threads`.'],
+            ['`LOCAL_AI_QUEUE_CAPACITY`', '`4`; 1–32', 'Inference service only: batches allowed to wait behind the one executing; beyond that the service answers 429. Helm: `localAI.queueCapacity`.'],
+            ['`LOCAL_AI_QUEUE_TIMEOUT_SECONDS`', '`60`; above 0, at most 300', 'Inference service only: how long a waiting batch may wait for the executing slot before a 429. A full 50-decision batch takes about 15–20 seconds on 4 CPU threads; keep it below `LOCAL_AI_TIMEOUT_SECONDS` so a queued caller gets a retryable 429 rather than its own timeout (Helm enforces this). Compose forwards the shell value (default 60); Helm: `localAI.queueTimeoutSeconds`.'],
+            ['`LOCAL_AI_MAX_INFERENCE_SECONDS`', '`120`; above 0, at most 600', 'Inference service only: a batch still running after this long is treated as wedged, and `/healthz` and `/readyz` answer 503 until it finishes, so the Kubernetes liveness probe restarts the pod. Compose forwards the shell value (default 120) and marks the container unhealthy; Docker does not restart an unhealthy container by itself. Helm: `localAI.maxInferenceSeconds`.'],
+            ['`LOCAL_AI_IMAGE`, `LOCAL_AI_CPUS`', '`ghcr.io/yassinebenameur/probara-local-ai:latest`; `4`', 'Compose interpolation only: the image to pull (built from `ai-service/` when the pull fails) and the container CPU limit. `latest` is pushed only by stable releases, so on the prerelease line set `LOCAL_AI_IMAGE` to an `:alpha` or version tag, or Compose builds the image locally (Git LFS head weights required); a local build keeps the tag, so rebuild it (`docker compose build local-ai`) after an `ai-service/` change. Docker requires the CPU limit to be at most the host CPU count. The Make targets and `scripts/start-local-services.sh` default it to min(host CPUs, 4).'],
           ],
         },
         {
           type: 'paragraph',
-          text:
-            'These LLM values are an optional global fallback. Tenant-specific AI settings stored in PostgreSQL take precedence. Compose and Helm do not currently inject the fallback variables into API or worker pods. The API derives an `AIAnalysisEnabled` flag from `LLM_BASE_URL`, but that flag has no present runtime use.',
+          text: 'Local AI uses one evaluated Probara checkpoint, served by the installation-owned inference service (`ai-service/`), for every AI surface: incident analysis, automatic alert triage and dependency suggestions. Range errors in the service variables stop the service at startup; Helm checks `threads`, `queueCapacity`, `queueTimeoutSeconds`, `maxInferenceSeconds` and `timeoutSeconds` (and that the queue timeout is below the client timeout) at render time instead. Workspace rows store only effective enablement: explicit enabled/disabled settings are preserved and absent settings default enabled. External providers and `LLM_*` execution are retired; old columns are retained for rollback. Explanations come from measured evidence and maintained templates.',
         },
       ],
     },
@@ -545,7 +542,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`HTTP_ALLOWED_CIDRS`',
               'Empty; comma-separated CIDRs',
-              'Narrow exceptions to the block policy. Any invalid CIDR fails startup.',
+              'Narrow exceptions to the block policy. Entries also admit a private media address that a public SIP peer names in its SDP answer, which a [test call with `call.media`](/docs/security/#ssrf-network-policy) otherwise refuses even with blocking off. Any invalid CIDR fails startup.',
             ],
             [
               '`CHROME_BIN`',
@@ -555,7 +552,17 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`SIP_LOCALHOST_AS_HOST_GATEWAY`',
               '`false`',
-              'Truthy values are `1`, `true`, `yes`, and `on`. Compose/local set it for host-gateway development.',
+              'Rewrites each SIP target host that is `localhost` or a loopback IP (the monitor host or, under `resolution: rfc3263`, an SRV target) to `host.docker.internal` before it is resolved, so a containerized worker can reach a SIP server on the developer machine. Truthy values are `1`, `true`, `yes`, and `on`. The Compose worker and `make start-all-local` (local-process workers) both turn it on; leave it off in production.',
+            ],
+            [
+              '`SIP_CALL_ENABLED`',
+              '`true` on platform workers, `false` on private-location workers (`WORKER_LOCATION_ID` set)',
+              'Lets the worker place [SIP test calls](/docs/monitors/#network-protocols) (`method: invite`), which are real and possibly billed. A disabled worker fails each one with `sip_call: disabled on this worker` before sending anything. It also gates call quality (`call.media`, which sends RTP and RTCP during the hold): there is no separate media switch. A private-location operator opts in with `SIP_CALL_ENABLED=true` (Helm: `worker.locations[].extraEnv`). Any value `strconv.ParseBool` rejects fails startup.',
+            ],
+            [
+              '`SIP_CALL_ALLOWED_DESTINATIONS`',
+              'Empty (every destination)',
+              'Comma-separated regular expressions; a test call is placed only when the called user part (`call.number`, or the decoded user part of `call.target_uri`, which may carry no `;parameters` or `:password`) matches one in full (each is anchored), else it fails with `policy: destination not allowed by worker policy` before sending anything. An invalid expression fails startup.',
             ],
           ],
         },
@@ -580,6 +587,22 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`AI_RCA_SUBJECT`', '`ai.rca.jobs`', 'Must match API.'],
             ['`AI_RCA_CONSUMER_NAME`', '`ai-rca-workers`', 'Durable AI consumer.'],
             [
+              '`AI_TRIAGE_ENABLED`',
+              '`true`; boolean, invalid values fail startup',
+              'Platform kill switch for [automatic alert triage](/docs/alerting/#ai-triage), read by the worker, the alerter and the API. On the worker `false` stops new claims only; queued triages finish as skipped without calling the model. On the alerter `false` stops every suspected-cause follow-up, including from triages that were already ready. On the API `false` (or `LOCAL_AI_DISABLED=true`) keeps [SLA reports](/docs/slas/#suspected-causes) from listing an alert with no triage as Triage pending. Compose forwards the shell value to all three; Helm renders `localAI.triageEnabled` into all three.',
+            ],
+            [
+              '`AI_TRIAGE_STREAM`',
+              '`AI_TRIAGE`',
+              'Alert triage work-queue stream (1-hour max age). Must differ from `AI_RCA_STREAM`, or startup fails.',
+            ],
+            [
+              '`AI_TRIAGE_SUBJECT`',
+              '`ai.triage.jobs`',
+              'Worker-internal: the relay publishes and the triage consumer reads it, so the API does not need it. Must differ from `AI_RCA_SUBJECT`, or startup fails.',
+            ],
+            ['`AI_TRIAGE_CONSUMER_NAME`', '`ai-triage-workers`', 'Durable triage consumer.'],
+            [
               '`NOTIFICATIONS_ENABLED`',
               '`false`',
               'Starts the worker notification consumer only when PostgreSQL is also configured.',
@@ -600,7 +623,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The worker uses the same `LLM_*` and `SMTP_*` variables documented on this page. Compose wires neither AI, notification, nor SMTP variables into the worker. Helm wires `SMTP_*` through its `smtp` values block; AI and notification-mode variables still require `extraEnv`.',
+            'The database-connected worker uses the same `LOCAL_AI_*` client variables as the API; Compose and Helm wire them to both, and Helm wires `SMTP_*` through its `smtp` values block. The `AI_RCA_*` variables and the `AI_TRIAGE_*` stream names are not wired, so their code defaults apply; set them through `extraEnv` only to rename the streams. `AI_TRIAGE_ENABLED` is wired to the worker, the alerter and the API. Only database-connected platform workers read `AI_TRIAGE_*`: they run the triage relay and consumer, and location workers never do. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`.',
         },
       ],
     },
@@ -649,6 +672,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`false`; boolean',
               'Publishes channel dispatch jobs to NATS instead of sending synchronously.',
             ],
+            [
+              '`LOCAL_AI_DISABLED` / `AI_TRIAGE_ENABLED`',
+              '`false` / `true`; boolean, invalid values fail startup',
+              'The local AI kill switches. The alerter never calls local AI; with `LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` it sends no [suspected-cause follow-ups](/docs/alerting/#ai-triage), whatever the workspace settings say.',
+            ],
             ['`NOTIFICATIONS_STREAM`', '`NOTIFICATIONS`', 'Must match worker.'],
             [
               '`NOTIFICATIONS_SUBJECT_GLOB`',
@@ -684,7 +712,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel; omitted when unset. Read by the same three services.',
+              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel; omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one).',
             ],
           ],
         },
@@ -906,6 +934,7 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Required GitHub Actions secret for release workflow',
               'Used as semantic-release, GHCR/Helm registry, `GH_TOKEN`, and `GITHUB_TOKEN` credential. Scope it to the repository/packages required by the workflow.',
             ],
+            ['`LAYA_GIT_URL`, `HF_ENDPOINT`, `BASE_MODEL_REPO`, `BASE_MODEL_REVISION`', '`https://github.com/NandhaKishorM/laya.git`, `https://huggingface.co`, empty, empty (= `base-lock.json`)', 'Build args of `ai-service/Dockerfile` naming where the pinned laya commit and base model are fetched from, for a mirror; the pinned commit and every locked sha256 are still checked. CI reads the first two from repository variables of the same name, and `release.yml` checks those sources still serve the pins before tagging.'],
             ['`API`', '`http://localhost:8080`', '`scripts/verify-auth.sh`.'],
             ['`ADMIN_USER`', '`admin`', 'Authentication verification helper.'],
             ['`ADMIN_PASS`', '`change-me`', 'Authentication verification helper only; never a production default.'],
@@ -947,7 +976,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
             ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
-            ['AI fallback', 'Not wired', 'Not wired'],
+            ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker, `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` also to the alerter, `AI_TRIAGE_ENABLED` also to the API; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only (the alerter gets only `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED`; `AI_TRIAGE_ENABLED` also reaches the API)'],
             [
               'SMTP',
               'Not wired',

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -41,15 +43,35 @@ func (h *Handlers) Suggest(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.service.Suggest(r.Context(), tenantUUID)
 	if err != nil {
-		if errors.Is(err, ai.ErrNotConfigured) {
-			apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "AI is not configured. Set it up in Settings → AI root cause analysis.")
-			return
-		}
-		h.logger.WithError(err).Error("Failed to suggest dependencies")
-		apierrors.WriteInternalError(w, "failed to suggest dependencies")
+		writeSuggestError(w, err, h.logger)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+// unavailableRetryAfter is the Retry-After sent when the local AI answered
+// without one (its own 429 carries 5 s).
+const unavailableRetryAfter = 5 * time.Second
+
+// writeSuggestError maps a Suggest failure. A local AI that is busy (queue
+// full or queue deadline, HTTP 429), loading or restarting is
+// ai.ErrUnavailable: a retryable 503 with Retry-After, not a 500, since the
+// same request succeeds once the executing batch finishes.
+func writeSuggestError(w http.ResponseWriter, err error, log *logger.Logger) {
+	switch {
+	case errors.Is(err, ai.ErrNotConfigured):
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "Local AI is disabled for this workspace or installation. Check Settings → AI.")
+	case errors.Is(err, ai.ErrUnavailable):
+		retry := ai.RetryAfterHint(err)
+		if retry <= 0 {
+			retry = unavailableRetryAfter
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(int((retry+time.Second-1)/time.Second)))
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "unavailable", "Local AI is busy or restarting; retry shortly.")
+	default:
+		log.WithError(err).Error("Failed to suggest dependencies")
+		apierrors.WriteInternalError(w, "failed to suggest dependencies")
+	}
 }

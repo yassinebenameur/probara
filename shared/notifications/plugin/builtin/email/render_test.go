@@ -208,3 +208,66 @@ func TestWrapText_PreservesExistingNewlines(t *testing.T) {
 		t.Errorf("wrapText = %q", got)
 	}
 }
+
+func suspectedCauseEvent() notifications.AlertEvent {
+	event := sampleEvent()
+	event.Type = present.EventSuspectedCause
+	event.Timestamp = event.Alert.TriggeredAt.Add(6 * time.Minute)
+	event.Alert.SuspectedCause = &notifications.SuspectedCause{
+		TriageID: "t-1", Key: "dns_failure", Title: "DNS resolution failure", Confidence: "high",
+		Actions: []string{"Query the record from the affected location."},
+	}
+	return event
+}
+
+func TestRenderSuspectedCause_BuiltInParts(t *testing.T) {
+	event := suspectedCauseEvent()
+	subject, err := RenderSubject(event, Templates{}, "")
+	if err != nil || subject != "[Suspected Cause] API health" {
+		t.Fatalf("subject = %q, %v", subject, err)
+	}
+	text, err := RenderBody(event, Templates{}, "https://probara.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"AI TRIAGE · Suspected Cause",
+		"DNS resolution failure (high confidence)",
+		"Suspected cause",
+		"Suggested first check",
+		"https://probara.example.com/alerts?alert=a-1&tenant=tenant-1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text part missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "timeout") {
+		t.Errorf("follow-up must not repeat the page's last error:\n%s", text)
+	}
+}
+
+// Override templates model a page; a follow-up rendered through them would
+// read as a second DOWN email, so it always uses the built-in rendering.
+func TestRenderSuspectedCause_IgnoresOverrideTemplates(t *testing.T) {
+	overrides := Templates{
+		Subject: "{{.monitor_name}} is DOWN ({{.status}})",
+		Body:    "DOWN: {{.monitor_name}}",
+		HTML:    "<p>DOWN: {{.monitor_name}}</p>",
+	}
+	event := suspectedCauseEvent()
+	subject, err := RenderSubject(event, overrides, "")
+	if err != nil || subject != "[Suspected Cause] API health" {
+		t.Fatalf("subject = %q, %v", subject, err)
+	}
+	body, _ := RenderBody(event, overrides, "")
+	html, _ := RenderHTML(event, overrides, "")
+	if strings.Contains(body, "DOWN:") || strings.Contains(html, "DOWN:") || html == "" {
+		t.Fatalf("override templates leaked into the follow-up: body=%q html=%d bytes", body, len(html))
+	}
+
+	// The same overrides still apply to a page.
+	page := sampleEvent()
+	if subject, _ := RenderSubject(page, overrides, ""); subject != "API health is DOWN (active)" {
+		t.Fatalf("page subject = %q", subject)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -39,10 +40,16 @@ const (
 // nextCheckDelay returns how long after now the monitor should run again.
 // Only 'suspect' (temporal, mid-confirmation) gets the fast recheck;
 // 'degraded' (spatial: some locations down, below quorum) can persist
-// indefinitely and runs at the normal interval.
-func nextCheckDelay(currentState string, intervalSeconds int) time.Duration {
-	interval := time.Duration(intervalSeconds) * time.Second
-	if currentState == "suspect" && suspectRecheckInterval < interval {
+// indefinitely and runs at the normal interval. Side-effecting checks (SIP
+// INVITE test calls) never get the fast recheck (S-A9): their interval floor
+// (models.SIPCallMinIntervalSeconds) is the call-rate limit, and a 20 s
+// recheck would also overlap a call that can run 24 s (timeout plus teardown
+// reserve). IsSIPCallConfig reads only non-secret fields, so the encrypted
+// config answers the same.
+func nextCheckDelay(m Monitor) time.Duration {
+	interval := time.Duration(m.IntervalSeconds) * time.Second
+	if m.CurrentState == "suspect" && suspectRecheckInterval < interval &&
+		!models.IsSIPCallConfig(m.Type, m.Config) {
 		return suspectRecheckInterval
 	}
 	return interval
@@ -57,6 +64,9 @@ type Monitor struct {
 	IntervalSeconds int
 	TimeoutSeconds  int
 	CurrentState    string
+	// DueAt is the next_run_at this dispatch serves (NULL for a row that
+	// never had one): the slot behind each job's Nats-Msg-Id.
+	DueAt sql.NullTime
 	// LocationIDs the monitor fans out to; empty = default platform fleet.
 	LocationIDs []uuid.UUID
 	// LocationCredentials contains plaintext per-location credentials only for
@@ -105,10 +115,10 @@ type Scheduler struct {
 	meshEdgesScheduled *prometheus.CounterVec
 	meshPublishErrors  *prometheus.CounterVec
 
-	// publish sends one job to the queue. It defaults to the NATS-backed
-	// implementation and exists as a seam so tests can capture published jobs
-	// without a broker.
-	publish func(ctx context.Context, subject string, job *models.Job) error
+	// publish sends one job to the queue with its headers. It defaults to
+	// the NATS-backed implementation and exists as a seam so tests can
+	// capture published jobs without a broker.
+	publish func(ctx context.Context, subject string, job *models.Job, headers map[string][]string) error
 
 	purger *purger
 }
@@ -218,8 +228,8 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Unix timestamp of the latest processed check result cursor",
 		[]string{},
 	)
-	s.publish = func(ctx context.Context, subject string, job *models.Job) error {
-		return s.queue.PublishJSON(ctx, subject, job, nil)
+	s.publish = func(ctx context.Context, subject string, job *models.Job, headers map[string][]string) error {
+		return s.queue.PublishJSON(ctx, subject, job, headers)
 	}
 
 	purgerMetrics := &purgerMetrics{
@@ -577,18 +587,18 @@ func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.U
 // fetchDueMonitors fetches monitors that are due to run within a transaction
 func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize int) ([]Monitor, error) {
 	query := `
-		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state
+		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state, next_run_at
 		FROM monitors
 		WHERE enabled = true
 		  AND deleted_at IS NULL
-		  AND type != 'group'
+		  AND type <> ALL($2)
 		  AND (next_run_at IS NULL OR next_run_at <= NOW())
 		ORDER BY next_run_at NULLS FIRST, id
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED
 	`
 
-	rows, err := tx.QueryContext(ctx, query, batchSize)
+	rows, err := tx.QueryContext(ctx, query, batchSize, pq.Array(models.PassiveMonitorTypes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query due monitors: %w", err)
 	}
@@ -600,7 +610,7 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 
 		err := rows.Scan(
 			&m.ID, &m.TenantID, &m.Type, &m.Config,
-			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState,
+			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState, &m.DueAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan monitor: %w", err)
@@ -754,11 +764,28 @@ func (s *Scheduler) ensureLocationConsumer(ctx context.Context, locationID strin
 }
 
 // publishJob publishes a job to NATS (via the publish seam).
-func (s *Scheduler) publishJob(ctx context.Context, subject string, job *models.Job) error {
-	if err := s.publish(ctx, subject, job); err != nil {
+func (s *Scheduler) publishJob(ctx context.Context, subject string, job *models.Job, headers map[string][]string) error {
+	if err := s.publish(ctx, subject, job, headers); err != nil {
 		return fmt.Errorf("failed to publish job: %w", err)
 	}
 	return nil
+}
+
+// checkJobMsgID is a scheduled job's Nats-Msg-Id: one per (monitor,
+// location, due slot). A dispatch retried for the same slot — a publish that
+// errored after JetStream stored it (lost PubAck), or a reschedule that
+// failed and rolled the batch back — carries the same id, so the stream
+// drops the copy within its Duplicates window (2 minutes, far longer than a
+// scheduler tick) instead of queueing a second check, which for a SIP test
+// call would be a second real call. next_run_at is unchanged until the
+// reschedule commits, so the retry sees the same slot. Run-now is a
+// deliberate manual trigger and publishes without one.
+func checkJobMsgID(monitor Monitor, locationID string) string {
+	slot := "initial"
+	if monitor.DueAt.Valid {
+		slot = strconv.FormatInt(monitor.DueAt.Time.UnixNano(), 10)
+	}
+	return "check:" + monitor.ID.String() + ":" + locationID + ":" + slot
 }
 
 // publishMonitorJobs fans a due monitor out to its locations (or the default
@@ -790,7 +817,8 @@ func (s *Scheduler) publishMonitorJobs(ctx context.Context, monitor Monitor) (pu
 			continue
 		}
 
-		if err := s.publishJob(ctx, s.jobSubject(locationID), job); err != nil {
+		headers := queue.MsgIDHeaders(checkJobMsgID(monitor, locationID))
+		if err := s.publishJob(ctx, s.jobSubject(locationID), job, headers); err != nil {
 			s.jobsPublishErrors.With(prometheus.Labels{}).Inc()
 			s.logger.WithError(err).
 				WithField("monitor_id", monitor.ID).
@@ -877,7 +905,7 @@ func (s *Scheduler) scheduleBatch(ctx context.Context) {
 		}
 
 		// Calculate next run time
-		nextRunAt := time.Now().Add(nextCheckDelay(monitor.CurrentState, monitor.IntervalSeconds))
+		nextRunAt := time.Now().Add(nextCheckDelay(monitor))
 
 		// Update monitor's next_run_at within the transaction
 		if err := s.updateMonitorNextRunAt(ctx, tx, monitor.ID, nextRunAt); err != nil {
@@ -886,9 +914,12 @@ func (s *Scheduler) scheduleBatch(ctx context.Context) {
 				WithField("monitor_id", monitor.ID).
 				WithField("tenant_id", monitor.TenantID).
 				Error("Failed to update monitor next_run_at")
-			// If DB update fails, we've already published the job(s)
-			// This is acceptable - the monitor will be scheduled again, but the jobs are already queued
-			// We continue to process other monitors
+			// The job(s) are already queued, and a failed statement aborts
+			// the whole Postgres transaction: the commit below fails and
+			// every monitor of the batch is dispatched again next tick for
+			// the same slot. checkJobMsgID makes that re-dispatch a
+			// duplicate the stream drops, so no check (and no test call)
+			// runs twice.
 			continue
 		}
 

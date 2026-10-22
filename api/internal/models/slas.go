@@ -91,6 +91,11 @@ type SLAReport struct {
 	OutagesTruncated bool              `json:"outages_truncated"`
 	Response         SLAReportResponse `json:"response"`
 	Notes            []string          `json:"notes"`
+	// SuspectedCauses is the suspected-cause breakdown of monitor outages.
+	// Absent on reports computed before it existed, so every renderer
+	// (web, CSV, PDF) must treat it as optional and leave such a report's
+	// output unchanged.
+	SuspectedCauses *SLAReportSuspectedCauses `json:"suspected_causes,omitempty"`
 }
 
 // SLAReportDefinition is the SLA as it stood when the report was computed.
@@ -186,6 +191,68 @@ type SLAReportOutage struct {
 	UnplannedSeconds float64    `json:"unplanned_seconds"`
 	StartedBefore    bool       `json:"started_before"`
 	Ongoing          bool       `json:"ongoing"`
+	// CauseKind/CauseKey/CauseTitle are the outage's bucket in
+	// SuspectedCauses (one of the SLACause* kinds; CauseKey is the catalogue
+	// key for suspected causes, else the kind). Set only on per-monitor
+	// outages with unplanned time, on reports computed since causes exist.
+	CauseKind  string `json:"cause_kind,omitempty"`
+	CauseKey   string `json:"cause_key,omitempty"`
+	CauseTitle string `json:"cause_title,omitempty"`
+}
+
+// Suspected-cause buckets of an SLA report, in display order after the
+// suspected (catalogue) causes.
+const (
+	// SLACauseSuspected: a named catalogue cause, from a ready triage or an
+	// operator's label on it.
+	SLACauseSuspected = "suspected"
+	// SLACauseInconclusive: triage ran and found no supported cause, or an
+	// operator confirmed there was none.
+	SLACauseInconclusive = "inconclusive"
+	// SLACausePending: the alert's triage was queued or running, or the
+	// alert was still open and claimable, when the report was computed.
+	SLACausePending = "pending"
+	// SLACauseUntriaged: the overlapping alerts were never triaged (no row,
+	// failed or skipped).
+	SLACauseUntriaged = "untriaged"
+	// SLACauseNoAlert: no availability alert of the monitor overlapped the
+	// outage.
+	SLACauseNoAlert = "no_alert"
+)
+
+// SLAReportSuspectedCauses rolls monitor outages up by suspected cause.
+// Counts are monitor outages (a span on one monitor), not alerts, and
+// UnplannedSeconds is summed per monitor, so it can exceed the service's
+// downtime when monitors fail together.
+type SLAReportSuspectedCauses struct {
+	OutageCount int `json:"outage_count"`
+	// TriagedOutageCount = suspected + inconclusive outages.
+	TriagedOutageCount int     `json:"triaged_outage_count"`
+	PendingOutageCount int     `json:"pending_outage_count"`
+	UnplannedSeconds   float64 `json:"unplanned_seconds"`
+	// Buckets: suspected causes by downtime, then inconclusive, pending,
+	// untriaged, no_alert. Empty buckets are omitted; never null.
+	Buckets []SLAReportCauseBucket `json:"buckets"`
+}
+
+type SLAReportCauseBucket struct {
+	Kind string `json:"kind"`
+	// Key is the catalogue rca key for suspected causes, else the kind.
+	Key string `json:"key"`
+	// Title is copied in when the report is computed, so an issued report
+	// stays readable whatever the catalogue later calls the key.
+	Title       string `json:"title"`
+	OutageCount int    `json:"outage_count"`
+	// AlertCount is the distinct availability alerts the outages were
+	// attributed to; they can have triggered before the period.
+	AlertCount       int     `json:"alert_count"`
+	MonitorCount     int     `json:"monitor_count"`
+	UnplannedSeconds float64 `json:"unplanned_seconds"`
+	// ConfirmedOutageCount / CorrectedOutageCount: outages whose cause came
+	// from an operator label that confirmed the model's answer, or replaced
+	// it.
+	ConfirmedOutageCount int `json:"confirmed_outage_count"`
+	CorrectedOutageCount int `json:"corrected_outage_count"`
 }
 
 // SLAReportResponse covers detection-to-recovery (outages) and operator

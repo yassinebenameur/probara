@@ -1,0 +1,10 @@
+{
+  "legacy_rendering": true,
+  "transient_failures": 1,
+  "polling_recovered": true,
+  "abstention_rendering": true,
+  "scope": "Persisted UI fixtures; no real model or queue claim.",
+  "browser": "Playwright 1.58.2 Chromium on Linux arm64",
+  "browser_image": "mcr.microsoft.com/playwright@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d",
+  "date": "2026-10-11"
+}

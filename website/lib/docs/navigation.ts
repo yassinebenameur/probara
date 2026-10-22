@@ -32,7 +32,7 @@ export const DOC_NAVIGATION: DocNavGroup[] = [
       {
         slug: 'alerting',
         title: 'Alerting & incidents',
-        description: 'Sensitivity, routing, lifecycle, maintenance, and AI RCA.',
+        description: 'Sensitivity, routing, lifecycle, maintenance, AI analysis and triage.',
       },
       {
         slug: 'status-pages',
@@ -68,6 +68,11 @@ export const DOC_NAVIGATION: DocNavGroup[] = [
         slug: 'api',
         title: 'API reference',
         description: 'Authentication, conventions, endpoint families, and examples.',
+      },
+      {
+        slug: 'mcp',
+        title: 'MCP server',
+        description: 'Connect Claude, Cursor and other AI agents with your role and audit trail.',
       },
       {
         slug: 'configuration',

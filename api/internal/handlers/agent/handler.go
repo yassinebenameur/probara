@@ -154,12 +154,7 @@ func (h *Handler) HandleGetInstallCommand(w http.ResponseWriter, r *http.Request
 
 	backendURL := h.resolveBackendURL(r)
 
-	// Extract API key from Authorization header
-	apiKey := ""
-	authHeader := r.Header.Get("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
-	}
+	apiKey := embeddableAPIKey(r)
 
 	// Generate install command
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
@@ -204,12 +199,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 
 	backendURL := h.resolveBackendURL(r)
 
-	// Extract API key from Authorization header
-	apiKey := ""
-	authHeader := r.Header.Get("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
-	}
+	apiKey := embeddableAPIKey(r)
 
 	// Generate install command
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
@@ -252,11 +242,7 @@ func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.R
 
 	backendURL := h.resolveBackendURL(r)
 
-	apiKey := ""
-	authHeader := r.Header.Get("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
-	}
+	apiKey := embeddableAPIKey(r)
 
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
@@ -333,11 +319,7 @@ func (h *Handler) HandleGetUninstallScript(w http.ResponseWriter, r *http.Reques
 
 	backendURL := h.resolveBackendURL(r)
 
-	apiKey := ""
-	authHeader := r.Header.Get("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
-	}
+	apiKey := embeddableAPIKey(r)
 
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
@@ -378,11 +360,7 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 
 	backendURL := h.resolveBackendURL(r)
 
-	apiKey := ""
-	authHeader := r.Header.Get("Authorization")
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
-	}
+	apiKey := embeddableAPIKey(r)
 
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
@@ -394,4 +372,25 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", "inline; filename=uninstall-probara-agent.ps1")
 	w.Write([]byte(installCmd.WindowsUninstallScript))
+}
+
+// embeddableAPIKey returns the caller's bearer credential for baking into an
+// install script, but only when it is a tenant API key. A cookie session has
+// no bearer, and an MCP OAuth access token is a short-lived credential of a
+// person: written onto a host it would leak that user's session and stop
+// working within the hour. A read-scope key cannot submit metrics, so the
+// collector it installed would have every export rejected. Those callers get
+// a script with an empty key, which the installer refuses up front.
+func embeddableAPIKey(r *http.Request) string {
+	if actor, ok := context.GetActorType(r.Context()); !ok || actor != context.ActorTypeAPIKey {
+		return ""
+	}
+	if scope, ok := context.GetAuthScope(r.Context()); !ok || scope != "write" {
+		return ""
+	}
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return ""
+	}
+	return strings.TrimPrefix(authHeader, "Bearer ")
 }

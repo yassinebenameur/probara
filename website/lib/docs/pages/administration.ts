@@ -94,6 +94,11 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "Viewer and read-key compute-only POST routes include monitor test, import preview, dependency suggestions, mesh probe, and AI connection test. Persisted operations such as `Run now`, channel test, acknowledgement, or configuration updates require [write authorization](/docs/security/#roles-scopes-tenancy).",
         },
         {
+          type: "paragraph",
+          text:
+            "AI training labels are writes, not diagnostics: confirming or correcting an [incident analysis](/docs/alerting/#ai-analysis) or an [alert triage](/docs/alerting/#ai-triage) and accepting or dismissing a [dependency suggestion](/docs/dependencies/#suggestions) need an editor, admin, superadmin, or write API key, and viewers and read keys get HTTP 403. Only tenant admins and superadmins, signed in, can [export labels](#ai-settings); every API key is refused, write scope included. The same holds for [SIP test-call monitors](/docs/monitors/#network-protocols), which place real calls: creating, changing, pausing, running, testing or importing one needs a signed-in tenant admin or superadmin, and editors and API keys get HTTP 403.",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Write scope is not tenant admin",
@@ -309,45 +314,22 @@ export const ADMINISTRATION_PAGE: DocPage = {
     },
     {
       id: "ai-settings",
-      title: "Tenant AI settings",
+      title: "Workspace local AI settings",
       blocks: [
-        {
-          type: "table",
-          columns: ["Variable", "Meaning"],
-          rows: [
-            ["`enabled`", "Permit tenant AI features"],
-            [
-              "`provider`",
-              "Provider identifier; current default is `openai_compat`",
-            ],
-            [
-              "`base_url`",
-              "OpenAI-compatible API base endpoint",
-            ],
-            ["`model`", "Model name sent to the provider"],
-            ["`json_mode`", "Request structured JSON output where supported"],
-            ["`max_tokens`", "Response token limit"],
-            ["`timeout_seconds`", "Provider request timeout"],
-            [
-              "`api_key`",
-              "Write-only secret: omit to keep, send empty to clear, send a value to replace",
-            ],
-            [
-              "`has_api_key`",
-              "Read-time boolean indicating whether tenant secret material exists",
-            ],
-          ],
-        },
-        {
-          type: "paragraph",
-          text:
-            "Tenant settings override effective environment fallback configuration when present. The API key is encrypted at rest when the [platform master encryption key](/docs/security/#encryption-at-rest) is configured. The connection-test action is compute-only and can be run without saving a new monitor or incident.",
-        },
-        {
-          type: "paragraph",
-          text:
-            "AI configuration enables dependency suggestions and asynchronous incident analysis. It does not automatically apply suggested graph edges or remediation steps.",
-        },
+        { type: "table", columns: ["Field", "Meaning"], rows: [
+          ["`enabled`", "Writable; enable dependency suggestions, asynchronous incident analysis and alert triage for the workspace"],
+          ["`installation_enabled`", "Installation-level availability switch; overrides workspace enablement"],
+          ["`available` / `model`", "Read-only local-service readiness and model identity. Each API process caches the result for about 30 seconds, failures included, so a just-fixed service can read as unavailable until the cache expires."],
+          ["`message`", "One of four fixed readiness strings (disabled, not configured correctly, unreachable, not ready); details are only in the API logs"],
+          ["`auto_triage_enabled`", "Writable, default `false`; [triage new alerts automatically](/docs/alerting/#ai-triage). Takes effect only while `enabled` is also on. With it off, alerts are not triaged at all, so [SLA report](/docs/slas/#suspected-causes) outages land in Not triaged"],
+          ["`triage_delay_seconds`", "Writable, default `60`, 0–3600; how long an alert must stay open before it is triaged. The wait is never shorter than two check intervals of the alert's monitor (that part capped at one hour), so `0` still waits for them"],
+          ["`triage_cooldown_seconds`", "Writable, default `900`, 0–86400; skip an alert's triage when its monitor already has a ready triage completed within this time. `0` turns the cooldown off"],
+          ["`triage_max_per_hour`", "Writable, default `60`, 1–600; triages claimed per rolling hour in this workspace, skipped ones not counted"],
+          ["`triage_notifications_enabled`", "Writable, default `false`; [send suspected causes](/docs/alerting/#ai-triage) once to each channel already paged for an alert (not PagerDuty or Opsgenie). Takes effect only while `enabled` and `auto_triage_enabled` are also on, and only for triages completed after it was turned on"],
+        ] },
+        { type: "paragraph", text: "Settings → AI controls the workspace switch and tests the installation-owned CPU service. Absent workspace settings default enabled, with auto-triage off and the triage defaults above; existing enable and disable switches are preserved. Settings updates are partial: any of the six writable fields, at least one, and an omitted field keeps its stored value. Out-of-range numbers and legacy provider fields return a validation error. Editors, admins, superadmins and write API keys can change these settings; viewers see them read-only. The **Automatic alert triage** block (**Triage new alerts automatically**, **Send suspected causes to alert channels**, **Wait before triage (s)**, **Cooldown per monitor (s)**, **Max triages per hour**) is locked while local AI is disabled for the installation or the workspace switch is off, and **Send suspected causes to alert channels** also while auto-triage is off. The API still accepts `auto_triage_enabled` and `triage_notifications_enabled` with AI or triage off; no alert is triaged, and no follow-up sent, until every switch they depend on is on. The connection test accepts an empty object, cannot accept destinations or credentials, always probes afresh and refreshes the readiness cache of the API replica that serves it." },
+        { type: "paragraph", text: "Tenant admins also see **Training labels** under Settings → AI. **Export labels** downloads every label in the workspace as JSONL training rows (`POST /api/v1/ai-labels/export`, which also accepts a `since`/`until` window and subject types). A row carries evidence counters, catalogue answers and provenance, with no monitor names or IDs (see [AI training labels](/docs/security/#notifications-integrations-ai)). Labelling and export never call the model, so they work while local AI is disabled." },
+        { type: "paragraph", text: "Model decisions are advisory and explanations cite bounded monitoring evidence. No configuration secrets, bodies, screenshots or arbitrary error text are sent to the model. Suggested edges and troubleshooting actions require operator review. Controlled scenarios do not establish real-world accuracy." },
       ],
     },
     {
@@ -368,7 +350,21 @@ export const ADMINISTRATION_PAGE: DocPage = {
             ["`actor_id`", "Filter by actor identifier"],
             ["`from` / `to`", "RFC 3339 time bounds"],
             ["`page` / `page_size`", "Paginated results"],
+            [
+              "`sort` / `dir`",
+              "Order by `occurred_at` (the default, newest first), `action`, `resource` (type, then ID) or `outcome`, `asc` or `desc`; ties read newest first. Any other value is HTTP 400",
+            ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "AI labels record as `incident.label` (resource `incident/{id}`), `alert.label` (alert triage, resource `alert/{id}`), `monitor.label` (dependency suggestions), and `ai-label.export`; AI settings changes record as `ai-setting.update`. A viewer's refused label attempt is recorded as `denied`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Bulk alert triage (`POST /alerts/bulk/acknowledge` and `/resolve`) records one `alert.acknowledge` or `alert.resolve` event per requested alert (resource `alert/{id}`), shaped like the single action's, with `details.bulk: true`. An alert the batch skipped records as `failure` (HTTP 404, as the single action would answer) with `details.reason`. These per-alert events are written before the response, so they are not subject to the recorder's buffer, and they replace the usual request-level event; a refused or invalid bulk request (403, 400) records one request-level event as any other write does.",
         },
         {
           type: "paragraph",
@@ -494,7 +490,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "Test OIDC login and local/recovery login after every proxy, issuer, or public-origin change.",
             "Review audit events, inactive users, stale API keys, and tenant memberships on a schedule.",
             "Define both telemetry and audit retention intentionally.",
-            "Treat AI output as advisory and protect provider API keys with platform secret encryption.",
+            "Treat AI hypotheses as advisory and protect the installation-owned local-service token.",
             "Always preview monitor imports and test imported monitors before relying on them for production alerts.",
           ],
         },

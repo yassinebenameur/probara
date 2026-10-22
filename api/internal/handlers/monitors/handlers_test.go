@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
@@ -166,7 +169,25 @@ func (m *MockGroupService) GetGroupMembers(ctx context.Context, tenantID, groupI
 }
 
 // MockResultsService implements the ResultsService interface for testing
-type MockResultsService struct{}
+type MockResultsService struct {
+	batchIDs   []uuid.UUID
+	batchLimit int
+	batchCalls int
+}
+
+func (m *MockResultsService) GetMonitorResultsBatch(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, limit int) (*resultservice.MonitorResultsBatchResponse, error) {
+	m.batchCalls++
+	m.batchIDs = append([]uuid.UUID(nil), monitorIDs...)
+	m.batchLimit = limit
+	if len(monitorIDs) > resultservice.MaxBatchMonitorIDs {
+		return nil, fmt.Errorf("%w: too many", resultservice.ErrInvalidBatchRequest)
+	}
+	results := map[uuid.UUID][]models.CheckResult{}
+	for _, id := range monitorIDs {
+		results[id] = []models.CheckResult{}
+	}
+	return &resultservice.MonitorResultsBatchResponse{Limit: limit, Results: results, Members: map[uuid.UUID][]uuid.UUID{}}, nil
+}
 
 func (m *MockResultsService) GetMonitorResults(ctx context.Context, tenantID, monitorID uuid.UUID, limit int, since *time.Time) (*models.MonitorResultsResponse, error) {
 	return &models.MonitorResultsResponse{
@@ -674,6 +695,45 @@ func TestHandlers_RunMonitorNow_QueueUnavailable(t *testing.T) {
 	}
 }
 
+func TestHandlers_RunMonitorNow_RefusesPassiveTypes(t *testing.T) {
+	for _, typ := range []models.MonitorType{models.MonitorTypeGroup, models.MonitorTypePush, models.MonitorTypeAgent} {
+		t.Run(string(typ), func(t *testing.T) {
+			log := logger.New("test", "debug")
+			monitorSvc := NewMockMonitorService()
+			handlers := NewHandlers(monitorSvc, &MockGroupService{}, &MockResultsService{}, log, t.TempDir())
+			mockPublisher := &MockCheckJobPublisher{}
+			handlers.ConfigureCheckJobs(mockPublisher, "check.jobs")
+
+			tenantID := uuid.New()
+			monitorID := uuid.New()
+			monitorSvc.monitors[monitorID] = &models.Monitor{
+				ID:              monitorID,
+				TenantID:        tenantID,
+				Name:            "Passive",
+				Type:            typ,
+				Config:          json.RawMessage(`{}`),
+				IntervalSeconds: 60,
+				TimeoutSeconds:  30,
+				Enabled:         true,
+			}
+
+			r := chi.NewRouter()
+			r.Post("/{id}/run", handlers.RunMonitorNow)
+			req := httptest.NewRequest(http.MethodPost, "/"+monitorID.String()+"/run", nil)
+			req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("Expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+			}
+			if mockPublisher.job != nil {
+				t.Fatalf("passive %s monitor must not publish a check job", typ)
+			}
+		})
+	}
+}
+
 func TestHandlers_BulkDeleteMonitors(t *testing.T) {
 	log := logger.New("test", "debug")
 	monitorSvc := NewMockMonitorService()
@@ -734,4 +794,77 @@ func TestHandlers_BulkDeleteMonitors_RejectsEmpty(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
 	}
+}
+
+func TestHandlers_GetMonitorResultsBatch(t *testing.T) {
+	log := logger.New("test", "debug")
+	tenantID := uuid.New()
+	a, b := uuid.New(), uuid.New()
+	many := make([]string, resultservice.MaxBatchMonitorIDs+1)
+	for i := range many {
+		many[i] = uuid.NewString()
+	}
+
+	tests := []struct {
+		name      string
+		query     string
+		wantCode  int
+		wantIDs   []uuid.UUID
+		wantLimit int
+	}{
+		{name: "comma-separated and repeated ids", query: "ids=" + a.String() + "," + b.String() + "&ids=" + a.String() + "&limit=5", wantCode: http.StatusOK, wantIDs: []uuid.UUID{a, b, a}, wantLimit: 5},
+		{name: "default limit is the service's", query: "ids=" + a.String(), wantCode: http.StatusOK, wantIDs: []uuid.UUID{a}, wantLimit: 0},
+		{name: "invalid id", query: "ids=" + a.String() + ",not-a-uuid", wantCode: http.StatusBadRequest},
+		{name: "invalid limit", query: "ids=" + a.String() + "&limit=abc", wantCode: http.StatusBadRequest},
+		{name: "zero limit", query: "ids=" + a.String() + "&limit=0", wantCode: http.StatusBadRequest},
+		{name: "service rejects too many ids", query: "ids=" + strings.Join(many, ","), wantCode: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resultSvc := &MockResultsService{}
+			handlers := NewHandlers(NewMockMonitorService(), &MockGroupService{}, resultSvc, log, t.TempDir())
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/monitors/results/batch?"+tt.query, nil)
+			req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+			w := httptest.NewRecorder()
+			handlers.GetMonitorResultsBatch(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tt.wantCode, w.Body.String())
+			}
+			if tt.wantCode != http.StatusOK {
+				return
+			}
+			if resultSvc.batchLimit != tt.wantLimit {
+				t.Fatalf("limit passed = %d, want %d", resultSvc.batchLimit, tt.wantLimit)
+			}
+			if len(resultSvc.batchIDs) != len(tt.wantIDs) {
+				t.Fatalf("ids passed = %v, want %v", resultSvc.batchIDs, tt.wantIDs)
+			}
+			for i := range tt.wantIDs {
+				if resultSvc.batchIDs[i] != tt.wantIDs[i] {
+					t.Fatalf("ids passed = %v, want %v", resultSvc.batchIDs, tt.wantIDs)
+				}
+			}
+			var body struct {
+				Results map[string][]models.CheckResult `json:"results"`
+				Members map[string][]string             `json:"members"`
+			}
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if _, ok := body.Results[a.String()]; !ok {
+				t.Fatalf("results keyed by monitor id missing %s: %v", a, body.Results)
+			}
+		})
+	}
+
+	t.Run("no tenant", func(t *testing.T) {
+		handlers := NewHandlers(NewMockMonitorService(), &MockGroupService{}, &MockResultsService{}, log, t.TempDir())
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/monitors/results/batch?ids="+a.String(), nil)
+		w := httptest.NewRecorder()
+		handlers.GetMonitorResultsBatch(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", w.Code)
+		}
+	})
 }

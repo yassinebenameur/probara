@@ -1,0 +1,8 @@
+{
+  "repo": "convaiinnovations/laya-multilingual",
+  "revision": "1720e3e3357cfe1e281542e223f8273b0890ca34",
+  "weight_sha256": "9d628fd971b700382ac6f65920a86f149777b2e748e0c955fb3b19695aa8f204",
+  "training_interface_commit": "68804629e8ccd9d616d48a40e87de9fabbeae069",
+  "license": "Apache-2.0",
+  "modified": "Probara domain decision head fine-tuning and CPU encoder quantization; original encoder weights frozen."
+}

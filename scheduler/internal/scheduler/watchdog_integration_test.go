@@ -1,3 +1,5 @@
+//go:build !unit
+
 package scheduler
 
 // Absence-watchdog tests (docs/state-semantics.md S-F1..S-F4, S-A10): missing
@@ -11,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	shareddb "github.com/yassinebenameur/probara/shared/db"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -68,6 +71,39 @@ func TestWatchdogMarksStaleActiveMonitorUnknown(t *testing.T) {
 	}
 	if reason != "watchdog_stale" || !open {
 		t.Fatalf("interval = %s/open=%v, want watchdog_stale/open [S-F3, S-U4]", reason, open)
+	}
+}
+
+// Passive monitors (group, push, agent) never get a dispatched check, so the
+// active pass must leave them to the heartbeat pass: a stale push monitor in
+// down stays down instead of flipping to unknown.
+func TestWatchdogActivePassSkipsPassiveTypes(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := setupRollupTestDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "watchdog-passive")
+	ids := map[string]uuid.UUID{}
+	for _, typ := range sharedmodels.PassiveMonitorTypes {
+		id := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "passive-"+typ)
+		if _, err := dbClient.ExecContext(ctx,
+			`UPDATE monitors SET type = $2, config = '{}' WHERE id = $1`, id, typ,
+		); err != nil {
+			t.Fatalf("set type %s: %v", typ, err)
+		}
+		setMonitorEvidence(ctx, t, dbClient, id, "down", time.Now().Add(-10*time.Minute))
+		ids[typ] = id
+	}
+
+	s := newTestScheduler(dbClient)
+	if err := s.watchdogActivePass(ctx); err != nil {
+		t.Fatalf("active pass: %v", err)
+	}
+
+	for typ, id := range ids {
+		if state, _ := monitorStateAndFails(ctx, t, dbClient, id); state != "down" {
+			t.Errorf("stale %s monitor = %s, want down untouched by the active pass", typ, state)
+		}
 	}
 }
 

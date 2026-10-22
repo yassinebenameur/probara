@@ -39,7 +39,7 @@ spec:
         {{- toYaml $.Values.podSecurityContext | nindent 8 }}
       containers:
       - name: worker
-        image: "{{ $.Values.image.repository }}-worker:{{ $.Values.image.tag }}"
+        image: "{{ $.Values.image.repository }}-worker:{{ include "monitoring-platform.imageTag" $ }}"
         imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
         command: ["./worker"]
         ports:

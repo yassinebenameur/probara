@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
 	"github.com/yassinebenameur/probara/shared/ai"
@@ -16,83 +14,72 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/queue"
-	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// retryBackOff is the JetStream redelivery schedule for transient (infra)
-// failures. Analyzer/data failures are terminal: they are recorded on the row
-// as 'failed' and acked, so they don't retry here — the operator re-runs via
-// the UI's Retry button.
-var retryBackOff = []time.Duration{
-	10 * time.Second,
-	30 * time.Second,
-}
-
-// maxDeliver matches len(retryBackOff)+1.
+// Max delivery covers transient persistence failures and a local AI that is
+// temporarily unavailable (ai.ErrUnavailable); other analyzer failures are
+// recorded once (incident analyses then offer an operator retry).
 const maxDeliver = 3
 
+// ackWaitHeadroom is added to the local AI timeout to form the consumer's
+// AckWait: evidence loading and persistence run outside the model deadline.
+const ackWaitHeadroom = 30 * time.Second
+
+// consumerCheckInterval is how often a running Start confirms its durable
+// still exists on the server (see watchConsumer).
+const consumerCheckInterval = 30 * time.Second
+
+// heartbeatInterval keeps JetStream from redelivering a job mid-analysis. It
+// must stay well under the smallest AckWait (1s minimum timeout + headroom).
+const heartbeatInterval = 15 * time.Second
+
+// Operator-facing failure messages. Like every markFailed message they never
+// carry error text, which may hold infrastructure detail.
+const (
+	// The web panel renders "Analysis failed: <message>. Try again.", so
+	// failure messages carry no trailing period or retry instruction.
+	finalDeliveryFailureMessage = "the analysis failed after repeated errors"
+	analysisUnavailableMessage  = "Local AI service unavailable or returned invalid decisions; check service readiness"
+)
+
 // Consumer runs AI root cause analyses pulled from the AI_RCA stream. The
-// analyzer is resolved per job: a tenant's ai_settings row wins, otherwise the
-// envAnalyzer (built from LLM_* env vars) is the fallback.
+// workspace enablement is resolved per job; the installation-owned analyzer
+// handles every enabled workspace.
 type Consumer struct {
 	cfg         *config.WorkerConfig
 	logger      *logger.Logger
 	db          *db.Client
 	queue       *queue.Client
-	envAnalyzer ai.RootCauseAnalyzer // may be nil when no env LLM configured
-	encryptor   secrets.Encryptor
+	envAnalyzer ai.RootCauseAnalyzer // may be nil when no env local AI configured
+
+	heartbeatEvery     time.Duration // heartbeatInterval; shortened by tests
+	deliveryHeadroom   time.Duration // ackWaitHeadroom; shortened by tests
+	consumerCheckEvery time.Duration // consumerCheckInterval; shortened by tests
 }
 
-// New constructs the consumer. envAnalyzer may be nil; in that case only tenants
-// with their own ai_settings row can run analyses.
-func New(cfg *config.WorkerConfig, log *logger.Logger, dbClient *db.Client, queueClient *queue.Client, envAnalyzer ai.RootCauseAnalyzer, encryptor secrets.Encryptor) *Consumer {
-	if encryptor == nil {
-		encryptor = secrets.NoOpEncryptor{}
-	}
-	return &Consumer{
-		cfg:         cfg,
-		logger:      log,
-		db:          dbClient,
-		queue:       queueClient,
-		envAnalyzer: envAnalyzer,
-		encryptor:   encryptor,
-	}
+// New constructs the consumer. A nil installation analyzer (local AI disabled,
+// or a client config ai.NewAnalyzer rejected) produces failed analyses with a
+// retry action while check execution continues.
+func New(cfg *config.WorkerConfig, log *logger.Logger, dbClient *db.Client, queueClient *queue.Client, envAnalyzer ai.RootCauseAnalyzer) *Consumer {
+	return &Consumer{cfg: cfg, logger: log, db: dbClient, queue: queueClient, envAnalyzer: envAnalyzer,
+		heartbeatEvery: heartbeatInterval, deliveryHeadroom: ackWaitHeadroom, consumerCheckEvery: consumerCheckInterval}
+}
+
+// rcaSpec names the AI_RCA stream and durable.
+func rcaSpec(cfg *config.WorkerConfig) streamSpec {
+	return streamSpec{Stream: cfg.AIRCAStream, Subject: cfg.AIRCASubject, Consumer: cfg.AIRCAConsumerName, Label: "AI RCA", MaxAge: 24 * time.Hour}
 }
 
 // Start ensures the AI_RCA stream + consumer exist, then blocks on Consume
-// until ctx is cancelled.
+// until ctx is cancelled. It returns on any Consume failure; callers run it
+// under RunWithRestart.
 func (c *Consumer) Start(ctx context.Context) error {
-	stream := c.cfg.AIRCAStream
-	subject := c.cfg.AIRCASubject
-	consumerName := c.cfg.AIRCAConsumerName
-
-	if _, err := c.queue.EnsureWorkQueueStream(ctx, stream, []string{subject}, 24*time.Hour); err != nil {
-		return fmt.Errorf("ensure ai rca stream: %w", err)
-	}
-
-	// AckWait must outlast a single analysis (LLM round-trip) plus headroom so
-	// JetStream doesn't redeliver while we're still calling the model.
-	ackWait := time.Duration(c.cfg.LLMTimeoutSeconds)*time.Second + 30*time.Second
-	consumer, err := c.queue.CreateConsumerWithOptions(ctx, stream, consumerName, queue.ConsumerOptions{
-		AckWait:    ackWait,
-		MaxDeliver: maxDeliver,
-		BackOff:    retryBackOff,
-	})
-	if err != nil {
-		return fmt.Errorf("create ai rca consumer: %w", err)
-	}
-
-	c.logger.WithFields(logrus.Fields{
-		"stream":   stream,
-		"subject":  subject,
-		"consumer": consumerName,
-	}).Info("AI root cause consumer started")
-
-	return c.queue.Consume(ctx, consumer, func(msg *queue.Message) error {
-		return c.handle(ctx, msg)
-	})
+	return runConsumer(ctx, c.queue, c.logger, c.cfg.LocalAI.Timeout, c.consumerCheckEvery, rcaSpec(c.cfg), c.handle)
 }
 
+// handle decodes one job, runs it under an InProgress heartbeat, and turns the
+// outcome into an ack (nil), a delayed retry, or — on the final delivery — a
+// recorded failure, so no row is left pending once JetStream stops retrying.
 func (c *Consumer) handle(ctx context.Context, msg *queue.Message) error {
 	var job ai.AnalysisJob
 	if err := json.Unmarshal(msg.Data, &job); err != nil {
@@ -107,10 +94,51 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) error {
 	entry := c.logger.WithFields(logrus.Fields{
 		"analysis_id": job.AnalysisID,
 		"incident_id": job.IncidentID,
+		"delivery":    msg.NumDelivered,
 	})
 
-	// Idempotency: skip rows that are gone or already finished.
-	status, err := c.loadStatus(ctx, job.AnalysisID)
+	// One deadline for the whole delivery, not just the model call: the
+	// advisory lock, evidence queries and persistence all run under it. This
+	// is what makes "a delivery holds the row for at most LocalAI.Timeout +
+	// ackWaitHeadroom" true, which the sweep's staleAfter window relies on.
+	// The heartbeat stops at the same deadline, so even a driver call that
+	// outlives cancellation (lib/pq waits for the server to confirm a cancel
+	// request) cannot keep the message in progress: JetStream redelivers it
+	// after AckWait.
+	procCtx, cancel := context.WithTimeout(ctx, c.cfg.LocalAI.Timeout+c.deliveryHeadroom)
+	stopHeartbeat := startHeartbeat(procCtx, msg, c.heartbeatEvery, entry)
+	err := c.process(procCtx, entry, job)
+	stopHeartbeat()
+	cancel()
+	return c.settle(ctx, entry, msg, job, err)
+}
+
+// settle maps a process error onto the queue outcome; on the final delivery
+// the analysis is recorded failed with finalDeliveryFailureMessage, or
+// analysisUnavailableMessage when the local AI was still unavailable.
+func (c *Consumer) settle(ctx context.Context, entry *logrus.Entry, msg *queue.Message, job ai.AnalysisJob, err error) error {
+	return settleDelivery(ctx, entry, msg, err, func(markCtx context.Context) (bool, error) {
+		message := finalDeliveryFailureMessage
+		if errors.Is(err, ai.ErrUnavailable) {
+			message = analysisUnavailableMessage
+		}
+		return c.markFailed(markCtx, job, message)
+	})
+}
+
+// process runs one analysis. Any returned error is transient (retry) except
+// errAnalysisBusy; terminal outcomes are recorded on the row and return nil.
+func (c *Consumer) process(ctx context.Context, entry *logrus.Entry, job ai.AnalysisJob) error {
+	// Bind queued IDs to one tenant/incident before gathering any evidence.
+	// Serialize duplicate deliveries with an advisory lock on one pinned
+	// connection. The stale-pending sweep takes the same lock key
+	// (jobLockKeySQL), so it can never fail a row while a run holds it.
+	return withJobLock(ctx, c.db, job.AnalysisID, entry, func() error { return c.processLocked(ctx, entry, job) })
+}
+
+// processLocked is process under the analysis lock.
+func (c *Consumer) processLocked(ctx context.Context, entry *logrus.Entry, job ai.AnalysisJob) error {
+	status, requestedAt, err := c.loadStatus(ctx, job)
 	if errors.Is(err, sql.ErrNoRows) {
 		entry.Warn("Analysis row no longer exists; dropping")
 		return nil
@@ -124,39 +152,60 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 
-	// Resolve which LLM to use for this tenant (per-tenant row or env fallback).
+	// Resolve shared workspace enablement before gathering any evidence.
 	analyzer, err := c.resolveAnalyzer(ctx, job.TenantID)
+	if errors.Is(err, errAnalyzerMisconfigured) {
+		entry.Warn("Local AI is enabled but its client configuration was rejected at startup; marking analysis failed")
+		return c.finishFailed(ctx, entry, job, analysisMisconfiguredMessage)
+	}
 	if err != nil {
 		entry.WithError(err).Error("Failed to resolve analyzer config")
-		return err // transient DB/decrypt error — retry
+		return err // transient database error — retry
 	}
 	if analyzer == nil {
-		entry.Warn("No LLM configured for tenant; marking analysis failed")
-		return c.finishFailed(ctx, entry, job.AnalysisID, "AI analysis is not configured for this workspace")
+		entry.Warn("Local AI is disabled for the workspace or installation; marking analysis failed")
+		return c.finishFailed(ctx, entry, job, "Local AI is disabled for this workspace or installation")
 	}
 
-	input, err := buildAnalysisInput(ctx, c.db, job.TenantID, job.IncidentID)
+	input, err := buildAnalysisInput(ctx, c.db, job.TenantID, job.IncidentID, requestedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Incident or evidence vanished — terminal, record and ack.
 			entry.WithError(err).Warn("Incident not found while building analysis context")
-			return c.finishFailed(ctx, entry, job.AnalysisID, "incident not found")
+			return c.finishFailed(ctx, entry, job, "incident not found")
 		}
 		entry.WithError(err).Error("Failed to build analysis context")
 		return err // likely transient DB error — retry
 	}
 
-	result, err := analyzer.Analyze(ctx, input)
+	analysisCtx, cancel := context.WithTimeout(ctx, c.cfg.LocalAI.Timeout)
+	defer cancel()
+	result, err := analyzer.Analyze(analysisCtx, input)
 	if err != nil {
-		// Analyzer failures (provider down, refusal, bad config) are terminal
-		// for this run; the operator retries from the UI.
+		if ctx.Err() != nil {
+			// Shutdown or the delivery deadline cut the call short; that says
+			// nothing about the local AI, so retry rather than record a verdict.
+			return ctx.Err()
+		}
+		if errors.Is(err, ai.ErrUnavailable) {
+			// Queue full, model loading or the pod restarting: retried with
+			// deliveryRetryDelay so a restart needs no operator click.
+			return err
+		}
+		// Other analyzer failures (invalid responses, a model that timed
+		// out) are terminal for this run; the operator retries from the UI.
 		entry.WithError(err).Warn("Analysis failed")
-		return c.finishFailed(ctx, entry, job.AnalysisID, err.Error())
+		return c.finishFailed(ctx, entry, job, analysisUnavailableMessage)
 	}
 
-	if err := c.markReady(ctx, job.AnalysisID, result); err != nil {
+	updated, err := c.markReady(ctx, job, result)
+	if err != nil {
 		entry.WithError(err).Error("Failed to persist analysis result")
 		return err // retry the persist
+	}
+	if !updated {
+		logLostRace(entry, "ready")
+		return nil
 	}
 	entry.WithField("confidence", result.Confidence).Info("Analysis completed")
 	return nil
@@ -164,10 +213,14 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) error {
 
 // finishFailed records a terminal failure and acks (returns nil). If the write
 // itself fails it returns the error so JetStream retries.
-func (c *Consumer) finishFailed(ctx context.Context, entry *logrus.Entry, id uuid.UUID, message string) error {
-	if err := c.markFailed(ctx, id, message); err != nil {
+func (c *Consumer) finishFailed(ctx context.Context, entry *logrus.Entry, job ai.AnalysisJob, message string) error {
+	updated, err := c.markFailed(ctx, job, message)
+	if err != nil {
 		entry.WithError(err).Error("Failed to persist analysis failure")
 		return err
+	}
+	if !updated {
+		logLostRace(entry, "failed")
 	}
 	return nil
 }

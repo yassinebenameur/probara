@@ -289,7 +289,8 @@ export default function HomePage() {
                 <h3>Context for the failure, not just the symptom.</h3>
                 <p>
                   Model service dependencies, annotate downstream alerts, explore
-                  co-firing signals, and ask the configured LLM for incident root causes.
+                  co-firing signals, and get suspected incident causes from a bundled
+                  local model that runs offline.
                 </p>
                 <div className="feature-card__visual location-map" aria-hidden="true">
                   {[
@@ -322,7 +323,7 @@ export default function HomePage() {
                 <p>
                   Separate tenants, control writes with roles and scoped API keys, connect
                   OIDC, retain an audit trail, and configure encryption for stored monitor
-                  and channel secrets.
+                  and channel secrets. AI agents connect over MCP with the same roles.
                 </p>
                 <div className="feature-card__visual rbac-grid" aria-hidden="true">
                   <div className="rbac-cell">

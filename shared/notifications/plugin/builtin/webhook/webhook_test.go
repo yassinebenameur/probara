@@ -281,3 +281,51 @@ func sampleEvent() notifications.AlertEvent {
 		},
 	}
 }
+
+// The suspected-cause follow-up reaches a webhook as its own event type with
+// the hint in alert.suspected_cause; status keeps the alert's own value.
+func TestSend_SuspectedCauseEvent(t *testing.T) {
+	var gotBody []byte
+	var gotEvtType, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEvtType = r.Header.Get(eventTypeHeader)
+		gotKey = r.Header.Get(idempotencyHdr)
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := sampleEvent()
+	event.Type = "suspected_cause"
+	event.Alert.SuspectedCause = &notifications.SuspectedCause{
+		TriageID: "t-1", Key: "dns_failure", Title: "DNS resolution failure", Confidence: "high",
+	}
+	err := New().Send(context.Background(), plugin.DispatchRequest{
+		Channel:   plugin.ChannelRef{ID: "c-1", Config: map[string]any{"url": srv.URL}},
+		Event:     event,
+		EventType: "suspected_cause",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if gotEvtType != "suspected_cause" || !strings.HasSuffix(gotKey, ":c-1:suspected_cause") {
+		t.Fatalf("headers: type=%q key=%q", gotEvtType, gotKey)
+	}
+	var decoded struct {
+		Alert struct {
+			Status         string `json:"status"`
+			SuspectedCause struct {
+				TriageID   string `json:"triage_id"`
+				Key        string `json:"key"`
+				Confidence string `json:"confidence"`
+			} `json:"suspected_cause"`
+		} `json:"alert"`
+	}
+	if err := json.Unmarshal(gotBody, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	sc := decoded.Alert.SuspectedCause
+	if sc.TriageID != "t-1" || sc.Key != "dns_failure" || sc.Confidence != "high" || decoded.Alert.Status == "" {
+		t.Fatalf("body = %s", gotBody)
+	}
+}

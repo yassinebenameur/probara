@@ -56,6 +56,72 @@ services:
       - probara-network
     restart: "no"
 
+  # Bundled CPU inference, default-on (LOCAL_AI_DISABLED=true in the shell
+  # turns it off for api and worker too). It receives only its bearer token:
+  # never database, NATS or platform credentials. The image bakes in the model
+  # weights, so it needs no network at runtime.
+  #
+  # LOCAL_AI_TOKEN defaults to a fixed, PUBLIC development token: fine here
+  # because the port is bound to loopback and the token only gates inference,
+  # never for a shared or internet-reachable host. Export your own
+  # (`openssl rand -hex 32`) before `docker compose up` anywhere else.
+  # `make start-all-local` exports a per-checkout one from .dev-local-ai-token.
+  # Helm's equivalent is secrets.localAiToken (helm/monitoring-platform).
+  #
+  # Image: pulled when missing, built from ai-service/ only when the pull fails.
+  # The build fails on purpose for any artifact that is not release-approved on
+  # CPU, and Compose builds every missing image before starting anything, so
+  # one failed local-ai build aborts a whole `docker compose up`/`build`. The
+  # Makefile targets (up, build, rebuild, scale-workers, start-all,
+  # start-all-local) therefore start the platform first and local-ai on its
+  # own, tolerating its failure. With plain Compose and no pullable approved
+  # image, name the services or set LOCAL_AI_IMAGE to an image you have.
+  # `latest` is pushed only by stable releases, so until one ships local-ai
+  # there is none to pull and Compose builds from ai-service/ (Git LFS head
+  # weights required); on the prerelease line set e.g.
+  # LOCAL_AI_IMAGE=ghcr.io/yassinebenameur/probara-local-ai:alpha. A local
+  # build keeps this tag, so after an ai-service/ or MODEL_VERSION change run
+  # `docker compose build local-ai` (or `up -d --build local-ai`).
+  #
+  # Sizing: LOCAL_AI_CPUS must not exceed the Docker host's CPUs (Docker
+  # refuses to create the container otherwise); the Makefile and
+  # start-local-services.sh cap both it and LOCAL_AI_THREADS at the host's
+  # count. The model is CPU-validated at 4 threads.
+  local-ai:
+    image: "${LOCAL_AI_IMAGE:-ghcr.io/yassinebenameur/probara-local-ai:latest}"
+    pull_policy: missing
+    build:
+      context: .
+      dockerfile: ai-service/Dockerfile
+    container_name: probara-local-ai
+    environment:
+      LOCAL_AI_TOKEN: "${LOCAL_AI_TOKEN:-probara-local-development-token}"
+      LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
+      LOCAL_AI_THREADS: "${LOCAL_AI_THREADS:-4}"
+      LOCAL_AI_QUEUE_CAPACITY: "${LOCAL_AI_QUEUE_CAPACITY:-4}"
+      # Keep below the api/worker LOCAL_AI_TIMEOUT_SECONDS (90).
+      LOCAL_AI_QUEUE_TIMEOUT_SECONDS: "${LOCAL_AI_QUEUE_TIMEOUT_SECONDS:-60}"
+      # A batch running longer is wedged: /healthz turns 503 (unhealthy).
+      LOCAL_AI_MAX_INFERENCE_SECONDS: "${LOCAL_AI_MAX_INFERENCE_SECONDS:-120}"
+    ports:
+      - "127.0.0.1:8090:8090"
+    cpus: "${LOCAL_AI_CPUS:-4}"
+    mem_limit: 4g
+    deploy:
+      resources:
+        reservations:
+          cpus: '1'
+          memory: 2g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - probara-network
+    restart: unless-stopped
+
   # Application services
   api:
     build:
@@ -63,6 +129,13 @@ services:
       dockerfile: api/Dockerfile
     container_name: probara-api
     environment:
+      # Local AI client (api + worker only; same token as the local-ai service).
+      LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
+      LOCAL_AI_URL: "http://local-ai:8090"
+      LOCAL_AI_TOKEN: "${LOCAL_AI_TOKEN:-probara-local-development-token}"
+      LOCAL_AI_TIMEOUT_SECONDS: "${LOCAL_AI_TIMEOUT_SECONDS:-90}"
+      # Triage kill switch: SLA reports list no alert as "Triage pending" while it is off.
+      AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
       HTTP_PORT: "8080"
       METRICS_PORT: "9090"
       LOG_LEVEL: "info"
@@ -161,6 +234,11 @@ services:
       dockerfile: worker/Dockerfile
     container_name: probara-worker
     environment:
+      # Local AI client (api + worker only; same token as the local-ai service).
+      LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
+      LOCAL_AI_URL: "http://local-ai:8090"
+      LOCAL_AI_TOKEN: "${LOCAL_AI_TOKEN:-probara-local-development-token}"
+      LOCAL_AI_TIMEOUT_SECONDS: "${LOCAL_AI_TIMEOUT_SECONDS:-90}"
       HTTP_PORT: "8083"
       METRICS_PORT: "9092"
       LOG_LEVEL: "info"
@@ -172,6 +250,8 @@ services:
       NATS_CONSUMER_NAME: "worker"
       WORKER_CONCURRENCY: "10"
       CHROME_BIN: "/usr/bin/chromium-browser"
+      # Automatic alert triage kill switch (the alerter and the api read it too).
+      AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       SIP_LOCALHOST_AS_HOST_GATEWAY: "true"
     ports:
@@ -295,6 +375,10 @@ services:
       ALERT_REMINDER_INTERVAL_SECONDS: "3600"
       ALERT_GROUP_WINDOW_SECONDS: "60"
       ALERT_GROUP_MAX_CHILDREN: "5"
+      # Local AI kill switches. The alerter never calls local AI; with either
+      # switch off it stops sending suspected-cause follow-ups.
+      LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
+      AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
     ports:
       - "9094:9094"
     depends_on:

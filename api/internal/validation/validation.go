@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
@@ -204,6 +205,10 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 		}
 	}
 
+	if err := registry.ValidateSchedule(req.Type, req.Config, req.IntervalSeconds, req.TimeoutSeconds); err != nil {
+		return err
+	}
+
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
@@ -248,6 +253,10 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 		if *req.IntervalSeconds < minIntervalSeconds || *req.IntervalSeconds > maxIntervalSeconds {
 			return fmt.Errorf("interval_seconds must be between %d and %d", minIntervalSeconds, maxIntervalSeconds)
 		}
+	}
+
+	if err := validateEffectiveSchedule(req, existingMonitor, registry); err != nil {
+		return err
 	}
 
 	// Determine the monitor type
@@ -304,6 +313,54 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 	}
 
 	return nil
+}
+
+// validateEffectiveSchedule checks the monitor as it will be after the update.
+// The config validator above only runs when the request carries a config, so
+// a PATCH of the interval, the timeout or the type alone would otherwise skip
+// every rule that ties the schedule to the config. Whenever any of the four
+// is in the request, the effective (type, config, interval, timeout) — each
+// from the request, else the existing monitor — goes through the type's
+// schedule rules (ScheduleAwareValidator).
+//
+// It also refuses to turn a monitor into or out of a SIP test call: an
+// INVITE's latency_ms and anomaly baseline mean something else than an
+// OPTIONS or REGISTER probe's, and one PATCH must not turn a free probe into
+// a billed call. Changing the class means creating a new monitor. Both reads
+// are of non-secret fields, so the existing monitor's masked config answers
+// the same as the stored one.
+func validateEffectiveSchedule(req *models.UpdateMonitorRequest, existing *models.Monitor, registry *ValidatorRegistry) error {
+	if req.Type == nil && len(req.Config) == 0 && req.IntervalSeconds == nil && req.TimeoutSeconds == nil {
+		return nil
+	}
+	monitorType := existing.Type
+	if req.Type != nil {
+		monitorType = *req.Type
+	}
+	config := existing.Config
+	if len(req.Config) > 0 {
+		config = req.Config
+	}
+	interval := existing.IntervalSeconds
+	if req.IntervalSeconds != nil {
+		interval = *req.IntervalSeconds
+	}
+	timeout := existing.TimeoutSeconds
+	if req.TimeoutSeconds != nil {
+		timeout = *req.TimeoutSeconds
+	}
+
+	wasCall := sharedmodels.IsSIPCallConfig(string(existing.Type), existing.Config)
+	isCall := sharedmodels.IsSIPCallConfig(string(monitorType), config)
+	if wasCall != isCall {
+		return fmt.Errorf("a SIP monitor cannot switch between a test call (INVITE) and an OPTIONS/REGISTER probe, or change type to or from a test call: create a new monitor")
+	}
+
+	if !registry.Has(monitorType) {
+		return nil // reported by the type check
+	}
+	// A config change was validated above; this pass is for its schedule.
+	return registry.ValidateSchedule(monitorType, config, interval, timeout)
 }
 
 // ValidateMonitorLocationFields validates private-location selection: only

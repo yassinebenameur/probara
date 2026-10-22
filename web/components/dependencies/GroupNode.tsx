@@ -17,11 +17,8 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupFlowNode>) {
   const allQuiet = data.downCount === 0 && data.warnCount === 0;
 
   return (
-    <div className={`relative w-[216px] transition-opacity duration-200 ${dimmed ? 'opacity-20' : 'opacity-100'}`}>
-      {/* Stacked-card hint: the pile these monitors are folded into. */}
-      <span className="pointer-events-none absolute inset-x-2 -top-1.5 h-full rounded-xl border border-white/[0.05] bg-slate-900/40" />
-      <span className="pointer-events-none absolute inset-x-1 -top-[3px] h-full rounded-xl border border-white/[0.06] bg-slate-900/60" />
-      <div className="relative rounded-xl border border-dashed border-slate-500/50 bg-slate-900/90">
+    <div className={`relative w-[216px] transition-opacity duration-base ${dimmed ? 'opacity-20' : 'opacity-100'}`}>
+      <div className="relative rounded-xl border border-dashed border-slate-500/50 bg-glass-strong shadow-[0_1px_2px_rgb(0_0_0/0.12)]">
         <Handle
           type="target"
           position={Position.Left}
@@ -29,7 +26,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupFlowNode>) {
           className="!h-2 !w-2 !border-0 !bg-transparent"
         />
         <div className="flex items-center gap-2.5 py-2 pl-3 pr-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-500/10 text-slate-400">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-well-hover text-slate-400">
             <Layers className="h-4 w-4" strokeWidth={1.75} />
           </span>
           <div className="min-w-0 flex-1">
@@ -40,27 +37,27 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupFlowNode>) {
                 expandGroup(id, 'page');
               }}
               title={`Show ${Math.min(EXPAND_PAGE, data.hiddenCount)} more`}
-              className="nodrag nopan block w-full truncate text-left text-[13px] font-medium text-slate-200 transition-colors hover:text-cyan-300"
+              className="nodrag nopan block w-full truncate text-left text-ui font-medium text-slate-200 transition-colors hover:text-cyan-300"
             >
               +{data.hiddenCount} more {label}
             </button>
-            <p className="mt-0.5 flex items-center gap-2 text-[10px] uppercase tracking-wider">
+            <p className="mt-1 flex items-center gap-2 text-2xs">
               {data.downCount > 0 && (
-                <span className="flex items-center gap-1 text-rose-400">
+                <span className="flex items-center gap-1 text-rose-300">
                   <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
                   {data.downCount} down
                 </span>
               )}
               {data.warnCount > 0 && (
-                <span className="flex items-center gap-1 text-amber-400">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                <span className="flex items-center gap-1 text-amber-300">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                   {data.warnCount} degraded
                 </span>
               )}
               {allQuiet && (
                 <span className="flex items-center gap-1 text-slate-500">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/70" />
-                  no alerts
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  No alerts
                 </span>
               )}
             </p>
@@ -72,9 +69,9 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupFlowNode>) {
               expandGroup(id, 'all');
             }}
             title={`Show all ${data.hiddenCount}`}
-            className="nodrag nopan shrink-0 rounded-md border border-white/[0.08] px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-400"
+            className="nodrag nopan shrink-0 rounded-md px-1.5 py-0.5 text-2xs font-medium text-slate-400 transition-colors hover:bg-well-hover hover:text-cyan-300"
           >
-            all
+            All
           </button>
         </div>
         <Handle

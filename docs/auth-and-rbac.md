@@ -5,7 +5,7 @@ How identity and authorization work as of the enterprise-auth rework
 
 ## Identity model
 
-Two credential types, resolved by `api/internal/middleware/auth.go`:
+Three credential types, resolved by `api/internal/middleware/auth.go`:
 
 - **Admin users** (`admin_users`) — humans. JWT access cookie (15 min) +
   rotating opaque refresh session. Two platform roles:
@@ -18,6 +18,16 @@ Two credential types, resolved by `api/internal/middleware/auth.go`:
 - **API keys** (`api_keys`) — machines. Pinned to one tenant, carry a
   `scope` (`read` | `write`, legacy keys backfilled to `write`) and an
   optional `expires_at`. Expired keys fail validation in SQL.
+- **MCP OAuth access tokens** (`pbm_at_…`, `mcp_oauth_*` tables, migration
+  000096) — an AI agent acting as the user who consented
+  (`api/internal/services/mcpoauth`). Authenticated through the same admin
+  path as a cookie session (roles from the DB, disabled users rejected),
+  with the grant's default tenant when no `X-Tenant-ID` is sent and the
+  grant's `scope` added on top. `ctxpkg.CanWrite` checks a scope **before**
+  any role, so a read grant narrows even a superadmin. Accepted only on
+  `/api/v1/mcp` and on requests it dispatches (context `via=mcp`, which no
+  client can set) — the token's audience is the MCP resource, not the REST
+  API. See [MCP](#mcp).
 
 Tenant roles (fixed, on `tenant_memberships.role`):
 
@@ -56,11 +66,41 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   match. Test requests cannot supply ciphertext envelopes directly: use
   write-only placeholders for existing credentials.
 - `RequireTenantAdmin`: API key create/revoke, tenant settings mutation,
-  audit log. Superadmin or tenant-role admin; API keys never pass.
+  audit log. Superadmin or tenant-role admin; API keys never pass. Its
+  predicate is `ctxpkg.IsTenantAdmin`, which also gates SIP test-call
+  monitors (`method: invite`, real calls) where no route guard can: create
+  and every update (pause included) in the monitors service, so import
+  inherits it, and `/monitors/{id}/run` and `/monitors/test` in their
+  handlers (`monitorservice.RequireCallPermission`). Editors and API keys of
+  any scope get 403.
 - `RequireSuperadmin`: `/users/*`.
 
 Audit runs *outside* the write gate so denied attempts are recorded with
 `outcome=denied`.
+
+## MCP
+
+`/api/v1/mcp` (package `api/internal/mcp`) serves every catalog tool by
+rebuilding the tool's REST request and dispatching it **through the root
+router in process**, with the caller's bearer credential and a fresh
+context. Every layer above therefore applies unchanged to agents; nothing in
+the MCP package decides access. Rules that keep it so:
+
+- Bearer only: `Protect` strips the `Cookie` header, so a browser page can
+  never drive MCP with an operator's session.
+- `tools/list` is filtered per caller (read-only → no write tools, API key →
+  no tenant-admin/superadmin tools) from `IsReadOnlyRequest` and the route
+  gates `chi.Walk` reports — UX only; the inner dispatch enforces.
+- Every `/api/v1` route is a tool or listed in `notExposed` with a reason;
+  `TestMCPCatalogMatchesRouter` (and startup) fail otherwise.
+- Writes are audited under the real route with the user/key as actor and
+  `details.via = "mcp"`.
+- OAuth consent (`/oauth/authorize/decision`) and connection management
+  (`/oauth/grants`) take a signed-in **user session only** (no API key, no
+  MCP token), sit outside the write gate (a viewer may connect a read-only
+  agent) and record `mcp_connection.authorize` / `.revoke` themselves.
+- Agent install scripts embed the caller's bearer only when it is an API key
+  (`embeddableAPIKey`), never an MCP token.
 
 ## Audit log
 

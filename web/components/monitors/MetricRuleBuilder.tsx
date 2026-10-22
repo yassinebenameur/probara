@@ -2,25 +2,22 @@
 
 import { useEffect, useId, useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
+import { FOCUS_RING } from '@/components/ui/focus';
 import { MetricRule, MetricSeriesInfo } from '@/lib/types';
 import { getMonitorMetricSeries } from '@/lib/api';
 import {
   METRIC_META,
   isUtilizationMetric,
   metricUnitKind,
-  percentToRatio,
-  ratioToPercent,
 } from '@/lib/metrics';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
+import { MAX_RULES, MetricRuleDraft, canonicalRuleKey, draftsFromRules } from '@/lib/monitor-form/metric-rules';
 
-// Client-side mirror of the server's metric_rules validation.
-const MAX_RULES = 50;
-const MAX_METRIC_NAME_LENGTH = 255;
-const MAX_ATTRIBUTE_FILTERS = 8;
-const MAX_ATTRIBUTE_TOKEN_LENGTH = 128;
-const MAX_FOR_DURATION_SECONDS = 86400;
-const METRIC_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_./-]*$/;
-const FORBIDDEN_ATTRIBUTE_CHARS = /[,}=]/;
+// Drafts and their parsing live in lib so they can be tested; re-exported
+// for the forms that import them from here.
+export { draftsFromRules, rulesFromDrafts } from '@/lib/monitor-form/metric-rules';
+export type { MetricRuleDraft } from '@/lib/monitor-form/metric-rules';
 
 const DURATION_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 0, label: 'Instant' },
@@ -41,130 +38,6 @@ const COMMON_RULES: MetricRule[] = [
   { metric_name: 'system.filesystem.utilization', attribute_filters: { mode: 'rw' }, operator: '>=', threshold: 0.9 },
   { metric_name: 'system.paging.utilization', attribute_filters: { state: 'used' }, operator: '>=', threshold: 0.8 },
 ];
-
-export interface MetricRuleDraft {
-  metric_name: string;
-  filters: Array<{ key: string; value: string }>;
-  operator: '>=' | '<=';
-  // Display units: percent for *.utilization metrics, native otherwise.
-  threshold: string;
-  for_duration_seconds: number;
-}
-
-function thresholdToInput(rule: MetricRule): string {
-  if (isUtilizationMetric(rule.metric_name)) {
-    return String(ratioToPercent(rule.threshold));
-  }
-  return String(rule.threshold);
-}
-
-export function draftsFromRules(rules?: MetricRule[]): MetricRuleDraft[] {
-  return (rules || []).map((rule) => ({
-    metric_name: rule.metric_name,
-    filters: Object.entries(rule.attribute_filters || {}).map(([key, value]) => ({ key, value })),
-    operator: rule.operator,
-    threshold: thresholdToInput(rule),
-    for_duration_seconds: rule.for_duration_seconds ?? 0,
-  }));
-}
-
-function canonicalRuleKey(metricName: string, filters: Record<string, string>): string {
-  const parts = Object.keys(filters)
-    .sort()
-    .map((key) => `${key}=${filters[key]}`);
-  return `${metricName}{${parts.join(',')}}`;
-}
-
-// Parses drafts into MetricRule[] mirroring the server's validation.
-// Returns per-row error messages keyed by row index.
-export function rulesFromDrafts(drafts: MetricRuleDraft[]): {
-  rules: MetricRule[];
-  errors: Record<number, string>;
-} {
-  const rules: MetricRule[] = [];
-  const errors: Record<number, string> = {};
-  const seen = new Set<string>();
-
-  if (drafts.length > MAX_RULES) {
-    errors[MAX_RULES] = `At most ${MAX_RULES} rules are allowed`;
-  }
-
-  drafts.forEach((draft, index) => {
-    const name = draft.metric_name.trim();
-    if (!name) {
-      errors[index] = 'Metric name is required';
-      return;
-    }
-    if (name.length > MAX_METRIC_NAME_LENGTH || !METRIC_NAME_PATTERN.test(name)) {
-      errors[index] = 'Metric name must match ^[a-zA-Z_][a-zA-Z0-9_./-]*$';
-      return;
-    }
-
-    if (draft.filters.length > MAX_ATTRIBUTE_FILTERS) {
-      errors[index] = `At most ${MAX_ATTRIBUTE_FILTERS} attribute filters per rule`;
-      return;
-    }
-    const filters: Record<string, string> = {};
-    for (const filter of draft.filters) {
-      const key = filter.key.trim();
-      const value = filter.value.trim();
-      if (!key || !value) {
-        errors[index] = 'Attribute filters need both a key and a value';
-        return;
-      }
-      if (key.length > MAX_ATTRIBUTE_TOKEN_LENGTH || value.length > MAX_ATTRIBUTE_TOKEN_LENGTH) {
-        errors[index] = `Attribute keys/values are limited to ${MAX_ATTRIBUTE_TOKEN_LENGTH} characters`;
-        return;
-      }
-      if (FORBIDDEN_ATTRIBUTE_CHARS.test(key) || FORBIDDEN_ATTRIBUTE_CHARS.test(value)) {
-        errors[index] = 'Attribute keys/values must not contain "," "}" or "="';
-        return;
-      }
-      if (key in filters) {
-        errors[index] = `Duplicate attribute key "${key}"`;
-        return;
-      }
-      filters[key] = value;
-    }
-
-    const rawThreshold = draft.threshold.trim();
-    const parsed = Number(rawThreshold);
-    if (rawThreshold === '' || !Number.isFinite(parsed)) {
-      errors[index] = 'Threshold is required';
-      return;
-    }
-    let threshold = parsed;
-    if (isUtilizationMetric(name)) {
-      if (parsed <= 0 || parsed > 100) {
-        errors[index] = 'Utilization thresholds are percentages between 0 and 100';
-        return;
-      }
-      threshold = percentToRatio(parsed);
-    }
-
-    if (
-      draft.for_duration_seconds < 0 ||
-      draft.for_duration_seconds > MAX_FOR_DURATION_SECONDS
-    ) {
-      errors[index] = `Sustained duration must be between 0 and ${MAX_FOR_DURATION_SECONDS} seconds`;
-      return;
-    }
-
-    const key = canonicalRuleKey(name, filters);
-    if (seen.has(key)) {
-      errors[index] = 'Duplicate rule: same metric and attribute filters as another rule';
-      return;
-    }
-    seen.add(key);
-
-    const rule: MetricRule = { metric_name: name, operator: draft.operator, threshold };
-    if (Object.keys(filters).length > 0) rule.attribute_filters = filters;
-    if (draft.for_duration_seconds > 0) rule.for_duration_seconds = draft.for_duration_seconds;
-    rules.push(rule);
-  });
-
-  return { rules, errors };
-}
 
 interface MetricRuleBuilderProps {
   drafts: MetricRuleDraft[];
@@ -295,7 +168,7 @@ export default function MetricRuleBuilder({
       </datalist>
 
       {drafts.length === 0 && (
-        <p className="rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3 text-xs text-slate-500">
+        <p className="glass-well px-4 py-3 text-ui text-slate-400">
           No metric rules. Alerts open only for missed heartbeats until you add one.
         </p>
       )}
@@ -318,85 +191,88 @@ export default function MetricRuleBuilder({
         return (
           <div
             key={index}
-            className={`space-y-3 rounded-lg border px-4 py-3 ${
-              error ? 'border-rose-500/40 bg-rose-500/5' : 'border-white/[0.06] bg-slate-900/40'
-            }`}
+            className={`glass-well space-y-3 p-4 ${error ? 'ring-1 ring-inset ring-rose-500/40' : ''}`}
           >
             <div className="flex flex-wrap items-end gap-2">
               <div className="min-w-[220px] flex-1">
-                <label className="mb-1 block text-[11px] text-slate-500">
+                <label htmlFor={`${datalistId}-${index}-metric`} className="mb-1.5 block text-xs text-slate-400">
                   Metric{curatedLabel ? ` — ${curatedLabel}` : ''}
                 </label>
                 <input
+                  id={`${datalistId}-${index}-metric`}
                   type="text"
                   list={datalistId}
                   value={draft.metric_name}
                   onChange={(e) => updateDraft(index, { metric_name: e.target.value })}
                   placeholder="system.cpu.utilization"
-                  className="input input-xs w-full font-mono"
+                  className="input input-sm h-9 font-mono"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] text-slate-500">Operator</label>
+                <label htmlFor={`${datalistId}-${index}-op`} className="mb-1.5 block text-xs text-slate-400">Operator</label>
                 <select
+                  id={`${datalistId}-${index}-op`}
                   value={draft.operator}
                   onChange={(e) => updateDraft(index, { operator: e.target.value as MetricRuleDraft['operator'] })}
-                  className="input input-xs"
+                  // !h-9: select.input-sm pins 34px, which drops its label 2px
+                  // below the inputs' on this bottom-aligned row.
+                  className="input input-sm !h-9"
                 >
                   <option value=">=">≥</option>
                   <option value="<=">≤</option>
                 </select>
               </div>
               <div className="w-28">
-                <label className="mb-1 block text-[11px] text-slate-500">
+                <label htmlFor={`${datalistId}-${index}-threshold`} className="mb-1.5 block text-xs text-slate-400">
                   Threshold{unitSuffix ? ` (${unitSuffix})` : ''}
                 </label>
                 <input
+                  id={`${datalistId}-${index}-threshold`}
                   type="number"
                   value={draft.threshold}
                   onChange={(e) => updateDraft(index, { threshold: e.target.value })}
                   placeholder={isUtilization ? 'e.g. 90' : 'value'}
                   step="any"
-                  className="input input-xs w-full"
+                  className="input input-sm h-9"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] text-slate-500">Duration</label>
+                <label htmlFor={`${datalistId}-${index}-duration`} className="mb-1.5 block text-xs text-slate-400">Duration</label>
                 <select
+                  id={`${datalistId}-${index}-duration`}
                   value={draft.for_duration_seconds}
                   onChange={(e) => updateDraft(index, { for_duration_seconds: Number(e.target.value) })}
-                  className="input input-xs"
+                  // !h-9: select.input-sm pins 34px, which drops its label 2px
+                  // below the inputs' on this bottom-aligned row.
+                  className="input input-sm !h-9"
                 >
                   {DURATION_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </div>
-              <Button
-                variant="ghost"
-                size="xs"
-                type="button"
-                aria-label="Remove rule"
+              <IconButton
+                icon={<X strokeWidth={1.75} />}
+                label="Remove rule"
+                danger
                 onClick={() => removeDraft(index)}
-              >
-                <X className="h-3.5 w-3.5" strokeWidth={1.75} />
-              </Button>
+              />
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
               {draft.filters.map((filter, filterIndex) => (
                 <span
                   key={`${filter.key}-${filterIndex}`}
-                  className="inline-flex items-center gap-1 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 font-mono text-[10px] text-cyan-300"
+                  className="inline-flex items-center gap-1 rounded-full bg-well-hover py-0.5 pl-2 pr-1 font-mono text-2xs text-slate-200"
                 >
                   {filter.key}={filter.value}
                   <button
                     type="button"
                     aria-label={`Remove filter ${filter.key}`}
-                    className="text-cyan-400/70 hover:text-white"
+                    className={`rounded-full p-0.5 text-slate-500 transition-colors hover:text-white ${FOCUS_RING}`}
                     onClick={() => removeFilter(index, filterIndex)}
                   >
-                    <X className="h-3 w-3" strokeWidth={1.75} />
+                    <X className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
                   </button>
                 </span>
               ))}
@@ -404,8 +280,9 @@ export default function MetricRuleBuilder({
                 type="text"
                 value={pending.key}
                 onChange={(e) => setPendingFilter(index, { key: e.target.value })}
+                aria-label="Filter key"
                 placeholder="key"
-                className="input input-xs w-24 font-mono"
+                className="input input-sm h-7 !w-28 font-mono"
               />
               <input
                 type="text"
@@ -418,7 +295,8 @@ export default function MetricRuleBuilder({
                   }
                 }}
                 placeholder="value"
-                className="input input-xs w-24 font-mono"
+                aria-label="Filter value"
+                className="input input-sm h-7 !w-28 font-mono"
               />
               <Button
                 variant="ghost"
@@ -429,17 +307,17 @@ export default function MetricRuleBuilder({
               >
                 Add filter
               </Button>
-              <span className="text-[10px] text-slate-600">
+              <span className="text-xs text-slate-500">
                 No filters = rule applies to every matching series
               </span>
             </div>
 
-            {error && <p className="text-xs text-rose-400">{error}</p>}
+            {error && <p data-form-error className="text-xs text-rose-300">{error}</p>}
           </div>
         );
       })}
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="ghost"
           size="xs"
@@ -453,7 +331,7 @@ export default function MetricRuleBuilder({
         <Button variant="ghost" size="xs" type="button" onClick={addCommonRules}>
           Add common rules
         </Button>
-        <span className="text-[10px] text-slate-600">
+        <span className="text-xs text-slate-500">
           CPU / Memory / Filesystem ≥ 90%, Swap ≥ 80%
         </span>
       </div>

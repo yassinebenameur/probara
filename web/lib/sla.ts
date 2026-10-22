@@ -58,6 +58,42 @@ export interface SlaReportOutage {
   unplanned_seconds: number;
   started_before: boolean;
   ongoing: boolean;
+  /** The outage's suspected-cause bucket; only on per-monitor outages with unplanned time, on reports computed since causes exist. */
+  cause_kind?: SlaCauseKind;
+  /** Catalogue key for suspected causes, else the kind. */
+  cause_key?: string;
+  cause_title?: string;
+}
+
+/** Suspected-cause buckets (api models.SLACause*), in display order after the named causes. */
+export type SlaCauseKind = 'suspected' | 'inconclusive' | 'pending' | 'untriaged' | 'no_alert';
+
+export interface SlaReportCauseBucket {
+  kind: SlaCauseKind;
+  /** Catalogue key for suspected causes, else the kind. */
+  key: string;
+  /** Frozen when the report is computed, so an issued report keeps its wording. */
+  title: string;
+  outage_count: number;
+  alert_count: number;
+  monitor_count: number;
+  unplanned_seconds: number;
+  confirmed_outage_count: number;
+  corrected_outage_count: number;
+}
+
+/**
+ * Monitor outages rolled up by the triage of their overlapping availability
+ * alerts. Counts are monitor outages, not alerts; unplanned_seconds is summed
+ * per monitor, so it can exceed the service downtime.
+ */
+export interface SlaReportSuspectedCauses {
+  outage_count: number;
+  triaged_outage_count: number;
+  pending_outage_count: number;
+  unplanned_seconds: number;
+  /** Already ordered by the API: named causes by downtime, then the fixed buckets. */
+  buckets: SlaReportCauseBucket[];
 }
 
 export interface SlaReportMonitor {
@@ -142,6 +178,8 @@ export interface SlaReport {
     mtta_seconds: number | null;
   };
   notes: string[];
+  /** Absent on reports issued before causes existed: render nothing for those. */
+  suspected_causes?: SlaReportSuspectedCauses;
 }
 
 export interface SlaReportRef {
@@ -179,6 +217,82 @@ export const SLA_AGGREGATION_LABELS: Record<SlaAggregation, string> = {
   serial: 'Serial (all must be up)',
   mean: 'Mean of monitors',
 };
+
+/** The aggregation as a plain rule, for compact sublines. */
+export const SLA_AGGREGATION_SHORT: Record<SlaAggregation, string> = {
+  serial: 'All must be up',
+  mean: 'Mean of monitors',
+};
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+interface DayParts {
+  y: number;
+  m: number; // 0-based
+  d: number;
+}
+
+// Calendar day of an instant in the SLA's own timezone: periods are cut at
+// local midnight there, so the browser's zone could shift a boundary by a day.
+function dayIn(date: Date, timeZone: string): DayParts {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+    }).formatToParts(date);
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    return { y: get('year'), m: get('month') - 1, d: get('day') };
+  } catch {
+    return { y: date.getFullYear(), m: date.getMonth(), d: date.getDate() };
+  }
+}
+
+/**
+ * An instant in the SLA's own timezone, spelled like lib/format (`28 Sep 2026`,
+ * `2 Oct 2026, 15:19`): built from parts and the shared month table, because
+ * Intl's en-GB short month reads "Sept".
+ */
+export function formatSlaDate(iso: string, timeZone: string, withTime = true): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      ...(withTime ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' } : {}),
+    } as Intl.DateTimeFormatOptions).formatToParts(new Date(iso));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+    const day = `${Number(get('day'))} ${MONTHS[Number(get('month')) - 1]} ${get('year')}`;
+    return withTime ? `${day}, ${get('hour')}:${get('minute')}` : day;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A period as readable dates instead of its key: `5–11 Oct`, `29 Sep – 5 Oct`,
+ * `1 Oct – 31 Dec`; the year only when it is not the current one. `end` is
+ * exclusive (the API's half-open span), so the last day shown is the one
+ * before it, in the SLA's timezone.
+ */
+export function formatSlaPeriodRange(start: string, end: string, timeZone: string, now: Date = new Date()): string {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return '—';
+  const s = dayIn(startDate, timeZone);
+  const e = dayIn(new Date(endDate.getTime() - 1), timeZone);
+  const currentYear = dayIn(now, timeZone).y;
+  if (s.y !== e.y) {
+    return `${s.d} ${MONTHS[s.m]} ${s.y} – ${e.d} ${MONTHS[e.m]} ${e.y}`;
+  }
+  const year = e.y === currentYear ? '' : ` ${e.y}`;
+  if (s.m === e.m) {
+    return s.d === e.d ? `${s.d} ${MONTHS[s.m]}${year}` : `${s.d}–${e.d} ${MONTHS[e.m]}${year}`;
+  }
+  return `${s.d} ${MONTHS[s.m]} – ${e.d} ${MONTHS[e.m]}${year}`;
+}
 
 export function slaReportQueryString(query: SlaReportQuery, format?: SlaExportFormat): string {
   const params = new URLSearchParams();
@@ -252,4 +366,44 @@ export function slaInputError(input: SlaInput): string | null {
   }
   if (input.monitor_ids.length === 0 && input.tags.length === 0) return 'Select at least one monitor or tag.';
   return null;
+}
+
+/**
+ * Whether the report shows its suspected-cause panel and the monitor-outage
+ * Cause column: the PDF's rule (api/internal/services/slas/export.go), so a
+ * workspace without auto-triage never sees a table of "Not triaged", and a
+ * report issued before causes existed looks unchanged. Only the CSV carries
+ * the causes regardless.
+ */
+export function showSuspectedCauses(r: Pick<SlaReport, 'suspected_causes'>): boolean {
+  return !!r.suspected_causes && r.suspected_causes.triaged_outage_count > 0;
+}
+
+/** A bucket's share of the attributed downtime, as the PDF prints it; "—" when nothing was attributed. */
+export function causeShare(bucketSeconds: number, totalSeconds: number): string {
+  if (!(totalSeconds > 0)) return '—';
+  return `${((bucketSeconds / totalSeconds) * 100).toFixed(1)}%`;
+}
+
+/**
+ * The note under the suspected-cause breakdown. Same wording as the PDF's
+ * causesCaveat (api/internal/services/slas/export.go); change them together.
+ * The triage lookback is left unnumbered here: it lives in shared/ai
+ * (TriageLookback) and the docs, not in the UI.
+ */
+export function slaCausesCaveat(c: Pick<SlaReportSuspectedCauses, 'outage_count' | 'triaged_outage_count'>): string {
+  return (
+    "Each monitor outage takes the suspected cause of its monitor's availability alerts that overlapped it, " +
+    "from Probara's local AI triage, or an operator's label on it (* marks causes that include operator-labelled outages). " +
+    "The AI's hypothesis counts as a suspected cause only at medium or high confidence; an operator's label counts whatever the confidence. " +
+    'Suspected causes are observed symptoms, not confirmed root causes. ' +
+    'Inconclusive: the triage found no supported cause, named one only at low confidence, or an operator labelled it insufficient evidence. ' +
+    'Not triaged: the alert was never triaged, for example automatic triage was off at the time, the alert resolved within the settle wait, ' +
+    "the monitor was in its triage cooldown, the workspace's hourly triage limit or the platform backlog was reached, " +
+    'the alert was older than the triage lookback, triage was switched off while the alert was queued, or the local AI was unavailable. ' +
+    'Triage pending: triage was still running or the alert still open when the report was computed. ' +
+    'No alert: no availability alert overlapped the outage. ' +
+    'Counts are monitor outages, not alerts, and downtime is summed per monitor, so it can exceed the service downtime when monitors fail together. ' +
+    `${c.triaged_outage_count} of ${c.outage_count} monitor outages had a triaged alert.`
+  );
 }

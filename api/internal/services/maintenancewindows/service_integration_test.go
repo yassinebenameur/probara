@@ -1,3 +1,5 @@
+//go:build !unit
+
 package maintenancewindows_test
 
 import (
@@ -168,4 +170,58 @@ func TestSnoozeMonitorCreatesWindow(t *testing.T) {
 
 	_, err = svc.SnoozeMonitor(ctx, tenantID, uuid.New(), until)
 	require.ErrorContains(t, err, "monitor not found")
+}
+
+// Each status tab lists the window an operator needs next first, so the API's
+// page cut never drops it: upcoming by soonest start, active by soonest end,
+// past by most recent end.
+func TestMaintenanceWindowListOrderPerStatus(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mw-order")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api")
+	now := time.Now().UTC()
+
+	// Inserted directly: Create refuses windows that already ended.
+	insert := func(title string, start, end time.Time) {
+		t.Helper()
+		id := uuid.New()
+		_, err := dbClient.ExecContext(ctx, `
+			INSERT INTO maintenance_windows (id, tenant_id, title, description, starts_at, ends_at)
+			VALUES ($1, $2, $3, '', $4, $5)`, id, tenantID, title, start, end)
+		require.NoError(t, err)
+		_, err = dbClient.ExecContext(ctx, `
+			INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id) VALUES ($1, $2)`, id, monitorID)
+		require.NoError(t, err)
+	}
+	insert("upcoming-far", now.Add(72*time.Hour), now.Add(73*time.Hour))
+	insert("upcoming-soon", now.Add(2*time.Hour), now.Add(3*time.Hour))
+	insert("active-ends-late", now.Add(-time.Hour), now.Add(5*time.Hour))
+	insert("active-ends-soon", now.Add(-3*time.Hour), now.Add(30*time.Minute))
+	insert("past-old", now.Add(-72*time.Hour), now.Add(-71*time.Hour))
+	insert("past-recent", now.Add(-5*time.Hour), now.Add(-time.Hour))
+
+	svc := maintenancewindows.NewService(dbClient)
+	titles := func(status string) []string {
+		t.Helper()
+		res, err := svc.List(ctx, tenantID, status, uuid.Nil, 1, 20)
+		require.NoError(t, err)
+		out := make([]string, 0, len(res.Items))
+		for _, w := range res.Items {
+			out = append(out, w.Title)
+		}
+		return out
+	}
+
+	require.Equal(t, []string{"upcoming-soon", "upcoming-far"}, titles("upcoming"))
+	require.Equal(t, []string{"active-ends-soon", "active-ends-late"}, titles("active"))
+	require.Equal(t, []string{"past-recent", "past-old"}, titles("past"))
+
+	// A one-row page keeps the most relevant window.
+	first, err := svc.List(ctx, tenantID, "upcoming", uuid.Nil, 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.Total)
+	require.Equal(t, "upcoming-soon", first.Items[0].Title)
 }

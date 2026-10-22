@@ -3,7 +3,6 @@ package statuspage
 import (
 	"context"
 	"math"
-	"regexp"
 	"testing"
 	"time"
 
@@ -20,30 +19,9 @@ func TestService_GetGlobalHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *tes
 	}
 	defer sqlDB.Close()
 
-	statusPageID := uuid.New()
 	tenantID := uuid.New()
 	monitorA := uuid.New()
 	monitorB := uuid.New()
-
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT spsm.monitor_id
-		FROM status_page_sections sps
-		JOIN status_page_section_monitors spsm ON spsm.section_id = sps.id
-		WHERE sps.status_page_id = $1
-		ORDER BY sps.position ASC, spsm.position ASC, spsm.monitor_id ASC
-	`)).
-		WithArgs(statusPageID).
-		WillReturnRows(sqlmock.NewRows([]string{"monitor_id"}).AddRow(monitorA).AddRow(monitorB))
-
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT m.id, m.type
-		FROM monitors m
-		WHERE m.id = ANY($1) AND m.tenant_id = $2 AND m.deleted_at IS NULL
-	`)).
-		WithArgs(sqlmock.AnyArg(), tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "type"}).
-			AddRow(monitorA, "http").
-			AddRow(monitorB, "http"))
 
 	// The rollup cursor is read in its own cheap query so the main query's raw
 	// scan bounds arrive as plain parameters (index-friendly), not a CTE join.
@@ -58,7 +36,7 @@ func TestService_GetGlobalHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *tes
 		WillReturnRows(rows)
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
-	if _, err := svc.GetGlobalHourlyUptime(context.Background(), statusPageID, tenantID); err != nil {
+	if _, err := svc.GetGlobalHourlyUptime(context.Background(), []uuid.UUID{monitorA, monitorB}, tenantID); err != nil {
 		t.Fatalf("GetGlobalHourlyUptime() error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -204,3 +182,35 @@ func TestService_BatchUptimeSummary_UsesHourlyRollupsAndBoundedRawScan(t *testin
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+// The status page finds a check's certificate wherever shared/tlscert says it
+// lives: an HTTPS check's http.tls and a SIP-over-TLS check's sip.tls alike.
+func TestCurrentStatusApplyCertificate(t *testing.T) {
+	tests := []struct {
+		name     string
+		metrics  string
+		wantDays *int
+		wantNot  string
+	}{
+		{name: "http", metrics: `{"http":{"tls":{"not_after":"2027-01-01T00:00:00Z","days_until_expiry":30}}}`, wantDays: intPtr(30), wantNot: "2027-01-01T00:00:00Z"},
+		{name: "sip", metrics: `{"sip":{"method":"OPTIONS","transport":"tls","tls":{"not_after":"2027-02-01T00:00:00Z","days_until_expiry":12}}}`, wantDays: intPtr(12), wantNot: "2027-02-01T00:00:00Z"},
+		{name: "sip without tls", metrics: `{"sip":{"method":"OPTIONS","transport":"udp"}}`},
+		{name: "no metrics", metrics: ``},
+		{name: "garbage", metrics: `{"http":"tls"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := &CurrentStatus{}
+			cs.applyCertificate([]byte(tt.metrics))
+			if (cs.TLSDaysUntilExpiry == nil) != (tt.wantDays == nil) ||
+				(cs.TLSDaysUntilExpiry != nil && *cs.TLSDaysUntilExpiry != *tt.wantDays) {
+				t.Errorf("TLSDaysUntilExpiry = %v, want %v", cs.TLSDaysUntilExpiry, tt.wantDays)
+			}
+			if cs.TLSNotAfter != tt.wantNot {
+				t.Errorf("TLSNotAfter = %q, want %q", cs.TLSNotAfter, tt.wantNot)
+			}
+		})
+	}
+}
+
+func intPtr(n int) *int { return &n }

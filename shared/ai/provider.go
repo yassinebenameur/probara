@@ -1,137 +1,283 @@
 package ai
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
+	"net"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// ErrNotConfigured is returned by NewAnalyzer when the LLM endpoint is not
-// configured. Callers treat this as "feature disabled" rather than a failure.
-var ErrNotConfigured = errors.New("ai: LLM provider not configured")
+var ErrNotConfigured = errors.New("local AI is disabled")
 
-// Provider is the low-level transport: a single chat/completions round-trip.
-// Concrete implementations (e.g. openaiCompatProvider) own the wire format;
-// the analyzer owns prompt construction and result parsing. Adding support for
-// a different vendor API is a new Provider implementation with no changes to
-// callers.
-type Provider interface {
-	// Name identifies the provider implementation (for logging).
-	Name() string
-	// Complete sends one request and returns the model's raw text content.
-	Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error)
+// ErrUnavailable marks a call the local AI service could not take right now:
+// it refused or reset the connection, its name did not resolve, or it
+// answered 429 (queue full), 502, 503 (model loading, shutting down) or 504.
+// A later attempt may succeed, so job consumers retry it instead of
+// recording a verdict. A model that ran past the timeout, an auth or
+// validation failure, and an invalid response are not ErrUnavailable.
+// Match with errors.Is; RetryAfterHint returns the service's Retry-After.
+var ErrUnavailable = errors.New("local AI temporarily unavailable")
+
+// unavailableError is an ErrUnavailable with its cause and Retry-After hint.
+// The cause stays reachable (errors.As *url.Error still works for readiness
+// classification); the text carries no more detail than before.
+type unavailableError struct {
+	msg        string
+	cause      error
+	retryAfter time.Duration
 }
 
-// CompletionRequest is a vendor-neutral completion request.
-type CompletionRequest struct {
-	Model     string
-	System    string
-	User      string
-	MaxTokens int
-	// JSONSchema, when set, asks the provider to constrain output to JSON.
-	// Providers that don't support strict schemas fall back to plain JSON
-	// mode; the analyzer parses defensively either way.
-	JSONSchema json.RawMessage
-	SchemaName string
+func (e *unavailableError) Error() string        { return e.msg }
+func (e *unavailableError) Unwrap() error        { return e.cause }
+func (e *unavailableError) Is(target error) bool { return target == ErrUnavailable }
+
+// RetryAfterHint returns the Retry-After the service sent with an
+// ErrUnavailable answer, or 0 when there was none.
+func RetryAfterHint(err error) time.Duration {
+	var u *unavailableError
+	if errors.As(err, &u) {
+		return u.retryAfter
+	}
+	return 0
 }
 
-// CompletionResponse is a vendor-neutral completion response.
-type CompletionResponse struct {
-	Content string
-	Model   string
+// transientTransport reports whether a transport error (the request's own
+// context still live) means the service is unreachable for now. A dial
+// failure is, even when it timed out; a request that timed out after
+// connecting is a slow model, not an unavailable one, and retrying it would
+// spend the inference slot again; a certificate the client rejects will not
+// fix itself.
+func transientTransport(err error) bool {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "dial" {
+		return true
+	}
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return false
+	}
+	return true
 }
 
-// Config selects and configures the provider, populated from env in
-// shared/config. All fields except BaseURL have sensible defaults.
+// parseRetryAfter reads a Retry-After header: delay-seconds or an HTTP date.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		if n < 0 {
+			return 0
+		}
+		return time.Duration(n) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// Config is installation-owned. No tenant can supply an inference destination.
 type Config struct {
-	Provider  string        // default "openai_compat"
-	BaseURL   string        // required; e.g. https://api.openai.com/v1
-	APIKey    string        // optional (keyless local runtimes)
-	Model     string        // model string passed through to the provider
-	MaxTokens int           // default 1024
-	Timeout   time.Duration // default 60s
-	// JSONMode controls the response_format field sent to the provider:
-	// "" / "off" (default) omits it — the prompt still describes the schema and
-	// the result is parsed defensively, so this works against any endpoint.
-	// "json_object" and "json_schema" opt into provider-native structured
-	// output where supported. Some servers (e.g. certain SGLang builds) error
-	// on response_format, so off is the portable default.
-	JSONMode string
+	Disabled bool
+	BaseURL  string
+	APIKey   string
+	Timeout  time.Duration
 }
 
-func (cfg *Config) applyDefaults() {
-	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = 1024
-	}
-	if cfg.Timeout <= 0 {
-		cfg.Timeout = 60 * time.Second
-	}
+type Decision struct {
+	ID       string            `json:"id"`
+	Task     string            `json:"task"`
+	Evidence any               `json:"evidence"`
+	Choices  map[string]string `json:"choices"`
+}
+type DecisionResult struct {
+	ID            string             `json:"id"`
+	Probabilities map[string]float64 `json:"probabilities"`
+}
+type ModelIdentity struct {
+	Engine    string `json:"engine"`
+	Version   string `json:"version"`
+	SHA256    string `json:"sha256"`
+	Catalogue string `json:"catalogue"`
+}
+type BatchResult struct {
+	Model      ModelIdentity      `json:"model"`
+	Thresholds map[string]float64 `json:"thresholds"`
+	Results    []DecisionResult   `json:"results"`
 }
 
-// newProvider constructs the transport for the configured vendor. This is the
-// single extension point for additional LLM vendors — add a case here and a
-// new Provider implementation; nothing else changes.
-func newProvider(cfg Config) (Provider, error) {
-	switch strings.TrimSpace(cfg.Provider) {
-	case "", "openai_compat", "openai":
-		return newOpenAICompatProvider(cfg.BaseURL, cfg.APIKey, cfg.Timeout, cfg.JSONMode), nil
-	default:
-		return nil, fmt.Errorf("ai: unknown LLM provider %q", cfg.Provider)
-	}
+type localAnalyzer struct {
+	cfg    Config
+	client *http.Client
 }
 
-// NewAnalyzer builds a RootCauseAnalyzer from config. Returns ErrNotConfigured
-// when no endpoint is set so callers can disable the feature cleanly.
 func NewAnalyzer(cfg Config) (RootCauseAnalyzer, error) {
-	if strings.TrimSpace(cfg.BaseURL) == "" {
-		return nil, ErrNotConfigured
-	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		return nil, fmt.Errorf("ai: LLM_MODEL is required")
-	}
-	cfg.applyDefaults()
-
-	provider, err := newProvider(cfg)
+	a, err := newLocalAnalyzer(cfg)
 	if err != nil {
+		// Return a literal nil, not a nil *localAnalyzer: wrapping a typed nil
+		// pointer would give callers a non-nil interface on the error path.
 		return nil, err
 	}
-	return &llmAnalyzer{
-		provider:  provider,
-		model:     cfg.Model,
-		maxTokens: cfg.MaxTokens,
-	}, nil
+	return a, nil
 }
 
-// Probe verifies connectivity and credentials against the configured endpoint
-// with a tiny completion. It powers the UI "Test connection" button. On success
-// it returns the model id the server reported (may differ from cfg.Model).
-func Probe(ctx context.Context, cfg Config) (string, error) {
-	if strings.TrimSpace(cfg.BaseURL) == "" {
-		return "", ErrNotConfigured
+// newLocalAnalyzer is the one place the client is validated and built.
+// NewAnalyzer, NewDependencyAdvisor and Probe all go through it, so none of
+// them needs to type-assert the interface NewAnalyzer returns.
+func newLocalAnalyzer(cfg Config) (*localAnalyzer, error) {
+	if cfg.Disabled {
+		return nil, ErrNotConfigured
 	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		return "", fmt.Errorf("ai: model is required")
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "http://127.0.0.1:8090"
 	}
-	cfg.applyDefaults()
+	u, err := url.Parse(cfg.BaseURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return nil, errors.New("invalid LOCAL_AI_URL")
+	}
+	if len(strings.TrimSpace(cfg.APIKey)) < 16 {
+		return nil, errors.New("LOCAL_AI_TOKEN must have at least 16 characters when local AI is enabled")
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 90 * time.Second
+	}
+	return &localAnalyzer{cfg: cfg, client: &http.Client{Timeout: cfg.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+}
 
-	provider, err := newProvider(cfg)
+func (a *localAnalyzer) call(ctx context.Context, method, path string, body any, out any) error {
+	var b bytes.Buffer
+	if body != nil {
+		if err := json.NewEncoder(&b).Encode(body); err != nil {
+			return err
+		}
+	}
+	if b.Len() > 512*1024 {
+		return errors.New("local AI request exceeds evidence budget")
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(a.cfg.BaseURL, "/")+path, &b)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		if ctx.Err() == nil && transientTransport(err) {
+			return &unavailableError{msg: "local AI unavailable: " + err.Error(), cause: err}
+		}
+		return fmt.Errorf("local AI unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg := fmt.Sprintf("local AI service returned HTTP %d; retry after checking service readiness", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return &unavailableError{msg: msg, retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+		}
+		return errors.New(msg)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > 512*1024 {
+		return errors.New("local AI response exceeds budget")
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		return fmt.Errorf("invalid local AI response: %w", err)
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		return errors.New("invalid trailing local AI response")
+	}
+	return nil
+}
+
+func (a *localAnalyzer) decide(ctx context.Context, decisions []Decision) (BatchResult, error) {
+	if len(decisions) == 0 || len(decisions) > 50 {
+		return BatchResult{}, errors.New("decision batch must contain 1 to 50 items")
+	}
+	var out BatchResult
+	if err := a.call(ctx, "POST", "/v1/decisions", struct {
+		Decisions []Decision `json:"decisions"`
+	}{decisions}, &out); err != nil {
+		return out, err
+	}
+	_, identityErr := hex.DecodeString(out.Model.SHA256)
+	if identityErr != nil || out.Model.Engine != "laya-cpu" || out.Model.Version == "" || len(out.Model.SHA256) != 64 || out.Model.Catalogue != CatalogueVersion || len(out.Results) != len(decisions) {
+		return out, errors.New("invalid local AI model identity or batch size")
+	}
+	expected := map[string]Decision{}
+	for _, d := range decisions {
+		if _, ok := expected[d.ID]; ok {
+			return out, errors.New("duplicate decision id")
+		}
+		expected[d.ID] = d
+	}
+	for _, r := range out.Results {
+		d, ok := expected[r.ID]
+		if !ok {
+			return out, errors.New("unknown or duplicate response id")
+		}
+		delete(expected, r.ID)
+		if len(r.Probabilities) != len(d.Choices) {
+			return out, errors.New("incomplete decision probabilities")
+		}
+		total := 0.0
+		for k, p := range r.Probabilities {
+			if _, ok := d.Choices[k]; !ok || math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
+				return out, errors.New("invalid choice probability")
+			}
+			total += p
+		}
+		threshold, ok := out.Thresholds[d.Task]
+		if !ok || math.IsNaN(threshold) || threshold <= 0 || threshold > 1 || math.Abs(total-1) > 1e-4 {
+			return out, errors.New("invalid calibration or probability sum")
+		}
+	}
+	// Preserve request order even if the service returns responses out of order.
+	byID := map[string]DecisionResult{}
+	for _, r := range out.Results {
+		byID[r.ID] = r
+	}
+	for i, d := range decisions {
+		out.Results[i] = byID[d.ID]
+	}
+	return out, nil
+}
+
+func Probe(ctx context.Context, cfg Config) (string, error) {
+	analyzer, err := newLocalAnalyzer(cfg)
 	if err != nil {
 		return "", err
 	}
-	resp, err := provider.Complete(ctx, CompletionRequest{
-		Model:     cfg.Model,
-		System:    "You are a health check. Reply with the single word: OK.",
-		User:      "ping",
-		MaxTokens: 16,
-	})
-	if err != nil {
+	var out struct {
+		Model ModelIdentity `json:"model"`
+	}
+	if err := analyzer.call(ctx, "GET", "/readyz", nil, &out); err != nil {
 		return "", err
 	}
-	if resp.Model != "" {
-		return resp.Model, nil
+	if out.Model.Engine != "laya-cpu" || out.Model.Version == "" || out.Model.Catalogue != CatalogueVersion {
+		return "", errors.New("invalid local AI readiness identity")
 	}
-	return cfg.Model, nil
+	return out.Model.Version, nil
 }

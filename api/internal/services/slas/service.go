@@ -47,10 +47,16 @@ type Service struct {
 	db        *db.Client
 	analytics *sharedanalytics.Repository
 	now       func() time.Time
+	// aiTriageOff is the installation's triage kill switch
+	// (LOCAL_AI_DISABLED=true or AI_TRIAGE_ENABLED=false): the relay claims
+	// nothing, so no alert without a triage row reads as "Triage pending".
+	aiTriageOff bool
 }
 
-func NewService(dbClient *db.Client, analytics *sharedanalytics.Repository) *Service {
-	return &Service{db: dbClient, analytics: analytics, now: func() time.Time { return time.Now().UTC() }}
+// NewService builds the SLA service. aiTriageOff is
+// cfg.LocalAI.Disabled || !cfg.AITriageEnabled.
+func NewService(dbClient *db.Client, analytics *sharedanalytics.Repository, aiTriageOff bool) *Service {
+	return &Service{db: dbClient, analytics: analytics, now: func() time.Time { return time.Now().UTC() }, aiTriageOff: aiTriageOff}
 }
 
 const slaColumns = `s.id, s.tenant_id, s.name, s.description, s.target_pct::float8, s.aggregation, s.period,

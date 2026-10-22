@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
@@ -71,7 +72,7 @@ func (a *Alerter) deliverNotification(
 		alert.ResolvedAt = resolvedAt
 	}
 
-	claimed, err := claimNotificationTx(ctx, tx, alert.ID, channel.ID, eventType, now, reminderInterval)
+	claimed, round, err := claimNotificationTx(ctx, tx, alert.ID, channel.ID, eventType, now, reminderInterval)
 	if err != nil {
 		return false, err
 	}
@@ -79,6 +80,9 @@ func (a *Alerter) deliverNotification(
 		return false, nil
 	}
 
+	// A rolled-back claim is retried by whichever replica claims next; the
+	// key lets that retry skip the recipients this attempt already reached.
+	ctx = withRecipientKey(ctx, notifications.RecipientEventKey(eventType, round))
 	if err := a.sendFunc(ctx, channel, eventType, binding, alert, groupInfo, now); err != nil {
 		if plugin.IsPermanent(err) {
 			// The provider rejected the channel itself (revoked key, deleted
@@ -110,9 +114,17 @@ func (a *Alerter) deliverNotification(
 //   - acknowledged: update wins once (acknowledged_sent_at IS NULL) on an
 //     existing, unresolved row; it leaves last_event_type alone so reminders
 //     and the resolve still flow.
+//   - suspected_cause: the same one-shot shape on suspected_cause_sent_at.
 //
-// Returns true when a row came back, i.e. the caller owns the send.
-func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uuid.UUID, eventType string, now time.Time, reminderInterval time.Duration) (bool, error) {
+// The one-shot columns never touch last_event_type or last_sent_at, so the
+// created/reminder/resolved timing is identical with or without them.
+//
+// Returns true when a row came back, i.e. the caller owns the send. For a
+// reminder it also returns the last_sent_at the claim replaced: the round's
+// identity in the per-recipient ledger (notifications.RecipientEventKey). A
+// transient failure rolls the claim back, so the retry finds the same value;
+// the next round finds the time this one committed.
+func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uuid.UUID, eventType string, now time.Time, reminderInterval time.Duration) (bool, time.Time, error) {
 	var query string
 	args := []interface{}{alertID, channelID, now}
 	switch eventType {
@@ -125,15 +137,20 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			RETURNING alert_id`
 	case "reminder":
 		if reminderInterval <= 0 {
-			return false, nil
+			return false, time.Time{}, nil
 		}
+		// prev is the same row as read by the statement's snapshot, i.e. the
+		// last_sent_at being replaced. The due predicate stays on s, which a
+		// blocked concurrent claimant re-checks against the committed row.
 		query = `
-			UPDATE alert_notification_states
+			UPDATE alert_notification_states s
 			SET last_sent_at = $3::timestamptz, last_event_type = 'reminder', updated_at = NOW()
-			WHERE alert_id = $1 AND channel_id = $2
-			  AND last_event_type <> 'resolved'
-			  AND last_sent_at <= $3::timestamptz - ($4::double precision * INTERVAL '1 second')
-			RETURNING alert_id`
+			FROM alert_notification_states prev
+			WHERE s.alert_id = $1 AND s.channel_id = $2
+			  AND prev.alert_id = s.alert_id AND prev.channel_id = s.channel_id
+			  AND s.last_event_type <> 'resolved'
+			  AND s.last_sent_at <= $3::timestamptz - ($4::double precision * INTERVAL '1 second')
+			RETURNING s.alert_id, prev.last_sent_at`
 		args = append(args, reminderInterval.Seconds())
 	case "resolved":
 		query = `
@@ -154,17 +171,49 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			  AND acknowledged_sent_at IS NULL
 			  AND last_event_type <> 'resolved'
 			RETURNING alert_id`
+	case "suspected_cause":
+		// Advisory follow-up: one-shot, and only for a channel that was
+		// paged for this still-open alert (see dispatchSuspectedCauses).
+		query = `
+			UPDATE alert_notification_states
+			SET suspected_cause_sent_at = $3::timestamptz, updated_at = NOW()
+			WHERE alert_id = $1 AND channel_id = $2
+			  AND suspected_cause_sent_at IS NULL
+			  AND last_event_type <> 'resolved'
+			RETURNING alert_id`
 	default:
-		return false, fmt.Errorf("unknown notification event type %q", eventType)
+		return false, time.Time{}, fmt.Errorf("unknown notification event type %q", eventType)
 	}
 
 	var claimedAlertID uuid.UUID
-	err := tx.QueryRowContext(ctx, query, args...).Scan(&claimedAlertID)
+	var round time.Time
+	dest := []any{&claimedAlertID}
+	if eventType == "reminder" {
+		dest = append(dest, &round)
+	}
+	err := tx.QueryRowContext(ctx, query, args...).Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return false, time.Time{}, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("claim %s notification: %w", eventType, err)
+		return false, time.Time{}, fmt.Errorf("claim %s notification: %w", eventType, err)
 	}
-	return true, nil
+	return true, round, nil
+}
+
+type recipientKeyCtx struct{}
+
+// withRecipientKey hands sendChannelNotification the ledger key of the event
+// deliverNotification claimed, without widening sendFunc.
+func withRecipientKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, recipientKeyCtx{}, key)
+}
+
+// recipientKey returns the key deliverNotification attached, or derives one
+// from now for a send that bypassed the claim.
+func recipientKey(ctx context.Context, eventType string, now time.Time) string {
+	if key, ok := ctx.Value(recipientKeyCtx{}).(string); ok && key != "" {
+		return key
+	}
+	return notifications.RecipientEventKey(eventType, now)
 }

@@ -1,3 +1,193 @@
+# [2.0.0-alpha.8](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.7...v2.0.0-alpha.8) (2026-10-21)
+
+
+### Bug Fixes
+
+* **helm:** point install notes at the first-admin form and the release namespace ([ab3c8c5](https://github.com/yassinebenameur/probara/commit/ab3c8c510765c5fc134e06151e36a329923f8733))
+* **scripts:** fall back when nvm has no LTS and require Node 20.9 for the UI ([5fc9cc7](https://github.com/yassinebenameur/probara/commit/5fc9cc7dec3c0b54c8009e21654c6f663360a5c4))
+
+# [2.0.0-alpha.7](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.6...v2.0.0-alpha.7) (2026-10-21)
+
+
+### Bug Fixes
+
+* **agent:** restart on re-run, fail closed on checksums and refuse keyless installers ([e4503ad](https://github.com/yassinebenameur/probara/commit/e4503ade9b23815c4ed71ef15e824d994da29b3b))
+* **web:** move every tag picker onto FilterPopover and make the sidebar shortcut Ctrl+B / ⌘B ([131e091](https://github.com/yassinebenameur/probara/commit/131e091a2280a04915014307b37d7a2daada98a3))
+
+
+### Features
+
+* **alerts:** bulk acknowledge and resolve with hover selection and server-side sorting ([dbccb5a](https://github.com/yassinebenameur/probara/commit/dbccb5a6242aa89a4ac35e7e144edc916d3c42be))
+* **web:** lay monitor forms out as section rows with setting-row alerting ([aa7dee6](https://github.com/yassinebenameur/probara/commit/aa7dee694fd03cd95d5d73cc2cab30c48e9bbfd0))
+* **web:** polish incident detail and the status page editor ([f8a6a2e](https://github.com/yassinebenameur/probara/commit/f8a6a2e697c3ac749dfd85892aa779690936caa4))
+* **web:** polish the monitor detail page ([78e30e0](https://github.com/yassinebenameur/probara/commit/78e30e01e2362765a80160514e5a860eaa13c95b))
+
+
+### Performance Improvements
+
+* **monitors:** load recent results for the whole list in one batch request ([6d10427](https://github.com/yassinebenameur/probara/commit/6d104272572a0456f3fa2c0331eb6bf68dfb8245))
+
+# [2.0.0-alpha.6](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.5...v2.0.0-alpha.6) (2026-10-21)
+
+
+### Bug Fixes
+
+* **sip:** send one more BYE from the linger after an unconfirmed hang-up ([d64ae15](https://github.com/yassinebenameur/probara/commit/d64ae1537aab63c43f95fa17e50040149d024891))
+* **web:** use the shared segmented control for SIP call mode and audio expectation ([6fd55ac](https://github.com/yassinebenameur/probara/commit/6fd55ac433f0cb33e53ab6c486b29d02986188a1))
+* **worker:** bound concurrent side-effecting test checks ([8b56958](https://github.com/yassinebenameur/probara/commit/8b56958a6d22eb7713b8dcd872aca8dfec8ccd97))
+
+
+### Features
+
+* **netguard:** vet server-chosen media destinations ([1f62e57](https://github.com/yassinebenameur/probara/commit/1f62e5747f4492d0b5d26a95229fe502efc626fc))
+* **sip:** exchange RTP and measure call quality on test calls ([c6ee9c0](https://github.com/yassinebenameur/probara/commit/c6ee9c0cdcb5eda21f12b354fc6f3d52ae01eeb2))
+* **sip:** RTCP sender reports, far-end reception reports and RTT ([19a0213](https://github.com/yassinebenameur/probara/commit/19a0213bed6fd4ac642c68d37ed8f983dd708ed1))
+* **web:** call-quality facts and MOS, loss and jitter panels ([45ad776](https://github.com/yassinebenameur/probara/commit/45ad776e19da7f30d245200676c4bba542046faa))
+* **web:** call-quality settings in the test-call form ([8798c79](https://github.com/yassinebenameur/probara/commit/8798c79e3fe632800bd2237cabe8392e6de53979))
+* **worker:** RTP statistics and E-model estimate package ([f58c958](https://github.com/yassinebenameur/probara/commit/f58c9583259262c7baae75d49fba96df4c0063ac))
+
+# [2.0.0-alpha.5](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.4...v2.0.0-alpha.5) (2026-10-21)
+
+
+### Bug Fixes
+
+* **dashboard:** rank problem monitors and service groups by current state ([fb77339](https://github.com/yassinebenameur/probara/commit/fb773394209b5a9d82bb30f2d1b66d7da0d7d453))
+* **web:** float the notification save bar and tidy settings alignment, focus and labels ([b6cd8c2](https://github.com/yassinebenameur/probara/commit/b6cd8c2acda7a6b86f647cc14e5114c34b33e456))
+* **web:** lay notification settings cards out in balanced column stacks with one control rail ([c35c1ba](https://github.com/yassinebenameur/probara/commit/c35c1bada2f35dc5cde1e520e9fdc221ed505d3a))
+* **web:** split notification settings into two columns sooner, equalize segments and fit the channel table on phones ([ad6d0d0](https://github.com/yassinebenameur/probara/commit/ad6d0d079ba1fa3ba7ea3e0ed11a2c35cfeaf4b2))
+
+
+### Features
+
+* **maintenance:** order maintenance windows per status ([7eff411](https://github.com/yassinebenameur/probara/commit/7eff4114f5897a0dfe1ef7f9f9b7bf0208c48a95))
+* **status-page:** add a 1h uptime range ([a235bea](https://github.com/yassinebenameur/probara/commit/a235bead7d07518b87659cadc8e6c9650370c55f))
+* **web:** premium UI overhaul: full-width layouts, flat canvas, accessible contrast, live feedback and shared controls ([c6736a7](https://github.com/yassinebenameur/probara/commit/c6736a72aacdf485b75bf2576491f84f7982d1b1))
+* **web:** redesign notification settings as sectioned setting rows with segmented controls ([1b9a7d4](https://github.com/yassinebenameur/probara/commit/1b9a7d4f06d4dac1c5721dddde9911a9a343370b))
+
+# [2.0.0-alpha.4](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.3...v2.0.0-alpha.4) (2026-10-20)
+
+
+### Bug Fixes
+
+* **analytics:** derive raw-range downtime from the state timeline, not check rows ([5d9d941](https://github.com/yassinebenameur/probara/commit/5d9d9413aca333c3ea8d81f19cb4b83051b08172))
+* **notifications:** never re-send to recipients that already received an alert ([2e26593](https://github.com/yassinebenameur/probara/commit/2e26593135a1fc769e8de5bfcf6f3b0c45bfbfd5))
+
+
+### Features
+
+* **scripts:** add a seed-demo tool for the Northwind demo tenant ([e38bf3f](https://github.com/yassinebenameur/probara/commit/e38bf3f959e88d4582186e7c0751a61dd34febf3))
+
+# [2.0.0-alpha.3](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.2...v2.0.0-alpha.3) (2026-10-20)
+
+
+### Bug Fixes
+
+* **ci:** keep push runs, release-gate order and coverage intact ([be07666](https://github.com/yassinebenameur/probara/commit/be0766632666e93e80628a4a062f06b23562f767))
+
+# [2.0.0-alpha.2](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.1...v2.0.0-alpha.2) (2026-10-19)
+
+
+### Bug Fixes
+
+* **agent:** embed only API keys in collector install scripts ([2861b93](https://github.com/yassinebenameur/probara/commit/2861b931b9a9074538e3d8f3ec429dc2316b1526))
+* **auth:** let a credential scope narrow every role, superadmin included ([693aec8](https://github.com/yassinebenameur/probara/commit/693aec819f159cec89bf6e7356f1a9ddb2f3fdd6))
+* **mcp:** make alert wait timeout tests deterministic ([31276ec](https://github.com/yassinebenameur/probara/commit/31276ecbca1e708bff3caa700d9a71661ecfce72))
+
+
+### Features
+
+* **audit:** record the dispatch channel in audit event details ([9731770](https://github.com/yassinebenameur/probara/commit/973177004f59286fb470f4666d42962c29d9374f))
+* **mcp:** add an OAuth 2.1 authorization server for MCP clients ([e025f69](https://github.com/yassinebenameur/probara/commit/e025f698e3737babe74fb7ec3d437b8e7a78ba7b))
+* **mcp:** serve the whole API as MCP tools at /api/v1/mcp ([79cb0b6](https://github.com/yassinebenameur/probara/commit/79cb0b6363455f70e4d21cf900c838f457968117))
+* **web:** add the MCP consent screen and settings tab ([6506a72](https://github.com/yassinebenameur/probara/commit/6506a72ff7f9a1cfc55cf3a34a1b2e229cfb422d))
+
+# [2.0.0-alpha.1](https://github.com/yassinebenameur/probara/compare/v1.0.0...v2.0.0-alpha.1) (2026-10-16)
+
+
+* refactor(ai)!: replace the external LLM with the local decision engine ([82132cc](https://github.com/yassinebenameur/probara/commit/82132cce34104c101e9f21894b194f7f923e5719))
+
+
+### Bug Fixes
+
+* **ai-service:** re-render operator label exports passed to --extra-train ([15fbb73](https://github.com/yassinebenameur/probara/commit/15fbb732258b1fd5c260d5a07240e2042af841cd))
+* **ai-service:** serve queued batches, trim the token, restart a wedged inference ([f2f544c](https://github.com/yassinebenameur/probara/commit/f2f544cc0205b894d902f8910882c82a875a9c75))
+* **ai:** harden the local AI analysis pipeline ([2d8e66a](https://github.com/yassinebenameur/probara/commit/2d8e66a84cadd9dfb3b8a1ee20b9d0649ca0871f))
+* **ai:** keep the stale sweep from failing analyses mid-retry ([94017ec](https://github.com/yassinebenameur/probara/commit/94017ec130909a83cb7862a08804bf9fdc132894))
+* **ai:** name monitors in analysis evidence and list each missing upstream once ([42016a0](https://github.com/yassinebenameur/probara/commit/42016a0579b2a4db1b5100065605b62a9e8d0013))
+* **ai:** report a misconfigured local AI and stop claiming triages without an analyzer ([0d3384a](https://github.com/yassinebenameur/probara/commit/0d3384a4b07409c66a5864cc23a8f81c38eb18a4))
+* **ai:** retry a temporarily unavailable local AI instead of failing the job ([ac6bac9](https://github.com/yassinebenameur/probara/commit/ac6bac9cb292cb8cf1d3ee536d866b9d111a5b88))
+* **alerter:** filter unrouted follow-up pairs in SQL and rotate the batch ([7e6d47c](https://github.com/yassinebenameur/probara/commit/7e6d47cbb6684f625acef2888e4b1d293a8ed3da))
+* **api:** leave dependency edges of SIP test-call monitors outside the call gate ([f2bc807](https://github.com/yassinebenameur/probara/commit/f2bc807c239170d6e5c93a9c49579753d2cd45ac))
+* **ci:** let the local AI checks expect the alerter's kill switch ([a5fce9e](https://github.com/yassinebenameur/probara/commit/a5fce9ea6beae2427a26e3d016e934237185a423))
+* **db:** index pending analyses for the stale sweep, fix ai_labels comments ([802392a](https://github.com/yassinebenameur/probara/commit/802392a47c034f6896ab6f287fba7c1968c65ed5))
+* **dev:** start local AI after the platform and refuse LFS-less builds ([bd39a12](https://github.com/yassinebenameur/probara/commit/bd39a1229cfffb04258c9f3c872c9055a8df9b84))
+* **helm:** default every image tag to the chart's appVersion ([89edf2a](https://github.com/yassinebenameur/probara/commit/89edf2ad216949d1e26f23a78db2f13fe9b0f326))
+* **scheduler:** give each scheduled check job a per-slot Nats-Msg-Id ([bca96f4](https://github.com/yassinebenameur/probara/commit/bca96f401c9b5f81d574bf8907ea8c6364a2e938))
+* **scheduler:** keep the interval floor for SIP test calls while suspect ([d60545c](https://github.com/yassinebenameur/probara/commit/d60545c0cab28947050633fee66b7046c633d54b))
+* **scheduler:** never dispatch push or agent monitors as check jobs ([bbb373e](https://github.com/yassinebenameur/probara/commit/bbb373e130351ccb22634a5fa460743da5e98629))
+* **scripts:** expect 409 for a dependency cycle in local AI acceptance ([bbc244a](https://github.com/yassinebenameur/probara/commit/bbc244a8bd1dbd2a7bfb053c34e384e1fe949a29))
+* **sip:** check tls_server_name syntax on save only so stored monitors keep running ([97b1c3f](https://github.com/yassinebenameur/probara/commit/97b1c3f506745103782c09c66526a96a4cbdc4d7))
+* **sip:** close target_uri allow-list bypass, refuse bulk edits up front, label late remote BYEs ([47d5f41](https://github.com/yassinebenameur/probara/commit/47d5f411f9816f6ccce11e8c4da48883d251e6a1))
+* **sip:** fail an INVITE over when its TLS handshake stalls ([c9db0ff](https://github.com/yassinebenameur/probara/commit/c9db0ff5857d6217b26bae465efd678b348e666c))
+* **sip:** fail over black-holed connects in a mode, keep partial SRV answers, show IP targets with their port ([b198d5b](https://github.com/yassinebenameur/probara/commit/b198d5bc8f5e82e06b414acfd9cc2993cc9d3956))
+* **sip:** keep every answered realm's credentials on INVITE and BYE retries ([052ba4b](https://github.com/yassinebenameur/probara/commit/052ba4b76275e40869db517ffa973f7839f7d568))
+* **sip:** move past a failed SRV name to the next NAPTR record or transport ([ef85046](https://github.com/yassinebenameur/probara/commit/ef85046d2d5ac222bc4e5d2248c4867f1de15902))
+* **sip:** record the peer of a failed TLS handshake ([078835d](https://github.com/yassinebenameur/probara/commit/078835ddc0ee435178c79c4f67fbb4c0bb2ccc4f))
+* **sip:** refuse case-variant config keys and treat any spelling of a call as one ([1a5ee32](https://github.com/yassinebenameur/probara/commit/1a5ee328a31965642774cafd15e4e7c57518a9fd))
+* **sip:** require a bare host as a test call's domain ([0f3b80b](https://github.com/yassinebenameur/probara/commit/0f3b80b606a08d7b11e9ba7d6fd2ca74d73a2381))
+* **sla:** count only confident triage hypotheses as suspected causes ([5d76c25](https://github.com/yassinebenameur/probara/commit/5d76c25cd032945413de4729c09b89a8d81ae8f0))
+* **sla:** derive the PDF lookback phrase and complete the CSV cause summary ([382563f](https://github.com/yassinebenameur/probara/commit/382563f4b6216232f878d27a7fe423db6c6928c3))
+* **sla:** share triage eligibility with the relay and honour the kill switches ([9688c19](https://github.com/yassinebenameur/probara/commit/9688c1920f5f14282bf8f3bdf379dc18001ea95b))
+* **sla:** stop the pending note pointing at a hidden cause table ([0db383c](https://github.com/yassinebenameur/probara/commit/0db383c87a128fc216892897304609b595e23b86))
+* **sla:** store the golden SLA CSV with its CRLF line endings ([04cedd9](https://github.com/yassinebenameur/probara/commit/04cedd9d122a50ebf9d321b333d932aa623ca241))
+* **status-page:** keep INVITE targets to the signalling host on public pages ([76bed92](https://github.com/yassinebenameur/probara/commit/76bed92e66e21d472f25755e30d2dcc23f0d1a5d))
+* **web:** arrow-key roving on the SIP call mode segment ([3a600b9](https://github.com/yassinebenameur/probara/commit/3a600b9702232153824858a2a5bb165fe1aeb874))
+* **web:** badge SIP test calls as CALL in import preview and results ([e64f89b](https://github.com/yassinebenameur/probara/commit/e64f89b6ff7c321155cefd6c35a336b373aa31bf))
+* **web:** clear SIP errors when their field is hidden ([2c2a34d](https://github.com/yassinebenameur/probara/commit/2c2a34d31c098851f922c3b546abf9d1f278e578))
+* **web:** count the SIP caller name in code points like the server ([83f9791](https://github.com/yassinebenameur/probara/commit/83f9791ab839583289b75bec57dabf6be6009b71))
+* **web:** draw isolated samples as dots in metric charts ([b726830](https://github.com/yassinebenameur/probara/commit/b7268309438250b64c4ae95053076a9ed67ba0db))
+* **web:** format the SIP Test result latency with formatLatency ([101de0e](https://github.com/yassinebenameur/probara/commit/101de0e43b66566c1b07c13790bd4e690c0555e7))
+* **web:** hide only the teardown warning the Teardown row already shows ([341303e](https://github.com/yassinebenameur/probara/commit/341303e08097ab176851a0c407f9c8896c4c116e))
+* **web:** keep SIP tls_server_name and every non-secret field on save and clone ([eb6d10e](https://github.com/yassinebenameur/probara/commit/eb6d10e7480044a6f2a821203b528146a912ae45))
+* **web:** match the server's call detection for any key spelling ([0999933](https://github.com/yassinebenameur/probara/commit/09999330abb48a1ba86d127326bf0474a013836a))
+* **web:** mirror the server's test-call URI and host rules on the SIP form ([3417814](https://github.com/yassinebenameur/probara/commit/34178148b581711f6a2ff7340386f2b3b671a349))
+* **web:** re-enable AI triggers once local AI becomes ready ([a5ab22a](https://github.com/yassinebenameur/probara/commit/a5ab22ae3d41582327bb25b083e3c697bc9982fa))
+* **web:** read the SIP resolution mode case-insensitively like the worker ([a4457c2](https://github.com/yassinebenameur/probara/commit/a4457c2b9a51e097f669a6fca47e8434f1a905ee))
+* **web:** say no response in the PDD headline when the INVITE drew nothing ([0de9773](https://github.com/yassinebenameur/probara/commit/0de97738d411b6298480f74b18114899b5f470bb))
+* **web:** show SLA suspected causes under the PDF's triaged-outage rule ([468890b](https://github.com/yassinebenameur/probara/commit/468890be27b44b61198abe51d1e59b22a6c8aaa5))
+* **web:** surface local AI server errors and tidy the AI controls ([fd33c17](https://github.com/yassinebenameur/probara/commit/fd33c179d91c6affa5317424526de044765f80fa))
+* **web:** surface SIP test-call warnings on the Test result ([8f30f46](https://github.com/yassinebenameur/probara/commit/8f30f46dafe01174b87efe4549e4a9459bd58cd5))
+* **web:** validate and save SIP TLS min-days with one whole-number parser ([c7212a7](https://github.com/yassinebenameur/probara/commit/c7212a728d83193e3047248a9e8ac5b02f1ed798))
+* **worker:** classify SIP TLS failures before connect errors ([f617338](https://github.com/yassinebenameur/probara/commit/f6173387c78a27c6f0886c597c825f79ab10c83f))
+* **worker:** drain queued INVITE events before treating a closed flow as an error ([0590a65](https://github.com/yassinebenameur/probara/commit/0590a654fe2429ae4242972f5dabc5932da48199))
+* **worker:** drop a test call's result when worker shutdown interrupts it ([579da3b](https://github.com/yassinebenameur/probara/commit/579da3bb13e170c8b2cb5fe5913ae378fe485422))
+* **worker:** never answer a looped-back SIP request or drop a queued final ([1ce0f3e](https://github.com/yassinebenameur/probara/commit/1ce0f3e1cbada423ae019a0eb526d91a03f74214))
+
+
+### Features
+
+* **ai-service:** bundle the local decision service, its artifact pipeline and a default-on workload ([7e4cfd1](https://github.com/yassinebenameur/probara/commit/7e4cfd1e407cbc409aa0f4e0df3899274867b7fc))
+* **ai-service:** ship probara-laya-v4, the first release-approved checkpoint ([a042221](https://github.com/yassinebenameur/probara/commit/a0422212019fb1c41248353de3140ae418540ff0))
+* **ai:** collect operator labels and export them as training rows ([12cdd91](https://github.com/yassinebenameur/probara/commit/12cdd91b989d482a166111887f754f3ed17eecf1))
+* **ai:** triage alerts automatically with the local model, display only ([b29f205](https://github.com/yassinebenameur/probara/commit/b29f205c85d9ea3130292daf4c9f48edcb77ed74))
+* **alerter:** send an opt-in suspected-cause follow-up per paged channel ([c5055c5](https://github.com/yassinebenameur/probara/commit/c5055c5a5f4da0a1b531129a6116017dfc0f9ee2))
+* **sip:** INVITE synthetic call check (backend) ([0c0c1bb](https://github.com/yassinebenameur/probara/commit/0c0c1bb7ac0e8ea907c17f627eeafb5b5564495d))
+* **sip:** NAPTR step of RFC 3263 ([e6abae8](https://github.com/yassinebenameur/probara/commit/e6abae8a8b3da3bdb64b07be4f14f7fe705b2191))
+* **sip:** per-check metrics_data envelope ([ccda804](https://github.com/yassinebenameur/probara/commit/ccda8048888875a3854c8690bd706e8495b11d01))
+* **sip:** RFC 3263 SRV resolution with failover ([9251de0](https://github.com/yassinebenameur/probara/commit/9251de09a85d8acc97dda38a397869d2e07999c3))
+* **sla:** break SLA report outages down by suspected cause ([7e6fdfa](https://github.com/yassinebenameur/probara/commit/7e6fdfaeb958a7fe7f37ffd991998aadfb529fc3))
+* **tls:** SIP-over-TLS certificate expiry via shared/tlscert ([a5d457c](https://github.com/yassinebenameur/probara/commit/a5d457c04721b9dc4fc816dca1f0507cf2116625))
+* **web:** consolidate the instrument-glass UI onto shared controls and helpers ([691b157](https://github.com/yassinebenameur/probara/commit/691b1577e0aafdc56f5b30066a6b995c5fd9c9a0))
+* **web:** instrument-glass visual overhaul of the operator UI ([5d60fd8](https://github.com/yassinebenameur/probara/commit/5d60fd8f8a93f2d15989579c2c77bbf4559dea5a))
+* **web:** INVITE test-call form, CALL badge and call facts ([d227773](https://github.com/yassinebenameur/probara/commit/d2277735f9b6540474740c680b9e416f990c73ef))
+* **web:** PDD and answer-time panels ([ad94325](https://github.com/yassinebenameur/probara/commit/ad94325c5ff19e650bd9dd2581637561be8a8f9f))
+* **worker:** heartbeat long checks; at-most-once side-effecting checks ([d5381e0](https://github.com/yassinebenameur/probara/commit/d5381e0d2471e0fae88253c03f7cf7af91b9278d))
+
+
+### BREAKING CHANGES
+
+* LLM_* variables and tenant provider settings stop working.
+
 # 1.0.0 (2026-10-10)
 
 
@@ -302,6 +492,14 @@
 * **status-page:** batch monitor loading to fix N+1 query timeout ([71a21f3](https://github.com/yassinebenameur/probara/commit/71a21f30052da4a669c86bcb40196f2fa33460f6))
 * **status-page:** bound global 24h hourly scan ([76d8344](https://github.com/yassinebenameur/probara/commit/76d8344a798425635463f453fa30b6a7f4e5ab4d))
 * **status-page:** parse template once; batch incident queries ([a257432](https://github.com/yassinebenameur/probara/commit/a257432fb0d269949ec8f86d594f9d014eba87bc))
+
+# [1.0.0-alpha.77](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.76...v1.0.0-alpha.77) (2026-10-10)
+
+
+### Features
+
+* **web:** consolidate the instrument-glass UI onto shared controls and helpers ([691b157](https://github.com/yassinebenameur/probara/commit/691b1577e0aafdc56f5b30066a6b995c5fd9c9a0))
+* **web:** instrument-glass visual overhaul of the operator UI ([5d60fd8](https://github.com/yassinebenameur/probara/commit/5d60fd8f8a93f2d15989579c2c77bbf4559dea5a))
 
 # [1.0.0-alpha.76](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.75...v1.0.0-alpha.76) (2026-09-29)
 

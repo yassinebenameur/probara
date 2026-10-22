@@ -105,6 +105,11 @@ func (h *Handlers) ConfigureCheckJobs(publisher checkJobPublisher, subject strin
 }
 
 // TestMonitorConfigRequest is the body for POST /api/v1/monitors/test.
+// RunMonitorNowRequest is the optional body of POST /monitors/{id}/run.
+type RunMonitorNowRequest struct {
+	LocationID *string `json:"location_id,omitempty"`
+}
+
 type TestMonitorConfigRequest struct {
 	Type           models.MonitorType `json:"type"`
 	Config         json.RawMessage    `json:"config"`
@@ -154,6 +159,11 @@ func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validation.DefaultRegistry.Validate(req.Type, req.Config); err != nil {
 		errors.WriteValidationError(w, err.Error())
+		return
+	}
+	// A test of a test-call config places a real call.
+	if err := monitorservice.RequireCallPermission(r.Context(), req.Type, req.Config); err != nil {
+		errors.WriteForbiddenError(w, err.Error())
 		return
 	}
 	if containsEncryptedTestSecret(req.Type, req.Config) {
@@ -278,6 +288,10 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 
 	monitor, err := h.service.CreateMonitor(r.Context(), tenantUUID, &req)
 	if err != nil {
+		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
+			errors.WriteForbiddenError(w, err.Error())
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
@@ -531,6 +545,10 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 
 	monitor, err := h.service.UpdateMonitor(r.Context(), tenantUUID, monitorID, &req)
 	if err != nil {
+		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
+			errors.WriteForbiddenError(w, err.Error())
+			return
+		}
 		if err.Error() == "monitor not found" {
 			errors.WriteNotFoundError(w, "monitor not found")
 			return
@@ -839,6 +857,67 @@ func (h *Handlers) GetMonitorResults(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
+// GetMonitorResultsBatch handles GET /api/v1/monitors/results/batch: the
+// newest ?limit= (default 20, max 100) results for each of up to 100
+// monitors, named by ?ids= (comma-separated, repeatable). It is a GET so
+// viewers and read-scope keys reach it without a postReadPaths entry.
+func (h *Handlers) GetMonitorResultsBatch(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	query := r.URL.Query()
+	var monitorIDs []uuid.UUID
+	for _, value := range query["ids"] {
+		for _, raw := range strings.Split(value, ",") {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				errors.WriteValidationError(w, fmt.Sprintf("invalid monitor ID %q", raw))
+				return
+			}
+			monitorIDs = append(monitorIDs, id)
+		}
+	}
+
+	limit := 0
+	if limitStr := query.Get("limit"); limitStr != "" {
+		limit, err = strconv.Atoi(limitStr)
+		if err != nil || limit < 1 {
+			errors.WriteValidationError(w, fmt.Sprintf("limit must be an integer between 1 and %d", resultservice.MaxBatchResultsLimit))
+			return
+		}
+	}
+
+	response, err := h.resultService.GetMonitorResultsBatch(r.Context(), tenantUUID, monitorIDs, limit)
+	if err != nil {
+		if stderrors.Is(err, resultservice.ErrInvalidBatchRequest) {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":         err.Error(),
+			"tenant_id":     tenantID,
+			"monitor_count": len(monitorIDs),
+		}).Error("Failed to get batch monitor results")
+		errors.WriteInternalError(w, "failed to get monitor results")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // GetMonitorAnalytics handles GET /api/v1/monitors/{id}/analytics
 func (h *Handlers) GetMonitorAnalytics(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := middleware.GetTenantID(r.Context())
@@ -979,17 +1058,21 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if monitor.Type == models.MonitorTypeGroup {
-		errors.WriteValidationError(w, "group monitors cannot be run on-demand")
+	if sharedmodels.IsPassiveMonitorType(string(monitor.Type)) {
+		errors.WriteValidationError(w, fmt.Sprintf("%s monitors cannot be run on-demand", monitor.Type))
+		return
+	}
+	// Running a test-call monitor places a real call from every selected
+	// location.
+	if err := monitorservice.RequireCallPermission(r.Context(), monitor.Type, monitor.Config); err != nil {
+		errors.WriteForbiddenError(w, err.Error())
 		return
 	}
 
 	// Optional body: {"location_id": "..."} narrows the run to one of the
 	// monitor's locations. Default: fan out exactly like the scheduler (all
 	// selected locations, or the default fleet when none).
-	var runReq struct {
-		LocationID *string `json:"location_id,omitempty"`
-	}
+	var runReq RunMonitorNowRequest
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&runReq) // empty body is fine
 	}

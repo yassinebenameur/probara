@@ -9,7 +9,7 @@ Congratulations! The monitoring platform has been deployed successfully.
 DATABASE MIGRATIONS:
   A migrations job has been created and will run automatically.
   Check the status with:
-    kubectl get jobs -l app.kubernetes.io/component=migrations
+    kubectl -n {{ .Release.Namespace }} get jobs -l app.kubernetes.io/component=migrations
 {{- end }}
 
 ACCESSING THE APPLICATION:
@@ -23,37 +23,58 @@ ACCESSING THE APPLICATION:
   The application is running inside the cluster. To access it:
 
   1. Frontend (Web UI):
-     kubectl port-forward svc/{{ include "monitoring-platform.fullname" . }}-frontend {{ .Values.frontend.httpPort }}:{{ .Values.frontend.httpPort }}
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "monitoring-platform.fullname" . }}-frontend {{ .Values.frontend.httpPort }}:{{ .Values.frontend.httpPort }}
      Then open: http://localhost:{{ .Values.frontend.httpPort }}
 
   2. API:
-     kubectl port-forward svc/{{ include "monitoring-platform.fullname" . }}-api {{ .Values.api.httpPort }}:{{ .Values.api.httpPort }}
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "monitoring-platform.fullname" . }}-api {{ .Values.api.httpPort }}:{{ .Values.api.httpPort }}
      Then access: http://localhost:{{ .Values.api.httpPort }}
 
   3. Status Page:
-     kubectl port-forward svc/{{ include "monitoring-platform.fullname" . }}-status-page {{ .Values.statusPage.httpPort }}:{{ .Values.statusPage.httpPort }}
-     Then open: http://localhost:{{ .Values.statusPage.httpPort }}
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "monitoring-platform.fullname" . }}-status-page 8082:{{ .Values.statusPage.httpPort }}
+     Then open: http://localhost:8082/public/status/<slug>
 {{- end }}
 
-AUTHENTICATION:
+FIRST LOGIN:
 
-  Use the following API key to authenticate:
-  
-    {{ .Values.secrets.initialApiKey }}
+  Open the UI. On a fresh install the login page asks you to create the first
+  administrator (a superadmin). There is no default account or API key.
 
-  IMPORTANT: Change this key in production by setting:
-    --set secrets.initialApiKey=your-secure-api-key
+LOCAL AI:
+{{- if .Values.localAI.enabled }}
+  Bundled CPU inference runs as {{ include "monitoring-platform.fullname" . }}-local-ai; only the api
+  and the platform worker are configured to call it.
+  {{- if and (not .Values.secrets.localAiToken) (include "monitoring-platform.chartManagedSecret" (dict "ctx" . "secret" .Values.secrets.localAiTokenExistingSecret)) }}
+  Its bearer token is derived from secrets.adminJwtSecret. Set secrets.localAiToken
+  (or secrets.localAiTokenExistingSecret) to manage it independently.
+  {{- end }}
+  {{- if .Values.localAI.networkPolicy.enabled }}
+  Its NetworkPolicy only takes effect if your CNI enforces NetworkPolicy.
+  {{- end }}
+  {{- if and .Values.secrets.existingSecret (not .Values.secrets.localAiTokenExistingSecret) }}
+
+  UPGRADE NOTE: secrets.existingSecret ({{ .Values.secrets.existingSecret }}) must carry the key
+  local_ai_token (at least 16 characters; openssl rand -hex 32). Until it does,
+  the local-ai pod stays in CreateContainerConfigError and the api and worker
+  run with AI analysis unavailable. Alternatively set
+  secrets.localAiTokenExistingSecret, or localAI.enabled=false.
+  {{- end }}
+{{- else if .Values.localAI.externalUrl }}
+  api and worker call the operator-run service at {{ .Values.localAI.externalUrl }}.
+{{- else }}
+  Disabled (localAI.enabled=false): AI analysis is off for every workspace.
+{{- end }}
 
 CHECKING STATUS:
 
   View all pods:
-    kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+    kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
 
   View services:
-    kubectl get svc -l app.kubernetes.io/instance={{ .Release.Name }}
+    kubectl -n {{ .Release.Namespace }} get svc -l app.kubernetes.io/instance={{ .Release.Name }}
 
   View logs for a component (e.g., api):
-    kubectl logs -l app.kubernetes.io/component=api -f
+    kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=api -f
 
 COMPONENTS DEPLOYED:
 {{- if .Values.postgresql.enabled }}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/google/uuid"
@@ -75,6 +76,14 @@ func extractConfigString(configJSON []byte, key string) string {
 	return value
 }
 
+// extractSIPTarget is a SIP monitor's public target: its signalling server
+// (host, with the port the worker dials). An INVITE test call deliberately
+// shows that host too, never call.number or call.target_uri: monitor.URL is
+// public on every page whatever show_monitor_url says (the detail line, the
+// data-search text, a custom template's .URL), so a dialled number would leak
+// to every visitor. This departs from the design's "number@domain" on
+// purpose; the operator UI's monitorTarget, which only signed-in users see,
+// differs.
 func extractSIPTarget(configJSON []byte) string {
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
@@ -86,9 +95,21 @@ func extractSIPTarget(configJSON []byte) string {
 		return ""
 	}
 
+	// Under RFC 3263 without a port, SRV picks the servers and their
+	// ports: the target is the domain itself. An IP host skips SRV, so it
+	// falls through to the default port the worker dials.
 	port, _ := config["port"].(float64)
+	isIP := net.ParseIP(strings.Trim(strings.TrimSpace(host), "[]")) != nil
+	if resolution, _ := config["resolution"].(string); port == 0 && !isIP && strings.EqualFold(resolution, "rfc3263") {
+		return host
+	}
+
+	// Same defaults the worker dials: 5061 over TLS, 5060 otherwise.
 	if port == 0 {
 		port = 5060
+		if transport, _ := config["transport"].(string); strings.EqualFold(transport, "tls") {
+			port = 5061
+		}
 	}
 
 	return fmt.Sprintf("%s:%d", host, int(port))

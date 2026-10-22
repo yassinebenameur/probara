@@ -12,19 +12,14 @@ import (
 func RequireTenantAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		if ctxpkg.IsSuperadmin(ctx) {
+		switch {
+		case ctxpkg.IsTenantAdmin(ctx):
 			next.ServeHTTP(w, r)
-			return
-		}
-		if !ctxpkg.IsAdmin(ctx) {
+		case !ctxpkg.IsAdmin(ctx):
 			errors.WriteForbiddenError(w, "admin session required")
-			return
-		}
-		if role, ok := ctxpkg.GetRole(ctx); !ok || role != "admin" {
+		default:
 			errors.WriteForbiddenError(w, "tenant admin role required")
-			return
 		}
-		next.ServeHTTP(w, r)
 	})
 }
 

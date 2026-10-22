@@ -188,6 +188,16 @@ with checks that, against a locally auth-enabled NATS:
 - rotate invalidates the old cred;
 - an anonymous connection is refused.
 
+## Side effects a location worker refuses by default
+
+Authorization decides which jobs reach a location worker, not what the worker
+is willing to do with them. SIP test calls (`sip` monitors with
+`method: invite`) place real calls billed to the trunk they go through, so a
+location worker places none until its operator sets `SIP_CALL_ENABLED=true`
+(platform workers default to true); `SIP_CALL_ALLOWED_DESTINATIONS` further
+limits the numbers it calls. Both are read by `shared/config`
+(`LoadWorkerConfig`) and checked before anything is sent.
+
 ## Deliberately deferred
 
 - TLS/mTLS on the NATS listener (transport confidentiality) — separate, larger

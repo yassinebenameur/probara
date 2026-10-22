@@ -15,6 +15,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -60,6 +61,8 @@ type alertRecord struct {
 	SourceLocationName *string
 	TargetLocationID   *uuid.UUID
 	TargetLocationName *string
+	// SuspectedCause is set only for the "suspected_cause" follow-up.
+	SuspectedCause *notifications.SuspectedCause
 }
 
 type alertChannel struct {
@@ -71,9 +74,10 @@ type alertChannel struct {
 }
 
 type notificationState struct {
-	LastSentAt         time.Time
-	LastEventType      string
-	AcknowledgedSentAt *time.Time
+	LastSentAt           time.Time
+	LastEventType        string
+	AcknowledgedSentAt   *time.Time
+	SuspectedCauseSentAt *time.Time
 }
 
 type groupMember struct {
@@ -392,7 +396,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 	}
 
 	query := `
-		SELECT alert_id, channel_id, last_sent_at, last_event_type, acknowledged_sent_at
+		SELECT alert_id, channel_id, last_sent_at, last_event_type, acknowledged_sent_at, suspected_cause_sent_at
 		FROM alert_notification_states
 		WHERE alert_id = ANY($1)
 	`
@@ -407,7 +411,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 		var alertID uuid.UUID
 		var channelID uuid.UUID
 		var state notificationState
-		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType, &state.AcknowledgedSentAt); err != nil {
+		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType, &state.AcknowledgedSentAt, &state.SuspectedCauseSentAt); err != nil {
 			return nil, fmt.Errorf("failed to scan notification state: %w", err)
 		}
 		if _, ok := states[alertID]; !ok {
@@ -1151,6 +1155,8 @@ func shouldSendNotification(eventType string, state *notificationState, now time
 		return now.Sub(state.LastSentAt) >= reminderInterval
 	case "acknowledged":
 		return state != nil && state.LastEventType != "resolved" && state.AcknowledgedSentAt == nil
+	case "suspected_cause":
+		return state != nil && state.LastEventType != "resolved" && state.SuspectedCauseSentAt == nil
 	default:
 		return false
 	}
@@ -1180,6 +1186,7 @@ func (a *Alerter) sendChannelNotification(
 		}
 	}
 	event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
+	deliveryKey := recipientKey(ctx, eventType, now)
 
 	if a.config.AsyncDispatch && a.nats != nil {
 		envelope := notifications.DispatchEnvelope{
@@ -1189,6 +1196,7 @@ func (a *Alerter) sendChannelNotification(
 			AlertID:     alert.ID.String(),
 			EventType:   eventType,
 			Event:       event,
+			DeliveryKey: deliveryKey,
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
 		messageID := envelope.IdempotencyKey()
@@ -1214,15 +1222,22 @@ func (a *Alerter) sendChannelNotification(
 		return fmt.Errorf("decrypt channel config: %w", err)
 	}
 
+	var recipients plugin.RecipientLedger
+	if a.db != nil {
+		// The pool, not deliverNotification's claim transaction: a failed
+		// send rolls that back, and the progress must survive it.
+		recipients = recipientledger.For(a.db, alert.ID, channel.ID, deliveryKey)
+	}
 	return p.Send(ctx, plugin.DispatchRequest{
 		Channel: plugin.ChannelRef{
 			ID:     channel.ID.String(),
 			Name:   channel.Name,
 			Config: configMap,
 		},
-		Event:     event,
-		EventType: eventType,
-		Attempt:   1,
+		Event:      event,
+		EventType:  eventType,
+		Attempt:    1,
+		Recipients: recipients,
 	})
 }
 
@@ -1244,6 +1259,12 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 		status = "resolved"
 	case "acknowledged":
 		status = "acknowledged"
+	case "suspected_cause":
+		// An advisory follow-up keeps the alert's own status (active or
+		// acknowledged); receivers tell it apart by the event type.
+		if alert.Status != "" {
+			status = alert.Status
+		}
 	}
 
 	var rootCauseID *string
@@ -1299,6 +1320,7 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			SourceLocationName:   alert.SourceLocationName,
 			TargetLocationID:     uuidStr(alert.TargetLocationID),
 			TargetLocationName:   alert.TargetLocationName,
+			SuspectedCause:       alert.SuspectedCause,
 		},
 	}
 }

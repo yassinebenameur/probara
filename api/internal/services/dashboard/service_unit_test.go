@@ -151,12 +151,12 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 			GROUP BY m.id, m.name, m.current_state, latest.latest_check_at
 			HAVING COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) > 0
 			    OR m.current_state IN ('down', 'degraded')
-			ORDER BY problem_checks DESC, name ASC
+			ORDER BY `+currentStateRankSQL("m.current_state")+`, problem_checks DESC, name ASC
 			LIMIT $4
 		)
 		SELECT id, name, current_state, total_checks, success_checks, problem_checks, latest_check_at
 		FROM rollup_candidates
-		ORDER BY problem_checks DESC, name ASC
+		ORDER BY `+currentStateRankSQL("current_state")+`, problem_checks DESC, name ASC
 	`)).
 		WithArgs(tenantID, rangeStart, rangeEnd, problemMonitorLimit*4).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -232,8 +232,8 @@ func TestService_LoadGroups_LongRangeUsesRollups(t *testing.T) {
 	mock.ExpectQuery("monitor_daily_rollups").
 		WithArgs(tenantID, rangeStart, rangeEnd).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "tags", "current_status", "uptime", "needs_attention",
-		}).AddRow(monitorID, "api", "{api}", "success", 99.5, false))
+			"id", "name", "tags", "current_status", "uptime", "current_state",
+		}).AddRow(monitorID, "api", "{api}", "success", 99.5, "up"))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{}, nil)
 
@@ -268,8 +268,8 @@ func TestService_LoadGroups_24hUsesExactRollingHelper(t *testing.T) {
 	latestStatus := "failure"
 	mock.ExpectQuery("SELECT m.id, m.name").
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "tags"}).
-			AddRow(monitorID, "api", "{api}"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "tags", "current_state"}).
+			AddRow(monitorID, "api", "{api}", "down"))
 
 	// Step 2: loadExactRolling24hSummary reads the rollup cursor first (cheap
 	// one-row lookup), then runs the stitched query with parameter bounds.
@@ -789,4 +789,89 @@ func TestService_LoadRolling24hData_RollupCursorLagWarning(t *testing.T) {
 			t.Fatalf("log entries = %d, want 0", len(entries))
 		}
 	})
+}
+
+// A monitor that is down now but failed few checks in the range must survive
+// the limit: the cut runs after ordering by current state, not failure count.
+func TestService_GetProblemMonitors24h_CurrentStateLeadsBeforeTheCut(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	noisyUp := uuid.New()
+	justDown := uuid.New()
+	latestAt := time.Now().UTC().Add(-5 * time.Minute)
+
+	mock.ExpectQuery("SELECT id").
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(noisyUp).AddRow(justDown))
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
+	mock.ExpectQuery("monitor_hourly_rollups").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"monitor_id", "total_checks", "success_checks",
+			"failure_checks_raw", "error_checks_raw", "bad_checks_rollup", "error_checks_rollup",
+			"latency_sum_ms", "latency_count", "latest_status", "latest_check_at",
+		}).
+			// 40 failed checks earlier in the day, recovered since.
+			AddRow(noisyUp, 1440, 1400, 40, 0, 0, 0, 1400.0, 1400, "success", latestAt).
+			// One failed check: it went down a minute ago.
+			AddRow(justDown, 1440, 1439, 1, 0, 0, 0, 1439.0, 1439, "failure", latestAt))
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
+	mock.ExpectQuery("raw_per_hour").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"bucket_hour", "total_checks", "success_checks", "latency_sum_ms", "latency_count",
+		}))
+	mock.ExpectQuery("SELECT id, name, current_state").
+		WithArgs(tenantID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "current_state"}).
+			AddRow(noisyUp, "noisy", "up").
+			AddRow(justDown, "just-down", "down"))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{}, nil)
+	monitors, err := svc.getProblemMonitors24h(context.Background(), tenantID, time.Time{}, time.Time{}, 1, nil)
+	if err != nil {
+		t.Fatalf("getProblemMonitors24h() error = %v", err)
+	}
+	if len(monitors) != 1 || monitors[0].MonitorID != justDown {
+		t.Fatalf("monitors = %+v, want only the down monitor", monitors)
+	}
+	if monitors[0].CurrentState != "down" {
+		t.Fatalf("CurrentState = %q, want down", monitors[0].CurrentState)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestService_GetProblemMonitors1h_OrdersByCurrentStateBeforeLimit(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	start := time.Date(2026, time.April, 1, 11, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	mock.ExpectQuery(regexp.QuoteMeta("ORDER BY "+currentStateRankSQL("m.current_state")+", (ps.failure_count + ps.error_count) DESC")).
+		WithArgs(tenantID, start, end, 5).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "name", "current_state", "failure_count", "error_count", "uptime", "latest_failure_at",
+		}))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{}, nil)
+	if _, err := svc.getProblemMonitors1h(context.Background(), tenantID, start, end, 5, nil); err != nil {
+		t.Fatalf("getProblemMonitors1h() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
 }

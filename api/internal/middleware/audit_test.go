@@ -20,6 +20,10 @@ func TestDeriveAction(t *testing.T) {
 		{http.MethodPut, "/api/v1/notification-settings", "notification-setting.update"},
 		{http.MethodPatch, "/api/v1/tenant-settings", "tenant-setting.update"},
 		{http.MethodPost, "/api/v1/status-pages", "status-page.create"},
+		{http.MethodPost, "/api/v1/incidents/3f2a6c1e-0000-0000-0000-000000000001/ai-analysis/label", "incident.label"},
+		{http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", "monitor.label"},
+		{http.MethodPost, "/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/triage/label", "alert.label"},
+		{http.MethodPost, "/api/v1/ai-labels/export", "ai-label.export"},
 	}
 
 	for _, tc := range cases {
@@ -36,6 +40,16 @@ func TestDeriveResource(t *testing.T) {
 	}
 	if resourceID != "3f2a6c1e-0000-0000-0000-000000000001" {
 		t.Errorf("resourceID = %q, want first UUID", resourceID)
+	}
+
+	resourceType, resourceID = deriveResource("/api/v1/incidents/3f2a6c1e-0000-0000-0000-000000000001/ai-analysis/label")
+	if resourceType != "incident" || resourceID != "3f2a6c1e-0000-0000-0000-000000000001" {
+		t.Errorf("incident label route: got (%q, %q)", resourceType, resourceID)
+	}
+
+	resourceType, resourceID = deriveResource("/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/triage/label")
+	if resourceType != "alert" || resourceID != "3f2a6c1e-0000-0000-0000-000000000001" {
+		t.Errorf("alert triage label route: got (%q, %q)", resourceType, resourceID)
 	}
 
 	resourceType, resourceID = deriveResource("/api/v1/monitors")
@@ -58,6 +72,28 @@ func TestOutcomeFromStatus(t *testing.T) {
 	for status, want := range cases {
 		if got := outcomeFromStatus(status); got != want {
 			t.Errorf("outcomeFromStatus(%d) = %q, want %q", status, got, want)
+		}
+	}
+}
+
+func TestItemizedSuccess(t *testing.T) {
+	cases := []struct {
+		path   string
+		status int
+		want   bool
+	}{
+		{"/api/v1/alerts/bulk/acknowledge", http.StatusOK, true},
+		{"/api/v1/alerts/bulk/resolve", http.StatusOK, true},
+		// Refused or invalid bulk requests never reach the per-item records.
+		{"/api/v1/alerts/bulk/resolve", http.StatusForbidden, false},
+		{"/api/v1/alerts/bulk/acknowledge", http.StatusBadRequest, false},
+		{"/api/v1/alerts/bulk/acknowledge", http.StatusInternalServerError, false},
+		{"/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/acknowledge", http.StatusOK, false},
+		{"/api/v1/monitors/bulk/delete", http.StatusOK, false},
+	}
+	for _, tc := range cases {
+		if got := itemizedSuccess(tc.path, tc.status); got != tc.want {
+			t.Errorf("itemizedSuccess(%s, %d) = %v, want %v", tc.path, tc.status, got, tc.want)
 		}
 	}
 }

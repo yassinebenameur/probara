@@ -18,6 +18,10 @@ type sipDigestChallenge struct {
 	Opaque    string
 	Algorithm string   // "" (implies MD5), "MD5", or "SHA-256"
 	QOP       []string // offered qop values, e.g. ["auth", "auth-int"]
+	// Stale means the credentials were right but the nonce had expired
+	// (RFC 2617 §3.2.1): answering again with the new nonce is expected,
+	// not a sign of a wrong password.
+	Stale bool
 }
 
 // parseSIPDigestChallenge parses a `Digest realm="…", nonce="…"` header value.
@@ -37,6 +41,7 @@ func parseSIPDigestChallenge(header string) (*sipDigestChallenge, error) {
 		Nonce:     params["nonce"],
 		Opaque:    params["opaque"],
 		Algorithm: params["algorithm"],
+		Stale:     strings.EqualFold(strings.TrimSpace(params["stale"]), "true"),
 	}
 	if qop := params["qop"]; qop != "" {
 		for _, value := range strings.Split(qop, ",") {
@@ -54,19 +59,24 @@ func parseSIPDigestChallenge(header string) (*sipDigestChallenge, error) {
 
 // buildSIPDigestAuthorization computes the credentials header value answering
 // a digest challenge. Supports MD5 (RFC 3261 default) and SHA-256 (RFC 8760),
-// with qop=auth or no qop (RFC 2069 compatibility).
-func buildSIPDigestAuthorization(challenge *sipDigestChallenge, username, password, method, uri string) (string, error) {
+// with qop=auth or no qop (RFC 2069 compatibility). nc is the nonce count:
+// 1 for the first request answering a nonce, one more for each later request
+// reusing it (sipAuthState keeps the count).
+func buildSIPDigestAuthorization(challenge *sipDigestChallenge, username, password, method, uri string, nc int) (string, error) {
 	cnonce, err := newSIPCnonce()
 	if err != nil {
 		return "", err
 	}
-	return buildSIPDigestAuthorizationWithCnonce(challenge, username, password, method, uri, cnonce)
+	return buildSIPDigestAuthorizationWithCnonce(challenge, username, password, method, uri, cnonce, nc)
 }
 
 // buildSIPDigestAuthorizationWithCnonce is the deterministic core of
 // buildSIPDigestAuthorization, split out so tests can verify against
 // published RFC vectors.
-func buildSIPDigestAuthorizationWithCnonce(challenge *sipDigestChallenge, username, password, method, uri, cnonce string) (string, error) {
+func buildSIPDigestAuthorizationWithCnonce(challenge *sipDigestChallenge, username, password, method, uri, cnonce string, nc int) (string, error) {
+	if nc < 1 {
+		nc = 1
+	}
 	algorithm := strings.ToUpper(strings.TrimSpace(challenge.Algorithm))
 	var digest func(string) string
 	switch algorithm {
@@ -100,11 +110,11 @@ func buildSIPDigestAuthorizationWithCnonce(challenge *sipDigestChallenge, userna
 		if !sipQOPOffersAuth(challenge.QOP) {
 			return "", fmt.Errorf("no supported qop offered (got %s; only auth is supported)", strings.Join(challenge.QOP, ","))
 		}
-		const nc = "00000001"
-		response = digest(strings.Join([]string{ha1, challenge.Nonce, nc, cnonce, "auth", ha2}, ":"))
+		ncValue := fmt.Sprintf("%08x", nc)
+		response = digest(strings.Join([]string{ha1, challenge.Nonce, ncValue, cnonce, "auth", ha2}, ":"))
 		params = append(params,
 			"qop=auth",
-			"nc="+nc,
+			"nc="+ncValue,
 			fmt.Sprintf("cnonce=%q", cnonce),
 		)
 	} else {
@@ -116,6 +126,183 @@ func buildSIPDigestAuthorizationWithCnonce(challenge *sipDigestChallenge, userna
 		params = append(params, fmt.Sprintf("opaque=%q", challenge.Opaque))
 	}
 	return "Digest " + strings.Join(params, ", "), nil
+}
+
+// sipSupportedDigestAlgorithm ranks the algorithms this client answers:
+// SHA-256 over MD5 when a realm offers both (RFC 8760 §2.4), 0 for one it
+// cannot answer.
+func sipSupportedDigestAlgorithm(algorithm string) int {
+	switch strings.ToUpper(strings.TrimSpace(algorithm)) {
+	case "SHA-256":
+		return 2
+	case "", "MD5":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// sipAuthState answers the digest challenges of one exchange with the
+// server — a check's REGISTER or OPTIONS, or a call and everything in its
+// dialogs. It remembers each realm's challenge, client nonce and nonce
+// count, so a later request challenged with a nonce already answered (a BYE
+// after the INVITE) counts up (nc=00000002) instead of replaying nc=1, which
+// a server enforcing RFC 2617 §3.2.2 would take for a replay.
+type sipAuthState struct {
+	username string
+	password string
+	realms   map[string]*sipAuthRealm // key: sipAuthKey(credentials header, realm)
+	order    []string                 // realms keys, first-seen
+}
+
+func sipAuthKey(credentialsHeader, realm string) string {
+	return credentialsHeader + "\x00" + realm
+}
+
+type sipAuthRealm struct {
+	header    string // Authorization or Proxy-Authorization
+	challenge *sipDigestChallenge
+	cnonce    string
+	nc        int
+}
+
+func newSIPAuthState(username, password string) *sipAuthState {
+	return &sipAuthState{username: username, password: password, realms: make(map[string]*sipAuthRealm)}
+}
+
+// sipAuthAnswer is the credentials answering one 401/407.
+type sipAuthAnswer struct {
+	headers   []sipHeader
+	keys      []string // the realm keys headers answer, in the same order
+	algorithm string   // the strongest algorithm used, as the envelope names it
+	// stale: every challenge in the response was marked stale=true.
+	stale bool
+}
+
+// answer builds credentials for every realm a 401 (WWW-Authenticate) or 407
+// (Proxy-Authenticate) challenges, one header per realm (RFC 3261 §22.3: a
+// forking proxy collects one challenge per realm), for a request with method
+// and Request-URI uri. A realm offering several algorithms is answered once,
+// with the strongest supported. It fails when the response carries no
+// challenge or none this client can answer.
+func (a *sipAuthState) answer(resp *sipMessage, method, uri string) (sipAuthAnswer, error) {
+	challengeHeader, credentialsHeader := "WWW-Authenticate", "Authorization"
+	if resp.StatusCode == 407 {
+		challengeHeader, credentialsHeader = "Proxy-Authenticate", "Proxy-Authorization"
+	}
+	values := resp.Values(challengeHeader)
+	if len(values) == 0 {
+		return sipAuthAnswer{}, fmt.Errorf("server returned %d without an authentication challenge", resp.StatusCode)
+	}
+
+	// The best supported challenge per realm, in first-seen order.
+	var (
+		order    []string
+		best     = make(map[string]*sipDigestChallenge)
+		firstErr error
+		allStale = true
+	)
+	for _, value := range values {
+		challenge, err := parseSIPDigestChallenge(value)
+		if err == nil && sipSupportedDigestAlgorithm(challenge.Algorithm) == 0 {
+			err = fmt.Errorf("unsupported digest algorithm %q", challenge.Algorithm)
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		current, seen := best[challenge.Realm]
+		if !seen {
+			order = append(order, challenge.Realm)
+		}
+		if !seen || sipSupportedDigestAlgorithm(challenge.Algorithm) > sipSupportedDigestAlgorithm(current.Algorithm) {
+			best[challenge.Realm] = challenge
+		}
+	}
+	if len(order) == 0 {
+		return sipAuthAnswer{}, firstErr
+	}
+
+	var out sipAuthAnswer
+	for _, realm := range order {
+		challenge := best[realm]
+		allStale = allStale && challenge.Stale
+		key := sipAuthKey(credentialsHeader, realm)
+		state := a.realms[key]
+		if state == nil || state.challenge.Nonce != challenge.Nonce {
+			cnonce, err := newSIPCnonce()
+			if err != nil {
+				return sipAuthAnswer{}, err
+			}
+			if state == nil {
+				a.order = append(a.order, key)
+			}
+			state = &sipAuthRealm{header: credentialsHeader, challenge: challenge, cnonce: cnonce}
+			a.realms[key] = state
+		}
+		state.nc++
+		value, err := buildSIPDigestAuthorizationWithCnonce(challenge, a.username, a.password, method, uri, state.cnonce, state.nc)
+		if err != nil {
+			return sipAuthAnswer{}, err
+		}
+		out.headers = append(out.headers, sipHeader{Name: credentialsHeader, Value: value})
+		out.keys = append(out.keys, key)
+		if name := sipDigestAlgorithmName(challenge.Algorithm); out.algorithm == "" || name == "SHA-256" {
+			out.algorithm = name
+		}
+	}
+	out.stale = allStale
+	return out, nil
+}
+
+// credentials is every credential a new request in the exchange carries:
+// ans's headers for the realms it just answered, and a fresh answer (the
+// realm's next nonce count, over this request's method and uri) for every
+// other realm answered earlier, all in first-seen order. A retry challenged
+// by one hop (a stale nonce, a BYE challenged for one realm) so keeps the
+// credentials every other hop already accepted (RFC 3261 §22.3).
+func (a *sipAuthState) credentials(ans sipAuthAnswer, method, uri string) ([]sipHeader, error) {
+	fresh := make(map[string]sipHeader, len(ans.keys))
+	for i, key := range ans.keys {
+		fresh[key] = ans.headers[i]
+	}
+	out := make([]sipHeader, 0, len(a.order))
+	for _, key := range a.order {
+		if h, ok := fresh[key]; ok {
+			out = append(out, h)
+			continue
+		}
+		state := a.realms[key]
+		state.nc++
+		value, err := buildSIPDigestAuthorizationWithCnonce(state.challenge, a.username, a.password, method, uri, state.cnonce, state.nc)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sipHeader{Name: state.header, Value: value})
+	}
+	return out, nil
+}
+
+// unansweredRealm is the first realm a 401/407 challenges that this exchange
+// never answered (a further hop asking for its own credentials), or false
+// when every challenged realm was answered before.
+func (a *sipAuthState) unansweredRealm(resp *sipMessage) (string, bool) {
+	credentialsHeader := "Authorization"
+	if resp.StatusCode == 407 {
+		credentialsHeader = "Proxy-Authorization"
+	}
+	for _, value := range resp.Values(sipChallengeHeader(resp.StatusCode)) {
+		challenge, err := parseSIPDigestChallenge(value)
+		if err != nil {
+			continue
+		}
+		if _, known := a.realms[sipAuthKey(credentialsHeader, challenge.Realm)]; !known {
+			return challenge.Realm, true
+		}
+	}
+	return "", false
 }
 
 // parseSIPAuthParams splits `key="value", key2=value2` pairs, honoring commas

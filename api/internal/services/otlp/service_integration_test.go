@@ -1,3 +1,5 @@
+//go:build !unit
+
 package otlp
 
 // Integration tests for OTLP ingest: series/sample persistence, the

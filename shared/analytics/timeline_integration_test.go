@@ -1,3 +1,5 @@
+//go:build !unit
+
 package analytics
 
 // Timeline integration tests (docs/state-semantics.md S-U1–S-U7, S-M3,

@@ -21,11 +21,34 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/netguard"
+	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
 // Checker is an interface for different monitor types
 type Checker interface {
 	Check(ctx context.Context, config json.RawMessage, timeoutSeconds int) CheckResult
+}
+
+// SideEffectingChecker is implemented by checkers whose Check acts on the
+// outside world instead of only observing it (a SIP INVITE places a real,
+// possibly billed, call). For a config it reports true for, the check-job
+// consumer is at-most-once (processJob in worker.go): a redelivered job is
+// acked without running, and a result that cannot be published is retried in
+// place and then dropped, never NAKed back for another run. A missing sample
+// reads as "no evidence"; a duplicate side effect cannot be taken back.
+//
+// config is the payload config as dispatched, so secret fields may still be
+// encrypted: decide from non-secret fields only. Checkers that do not
+// implement this keep the default at-least-once handling.
+type SideEffectingChecker interface {
+	SideEffecting(config json.RawMessage) bool
+}
+
+// isSideEffecting reports whether running checker on config has side effects
+// that must not be repeated (see SideEffectingChecker).
+func isSideEffecting(checker Checker, config json.RawMessage) bool {
+	se, ok := checker.(SideEffectingChecker)
+	return ok && se.SideEffecting(config)
 }
 
 // CheckResult represents the final evaluated result
@@ -36,6 +59,12 @@ type CheckResult struct {
 	ErrorMessage         *string
 	MatchedBodySubstring bool
 	MetricsData          json.RawMessage
+	// Interrupted marks a result that the worker's own shutdown produced
+	// (its context was cancelled before the check decided anything). It is
+	// worker-internal, never published: processJob drops such a result for a
+	// side-effecting check, since it is evidence about the worker, not the
+	// target.
+	Interrupted bool
 }
 
 // HTTPChecker implements Checker for HTTP monitors
@@ -62,27 +91,11 @@ type httpTimingInfo struct {
 	TotalMs        *int64 `json:"total_ms,omitempty"`
 }
 
-type httpTLSInfo struct {
-	Version          string   `json:"version,omitempty"`
-	CipherSuite      string   `json:"cipher_suite,omitempty"`
-	ServerName       string   `json:"server_name,omitempty"`
-	NotBefore        string   `json:"not_before,omitempty"`
-	NotAfter         string   `json:"not_after,omitempty"`
-	DaysUntilExpiry  *int     `json:"days_until_expiry,omitempty"`
-	Subject          string   `json:"subject,omitempty"`
-	Issuer           string   `json:"issuer,omitempty"`
-	SerialNumber     string   `json:"serial_number,omitempty"`
-	DNSNames         []string `json:"dns_names,omitempty"`
-	IPAddresses      []string `json:"ip_addresses,omitempty"`
-	VerifiedChains   int      `json:"verified_chains,omitempty"`
-	PeerCertificates int      `json:"peer_certificates,omitempty"`
-}
-
 type httpMetrics struct {
 	FinalURL   string          `json:"final_url,omitempty"`
 	Redirects  int             `json:"redirects,omitempty"`
 	Timing     *httpTimingInfo `json:"timing,omitempty"`
-	TLS        *httpTLSInfo    `json:"tls,omitempty"`
+	TLS        *tlscert.Info   `json:"tls,omitempty"` // shared/tlscert owns where readers find it
 	Assertions []string        `json:"assertions_failed,omitempty"`
 	// DisplayValues are the config's display_fields resolved against the
 	// response body; the monitors list shows them from the latest result.
@@ -343,27 +356,8 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		metrics.Timing = &traceTimings
 	}
 
-	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
-		leaf := resp.TLS.PeerCertificates[0]
-		days := int(time.Until(leaf.NotAfter).Hours() / 24)
-		serverName := tlsCfg.ServerName
-		metrics.TLS = &httpTLSInfo{
-			Version:          tls.VersionName(resp.TLS.Version),
-			CipherSuite:      tls.CipherSuiteName(resp.TLS.CipherSuite),
-			ServerName:       serverName,
-			NotBefore:        leaf.NotBefore.UTC().Format(time.RFC3339),
-			NotAfter:         leaf.NotAfter.UTC().Format(time.RFC3339),
-			DaysUntilExpiry:  &days,
-			Subject:          leaf.Subject.String(),
-			Issuer:           leaf.Issuer.String(),
-			SerialNumber:     leaf.SerialNumber.String(),
-			DNSNames:         leaf.DNSNames,
-			VerifiedChains:   len(resp.TLS.VerifiedChains),
-			PeerCertificates: len(resp.TLS.PeerCertificates),
-		}
-		for _, ip := range leaf.IPAddresses {
-			metrics.TLS.IPAddresses = append(metrics.TLS.IPAddresses, ip.String())
-		}
+	if resp.TLS != nil {
+		metrics.TLS = tlscert.FromConnectionState(*resp.TLS, tlsCfg.ServerName, time.Now())
 	}
 
 	if len(config.DisplayFields) > 0 {

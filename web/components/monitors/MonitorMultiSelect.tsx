@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Layers, Search } from 'lucide-react';
 import { Monitor } from '@/lib/types';
 import Button from '@/components/ui/Button';
@@ -8,6 +8,8 @@ import Pill from '@/components/ui/Pill';
 import SelectCheckbox from '@/components/ui/SelectCheckbox';
 import TagPill from '@/components/monitors/TagPill';
 import TagFilter from '@/components/monitors/TagFilter';
+import TypeBadge from '@/components/ui/TypeBadge';
+import { FOCUS_RING } from '@/components/ui/focus';
 
 interface MonitorMultiSelectProps {
   monitors: Monitor[];
@@ -77,16 +79,23 @@ export function MonitorMultiSelect({
 
   const filtering = query !== '' || selectedTags.size > 0;
 
-  const toggleTag = (tag: string) => {
-    setSelectedTags((prev) => {
-      const next = new Set(prev);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
-      return next;
-    });
-  };
+  // What was already selected when the list arrived (an edited group's
+  // members) leads the flat list, so an edit form opens on its own selection
+  // instead of "4 of 99 selected" with none of the 4 in view. The snapshot is
+  // taken once, so ticking a row never makes it jump.
+  const [pinned, setPinned] = useState<Set<string>>(() => new Set(monitors.length > 0 ? selectedIds : []));
+  const pinnedTaken = useRef(monitors.length > 0);
+  useEffect(() => {
+    if (pinnedTaken.current || monitors.length === 0) return;
+    pinnedTaken.current = true;
+    setPinned(new Set(selectedIds));
+  }, [monitors.length, selectedIds]);
 
-  const filtered = useMemo(() => selectable.filter(matches), [selectable, matches]);
+  const filtered = useMemo(() => {
+    const hits = selectable.filter(matches);
+    if (pinned.size === 0) return hits;
+    return [...hits.filter((m) => pinned.has(m.id)), ...hits.filter((m) => !pinned.has(m.id))];
+  }, [selectable, matches, pinned]);
 
   const grouped = groupMembers !== undefined;
 
@@ -194,7 +203,7 @@ export function MonitorMultiSelect({
 
   const rowClass = (isSelected: boolean) =>
     `flex items-center gap-3 rounded-lg px-3 py-2 transition-colors ${
-      isSelected ? 'border border-cyan-500/30 bg-cyan-500/10' : 'border border-transparent hover:bg-white/[0.03]'
+      isSelected ? 'bg-well-hover' : 'hover:bg-well'
     }`;
 
   const monitorRow = (mon: Monitor, opts?: { covered?: boolean; coveredBy?: string }) => {
@@ -208,8 +217,12 @@ export function MonitorMultiSelect({
           onChange={() => toggle(mon.id)}
           label={`Select ${mon.name}`}
         />
+        {/* A bigger pointer target for the checkbox beside it; keyboard and
+            screen-reader users get the checkbox itself (one stop per row). */}
         <button
           type="button"
+          tabIndex={-1}
+          aria-hidden="true"
           disabled={covered}
           onClick={() => toggle(mon.id)}
           className={`flex min-w-0 flex-1 items-center gap-3 text-left ${covered ? 'cursor-default' : 'cursor-pointer'}`}
@@ -219,20 +232,24 @@ export function MonitorMultiSelect({
               {mon.name}
             </p>
             <div className="flex min-w-0 items-center gap-1.5">
-              <p className="flex-shrink-0 text-xs text-slate-500">
-                {covered ? `Covered by ${opts?.coveredBy}` : mon.type.toUpperCase()}
-              </p>
+              {covered ? (
+                <p className="flex-shrink-0 text-xs text-slate-500">Covered by {opts?.coveredBy}</p>
+              ) : (
+                <TypeBadge type={mon.type} config={mon.config} />
+              )}
               {(mon.tags ?? []).slice(0, 2).map((tag) => (
                 <TagPill key={tag} tag={tag} size="xs" />
               ))}
               {(mon.tags?.length ?? 0) > 2 && (
-                <span className="text-[9px] text-slate-500">+{mon.tags!.length - 2}</span>
+                <span className="text-2xs text-slate-500">+{mon.tags!.length - 2}</span>
               )}
             </div>
           </div>
-          <Pill tone={mon.enabled ? 'success' : 'neutral'} size="xs" dot>
-            {mon.enabled ? 'Active' : 'Paused'}
-          </Pill>
+          {!mon.enabled && (
+            <Pill tone="neutral" size="xs">
+              Paused
+            </Pill>
+          )}
         </button>
       </div>
     );
@@ -244,46 +261,43 @@ export function MonitorMultiSelect({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={grouped ? 'Search monitors and groups...' : 'Search monitors...'}
-            // `.input` sets padding via shorthand and wins the cascade, so the
-            // icon clearance has to be important or the placeholder sits under it.
-            className="input !pl-9"
-            aria-label="Search monitors"
-          />
-        </div>
+      <div className="relative">
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+          strokeWidth={1.75}
+          aria-hidden="true"
+        />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={grouped ? 'Search monitors and groups...' : 'Search monitors...'}
+          // `.input` sets padding via shorthand and wins the cascade, so the
+          // icon clearance has to be important or the placeholder sits under it.
+          className="input !pl-9"
+          aria-label="Search monitors"
+        />
       </div>
 
-      {allTags.length > 0 && (
-        <TagFilter
-          tags={allTags}
-          selected={selectedTags}
-          onToggle={toggleTag}
-          onClear={() => setSelectedTags(new Set())}
-        />
-      )}
-
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-slate-400">
-          {grouped ? (
-            <>
-              {selectedIds.length} selected
-              {coveredCount !== selectedIds.length && (
-                <span className="text-slate-500"> · covers {coveredCount} monitors</span>
-              )}
-            </>
-          ) : (
-            <>
-              {selectedIds.length} of {selectable.length} selected
-            </>
-          )}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex min-w-0 items-center gap-3">
+          {/* Portaled over the dialog, so the tag list never pushes the picker down. */}
+          {allTags.length > 0 && <TagFilter tags={allTags} selected={selectedTags} onChange={setSelectedTags} />}
+          <span className="text-xs text-slate-400" role="status">
+            {grouped ? (
+              <>
+                {selectedIds.length} selected
+                {coveredCount !== selectedIds.length && (
+                  <span className="ml-3 text-slate-500">covers {coveredCount} monitors</span>
+                )}
+              </>
+            ) : (
+              <>
+                {selectedIds.length} of {selectable.length} selected
+              </>
+            )}
+          </span>
+        </div>
         <div className="flex gap-1.5">
           <Button variant="ghost" size="xs" type="button" onClick={selectAllFiltered}>
             {/* Say which "all" is meant — with a filter on, it's only the matches. */}
@@ -295,9 +309,10 @@ export function MonitorMultiSelect({
         </div>
       </div>
 
-      <div
-        className={`${maxHeightClass} overflow-y-auto rounded-lg border border-white/[0.06] bg-slate-900/40 p-2`}
-      >
+      {/* relative: each row's TypeBadge carries sr-only (absolute) text; the
+          scroll box must be its containing block or that text escapes it and
+          stretches the page by the whole list's height. */}
+      <div className={`${maxHeightClass} glass-well relative overflow-y-auto p-1.5`}>
         {nothingVisible ? (
           <p className="py-6 text-center text-sm text-slate-500">
             {selectable.length === 0 ? emptyMessage : 'No monitors match your filters'}
@@ -308,9 +323,7 @@ export function MonitorMultiSelect({
           <div className="space-y-3">
             {visibleGroups.length > 0 && (
               <div className="space-y-1">
-                <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                  Groups
-                </p>
+                <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-slate-500">Groups</p>
                 {visibleGroups.map(({ group, members, total }) => {
                   const isSelected = selected.has(group.id);
                   const selectedMembers = members.filter((m) => selected.has(m.id)).length;
@@ -326,16 +339,18 @@ export function MonitorMultiSelect({
                         />
                         <button
                           type="button"
+                          tabIndex={-1}
+                          aria-hidden="true"
                           onClick={() => toggle(group.id)}
                           className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
                         >
-                          <Layers className="h-3.5 w-3.5 flex-shrink-0 text-indigo-400" />
+                          <Layers className="h-4 w-4 flex-shrink-0 text-slate-400" strokeWidth={1.75} />
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-medium text-white">{group.name}</p>
                             <p className="text-xs text-slate-500">
                               {isSelected ? 'Group — covers ' : 'Group — '}
                               {total} {total === 1 ? 'member' : 'members'}
-                              {members.length !== total && ` · ${members.length} match`}
+                              {members.length !== total && <span className="ml-3">{members.length} match</span>}
                             </p>
                           </div>
                         </button>
@@ -344,19 +359,20 @@ export function MonitorMultiSelect({
                             type="button"
                             onClick={() => toggleExpanded(group.id)}
                             aria-expanded={isOpen}
+                            aria-controls={`mms-members-${group.id}`}
                             aria-label={`${isOpen ? 'Hide' : 'Show'} members of ${group.name}`}
-                            className="flex-shrink-0 rounded p-1 text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300"
+                            className={`flex-shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-well-hover hover:text-white active:bg-control-hover ${FOCUS_RING}`}
                           >
                             {isOpen ? (
-                              <ChevronDown className="h-3.5 w-3.5" />
+                              <ChevronDown className="h-4 w-4" strokeWidth={1.75} />
                             ) : (
-                              <ChevronRight className="h-3.5 w-3.5" />
+                              <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
                             )}
                           </button>
                         )}
                       </div>
                       {isOpen && members.length > 0 && (
-                        <div className="mt-1 space-y-1 border-l border-white/[0.08] pl-3 ml-4">
+                        <div id={`mms-members-${group.id}`} className="ml-5 mt-1 space-y-1 border-l border-divider pl-2">
                           {members.map((member) =>
                             monitorRow(member, { covered: isSelected, coveredBy: group.name })
                           )}
@@ -371,9 +387,7 @@ export function MonitorMultiSelect({
             {visibleLoose.length > 0 && (
               <div className="space-y-1">
                 {visibleGroups.length > 0 && (
-                  <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                    Ungrouped
-                  </p>
+                  <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-slate-500">Ungrouped</p>
                 )}
                 {visibleLoose.map((mon) => monitorRow(mon))}
               </div>

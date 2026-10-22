@@ -1,0 +1,65 @@
+{
+  "connection_failure": {
+    "status": "error",
+    "latency_ms": 0,
+    "error_message": "connect: Get \"http://127.0.0.1:64116\": dial tcp 127.0.0.1:64116: connect: connection refused",
+    "error_category": "connection",
+    "checked_at": "2026-01-01T00:00:00Z"
+  },
+  "dns_failure": {
+    "status": "error",
+    "error_message": "dns lookup failed: lookup fixture.invalid on 10.33.0.254:53: no such host",
+    "error_category": "dns",
+    "checked_at": "2026-01-01T00:00:00Z"
+  },
+  "healthy": {
+    "status": "success",
+    "http_status": 200,
+    "latency_ms": 1,
+    "metrics": {
+      "http": {
+        "final_url": "http://127.0.0.1:64112"
+      }
+    },
+    "checked_at": "2026-01-01T00:00:00Z"
+  },
+  "latency_degradation": {
+    "status": "failure",
+    "http_status": 200,
+    "latency_ms": 551,
+    "error_message": "latency: 551ms \u003e 500ms",
+    "metrics": {
+      "http": {
+        "final_url": "http://127.0.0.1:64115",
+        "assertions_failed": [
+          "latency: 551ms \u003e 500ms"
+        ]
+      }
+    },
+    "error_category": "unknown",
+    "checked_at": "2026-01-01T00:00:00Z"
+  },
+  "protocol_error": {
+    "status": "failure",
+    "http_status": 503,
+    "latency_ms": 0,
+    "error_message": "status_code: got 503",
+    "metrics": {
+      "http": {
+        "final_url": "http://127.0.0.1:64113",
+        "assertions_failed": [
+          "status_code: got 503"
+        ]
+      }
+    },
+    "error_category": "protocol",
+    "checked_at": "2026-01-01T00:00:00Z"
+  },
+  "tls_problem": {
+    "status": "error",
+    "latency_ms": 62,
+    "error_message": "unknown: Get \"https://127.0.0.1:64114\": tls: failed to verify certificate: x509: certificate signed by unknown authority",
+    "error_category": "tls",
+    "checked_at": "2026-01-01T00:00:00Z"
+  }
+}

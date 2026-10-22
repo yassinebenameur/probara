@@ -14,6 +14,8 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/validation"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -89,6 +91,26 @@ func (s *Service) maskSecrets(monitor *models.Monitor) {
 
 var ErrMonitorTypeMismatch = errors.New("test type must match the saved monitor type")
 
+// ErrCallMonitorForbidden refuses a SIP test-call (INVITE) monitor to anyone
+// but a tenant admin's session. Each check of such a monitor places a real,
+// possibly billed, call with stored trunk credentials, which makes it a
+// toll-fraud vector: editors and API keys (whatever their scope) can neither
+// create nor change one. Handlers map it to 403.
+var ErrCallMonitorForbidden = errors.New("SIP test-call monitors can only be created, changed or run by a tenant admin signed in to Probara (API keys cannot)")
+
+// RequireCallPermission returns ErrCallMonitorForbidden when a monitor of
+// monitorType with config places calls and the caller is not a tenant admin
+// (ctxpkg.IsTenantAdmin, the RequireTenantAdmin predicate). Create and update
+// apply it here, in the service, so every path that writes monitors (the
+// importer included) inherits it; the run-now and test-check handlers call it
+// before dispatching a call.
+func RequireCallPermission(ctx context.Context, monitorType models.MonitorType, config json.RawMessage) error {
+	if sharedmodels.IsSIPCallConfig(string(monitorType), config) && !ctxpkg.IsTenantAdmin(ctx) {
+		return ErrCallMonitorForbidden
+	}
+	return nil
+}
+
 // ResolveTestConfig resolves write-only secret placeholders ("***") in an
 // incoming config against the stored monitor's config so a test-connection
 // request can run with the real (still encrypted) secrets. With no monitorID
@@ -118,6 +140,9 @@ func (s *Service) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, mon
 
 // CreateMonitor creates a new monitor
 func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
+	if err := RequireCallPermission(ctx, req.Type, req.Config); err != nil {
+		return nil, err
+	}
 	now := time.Now()
 	monitorID := uuid.New()
 
@@ -568,8 +593,30 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	}
 
 	if len(setParts) == 0 && req.NotificationChannels == nil && req.Enabled == nil && req.LocationIDs == nil {
-		// No fields to update, return existing
+		// No fields to update, return existing. A PATCH carrying only
+		// depends_on_ids ends here (the handler syncs the edges after):
+		// dependency edges are deliberately outside the test-call gate
+		// below, as on the edge routes (mutateDependencyEdge), since they
+		// place no call and change nothing a call does.
 		return existing, nil
+	}
+
+	// Any change to a test-call monitor's row, or one that would make a
+	// monitor one, is a tenant admin's (pausing included: resuming starts
+	// calls again). Validation separately refuses switching between the two.
+	// Nothing above wrote anything: building setParts only reads.
+	updatedType, updatedConfig := existing.Type, existing.Config
+	if req.Type != nil {
+		updatedType = *req.Type
+	}
+	if len(req.Config) > 0 {
+		updatedConfig = req.Config
+	}
+	if err := RequireCallPermission(ctx, existing.Type, existing.Config); err != nil {
+		return nil, err
+	}
+	if err := RequireCallPermission(ctx, updatedType, updatedConfig); err != nil {
+		return nil, err
 	}
 
 	// Create a monitor with ID and TenantID for the update
@@ -826,6 +873,20 @@ func (s *Service) BulkUpdateAlerting(
 	}
 	if err := s.repo.VerifyMonitorsBelongToTenant(ctx, tenantID, monitorIDs); err != nil {
 		return 0, err
+	}
+
+	// The updates below are one UpdateMonitor each, with no transaction, so
+	// the test-call gate UpdateMonitor applies would only stop the edit at
+	// the first call monitor, after the earlier rows were written. Refuse
+	// the whole edit up front instead: a 403 then means nothing changed.
+	for _, monitorID := range monitorIDs {
+		existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
+		if err != nil {
+			return 0, err
+		}
+		if err := RequireCallPermission(ctx, existing.Type, existing.Config); err != nil {
+			return 0, err
+		}
 	}
 
 	for _, monitorID := range monitorIDs {

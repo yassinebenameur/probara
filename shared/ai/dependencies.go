@@ -2,8 +2,10 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"sort"
+	"strings"
 )
 
 // DependencyAdvisor suggests monitor dependency edges from observed signals
@@ -46,129 +48,282 @@ type CoFiringPair struct {
 	Later             string `json:"later_monitor"`
 	TimesCoFired      int    `json:"times_co_fired"`
 	MedianLeadSeconds int    `json:"median_lead_seconds"`
+	ReverseCoFires    int    `json:"reverse_co_fires"`
 }
 
 // DependencySuggestion proposes that Monitor depends on DependsOn.
 type DependencySuggestion struct {
-	Monitor    string `json:"monitor"`
-	DependsOn  string `json:"depends_on"`
-	Reason     string `json:"reason"`
-	Confidence string `json:"confidence"`
+	Monitor    string   `json:"monitor"`
+	DependsOn  string   `json:"depends_on"`
+	Reason     string   `json:"reason"`
+	Confidence string   `json:"confidence"`
+	Metadata   Metadata `json:"metadata"`
 }
 
 // DependencySuggestions is the model's output.
 type DependencySuggestions struct {
 	Suggestions []DependencySuggestion `json:"suggestions"`
 	Model       string                 `json:"-"`
+	Analyzed    int                    `json:"analyzed_pairs"`
+	Abstained   int                    `json:"abstained_pairs"`
 }
 
-var dependencyJSONSchema = json.RawMessage(`{
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "suggestions": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "monitor": {"type": "string"},
-          "depends_on": {"type": "string"},
-          "reason": {"type": "string"},
-          "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
-        },
-        "required": ["monitor", "depends_on", "reason", "confidence"]
-      }
-    }
-  },
-  "required": ["suggestions"]
-}`)
+// PairEvidence contains measurements and boolean corroboration, never names.
+type PairEvidence struct {
+	CoFires        int  `json:"co_fires"`
+	ALeadsSeconds  int  `json:"a_leads_seconds"`
+	ReverseCoFires int  `json:"reverse_co_fires"`
+	SharedService  bool `json:"shared_service"`
+	SharedGroup    bool `json:"shared_group"`
+	NamingSignal   bool `json:"naming_signal"`
+	CommonUpstream bool `json:"common_upstream"`
+}
+type candidate struct {
+	a, b string
+	e    PairEvidence
+}
 
-const dependencySystemPrompt = `You infer dependency relationships between infrastructure monitors.
-
-You are given a set of monitors (each with an opaque "ref", a name, a type, optional tags, and optional
-group memberships), the dependency edges that already exist, and co-firing alert statistics. Propose
-edges of the form "monitor depends_on depends_on" — the first depends on the second, i.e. the second is
-upstream.
-
-Signals, strongest to weakest:
-1. Co-firing alerts. Monitors whose alerts fire in the same short window are likely related; when one
-   consistently fails BEFORE the other (positive median_lead_seconds for the "earlier" monitor), the
-   earlier one is the upstream (the depends_on). This is the strongest signal.
-2. Shared group membership and overlapping tags. Monitors in the same group or sharing service tags
-   often belong to the same system and may share an upstream — a clustering hint, not proof of direction.
-3. Naming patterns. A shared service token or tiers implied by names (e.g. "checkout-api" depending on
-   "checkout-db", or an app monitor depending on its database/DNS/TCP monitor for the same service).
-
-Calibrate confidence to the evidence:
-- "high": strong, consistent co-firing with a clear lead direction, ideally corroborated by tags/group/name.
-- "medium": co-firing without a clear lead, OR a clear naming/tier relationship backed by shared tags/group.
-- "low": inference from names/tags/groups alone, with no co-firing support.
-Agreement across signals raises confidence; a single weak signal stays "low".
-
-Rules:
-- Reference monitors ONLY by their exact "ref" value. Never invent refs.
-- Do NOT repeat edges already in existing_dependencies, and never suggest a self-edge.
-- Favor precision over recall. Do not connect monitors merely because they share a generic tag like
-  "prod". It is fine to return few or no suggestions.
-- Give a one-sentence reason citing the specific evidence (which signal, and the direction rationale).
-
-Respond with a single JSON object: {"suggestions": [{"monitor": "<ref>", "depends_on": "<ref>", "reason": "...", "confidence": "high|medium|low"}]}`
-
-// SuggestDependencies builds the prompt, calls the provider, and parses the
-// suggestions defensively. Monitor refs are validated by the caller.
-func (a *llmAnalyzer) SuggestDependencies(ctx context.Context, in DependencyInput) (DependencySuggestions, error) {
-	payload, err := json.MarshalIndent(in, "", "  ")
-	if err != nil {
-		return DependencySuggestions{}, fmt.Errorf("ai: marshal dependency input: %w", err)
+func intersection(a, b []string, ignoreGeneric bool) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y && x != "" {
+				if ignoreGeneric {
+					switch strings.ToLower(x) {
+					case "prod", "production", "dev", "staging", "test":
+						continue
+					}
+				}
+				return true
+			}
+		}
 	}
+	return false
+}
+func naming(a, b string) bool {
+	tokens := func(s string) []string {
+		return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return r == '-' || r == '_' || r == ' ' || r == '.' })
+	}
+	for _, x := range tokens(a) {
+		if len(x) < 3 {
+			continue
+		}
+		switch x {
+		case "http", "tcp", "dns", "api", "db", "prod", "dev", "server", "monitor":
+			continue
+		}
+		for _, y := range tokens(b) {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
 
-	resp, err := a.provider.Complete(ctx, CompletionRequest{
-		Model:      a.model,
-		System:     dependencySystemPrompt,
-		User:       "Signals:\n" + string(payload),
-		MaxTokens:  a.maxTokens,
-		JSONSchema: dependencyJSONSchema,
-		SchemaName: "dependency_suggestions",
+// maxCandidatePairs is the per-request decision budget of SuggestDependencies.
+const maxCandidatePairs = 50
+
+// CandidatePairs returns the pairs the advisor sends, best evidence first,
+// capped at the decision budget. Pairs are oriented a < b by ref.
+func CandidatePairs(in DependencyInput) []candidate {
+	out := allCandidatePairs(in)
+	if len(out) > maxCandidatePairs {
+		out = out[:maxCandidatePairs]
+	}
+	return out
+}
+
+// PairDecisionFor returns the evidence the advisor would send for the pair
+// {refX, refY}, oriented as CandidatePairs orients it (a < b by ref), without
+// the 50-pair budget. ok=false when the pair is not a candidate.
+func PairDecisionFor(in DependencyInput, refX, refY string) (aRef, bRef string, e PairEvidence, ok bool) {
+	if refX == refY {
+		return "", "", PairEvidence{}, false
+	}
+	if refX > refY {
+		refX, refY = refY, refX
+	}
+	for _, c := range allCandidatePairs(in) {
+		if c.a == refX && c.b == refY {
+			return c.a, c.b, c.e, true
+		}
+	}
+	return "", "", PairEvidence{}, false
+}
+
+// allCandidatePairs is CandidatePairs without the budget. Operator labels
+// (PairDecisionFor) resolve through it so a pair ranked past the budget gets
+// the same evidence the advisor would compute for it.
+func allCandidatePairs(in DependencyInput) []candidate {
+	refs := map[string]DependencyMonitorRef{}
+	for _, m := range in.Monitors {
+		refs[m.Ref] = m
+	}
+	pairs := map[[2]string]PairEvidence{}
+	key := func(a, b string) [2]string {
+		if a > b {
+			return [2]string{b, a}
+		}
+		return [2]string{a, b}
+	}
+	for _, p := range in.CoFiringAlerts {
+		if p.Earlier == p.Later || p.TimesCoFired < 1 {
+			continue
+		}
+		if _, ok := refs[p.Earlier]; !ok {
+			continue
+		}
+		if _, ok := refs[p.Later]; !ok {
+			continue
+		}
+		k := key(p.Earlier, p.Later)
+		e := pairs[k]
+		if e.CoFires > 0 {
+			e.ReverseCoFires += p.TimesCoFired
+		} else {
+			e.CoFires = p.TimesCoFired
+			e.ReverseCoFires = p.ReverseCoFires
+			e.ALeadsSeconds = p.MedianLeadSeconds
+			if p.Earlier != k[0] {
+				e.ALeadsSeconds = -e.ALeadsSeconds
+			}
+		}
+		pairs[k] = e
+	}
+	upstream := map[string]map[string]bool{}
+	for _, edge := range in.ExistingDependencies {
+		if upstream[edge.Monitor] == nil {
+			upstream[edge.Monitor] = map[string]bool{}
+		}
+		upstream[edge.Monitor][edge.DependsOn] = true
+	}
+	for i, a := range in.Monitors {
+		for _, b := range in.Monitors[i+1:] {
+			k := key(a.Ref, b.Ref)
+			e := pairs[k]
+			e.SharedService = intersection(a.Tags, b.Tags, true)
+			e.SharedGroup = intersection(a.Groups, b.Groups, false)
+			e.NamingSignal = naming(a.Name, b.Name)
+			for u := range upstream[a.Ref] {
+				if upstream[b.Ref][u] {
+					e.CommonUpstream = true
+				}
+			}
+			if e.CoFires > 0 || e.SharedService || e.SharedGroup || e.NamingSignal {
+				pairs[k] = e
+			}
+		}
+	}
+	out := []candidate{}
+	for k, e := range pairs {
+		out = append(out, candidate{k[0], k[1], e})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.e.CoFires != b.e.CoFires {
+			return a.e.CoFires > b.e.CoFires
+		}
+		rank := func(e PairEvidence) int {
+			n := 0
+			if e.SharedService {
+				n += 4
+			}
+			if e.SharedGroup {
+				n += 2
+			}
+			if e.NamingSignal {
+				n++
+			}
+			return n
+		}
+		if rank(a.e) != rank(b.e) {
+			return rank(a.e) > rank(b.e)
+		}
+		if a.a != b.a {
+			return a.a < b.a
+		}
+		return a.b < b.b
 	})
-	if err != nil {
-		return DependencySuggestions{}, err
+	return out
+}
+func WouldCycle(edges []DependencyEdgeRef, monitor, upstream string) bool {
+	graph := map[string][]string{}
+	for _, e := range edges {
+		graph[e.Monitor] = append(graph[e.Monitor], e.DependsOn)
 	}
-
-	out, err := parseDependencySuggestions(resp.Content)
-	if err != nil {
-		return DependencySuggestions{}, err
+	visited := map[string]bool{}
+	todo := []string{upstream}
+	for len(todo) > 0 {
+		n := todo[len(todo)-1]
+		todo = todo[:len(todo)-1]
+		if n == monitor {
+			return true
+		}
+		if visited[n] {
+			continue
+		}
+		visited[n] = true
+		todo = append(todo, graph[n]...)
 	}
-	out.Model = resp.Model
-	if out.Model == "" {
-		out.Model = a.model
+	return false
+}
+func (a *localAnalyzer) SuggestDependencies(ctx context.Context, in DependencyInput) (DependencySuggestions, error) {
+	pairs := CandidatePairs(in)
+	out := DependencySuggestions{Suggestions: []DependencySuggestion{}, Analyzed: len(pairs)}
+	if len(pairs) == 0 {
+		return out, nil
+	}
+	ds := []Decision{}
+	for _, p := range pairs {
+		ds = append(ds, Decision{ID: uuid.NewString(), Task: "dependency", Evidence: p.e, Choices: choices("dependency")})
+	}
+	batch, err := a.decide(ctx, ds)
+	if err != nil {
+		return out, err
+	}
+	out.Model = batch.Model.Version
+	edges := append([]DependencyEdgeRef{}, in.ExistingDependencies...)
+	existing := map[[2]string]bool{}
+	for _, e := range edges {
+		existing[[2]string{e.Monitor, e.DependsOn}] = true
+	}
+	for i, r := range batch.Results {
+		h, score := best(r)
+		p := pairs[i]
+		monitor, upstream := p.a, p.b
+		if h == "b_depends_a" {
+			monitor, upstream = p.b, p.a
+		}
+		supported := p.e.CoFires >= 2 && p.e.ReverseCoFires == 0 && (p.e.SharedService || p.e.SharedGroup) && p.e.ALeadsSeconds != 0 && !p.e.CommonUpstream
+		direction := (h == "a_depends_b" && p.e.ALeadsSeconds < 0) || (h == "b_depends_a" && p.e.ALeadsSeconds > 0)
+		if score < batch.Thresholds["dependency"] || !supported || !direction || existing[[2]string{monitor, upstream}] || WouldCycle(edges, monitor, upstream) {
+			out.Abstained++
+			continue
+		}
+		lead := p.e.ALeadsSeconds
+		if lead < 0 {
+			lead = -lead
+		}
+		reason := fmt.Sprintf("Suspected dependency: %d co-firing alert windows in 30 days, with the proposed upstream leading by a median %d seconds", p.e.CoFires, lead)
+		if p.e.SharedService {
+			reason += ", corroborated by a shared service tag"
+		}
+		if p.e.SharedGroup {
+			reason += ", corroborated by group membership"
+		}
+		reason += ". Timing correlation does not prove causation."
+		refs := []EvidenceReference{{Ref: fmt.Sprintf("pair/%s/%s/alerts", p.a, p.b), Fact: reason}}
+		out.Suggestions = append(out.Suggestions, DependencySuggestion{Monitor: monitor, DependsOn: upstream, Reason: reason, Confidence: confidence(score), Metadata: metadata(batch.Model, h, score, refs, nil)})
+		edges = append(edges, DependencyEdgeRef{Monitor: monitor, DependsOn: upstream})
+		existing[[2]string{monitor, upstream}] = true
 	}
 	return out, nil
 }
-
-func parseDependencySuggestions(content string) (DependencySuggestions, error) {
-	raw := extractJSONObject(content)
-	if raw == "" {
-		return DependencySuggestions{}, fmt.Errorf("ai: model returned no JSON object")
-	}
-	var parsed struct {
-		Suggestions []DependencySuggestion `json:"suggestions"`
-	}
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return DependencySuggestions{}, fmt.Errorf("ai: parse dependency JSON: %w", err)
-	}
-	for i := range parsed.Suggestions {
-		parsed.Suggestions[i].Confidence = normalizeConfidence(parsed.Suggestions[i].Confidence)
-	}
-	return DependencySuggestions{Suggestions: parsed.Suggestions}, nil
-}
-
-// NewDependencyAdvisor builds a DependencyAdvisor from config. Same provider
-// construction and ErrNotConfigured semantics as NewAnalyzer.
 func NewDependencyAdvisor(cfg Config) (DependencyAdvisor, error) {
-	analyzer, err := NewAnalyzer(cfg)
+	a, err := newLocalAnalyzer(cfg)
 	if err != nil {
+		// Literal nil keeps the interface nil on error (see NewAnalyzer).
 		return nil, err
 	}
-	return analyzer.(*llmAnalyzer), nil
+	return a, nil
 }

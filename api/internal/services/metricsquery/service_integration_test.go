@@ -1,3 +1,5 @@
+//go:build !unit
+
 package metricsquery
 
 // Integration tests for the UI-facing metric query service: discovery,

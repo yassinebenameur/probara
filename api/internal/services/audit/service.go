@@ -84,12 +84,19 @@ type Filters struct {
 	To       *time.Time
 	Page     int
 	PageSize int
+	// Sort is a ParseSort column ("" = occurred_at); Desc reverses it. The
+	// zero value lists newest first.
+	Sort string
+	Desc bool
 }
 
 const (
 	bufferSize    = 1024
 	flushInterval = 2 * time.Second
 	maxBatch      = 100
+	// syncChunk bounds one RecordBatch INSERT (13 params per row, far
+	// below Postgres' 65535-parameter cap).
+	syncChunk = 500
 )
 
 // Recorder persists audit events asynchronously: Record never blocks the
@@ -175,8 +182,25 @@ func FromRequest(r *http.Request) Event {
 		// API key requests before scoped keys land carry no key ID.
 		event.ActorType = ActorAPIKey
 	}
+	if via, ok := ctxpkg.GetVia(ctx); ok {
+		event.Details = map[string]any{"via": via}
+	}
 
 	return event
+}
+
+// MergeDetails adds details to the event without dropping what FromRequest
+// already put there (the MCP "via" marker).
+func (e *Event) MergeDetails(details map[string]any) {
+	if len(details) == 0 {
+		return
+	}
+	if e.Details == nil {
+		e.Details = make(map[string]any, len(details))
+	}
+	for k, v := range details {
+		e.Details[k] = v
+	}
 }
 
 // ClientIP extracts the originating client IP, honoring X-Forwarded-For.
@@ -230,10 +254,49 @@ func (r *Recorder) run() {
 	}
 }
 
+// RecordBatch persists events synchronously, bypassing the buffer, for a
+// handler that audits many items of one request (the alert bulk endpoints):
+// up to 500 events at once would take half of the buffer Record drops from
+// when full, and with no request-level event behind them a drop would leave
+// no trace of the action. Rows go in chunks of syncChunk, each one INSERT.
+// A missing audit_log table (pre-migration window) is not an error.
+func (r *Recorder) RecordBatch(ctx context.Context, events []Event) error {
+	now := time.Now()
+	for i := range events {
+		if events[i].OccurredAt.IsZero() {
+			events[i].OccurredAt = now
+		}
+	}
+	for start := 0; start < len(events); start += syncChunk {
+		end := min(start+syncChunk, len(events))
+		if err := r.insertEvents(ctx, events[start:end]); err != nil {
+			if isMissingSchema(err) {
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Recorder) insertBatch(batch []Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	if err := r.insertEvents(ctx, batch); err != nil {
+		if isMissingSchema(err) {
+			// Pre-migration window (post-upgrade migrations job): drop quietly.
+			return
+		}
+		r.log.WithError(err).Error("Failed to persist audit events")
+	}
+}
+
+// insertEvents writes events in one multi-row INSERT.
+func (r *Recorder) insertEvents(ctx context.Context, batch []Event) error {
+	if len(batch) == 0 {
+		return nil
+	}
 	// Multi-row VALUES insert; 13 params per row keeps well under limits.
 	var sb strings.Builder
 	sb.WriteString(`INSERT INTO audit_log
@@ -262,13 +325,8 @@ func (r *Recorder) insertBatch(batch []Event) {
 			e.Action, e.ResourceType, e.ResourceID, e.Outcome, statusCode, e.IP, e.UserAgent, details)
 	}
 
-	if _, err := r.db.ExecContext(ctx, sb.String(), args...); err != nil {
-		if isMissingSchema(err) {
-			// Pre-migration window (post-upgrade migrations job): drop quietly.
-			return
-		}
-		r.log.WithError(err).Error("Failed to persist audit events")
-	}
+	_, err := r.db.ExecContext(ctx, sb.String(), args...)
+	return err
 }
 
 // Service queries and prunes the audit log.
@@ -337,9 +395,9 @@ func (s *Service) List(ctx context.Context, tenantID uuid.UUID, includePlatform 
 		       action, resource_type, resource_id, outcome, status_code, ip, user_agent, details
 		FROM audit_log
 		%s
-		ORDER BY occurred_at DESC, id DESC
+		ORDER BY %s
 		LIMIT %s OFFSET %s
-	`, whereClause, arg(f.PageSize), arg((f.Page-1)*f.PageSize))
+	`, whereClause, orderBy(f.Sort, f.Desc), arg(f.PageSize), arg((f.Page-1)*f.PageSize))
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

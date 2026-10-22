@@ -1,114 +1,197 @@
 'use client';
 
-import { CheckResult } from '@/lib/types';
-import { calculateUptime, countOperationalResults, getOperationalResults } from '@/lib/monitor-utils';
+import { Check } from 'lucide-react';
+import { CheckResult, MonitorAnalyticsResponse } from '@/lib/types';
+import { describeRun, foldFailureRuns, laneReachesCut } from '@/lib/result-runs';
+import { countOperationalResults, getOperationalResults, shortFailureReason } from '@/lib/monitor-utils';
+import { formatCount, formatDateTime, formatDateTimeFull, formatUptime, timezoneLabel } from '@/lib/format';
+import { checkResultLabel, checkResultTone, failedChecksTone, UPTIME_TONE_TEXT, uptimeTone } from '@/lib/status-tones';
+import Pill from '@/components/ui/Pill';
+import EmptyState from '@/components/ui/EmptyState';
+import TableSkeleton from '@/components/ui/TableSkeleton';
+import { bucketFailedChecks, Stat, StatStrip, UptimeTrace } from './MonitorAnalyticsOverview';
 
 interface MonitorDetailHistoryProps {
+  /** Raw results of the last 7 days. */
   results: CheckResult[];
+  /**
+   * The 7-day analytics, so availability is the same interval-based number
+   * the Overview shows for 7d rather than a client-side count.
+   */
+  analytics?: MonitorAnalyticsResponse | null;
+  /** Strictest SLA target covering the monitor. */
+  slaTarget: number;
+  timeoutSeconds: number;
+  intervalSeconds: number;
+  /** When the monitor was created: raw rows that start there were not cut off. */
+  createdAt?: string;
   loading?: boolean;
 }
 
+const FAILURE_LIMIT = 15;
+
 export default function MonitorDetailHistory({
   results,
+  analytics,
+  slaTarget,
+  timeoutSeconds,
+  intervalSeconds,
+  createdAt,
   loading = false,
 }: MonitorDetailHistoryProps) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="text-slate-500">Loading history...</div>
-      </div>
-    );
+  if (loading && results.length === 0) {
+    return <TableSkeleton rows={4} columns={3} label="Loading history" />;
   }
 
   const operationalResults = getOperationalResults(results);
-  const failures = operationalResults.filter(r => r.status === 'failure' || r.status === 'error');
-  const uptime = calculateUptime(results);
-  const totalChecks = countOperationalResults(results);
-  const failedChecks = failures.length;
-  const recentFailures = results.filter(r => r.status === 'failure' || r.status === 'error').slice(0, 15);
+  const failures = operationalResults.filter((r) => r.status === 'failure' || r.status === 'error');
+  const summary = analytics?.summary;
+  const availability = summary?.has_data ? (summary.availability_pct ?? summary.sla_pct) : null;
+  // Counts come from the 7-day analytics buckets, the same source as the
+  // availability beside them and the Overview at 7d: the raw results
+  // endpoint is row-capped (multi-location monitors hit the cap well
+  // inside 7 days), so it only feeds the list of recent failures.
+  const series = analytics?.uptime_series ?? [];
+  const fromAnalytics = series.length > 0;
+  const totalChecks = fromAnalytics
+    ? series.reduce((sum, p) => sum + p.total_checks, 0)
+    : countOperationalResults(results);
+  const failedChecks = fromAnalytics
+    ? series.reduce((sum, p) => sum + bucketFailedChecks(p.total_checks, p.has_data ? p.uptime_pct : null), 0)
+    : failures.length;
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toISOString().replace('T', ' ').slice(0, 19);
-  };
+  // The same check trace as the Overview, over the week.
+  const traceBuckets = series.map((p) => {
+    const pct = p.has_data ? p.uptime_pct : null;
+    return {
+      ts: Date.parse(p.bucket_start),
+      pct,
+      checks: p.total_checks,
+      failed: bucketFailedChecks(p.total_checks, pct),
+    };
+  });
+  const traceEnd = analytics?.generated_at ? Date.parse(analytics.generated_at) : Date.now();
+  // Raw rows that stop short of the window (cap or retention) are stated,
+  // never passed off as the whole week.
+  const oldestRaw = results.length > 0 ? results[results.length - 1].created_at : null;
+  const windowStart = series[0]?.bucket_start ?? null;
+  const rawStartsLate =
+    oldestRaw !== null && windowStart !== null && Date.parse(oldestRaw) - Date.parse(windowStart) > 6 * 3600 * 1000;
+  // The oldest raw row is a cut unless it is the monitor's first check: the
+  // 7-day window or the row cap stops the fetch there, so a failure run
+  // still going at that row may have started earlier (a lower bound).
+  const oldestRow = results[results.length - 1];
+  const startsAtCreation =
+    oldestRaw !== null &&
+    createdAt !== undefined &&
+    Date.parse(oldestRaw) - Date.parse(createdAt) <= 2 * Math.max(intervalSeconds, 60) * 1000;
+  const fetchCut = oldestRaw !== null && !startsAtCreation;
+  // The same set as the list: platform results (expired jobs) never ran, so
+  // they are not failed checks.
+  const failureRuns = foldFailureRuns(
+    operationalResults,
+    (result) => result.location_id ?? result.location_name ?? '',
+    (result) => shortFailureReason(result.error_message, { httpStatus: result.http_status, timeoutSeconds }),
+    (laneOldest) => fetchCut && laneReachesCut(laneOldest, oldestRow, intervalSeconds)
+  );
+  const recentFailures = failureRuns.slice(0, FAILURE_LIMIT);
+  const listCaption = [
+    failureRuns.length > FAILURE_LIMIT ? `The latest ${FAILURE_LIMIT} runs, newest first.` : 'Newest first.',
+    failureRuns.length < failures.length ? 'Repeats are folded into one row.' : '',
+    recentFailures.some((f) => f.truncated) ? 'A + marks a run that started before the oldest record.' : '',
+    rawStartsLate && oldestRaw ? `Check records go back to ${formatDateTime(oldestRaw)}.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-          <p className="text-xs text-slate-500">Uptime (7 days)</p>
-          <p className={`mt-1 text-2xl font-semibold ${uptime >= 99 ? 'text-emerald-400' : 'text-amber-400'}`}>
-            {uptime.toFixed(3)}%
-          </p>
-        </div>
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-          <p className="text-xs text-slate-500">Total Checks</p>
-          <p className="mt-1 text-2xl font-semibold text-white">{totalChecks}</p>
-        </div>
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-          <p className="text-xs text-slate-500">Failed Checks</p>
-          <p className={`mt-1 text-2xl font-semibold ${failedChecks === 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {failedChecks}
-          </p>
-        </div>
-      </div>
+      <StatStrip
+        footer={
+          traceBuckets.length > 0 ? (
+            <UptimeTrace buckets={traceBuckets} range="7d" windowStart={traceBuckets[0].ts} windowEnd={traceEnd} />
+          ) : undefined
+        }
+      >
+        <Stat
+          label="Availability, last 7 days"
+          value={formatUptime(availability)}
+          valueClassName={availability === null ? 'text-slate-500' : UPTIME_TONE_TEXT[uptimeTone(availability, slaTarget)]}
+        />
+        <Stat label="Checks" value={formatCount(totalChecks)} />
+        <Stat
+          label="Failed checks"
+          value={formatCount(failedChecks)}
+          valueClassName={failedChecks === 0 ? 'text-white' : UPTIME_TONE_TEXT[failedChecksTone(failedChecks, totalChecks)]}
+        />
+      </StatStrip>
 
-      {/* Failure Timeline */}
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 overflow-hidden">
-        <div className="px-5 py-4 border-b border-white/[0.06]">
-          <h3 className="text-sm font-medium text-white">Incident History</h3>
-          <p className="text-xs text-slate-500 mt-0.5">Recent failures and errors</p>
+      <section className="glass overflow-hidden">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-5 pb-3 pt-4">
+          <div>
+            <h3 className="text-title font-semibold text-white">Failed checks, last 7 days</h3>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {listCaption}
+            </p>
+          </div>
+          {recentFailures.length > 0 && <span className="text-xs text-slate-500">Times in {timezoneLabel()}</span>}
         </div>
 
         {recentFailures.length > 0 ? (
-          <div className="divide-y divide-white/[0.04]">
-            {recentFailures.map((failure) => (
-              <div key={failure.id} className="px-5 py-4 flex items-start gap-4">
-                {/* Timeline dot */}
-                <div className="relative mt-1">
-                  <div className="h-2.5 w-2.5 rounded-full bg-rose-500" />
-                  <div className="absolute top-3 left-1/2 -translate-x-1/2 w-px h-full bg-white/[0.06]" />
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-mono text-slate-400">{formatDate(failure.created_at)}</span>
-                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
-                      failure.status === 'failure' 
-                        ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                    }`}>
-                      {failure.status === 'failure' ? 'Failed' : 'Error'}
-                    </span>
-                    {failure.http_status && (
-                      <span className="text-xs text-slate-500">HTTP {failure.http_status}</span>
+          <ul className="divide-y divide-divider border-t border-divider">
+            {recentFailures.map(({ run, truncated }) => {
+              const failure = run.latest;
+              const span = describeRun(run, { truncated });
+              return (
+                <li key={failure.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5">
+                  <span
+                    className="font-mono text-xs text-slate-300"
+                    title={`${formatDateTimeFull(run.earliest.created_at)}${run.count > 1 ? ` to ${formatDateTimeFull(failure.created_at)}` : ''}${
+                      truncated ? '. This run started before the oldest check fetched' : ''
+                    }`}
+                  >
+                    {span.start}
+                    {span.end && (
+                      <>
+                        <span className="text-slate-500"> – </span>
+                        {span.end}
+                      </>
                     )}
-                    {failure.location_name && (
-                      <span className="inline-flex items-center rounded-full border border-cyan-500/35 bg-cyan-500/12 px-2 py-0.5 text-xs font-medium text-cyan-200">
-                        {failure.location_name}
-                      </span>
-                    )}
-                  </div>
-                  {failure.error_message && (
-                    <p className="mt-1 text-sm text-slate-500 truncate">{failure.error_message}</p>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Pill tone={checkResultTone(failure.status)} size="xs">
+                      {checkResultLabel(failure.status)}
+                    </Pill>
+                    {span.count && <span className="text-xs tabular-nums text-slate-500">{span.count}</span>}
+                  </span>
+                  {failure.location_name && (
+                    <Pill tone="neutral" size="xs">{failure.location_name}</Pill>
                   )}
-                </div>
-              </div>
-            ))}
-          </div>
+                  {run.reason && (
+                    <span
+                      className="min-w-0 basis-full truncate text-ui text-slate-300 sm:basis-0 sm:flex-1"
+                      title={failure.error_message || run.reason}
+                    >
+                      {run.reason}
+                    </span>
+                  )}
+                  {span.duration && (
+                    <span className="ml-auto shrink-0 text-xs tabular-nums text-slate-500">{span.duration}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         ) : (
-          <div className="px-5 py-12 text-center">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 mb-3">
-              <svg className="w-6 h-6 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-            </div>
-            <p className="text-sm font-medium text-white">No failures recorded</p>
-            <p className="text-xs text-slate-500 mt-1">This monitor is performing well!</p>
+          <div className="border-t border-divider">
+            <EmptyState
+              variant="inline"
+              icon={<Check className="h-5 w-5 text-emerald-400" strokeWidth={1.75} aria-hidden="true" />}
+              title={rawStartsLate && oldestRaw ? `No failed checks since ${formatDateTime(oldestRaw)}.` : 'No failed checks in the last 7 days.'}
+            />
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }

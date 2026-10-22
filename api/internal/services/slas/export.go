@@ -11,6 +11,7 @@ import (
 	"github.com/go-pdf/fpdf"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/ai"
 )
 
 // Export formats. Both render from the SLAReport document alone, so an
@@ -42,7 +43,15 @@ func pctString(p *float64, decimals int) string {
 func secondsString(s float64) string { return strconv.FormatFloat(s, 'f', 0, 64) }
 
 // WriteCSV writes the report as consecutive sections separated by blank
-// lines: summary, daily, monitors, outages.
+// lines: summary, daily, monitors, outages, and suspected causes. The cause
+// columns on outages and the trailing cause section appear only when the
+// report has SuspectedCauses, so a report issued before causes existed
+// exports byte for byte as it did; new rows go after every existing row so
+// no row position moves. Unlike the PDF, which hides its cause table until
+// an outage was triaged, the CSV is the raw-data export: every report
+// computed since causes exist carries the same column set, AI on or off
+// ("Not triaged"/"No alert" rows), so a spreadsheet never changes shape with
+// the workspace's AI settings.
 func WriteCSV(w io.Writer, r *models.SLAReport) error {
 	loc := reportLocation(r)
 	ts := func(t time.Time) string { return t.In(loc).Format(time.RFC3339) }
@@ -94,20 +103,41 @@ func WriteCSV(w io.Writer, r *models.SLAReport) error {
 			secondsString(m.UnknownSeconds), secondsString(m.UntrackedSeconds), strconv.Itoa(m.OutageCount)})
 	}
 
-	rows = append(rows, nil, []string{"Outage scope", "Monitor ID", "Start", "End", "Duration seconds",
-		"Planned seconds", "Unplanned seconds", "Started before period", "Ongoing"})
+	withCause := r.SuspectedCauses != nil
+	outageHeader := []string{"Outage scope", "Monitor ID", "Start", "End", "Duration seconds",
+		"Planned seconds", "Unplanned seconds", "Started before period", "Ongoing"}
+	if withCause {
+		outageHeader = append(outageHeader, "Cause key", "Suspected cause")
+	}
+	rows = append(rows, nil, outageHeader)
 	for _, o := range r.ServiceOutages {
-		rows = append(rows, outageCSV("Service", "", o, ts))
+		rows = append(rows, outageCSV("Service", "", o, ts, withCause))
 	}
 	for _, o := range r.Outages {
 		id := ""
 		if o.MonitorID != nil {
 			id = o.MonitorID.String()
 		}
-		rows = append(rows, outageCSV(o.MonitorName, id, o, ts))
+		rows = append(rows, outageCSV(o.MonitorName, id, o, ts, withCause))
 	}
 	if r.OutagesTruncated {
 		rows = append(rows, []string{fmt.Sprintf("Outage list truncated at %d rows", len(r.Outages))})
+	}
+
+	if c := r.SuspectedCauses; c != nil {
+		rows = append(rows, nil,
+			[]string{"Attributed monitor outages", strconv.Itoa(c.OutageCount)},
+			[]string{"Triaged monitor outages", strconv.Itoa(c.TriagedOutageCount)},
+			[]string{"Pending monitor outages", strconv.Itoa(c.PendingOutageCount)},
+			[]string{"Unplanned seconds (summed per monitor)", secondsString(c.UnplannedSeconds)},
+			nil,
+			[]string{"Suspected cause", "Key", "Kind", "Monitor outages", "Overlapping alerts", "Monitors",
+				"Unplanned seconds (summed per monitor)", "Operator-confirmed outages", "Operator-corrected outages"})
+		for _, b := range c.Buckets {
+			rows = append(rows, []string{b.Title, b.Key, b.Kind, strconv.Itoa(b.OutageCount), strconv.Itoa(b.AlertCount),
+				strconv.Itoa(b.MonitorCount), secondsString(b.UnplannedSeconds), strconv.Itoa(b.ConfirmedOutageCount),
+				strconv.Itoa(b.CorrectedOutageCount)})
+		}
 	}
 
 	for _, row := range rows {
@@ -122,9 +152,13 @@ func WriteCSV(w io.Writer, r *models.SLAReport) error {
 	return cw.Error()
 }
 
-func outageCSV(scope, id string, o models.SLAReportOutage, ts func(time.Time) string) []string {
-	return []string{scope, id, ts(o.Start), ts(o.End), secondsString(o.DurationSeconds), secondsString(o.PlannedSeconds),
+func outageCSV(scope, id string, o models.SLAReportOutage, ts func(time.Time) string, withCause bool) []string {
+	row := []string{scope, id, ts(o.Start), ts(o.End), secondsString(o.DurationSeconds), secondsString(o.PlannedSeconds),
 		secondsString(o.UnplannedSeconds), strconv.FormatBool(o.StartedBefore), strconv.FormatBool(o.Ongoing)}
+	if withCause {
+		row = append(row, o.CauseKey, o.CauseTitle)
+	}
+	return row
 }
 
 func metString(m *bool) string {
@@ -336,6 +370,32 @@ func WritePDF(w io.Writer, r *models.SLAReport) error {
 		{"Mean time to acknowledge", optHuman(r.Response.MTTASeconds)},
 	})
 
+	// Suspected causes: only when at least one outage was triaged, so a
+	// workspace without auto-triage never sends customers a table of
+	// "Not triaged". Reports computed before causes existed have none.
+	if c := r.SuspectedCauses; c != nil && c.TriagedOutageCount > 0 {
+		section(pdf, tr, "Suspected causes (monitor outages)")
+		ccols := []float64{78, 22, 30, 25, 25}
+		tableHeader(pdf, tr, ccols, []string{"Cause", "Outages", "Downtime", "Share", "Monitors"})
+		for _, b := range c.Buckets {
+			title := b.Title
+			if b.ConfirmedOutageCount+b.CorrectedOutageCount > 0 {
+				title += " *"
+			}
+			share := "-"
+			if c.UnplannedSeconds > 0 {
+				share = fmt.Sprintf("%.1f%%", b.UnplannedSeconds/c.UnplannedSeconds*100)
+			}
+			tableRow(pdf, tr, ccols, []string{title, strconv.Itoa(b.OutageCount), humanDuration(b.UnplannedSeconds), share,
+				strconv.Itoa(b.MonitorCount)})
+		}
+		pdf.Ln(1)
+		pdf.SetFont("Helvetica", "", 8)
+		color(pdfMuted)
+		pdf.MultiCell(width, 4, tr(causesCaveat(c)), "", "L", false)
+		pdf.Ln(3)
+	}
+
 	// Outages.
 	outages := r.Outages
 	title := "Outages"
@@ -392,6 +452,31 @@ func WritePDF(w io.Writer, r *models.SLAReport) error {
 	}
 
 	return pdf.Output(w)
+}
+
+// causesCaveat is the PDF's note under the suspected-cause table.
+func causesCaveat(c *models.SLAReportSuspectedCauses) string {
+	return "Each monitor outage takes the suspected cause of its monitor's availability alerts that overlapped it, " +
+		"from Probara's local AI triage, or an operator's label on it (* marks causes that include operator-labelled outages). " +
+		"The AI's hypothesis counts as a suspected cause only at medium or high confidence; an operator's label counts whatever the confidence. " +
+		"Suspected causes are observed symptoms, not confirmed root causes. " +
+		"Inconclusive: the triage found no supported cause, named one only at low confidence, or an operator labelled it insufficient evidence. " +
+		"Not triaged: the alert was never triaged, for example automatic triage was off at the time, the alert resolved within the settle wait, " +
+		"the monitor was in its triage cooldown, the workspace's hourly triage limit or the platform backlog was reached, " +
+		fmt.Sprintf("the alert was older than the %s lookback, triage was switched off while the alert was queued, or the local AI was unavailable. ", lookbackPhrase(ai.TriageLookback)) +
+		"Triage pending: triage was still running or the alert still open when the report was computed. " +
+		"No alert: no availability alert overlapped the outage. " +
+		"Counts are monitor outages, not alerts, and downtime is summed per monitor, so it can exceed the service downtime when monitors fail together. " +
+		fmt.Sprintf("%d of %d monitor outages had a triaged alert.", c.TriagedOutageCount, c.OutageCount)
+}
+
+// lookbackPhrase renders the triage lookback for the caveat ("6-hour"). The
+// caveat renders at download time, so issued reports follow the constant.
+func lookbackPhrase(d time.Duration) string {
+	if d%time.Hour == 0 {
+		return strconv.FormatFloat(d.Hours(), 'f', -1, 64) + "-hour"
+	}
+	return strconv.FormatFloat(d.Minutes(), 'f', -1, 64) + "-minute"
 }
 
 func budgetRemaining(b models.SLAReportBudget) string {

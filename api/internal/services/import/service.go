@@ -994,6 +994,11 @@ func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUI
 	if err := validation.DefaultRegistry.Validate(models.MonitorType(monitorType), config); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
+	// Schedule rules a config imposes (a SIP test call's interval floor and
+	// timeout cap) hold on import too.
+	if err := validation.DefaultRegistry.ValidateSchedule(models.MonitorType(monitorType), config, intervalSeconds, timeoutSeconds); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
+	}
 
 	req := &models.CreateMonitorRequest{
 		Name:                         name,

@@ -20,14 +20,18 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 
 ## Repo layout
 
-- `api/` — REST API (chi), validation registry, monitor/import/auth services
+- `api/` — REST API (chi), validation registry, monitor/import/auth services,
+  the MCP server (`internal/mcp/`) and its OAuth authorization server
+  (`internal/services/mcpoauth/`, `internal/handlers/oauth/`)
 - `scheduler/` — cron-style dispatch, JetStream stream provisioning, results
   ingest (`internal/ingest/`)
 - `worker/` — check execution (all monitor types); checkers dial through
-  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`)
+  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`);
+  SIP call-quality math (RTP and RTCP codecs, RFC 3550 statistics, the G.107
+  E-model, G.711 frames) is the I/O-free `internal/rtp`
 - `alerter/` — alert evaluation and notification delivery
 - `status-page/` — public status pages (custom template engine)
-- `shared/` — cross-service models, config, secrets, queue, AI provider
+- `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
 - `shared/db/migrations/` — golang-migrate pairs `NNNNNN_name.{up,down}.sql`
   (take the next free number), applied by `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
@@ -41,10 +45,24 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   Uptime Kuma over its socket.io API and writes Kuma's own backup shape (Kuma
   2.0 removed the export button). Transport only — all translation lives in
   `api/internal/services/import/kuma.go`
-- `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry)
+- `scripts/sipp/` — digest-pinned SIPp image that
+  `worker/internal/worker/sip_invite_integration_test.go` builds and runs its
+  `testdata/sipp/` UAS scenarios in (bump base digest and package together)
+- `ai-service/` — Python CPU inference service for local AI (FastAPI,
+  `probara_ai/`: `server.py`, `runtime.py` with `verify_artifact`, `gate.py`
+  the release predicate, `contract.py` the evidence contract); committed
+  head-only artifacts in `artifacts/<version>/`, training/validation scripts
+  in `training/`, hash-locked `requirements*.lock`. `docs/local-ai.md` is its
+  guide, `docs/local-ai-validation.md` the current model status
+- `scripts/seed-demo/` — dev-only Go tool that seeds the "Northwind" demo
+  tenant (structure via the API, history via SQL) and keeps it live with mock
+  targets (`targets` subcommand); see its README
+- `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry;
+  "instrument glass" design, surface contract at the top of `app/globals.css`)
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
 - `docs/` — `architecture.md` (see below), `state-semantics.md`,
-  `auth-and-rbac.md`, `location-worker-auth.md`, `correctness-notes.md`
+  `auth-and-rbac.md`, `location-worker-auth.md`, `correctness-notes.md`,
+  `testing.md` (test suites and CI jobs)
 - `helm/monitoring-platform/` — chart; `docker-compose.yml` — full local stack;
   `infra/` — dev infra config (dex for the SSO profile)
 
@@ -59,7 +77,28 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   state advancement.
 - Check execution needs NATS only, never Postgres — private-location workers
   get neither the database nor the platform key. Only the worker's optional
-  notification/AI consumers touch the database.
+  notification/AI consumers and the AI triage relay touch the database.
+- Local AI decision calls come only from the api and DB-connected workers —
+  never from location workers, the scheduler or the alerter. In
+  `worker/cmd/worker/main.go` the AI_RCA consumer needs `dbClient != nil`;
+  the triage relay and consumer also need `LocationID == ""`. The relay
+  (`worker/internal/airca/relay.go`) reads/writes Postgres and publishes
+  `AI_TRIAGE`; the triage consumer (`triage.go`) writes only `alert_triage`.
+- **Alert triage never changes paging.** `shared/alertrouting`, suppression,
+  severity and the created/reminder/acknowledged/resolved events never read
+  `alert_triage`, and triage never writes an alert. Its one reader outside the
+  API's `triageview` is the alerter's opt-in `dispatchSuspectedCauses`
+  (`alerter/internal/alerter/suspected_cause.go`): one `suspected_cause`
+  follow-up per already-paged, still-routed channel, claimed on
+  `alert_notification_states.suspected_cause_sent_at`, muted by the same
+  `openAlertDispatchablePredicate` as reminders, on its own time budget
+  ahead of the recovery sweep, with a round-robin batch so one hanging
+  provider cannot hold the others back. Cause predicates (`ai.IsNamedCause`,
+  `ai.IsConfident`, `ai.RCAInsufficientEvidence`) live in `shared/ai`; reuse
+  them. SLA reports (`api/internal/services/slas/causes.go`) also read
+  triage, only through triageview's `CauseJoin`/`CauseColumns`/
+  `ClaimableExpr`/`EffectiveCause` (label over hypothesis). Never let triage
+  gate or alter a page.
 - Durable work goes through JetStream (`shared/queue`). Core NATS
   (`shared/statusupdates`, `statuspage.updates`) is live fan-out only;
   nothing persistent may depend on a core-NATS subscriber.
@@ -67,7 +106,10 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (see `scheduler/internal/scheduler/maintenance_lock.go`), never through
   separate pool calls.
 - Every service keeps `/healthz`, `/readyz` and `/metrics`; keep them intact
-  when touching startup or server wiring.
+  when touching startup or server wiring (ai-service's `/readyz` needs the
+  bearer token, so the chart's readiness probe is an exec; its `/healthz`
+  turns 503 once a batch outruns `LOCAL_AI_MAX_INFERENCE_SECONDS`, which is
+  what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
 
@@ -77,6 +119,14 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   Import, preview, and anything type-driven must delegate to it
   (`DefaultRegistry.Has/Types`), never keep a parallel hardcoded list.
 - **Active-check types** (timeout semantics): `validation.IsActiveCheckType`.
+- **Passive types** (never dispatched, refused by run-now, skipped by the
+  worker): `shared/models.PassiveMonitorTypes`; the monitor page's
+  `PASSIVE_TYPES` is its UI mirror.
+- **Server-chosen destinations**: `netguard.Policy.AllowsServerChosen`
+  (`shared/netguard`) vets every address a remote server chose rather than
+  the operator (SDP media, latch targets, RTCP); never send to one without
+  it. Its extra ranges (`0.0.0.0/8`, NAT64/6to4 embedded IPv4, Teredo,
+  documentation) stay out of the shared `privateCIDRs` table.
 - **Monitor config secrets**: `shared/secrets/monitor_config.go`
   (`MonitorSecretFields` / `MonitorSecretMapFields`). One entry gives
   encryption at rest, `***` masking on reads, write-only merge on updates,
@@ -92,6 +142,12 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `***` all **keep** the stored value (the channel form submits every secret
   input blank on edit), and `null` **clears** it — SchemaForm's "Remove
   stored value", offered only for optional secret fields.
+- **Certificate location in `metrics_data`**: `shared/tlscert` owns the
+  certificate snapshot (`Info`, built by `FromConnectionState`) and where it
+  sits (`MetricsPaths`: `http.tls`, `sip.tls`). The alerter's `tls_expiry`
+  reads through `SQLExpr`, the status page and AI evidence through
+  `Extract`; `TestSQLExprMatchesExtract` pins the pair. A new TLS-capable
+  type adds its path there, never a hard-coded `#> '{x,tls}'`.
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
@@ -108,7 +164,10 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   notified" and "what the UI reports" cannot disagree — always use the
   fragment, never re-derive a rule. `UnreachablePredicate` is the SQL twin of
   `Classify().Reachable`; change them together
-  (`TestUnreachablePredicateMatchesClassify` pins the pair). Escalation delays
+  (`TestUnreachablePredicateMatchesClassify` pins the pair).
+  `RoutesToChannelPredicate` is `TargetsSQL`'s own union correlated per row,
+  for batch queries that must drop unrouted pairs before a `LIMIT`
+  (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Escalation delays
   count from `DispatchEligibleSinceExpr` (the end of a cleared root cause's
   grace period, else `triggered_at`). Known asymmetry: member suppression
   ignores the group's `enabled` flag, so a paused `group`-rollup group
@@ -138,7 +197,41 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (`computeIntervalAvailability`) and SLA reports (`api/internal/services/slas`)
   both reduce it; never write another interval query. Calendar periods live
   next to it in `period.go`. Issued SLA reports (`sla_reports.data`) are a
-  frozen `models.SLAReport` document: add fields, never repurpose them.
+  frozen `models.SLAReport` document: add fields, never repurpose them. A
+  field added later (e.g. `suspected_causes`) is nil on older reports, and
+  every renderer must export those unchanged
+  (`TestLegacyIssuedReportRendersUnchanged`, `slas/testdata` goldens).
+  Down spans come from its sibling `Outages`: analytics downtime periods
+  are `down` intervals on both paths (raw ranges via `loadTimelineDowntime`,
+  rollup ranges via the scheduler's `syncDowntimeFromIntervals` projection;
+  `TestDowntimeProjectionMatchesRawAnalyticsPath` pins the pair). Never
+  derive downtime from check rows.
+- **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
+  (version `probara-evidence-v1`) is the closed set of hypotheses the model may
+  pick and the only source of analysis/suggestion prose and actions; the
+  inference service validates requests against the same file (the image
+  copies it in) and every artifact manifest pins its version, so a label or
+  description change is a catalogue version bump on both sides and needs a
+  newly trained artifact; a catalogue mismatch makes the service refuse the
+  model and the Go client refuse its answers. What reaches
+  the model is the counters-and-booleans allow-list in `shared/ai/evidence.go`
+  (`MonitorEvidence`) plus opaque IDs — never names, URLs, error text, bodies
+  or monitor config. Model answers only count when `Supports` (and the
+  dependency gates in `dependencies.go`) agree with the measured evidence.
+- **AI label export format**: `shared/ai/labelexport.go` (`WriteLabelExport`,
+  `StateText`) is the Go twin of ai-service `probara_ai/contract.py`
+  (`training_row`/`state_text`/`validate_evidence`), pinned by
+  `shared/ai/testdata/label-export-v1.jsonl` (`TestLabelExportFixture`,
+  regenerate with `-update`); the ai-service training reader must test the
+  same file (`read_extra_train` re-renders `op-` rows through
+  `from_label_export`), so change both sides together. Labels copy evidence server-side,
+  never from the client: `incident_ai_analyses.decision_snapshot` (worker
+  `markReady`) and `alert_triage.decision_snapshot` (`markTriageReady`) are
+  read by `api/internal/services/ailabels`
+  (change the `DecisionSnapshot` shape on both together); pairs come from
+  `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
+  cascades only on tenant delete. The label routes are writes (never in
+  `postReadPaths`); export is `RequireTenantAdmin`.
 
 ## Monitor import
 
@@ -175,19 +268,26 @@ or imported groups come back empty. Any other path that creates groups through
    `shared/models/` (one file per newer type, e.g. `prometheus.go`; older types
    sit in `check_job_payload.go`). The API validator and the worker both consume
    the shared struct, so put `Validate()` on it rather than duplicating rules
-2. Validator in `api/internal/validation/` + register in `registry.go`
+2. Validator in `api/internal/validation/` + register in `registry.go`, and
+   its `ConfigType()` in `config_types.go` (the struct MCP's
+   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`)
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
    through `dialGuard` (SSRF policy)
 4. Secret fields → `MonitorSecretFields`
 5. UI: form component in `web/components/monitors/`, wire into
-   `MonitorForm.tsx` (`MONITOR_TYPE_META` + dispatch), types in `web/lib/types.ts`
+   `MonitorForm.tsx` (`MONITOR_TYPE_META` + `TYPE_FORMS` dispatch), types in
+   `web/lib/types.ts`;
+   its hydration and request builder in `web/lib/monitor-form/`, with exact
+   payload tests (create, filled, an edit round trip that sets every field
+   the form hydrates, clone, secret clears) in `web/lib/monitor-form-*.test.ts`
 6. Docs: `website/lib/docs/pages/monitors.ts` (type table + protocol passage +
    secrets coverage) — import/export support is automatic via the registry
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
    in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
    `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
-   `web/app/monitors/page.tsx`, and the type count + `monitorGroups` on the
+   `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
+   `badge`), and the type count + `monitorGroups` on the
    landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
 
 ## Cross-service contracts
@@ -209,6 +309,43 @@ or imported groups come back empty. Any other path that creates groups through
   on API (run-now publisher), scheduler, and workers. Code defaults
   `CHECK_JOBS`/`check.jobs`; Compose and Helm ship `check-jobs`/`check.job` on
   all three. Changing one service alone silently breaks run-now.
+- **Check-job delivery**: the worker heartbeats `InProgress` every 10 s while
+  a check runs (`checkProgressInterval`, `worker.go`; keep it well under the
+  30 s AckWait). Checks whose checker implements `SideEffectingChecker`
+  (`checker.go`) are at-most-once: a redelivery (`NumDelivered > 1`) is acked
+  without running, a failed publish retries in place, never NAKs, and a result
+  the worker's own shutdown produced (`CheckResult.Interrupted`) is acked
+  unpublished. A checker that acts on the world (places calls, sends messages)
+  must implement it, deciding from non-secret config fields only. Test
+  checks (core-NATS request/reply, one goroutine per request) are not bounded
+  by `WORKER_CONCURRENCY`, so `handleTestCheck` refuses a side-effecting one
+  beyond `maxSideEffectTestChecks` (16) in flight; scheduled checks never
+  share that bound. Scheduled
+  jobs carry a per-slot `Nats-Msg-Id` (`checkJobMsgID`, used by
+  `publishMonitorJobs`), so a dispatch retried for the same `next_run_at` is a
+  stream duplicate; keep the id deterministic per slot.
+- **SIP test calls** (`sip` + `method: invite`,
+  `worker/internal/worker/sip_invite.go`) place real, billable calls.
+  `models.IsSIPCallConfig` is the one "is this a call" test (non-secret
+  fields; it errs towards a call, matching any key spelling, and the API
+  validator parses with `ParseSIPMonitorConfig`, which refuses case-variant
+  keys): the checker's `SideEffecting`, the API's tenant-admin gate
+  (`monitorservice.RequireCallPermission` → `ctxpkg.IsTenantAdmin`, in
+  `CreateMonitor`/`UpdateMonitor` so import inherits it, plus the run-now and
+  test handlers; API keys never pass) and the update-time method-class refusal
+  all use it. Schedule bounds go through `ScheduleAwareValidator`
+  (`validation/registry.go`), applied to the effective
+  type/config/interval/timeout on every update. Workers read
+  `SIP_CALL_ENABLED` (default true, false with `WORKER_LOCATION_ID`) and
+  `SIP_CALL_ALLOWED_DESTINATIONS`; a `SIPChecker` never configured
+  (`ConfigureCalls`) places no call. `call.media` (`shared/models/sip_media.go`,
+  orchestrated by `worker/internal/worker/sip_media.go`) measures the hold's
+  audio; it rides `SIP_CALL_ENABLED` (no second switch), its keys are strict
+  (`UnmarshalJSON` records, never returns, what `Validate` refuses, so other
+  decoders of a SIP config never break), and a worker that predates a media
+  field fails the check closed before dialing. Its web twin is `isSipCall`
+  (`web/lib/sip-config.ts`): the UI hides call run/pause/clone and locks the
+  form for non-admins (`useIsTenantAdmin`), and confirms every Test and run.
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs).
@@ -247,9 +384,25 @@ or imported groups come back empty. Any other path that creates groups through
   `go run ./cmd/admin/gen_vapid_keys`; never generate it at startup, and
   rotating it invalidates **every** stored subscription (`statusPage.vapid`
   in `values.yaml` explains both).
-- **Helm `extraEnv`**: top-level (all workloads incl. migrations job) and
-  `<service>.extraEnv`; `worker.extraEnv` also reaches location workers, and
-  `worker.locations[]` entries can carry their own.
+- **Helm `extraEnv`**: top-level (all workloads incl. migrations job, but
+  never the local AI pod, which holds no platform credentials — it has
+  `localAI.extraEnv`) and `<service>.extraEnv`; `worker.extraEnv` also
+  reaches location workers, and `worker.locations[]` entries can carry their
+  own.
+- **Local AI wiring**: `LOCAL_AI_*` reach the api and the DB-connected
+  (platform) worker only — never scheduler, alerter, status page or location
+  workers — via `monitoring-platform.localAIEnv` in Helm and explicit
+  entries in Compose. The exception is the two kill switches: the alerter
+  also gets `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` (Helm
+  `alerterAIEnv`/`aiTriageEnv`, value `localAI.triageEnabled`; Compose shell
+  passthrough), which stop suspected-cause follow-ups
+  (`AlerterConfig.SuspectedCausesDisabled`); `AI_TRIAGE_ENABLED` also reaches
+  worker and api (`aiTriageEnv`; the api's SLA reports read it). The service gets only `LOCAL_AI_TOKEN`. Helm's token is
+  canonical key `local_ai_token`; chart-managed and empty, it is derived from
+  `secrets.adminJwtSecret` (stable across renders; never `randAlphaNum` or
+  `lookup`), and `secret.yaml` fails where it cannot be derived (`externalUrl`,
+  or an empty/externally-sourced JWT secret). The clients' reference is
+  `optional` so a pre-local-AI existing Secret never blocks api/worker.
 - **Helm secret sources**: every credential resolves per-field
   `<field>ExistingSecret` → chart-wide `secrets.existingSecret` → the
   chart-managed `<fullname>-secret`, all through
@@ -257,7 +410,8 @@ or imported groups come back empty. Any other path that creates groups through
   as a literal `value:` in a PodSpec and never hardcode the Secret name — the
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
-  `oidc_client_secret`) are the contract external secret managers fill.
+  `oidc_client_secret`, `local_ai_token`) are the contract external secret
+  managers fill.
   Helm cannot read Secrets, so anything the chart *composes* from a
   credential (the Postgres DSN, the embedded NATS URL) needs the composed
   value externalized too — hence the paired `fail`s in `secret.yaml`.
@@ -268,6 +422,31 @@ or imported groups come back empty. Any other path that creates groups through
   space/comma/brace passwords abort startup), and quoting the reference
   silently disables the expansion.
 
+## MCP server
+
+- **Tools are a protocol adapter over the router.** Each catalog entry
+  (`api/internal/mcp/catalog*.go`) is one REST route; a call rebuilds that
+  request and dispatches it through the root router in process with the
+  caller's bearer, so auth, audit, the write gate, role gates, validation and
+  masking apply unchanged. Never call a service from `api/internal/mcp` —
+  extras (`extras.go`) read only compile-time registries or go through the
+  router too. Inner requests get a value-free context (`detached`): chi
+  reuses a RouteContext it finds, and identity must be re-resolved.
+- **Every `/api/v1` route is a tool or in `notExposed` with a reason.**
+  `Bind` (startup) and `TestMCPCatalogMatchesRouter` fail on a missing route,
+  a tool whose route is gone, or a stale exclusion. Body schemas reflect the
+  handler's request type, so name the type (no anonymous decode structs on a
+  routed handler); readOnly comes from `middleware.IsReadOnlyRequest`, gates
+  from `chi.Walk`.
+- **Bearer only.** `Protect` strips cookies before auth; never let the MCP
+  route accept the session cookie. MCP OAuth access tokens (`pbm_at_`) are
+  accepted only on `/api/v1/mcp` and on requests it dispatched
+  (`ctxpkg.ViaMCP`), carry a scope and never a role, and `CanWrite` checks
+  scope first so it only narrows. Consent and `/oauth/grants` take a user
+  session only, outside the write gate, with their own audit events.
+- `tools/list` filtering by capability is UX; enforcement is the inner
+  dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
+
 ## Notifications
 
 - **Alerter sends go through `deliverNotification`**
@@ -277,6 +456,8 @@ or imported groups come back empty. Any other path that creates groups through
   without leader election. The claim
   predicates in `claimNotificationTx` and the in-memory pre-filter
   `shouldSendNotification` encode the same due rules; change them together.
+  The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
+  never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
   skips notifications, so it is not an error to log.
 - **Delivery ordering rests on row locks — keep them.** The async worker
@@ -300,7 +481,21 @@ or imported groups come back empty. Any other path that creates groups through
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and
   `PostJSON`/`Post`, `Permanent` errors, `HostMatches` host checks, test
   sends that leave no provider state, the acknowledge capability, and
-  multi-recipient errors.
+  multi-recipient errors. The alerter targets advisory follow-ups
+  (`suspected_cause`) by `CapabilityFollowUp`, never by plugin type: paging
+  plugins (PagerDuty, Opsgenie) leave it off, everything else advertises it.
+  Email follow-ups ignore channel template overrides (`effectiveTemplates`).
+- **Fan-out progress is durable, per recipient.** Every real send sets
+  `DispatchRequest.Recipients` (`shared/notifications/recipientledger`, table
+  `alert_notification_recipient_deliveries`) from the pool, never the claim or
+  lock transaction (both roll back), keyed by `notifications.RecipientEventKey`:
+  the event type, plus for reminders the `last_sent_at` the reminder claim
+  replaced (`claimNotificationTx`), carried to the worker as
+  `DispatchEnvelope.DeliveryKey`. A deliberate re-send of an event needs a key
+  of its own (`notifications.OvertakenAckKey`, the worker's re-ack), or it
+  inherits the first send's recipients and reaches nobody. A multi-recipient
+  plugin skips what it reports delivered and records each acceptance (the
+  `plugin` doc; `twilio` does).
 
 ## Status pages
 
@@ -334,7 +529,7 @@ or imported groups come back empty. Any other path that creates groups through
   keys the page subtree on the tenant, so every page's mount-time fetch
   re-runs on a switch. Pages must not add their own `tenant-changed`
   listeners — only components *outside* that subtree (Sidebar,
-  CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
+  `useFleetHealth`, CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
   redirect to their list page on a switch (`/users/[id]` excepted: users are
   platform-scoped).
 - **Folded routes stay as redirects**: Mesh is a tab of Locations and
@@ -346,12 +541,205 @@ or imported groups come back empty. Any other path that creates groups through
 - **Row actions** in tables and lists use `components/ui/IconButton.tsx`
   (icon only, named by its tooltip, `danger` last) for up to three
   actions, and `components/ui/RowMenu.tsx` (⋮, position:fixed, flips up)
-  beyond that. Don't put text buttons in rows.
+  beyond that. Don't put text buttons in rows — except a lifecycle list's one
+  labelled next step (alerts: Acknowledge → Resolve, the rest in ⋮; see
+  `components/alerts/AlertTable.tsx`).
+  Bulk selection (monitors, alerts) is a hover-revealed box in a reserved
+  lead slot (pinned once anything is selected, always on touch), Shift-click
+  ranges, Escape clears, and a portaled bar at `md:left-[var(--sidebar-offset)]`
+  for writers only (alerts: `useAlertSelection`, `AlertBulkBar`). A
+  single-key row shortcut (alerts' A / R) fires only from a focused row and
+  never in text fields — WCAG 2.1.4; the guard, range and prune rules are
+  pure functions in `lib/alert-list.ts` with node tests.
+- **Shell**: the sidebar (`components/layout/Sidebar.tsx`) is the only chrome
+  — no desktop top bar; below `md` it is a drawer opened from `TopBar`. It is
+  ONE instance on every breakpoint, so `TenantSwitcher`'s tenant bootstrap
+  (load, settle, `emitTenantChange`) runs once; never render a second copy.
+  From `md` it collapses to a 64px icon rail (header toggle, or Ctrl+B / ⌘B —
+  a modifier chord, never a bare character key, WCAG 2.1.4; its rules are
+  `lib/sidebar-shortcut.ts`, unit-tested; every page-level modifier chord
+  takes its ⌘/Ctrl label and platform check from `lib/shortcuts.ts`
+  (`shortcutLabel`/`shortcutAria`, `isApplePlatform`) and stands down behind
+  a dialog via `modalOpen`): the same
+  instance with `rail` props, rows folding via `components/layout/rail.ts`.
+  Nothing may change height while the width animates: rows keep one
+  structure, the header is one fixed row (the rail toggle overlays the mark),
+  and the footer swaps layout only once the width settles.
+  State is `html[data-sidebar="collapsed"]`, set pre-paint by the boot script
+  in `app/layout.tsx` from localStorage `probara-sidebar` and owned by
+  `useSidebarCollapsed`; widths are CSS keyed on it, and fixed overlays that
+  clear the sidebar use `md:left-[var(--sidebar-offset)]`, never a literal.
+  Rail labels are `components/ui/Tooltip.tsx` (`useTooltip`, portaled).
+  `useFleetHealth` (called once, in `Layout`'s `Shell`) feeds the sidebar
+  FleetHealth row and TopBar; fleet health never tints the page. The shell
+  has no content cap below 2560px (`max-w-[160rem]`, gutters only); each page
+  picks its width with `components/ui/Page.tsx` (`<Page width="data|detail|
+  wide|reading|form">`, the page root). Settings is `data` too: its tabs
+  lay panels into container-width columns from
+  `components/settings/layout.ts`, never viewport breakpoints (the sidebar
+  changes the main width). Tailwind screens add `3xl` 1920 / `4xl` 2400.
+- **Route titles**: every route folder has a server `layout.tsx` that only
+  exports `metadata.title` (the root template appends ` · Probara`); nested
+  segments under a titled parent use `title: { absolute: '… · Probara' }`,
+  since a parent's string title stops the root template. Client detail pages
+  name themselves with `useDocumentTitle` (`lib/useDocumentTitle.ts`).
+- **Glass surfaces**: the canvas is flat (no gradients, grid or bloom).
+  Panels use `.glass` (or `Panel`/`FormCard`, near-opaque, no
+  blur), overlays `.glass-overlay`, groups inside a panel `.glass-well`,
+  banners `components/ui/Callout.tsx`; only overlays and the shell blur, and
+  never nest a blurred surface in another. Orange (`cyan-*`) is for actions
+  only; text on it is `text-onaccent`. "Selected" tabs and segments are
+  neutral raised glass (`SELECTED_SEGMENT` in `components/ui/roving.ts`,
+  fill `bg-selected`/`--segment-selected`); a selected `FilterChip` is
+  inverted ink (`bg-white` + panel-coloured text) so applied filters read
+  at a glance; the active nav item is
+  `bg-nav-selected` (a filled step above hover on the shell); never orange
+  and never a rail; checked list rows use `bg-well-strong`. Icon-only
+  buttons are named by `useTooltip` (`components/ui/Tooltip.tsx`, fast,
+  shows on focus), never a native `title`.
+  Chart series take `--chart-1..6` (`SERIES_COLORS`/`LATENCY_COLOR`/
+  `CHART_GRID` in `components/monitors/metric-chart.tsx`), never a hex or a
+  status colour; monitor-detail charts are that file's `ChartTile`/
+  `ChartLegend`/`MetricChart` (`xDomain` spans the page range), never a
+  per-view copy, and detail side panels are `DetailRow`/`DetailList` from
+  `components/monitors/MonitorFactsCard.tsx`; an empty trace slot or no-data bucket is `NO_DATA_BAR`
+  (`lib/status-tones.ts`, hollow). Text meets 4.5:1 and meaningful marks
+  3:1 on every surface they sit on (contrast notes per token in the
+  `globals.css` header). Focus is
+  `FOCUS_RING`/`FOCUS_RING_INSET` (`components/ui/focus.ts`, the `--focus`
+  token); input, select, checkbox and radio borders use `--input-edge`, the
+  Switch off track `--switch-off`. Type scale is `text-2xs`/`xs`/`ui`/`sm`/
+  `title`, plus `text-metric` for KPI numbers; no arbitrary px sizes. The
+  rules and token list sit in the comment at the top of `app/globals.css`
+  and in `tailwind.config.ts`.
+- **Theme** follows `prefers-color-scheme` unless `probara-theme` is stored
+  (boot script in `app/layout.tsx`); `ThemeToggle` cycles light/dark/system.
+- **Motion**: `--dur-*`/`--ease-*` in `globals.css`; Tailwind
+  `duration-fast|base|slow`, `ease-standard|emphasized|exit` and
+  `animate-fade-in|pop-in|dialog-in|toast-in|row-flash|bar-in|value-in|
+  live-ping|status-pulse` (row-flash/live-ping take their colour from the
+  `--flash` CSS var, see `flashStyle` in `lib/useRowFlash.ts`). Only one
+  thing loops: `status-pulse`, on the newest CheckTrace bar of a monitor
+  degraded right now — never pulse whole traces or lists. Reduced motion is
+  handled globally in `globals.css`; never hard-code a duration.
+- **Formatting and tones have one home each**: dates, recency, durations,
+  uptime %, latency, call quality and the `RANGES` table live in
+  `lib/format.ts` (`formatDateTime`, `formatTimestamp`, `formatRelativeTime`,
+  `formatUptime`, `formatLatency`, `formatMOS`/`formatLossPct`/
+  `formatJitter`, …); what colour a state or number gets lives in
+  `lib/status-tones.ts` (`uptimeTone(pct, target)` for availability only;
+  `failedChecksTone` for check-bucket trace bars, `utilizationTone` for
+  agent gauges from the monitor's `metric_rules`, `mosTone`/`lossTone` for
+  SIP call quality from the monitor's `call.media` thresholds (with default
+  bands), `thresholdTone` for its jitter and round trip (own thresholds only);
+  alert/incident/check/monitor-status tones). Never `toLocaleString()`, `toFixed()` on a percent,
+  or an inline uptime threshold in a component. Severity order, monitor
+  target and short failure reasons are `STATUS_RANK`/`sortBySeverity`,
+  `monitorTarget`, `shortFailureReason` in `lib/monitor-utils.ts`.
+- **Shared controls**: time ranges use `components/ui/RangePicker.tsx`
+  (page-scoped: header or Tabs `trailing`, never inside one card); a setting
+  with a few discrete stops (sensitivity, a window length) is
+  `components/ui/SegmentedControl.tsx` (radiogroup, roving arrows,
+  `SELECTED_SEGMENT`), never a range slider (there is no slider style); a
+  Switch's on track is neutral ink like a checked Checkbox, never orange; a save bar shown only
+  while a form is dirty floats over the page (portaled, `data-floating-bar`,
+  as in Settings → Notifications) so its arrival never shifts content; monitor
+  types render as `components/ui/TypeBadge.tsx` (pass `config` where it is at
+  hand so a SIP test call reads `CALL`, via `monitorTypeDisplay`), labels from
+  `lib/monitor-type-labels.ts` only; write affordances gate on
+  `useCanWrite()` / `useIsTenantAdmin()` from `CurrentUserProvider` (both
+  read false while identity loads, so "read-only" copy also waits for
+  `useCurrentUser().loading` to clear). Recent
+  checks draw as `components/monitors/CheckTrace.tsx`, the one check-history
+  trace (monitors list, dashboard; fixed 79px, equal-height bars)
+  — never a second bar strip. Multi-select list filters and tag pickers
+  (/monitors Type and Tags, the dashboard's tag scope, `TagFilter` in
+  `MonitorMultiSelect` and the SLA form) are
+  `components/ui/FilterPopover.tsx`: a FilterChip trigger with a portaled,
+  anchored popup — never an inline panel that pushes the content down. In a
+  dialog it stacks above the scrim (z-60) and its `data-popover-layer` keeps
+  ModalPortal's focus trap off its Tab order; Escape and an outside click
+  (whose mousedown and click it swallows) close only the popup. Tag pickers
+  that set a value (SLA tags, Settings dashboard groups) use `TagFilter`
+  `asValue`.
+  Checkboxes and radios are
+  `components/ui/Checkbox.tsx` / `Radio.tsx` (`onChange` receives the boolean
+  first; never a native `accent-*` box). Every modal is
+  `components/ui/Dialog.tsx` (form modals put the submit button in `footer`
+  with `form={id}`); scrolling lists inside a card use
+  `components/ui/ScrollList.tsx`.
+- **Sorting**: list columns use `components/ui/SortableHeader.tsx` over
+  `lib/sort.ts` (nulls last in both directions), with state in
+  `?sort=&dir=` through `useUrlSort` (defaults left out), and sort the whole
+  filtered set before paging. Server-paged views (every alerts view but
+  Open, audit) pass the sort to the API instead (`sort=`/`dir=`, a whitelist
+  in the service — `ParseListSort` in `services/alerts/sort.go`, `ParseSort`
+  in `services/audit/sort.go` — ending in an id tiebreaker so pages never
+  overlap); keep client sort wherever the whole set is loaded. A header shows
+  the order the rows are in: /alerts defaults per view and maps a status sort
+  under a one-status filter to newest first (`lib/alert-list.ts`).
+- **Live pages and feedback**: relative times render as `RelativeTime` /
+  `ElapsedTime` (`components/ui/RelativeTime.tsx`, on the shared `useNow`
+  clock), never a frozen `formatRelativeTime` string. Live pages load through
+  `useLiveRefresh` with `LiveStatus` in the header and flash changed rows with
+  `useRowFlash`. Toasts go through `showToast` (`group` coalesces bursts); no
+  success toast for a change already visible in place, and an own
+  acknowledge/resolve calls `markLocalAction` first so the stream echo stays
+  quiet.
+- **Dashboard**: `app/page.tsx` `GRID`/`CELL_*` constants own the 12-column
+  xl/3xl/4xl layout; a service group's tone is `groupHealth()` in
+  `lib/dashboard-view-model.ts` (current worst member state; history only
+  through `uptimeTone`), never `attention_count`.
+  Per-check `metrics_data` charts on the detail page (`MongoClusterPanels`,
+  `SipCallPanels`) fetch through `lib/useMetricsSnapshots.ts` and pick and
+  grid their points with `lib/metric-snapshots.ts`; a new panel does the same.
+- **`/monitors` deep links** (`?status=`, repeatable `?tag=`,
+  `?routing=unrouted`, `?sort=status|name|success|latency|last_check` with
+  `?dir=asc|desc`, defaults left out per `MONITOR_SORT_DEFAULT_DIR`) are
+  parsed and written only by `parseMonitorListParams`/
+  `formatMonitorListParams` in `lib/monitor-list.ts`; link to the filtered
+  list rather than adding page-local query handling. The list order is
+  `sortMonitorList`: groups and monitors sort together, a group ranking by
+  its worst member under status.
+  Likewise the one-alert `/alerts?alert=<id>&tenant=<id>` link notifications
+  carry (built in `present.suspectedCauseAction`) is parsed only by
+  `lib/alert-links.ts`.
+- **Alert counts**: "active" = `status=active` only (sidebar fleet health,
+  dashboard tile); "open" = active + acknowledged (the alerts page's default
+  view). Keep the words matched to what is counted.
 - **Overlays must portal**: pages wrap content in `space-y-*`, which puts a
   `margin-top` on a `fixed inset-0` sibling, so the backdrop stops covering the
-  viewport (and `main`'s `overflow-x-clip` can clip it). Wrap modal roots in
-  `components/ui/ModalPortal.tsx`. Modals still rendered inline elsewhere carry
-  this bug.
+  viewport (and `main`'s `overflow-x-clip` can clip it), and every `.glass`
+  ancestor's `backdrop-filter` becomes the containing block of a `fixed`
+  child, offsetting and clipping it. Wrap modal roots in
+  `components/ui/ModalPortal.tsx` (menus/popovers: `createPortal`, as
+  `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus, marks
+  `#app-root` inert while open and restores focus on close; pass `onEscape`
+  unless the modal handles Escape itself (`Dialog` does).
+- **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
+  (brings back native min/max checks), `useClearErrorsOnEdit` and
+  `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
+  form does the same. MonitorForm itself is the shell: it owns the state and
+  submit of the types it edits inline (http, ping, dns, synthetic) and draws
+  their fields through field-only editors (`HttpMonitorForm`, `DnsEditor`,
+  `SyntheticApiEditor`, `SyntheticBrowserEditor`); synthetic "Test now" is
+  `useSyntheticLiveTest`. Labelled fields in a type form are
+  `components/ui/FormField`; form-kit's `FormInput`/`FormSelect`/
+  `FormTextarea` are only for those inline editors. Form layout is form-kit
+  too: sections are `FormPanel`, settings are
+  `FormRow`/`ToggleRow`, the sticky bar is `FormActionBar`, and the form
+  root carries `data-form-stack`; MonitorForm's shell switches the
+  two-column (section rail + card) layout on from its measured width
+  (`useWideForm`). Child forms update state functionally
+  (`setFormData((prev) => …)`): AlertingSection fires two changes in one
+  event when switching to Custom.
+- **Monitor form payloads are pure and pinned**: every form's initial state
+  and submitted request come from `lib/monitor-form/` (`initial*FormState`,
+  `build*Request`; the shared envelope is `common.ts`), never from inline
+  `handleSubmit` code. `lib/monitor-form-*.test.ts` assert the exact wire
+  JSON of every type's create and edit round trip (and of a clone for the
+  delegated types and http), so a payload change shows up as a test diff;
+  a field a form hydrates goes into its type's edit fixture.
 
 ## Build, test, verify
 
@@ -359,28 +747,59 @@ or imported groups come back empty. Any other path that creates groups through
   there: `go build ./...`, then `go test` scoped to what you touched
   (`go test ./api/...`, `go test ./shared/notifications/...`). `make test`
   runs the whole module with `-race` (skipping `scripts/`); `make lint` fails
-  on gofmt drift or `go vet` findings. The full api suite takes >2 min — run
+  on gofmt drift, `go vet` findings in either build mode, or an
+  integration file missing its build tag. The full api suite takes >2 min — run
   it in the background.
-- Tests sit next to the code; database- or queue-backed ones are
-  `*_integration_test.go`, with no build tag, so plain `go test` runs them.
+- Tests sit next to the code; external-service, browser and binary-backed
+  cases are `*_integration_test.go` with `//go:build !unit`. Plain `go test`
+  and `make test` still run everything; `make test-unit` / `go test -tags=unit`
+  exclude those files. Anything a plain `*_test.go` calls must live in an
+  untagged file, or only `-tags=unit` builds break. CI checks that every
+  `*_integration_test.go` carries the tag and runs the fast job without
+  Docker, so a Docker-backed test in a plain file fails there; it cannot
+  detect other misclassified dependencies (Chrome, binaries).
   `testutil.SetupPostgresDB` uses testcontainers and fails (not skips)
   without a Docker daemon — then set
   `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`
   (role needs CREATEDB) and each test gets a scratch database on that server.
-- CI's Go job logs the whole module with `-v`, far past any log tail; a
-  failure is repeated by its "Summarize test failures" step (end of the job
-  log, step summary, check-run annotations) — read that, not the log head.
+  The SIPp INVITE test (`worker/.../sip_invite_integration_test.go`) is no
+  database test and skips instead when no Docker provider is reachable (CI
+  still fails that skip). Its `media/*` subtests run SIPp's `-rtp_echo` on a
+  fixed UDP port published on the host's `127.0.0.1` (the templated
+  `uas_echo.xml.tmpl` names it), so they need a local daemon (Docker Desktop
+  or the runner's dockerd); a remote `DOCKER_HOST` fails them, never skips.
+- CI runs a fast Go job and three complete package groups with `-race`;
+  each full group gets one Postgres service via `PROBARA_TEST_POSTGRES_DSN`.
+  `scripts/ci.py` under `.github/workflows/` owns package assignment, JSON
+  failure/timing summaries, unexpected-skip checks and coverage merging.
+  The aggregate keeps the required `Go test (main module)` check name.
+  `docs/testing.md` documents the suites, intentional optional skips and
+  conservative AI checkpoint selection; update it when changing the workflow.
 - Web/website: CI runs `npm run lint`, `npx tsc --noEmit` and `npm run build`
   in both (`website/` lint allows no warnings), plus `npm test` in `web/`.
   Run the same in whichever one you touched.
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).
+  After touching local AI values, templates, Compose, the Makefile or the
+  start script, run `python .github/workflows/scripts/local_ai_helm_cases.py`
+  and `python3 -I scripts/check-local-ai-packaging.py` (render cases, fail
+  cases and Compose wiring; CI runs both in `local-ai-pr.yml`).
 - Compose: `docker compose config` validates env wiring.
+- ai-service: from the repo root with the hash-locked deps installed
+  (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
+  PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests
+  .github/workflows/scripts -q`. Real-base and real-checkpoint tests skip
+  unless `PROBARA_LAYA_BASE` / `LOCAL_AI_ARTIFACT` are set, dataset-backed
+  ones unless `python ai-service/training/generate.py --output
+  ai-service/artifacts/dataset` has run (CI generates it first). Never run training,
+  `validate_cpu.py` or the image build casually: they take hours or download
+  the ~650 MB base.
 
 ## Local dev environment
 
-- `make start-all-local` is the usual stack: Compose runs only postgres
-  (`probara`/`probara`, :5432) and nats (:4222, monitoring :8222); the
+- `make start-all-local` is the usual stack: Compose runs postgres
+  (`probara`/`probara`, :5432), nats (:4222, monitoring :8222) and local-ai
+  (:8090, below); the
   target applies migrations, builds the collector binaries, then runs the Go
   services as local processes (binaries in `/tmp/probara-bin`, logs in
   `/tmp/probara-<service>.log`) and the UI as `next dev`. HTTP/metrics
@@ -390,6 +809,22 @@ or imported groups come back empty. Any other path that creates groups through
   instead run the backend in Compose (`docker-compose.yml` defines every
   service). Dex (test OIDC IdP, :5556) is opt-in in either mode:
   `docker compose --profile sso up -d dex`.
+- AI analysis is local only and default-on: api and the DB-connected worker
+  call `ai-service` at `LOCAL_AI_URL` with `LOCAL_AI_TOKEN` (`shared/config`
+  `loadLocalAIConfig`); absent workspace `ai_settings` rows default enabled.
+  Both `make start-all-local` and the Compose targets run it as the Compose
+  service `local-ai` on `127.0.0.1:8090`, started after the platform (in the
+  background for `start-all-local`) so a slow or failed image build never
+  blocks it; `LOCAL_AI_DISABLED=true` skips it. Building the image needs the
+  Git LFS head weights (`git lfs pull --include
+  'ai-service/artifacts/*/head.safetensors'`); a local build is reused until
+  `docker compose build local-ai`.
+  The local-process stack keeps a per-checkout token in the gitignored
+  `.dev-local-ai-token`; plain Compose falls back to a fixed, public
+  development token (loopback-only). If the image cannot be pulled or built
+  (the build fetches the pinned base from Hugging Face), AI reports
+  unavailable and the platform runs on. `LLM_*` and tenant
+  provider settings are retired.
 - The start script refuses any Go except the minor on `go.mod`'s `go` line
   (1.26.x). With a newer local Go, prefix the command:
   `GOTOOLCHAIN=go1.26.7 make start-all-local`.
@@ -400,6 +835,16 @@ or imported groups come back empty. Any other path that creates groups through
   `00000000-0000-0000-0000-000000000001`.
 - API auth is cookie-based: POST `/api/v1/auth/login`, keep a cookie jar, and
   pass `tenant_id` as a query param on tenant-scoped routes.
+- `make seed-demo` (re)builds the Northwind demo tenant
+  (`00000000-0000-0000-0000-00000000d3e0`, ~150 monitors, 110 days of
+  history) and leaves `seed-demo targets` running in the background (under
+  `caffeinate -i` on macOS; mock ports 19100–19199 behind
+  `*.northwind.localtest.me` hostnames, which need public DNS; three location
+  workers; log `/tmp/probara-seed-targets.log`; stop with
+  `make seed-demo-stop`). It only
+  ever deletes its own tenant and `@northwind.example` users. Its history
+  writer encodes the rollup/interval invariants in
+  `scripts/seed-demo/README.md` — keep it in step when those rules change.
 - Locally running binaries are stale after code changes — verify new worker/
   api behavior through unit tests, or restart the processes
   (`scripts/start-local-services.sh` rebuilds and restarts just the Go
@@ -441,11 +886,110 @@ or imported groups come back empty. Any other path that creates groups through
   `RawPruneCutoffSQL` (one hour lower, same DB clock), and skips buckets with
   a pending mark (`checkResultNotPendingRollup`). Change the pair together.
 - `expected_status` etc. reuse `HTTPStatus` fields for non-HTTP protocols
-  (SIP status codes ride in `http_status`).
+  (SIP status codes ride in `http_status`; for an INVITE it is the final
+  INVITE code, the 18x in ring mode, never the BYE's).
 - SIP dev against the host: `SIP_LOCALHOST_AS_HOST_GATEWAY=true` rewrites
-  loopback targets to `host.docker.internal` (compose worker only).
+  each loopback target host (configured host or SRV target) to
+  `host.docker.internal` before resolving it; the Compose worker and
+  `start-local-services.sh` (local-process workers) both default it on.
+- SIP resolves its own targets (`sip_resolve.go`: A/AAAA, or opt-in RFC
+  3263 NAPTR (`sip_naptr.go`, best effort) and SRV with failover) into
+  IP-literal candidates; each attempt dials one through `dialGuard`. SIP
+  TLS identity is `tls_server_name` or the configured host, never an SRV
+  target.
+- SIP signalling rides one flow per attempt: every request, response and
+  answer to a server-sent request goes over the connection `dialSIP` opened
+  through `dialGuard` (`worker/internal/worker/sip_flow.go`); never dial a
+  Contact, Via, Record-Route or SDP address for signalling (in a call's
+  dialogs they only fill the Request-URI and Route headers). Call media
+  writes RTP/RTCP only from the call's bound, unconnected pair, only to
+  addresses `netguard.Policy.AllowsServerChosen` admits (`prepareMedia`, the
+  latch; RTCP only to the media destination's IP),
+  starts only at HOLDING entry and stops first thing in `teardown`, so no
+  RTP follows a BYE; its error and warning text never names an address
+  (`present.Build` copies it into every notification). Requests are client
+  transactions in `sip_txn.go` (Timer E on UDP, matched by Via branch + CSeq
+  method).
+- INVITE responses reach `sipCall.onResponse` on the dispatcher goroutine,
+  which sends every ACK itself (non-2xx in-transaction, each 2xx per To tag,
+  re-sent for retransmissions) so ACKs go out during CANCEL/BYE waits and the
+  post-result linger; keep them there. The 2xx ACK repeats the INVITE's
+  credentials; CANCEL and the non-2xx ACK carry none.
 - `alert_policies` are retired (API returns 410); workspace alert config
   lives on tenants via `/notification-settings`.
+- **AI analysis timing**: the worker's stale-pending sweep
+  (`worker/internal/airca/sweep.go`, 20 min, 30 min lock ceiling) must outlast
+  one delivery (`LOCAL_AI_TIMEOUT_SECONDS` max 300 s + 30 s) and the
+  unlocked unavailable-retry window (`unavailableRetryWindow`); compile-time
+  guards there pin both, so raise them together. Analysis failure messages
+  carry no trailing period or retry instruction: `AIRootCausePanel` renders
+  "Analysis failed: <message>. Try again.".
+  A local AI that cannot take a call right now returns `ai.ErrUnavailable`
+  (`shared/ai/provider.go`: 429/502/503/504, refused/reset/DNS — not a
+  model timeout); both job consumers NAK it with `deliveryRetryDelay`
+  (`jobrun.go`, capped by `unavailableRetryMax`, which the relay's
+  `triageFailAfter` guard counts) instead of recording a verdict.
+- **AI triage timing**: the relay/consumer windows live as constants with
+  compile-time guards in `worker/internal/airca/relay.go` and `triage.go`
+  (15 s tick, 6 h lookback — the value is `ai.TriageLookback` in
+  `shared/ai/settings.go`, aliased by relay.go's `triageLookback` — claim wait
+  `GREATEST(delay, LEAST(2×interval, 1 h))`, 3 min republish, 30 min run timeout from `started_at`, not-started
+  timeout = stream max age 1 h + 10 min). Republishes must land inside the
+  `AI_TRIAGE` Duplicates window (30 min), and the relay and consumer must
+  provision the stream through the same `triageSpec`/`ensureStream`, or one
+  side's restart resets that window. Incident and alert evidence share
+  `buildEvidence` in `context.go`; never fork the window/evidence SQL. The
+  claim and cap SQL is `relayClaimSQL`; the settings ranges are pinned in
+  migration 000094, `aisettings` and `web/lib/ai-triage.ts` together.
+  Triage eligibility (open, lookback, live monitor, workspace AI +
+  auto-triage on) is `ai.TriageClaimableAlertSQL`/`ai.TriageSettingsEnabledSQL`
+  in `shared/ai/settings.go`; `relayClaimSQL` and `triageview.ClaimableExpr`
+  (the SLA report's pending vs. untriaged split) both build from them — never
+  re-type the clause. The SLA service takes the kill switches
+  (`aiTriageOff`) and uses `FALSE` for claimable under them.
+- **Local AI release gate**: `release_approved` comes only from
+  `ai-service/training/validate_cpu.py`; `probara_ai/gate.py` is the
+  predicate and `verify_artifact` recomputes it from `cpu-evaluation.json`,
+  so editing the flag approves nothing. Never set it by hand. The image build
+  fails for an unapproved shipped artifact (`ARG MODEL_VERSION` in
+  `ai-service/Dockerfile`, which CI also reads), `docker-build` skips the
+  `-local-ai` image, and `release.yml` refuses to tag while it is unapproved.
+  `docker-build` builds `-local-ai` on release tags only, and after each
+  tagged push checks the image is anonymously pullable (a new GHCR package
+  starts private; `docs/local-ai.md` has the one-time fix). `release.yml`
+  first runs `local_ai_artifact.py sources` (laya commit + HF revision still
+  served); mirrors go in the `LAYA_GIT_URL` / `HF_ENDPOINT` build args.
+- **Helm image tags default to the chart's `appVersion`**
+  (`monitoring-platform.imageTag`, used by every Probara image): releases
+  push each image under its version, while `latest` exists only for stable
+  releases. Never default a tag to `latest`.
+- **Local AI artifacts are head-only**: `artifacts/<version>/` commits
+  `head.safetensors` plus metadata and `manifest.json`; tokenizer and encoder
+  come from the base pinned in `ai-service/training/base-lock.json` (HF
+  revision + per-file sha256, plus a `normalized` hash for the tokenizer
+  config laya rewrites), fetched at build time by `training/upstream.py` and
+  composed by `training/compose_artifact.py`, which refuses output differing
+  from the manifest's `composed` hashes. Manifest `version`, `catalogue`,
+  `state_format`, `base`, `upstream_commit` and `head_sha256` are immutable:
+  change one and it is a new version.
+- **Git LFS covers only `ai-service/artifacts/*/head.safetensors`**
+  (`.gitattributes`). Every CI checkout uses `lfs: false`; only the
+  `local-ai` job in `build-test.yml` (every head, cached) and an approved
+  local-ai image build in `docker-build.yml` (tags) / `local-ai-pr.yml` (the
+  shipped checkpoint's head only) run `git lfs pull --include` (bandwidth is
+  metered). Keep new LFS patterns and pulls equally narrow.
+- **Evidence `state_format` is pinned per artifact**: `contract.py`
+  `STATE_FORMAT` versions the evidence-to-text rendering; the manifest's
+  `state_format` (absent = 1) is what the runtime renders and what the
+  validation corpus must use. Add a new format for any wording change, never
+  edit an existing renderer (`training/history/` regenerates old corpora
+  byte for byte).
+- **Signed NATS structs** (`LocationHeartbeat`, `CheckResultMessage` and
+  its `MeshResultInfo`) are verified by re-marshalling the receiver's struct
+  (`locationauth.VerifyJSON`), so a new non-empty field breaks older
+  verifiers (an omitempty field left empty does not). Extend inside
+  `metrics_data` or reuse `LocationHeartbeat.Version`;
+  `TestSignedNATSStructsFrozen` (`scheduler/internal/ingest`) pins them.
 - **`monitor_state_intervals` is SLA history.** Nothing prunes it by time,
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what

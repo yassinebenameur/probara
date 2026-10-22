@@ -93,6 +93,11 @@ export const API_PAGE: DocPage = {
               description:
                 "Used only in `/api/v1/push/{token}`. No cookie or bearer key is required because possession of the URL token authorizes a heartbeat.",
             },
+            {
+              term: "MCP access token",
+              description:
+                "`Bearer pbm_at_…`, issued to an AI agent by the [MCP sign-in](/docs/mcp/#authentication). Valid only on `/api/v1/mcp`: every tool call there runs as one of the routes below with the same checks. A direct REST call with it returns 401.",
+            },
           ],
         },
         {
@@ -170,7 +175,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only.",
+            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only. The [AI label routes](#ai-labels) persist operator verdicts, so they are writes: viewers and read keys get HTTP 403.",
         },
       ],
     },
@@ -189,11 +194,15 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "Monitors",
-              "`tag` (repeatable where supported), `enabled`, `page`, `page_size` (default 20, max 100)",
+              "`tag` (repeatable where supported), `enabled`, `page`, `page_size` (default 20, max 100); newest first by creation time, ties broken by id, so pages never overlap",
             ],
             [
               "Monitor results",
               "`limit`, optional RFC 3339 `since`",
+            ],
+            [
+              "Batch monitor results",
+              "`ids` (comma-separated or repeated, up to 100), `limit` per monitor (default 20, max 100)",
             ],
             [
               "Monitor analytics",
@@ -243,11 +252,15 @@ export const API_PAGE: DocPage = {
             ["`DELETE /api/v1/monitors/{id}`", "Soft-delete a monitor"],
             [
               "`POST /api/v1/monitors/{id}/run`",
-              "Queue a persisted on-demand check",
+              "Queue a persisted on-demand check (refused with 400 for `group`, `push` and `agent` monitors, which never run a check of their own)",
             ],
             [
               "`GET /api/v1/monitors/{id}/results`",
               "List raw check results",
+            ],
+            [
+              "`GET /api/v1/monitors/results/batch?ids=...&limit=20`",
+              "The newest results for up to 100 monitors in one request, plus each group's direct member ids (see below)",
             ],
             [
               "`GET /api/v1/monitors/{id}/metrics-snapshots?range=24h`",
@@ -279,11 +292,16 @@ export const API_PAGE: DocPage = {
             '{\n  "name": "Public API",\n  "type": "http",\n  "config": {\n    "url": "https://api.example.com/health",\n    "method": "GET",\n    "expected_status_classes": ["2xx"],\n    "json_assertions": [\n      {"path": "status", "op": "equals", "value": "ok"}\n    ],\n    "max_latency_ms": 1500\n  },\n  "interval_seconds": 60,\n  "timeout_seconds": 15,\n  "enabled": true,\n  "tags": ["api", "production"],\n  "consecutive_failures_threshold": 2,\n  "notification_mode": "default",\n  "location_ids": [],\n  "location_quorum": 1\n}',
         },
         {
+          type: "paragraph",
+          text:
+            "`GET /monitors/results/batch` answers `{\"limit\", \"results\": {monitor_id: [...]}, \"members\": {group_id: [member_id, ...]}}`. Each `results` list is what `GET /monitors/{id}/results?limit=N` returns for that monitor: a group's list merges its nested members' newest results under a derived group-status row, and `members` lists a group's direct members (by name). Ids that are not live monitors of the workspace are left out rather than failing the request; more than 100 ids, a malformed id, or a `limit` outside 1-100 is a 400. Raw results are kept 30 days, so a monitor that has not run for longer than that comes back with an empty list (here and on the per-monitor endpoint alike). Viewers and read-scope keys may call it.",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Test and run have different side effects",
           text:
-            "`POST /monitors/test` is allowed for viewers/read keys because it is compute-only. `POST /monitors/{id}/run` publishes a normal job, stores the result, changes state, and can trigger alerts, so it requires write permission.",
+            "`POST /monitors/test` is allowed for viewers/read keys because it is compute-only. `POST /monitors/{id}/run` publishes a normal job, stores the result, changes state, and can trigger alerts, so it requires write permission. For a SIP test-call monitor (`method: invite`) both place a real call, so both, like creating or changing one, need a signed-in tenant admin or superadmin; every API key gets HTTP 403.",
         },
       ],
     },
@@ -329,7 +347,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/monitors/dependency-suggestions`",
-              "Compute advisory AI suggestions without saving edges",
+              "Compute advisory AI suggestions without saving edges. 503 `not_configured` when local AI is off; 503 `unavailable` with `Retry-After` while the service is busy or restarting",
+            ],
+            [
+              "`POST /api/v1/monitors/dependency-suggestions/label`",
+              "Write; record an operator verdict on a suggestion as an [AI label](#ai-labels)",
             ],
             [
               "`POST /api/v1/monitors/bulk/alerting`",
@@ -492,7 +514,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Overview ranges are `1h`, `24h`, `7d`, `30d`, `90d`, and `365d`, defaulting to `24h`. Dashboard group rows are tag-derived presentation, not group-monitor resources.",
+            "Overview ranges are `1h`, `24h`, `7d`, `30d`, `90d`, and `365d`, defaulting to `24h`. Dashboard group rows are tag-derived presentation, not group-monitor resources. Problem monitors are ordered by current state (down, degraded, unknown, up), then failed checks, before the limit applies, so a monitor that is down now is never cut. A group's `attention_count` counts members down or degraded now; failures earlier in the range show only in its uptime.",
         },
       ],
     },
@@ -506,14 +528,14 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET /api/v1/alerts`",
-              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`); items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
             ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
               "`GET /api/v1/alerts/stream`",
               "Authenticated server-sent event stream",
             ],
-            ["`GET /api/v1/alerts/{id}`", "Alert detail"],
+            ["`GET /api/v1/alerts/{id}`", "Alert detail; a labelable `triage` also carries `label_context`"],
             [
               "`POST /api/v1/alerts/{id}/acknowledge`",
               "Mark an open condition acknowledged",
@@ -521,6 +543,18 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/alerts/{id}/resolve`",
               "Manually close an alert lifecycle",
+            ],
+            [
+              "`POST /api/v1/alerts/bulk/acknowledge`",
+              "Write; acknowledge many alerts, body `{\"ids\": [...]}` (1-500). Never all-or-nothing: HTTP 200 with `items` (the alerts acknowledged, in their new state) and `failed` (`{id, reason}`, reason `not_found` (missing, another tenant's, or its monitor was deleted), `already_acknowledged` or `already_resolved`). Each requested alert gets its own `alert.acknowledge` audit event, as the single endpoint records it, with `details.bulk`",
+            ],
+            [
+              "`POST /api/v1/alerts/bulk/resolve`",
+              "Write; resolve many open alerts, same body and response shape (reason `not_found` or `already_resolved`), one `alert.resolve` audit event per alert",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/triage/label`",
+              "Write; confirm or correct a ready triage as an [AI label](#ai-labels)",
             ],
             [
               "`GET /api/v1/alert-channels`",
@@ -571,6 +605,11 @@ export const API_PAGE: DocPage = {
           text:
             "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints under `/alerts/counts/...` should not be used as a supported policy-management model. See [retired alert policies](/docs/alerting/#retired-policies).",
         },
+        {
+          type: "paragraph",
+          text:
+            "Alert reads (list, detail, recent alerts, and the acknowledge and resolve responses) and the `alerts[]` of `GET /incidents/{id}` include a read-only `triage` object when the alert has a triage row. The object is omitted when there is no row, and stream events never carry it. Fields that do not apply are `null`: `id`, `status` (`pending`, `ready`, `failed`, `skipped`), `hypothesis` (catalogue key) and `title`, `confidence` (`low`, `medium`, `high`) and `summary` when ready, `skip_reason` (`resolved`, `cooldown`, `not_modeled`, `disabled`) when skipped, `error_message` (a fixed string) when failed, `created_at` (claim time), `completed_at`, `labelled`, and `labelable` (ready and at least one decision was sent to the model). Only `GET /alerts/{id}` adds `label_context`, in the same shape as an incident analysis's, when the triage is labelable.",
+        },
       ],
     },
     {
@@ -619,13 +658,96 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/incidents/{id}/ai-analysis`",
-              "Queue tenant-configured asynchronous analysis",
+              "Queue asynchronous local AI analysis; a queueing failure records the run as failed",
             ],
             [
               "`GET /api/v1/incidents/{id}/ai-analysis`",
               "Read pending, ready, or failed analysis state",
             ],
+            [
+              "`POST /api/v1/incidents/{id}/ai-analysis/label`",
+              "Write; confirm or correct a ready analysis as an [AI label](#ai-labels)",
+            ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "A ready analysis that can be labelled also carries `label_context` on the analysis GET and on `GET /incidents/{id}`: `catalogue_version`, the incident-level `predicted` key, the selectable `choices` (`key`, `title`), one entry per monitor decision (`id`, `monitor_id`, `monitor_name`, which is null once the monitor is purged, and `predicted`), and the current `label` or null. It is omitted for pending, failed and legacy analyses, analyses that sent no decisions, and analyses completed before labels existed. The analysis GET and `GET /incidents/{id}` also add `monitor_names`, a map from each monitor ID cited in `metadata` (evidence references and incomplete-evidence notes) to the monitor's current name; purged monitors are absent, and the map is omitted when nothing resolves.",
+        },
+      ],
+    },
+    {
+      id: "ai-labels",
+      title: "AI label endpoints",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Method and path", "Who and purpose"],
+          rows: [
+            [
+              "`POST /api/v1/incidents/{id}/ai-analysis/label`",
+              "Editor, admin, superadmin or write key; label an incident analysis",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/triage/label`",
+              "Editor, admin, superadmin or write key; label an alert's automatic triage",
+            ],
+            [
+              "`POST /api/v1/monitors/dependency-suggestions/label`",
+              "Editor, admin, superadmin or write key; label a dependency suggestion",
+            ],
+            [
+              "`POST /api/v1/ai-labels/export`",
+              "Tenant admin or superadmin session only (no API key); download training rows",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Bodies are strict JSON up to 64 KiB, and unknown fields are rejected with `validation_error`, so evidence can never be supplied: the server copies it from the stored decision snapshot or recomputes it. Labelling never calls the model and works with local AI disabled. A label is one row per analysis, triage or unordered monitor pair; sending again replaces the verdict and answers (latest wins). Every label route returns the label: `subject_type`, `subject_id` (analyses and triages only), `verdict`, `incident_label` (for a triage, its alert-level cause), `answers` keyed by opaque decision ID (`label`, plus `source`: `operator`, `confirmed` or `propagated`), `catalogue_version`, `model_version`, `labeled_by` (null for API keys) and `labeled_at`.",
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Incident analysis label",
+          code:
+            '{\n  "analysis_id": "<optional; defaults to the newest ready analysis>",\n  "verdict": "corrected",\n  "incident_label": "dns_failure",\n  "answers": { "<decision id>": "insufficient_evidence" }\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "`verdict` is `confirmed` or `corrected`. Confirming keeps every decision's shown answer and accepts `incident_label` only when it equals the prediction; correcting requires an `incident_label` from the analysis's choices. Optional `answers` override single decisions. Errors: `400 validation_error` (bad verdict, a cause or override that is not a choice of that decision, unknown decision ID), `404 not_found` (incident or `analysis_id` not in this tenant), `409 analysis_not_ready` (pending, failed, or no ready analysis), `409 analysis_not_labelable` (legacy, no-decision, or pre-label analysis).",
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Alert triage label",
+          code:
+            '{\n  "verdict": "corrected",\n  "label": "dns_failure",\n  "answers": { "<decision id>": "insufficient_evidence" }\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "The triage label works like the incident analysis label, with `label` in place of `incident_label`. Confirming accepts `label` only when it equals the triage's hypothesis, and correcting requires one of its choices. The label is stored with subject type `alert_triage`, and its evidence comes from the triage's stored decision snapshot. Errors: `400 validation_error` (bad verdict, a cause or override that is not a choice, unknown decision ID, unknown fields), `404 not_found` (alert not in this tenant), `409 triage_not_ready` (no triage, or one that is pending, failed or skipped), `409 triage_not_labelable` (the triage sent no decisions).",
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Dependency suggestion label",
+          code:
+            '{\n  "monitor_id": "<dependent monitor>",\n  "depends_on_id": "<suggested upstream>",\n  "verdict": "rejected",\n  "corrected": "reversed"\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "`verdict` is `confirmed` or `rejected`; `corrected` is allowed only with `rejected` and is `reversed`, `shared_upstream`, `insufficient_evidence` or `no_dependency` (the default). Either orientation addresses the same pair. Errors: `400 validation_error` (identical or malformed IDs, bad verdict), `404 not_found` (a monitor is not a live monitor of this tenant), `409 pair_evidence_unavailable` (the pair is no longer a candidate: disabled, a group, outside the 250-monitor set, or no shared signal left).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Export takes an optional body with `since` and `until` (RFC 3339, a half-open window on the label's last update) and `subject_types` (`incident_analysis`, `alert_triage`, `dependency_pair`); an empty body exports everything, and an inverted window or unknown type is a `validation_error`. It returns `application/x-ndjson` as `probara-ai-labels-YYYYMMDD.jsonl` with `X-Probara-Export-Rows` and `X-Probara-Export-Skipped` headers: one training row per decision, and rows whose stored evidence fails validation are skipped and counted. Triage rows share a split group with the earliest incident that links the alert, or form their own group when none does. More than 5,000 labels or 20,000 rows returns `400 export_too_large`; narrow the window. Rows contain no identifiers (see [security](/docs/security/#notifications-integrations-ai)).",
         },
       ],
     },
@@ -816,7 +938,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/audit-log`",
-              "Tenant admin; filtered [audit records](/docs/administration/#audit)",
+              "Tenant admin; filtered, sortable [audit records](/docs/administration/#audit)",
             ],
             [
               "`GET /api/v1/audit-log/actions`",
@@ -824,15 +946,15 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/ai-settings`",
-              "Authenticated; effective tenant-safe settings",
+              "Authenticated; workspace switch, installation switch, cached local-service readiness, and the auto-triage settings (`auto_triage_enabled`, `triage_delay_seconds`, `triage_cooldown_seconds`, `triage_max_per_hour`, `triage_notifications_enabled`)",
             ],
             [
               "`PUT /api/v1/ai-settings`",
-              "Authorized write; replace tenant AI configuration",
+              "Authorized write; partial update of `enabled` and the five auto-triage fields (at least one; ranges in [AI settings](/docs/administration/#ai-settings)); unknown fields are rejected",
             ],
             [
               "`POST /api/v1/ai-settings/test`",
-              "Compute-only provider connection test",
+              "Fresh local-service readiness probe; refreshes this replica's readiness cache",
             ],
             [
               "`GET /api/v1/users`",

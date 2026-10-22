@@ -1,169 +1,124 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Search, Tag as TagIcon } from 'lucide-react';
-import TagPill from './TagPill';
+import { useEffect, useMemo, useRef } from 'react';
+import { Tag as TagIcon, X } from 'lucide-react';
+import FilterPopover, { type FilterOption } from '@/components/ui/FilterPopover';
+import { FOCUS_RING } from '@/components/ui/focus';
+import TagPill, { getTagColor } from './TagPill';
 
 export interface TagOption {
   tag: string;
-  count: number;
+  /** Monitors wearing the tag; omit when the caller has no counts. */
+  count?: number;
 }
 
 interface TagFilterProps {
   tags: TagOption[];
-  selected: Set<string>;
-  onToggle: (tag: string) => void;
-  onClear: () => void;
-  // Tags a workspace accumulates can run into the hundreds; the list keeps its
-  // own search so the panel never grows past a few rows of scroll.
-  visibleLimit?: number;
+  selected: ReadonlySet<string>;
+  onChange: (next: Set<string>) => void;
+  /**
+   * Picking tags as a value (an SLA's scope) rather than filtering a list:
+   * names the popup "Choose tags", and the chip counts while the chosen tags
+   * read as pills beside it, since a form field should show its whole value.
+   */
+  asValue?: boolean;
+  /**
+   * The chip's accessible name when "Tags" alone is ambiguous: the SLA form
+   * has a second Tags chip (MonitorMultiSelect's filter) in the same dialog.
+   */
+  accessibleLabel?: string;
+  className?: string;
 }
 
-// Collapsed chip row + expandable searchable tag list. Inline rather than a
-// floating popover so it can't be clipped by a modal's scroll container.
+/**
+ * Tag chip for the monitor pickers inside dialogs (MonitorMultiSelect, the
+ * SLA form) and the Settings dashboard groups: FilterPopover over the tags with their monitor counts, most used
+ * first, so a long tag list is searchable and never pushes the dialog's
+ * content down. The popup is portaled above the dialog and out of its focus
+ * trap (see FilterPopover).
+ */
 export default function TagFilter({
   tags,
   selected,
-  onToggle,
-  onClear,
-  visibleLimit = 80,
+  onChange,
+  asValue = false,
+  accessibleLabel,
+  className,
 }: TagFilterProps) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-
-  // Most-used tags first — that ordering is what makes a long list usable
+  // Most-used tags first: that ordering is what makes a long list usable
   // before anyone types anything.
-  const ordered = useMemo(
-    () => [...tags].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)),
+  const options = useMemo<FilterOption[]>(
+    () =>
+      [...tags]
+        .sort((a, b) => (b.count ?? 0) - (a.count ?? 0) || a.tag.localeCompare(b.tag))
+        .map(({ tag, count }) => ({ value: tag, label: tag, count, dotClassName: getTagColor(tag).dot })),
     [tags]
   );
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return ordered;
-    return ordered.filter((t) => t.tag.toLowerCase().includes(q));
-  }, [ordered, search]);
+  // A removed pill unmounts with focus on it: hand focus to the pill that
+  // took its place, else the one before, else the chip.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const refocusPill = useRef<number | null>(null);
+  useEffect(() => {
+    const index = refocusPill.current;
+    if (index === null) return;
+    refocusPill.current = null;
+    const pills = wrapRef.current?.querySelectorAll<HTMLElement>('[data-tag-remove]');
+    const target =
+      pills?.[Math.min(index, pills.length - 1)] ??
+      wrapRef.current?.querySelector<HTMLElement>('[data-filter-popover-trigger]');
+    target?.focus();
+  }, [selected]);
 
-  const visible = filtered.slice(0, visibleLimit);
-  const hidden = filtered.length - visible.length;
-  const selectedTags = ordered.filter((t) => selected.has(t.tag));
+  const popover = (
+    <FilterPopover
+      label="Tags"
+      noun="tag"
+      icon={<TagIcon strokeWidth={1.75} />}
+      options={options}
+      selected={selected}
+      onChange={onChange}
+      popupLabel={asValue ? 'Choose tags' : undefined}
+      clearLabel={asValue ? `Clear ${accessibleLabel ?? 'tags'}` : undefined}
+      accessibleLabel={accessibleLabel}
+      summarizeAsCount={asValue}
+      className={className}
+    />
+  );
+  if (!asValue) return popover;
 
+  // The chip counts; the value itself reads beside it, most used first, and
+  // each pill removes its tag in one click.
+  const chosen = [
+    ...options.filter((o) => selected.has(o.value)).map((o) => o.value),
+    ...Array.from(selected).filter((tag) => !options.some((o) => o.value === tag)),
+  ];
   return (
-    <div className="rounded-lg border border-white/[0.06] bg-slate-900/40">
-      <div className="flex items-center gap-2 px-2.5 py-2">
+    <div ref={wrapRef} className="flex flex-wrap items-center gap-1.5">
+      {popover}
+      {chosen.map((tag, index) => (
         <button
+          key={tag}
           type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="flex flex-shrink-0 items-center gap-1.5 text-[11px] font-medium text-slate-400 transition-colors hover:text-slate-200"
+          data-tag-remove=""
+          aria-label={`Remove ${tag}`}
+          title={`Remove ${tag}`}
+          onClick={() => {
+            refocusPill.current = index;
+            const next = new Set(selected);
+            next.delete(tag);
+            onChange(next);
+          }}
+          className={`group inline-flex items-center gap-0.5 rounded-full pr-1 transition active:scale-[.98] ${FOCUS_RING}`}
         >
-          {open ? (
-            <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-          )}
-          <TagIcon className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-          Tags
-          <span className="text-slate-600">
-            {selected.size > 0 ? `· ${selected.size} active` : `· ${tags.length}`}
-          </span>
+          <TagPill tag={tag} size="xs" />
+          <X
+            className="h-3 w-3 shrink-0 text-slate-500 transition-colors duration-fast group-hover:text-white"
+            strokeWidth={2}
+            aria-hidden="true"
+          />
         </button>
-
-        {/* Active tags stay visible with the panel closed; clicking one drops it. */}
-        {selectedTags.length > 0 && (
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-            {selectedTags.slice(0, 6).map(({ tag }) => (
-              <TagPill key={tag} tag={tag} size="xs" selected onClick={() => onToggle(tag)} />
-            ))}
-            {selectedTags.length > 6 && (
-              <span className="text-[10px] text-slate-500">+{selectedTags.length - 6}</span>
-            )}
-          </div>
-        )}
-
-        {selected.size > 0 && (
-          <button
-            type="button"
-            onClick={onClear}
-            className="ml-auto flex-shrink-0 text-[10px] text-slate-400 transition-colors hover:text-white"
-          >
-            Clear tags
-          </button>
-        )}
-      </div>
-
-      {open && (
-        <div className="border-t border-white/[0.06] p-2">
-          <div className="mb-1.5 flex items-center gap-2 rounded-md border border-white/[0.06] bg-slate-950/40 px-2 py-1.5">
-            <Search className="h-3.5 w-3.5 flex-shrink-0 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Find a tag…"
-              aria-label="Find a tag"
-              className="w-full bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none"
-            />
-          </div>
-
-          <div
-            className="dashboard-scroll max-h-40 overflow-y-auto"
-            role="listbox"
-            aria-multiselectable="true"
-            aria-label="Filter by tags"
-          >
-            {visible.length === 0 ? (
-              <p className="px-2 py-4 text-center text-[11px] text-slate-500">No tags match.</p>
-            ) : (
-              visible.map(({ tag, count }) => {
-                const isSelected = selected.has(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    onClick={() => onToggle(tag)}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                      isSelected ? 'bg-cyan-500/[0.08]' : 'hover:bg-white/[0.04]'
-                    }`}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded border transition-colors ${
-                        isSelected ? 'border-cyan-500 bg-cyan-500' : 'border-white/20 bg-slate-950/50'
-                      }`}
-                    >
-                      {isSelected && (
-                        <svg
-                          className="h-2 w-2 text-white"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={3}
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <TagPill tag={tag} size="xs" />
-                    </span>
-                    <span className="flex-shrink-0 text-[10px] tabular-nums text-slate-500">
-                      {count}
-                    </span>
-                  </button>
-                );
-              })
-            )}
-            {hidden > 0 && (
-              <p className="px-2 py-1.5 text-center text-[10px] text-slate-600">
-                {hidden} more — search to narrow the list
-              </p>
-            )}
-          </div>
-        </div>
-      )}
+      ))}
     </div>
   );
 }

@@ -50,3 +50,30 @@ func (agentUnavailableService) GenerateInstallCommand(context.Context, uuid.UUID
 func (agentUnavailableService) GenerateCollectorConfig(context.Context, uuid.UUID, uuid.UUID, string, string) (string, error) {
 	return "", nil
 }
+
+func TestEmbeddableAPIKeyRequiresWriteScopeAPIKey(t *testing.T) {
+	cases := []struct {
+		name  string
+		actor string
+		scope string
+		want  string
+	}{
+		{"write-scope api key", ctxpkg.ActorTypeAPIKey, "write", "pk_secret"},
+		{"read-scope api key", ctxpkg.ActorTypeAPIKey, "read", ""},
+		{"api key without scope", ctxpkg.ActorTypeAPIKey, "", ""},
+		{"user session", ctxpkg.ActorTypeAdminUser, "write", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/monitors/x/agent/install/script.sh", nil)
+			req.Header.Set("Authorization", "Bearer pk_secret")
+			ctx := ctxpkg.WithActorType(req.Context(), tc.actor)
+			if tc.scope != "" {
+				ctx = ctxpkg.WithAuthScope(ctx, tc.scope)
+			}
+			if got := embeddableAPIKey(req.WithContext(ctx)); got != tc.want {
+				t.Fatalf("embeddableAPIKey = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

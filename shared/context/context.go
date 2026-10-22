@@ -22,9 +22,14 @@ const (
 	ActorTypeKey contextKey = "actor_type"
 	// APIKeyIDKey is the context key for the authenticated API key ID
 	APIKeyIDKey contextKey = "api_key_id"
-	// AuthScopeKey is the context key for the API key scope (read/write)
+	// AuthScopeKey is the context key for the credential scope (read/write)
 	AuthScopeKey contextKey = "auth_scope"
+	// ViaKey marks a request dispatched on behalf of another channel (MCP)
+	ViaKey contextKey = "via"
 )
+
+// ViaMCP is the ViaKey value of a REST request an MCP tool call dispatched.
+const ViaMCP = "mcp"
 
 // Actor types stored under ActorTypeKey.
 const (
@@ -110,6 +115,22 @@ func IsSuperadmin(ctx context.Context) bool {
 	return ok && platformRole == "superadmin"
 }
 
+// IsTenantAdmin reports a superadmin, or a signed-in user (never an API key:
+// keys carry no admin ID) whose role in the selected tenant is admin. It is
+// the predicate behind the API's RequireTenantAdmin middleware and the
+// service-level gates that need the same answer outside a route, such as SIP
+// test-call monitors.
+func IsTenantAdmin(ctx context.Context) bool {
+	if IsSuperadmin(ctx) {
+		return true
+	}
+	if !IsAdmin(ctx) {
+		return false
+	}
+	role, ok := GetRole(ctx)
+	return ok && role == "admin"
+}
+
 // WithActorType adds the credential type to the context
 func WithActorType(ctx context.Context, actorType string) context.Context {
 	return context.WithValue(ctx, ActorTypeKey, actorType)
@@ -144,9 +165,13 @@ func GetAuthScope(ctx context.Context) (string, bool) {
 }
 
 // CanWrite reports whether the request identity may perform mutations:
-// superadmins always, members with an admin/editor tenant role, and API keys
-// with write scope.
+// superadmins, members with an admin/editor tenant role, and API keys with
+// write scope. A scope only ever narrows: a read-scope MCP OAuth grant held
+// by a superadmin stays read-only, so scope is checked before any role.
 func CanWrite(ctx context.Context) bool {
+	if scope, ok := GetAuthScope(ctx); ok && scope != "write" {
+		return false
+	}
 	if IsSuperadmin(ctx) {
 		return true
 	}
@@ -157,4 +182,15 @@ func CanWrite(ctx context.Context) bool {
 		return scope == "write"
 	}
 	return false
+}
+
+// WithVia records the channel a request was dispatched through (ViaMCP).
+func WithVia(ctx context.Context, via string) context.Context {
+	return context.WithValue(ctx, ViaKey, via)
+}
+
+// GetVia retrieves the dispatch channel, if any.
+func GetVia(ctx context.Context) (string, bool) {
+	via, ok := ctx.Value(ViaKey).(string)
+	return via, ok
 }

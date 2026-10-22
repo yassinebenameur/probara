@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import Link from 'next/link';
 import { getLocations } from '@/lib/api';
 import type { Location } from '@/lib/types';
@@ -23,6 +23,7 @@ export function LocationsSection({
   onLocationsLoaded,
 }: LocationsSectionProps) {
   const [locations, setLocations] = useState<Location[]>([]);
+  const quorumId = useId();
 
   useEffect(() => {
     getLocations({ page_size: 100 })
@@ -37,7 +38,7 @@ export function LocationsSection({
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-slate-500">
+      <p className="text-ui text-slate-400">
         Run this check from your private locations. None selected = the default platform fleet.
       </p>
 
@@ -51,7 +52,10 @@ export function LocationsSection({
       {locations.length === 0 && (
         <p className="text-xs text-slate-500">
           Create one under{' '}
-          <Link href="/locations" className="text-cyan-400 hover:text-cyan-300">
+          <Link
+            href="/locations"
+            className="font-medium text-cyan-300 underline decoration-cyan-300/40 underline-offset-2 hover:text-cyan-200 hover:decoration-cyan-300"
+          >
             Locations
           </Link>{' '}
           and deploy a worker there first.
@@ -60,22 +64,27 @@ export function LocationsSection({
 
       {selectedIds.length >= 2 && (
         <div>
-          <label className="mb-1.5 block text-xs font-medium text-slate-400">
+          <label htmlFor={quorumId} className="mb-1.5 block text-ui font-medium text-slate-300">
             Locations required down
           </label>
-          <input
-            type="number"
-            min={1}
-            max={selectedIds.length}
-            value={quorum}
-            onChange={(e) => {
-              const raw = Number(e.target.value);
-              if (Number.isNaN(raw)) return;
-              onQuorumChange(Math.min(Math.max(raw, 1), selectedIds.length));
-            }}
-            className="input max-w-[8rem]"
-          />
-          <p className="mt-1 text-xs text-slate-500">
+          <span className="flex items-center gap-2">
+            <input
+              id={quorumId}
+              type="number"
+              min={1}
+              max={selectedIds.length}
+              value={quorum}
+              onChange={(e) => {
+                const raw = Number(e.target.value);
+                if (Number.isNaN(raw)) return;
+                onQuorumChange(Math.min(Math.max(raw, 1), selectedIds.length));
+              }}
+              aria-describedby={`${quorumId}-hint`}
+              className="input input-sm !w-24 tabular-nums"
+            />
+            <span className="text-xs text-slate-500">of {selectedIds.length}</span>
+          </span>
+          <p id={`${quorumId}-hint`} className="mt-1 text-xs text-slate-500">
             Down when at least this many locations fail; fewer failing = Degraded.
           </p>
         </div>

@@ -1,3 +1,5 @@
+//go:build !unit
+
 package alerts_test
 
 import (
@@ -35,7 +37,7 @@ func TestAlertsWithoutPolicyAreVisible(t *testing.T) {
 	svc := alertsvc.NewService(dbClient, nil)
 
 	t.Run("ListAlerts returns NULL-policy alert", func(t *testing.T) {
-		resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{})
+		resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{}, alertsvc.ListSort{})
 		require.NoError(t, err)
 		require.Equal(t, 1, resp.Total, "Total must include NULL-policy alert")
 		require.Len(t, resp.Items, 1, "Items must include NULL-policy alert")

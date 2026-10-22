@@ -1,0 +1,2 @@
+# Local training/compose cache (base checkpoint, composed artifacts, score caches).
+.cache/

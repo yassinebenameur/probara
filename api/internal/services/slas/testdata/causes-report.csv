@@ -1,0 +1,43 @@
+SLA,Checkout platform
+Period,2026-09,2026-09-01T02:00:00+02:00,2026-10-01T02:00:00+02:00
+Effective end,2026-10-01T02:00:00+02:00
+Closed,true
+Timezone,Europe/Paris
+Aggregation,mean
+Degraded counts as down,false
+Target %,99.9
+Availability %,99.86111
+Coverage %,100.000
+Met,false
+Eligible seconds,2592000
+Down seconds,3600
+Excluded seconds,0
+Budget allowed seconds,2592
+Budget consumed seconds,3600
+Budget remaining seconds,-1008
+Outages,1
+MTTR seconds,3600
+Alerts,1
+Acknowledged alerts,1
+MTTA seconds,600
+Generated at,2026-10-02T14:00:00+02:00
+Note,checkout has no state history before 2026-09-02 00:00 CEST; the earlier part of the period is untracked.
+
+Date,Availability %,Coverage %,Down seconds
+2026-09-10,99.86111,100.000,3600
+
+Monitor,Monitor ID,Type,Availability %,Coverage %,Available seconds,Unplanned down seconds,Planned down seconds,Paused seconds,Unknown seconds,Untracked seconds,Outages
+checkout,6f1c2a7e-0d4b-4a8e-9a51-1d2f3e4a5b6c,http,99.86111,100.000,2588400,3600,0,0,0,0,1
+
+Outage scope,Monitor ID,Start,End,Duration seconds,Planned seconds,Unplanned seconds,Started before period,Ongoing,Cause key,Suspected cause
+checkout,6f1c2a7e-0d4b-4a8e-9a51-1d2f3e4a5b6c,2026-09-10T12:00:00+02:00,2026-09-10T13:00:00+02:00,3600,0,3600,false,false,dns_failure,DNS resolution failure
+search,7a2d3b8f-1e5c-4b9f-8a62-2e3f4a5b6c7d,2026-09-20T05:00:00+02:00,2026-09-20T05:10:00+02:00,600,0,600,false,false,no_alert,No alert
+
+Attributed monitor outages,2
+Triaged monitor outages,1
+Pending monitor outages,0
+Unplanned seconds (summed per monitor),4200
+
+Suspected cause,Key,Kind,Monitor outages,Overlapping alerts,Monitors,Unplanned seconds (summed per monitor),Operator-confirmed outages,Operator-corrected outages
+DNS resolution failure,dns_failure,suspected,1,1,1,3600,0,1
+No alert,no_alert,no_alert,1,0,1,600,0,0

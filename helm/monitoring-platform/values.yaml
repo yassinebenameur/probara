@@ -14,7 +14,10 @@ global:
 # =============================================================================
 image:
   repository: ghcr.io/yassinebenameur/probara
-  tag: "latest"
+  # Empty = Chart appVersion (the released version, which every Probara image
+  # is pushed under; `latest` exists only for stable releases). Pin for
+  # production. Applies to every Probara image unless overridden below.
+  tag: ""
   pullSecrets: []
 
 # =============================================================================
@@ -143,6 +146,7 @@ secrets:
   #   nats.auth.enabled   nats_platform_password (embedded broker only),
   #                     nats_location_auth_issuer_seed
   #   oidc enabled      oidc_client_secret
+  #   local AI in use   local_ai_token (localAI.enabled or localAI.externalUrl)
   # A key the chart asks for but the Secret does not carry keeps the pod in
   # CreateContainerConfigError — deliberate: silently starting without, say,
   # probara_secrets_key would store monitor credentials in plaintext.
@@ -154,7 +158,8 @@ secrets:
   adminJwtSecret: "change-me-in-production-jwt-secret-minimum-32-chars"
   adminJwtSecretExistingSecret: ""
   adminJwtSecretExistingSecretKey: admin_jwt_secret
-  # Initial API key for first login - CHANGE IN PRODUCTION
+  # Unused: stored in the chart Secret, but nothing reads it and it creates no
+  # API key. The first administrator is created on the UI login page.
   initialApiKey: "probara-initial-api-key-change-me"
   # At-rest encryption key for monitor/channel config secrets (DB passwords,
   # connection strings, webhook tokens). 32 random bytes, base64-encoded:
@@ -173,9 +178,34 @@ secrets:
   statusPageVapidPrivateKey: ""
   statusPageVapidPrivateKeyExistingSecret: ""
   statusPageVapidPrivateKeyExistingSecretKey: status_page_vapid_private_key
+  # Bearer token the api and the platform worker present to the local AI
+  # service (LOCAL_AI_TOKEN, canonical key local_ai_token). Needed whenever
+  # localAI.enabled or localAI.externalUrl is set; at least 16 characters.
+  #
+  # Left empty with the bundled service and a chart-managed adminJwtSecret, the
+  # chart DERIVES it (sha256 of a domain-separated adminJwtSecret) rather than
+  # generating a random one: randAlphaNum/lookup re-roll on every `helm
+  # template` and under GitOps renderers that cannot read the cluster (Argo CD,
+  # Flux post-render), which would restart the token on every sync. The chart
+  # never generates credentials, and the derivation keeps default-on installs
+  # working while making the token as private as the JWT secret you are
+  # already told to change -- with the shipped placeholder JWT secret it is a
+  # well-known value, like that secret. Rotating adminJwtSecret rotates it;
+  # restart api, worker and local-ai together afterwards.
+  #
+  # The chart fails instead of deriving when it cannot read the source
+  # (adminJwtSecretExistingSecret set) and with localAI.externalUrl (the
+  # operator-run service must be configured with the same token, so set it
+  # explicitly). Generate one with `openssl rand -hex 32`.
+  localAiToken: ""
+  localAiTokenExistingSecret: ""
+  localAiTokenExistingSecretKey: local_ai_token
 
-# Extra environment variables appended to EVERY workload (api, scheduler,
-# worker, location workers, alerter, status page, frontend, migrations job).
+# Extra environment variables appended to every platform workload (api,
+# scheduler, worker, location workers, alerter, status page, frontend,
+# migrations job). NOT the local AI pod: it holds no platform credentials, so
+# shared entries such as PROBARA_SECRETS_KEY_V2 must never reach it; use
+# localAI.extraEnv for that pod.
 # Standard Kubernetes EnvVar entries — plain values or valueFrom secret/
 # configmap references. Use this for settings shared across services, e.g.
 # secrets-key rotation (PROBARA_SECRETS_KEY_V2) or SSRF policy overrides.
@@ -237,6 +267,7 @@ migrations:
   image:
     # Uses main image repository with -migrations suffix if not specified
     repository: ""
+    # Empty = image.tag, then Chart appVersion.
     tag: ""
   resources:
     requests:
@@ -275,7 +306,7 @@ api:
       cpu: "500m"
       memory: "256Mi"
   # Extra env vars for the API only (Kubernetes EnvVar entries), e.g. SMTP_*,
-  # LLM_*, OIDC tuning, NOTIFY_ASYNC_*.
+  # OIDC tuning, NOTIFY_ASYNC_*.
   extraEnv: []
 
 # =============================================================================
@@ -451,7 +482,8 @@ frontend:
   apiProxyTarget: ""
   image:
     repository: ghcr.io/yassinebenameur/probara-frontend
-    tag: "latest"
+    # Empty = image.tag, then Chart appVersion.
+    tag: ""
     pullPolicy: IfNotPresent
     pullSecrets: []
   service:
@@ -512,3 +544,98 @@ securityContext:
     drop:
       - ALL
   readOnlyRootFilesystem: false
+
+# =============================================================================
+# LOCAL AI (bundled CPU inference for incident analysis)
+# =============================================================================
+# Default-on. The image carries the fine-tuned model weights, so the pod needs
+# no network egress at runtime (air-gapped). Only the api and the platform
+# worker receive LOCAL_AI_URL/LOCAL_AI_TOKEN; scheduler, alerter, status page
+# and location workers never do (the alerter gets only LOCAL_AI_DISABLED and
+# AI_TRIAGE_ENABLED). The service gets no database or NATS credentials. Its bearer token is secrets.localAiToken (see there).
+localAI:
+  # false = no local AI workload; api/worker/alerter run with LOCAL_AI_DISABLED=true,
+  # which overrides every workspace setting -- unless externalUrl is set.
+  enabled: true
+  # Operator-run service speaking the same /v1/decisions protocol, e.g.
+  # "http://probara-ai.ai.svc:8090". Requires enabled=false (the chart fails
+  # when both are set) and an explicit secrets.localAiToken or existing Secret.
+  # Scheme and host[:port] only: no path, query or embedded credentials.
+  externalUrl: ""
+  # The pod pulls with image.pullSecrets, like every Probara image; set them
+  # if the -local-ai package (or a mirror of it) is private.
+  image:
+    # Empty = <image.repository>-local-ai, like the other service images.
+    repository: ""
+    # Empty = image.tag, then Chart appVersion.
+    tag: ""
+    # Empty = global.imagePullPolicy.
+    pullPolicy: ""
+  # Inference threads, 1-4 (the model is CPU-validated at 4). Keep it at or
+  # below resources.limits.cpu.
+  threads: 4
+  # Waiting batches before the service answers 429, 1-32.
+  queueCapacity: 4
+  # How long a waiting batch may wait for the executing one before a 429
+  # (LOCAL_AI_QUEUE_TIMEOUT_SECONDS, 1-300, and lower than timeoutSeconds so
+  # a queued caller gets a retryable 429 before its own client gives up). A
+  # full 50-decision batch takes about 15-20 s on 4 CPU threads.
+  queueTimeoutSeconds: 60
+  # A batch still running after this many seconds is wedged: /healthz turns
+  # 503 and the liveness probe restarts the pod (LOCAL_AI_MAX_INFERENCE_SECONDS,
+  # 1-600).
+  maxInferenceSeconds: 120
+  # Client-side request timeout on api/worker (LOCAL_AI_TIMEOUT_SECONDS, 1-300).
+  # All these ranges are enforced at render time.
+  timeoutSeconds: 90
+  # AI_TRIAGE_ENABLED on the platform worker, the alerter and the api: false
+  # stops new automatic alert triages (queued ones drain as skipped) and every
+  # suspected-cause follow-up, whatever the workspace settings say, and SLA
+  # reports then list no alert as "Triage pending". The
+  # alerter also stops follow-ups when local AI is off (no enabled/externalUrl).
+  triageEnabled: true
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+  # Matches the image's non-root user (uid/gid 1000).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  # Not merged with the top-level podAnnotations: those advertise a 9090
+  # scrape port, while this service serves /metrics on 8090. To scrape it, set
+  #   prometheus.io/scrape: "true"
+  #   prometheus.io/port: "8090"
+  #   prometheus.io/path: "/metrics"
+  # and admit the scraper through networkPolicy.extraIngress below.
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  networkPolicy:
+    # Ingress only from this release's api and worker pods on 8090, and no
+    # egress at all (not even DNS: the service resolves nothing). A
+    # NetworkPolicy is only enforced when the cluster's CNI implements it
+    # (Calico, Cilium, ...); on a CNI without policy support it is accepted
+    # and silently ignored, and the bearer token is the only barrier.
+    enabled: true
+    # Additional NetworkPolicyIngressRule entries, e.g. for Prometheus:
+    # - from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: monitoring
+    #   ports:
+    #     - port: 8090
+    #       protocol: TCP
+    extraIngress: []
+  # Extra env vars for the local AI pod; every LOCAL_AI_* setting the service
+  # reads has its own value above. The only extra env it gets: the top-level
+  # extraEnv does not reach it.
+  extraEnv: []

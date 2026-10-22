@@ -72,7 +72,7 @@ func (h *Handlers) recordUserEvent(r *http.Request, action, outcome string, targ
 	event.Outcome = outcome
 	event.ResourceType = "user"
 	event.ResourceID = targetID
-	event.Details = details
+	event.MergeDetails(details)
 	h.audit.Record(event)
 }
 

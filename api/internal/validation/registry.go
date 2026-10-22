@@ -13,6 +13,15 @@ type ConfigValidator interface {
 	ValidateConfig(config json.RawMessage) error
 }
 
+// ScheduleAwareValidator is implemented by validators whose config bounds the
+// monitor's schedule (a SIP test call places a real call per check, so it
+// sets an interval floor and a timeout cap). The registry calls it on create
+// and on every update that changes the type, config, interval or timeout,
+// with the effective values after the update.
+type ScheduleAwareValidator interface {
+	ValidateSchedule(config json.RawMessage, intervalSeconds, timeoutSeconds int) error
+}
+
 // ValidatorRegistry manages registered validators for different monitor types
 type ValidatorRegistry struct {
 	validators map[models.MonitorType]ConfigValidator
@@ -43,6 +52,21 @@ func (r *ValidatorRegistry) Validate(monitorType models.MonitorType, config json
 		return fmt.Errorf("unknown monitor type: %s", monitorType)
 	}
 	return validator.ValidateConfig(config)
+}
+
+// ValidateSchedule applies the type's schedule rules (ScheduleAwareValidator)
+// to a config; types without any pass.
+func (r *ValidatorRegistry) ValidateSchedule(monitorType models.MonitorType, config json.RawMessage, intervalSeconds, timeoutSeconds int) error {
+	r.mu.RLock()
+	validator, ok := r.validators[monitorType]
+	r.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("unknown monitor type: %s", monitorType)
+	}
+	if scheduled, ok := validator.(ScheduleAwareValidator); ok {
+		return scheduled.ValidateSchedule(config, intervalSeconds, timeoutSeconds)
+	}
+	return nil
 }
 
 // Has checks if a validator is registered for a monitor type

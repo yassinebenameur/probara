@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  dayTone, formatSlaDuration, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
-  DEFAULT_SLA_TARGET, type SlaInput,
+  causeShare, showSuspectedCauses, slaCausesCaveat, dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
+  DEFAULT_SLA_TARGET, type SlaInput, type SlaReport,
 } from './sla';
 
 test('formatSlaDuration picks the two most significant units', () => {
@@ -52,4 +52,52 @@ test('input validation mirrors the API', () => {
   assert.match(slaInputError({ ...base, name: ' ' }) ?? '', /Name/);
   assert.match(slaInputError({ ...base, target_pct: 100 }) ?? '', /Target/);
   assert.match(slaInputError({ ...base, tags: [] }) ?? '', /monitor or tag/);
+});
+
+test('periods read as dates in the SLA timezone, end exclusive', () => {
+  const now = new Date('2026-10-09T12:00:00Z');
+  // ISO week 41 of 2026 in Paris: Monday 5 Oct 00:00 CEST to Monday 12 Oct.
+  assert.equal(formatSlaPeriodRange('2026-10-04T22:00:00Z', '2026-10-11T22:00:00Z', 'Europe/Paris', now), '5–11 Oct');
+  assert.equal(formatSlaPeriodRange('2026-09-28T00:00:00Z', '2026-10-05T00:00:00Z', 'UTC', now), '28 Sep – 4 Oct');
+  assert.equal(formatSlaPeriodRange('2026-10-01T00:00:00Z', '2027-01-01T00:00:00Z', 'UTC', now), '1 Oct – 31 Dec');
+  assert.equal(formatSlaPeriodRange('2025-09-01T00:00:00Z', '2025-10-01T00:00:00Z', 'UTC', now), '1–30 Sep 2025');
+  assert.equal(formatSlaPeriodRange('2025-12-29T00:00:00Z', '2026-01-05T00:00:00Z', 'UTC', now), '29 Dec 2025 – 4 Jan 2026');
+  assert.equal(formatSlaPeriodRange('bad', '2026-01-05T00:00:00Z', 'UTC', now), '—');
+});
+
+test('suspected causes show under the PDF rule: absent on legacy reports, hidden until one outage is triaged', () => {
+  // An issued report from before causes existed: no suspected_causes, so no
+  // panel and no Cause column.
+  const legacy: Pick<SlaReport, 'suspected_causes'> = {};
+  assert.equal(showSuspectedCauses(legacy), false);
+
+  // AI or auto-triage off: every outage is Not triaged or No alert. The CSV
+  // still carries them; the UI and PDF show nothing.
+  const untriaged: Pick<SlaReport, 'suspected_causes'> = {
+    suspected_causes: {
+      outage_count: 2, triaged_outage_count: 0, pending_outage_count: 0, unplanned_seconds: 600,
+      buckets: [
+        { kind: 'untriaged', key: 'untriaged', title: 'Not triaged', outage_count: 2, alert_count: 2, monitor_count: 1,
+          unplanned_seconds: 600, confirmed_outage_count: 0, corrected_outage_count: 0 },
+      ],
+    },
+  };
+  assert.equal(showSuspectedCauses(untriaged), false);
+
+  const triaged: Pick<SlaReport, 'suspected_causes'> = {
+    suspected_causes: { ...untriaged.suspected_causes!, triaged_outage_count: 1 },
+  };
+  assert.equal(showSuspectedCauses(triaged), true);
+});
+
+test('cause share and caveat', () => {
+  assert.equal(causeShare(900, 3600), '25.0%');
+  assert.equal(causeShare(3600, 3600), '100.0%');
+  // Only planned or zero-length time attributed: no share rather than NaN.
+  assert.equal(causeShare(0, 0), '—');
+  assert.equal(causeShare(120, 0), '—');
+  const caveat = slaCausesCaveat({ outage_count: 4, triaged_outage_count: 3 });
+  assert.match(caveat, /observed symptoms, not confirmed root causes/);
+  assert.match(caveat, /only at medium or high confidence/);
+  assert.match(caveat, /3 of 4 monitor outages had a triaged alert\.$/);
 });

@@ -56,7 +56,7 @@ spec:
       {{- end }}
       containers:
       - name: scheduler
-        image: "{{ .Values.image.repository }}-scheduler:{{ .Values.image.tag }}"
+        image: "{{ .Values.image.repository }}-scheduler:{{ include "monitoring-platform.imageTag" . }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         command: ["./scheduler"]
         ports:

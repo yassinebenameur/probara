@@ -2,6 +2,7 @@ package statuspage
 
 import (
 	"encoding/json"
+	"fmt"
 	statustemplate "github.com/yassinebenameur/probara/shared/statustemplate"
 	"html"
 	"math"
@@ -80,11 +81,15 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		`data-mode="default"`,
 		`data-mode="compact"`,
 		`data-mode="kiosk"`,
+		`data-range-pill="1h"`,
 		`data-range-pill="24h"`,
 		`data-range-pill="7d"`,
 		`data-range-pill="30d"`,
 		`data-range-pill="90d"`,
 		`class="range-btn active" data-range-pill="24h" aria-pressed="true"`,
+		`class="range-btn" data-range-pill="1h" aria-pressed="false"`,
+		`data-range-1h=`,
+		`data-range-value-1h=`,
 		`data-range-7d=`,
 		`data-monitor-id="monitor-1"`,
 		`localStorage.setItem('status-page-mode'`,
@@ -120,14 +125,20 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		}
 	}
 	for _, re := range []*regexp.Regexp{
-		regexp.MustCompile(`(?s)class="uptime-bars js-strip".*?data-cells="48".*?data-cells-7d="70".*?data-cells-30d="90".*?data-cells-90d="90"`),
-		regexp.MustCompile(`(?s)class="monitor-bar js-strip".*?data-cells="36".*?data-cells-30d="60".*?data-cells-90d="60"`),
-		regexp.MustCompile(`(?s)class="expanded-bars js-strip".*?data-cells="36".*?data-cells-30d="90".*?data-cells-90d="90"`),
+		regexp.MustCompile(`(?s)class="uptime-bars js-strip".*?data-cells="48".*?data-cells-1h="60".*?data-cells-7d="70".*?data-cells-30d="90".*?data-cells-90d="90"`),
+		regexp.MustCompile(`(?s)class="monitor-bar js-strip".*?data-cells="36".*?data-cells-1h="30".*?data-cells-30d="60".*?data-cells-90d="60"`),
+		regexp.MustCompile(`(?s)class="expanded-bars js-strip".*?data-cells="36".*?data-cells-1h="60".*?data-cells-30d="90".*?data-cells-90d="90"`),
+		// Kiosk tiles carry the per-range cell counts too; without them the
+		// 60-point 30d/90d strips were cut to the oldest 36 cells.
+		regexp.MustCompile(`(?s)class="k-tile-bar js-strip".*?data-cells="36".*?data-cells-1h="30".*?data-cells-30d="60".*?data-cells-90d="60"`),
 	} {
 		if !re.MatchString(html) {
 			t.Fatalf("expected rendered HTML to match %q", re.String())
 		}
 	}
+	assertStripPointCount(t, html, `class="uptime-bars js-strip"[\s\S]*?data-range-1h="([^"]+)"`, 60)
+	assertStripPointCount(t, html, `class="monitor-bar js-strip"[\s\S]*?data-range-1h="([^"]+)"`, 30)
+	assertStripPointCount(t, html, `class="expanded-bars js-strip"[\s\S]*?data-range-1h="([^"]+)"`, 60)
 	assertStripPointCount(t, html, `class="uptime-bars js-strip"[\s\S]*?data-range-30d="([^"]+)"`, 90)
 	assertStripPointCount(t, html, `class="uptime-bars js-strip"[\s\S]*?data-range-90d="([^"]+)"`, 90)
 	assertStripPointCount(t, html, `class="monitor-bar js-strip"[\s\S]*?data-range-30d="([^"]+)"`, 60)
@@ -189,6 +200,7 @@ func TestRenderPublicStatusPage_IncludesToolbarForMultipleMonitors(t *testing.T)
 		`id="statusHero"`,
 		`id="incidentsSection"`,
 		`class="group-cards"`,
+		`data-range-pill="1h"`,
 		`data-range-pill="24h"`,
 		`data-range-pill="7d"`,
 		`data-range-pill="30d"`,
@@ -545,5 +557,85 @@ func TestRenderStatusPage_PushToggleFollowsPushEnabled(t *testing.T) {
 	// live refresh swaps, so the control survives an SSE-driven refresh.
 	if !strings.Contains(on, `data-push-enabled="1"`) {
 		t.Fatalf("data-push-enabled not set when push is enabled")
+	}
+}
+
+// A SIP-over-TLS monitor carries its certificate expiry to the page view like
+// an HTTPS monitor (the reader is type-agnostic, see applyCertificate).
+func TestBuildStatusPageMonitorView_SIPShowsTLSDays(t *testing.T) {
+	days := 12
+	view := buildStatusPageMonitorView(MonitorStatus{
+		ID:                 "sip-1",
+		Name:               "SBC",
+		MonitorType:        "sip",
+		Status:             "up",
+		TLSDaysUntilExpiry: &days,
+	})
+	if view.TLSDetail != "TLS expires in 12 days" {
+		t.Fatalf("TLSDetail = %q, want %q", view.TLSDetail, "TLS expires in 12 days")
+	}
+}
+
+// The 1h range draws 60 one-minute buckets: one cell per minute on the
+// page-level and expanded strips, one cell per two minutes on a monitor row.
+// Empty minutes (-1) never drag a cell's or the range's uptime down.
+func TestBuildStatusPageRenderView_OneHourStrips(t *testing.T) {
+	minutes := make([]MinuteUptime, 60)
+	for i := range minutes {
+		minutes[i] = MinuteUptime{Time: fmt.Sprintf("10:%02d", i), Uptime: 100}
+	}
+	minutes[10].Uptime = -1 // no check this minute
+	minutes[11].Uptime = 50
+	minutes[20].Uptime = -1
+	minutes[21].Uptime = -1
+
+	view := buildStatusPageRenderView(&StatusPageData{
+		ID:              "page-1",
+		Title:           "Example Status",
+		UptimeHistory1h: minutes,
+		Monitors: []MonitorStatus{{
+			ID:              "monitor-1",
+			Name:            "API",
+			MonitorType:     "http",
+			Status:          "up",
+			UptimeHistory1h: minutes,
+		}},
+	}, false)
+
+	var global []barPoint
+	if err := json.Unmarshal([]byte(view.GlobalUptime1hJSON), &global); err != nil {
+		t.Fatalf("GlobalUptime1hJSON: %v", err)
+	}
+	if len(global) != 60 {
+		t.Fatalf("global 1h cells = %d, want 60", len(global))
+	}
+	if global[11].Uptime != 50 || global[11].Label != "10:11" {
+		t.Fatalf("global cell 11 = %+v, want one minute at 50%%", global[11])
+	}
+
+	monitor := view.Monitors[0]
+	var row, expanded []barPoint
+	if err := json.Unmarshal([]byte(monitor.History1hJSON), &row); err != nil {
+		t.Fatalf("History1hJSON: %v", err)
+	}
+	if err := json.Unmarshal([]byte(monitor.ExpandedHistory1hJSON), &expanded); err != nil {
+		t.Fatalf("ExpandedHistory1hJSON: %v", err)
+	}
+	if len(row) != 30 || len(expanded) != 60 {
+		t.Fatalf("monitor 1h cells = %d row / %d expanded, want 30 / 60", len(row), len(expanded))
+	}
+	if row[5].Uptime != 50 || row[5].Label != "10:10 - 10:11" {
+		t.Fatalf("row cell 5 = %+v, want the 10:10-10:11 pair at 50%% (empty minute skipped)", row[5])
+	}
+	if row[10].Uptime != -1 {
+		t.Fatalf("row cell 10 = %+v, want no data for two empty minutes", row[10])
+	}
+
+	want := uptimeValue(averageBarPoints(sliceToBarPoints(minutes)))
+	if monitor.Uptime1hValue != want || view.GlobalUptime1hValue != want {
+		t.Fatalf("1h values = %q monitor / %q global, want %q", monitor.Uptime1hValue, view.GlobalUptime1hValue, want)
+	}
+	if got := monitorUptimeLabel("1h"); got != "1h uptime" {
+		t.Fatalf("monitorUptimeLabel(1h) = %q", got)
 	}
 }

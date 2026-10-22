@@ -77,7 +77,7 @@ export const LOCATIONS_PAGE: DocPage = {
           language: "yaml",
           title: "Shape of generated worker environment",
           code:
-            "image: ghcr.io/yassinebenameur/probara-worker:latest\nenvironment:\n  NATS_URL: tls://nats.example.com:4222\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"\n  HTTP_BLOCK_PRIVATE_IPS: \"true\"",
+            "image: ghcr.io/yassinebenameur/probara-worker:latest\nenvironment:\n  NATS_URL: tls://nats.example.com:4222\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
         },
         {
           type: "callout",
@@ -125,7 +125,7 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Workers block private, loopback, link-local, and reserved destinations by default. The generated private-location configuration deliberately keeps `HTTP_BLOCK_PRIVATE_IPS=true`, so merely moving a monitor to an internal worker does not automatically permit every internal address.",
+            "Workers allow private, loopback, link-local, and reserved destinations unless `HTTP_BLOCK_PRIVATE_IPS=true`: the code default is `false`, and the generated private-location configuration does not set it. Add it, with a narrow `HTTP_ALLOWED_CIDRS`, so that moving a monitor to an internal worker does not permit every internal address that worker can reach.",
         },
         {
           type: "code",
@@ -140,6 +140,11 @@ export const LOCATIONS_PAGE: DocPage = {
           title: "Prefer narrow allowlists",
           text:
             "Add only the CIDRs the worker is expected to monitor. Disabling private-IP blocking globally broadens the worker into an internal network request primitive and weakens [SSRF containment](/docs/security/#ssrf-network-policy).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A private-location worker places no [SIP test call](/docs/monitors/#network-protocols) until its operator sets `SIP_CALL_ENABLED=true`: such calls are real and possibly billed to the trunk they go through, so a test-call monitor assigned to a location whose worker has not opted in fails there with `sip_call: disabled on this worker`. `SIP_CALL_ALLOWED_DESTINATIONS` further limits which numbers the worker will call. It is also the only opt-in for [call quality](/docs/monitors/#network-protocols): with `call.media`, the call also sends RTP and RTCP to the address in the far end's SDP answer, vetted by the worker's own network policy and the [media scope rule](/docs/security/#ssrf-network-policy). A location worker that predates call quality fails such a monitor with `invalid SIP config: call.media: media analysis is not available yet`, placing no call, until it is upgraded.",
         },
       ],
     },

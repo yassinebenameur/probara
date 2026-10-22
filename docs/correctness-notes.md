@@ -118,7 +118,13 @@ are now a projection of `monitor_state_intervals` (closed `down` intervals →
 periods, open `down` interval → `monitor_downtime_open`); pre-timeline
 downtime rows are preserved, and group monitors (no timeline yet) keep their
 frozen rows until their state derivation is unified. The backfill script
-remains the repair tool for pre-ledger history.
+remains the repair tool for pre-ledger history. Short-range analytics (1h,
+6h, 24h) read the same `down` intervals straight from the timeline
+(`loadTimelineDowntime` in `shared/analytics/repository.go`) because the
+projection trails it by up to one rollup run; they no longer derive
+downtime from raw check rows, which opened a period at every failed row
+until the next success from any location (one failing location of three
+produced a period per check).
 
 ## Rollup-era failure vs error split
 
@@ -151,9 +157,12 @@ deliberate trade for collapsing request bursts into one computation.
 
 ## Deploy ordering
 
-The helm migrations job is a **post-install/post-upgrade hook**
-(`helm/monitoring-platform/templates/job-migrations.yaml`): on upgrade the new
-pods are rolled out first, and migrations run after. New code must therefore
+Migrations run in two places: the API applies them at startup, before it
+serves (`api/cmd/api/main.go`), and the helm migrations job runs them as a
+**post-install/post-upgrade hook**
+(`helm/monitoring-platform/templates/job-migrations.yaml`). Neither gates the
+other workloads: on upgrade the scheduler, worker and alerter pods can start
+before the new API pod or the hook Job has migrated. New code must therefore
 tolerate running against the **old schema** for the rollout window.
 Concretely:
 
@@ -166,6 +175,24 @@ Concretely:
 - **Dashboard 24h endpoints**: queries reading columns added by a pending
   migration (e.g. `error_checks`) return errors during the window; this
   self-heals once the migration job completes.
+- **Alerter notification state**: `loadNotificationStates`
+  (`alerter/internal/alerter/evaluator.go`) reads every
+  `alert_notification_states` column, including `acknowledged_sent_at`
+  (000089) and `suspected_cause_sent_at` (000095). Until the migration lands,
+  the evaluate, dispatch and mesh paths fail with SQLSTATE 42703 on every tick
+  that has an open alert: no created, reminder or resolved notifications go
+  out and no alert transitions happen. The tick retries and recovers by itself
+  once the column exists; since the API migrates at startup before it serves,
+  the window is usually seconds. Do not add a fallback query without the
+  column: it would duplicate the due rules in `claimNotificationTx` and
+  `shouldSendNotification`.
+- **Per-recipient delivery ledger**: until migration 000097 creates
+  `alert_notification_recipient_deliveries`, `recipientledger` reads report
+  nothing delivered (SQLSTATE 42P01 — exact, since nothing could have been
+  recorded) and writes fail, so SMS sends go out as before and a partial
+  failure in that window can still re-text recipients. Workers from before the
+  change ignore an envelope's `delivery_key`; new workers fall back to the
+  event timestamp for envelopes without one.
 
 For zero-error rollouts, when convenient, run the migration job manually
 before `helm upgrade` so the new schema is already in place when the new pods

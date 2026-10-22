@@ -1,3 +1,5 @@
+//go:build !unit
+
 package audit
 
 import (
@@ -148,4 +150,48 @@ func TestAuditRecordListPrune(t *testing.T) {
 			t.Fatalf("expected 1 recent entry, got %d", resp.Total)
 		}
 	})
+}
+
+// RecordBatch writes synchronously (no Start, no buffer): every event is
+// listable as soon as it returns, past the buffer size and in chunks.
+func TestAuditRecordBatchIsSynchronous(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires Docker")
+	}
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "audit-batch-tenant")
+	recorder := NewRecorder(dbClient, logger.New("audit-test", "error"))
+
+	const n = syncChunk + 7 // two INSERTs
+	events := make([]Event, n)
+	for i := range events {
+		events[i] = Event{
+			TenantID:     &tenantID,
+			ActorType:    ActorAdminUser,
+			Action:       "alert.resolve",
+			ResourceType: "alert",
+			ResourceID:   uuid.NewString(),
+			Outcome:      OutcomeSuccess,
+			StatusCode:   200,
+			Details:      map[string]any{"bulk": true},
+		}
+	}
+	if err := recorder.RecordBatch(ctx, events); err != nil {
+		t.Fatalf("RecordBatch: %v", err)
+	}
+
+	resp, err := NewService(dbClient).List(ctx, tenantID, false, Filters{Action: "alert.resolve"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if resp.Total != n {
+		t.Fatalf("listed %d events right after RecordBatch, want %d", resp.Total, n)
+	}
+	if resp.Items[0].OccurredAt.IsZero() {
+		t.Errorf("RecordBatch left occurred_at unset")
+	}
 }

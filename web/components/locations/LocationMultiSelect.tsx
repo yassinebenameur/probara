@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Location } from '@/lib/types';
 import Button from '@/components/ui/Button';
-import Pill from '@/components/ui/Pill';
+import Checkbox from '@/components/ui/Checkbox';
 
 interface LocationMultiSelectProps {
   locations: Location[];
@@ -45,21 +45,24 @@ export function LocationMultiSelect({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search locations..."
-            className="input !pl-9"
-          />
-        </div>
+      <div className="relative">
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+          strokeWidth={1.75}
+          aria-hidden="true"
+        />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search locations..."
+          className="input !pl-9"
+          aria-label="Search locations"
+        />
       </div>
 
       <div className="flex items-center justify-between">
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-slate-400" role="status">
           {selectedIds.length} of {locations.length} selected
         </span>
         <div className="flex gap-1.5">
@@ -72,7 +75,8 @@ export function LocationMultiSelect({
         </div>
       </div>
 
-      <div className="max-h-56 overflow-y-auto rounded-lg border border-white/[0.06] bg-slate-900/40 p-2">
+      {/* relative: keeps any sr-only (absolute) row text inside the scroll box. */}
+      <div className="glass-well relative max-h-56 overflow-y-auto p-1.5">
         {filtered.length === 0 ? (
           <p className="py-6 text-center text-sm text-slate-500">
             {locations.length === 0 ? emptyMessage : 'No locations match your search'}
@@ -82,39 +86,32 @@ export function LocationMultiSelect({
             {filtered.map((loc) => {
               const isSelected = selectedIds.includes(loc.id);
               return (
-                <label
+                // The whole row is the checkbox's label (the label's last
+                // child, the text column, stretches so the status sits right).
+                <Checkbox
                   key={loc.id}
-                  className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 transition-colors ${
-                    isSelected
-                      ? 'border border-cyan-500/30 bg-cyan-500/10'
-                      : 'border border-transparent hover:bg-white/[0.03]'
+                  checked={isSelected}
+                  onChange={() => toggle(loc.id)}
+                  stretch
+                  className={`w-full rounded-lg px-3 !py-2 transition-colors ${
+                    isSelected ? 'bg-well-hover' : 'hover:bg-well'
                   }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => toggle(loc.id)}
-                    className="sr-only"
-                  />
-                  <div
-                    className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${
-                      isSelected ? 'border-cyan-500 bg-cyan-500' : 'border-slate-600'
-                    }`}
-                  >
-                    {isSelected && (
-                      <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-white">{loc.name}</p>
-                    <p className="text-xs text-slate-500">{loc.slug}</p>
-                  </div>
-                  <Pill tone={loc.connected ? 'success' : 'danger'} size="xs" dot>
-                    {loc.connected ? 'Connected' : 'Disconnected'}
-                  </Pill>
-                </label>
+                  label={
+                    <span className="flex items-center gap-3">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium text-white">{loc.name}</span>
+                        <span className="block font-mono text-xs text-slate-500">{loc.slug}</span>
+                      </span>
+                      <span className="flex flex-shrink-0 items-center gap-1.5 text-xs text-slate-400">
+                        <span
+                          className={`h-2 w-2 rounded-full ${loc.connected ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                          aria-hidden="true"
+                        />
+                        {loc.connected ? 'Connected' : 'Disconnected'}
+                      </span>
+                    </span>
+                  }
+                />
               );
             })}
           </div>

@@ -353,22 +353,7 @@ func (v *DNSConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		}
 	}
 
-	if ns := strings.TrimSpace(config.Nameserver); ns != "" {
-		nsHost := ns
-		if h, p, err := net.SplitHostPort(ns); err == nil {
-			nsHost = h
-			if port, err := strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
-				return fmt.Errorf("nameserver port must be between 1 and 65535")
-			}
-		}
-		if ip := net.ParseIP(nsHost); ip == nil {
-			if !isValidHostname(nsHost) {
-				return fmt.Errorf("nameserver must be a valid IP address or hostname (host or host:port)")
-			}
-		}
-	}
-
-	return nil
+	return sharedmodels.ValidateNameserver(config.Nameserver)
 }
 
 // GRPCConfigValidator validates gRPC health monitor configuration
@@ -628,61 +613,34 @@ func (v *PushConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	return nil
 }
 
-// SIPConfigValidator validates SIP monitor configuration
+// SIPConfigValidator validates SIP monitor configuration. The rules live on
+// the shared config struct, which the worker's SIP checker applies too.
 type SIPConfigValidator struct{}
 
 // ValidateConfig validates SIP monitor config
+// It parses with ParseSIPMonitorConfig, which refuses a key spelled in
+// another case ("Method" next to "method"), so the config it validates is
+// the config that gets stored, whatever the JSON round trip does to it.
 func (v *SIPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
-	var config models.SIPConfig
-	if err := json.Unmarshal(configRaw, &config); err != nil {
+	config, err := sharedmodels.ParseSIPMonitorConfig(configRaw)
+	if err != nil {
 		return fmt.Errorf("invalid SIP config: %w", err)
 	}
-
-	if config.Host == "" {
-		return fmt.Errorf("host is required")
+	if err := config.Validate(); err != nil {
+		return err
 	}
+	// Save-time only: the worker's Validate leaves it out so monitors
+	// stored before the rule keep running.
+	return sharedmodels.ValidateSIPTLSServerName(config.TLSServerName)
+}
 
-	// Validate host is either a valid hostname or IP address
-	if ip := net.ParseIP(config.Host); ip == nil {
-		// Not an IP, check if it's a valid hostname
-		if !isValidHostname(config.Host) {
-			return fmt.Errorf("host must be a valid IP address or hostname")
-		}
-	}
-
-	// Validate port (default is 5060 if not specified)
-	if config.Port != 0 && (config.Port < 1 || config.Port > 65535) {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-
-	// Validate transport
-	if config.Transport != "" {
-		transport := strings.ToLower(config.Transport)
-		if transport != "udp" && transport != "tcp" && transport != "tls" {
-			return fmt.Errorf("transport must be 'udp', 'tcp', or 'tls'")
-		}
-	}
-
-	// Validate method
-	if config.Method != "" {
-		method := strings.ToLower(config.Method)
-		if method != "options" && method != "register" {
-			return fmt.Errorf("method must be 'options' or 'register'")
-		}
-	}
-
-	// Digest credentials go together: a password without a username (or vice
-	// versa) is a config mistake, not a server-side condition.
-	if (strings.TrimSpace(config.Username) == "") != (config.Password == "") {
-		return fmt.Errorf("username and password must be provided together")
-	}
-
-	// Validate expected status (SIP response codes are 100-699)
-	if config.ExpectedStatus != nil && (*config.ExpectedStatus < 100 || *config.ExpectedStatus > 699) {
-		return fmt.Errorf("expected_status must be between 100 and 699")
-	}
-
-	return nil
+// ValidateSchedule bounds a test call's interval and timeout
+// (sharedmodels.ValidateSIPSchedule, which treats anything that may place
+// calls as a call); OPTIONS and REGISTER have no extra schedule rules. A
+// config that does not parse is ValidateConfig's to report (a type-only
+// PATCH carries the old type's config here, as it always has).
+func (v *SIPConfigValidator) ValidateSchedule(configRaw json.RawMessage, intervalSeconds, timeoutSeconds int) error {
+	return sharedmodels.ValidateSIPSchedule(configRaw, intervalSeconds, timeoutSeconds)
 }
 
 // SyntheticAPIConfigValidator validates synthetic API monitor configuration.
@@ -1113,13 +1071,10 @@ func validateURL(urlStr string) error {
 	return nil
 }
 
+// isValidHostname delegates to the shared rule that the shared config
+// structs' Validate methods use, so both apply one hostname grammar.
 func isValidHostname(hostname string) bool {
-	if len(hostname) == 0 || len(hostname) > 253 {
-		return false
-	}
-
-	hostnameRegex := regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$`)
-	return hostnameRegex.MatchString(hostname)
+	return sharedmodels.IsValidHostname(hostname)
 }
 
 // Ensure validators implement ConfigValidator interface
@@ -1134,3 +1089,5 @@ var (
 	_ ConfigValidator = (*SyntheticAPIConfigValidator)(nil)
 	_ ConfigValidator = (*SyntheticBrowserConfigValidator)(nil)
 )
+
+var _ ScheduleAwareValidator = (*SIPConfigValidator)(nil)

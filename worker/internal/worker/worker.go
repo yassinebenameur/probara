@@ -23,6 +23,39 @@ import (
 const checkJobStreamMaxAge = 24 * time.Hour
 const consumerRestartBackoff = 2 * time.Second
 
+// checkProgressInterval is how often a running check job tells JetStream it
+// is still being worked on (msg.InProgress). It must stay well under the
+// check-job consumer's AckWait (30s, the shared/queue ConsumerOptions
+// default): without it a check that outlives AckWait (a synthetic_browser
+// journey, an INVITE with hold and teardown) is redelivered to a second
+// worker while the first is still running it.
+const checkProgressInterval = 10 * time.Second
+
+// checkProgressGrace bounds the heartbeat past the job's own timeout (teardown,
+// publish retries), so a wedged checker stops pinning its message and AckWait
+// redelivery takes over again.
+const checkProgressGrace = 30 * time.Second
+
+// sideEffectPublishBackoff is the wait before each in-place publish retry of
+// a side-effecting check's result; sideEffectPublishAttemptTimeout bounds one
+// attempt. Worst case ~27s, inside the worker's 30s shutdown budget.
+var sideEffectPublishBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
+const sideEffectPublishAttemptTimeout = 5 * time.Second
+
+// maxSideEffectTestChecks bounds the side-effecting test checks (a SIP test
+// call's Test) one worker runs at once. Scheduled checks are already bounded
+// by WORKER_CONCURRENCY, but test checks arrive on a core-NATS request/reply
+// subscription that starts one goroutine per request, so without this a burst
+// of Test clicks would place an unbounded number of concurrent real calls. A
+// full bound refuses the test rather than queueing it, and scheduled checks
+// never share it, so a test flood cannot make a scheduled check fail.
+const maxSideEffectTestChecks = 16
+
+// errSideEffectTestChecksFull is the test-check reply when every
+// maxSideEffectTestChecks slot is taken. Nothing is dialed or published.
+const errSideEffectTestChecksFull = "sip_call: too many test calls running on this worker; try again"
+
 // resultPublisher is the minimal publishing surface the worker needs to hand
 // results back to the platform. Satisfied by *queue.Client and test spies.
 type resultPublisher interface {
@@ -58,6 +91,23 @@ type Worker struct {
 	natsAckTotal        prometheus.Counter
 	natsNakTotal        prometheus.Counter
 	resultPublishErrors prometheus.Counter
+	sideEffectSkipped   *prometheus.CounterVec
+	sideEffectAbandoned *prometheus.CounterVec
+	// sideEffectInterrupted counts side-effecting results the worker's own
+	// shutdown produced, acked and never published.
+	sideEffectInterrupted *prometheus.CounterVec
+	// sideEffectTestRejected counts side-effecting test checks refused
+	// because every sideEffectTestSlots slot was taken.
+	sideEffectTestRejected *prometheus.CounterVec
+
+	// sideEffectTestSlots holds one token per side-effecting test check in
+	// flight (capacity maxSideEffectTestChecks).
+	sideEffectTestSlots chan struct{}
+
+	// Zero values use checkProgressInterval / sideEffectPublishBackoff;
+	// tests shrink them.
+	progressInterval    time.Duration
+	publishRetryBackoff []time.Duration
 }
 
 // NewWorker creates a new worker instance
@@ -74,10 +124,12 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 		cancel:           cancel,
 		secretsEncryptor: secrets.NoOpEncryptor{},
 		checkerRegistry:  NewDefaultRegistry(cfg.MaxBodySizeBytes, cfg.HTTPBlockPrivateIPs, cfg.HTTPAllowedCIDRs, cfg.SyntheticArtifactsDir),
-		passiveTypes: map[string]bool{
-			"agent": true, // Agent monitors receive pushed metrics
-			"group": true, // Group monitors aggregate member results
-		},
+		passiveTypes:     map[string]bool{},
+
+		sideEffectTestSlots: make(chan struct{}, maxSideEffectTestChecks),
+	}
+	for _, t := range models.PassiveMonitorTypes {
+		w.passiveTypes[t] = true
 	}
 
 	// Initialize metrics
@@ -123,6 +175,85 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 		[]string{},
 	)
 	w.resultPublishErrors = resultPublishErrorsCounter.With(prometheus.Labels{})
+
+	w.sideEffectSkipped = metricsRegistry.NewCounter(
+		"side_effect_redelivery_skipped_total",
+		"Redelivered side-effecting check jobs acked without running (at-most-once)",
+		[]string{"type"},
+	)
+	w.sideEffectAbandoned = metricsRegistry.NewCounter(
+		"side_effect_result_abandoned_total",
+		"Side-effecting check results dropped after every publish retry failed",
+		[]string{"type"},
+	)
+	w.sideEffectInterrupted = metricsRegistry.NewCounter(
+		"side_effect_result_interrupted_total",
+		"Side-effecting checks interrupted by worker shutdown, acked without publishing",
+		[]string{"type"},
+	)
+	w.sideEffectTestRejected = metricsRegistry.NewCounter(
+		"test_check_side_effect_rejected_total",
+		"Side-effecting test checks refused because the worker's test-check bound was full",
+		[]string{"type"},
+	)
+
+	// SIP test calls: whether this worker places them (SIP_CALL_ENABLED,
+	// off by default on private-location workers, which also gates their
+	// media) and to which numbers (SIP_CALL_ALLOWED_DESTINATIONS), plus the
+	// post-call linger and media counters.
+	if checker, err := w.checkerRegistry.Get("sip"); err == nil {
+		if sip, ok := checker.(*SIPChecker); ok {
+			sip.ConfigureCalls(cfg.SIPCallEnabled, cfg.SIPCallAllowedDestinations)
+			lingers := metricsRegistry.NewCounter(
+				"sip_linger_total",
+				"SIP test-call lingers by outcome (late answers BYE'd, unanswered BYEs sent again, late provisionals CANCELled, quiet)",
+				[]string{"outcome"},
+			)
+			dropped := metricsRegistry.NewCounter(
+				"sip_linger_dropped_total",
+				"SIP test-call flows closed without a linger because every linger slot was taken",
+				[]string{},
+			).With(prometheus.Labels{})
+			sip.ConfigureCallMetrics(
+				func(outcome string) { lingers.With(prometheus.Labels{"outcome": outcome}).Inc() },
+				dropped.Inc,
+			)
+			sessions := metricsRegistry.NewCounter(
+				"sip_media_sessions_total",
+				"SIP test calls with call.media, by media status (measured, truncated, refused, unusable_answer, not_held, interrupted)",
+				[]string{"outcome"},
+			)
+			refused := metricsRegistry.NewCounter(
+				"sip_media_refused_total",
+				"SIP test calls whose far-end media address the worker refused to send to, by reason",
+				[]string{"reason"},
+			)
+			rxDropped := metricsRegistry.NewCounter(
+				"sip_media_rx_dropped_total",
+				"Inbound RTP packets of SIP test calls left out of the analysis (invalid, foreign source, record cap overflow)",
+				[]string{"reason"},
+			)
+			unreliable := metricsRegistry.NewCounter(
+				"sip_media_unreliable_total",
+				"SIP test calls whose media timing the worker could not trust (late sender, slow goroutine scheduling); quality not judged",
+				[]string{},
+			).With(prometheus.Labels{})
+			unconfirmed := metricsRegistry.NewCounter(
+				"sip_call_teardown_unconfirmed_total",
+				"SIP test calls whose BYE went unconfirmed, by whether the far end kept sending audio after it",
+				[]string{"evidence"},
+			)
+			sip.ConfigureMediaMetrics(sipMediaCounters{
+				session:    func(status string) { sessions.With(prometheus.Labels{"outcome": status}).Inc() },
+				refused:    func(reason string) { refused.With(prometheus.Labels{"reason": reason}).Inc() },
+				rxDropped:  func(reason string, n int) { rxDropped.With(prometheus.Labels{"reason": reason}).Add(float64(n)) },
+				unreliable: unreliable.Inc,
+				teardownUnconfirmed: func(evidence string) {
+					unconfirmed.With(prometheus.Labels{"evidence": evidence}).Inc()
+				},
+			})
+		}
+	}
 
 	return w
 }
@@ -311,6 +442,23 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 
+	// At-most-once for side-effecting checks: a redelivery may follow a run
+	// that already happened (the first worker died mid-check, its ack was
+	// lost, or its publish was abandoned), so it is acked without running or
+	// publishing anything. Checked before expiry so a redelivered expired job
+	// does not publish an expired marker either.
+	if msg.NumDelivered > 1 {
+		if checkType, ok := w.redeliveredSideEffect(job.Payload); ok {
+			logEntry.WithFields(logrus.Fields{
+				"type":          checkType,
+				"num_delivered": msg.NumDelivered,
+			}).Warn("Redelivered side-effecting check; acking without running it")
+			w.sideEffectSkipped.With(prometheus.Labels{"type": checkType}).Inc()
+			w.natsAckTotal.Inc()
+			return nil
+		}
+	}
+
 	// Check deadline
 	if job.IsExpired() {
 		logEntry.Warn("Job expired, marking as error")
@@ -364,6 +512,15 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 
+	sideEffecting := isSideEffecting(checker, payload.Config)
+
+	// Keep the message ours for as long as the check (and its publish) runs.
+	// The deferred stop waits for the heartbeat goroutine to exit, so no
+	// InProgress can race the ack Consume sends after processJob returns.
+	stopProgress := w.startProgressHeartbeat(msg,
+		time.Duration(payload.TimeoutSeconds)*time.Second+checkProgressGrace, logEntry)
+	defer stopProgress()
+
 	// Execute check using the registered checker
 	checkCtx := ctx
 	if payload.Type == "synthetic_browser" {
@@ -382,8 +539,26 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 		checkResult = checker.Check(checkCtx, checkConfig, payload.TimeoutSeconds)
 	}
 
-	// Publish result for the platform-side ingest consumer to persist
-	if err := w.publishResult(ctx, &job, &payload, &checkResult, startTime); err != nil {
+	// A side-effecting check cut short by this worker's shutdown (a deploy
+	// mid-call) produced no evidence about its target: ack it and publish
+	// nothing, so it costs one sample (a gap) instead of recording a failure.
+	// Teardown already ran inside Check.
+	if sideEffecting && checkResult.Interrupted {
+		logEntry.WithField("type", payload.Type).Warn("Side-effecting check interrupted by worker shutdown; acking without publishing")
+		w.sideEffectInterrupted.With(prometheus.Labels{"type": payload.Type}).Inc()
+		w.natsAckTotal.Inc()
+		return nil
+	}
+
+	// Publish result for the platform-side ingest consumer to persist. A
+	// side-effecting check never NAKs: a retry would run it again.
+	if sideEffecting {
+		if err := w.publishSideEffectingResult(ctx, &job, &payload, &checkResult, startTime, logEntry); err != nil {
+			logEntry.WithError(err).WithField("type", payload.Type).
+				Error("Failed to publish side-effecting check result after retries; dropping it (at-most-once)")
+			w.sideEffectAbandoned.With(prometheus.Labels{"type": payload.Type}).Inc()
+		}
+	} else if err := w.publishResult(ctx, &job, &payload, &checkResult, startTime); err != nil {
 		logEntry.WithError(err).Error("Failed to publish result")
 		w.resultPublishErrors.Inc()
 		w.natsNakTotal.Inc()
@@ -402,6 +577,85 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 
 	w.natsAckTotal.Inc()
 	return nil
+}
+
+// redeliveredSideEffect reports whether a job's payload is for a check whose
+// checker marks that config side-effecting, returning the monitor type.
+func (w *Worker) redeliveredSideEffect(raw json.RawMessage) (string, bool) {
+	var payload models.CheckJobPayload
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Type == "" {
+		return "", false
+	}
+	checker, err := w.checkerRegistry.Get(payload.Type)
+	if err != nil {
+		return "", false
+	}
+	return payload.Type, isSideEffecting(checker, payload.Config)
+}
+
+// startProgressHeartbeat calls msg.InProgress every checkProgressInterval until
+// the returned stop is called or ceiling elapses. stop blocks until the
+// goroutine has exited.
+func (w *Worker) startProgressHeartbeat(msg *queue.Message, ceiling time.Duration, logEntry *logrus.Entry) (stop func()) {
+	if msg.InProgress == nil {
+		return func() {}
+	}
+	interval := w.progressInterval
+	if interval <= 0 {
+		interval = checkProgressInterval
+	}
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		limit := time.NewTimer(ceiling)
+		defer limit.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-limit.C:
+				logEntry.Warn("Check still running past its timeout; no longer extending its ack deadline")
+				return
+			case <-ticker.C:
+				if err := msg.InProgress(); err != nil {
+					logEntry.WithError(err).Warn("Failed to extend check job ack deadline")
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-exited
+	}
+}
+
+// publishSideEffectingResult publishes a side-effecting check's result,
+// retrying in place on failure instead of NAKing (which would run the check
+// again). Retries ignore worker shutdown: the side effect already happened,
+// and a kill mid-retry only costs the sample, since the redelivery is skipped.
+func (w *Worker) publishSideEffectingResult(ctx context.Context, job *models.Job, payload *models.CheckJobPayload, checkResult *CheckResult, startedAt time.Time, logEntry *logrus.Entry) error {
+	backoff := w.publishRetryBackoff
+	if backoff == nil {
+		backoff = sideEffectPublishBackoff
+	}
+	pubCtx := context.WithoutCancel(ctx)
+	for attempt := 0; ; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(pubCtx, sideEffectPublishAttemptTimeout)
+		err := w.publishResult(attemptCtx, job, payload, checkResult, startedAt)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		w.resultPublishErrors.Inc()
+		if attempt >= len(backoff) {
+			return err
+		}
+		logEntry.WithError(err).WithField("attempt", attempt+1).Warn("Failed to publish side-effecting check result; retrying")
+		time.Sleep(backoff[attempt])
+	}
 }
 
 // handleTestCheck runs an ephemeral check for a test-connection request and
@@ -433,6 +687,17 @@ func (w *Worker) handleTestCheck(data []byte) []byte {
 	checker, err := w.checkerRegistry.Get(payload.Type)
 	if err != nil {
 		return errorResponse(fmt.Sprintf("unknown monitor type: %s", payload.Type))
+	}
+	// Decided on the config as sent, before decryption, like the check-job
+	// consumer's at-most-once test (SideEffectingChecker).
+	if isSideEffecting(checker, payload.Config) {
+		select {
+		case w.sideEffectTestSlots <- struct{}{}:
+			defer func() { <-w.sideEffectTestSlots }()
+		default:
+			w.sideEffectTestRejected.With(prometheus.Labels{"type": payload.Type}).Inc()
+			return errorResponse(errSideEffectTestChecksFull)
+		}
 	}
 
 	config, err := secrets.DecryptMonitorConfig(w.secretsEncryptor, payload.Type, payload.Config)

@@ -14,6 +14,7 @@ export const ALERTING_PAGE: DocPage = {
     "maintenance",
     "incidents",
     "latency anomaly",
+    "alert triage",
   ],
   sections: [
     {
@@ -48,7 +49,7 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`tls_expiry`",
-              "An HTTP monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
+              "An HTTPS or SIP-over-TLS monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
               "A renewed certificate is observed, or the threshold is removed",
             ],
           ],
@@ -72,6 +73,11 @@ export const ALERTING_PAGE: DocPage = {
           text:
             "Acknowledging records operator ownership but leaves the condition open. Reminder notifications to chat, email, SMS and webhook channels continue at the configured interval until resolution or until reminders are disabled. Paging channels (PagerDuty, Opsgenie / JSM) are the exception: they receive the acknowledgement itself and never receive reminders, because the provider runs its own escalation.",
         },
+        {
+          type: "paragraph",
+          text:
+            "On the Alerts page, users who can write work the queue in bulk: tick open alerts (Shift-click selects a range, the header box selects every open alert on the page, Escape clears), then Acknowledge or Resolve from the bar. Each action sends only the selected alerts it applies to, and alerts that changed state meanwhile are reported as skipped rather than failing the batch. Bulk acknowledge and resolve notify and record incident recovery as the single actions do; they skip alerts of deleted monitors (reported as not found), which the list no longer shows. With a row focused, `A` acknowledges and `R` resolves that alert; these keys work only while focus is on an alert row, never while typing or with Ctrl, Alt or Cmd held, and a press on an alert that is already past that step says so instead of acting. Every view except Open sorts on the server, so a column sort orders every matching alert, not just the page; those views default to newest first, while Open (which loads the whole queue) defaults to active first. Under a one-status filter (Active, Acknowledged, Resolved) the Status column does not sort, since every row has the same status.",
+        },
       ],
     },
     {
@@ -82,7 +88,7 @@ export const ALERTING_PAGE: DocPage = {
           type: "list",
           ordered: true,
           items: [
-            "A check failure first passes through the monitor's consecutive-failure confirmation and, when locations are selected, its [location failure quorum](/docs/locations/#assignment).",
+            "A check failure first passes through the monitor's consecutive-failure confirmation and, when locations are selected, its [location failure quorum](/docs/locations/#assignment). A check's `error` and `failure` are both failing evidence, including a check's own assertions: a SIP test call failing a [call-quality](/docs/monitors/#network-protocols) threshold (`max_loss_pct`, `min_mos`, …) is a failure like any other, while its `warn_*` thresholds only add warnings to the check and never alert.",
             "The alerter opens an availability alert only when effective state is `down`, the monitor is enabled, and maintenance/rollup rules do not mute it.",
             "The initial notification is sent through eligible routes after each route's configured delay.",
             "While the condition remains down, reminders are sent at the tenant reminder interval.",
@@ -269,7 +275,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
+            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
         },
         {
           type: "table",
@@ -278,13 +284,14 @@ export const ALERTING_PAGE: DocPage = {
             ["`created`", "Message", "Trigger / create"],
             ["`reminder`", "Message at the reminder interval", "Skipped — the provider escalates and re-notifies on its own"],
             ["`acknowledged`", "Not sent", "Acknowledge, once per paged channel"],
+            ["`suspected_cause`", "One follow-up message per paged channel when triage names a cause ([opt-in](#ai-triage))", "Not sent: their APIs add content by re-triggering, and an advisory hint must never re-page"],
             ["`resolved`", "Message", "Resolve / close"],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
+            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
         },
         {
           type: "list",
@@ -298,7 +305,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: if an operator acknowledges while a paging trigger is still waiting on a retry, the acknowledgement that went ahead is a no-op at the provider, so the worker acknowledges again right after the late trigger lands, and the incident does not keep escalating.",
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: if an operator acknowledges while a paging trigger is still waiting on a retry, the acknowledgement that went ahead is a no-op at the provider, so the worker acknowledges again right after the late trigger lands, and the incident does not keep escalating.",
         },
         {
           type: "callout",
@@ -312,7 +319,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "info",
           title: "Known gaps",
           text:
-            "Acknowledgement syncs one way: acknowledging in Probara acknowledges the PagerDuty or Opsgenie alert, but acknowledging or resolving in the provider does not change the Probara alert. Recipients of an SMS channel are texted in parallel, but when one fails transiently the whole send is retried, so recipients that already received it can get a duplicate.",
+            "Acknowledgement syncs one way: acknowledging in Probara acknowledges the PagerDuty or Opsgenie alert, but acknowledging or resolving in the provider does not change the Probara alert. Retrying an SMS send for one recipient does not text the others again: every number Twilio accepted for that event (or that reminder round) is skipped. A number can still get a duplicate when Twilio accepted the message but its answer never arrived (a timeout or a crash mid-request), or when recording the acceptance failed while another number's failure forced a retry.",
         },
       ],
     },
@@ -328,7 +335,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
+            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
         },
         {
           type: "table",
@@ -351,7 +358,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Templates receive the raw alert fields (`monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out and the error is logged.",
+            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
         },
       ],
     },
@@ -433,7 +440,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An HTTP monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+            "An HTTPS or SIP-over-TLS monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
         },
         {
           type: "callout",
@@ -465,7 +472,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Maintenance windows are classified as upcoming, active, or past. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during the active interval.",
+            "Maintenance windows are classified as upcoming, active, or past. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during the active interval. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest start, past (and the unfiltered list) by most recent end, so a page cut never drops the next window.",
         },
         {
           type: "paragraph",
@@ -571,7 +578,12 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When an effective [tenant LLM configuration](/docs/administration/#ai-settings) is enabled, an incident analysis request queues asynchronous work. Its result progresses through `pending`, `ready`, or `failed` and can include a summary, probable root cause, contributing factors, recommended actions, confidence, and evidence.",
+            "When [workspace local AI](/docs/administration/#ai-settings) is enabled, incident analysis queues asynchronous work through `AI_RCA`. Evidence spans 15 minutes before the earliest linked monitor alert (incident creation when none is linked) through 60 minutes after it, capped at analysis request time. Results from jobs that expired before a worker ran them (`result_source=platform`) are not evidence. Linked mesh-edge alerts are not analysed; they are listed by alert and location ID under incomplete evidence. Full-window summaries, sampled transitions, configured upstream checks, overlapping maintenance, allowlisted timings/certificate facts and fresh host utilization support monitor-level decisions. Results retain summary, suspected cause, contributing factors, actions, confidence and evidence, with structured model/score/reference metadata. Ambiguous or unsupported incidents complete as `ready` with insufficient evidence. A local AI that is temporarily unavailable (queue full with HTTP 429, model loading or restarting with 502/503/504, connection refused) is retried automatically, 1 and then 2 minutes later or after the service's `Retry-After` (at most 2 minutes), for up to 3 deliveries; other service failures, and an analysis still unavailable on its third delivery, become `failed` with a retry action. Each delivery runs under one deadline (`LOCAL_AI_TIMEOUT_SECONDS` plus 30 seconds); after repeated errors the run is recorded as failed, and database-connected workers fail any analysis still pending after 20 minutes (30 minutes if a run still holds it), which outlasts the unavailable-service retries. With no such worker running, pending analyses wait until one returns. Historical provider results remain visible as legacy analyses.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Below a ready analysis, editors and admins answer **Was this analysis right?** to record a training label for the local model. **Confirm** keeps the suspected cause and each monitor's shown answer. **Correct** picks the actual cause; each monitor's answer follows it only where that monitor's own evidence supports it, otherwise it becomes insufficient evidence. With more than one monitor, per-monitor answers can be set individually. The label stores the exact evidence the model saw, copied server-side, and a later change replaces it. Viewers see the existing label read-only. Legacy analyses, analyses that sent no monitor decisions, and analyses completed before labels existed cannot be labelled; run a new analysis. Labels do not change the incident, alerts or monitor state. See [AI label endpoints](/docs/api/#ai-labels).",
         },
         {
           type: "callout",
@@ -579,6 +591,81 @@ export const ALERTING_PAGE: DocPage = {
           title: "Analysis is advisory",
           text:
             "Generated findings are not a state transition or remediation action. Operators must validate them against result history, dependency evidence, deployment events, and system telemetry before acting.",
+        },
+      ],
+    },
+    {
+      id: "ai-triage",
+      title: "Automatic alert triage",
+      intro:
+        "With **Automatic alert triage** turned on in [Settings → AI](/docs/administration/#ai-settings), each new open alert gets one suspected cause from the same local model, catalogue and evidence checks as [incident analysis](#ai-analysis). Triage is shown next to the alert, and can optionally be sent once to the channels already paged for it (see suspected-cause follow-ups below). [SLA reports](/docs/slas/#suspected-causes) roll monitor outages up by these suspected causes at medium or high confidence, operator labels included (a low-confidence one counts as inconclusive).",
+      blocks: [
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Triage never changes paging",
+          text:
+            "Triage never delays, routes, suppresses or re-prioritises a page, and never changes an alert's severity or status. Created, reminder, acknowledged and resolved notifications are identical with triage on or off. The only thing it can send is the opt-in follow-up below, at most once per alert per channel. If local AI is temporarily unavailable (queue full, model loading or restarting, connection refused), the triage is retried up to 3 deliveries over about 3 minutes; if it is still unavailable, the triage is recorded as failed. Alerting carries on unchanged either way. Validate a suspected cause like any other evidence before acting on it.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Database-connected platform workers run a relay every 15 seconds. It claims alerts that are open (`active` or `acknowledged`, so acknowledging in the first minute still gets a triage), triggered within the last 6 hours, and older than the settle wait. The settle wait is the workspace delay, but at least two check intervals of the alert's monitor, so the alert's own failing checks are part of the evidence. The two-interval part is capped at one hour, so monitors that check less often than every 30 minutes are triaged an hour after the alert opens. An alert that resolves within the wait is never triaged, and alerts from before auto-triage was turned on are not triaged once they are more than 6 hours old. Claiming is oldest alert first. Each workspace has an hourly cap on triages, counted over the last hour with skipped ones excluded. All workspaces also share a platform-wide limit of 200 queued triages, so an alert storm cannot queue more work than the local AI can process before the jobs expire.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Evidence covers the alert's monitor (a group alert expands to its members), its configured upstreams, and the dependency root that suppressed it, if any. The window runs from 15 minutes before the alert triggered to 60 minutes after, capped at claim time. Window, sampling and exclusion rules are the same as for incident analysis. Each alert has one triage. It is not re-run while the alert stays open, and a reopened condition is a new alert.",
+        },
+        {
+          type: "table",
+          columns: ["Status", "Shown as", "Meaning"],
+          rows: [
+            ["`pending`", "Triaging… (muted)", "Claimed and queued, or running"],
+            ["`ready`", "Suspected <cause> · <confidence>, or No clear cause", "A catalogue hypothesis with low/medium/high confidence, or the model abstained (insufficient evidence). The tooltip holds the summary"],
+            ["`failed`", "Triage failed (muted)", "The local AI returned invalid decisions or was still unavailable after 3 deliveries, the run failed after repeated errors, the run was still pending 30 minutes after a worker started it, or no worker started it within 70 minutes of the claim (queued jobs expire after an hour)"],
+            ["`skipped` / `resolved`", "Not triaged (muted)", "The alert resolved before the triage ran; the model is not called"],
+            ["`skipped` / `cooldown`", "Not triaged (muted)", "The same monitor had a ready triage within the workspace cooldown"],
+            ["`skipped` / `disabled`", "Not triaged (muted)", "Auto-triage, workspace AI or installation AI was turned off (or `AI_TRIAGE_ENABLED=false`) while the job was queued"],
+            ["`skipped` / `not_modeled`", "Hidden", "Mesh-edge alerts have no monitor to analyse"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The Alerts table shows the triage as a pill in the monitor cell, and incident detail shows it next to each linked alert. Pills update the next time the list loads, not live: the alert stream carries alert changes only. Triage runs only while auto-triage and workspace AI are both on. Turning it off, setting `AI_TRIAGE_ENABLED=false`, or setting `LOCAL_AI_DISABLED=true` stops new claims, and triages already queued finish as skipped without calling the model. A job that never reached the queue is published again up to twice, 3 minutes apart. Two alerts of different kinds on one monitor triaged at the same moment can both run, because the cooldown only counts triages that are already ready.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Suspected-cause follow-ups.** With **Send suspected causes to alert channels** also on (it needs auto-triage and workspace AI), the alerter sends one advisory follow-up per channel that was already paged for the alert, after the page went out. Pages are never held back for it. The table lists when it is sent and when it is not.",
+        },
+        {
+          type: "table",
+          columns: ["Condition", "Follow-up"],
+          rows: [
+            ["Ready triage naming a catalogue cause with medium or high confidence, completed after the workspace turned follow-ups on", "Sent once per channel"],
+            ["No clear cause (abstention), low confidence, or a cause the running catalogue does not know", "Not sent; the pill still shows it"],
+            ["An operator corrected the cause before it went out", "Not sent; confirming keeps it"],
+            ["Channel not paged for the alert (unrouted, still inside its escalation delay, or suppressed from the start), no longer routed to the monitor, or inactive", "Not sent. A later escalation tier gets its own follow-up once its page goes out"],
+            ["Less than 3 minutes since that channel's page", "Waits, so it reads as a follow-up"],
+            ["Triage and the channel's page both more than an hour old", "Not sent"],
+            ["Alert resolved, monitor in maintenance, member of a roll-up group, or dependency-suppressed (muted exactly like a reminder)", "Not sent"],
+            ["Alert acknowledged", "Sent: the hint helps whoever is working it"],
+            ["Mesh-edge alert, or triage skipped (cooldown, resolved)", "Not sent: there is no ready triage"],
+            ["`LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` on the alerter", "Not sent, including from triages that were already ready"],
+            ["PagerDuty or Opsgenie / JSM channel", "Not sent (chat, email, SMS and webhook channels get it)"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The follow-up is titled **Suspected Cause: <monitor>** and says which page it follows up on (for example 'Down alert' or 'CPU Usage High', so two host-metric alerts on one host stay distinct), the suspected cause, its confidence, the catalogue's suggested first check, the trigger time and how long the alert has been open, plus the dependency root cause when one is known. It ends with a link to that alert on the Alerts page when `APP_BASE_URL` is set. Email follow-ups are separate messages with the subject `[Suspected Cause] <monitor>`, never threaded replies, and ignore channel template overrides. SMS channels send it as one more text per recipient. Reminders, acknowledgements and the resolve keep their own schedule. Under asynchronous dispatch the order is best effort: a page still on the delivery worker's retry backoff after 3 minutes can arrive after its follow-up, and a page the worker dropped for good still counts as paged.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Editors and admins can label a ready triage from the alert's row menu (⋮): **Confirm cause** or **Correct cause…**, or **Confirm no cause** and **Name the cause…** when the model abstained. Once labelled, a **Change label…** button (tag icon) takes the menu's place. Correcting opens the same per-monitor control as incident labels. The label stores the evidence the model saw, copied server-side, is included in the [training export](/docs/administration/#ai-settings), and shares a split group with the earliest incident that links the alert. A triage that sent no decisions cannot be labelled. Labels never change the alert; a correction made before the follow-up went out cancels it. A label does replace the model's cause in [SLA report suspected causes](/docs/slas/#suspected-causes) computed afterwards (an issued report keeps the cause it froze). See [AI label endpoints](/docs/api/#ai-labels).",
         },
       ],
     },

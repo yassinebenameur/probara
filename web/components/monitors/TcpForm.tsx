@@ -1,20 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Monitor,
   CreateMonitorRequest,
   UpdateMonitorRequest,
-  TCPMonitorConfig,
-  DependencySuppression,
-  NotificationMode,
-  ChannelAssignment,
 } from '@/lib/types';
+import { buildTcpRequest, initialTcpFormState } from '@/lib/monitor-form/network';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
-import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
-import { LocationsSection } from './LocationsSection';
+import ScheduleSection from './ScheduleSection';
+import DependenciesField from './DependenciesField';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 
 interface TcpFormProps {
   monitor?: Monitor;
@@ -32,32 +29,17 @@ export default function TcpForm({
   loading = false,
 }: TcpFormProps) {
   const isEditMode = Boolean(monitor);
-  const initialTcpConfig =
-    !isEditMode && initialData?.type === 'tcp' ? (initialData.config as TCPMonitorConfig) : undefined;
-  const existingConfig = monitor && monitor.type === 'tcp' ? (monitor.config as TCPMonitorConfig) : undefined;
 
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    host: existingConfig?.host ?? initialTcpConfig?.host ?? '',
-    port: existingConfig?.port ?? initialTcpConfig?.port ?? 0,
-    use_tls: existingConfig?.use_tls ?? initialTcpConfig?.use_tls ?? false,
-    tls_skip_verify: existingConfig?.tls_skip_verify ?? initialTcpConfig?.tls_skip_verify ?? false,
-    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
-    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
-    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
-  });
+  const [formData, setFormData] = useState(() => initialTcpFormState(monitor, initialData));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useClearErrorsOnEdit(formData, setErrors);
+  useFollowEnabled(monitor?.enabled, setFormData);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (reportConstraintViolation(formRef.current)) return;
     setErrors({});
 
     const newErrors: Record<string, string> = {};
@@ -70,47 +52,18 @@ export default function TcpForm({
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
+      revealFirstError(formRef.current);
       return;
     }
 
-    const config: TCPMonitorConfig = {
-      host: formData.host.trim(),
-      port: formData.port,
-      use_tls: formData.use_tls,
-    };
-
-    if (formData.use_tls && formData.tls_skip_verify) {
-      config.tls_skip_verify = true;
-    }
-
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'tcp',
-      config,
-      interval_seconds: formData.interval_seconds,
-      timeout_seconds: formData.timeout_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
-    }
-    requestData.location_ids = formData.location_ids;
-    requestData.location_quorum =
-      formData.location_ids.length >= 2
-        ? Math.min(formData.location_quorum, formData.location_ids.length)
-        : 1;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildTcpRequest(formData);
 
     await onSubmit(requestData);
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -121,183 +74,132 @@ export default function TcpForm({
           />
         </FormField>
 
-        <div className="grid grid-cols-3 gap-4">
-          <div className="col-span-2">
-            <FormField label="Host" required error={errors.host} description="Hostname or IP address to connect to">
-              <input
-                type="text"
-                value={formData.host}
-                onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-                placeholder="db.internal.example.com"
-                className="input"
-              />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="sm:col-span-2">
+            <FormField label="Host" required error={errors.host}>
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="text"
+                    value={formData.host}
+                    onChange={(e) => setFormData({ ...formData, host: e.target.value })}
+                    placeholder="db.internal.example.com"
+                    className="input font-mono"
+                  />
+                  <FieldHint>Hostname or IP address to connect to</FieldHint>
+                </>
+              )}
             </FormField>
           </div>
 
-          <FormField label="Port" required error={errors.port} description="TCP port, e.g. 5432">
-            <input
-              type="number"
-              value={formData.port || ''}
-              onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value, 10) || 0 })}
-              min={1}
-              max={65535}
-              placeholder="5432"
-              className="input"
-            />
+          <FormField label="Port" required error={errors.port}>
+            {(control) => (
+              <>
+                <input
+                  {...control}
+                  type="number"
+                  value={formData.port || ''}
+                  onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value, 10) || 0 })}
+                  min={1}
+                  max={65535}
+                  placeholder="5432"
+                  className="input tabular-nums"
+                />
+                <FieldHint>TCP port, e.g. 5432</FieldHint>
+              </>
+            )}
           </FormField>
         </div>
 
-        <FormField label="TLS handshake" description="Also complete a TLS handshake after connecting">
-          <div className="flex h-10 items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-3">
-            <span className={`text-sm ${formData.use_tls ? 'text-cyan-300' : 'text-slate-400'}`}>
-              {formData.use_tls ? 'Enabled' : 'Disabled'}
-            </span>
-            <button
-              type="button"
-              onClick={() => setFormData({ ...formData, use_tls: !formData.use_tls })}
-              className={`relative h-5 w-9 rounded-full transition-colors ${
-                formData.use_tls ? 'bg-cyan-500' : 'bg-slate-700'
-              }`}
-              aria-pressed={formData.use_tls}
-              aria-label="Toggle TLS handshake"
-            >
-              <span
-                className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                  formData.use_tls ? 'translate-x-4' : ''
-                }`}
-              />
-            </button>
-          </div>
-        </FormField>
+        <ToggleRow
+          title="TLS handshake"
+          description="Also complete a TLS handshake after connecting"
+          checked={formData.use_tls}
+          onChange={(v) => setFormData({ ...formData, use_tls: v })}
+        />
 
         {formData.use_tls && (
-          <FormField label="Skip certificate verification" description="Accept self-signed or mismatched certificates">
-            <div className="flex h-10 items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-3">
-              <span className={`text-sm ${formData.tls_skip_verify ? 'text-amber-300' : 'text-slate-400'}`}>
-                {formData.tls_skip_verify ? 'Verification off' : 'Verification on'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })}
-                className={`relative h-5 w-9 rounded-full transition-colors ${
-                  formData.tls_skip_verify ? 'bg-amber-500' : 'bg-slate-700'
-                }`}
-                aria-pressed={formData.tls_skip_verify}
-                aria-label="Toggle certificate verification"
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                    formData.tls_skip_verify ? 'translate-x-4' : ''
-                  }`}
-                />
-              </button>
-            </div>
-          </FormField>
+          <ToggleRow
+            title="Skip certificate verification"
+            description="Accept self-signed or mismatched certificates"
+            checked={formData.tls_skip_verify}
+            onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
+            tone="warning"
+          />
         )}
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Schedule">
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Interval (seconds)" description="How often to check">
-            <input
-              type="number"
-              value={formData.interval_seconds}
-              onChange={(e) => setFormData({ ...formData, interval_seconds: parseInt(e.target.value, 10) || 60 })}
-              min={10}
-              step={5}
-              className="input"
-            />
-          </FormField>
+      <ScheduleSection
+        intervalSeconds={formData.interval_seconds}
+        onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
+        timeoutSeconds={formData.timeout_seconds}
+        onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
+        timeoutError={errors.timeout_seconds}
+        locations={{
+          selectedIds: formData.location_ids,
+          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
+          quorum: formData.location_quorum,
+          onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
+        }}
+        enabled={formData.enabled}
+        onEnabledChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+        enabledDescription="Run TCP connect checks on this schedule"
+      />
 
-          <FormField
-            label="Timeout (seconds)"
-            error={errors.timeout_seconds}
-            description="Must be less than interval"
-          >
-            <input
-              type="number"
-              value={formData.timeout_seconds}
-              onChange={(e) => setFormData({ ...formData, timeout_seconds: parseInt(e.target.value, 10) || 10 })}
-              min={1}
-              className="input"
-            />
-          </FormField>
-        </div>
-      </FormSection>
-
-      <FormSection
-        title="Locations"
-        summary={formData.location_ids.length > 0 ? `${formData.location_ids.length} selected` : 'Default fleet'}
-        collapsible
-        defaultOpen={formData.location_ids.length > 0}
+      <FormPanel
+        title="Alerting"
+        rows={
+          <DependenciesField
+            selectedIds={formData.depends_on_ids}
+            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+            excludeId={monitor?.id}
+            error={errors.depends_on_ids}
+          />
+        }
       >
-        <LocationsSection
-          selectedIds={formData.location_ids}
-          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
-          quorum={formData.location_quorum}
-          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
-        />
-      </FormSection>
-
-      <FormSection title="Alerting">
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
-          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
           mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}
-          hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+          hasDependencies={formData.depends_on_ids.length > 0}
+          onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
           customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
         />
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Meta">
-        <FormField label="Tags" description="Comma-separated, e.g. production, network, critical">
-          <input
-            type="text"
-            value={formData.tags}
-            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-            placeholder="production, network, critical"
-            className="input"
+      <LabelsSection
+        tags={formData.tags}
+        onTagsChange={(v) => setFormData({ ...formData, tags: v })}
+        placeholder="production, network, critical"
+      />
+
+      <FormActionBar
+        summary={
+          <PlanSummary
+            errors={errors}
+            parts={
+              formData.host.trim() && formData.port
+                ? [
+                    everyLabel(formData.interval_seconds),
+                    <PlanTarget key="t">
+                      TCP {formData.host.trim()}:{formData.port}
+                    </PlanTarget>,
+                    formData.use_tls && 'with TLS',
+                    downAfterLabel(formData.consecutive_failures_threshold),
+                  ]
+                : []
+            }
           />
-        </FormField>
-
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Monitor enabled</p>
-            <p className="text-xs text-slate-500">Run TCP connect checks on schedule</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={formData.enabled}
-            aria-label="Toggle monitor enabled"
-          >
-            <span
-              className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                formData.enabled ? 'translate-x-4' : ''
-              }`}
-            />
-          </button>
-        </div>
-      </FormSection>
-
-      <FormActions
-        middle={
-          formData.host.trim() && formData.port
-            ? `Every ${formData.interval_seconds}s · TCP connect ${formData.host.trim()}:${formData.port}${formData.use_tls ? ' (TLS)' : ''} · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`
-            : undefined
         }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Update monitor' : 'Create monitor',
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
           loading,
           disabled: loading,
           type: 'submit',

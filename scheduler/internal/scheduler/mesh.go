@@ -187,7 +187,7 @@ func (s *Scheduler) publishMeshJob(ctx context.Context, edge meshEdge) error {
 	job := models.NewJob(uuid.New().String(), edge.TenantID.String(), models.JobTypeCheck, "v1", payloadJSON)
 	job = job.WithDeadline(deadline)
 
-	return s.publishJob(ctx, s.jobSubject(edge.SourceID.String()), job)
+	return s.publishJob(ctx, s.jobSubject(edge.SourceID.String()), job, nil)
 }
 
 // pruneTenantMeshResults applies the tenant's retention window to

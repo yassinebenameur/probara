@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { displayValueLabel, getEffectiveMonitorStatus, getHTTPDisplayValues } from './monitor-utils';
+import {
+  calculateLatencyStats,
+  displayStatusFromState,
+  displayValueLabel,
+  getEffectiveMonitorStatus,
+  isFailingStatus,
+  getHTTPDisplayValues,
+  monitorTarget,
+  shortFailureReason,
+  sortBySeverity,
+  STATUS_RANK,
+} from './monitor-utils';
 import type { CheckResult } from './types';
 
 function successResult(): CheckResult {
@@ -85,4 +96,115 @@ test('display values come from the latest non-platform result', () => {
 test('no display values without http metrics', () => {
   assert.deepEqual(getHTTPDisplayValues([successResult()]), []);
   assert.deepEqual(getHTTPDisplayValues([]), []);
+});
+
+test('latency stats ignore failed checks', () => {
+  const results = [
+    { id: 'a', status: 'failure', result_source: 'monitor', latency_ms: 10000, created_at: '' },
+    { id: 'b', status: 'success', result_source: 'monitor', latency_ms: 60, created_at: '' },
+    { id: 'c', status: 'success', result_source: 'monitor', latency_ms: 40, created_at: '' },
+  ] as unknown as CheckResult[];
+  const stats = calculateLatencyStats(results);
+  assert.equal(stats.median, 50);
+  assert.equal(stats.latest, 60);
+  assert.equal(stats.samples, 2);
+  assert.deepEqual(calculateLatencyStats(failureResults()), { median: 0, p95: 0, latest: 0, samples: 0 });
+});
+
+test('sortBySeverity puts problems first, then name', () => {
+  const items = [
+    { name: 'b', s: 'up' },
+    { name: 'a', s: 'paused' },
+    { name: 'c', s: 'down' },
+    { name: 'a', s: 'up' },
+  ] as const;
+  const sorted = sortBySeverity(items, (i) => i.s, (i) => i.name).map((i) => `${i.s}:${i.name}`);
+  assert.deepEqual(sorted, ['down:c', 'up:a', 'up:b', 'paused:a']);
+  assert.ok(STATUS_RANK.down < STATUS_RANK.degraded);
+});
+
+test('monitorTarget mirrors the list and detail target', () => {
+  assert.equal(monitorTarget({ type: 'http', config: { url: 'https://x.test/h' } as never }), 'https://x.test/h');
+  assert.equal(monitorTarget({ type: 'grpc', config: { host: 'g.test' } as never }), 'g.test:443');
+  assert.equal(monitorTarget({ type: 'tcp', config: { host: 'db', port: 5432 } as never }), 'db:5432');
+  assert.equal(monitorTarget({ type: 'ping', config: { host: '10.0.0.1' } as never }), '10.0.0.1');
+  assert.equal(monitorTarget({ type: 'push', config: {} as never }), null);
+  assert.equal(monitorTarget({ type: 'sip', config: { host: 'sbc.test', port: 5080 } as never }), 'sbc.test:5080');
+  assert.equal(monitorTarget({ type: 'sip', config: { host: 'sbc.test', transport: 'TLS' } as never }), 'sbc.test:5061');
+  assert.equal(monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'rfc3263', port: 0 } as never }), 'x.test');
+  // Stored rows may spell the mode in any case, as the worker accepts.
+  assert.equal(monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'RFC3263', port: 0 } as never }), 'x.test');
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'rfc3263', port: 5070 } as never }),
+    'x.test:5070'
+  );
+  // An IP host skips SRV: the worker dials it at the default port.
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: '192.0.2.10', resolution: 'rfc3263', port: 0 } as never }),
+    '192.0.2.10:5060'
+  );
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: '2001:db8::1', resolution: 'rfc3263', transport: 'tls' } as never }),
+    '2001:db8::1:5061'
+  );
+  // A test call reads as who it rings.
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: 'trunk.test', domain: 'example.com', method: 'invite', call: { number: '1000' } } as never }),
+    '1000@example.com'
+  );
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: 'trunk.test', method: 'invite', call: { target_uri: 'sip:ivr@pbx.test' } } as never }),
+    'sip:ivr@pbx.test'
+  );
+});
+
+test('shortFailureReason strips Go framing', () => {
+  assert.equal(
+    shortFailureReason('connect: Get "http://localhost:9999/": dial tcp [::1]:9999: connect: connection refused'),
+    'connection refused'
+  );
+  assert.equal(
+    shortFailureReason('timeout: Get "https://x.test": context deadline exceeded (Client.Timeout exceeded while awaiting headers)', {
+      timeoutSeconds: 10,
+    }),
+    'timed out after 10 s'
+  );
+  assert.equal(shortFailureReason('dns: Get "https://nope.test": dial tcp: lookup nope.test on 1.1.1.1:53: no such host'), 'no such host');
+  assert.equal(shortFailureReason('status_code: got 503'), 'HTTP 503');
+  assert.equal(shortFailureReason('status_code: got 503; latency: 1200ms > 1000ms'), 'HTTP 503 + latency');
+  assert.equal(shortFailureReason('latency: 1200ms > 1000ms'), 'slow response (1.2 s, limit 1.0 s)');
+  assert.equal(
+    shortFailureReason('tls: failed to verify certificate: x509: certificate has expired or is not yet valid'),
+    'TLS certificate expired'
+  );
+  assert.equal(shortFailureReason('keyword "ok" not found'), 'keyword "ok" not found');
+  // Assertion messages quote the operator's values; never read them as transport errors.
+  assert.equal(shortFailureReason('body: missing "timeout"'), 'body: missing "timeout"');
+  assert.equal(shortFailureReason('body: contains "connection refused"'), 'body: contains "connection refused"');
+  assert.equal(
+    shortFailureReason('body: regex matched "certificate has expired"'),
+    'body: regex matched "certificate has expired"'
+  );
+  assert.equal(shortFailureReason('header X-Status: != "timeout"'), 'header X-Status: != "timeout"');
+  assert.equal(shortFailureReason('', { httpStatus: 502 }), 'HTTP 502');
+  assert.equal(shortFailureReason(null), '');
+});
+
+test('displayStatusFromState maps persisted state after paused and maintenance', () => {
+  assert.equal(displayStatusFromState({ enabled: false, in_maintenance: true, current_state: 'down' }), 'paused');
+  assert.equal(displayStatusFromState({ enabled: true, in_maintenance: true, current_state: 'down' }), 'maintenance');
+  assert.equal(displayStatusFromState({ enabled: true, current_state: 'suspect' }), 'degraded');
+  assert.equal(displayStatusFromState({ enabled: true, current_state: 'degraded' }), 'degraded');
+  assert.equal(displayStatusFromState({ enabled: true, current_state: 'up' }), 'up');
+  assert.equal(displayStatusFromState({ enabled: true, current_state: 'down' }), 'down');
+  assert.equal(displayStatusFromState({ enabled: true }), 'unknown');
+  // A location carries no enabled flag: absent is not paused.
+  assert.equal(displayStatusFromState({ current_state: 'down' }), 'down');
+});
+
+test('isFailingStatus counts down and degraded only', () => {
+  assert.deepEqual(
+    (['down', 'degraded', 'unknown', 'up', 'maintenance', 'paused'] as const).filter(isFailingStatus),
+    ['down', 'degraded']
+  );
 });

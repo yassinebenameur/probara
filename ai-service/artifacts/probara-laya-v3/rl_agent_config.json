@@ -1,0 +1,32 @@
+{
+  "encoder": "jhu-clsp/mmBERT-base",
+  "head_layers": 2,
+  "max_len": 512,
+  "head_max_len": 256,
+  "max_prefixes": 6,
+  "act_costs": {
+    "escalate": 0.5
+  },
+  "cost_wrong_act": 3.0,
+  "amp_dtype": "bf16",
+  "model_name": "probara-laya-v3",
+  "temperature": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "temperature_by_options": {},
+  "training": {
+    "fine_tuned_from_checkpoint": false,
+    "initialised_from": "base head",
+    "epochs_completed": 3,
+    "encoder_device": "cpu",
+    "head_device": "mps",
+    "seed": 20261011,
+    "loss": "soft-ce",
+    "freeze_encoder": true,
+    "train_items": 6000
+  },
+  "catalogue": "probara-evidence-v1",
+  "state_format": 2
+}

@@ -49,6 +49,9 @@ type IncidentService interface {
 	// RequestAIAnalysis creates a pending AI root cause analysis row for an incident.
 	RequestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID, requestedBy *uuid.UUID) (*models.IncidentAIAnalysis, error)
 
+	// FailPendingAIAnalysis marks a pending AI analysis row failed (no-op once it left pending).
+	FailPendingAIAnalysis(ctx context.Context, tenantID, analysisID uuid.UUID, message string) error
+
 	// GetLatestAIAnalysis returns the most recent AI analysis for an incident (nil if none).
 	GetLatestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error)
 

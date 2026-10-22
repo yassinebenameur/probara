@@ -236,13 +236,20 @@ func (s *Service) query(ctx context.Context, tenantID uuid.UUID, status string, 
 	where := []string{"mw.tenant_id = $1"}
 	args := []interface{}{tenantID}
 
+	// Each lifecycle lists what an operator reaches for first, so a page cut
+	// keeps it: active by soonest end, upcoming by soonest start, past (and
+	// the unfiltered list) newest first.
+	orderBy := "mw.starts_at DESC, mw.id"
 	switch status {
 	case "active":
 		where = append(where, "mw.starts_at <= NOW() AND mw.ends_at > NOW()")
+		orderBy = "mw.ends_at ASC, mw.id"
 	case "upcoming":
 		where = append(where, "mw.starts_at > NOW()")
+		orderBy = "mw.starts_at ASC, mw.id"
 	case "past":
 		where = append(where, "mw.ends_at <= NOW()")
+		orderBy = "mw.ends_at DESC, mw.id"
 	case "":
 	default:
 		return nil, 0, fmt.Errorf("invalid status filter %q", status)
@@ -277,9 +284,9 @@ func (s *Service) query(ctx context.Context, tenantID uuid.UUID, status string, 
 		LEFT JOIN monitors m ON m.id = mwm.monitor_id AND m.deleted_at IS NULL
 		WHERE %s
 		GROUP BY mw.id
-		ORDER BY mw.starts_at DESC, mw.id
+		ORDER BY %s
 		LIMIT $%d OFFSET $%d
-	`, whereClause, len(args)-1, len(args))
+	`, whereClause, orderBy, len(args)-1, len(args))
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

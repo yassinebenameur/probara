@@ -40,7 +40,7 @@ export const OPERATIONS_PAGE: DocPage = {
             [
               'Worker',
               'NATS',
-              'Can execute checks without PostgreSQL. Database-free location workers intentionally omit DB; AI-RCA and notification consumers require DB.',
+              'Can execute checks without PostgreSQL. Database-free location workers intentionally omit DB; AI-RCA, alert-triage (relay and consumer) and notification consumers require DB.',
             ],
             [
               'Alerter',
@@ -56,6 +56,11 @@ export const OPERATIONS_PAGE: DocPage = {
               'Frontend',
               'Reachable API proxy target',
               'Static shell may load, but authenticated product workflows fail when API is unreachable.',
+            ],
+            [
+              'Local AI service',
+              'None: no database, NATS or network egress; only its token and the bundled model',
+              'When it is down or saturated, API and worker report local AI unavailable, incident analyses retry and then fail with a retry action, new alert triages retry for a few minutes and are then recorded as failed (paging is unaffected), and dependency suggestions fail. Check execution, alerting and status pages are unaffected.',
             ],
             [
               'Collector agent (`probara-collector`)',
@@ -156,6 +161,12 @@ kubectl -n probara rollout status deployment/probara-worker`,
               'PostgreSQL responds within five seconds.',
             ],
             [
+              'Local AI',
+              '`http://127.0.0.1:8090`',
+              '`/healthz`, unauthenticated: the process answers, and no batch has run past `LOCAL_AI_MAX_INFERENCE_SECONDS` (503 `wedged` otherwise, so Kubernetes restarts the pod).',
+              '`/readyz` requires `Authorization: Bearer <LOCAL_AI_TOKEN>` (401 otherwise) and returns the model identity; 503 while the model loads, when `LOCAL_AI_DISABLED=true`, during shutdown, or while a batch is wedged.',
+            ],
+            [
               'NATS',
               '`http://localhost:8222/healthz`',
               'Broker monitor endpoint.',
@@ -173,6 +184,7 @@ curl -fsS http://localhost:9091/readyz
 curl -fsS http://localhost:9092/readyz
 curl -fsS http://localhost:9093/readyz
 curl -fsS http://localhost:9094/readyz
+curl -fsS -H "Authorization: Bearer $LOCAL_AI_TOKEN" http://127.0.0.1:8090/readyz
 
 make healthcheck`,
         },
@@ -235,13 +247,23 @@ make healthcheck`,
             ],
             [
               'Worker NATS/results',
-              '`nats_ack_total`, `nats_nak_total`, `result_publish_errors_total`',
-              'NAK or publish-error growth and falling ACK throughput.',
+              '`nats_ack_total`, `nats_nak_total`, `result_publish_errors_total`, `side_effect_redelivery_skipped_total{type=…}`, `side_effect_result_abandoned_total{type=…}`, `side_effect_result_interrupted_total{type=…}`',
+              'NAK or publish-error growth and falling ACK throughput; any skipped redelivery or abandoned result of a side-effecting check (a worker died or lost NATS mid-check). Interrupted results are side-effecting checks a worker shutdown cut short (expected around deploys; each is a missing sample).',
+            ],
+            [
+              'SIP test calls',
+              '`sip_linger_total{outcome=late_answer|late_bye_ok|late_bye_unconfirmed|late_cancel|quiet|flow_closed|aborted}`, `sip_linger_dropped_total`, `test_check_side_effect_rejected_total{type=…}`, `sip_call_teardown_unconfirmed_total{evidence=audio_after_bye|none}`, `sip_media_sessions_total{outcome=measured|truncated|refused|unusable_answer|not_held|interrupted}`, `sip_media_refused_total{reason=…}`, `sip_media_rx_dropped_total{reason=invalid|foreign|overflow}`, `sip_media_unreliable_total`',
+              "Any `sip_linger_dropped_total` growth: every linger slot (32 per worker) was taken, so a late or forked answer to that call was neither ACKed nor BYE'd and may stay up, and billed, until the far end times it out. Sustained `late_answer` means the far end answers after the check gave up. `late_bye_ok` and `late_bye_unconfirmed` count the second BYE a linger sends when a call's hang-up BYE drew no response: `late_bye_ok` means the far end confirmed it (a 2xx, or 481 for a dialog it had already ended), and `late_bye_unconfirmed` means it went unanswered again or was refused, so the call may still be up, and billed, until the far end times it out; it outranks a late answer in the same linger. `test_check_side_effect_rejected_total` counts `Test` calls a worker refused because 16 were already running on it; scheduled checks are not affected. `sip_call_teardown_unconfirmed_total{evidence=audio_after_bye}` counts unconfirmed hang-ups after which the far end kept sending audio: those calls are likely still up and billed. For [call quality](/docs/monitors/#network-protocols), `sip_media_refused_total` by reason shows far ends whose media address the worker policy refuses (`private_behind_public` growth usually means a carrier leaks private SDP addresses, or `HTTP_ALLOWED_CIDRS` lacks an on-premises range); `sip_media_rx_dropped_total{reason=foreign}` growth means audio arriving from addresses the SDP did not name (asymmetric media); and any sustained `sip_media_unreliable_total` means the worker is too loaded to time media, so its quality thresholds are skipped: give it CPU or fewer concurrent checks.",
             ],
             [
               'Status live updates',
               '`probara_status_page_sse_subscriber_connected`',
               'Zero when low-latency status invalidation is expected.',
+            ],
+            [
+              'Local AI service (port 8090, plain-text exposition)',
+              '`probara_ai_ready`, `probara_ai_admitted`, `probara_ai_completed_total`, `probara_ai_rejected_total`, `probara_ai_failed_total`, `probara_ai_inference_seconds_sum`, `probara_ai_inflight_seconds`, `probara_ai_wedged`',
+              '`ready` at 0, growth in `rejected_total` (429 saturation) or `failed_total`, `admitted` pinned at queue capacity + 1, and `wedged` at 1 (the executing batch, `inflight_seconds` old, has passed `LOCAL_AI_MAX_INFERENCE_SECONDS`). Divide `inference_seconds_sum` by `completed_total` for mean batch time.',
             ],
           ],
         },
@@ -252,7 +274,13 @@ make healthcheck`,
           code: `curl -fsS http://localhost:8080/metrics | grep '^probara_'
 curl -fsS http://localhost:9091/metrics | grep '^probara_scheduler_'
 curl -fsS http://localhost:9092/metrics | grep '^probara_worker_'
-curl -fsS http://localhost:9093/metrics | grep '^probara_status_page_'`,
+curl -fsS http://localhost:9093/metrics | grep '^probara_status_page_'
+curl -fsS http://127.0.0.1:8090/metrics`,
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The local AI service runs one batch at a time and admits at most `LOCAL_AI_QUEUE_CAPACITY` more. A batch beyond that, or one that waits longer than `LOCAL_AI_QUEUE_TIMEOUT_SECONDS` (default 60 s, a few full batches) for the executing slot, gets HTTP 429 with `Retry-After: 5`. The worker treats that as transient: an incident analysis or alert triage is redelivered 1 minute and then 2 minutes later (or after the service’s `Retry-After`, at most 2 minutes), and the third failed delivery records it as failed; a failed analysis carries the action to check readiness and retry. Dependency suggestions, which the API computes on request, answer 503 `unavailable` with `Retry-After` instead of an error. A batch still running after `LOCAL_AI_MAX_INFERENCE_SECONDS` (default 120 s) is wedged: `/healthz` answers 503 and `probara_ai_wedged` is 1 until it finishes, so the Helm liveness probe restarts the pod; under Compose the container turns unhealthy and needs `docker compose restart local-ai`. Bodies over 512 KiB get 413 and evidence outside the allowlist 422. The chart does not annotate this pod for scraping; see [local AI values](/docs/deployment/#helm-values-local-ai).',
         },
         {
           type: 'callout',
@@ -322,7 +350,7 @@ go run ./cmd/admin`,
           tone: 'warning',
           title: 'Helm initialApiKey is not a bootstrap mechanism',
           text:
-            'The chart currently stores and prints `secrets.initialApiKey`, but no job or service creates a matching database API key. Bootstrap an administrator and create API keys through the authenticated product/API.',
+            'The chart still stores `secrets.initialApiKey` in its Secret, but no job or service creates a matching database API key, and the install notes no longer print it. Bootstrap an administrator and create API keys through the authenticated product/API.',
         },
       ],
     },
@@ -386,6 +414,16 @@ make db-restore`,
                 'Monitor state intervals (the timeline behind time-based availability and [SLA reports](/docs/slas/)) are not pruned by time; they are removed only with a monitor’s history or when a deleted monitor is purged. Issued SLA reports are kept until their SLA is deleted and survive monitor purges.',
             },
             {
+              term: 'Alert triage',
+              description:
+                'Each `alert_triage` row lives as long as its alert: it is deleted with the alert (monitor purge or history deletion) or with its workspace, and is not pruned by time or by `data_retention_days`. Labels on a triage outlive it, like other AI labels.',
+            },
+            {
+              term: 'AI training labels',
+              description:
+                'Operator labels on AI analyses, alert triages and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',
+            },
+            {
               term: 'Audit retention',
               description:
                 '`AUDIT_RETENTION_DAYS` is a separate compliance control, defaults to 365 days, and uses `0` to retain forever.',
@@ -445,7 +483,8 @@ make db-restore`,
             ['`CHECK_RESULTS` / `check.results`', 'Work-queue stream/subject', 'Workers publish; scheduler persists.'],
             ['`ALERTS` / `alerts`', 'Alert event stream/subject', 'Alerter publishes; API live subscriber consumes.'],
             ['`NOTIFICATIONS` / `alerts.dispatch.>`', 'Optional work queue', 'Async alerter-to-worker dispatch.'],
-            ['`AI_RCA` / `ai.rca.jobs`', 'AI work queue', 'API publishes tenant RCA work; DB-connected workers consume.'],
+            ['`AI_RCA` / `ai.rca.jobs`', 'AI work queue', 'API publishes tenant RCA work; DB-connected workers consume, restart the consumer with capped backoff (re-creating the durable if it disappears), and fail analyses pending for over 20 minutes (longer than the retries for a temporarily unavailable local AI).'],
+            ['`AI_TRIAGE` / `ai.triage.jobs`', 'Alert triage work queue (1-hour max age, 30-minute duplicate window)', 'Worker-internal; triage never changes paging (the alerter may send an opt-in suspected-cause follow-up from ready triages). The triage relay in DB-connected platform workers claims alerts every 15 seconds and publishes one job per claim, using the triage ID as `Nats-Msg-Id`. It republishes a job no worker has started up to twice, 3 minutes apart (duplicates are dropped), and fails triages still pending 30 minutes after a worker started them or 70 minutes after the claim when none did. The durable `ai-triage-workers` consumer restarts like `AI_RCA`. One relay tick runs at a time across replicas (a PostgreSQL advisory lock).'],
             ['Core NATS `statuspage.updates`', 'Non-JetStream fan-out', 'Cache/status update invalidation.'],
           ],
         },
@@ -607,6 +646,31 @@ helm lint ./helm/monitoring-platform \\
               'Frontend links point to old origin',
               '`NEXT_PUBLIC_*` changed only at runtime',
               'Rebuild the frontend client bundle with the desired public values or use stable relative routing.',
+            ],
+            [
+              'Settings → AI says “not configured correctly”',
+              '`LOCAL_AI_TOKEN` missing or shorter than 16 characters on the API, or an invalid `LOCAL_AI_URL`',
+              'Compare the API and worker environment with the service’s. A worker with the same problem fails incident analyses with “Local AI is not configured correctly for this installation”, claims no alerts for automatic triage (so the hourly cap is not spent on triages that would fail), and logs a warning at startup. In Helm, an existing Secret without `local_ai_token` leaves API and worker without a token by design; add the key or set `secrets.localAiTokenExistingSecret`.',
+            ],
+            [
+              'Settings → AI says “unreachable”',
+              'The service is not running, its image was never built or pulled, the URL points elsewhere, or a NetworkPolicy blocks the caller',
+              'Check `docker compose ps local-ai` / `kubectl get pods -l app.kubernetes.io/component=local-ai` and its logs. A local image build fetches the pinned base model from Hugging Face and fails on purpose for a checkpoint that is not release-approved; to run without local AI, set `LOCAL_AI_DISABLED=true` with the Make targets (`start-all`, `start-all-local`, `up`), which then skip `local-ai`, or `localAI.enabled=false` (Helm). Plain `docker compose up` still pulls or builds `local-ai` whatever `LOCAL_AI_DISABLED` says: name the other services instead, or set `LOCAL_AI_IMAGE` to an image you already have. Only the API and platform worker pods are admitted by the chart policy.',
+            ],
+            [
+              'Settings → AI says “not ready”',
+              'Model still loading, `LOCAL_AI_DISABLED=true` on the service only, a token mismatch (401), or a model whose catalogue version differs from the API’s',
+              'Probe `/readyz` with the token. A mismatch needs the same token on API, worker and service and a restart of all three. The readiness result is cached for about 30 seconds per API replica; the Settings test probes afresh.',
+            ],
+            [
+              'Local AI pod in `CreateContainerConfigError` after upgrade',
+              '`secrets.existingSecret` lacks the `local_ai_token` key',
+              'Add a token of at least 16 characters (`openssl rand -hex 32`) under that key, set `secrets.localAiTokenExistingSecret`, or set `localAI.enabled=false`.',
+            ],
+            [
+              'Incident analyses fail during load',
+              'Inference saturation: 429 responses exhausted the worker’s three deliveries',
+              'Watch `probara_ai_rejected_total` and `probara_ai_admitted`. Raise `localAI.queueCapacity` or `localAI.queueTimeoutSeconds` (it must stay below `localAI.timeoutSeconds`), give the pod more CPU up to 4 threads, or retry the analysis later. If `probara_ai_wedged` is 1, one batch is holding the slot: the liveness probe restarts the pod, or restart it yourself.',
             ],
             [
               'Prometheus cannot scrape API on 9090',

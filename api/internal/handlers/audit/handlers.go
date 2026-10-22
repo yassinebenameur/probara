@@ -78,6 +78,15 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// sort=occurred_at|action|resource|outcome, dir=asc|desc (whitelisted).
+	sortColumn, sortDesc, err := auditservice.ParseSort(r.URL.Query().Get("sort"), r.URL.Query().Get("dir"))
+	if err != nil {
+		errors.WriteValidationError(w, err.Error())
+		return
+	}
+	filters.Sort = sortColumn
+	filters.Desc = sortDesc
+
 	resp, err := h.service.List(r.Context(), tenantUUID, ctxpkg.IsSuperadmin(r.Context()), filters)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to list audit log")

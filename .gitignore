@@ -95,3 +95,10 @@ web/test-results/
 # Visual brainstorming sessions
 .superpowers/
 .dev-secrets.key
+
+# Local AI versioned binary artifact delivery (checksums in manifest.json)
+ai-service/artifacts/dataset/
+**/__pycache__/
+.pytest_cache/
+
+.dev-local-ai-token

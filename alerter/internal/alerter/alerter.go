@@ -27,6 +27,14 @@ type Alerter struct {
 	stop           chan struct{}
 	recoveryMu     sync.Mutex
 	recoveryCursor uuid.UUID
+	// suspectedCauseCursor rotates dispatchSuspectedCauses' batch; only the
+	// tick loop's single goroutine touches it.
+	suspectedCauseCursor suspectedCauseCursor
+
+	// Phase time budgets; zero means the production default. Tests shrink
+	// them (recoveryRetryBudget, suspectedCauseTimeBudget).
+	recoveryBudget       time.Duration
+	suspectedCauseBudget time.Duration
 
 	// sendFunc dispatches one channel notification. It defaults to
 	// sendChannelNotification and is swapped in tests so the lifecycle can be

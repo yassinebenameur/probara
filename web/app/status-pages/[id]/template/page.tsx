@@ -11,7 +11,9 @@ import {
   Rocket,
   RotateCcw,
   Trash2,
-  FileCode,
+  FileInput,
+  BookmarkPlus,
+  Library,
 } from 'lucide-react';
 import {
   StatusPage,
@@ -39,9 +41,33 @@ import {
   resolveStatusPageDraftPreviewUrl,
 } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import IconButton from '@/components/ui/IconButton';
+import FormField from '@/components/ui/FormField';
+import Pill from '@/components/ui/Pill';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Dialog from '@/components/ui/Dialog';
+import Input from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
+import { formatDateTime, formatDateTimeFull } from '@/lib/format';
+import useDocumentTitle from '@/lib/useDocumentTitle';
+import { followLiveSource, templateEditorState } from '@/lib/template-editor';
+import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
+
+const CODE_AREA =
+  'glass-well block w-full font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 ' +
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus';
+
+interface PendingConfirm {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  tone: 'danger' | 'default';
+  run: () => Promise<unknown>;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -55,12 +81,17 @@ export default function StatusPageTemplatePage() {
   const { showToast } = useToast();
 
   const [statusPage, setStatusPage] = useState<StatusPage | null>(null);
+  useDocumentTitle(statusPage ? `Template · ${statusPage.title}` : null);
   const [templateState, setTemplateState] = useState<StatusPageTemplateState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const [source, setSource] = useState('');
-  const [savedDraftSource, setSavedDraftSource] = useState<string | null>(null);
+  // What the editor's text is compared against: the stored draft, or the live
+  // source while no draft exists. "Unsaved" means the text differs from it,
+  // not merely that no draft exists yet, so every action that changes the
+  // draft or what is live moves it (lib/template-editor.ts).
+  const [baseline, setBaseline] = useState('');
   const [busy, setBusy] = useState(false);
   const [previewNonce, setPreviewNonce] = useState(0);
 
@@ -70,8 +101,12 @@ export default function StatusPageTemplatePage() {
   const [savingBranding, setSavingBranding] = useState(false);
 
   const [libraryItems, setLibraryItems] = useState<StatusPageLibraryTemplate[]>([]);
+  const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
+  const [libraryName, setLibraryName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Read once: the app shell renders client-only.
+  const [apple] = useState(isApplePlatform);
 
   const applySettings = (settings?: StatusPageSettings) => {
     setBrandingCSS(settings?.custom_css || '');
@@ -93,21 +128,16 @@ export default function StatusPageTemplatePage() {
 
       // Seed the editor: draft first, then the published version, then the
       // built-in default as the starting point.
+      let seed: string;
       if (template.draft_source != null) {
-        setSource(template.draft_source);
-        setSavedDraftSource(template.draft_source);
+        seed = template.draft_source;
       } else if (template.published_version != null) {
-        const published = await getStatusPageTemplateVersionSource(
-          id,
-          template.published_version
-        );
-        setSource(published);
-        setSavedDraftSource(null);
+        seed = await getStatusPageTemplateVersionSource(id, template.published_version);
       } else {
-        const fallback = await getStatusPageDefaultTemplateSource(id);
-        setSource(fallback);
-        setSavedDraftSource(null);
+        seed = await getStatusPageDefaultTemplateSource(id);
       }
+      setSource(seed);
+      setBaseline(seed);
     } catch (err: any) {
       setError(err.message || 'Failed to load template');
     } finally {
@@ -127,8 +157,8 @@ export default function StatusPageTemplatePage() {
       });
   }, []);
 
-  const dirty = savedDraftSource === null || source !== savedDraftSource;
   const hasDraft = templateState?.draft_source != null;
+  const { dirty, needsSave, status } = templateEditorState({ source, baseline, hasDraft });
 
   const previewUrl = useMemo(() => {
     if (!statusPage) return '';
@@ -139,6 +169,32 @@ export default function StatusPageTemplatePage() {
     const separator = base.includes('?') ? '&' : '?';
     return `${base}${separator}_=${previewNonce}`;
   }, [statusPage, templateState?.preview_token, previewNonce]);
+
+  // ⌘S / Ctrl+S saves the draft. A ref keeps the listener stable while the
+  // handler closes over the latest source; it stands down while a dialog is
+  // open so it never saves behind a confirmation.
+  const saveDraftRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        saveDraftRef.current();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, []);
+
+  // Unsaved editor text survives neither a reload nor closing the tab.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
   const runAction = async (
     action: () => Promise<StatusPageTemplateState>,
@@ -165,24 +221,17 @@ export default function StatusPageTemplatePage() {
       'Draft saved'
     );
     if (state) {
-      setSavedDraftSource(source);
+      setBaseline(source);
     }
     return state;
   };
 
   const handlePublish = async () => {
-    if (
-      !window.confirm(
-        'Publish this template? The public status page will render with it immediately.'
-      )
-    ) {
-      return;
-    }
-    if (dirty) {
+    if (needsSave) {
       try {
         setBusy(true);
         await saveStatusPageTemplateDraft(id, source);
-        setSavedDraftSource(source);
+        setBaseline(source);
       } catch (err: any) {
         showToast(err.message || 'Draft is invalid; fix it before publishing', 'error');
         setBusy(false);
@@ -193,9 +242,6 @@ export default function StatusPageTemplatePage() {
   };
 
   const handleDiscardDraft = async () => {
-    if (!window.confirm('Discard the draft? Unpublished changes will be lost.')) {
-      return;
-    }
     const state = await runAction(
       () => discardStatusPageTemplateDraft(id),
       'Draft discarded'
@@ -205,25 +251,37 @@ export default function StatusPageTemplatePage() {
     }
   };
 
-  const handleReset = async () => {
-    if (
-      !window.confirm(
-        'Reset to the built-in template? The public page stops using your custom template (versions stay available for revert).'
-      )
-    ) {
-      return;
+  // Reset and republish change what is live but leave any draft alone. With
+  // no draft the baseline is the live source, so it must follow: a clean
+  // editor reloads the new live template, edits are kept and read unsaved.
+  const followLive = async (state: StatusPageTemplateState) => {
+    if (state.draft_source != null) return;
+    try {
+      const live =
+        state.published_version != null
+          ? await getStatusPageTemplateVersionSource(id, state.published_version)
+          : await getStatusPageDefaultTemplateSource(id);
+      const next = followLiveSource({ source, baseline }, live);
+      setSource(next.source);
+      setBaseline(next.baseline);
+    } catch {
+      // Could not read the new live source: reload everything rather than
+      // leave a status line comparing against the old one.
+      await load();
     }
-    await runAction(() => resetStatusPageTemplate(id), 'Reverted to the built-in template');
+  };
+
+  const handleReset = async () => {
+    const state = await runAction(() => resetStatusPageTemplate(id), 'Reverted to the built-in template');
+    if (state) await followLive(state);
   };
 
   const handleRevert = async (version: number) => {
-    if (!window.confirm(`Republish version ${version}?`)) {
-      return;
-    }
-    await runAction(
+    const state = await runAction(
       () => revertStatusPageTemplate(id, version),
       `Version ${version} republished`
     );
+    if (state) await followLive(state);
   };
 
   const handleLoadDefault = async () => {
@@ -267,12 +325,12 @@ export default function StatusPageTemplatePage() {
     }
   };
 
-  const handleSaveToLibrary = async () => {
-    const templateName = window.prompt('Save current editor content to the library as:');
-    if (!templateName?.trim()) return;
+  const handleSaveToLibrary = async (templateName: string) => {
+    if (!templateName.trim()) return;
     try {
       setBusy(true);
-      const created = await createLibraryTemplate({ name: templateName, source });
+      const created = await createLibraryTemplate({ name: templateName.trim(), source });
+      setLibraryName(null);
       setLibraryItems((prev) =>
         [...prev, created].sort((a, b) => a.name.localeCompare(b.name))
       );
@@ -322,22 +380,36 @@ export default function StatusPageTemplatePage() {
     }
   };
 
+  saveDraftRef.current = () => {
+    if (busy || !needsSave || confirm !== null || libraryName !== null || modalOpen()) return;
+    void handleSaveDraft();
+  };
+
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="text-slate-500">Loading template…</div>
+      <div className="animate-pulse space-y-6" role="status" aria-label="Loading template">
+        <div className="space-y-2" aria-hidden="true">
+          <div className="h-4 w-56 rounded-md bg-well-hover" />
+          <div className="h-8 w-48 rounded-lg bg-well-hover" />
+        </div>
+        <div className="glass h-14" aria-hidden="true" />
+        <div className="glass h-[700px]" aria-hidden="true" />
       </div>
     );
   }
 
   if (error || !statusPage) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center gap-4">
-        <p className="text-rose-400">{error || 'Status page not found'}</p>
-        <Button variant="ghost" size="sm" onClick={() => router.push(`/status-pages/${id}`)}>
-          ← Back to status page
-        </Button>
-      </div>
+      <Callout
+        tone="danger"
+        action={
+          <Button variant="ghost" size="xs" onClick={() => router.push(`/status-pages/${id}`)}>
+            ← Back to status page
+          </Button>
+        }
+      >
+        {error || 'Status page not found'}
+      </Callout>
     );
   }
 
@@ -351,15 +423,7 @@ export default function StatusPageTemplatePage() {
   );
 
   return (
-    <div className="space-y-6">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".html,.gohtml,.tmpl,.txt"
-        className="hidden"
-        onChange={handleUpload}
-      />
-
+    <Page width="data">
       <PageHeader
         breadcrumb={[
           { label: 'Status pages', href: '/status-pages' },
@@ -367,9 +431,9 @@ export default function StatusPageTemplatePage() {
           { label: 'Template' },
         ]}
         title="Page template"
-        subtitle={`Live: ${activeLabel}${hasDraft ? ' · unpublished draft' : ''}`}
+        subtitle={[`Live: ${activeLabel}`, hasDraft ? 'Unpublished draft' : null]}
         action={
-          <Button variant="accent" size="sm" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
+          <Button variant="ghost" size="sm" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
             <a href={publicUrl} target="_blank" rel="noopener noreferrer">
               Open public page
             </a>
@@ -378,83 +442,83 @@ export default function StatusPageTemplatePage() {
       />
 
       <CollapsibleSection
-        title="Quick branding (CSS & HTML injection)"
+        title="Quick branding"
         summary="Custom CSS, extra <head> markup, and footer HTML applied to the built-in template"
       >
-        <div className="space-y-4">
-          <p className="text-sm text-slate-500">
-            The lightweight way to make the page match your brand: these snippets are injected
-            into the built-in template (and available to custom templates as{' '}
-            <code className="text-xs text-cyan-300">.CustomCSS</code>,{' '}
-            <code className="text-xs text-cyan-300">.CustomHeadHTML</code>,{' '}
-            <code className="text-xs text-cyan-300">.CustomFooterHTML</code>).
-          </p>
-          <div className="grid gap-4 lg:grid-cols-3">
-            <div>
-              <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
-                Custom CSS
-              </label>
-              <textarea
-                value={brandingCSS}
-                onChange={(e) => setBrandingCSS(e.target.value)}
-                rows={8}
-                spellCheck={false}
-                placeholder={':root { --brand-primary: #6366f1; }\n.header { … }'}
-                className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
-                Extra &lt;head&gt; HTML
-              </label>
-              <textarea
-                value={brandingHead}
-                onChange={(e) => setBrandingHead(e.target.value)}
-                rows={8}
-                spellCheck={false}
-                placeholder={'<link rel="icon" href="…">\n<meta property="og:image" content="…">'}
-                className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
-                Footer HTML
-              </label>
-              <textarea
-                value={brandingFooter}
-                onChange={(e) => setBrandingFooter(e.target.value)}
-                rows={8}
-                spellCheck={false}
-                placeholder={'<div class="links">…</div>'}
-                className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
-              />
-            </div>
-          </div>
-          <div className="flex justify-end">
-            <Button variant="accent" size="sm" onClick={handleSaveBranding} loading={savingBranding}>
-              Save branding
-            </Button>
-          </div>
+        <p className="text-ui text-slate-400">
+          The lightweight way to make the page match your brand: these snippets are injected
+          into the built-in template (and available to custom templates as{' '}
+          <code className="font-mono text-xs text-slate-200">.CustomCSS</code>,{' '}
+          <code className="font-mono text-xs text-slate-200">.CustomHeadHTML</code>,{' '}
+          <code className="font-mono text-xs text-slate-200">.CustomFooterHTML</code>).
+        </p>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <FormField label="Custom CSS">
+            <textarea
+              value={brandingCSS}
+              onChange={(e) => setBrandingCSS(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              wrap="off"
+              placeholder={':root { --brand-primary: #6366f1; }\n.header { … }'}
+              className={`${CODE_AREA} p-3`}
+            />
+          </FormField>
+          <FormField label="Extra <head> HTML">
+            <textarea
+              value={brandingHead}
+              onChange={(e) => setBrandingHead(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              wrap="off"
+              placeholder={'<link rel="icon" href="…">\n<meta property="og:image" content="…">'}
+              className={`${CODE_AREA} p-3`}
+            />
+          </FormField>
+          <FormField label="Footer HTML">
+            <textarea
+              value={brandingFooter}
+              onChange={(e) => setBrandingFooter(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              wrap="off"
+              placeholder={'<div class="links">…</div>'}
+              className={`${CODE_AREA} p-3`}
+            />
+          </FormField>
+        </div>
+        <div className="flex justify-end">
+          <Button variant="ghost" size="sm" onClick={handleSaveBranding} loading={savingBranding}>
+            Save branding
+          </Button>
         </div>
       </CollapsibleSection>
 
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/40">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3">
-          <div className="flex items-center gap-2 text-sm text-slate-300">
-            <FileCode className="h-4 w-4 text-cyan-400" strokeWidth={1.75} />
-            <span className="font-medium">Full template editor</span>
-            <span className="text-xs text-slate-500">
-              Go html/template · {formatBytes(source.length)} / {formatBytes(maxSize)}
-              {dirty ? ' · unsaved changes' : ''}
-            </span>
+      <div className="glass">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="text-title font-semibold text-white">Full template editor</h2>
+            <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
+              <span>Go html/template</span>
+              <span className="tabular-nums">
+                {formatBytes(source.length)} / {formatBytes(maxSize)}
+              </span>
+              {status === 'unsaved' ? (
+                <span className="text-amber-300">Unsaved changes</span>
+              ) : status === 'draft' ? (
+                <span className="text-sky-300">Draft saved, not published</span>
+              ) : (
+                <span>Same as the live template</span>
+              )}
+            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1">
             {libraryItems.length > 0 && (
               <select
                 value=""
                 onChange={(e) => handleApplyFromLibrary(e.target.value)}
                 disabled={busy}
-                className="rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                className="input input-sm mr-1 h-9 !w-auto text-ui"
               >
                 <option value="" disabled>
                   Apply from library…
@@ -466,21 +530,34 @@ export default function StatusPageTemplatePage() {
                 ))}
               </select>
             )}
-            <Button variant="ghost" size="sm" onClick={handleSaveToLibrary} disabled={busy}>
+            <Button
+              variant="subtle"
+              size="sm"
+              icon={<BookmarkPlus strokeWidth={1.75} />}
+              onClick={() => setLibraryName(`${statusPage.title} template`)}
+              disabled={busy}
+            >
               Save to library
             </Button>
             <Button
-              variant="ghost"
+              variant="subtle"
               size="sm"
+              icon={<Library strokeWidth={1.75} />}
               onClick={() => router.push('/status-pages/templates')}
             >
               Manage library
             </Button>
-            <Button variant="ghost" size="sm" onClick={handleLoadDefault} disabled={busy}>
+            <Button
+              variant="subtle"
+              size="sm"
+              icon={<FileInput strokeWidth={1.75} />}
+              onClick={handleLoadDefault}
+              disabled={busy}
+            >
               Load built-in
             </Button>
             <Button
-              variant="ghost"
+              variant="subtle"
               size="sm"
               icon={<Upload strokeWidth={1.75} />}
               onClick={() => fileInputRef.current?.click()}
@@ -489,7 +566,7 @@ export default function StatusPageTemplatePage() {
               Upload file
             </Button>
             <Button
-              variant="ghost"
+              variant="subtle"
               size="sm"
               icon={<Download strokeWidth={1.75} />}
               onClick={handleDownload}
@@ -500,58 +577,73 @@ export default function StatusPageTemplatePage() {
           </div>
         </div>
 
-        <div className="grid gap-0 xl:grid-cols-2">
+        {/* Editor and preview share the viewport height on wide screens, so
+            the code and its result stay side by side without page scroll. */}
+        <div className="grid gap-4 px-5 xl:h-[max(560px,calc(100dvh-19rem))] xl:grid-cols-2">
           <textarea
             value={source}
             onChange={(e) => setSource(e.target.value)}
             spellCheck={false}
-            className="min-h-[560px] w-full resize-y border-0 bg-slate-950/60 p-4 font-mono text-xs leading-5 text-slate-200 focus:outline-none xl:border-r xl:border-white/[0.06]"
+            wrap="off"
+            aria-label="Template source"
+            className={`${CODE_AREA} min-h-[420px] resize-y p-4 xl:h-full xl:min-h-0 xl:resize-none`}
           />
-          <div className="flex min-h-[560px] flex-col">
-            <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2">
-              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Draft preview (live data)
+          <div className="glass-well flex min-h-[420px] flex-col overflow-hidden xl:min-h-0">
+            <div className="flex items-center justify-between gap-2 py-1.5 pl-4 pr-1.5">
+              <span className="min-w-0 truncate text-ui font-medium text-slate-300">
+                {hasDraft ? 'Draft preview' : 'Live page'}
+                <span className={`ml-2 hidden font-normal sm:inline ${dirty ? 'text-amber-300' : 'text-slate-500'}`}>
+                  {dirty
+                    ? 'save the draft to preview your edits'
+                    : hasDraft
+                      ? 'with live data'
+                      : 'save a draft to preview changes'}
+                </span>
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-shrink-0 items-center gap-1">
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="subtle"
+                  size="xs"
                   icon={<RefreshCw strokeWidth={1.75} />}
                   onClick={() => setPreviewNonce((n) => n + 1)}
                 >
                   Refresh
                 </Button>
-                <Button variant="ghost" size="sm" asChild>
+                <Button variant="subtle" size="xs" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
                   <a href={previewUrl} target="_blank" rel="noopener noreferrer">
                     Open
                   </a>
                 </Button>
               </div>
             </div>
-            {hasDraft || previewNonce > 0 ? (
-              <iframe
-                key={previewNonce}
-                src={previewUrl}
-                title="Draft template preview"
-                className="min-h-0 w-full flex-1 bg-white"
-                sandbox="allow-scripts allow-same-origin"
-              />
-            ) : (
-              <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-slate-500">
-                Save a draft to preview it here against the page&apos;s live data.
-              </div>
-            )}
+            {/* The draft route renders the published (or built-in) page while
+                no draft exists, so there is always something real to show. */}
+            <iframe
+              key={previewNonce}
+              src={previewUrl}
+              title={hasDraft ? 'Draft template preview' : 'Live status page preview'}
+              className="min-h-0 w-full flex-1 bg-[#fff]"
+              sandbox="allow-scripts allow-same-origin"
+            />
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
           <div className="flex flex-wrap items-center gap-2">
             {hasDraft && (
               <Button
                 variant="ghost"
                 size="sm"
                 icon={<Trash2 strokeWidth={1.75} />}
-                onClick={handleDiscardDraft}
+                onClick={() =>
+                  setConfirm({
+                    title: 'Discard the draft?',
+                    description: 'The saved draft is deleted and the editor reloads the live template. Visitors are not affected.',
+                    confirmLabel: 'Discard draft',
+                    tone: 'danger',
+                    run: handleDiscardDraft,
+                  })
+                }
                 disabled={busy}
               >
                 Discard draft
@@ -562,7 +654,15 @@ export default function StatusPageTemplatePage() {
                 variant="ghost"
                 size="sm"
                 icon={<RotateCcw strokeWidth={1.75} />}
-                onClick={handleReset}
+                onClick={() =>
+                  setConfirm({
+                    title: 'Reset to the built-in template?',
+                    description: 'The public page stops using your custom template right away. Every version stays in the history for republishing.',
+                    confirmLabel: 'Reset to built-in',
+                    tone: 'danger',
+                    run: handleReset,
+                  })
+                }
                 disabled={busy}
               >
                 Reset to built-in
@@ -575,8 +675,9 @@ export default function StatusPageTemplatePage() {
               size="sm"
               icon={<Save strokeWidth={1.75} />}
               onClick={handleSaveDraft}
-              loading={busy}
-              disabled={!dirty && hasDraft}
+              loading={busy && !confirm}
+              disabled={busy || !needsSave}
+              title={shortcutLabel('S', apple)}
             >
               Save draft
             </Button>
@@ -584,7 +685,17 @@ export default function StatusPageTemplatePage() {
               variant="accent"
               size="sm"
               icon={<Rocket strokeWidth={1.75} />}
-              onClick={handlePublish}
+              onClick={() =>
+                setConfirm({
+                  title: 'Publish this template?',
+                  description: needsSave
+                    ? 'The editor content is saved as the draft, then published: the public status page renders with it immediately.'
+                    : 'The public status page renders with this draft immediately.',
+                  confirmLabel: 'Publish',
+                  tone: 'default',
+                  run: handlePublish,
+                })
+              }
               disabled={busy}
             >
               Publish
@@ -598,50 +709,52 @@ export default function StatusPageTemplatePage() {
           title="Version history"
           summary={`${historyVersions.length} version${historyVersions.length === 1 ? '' : 's'}`}
         >
-          <div className="divide-y divide-white/[0.06]">
+          <div className="divide-y divide-divider">
             {historyVersions.map((v) => (
               <div
                 key={`${v.version}-${v.created_at}`}
-                className="flex flex-wrap items-center justify-between gap-3 py-3"
+                className="flex flex-wrap items-center justify-between gap-3 py-2.5"
               >
                 <div className="flex items-center gap-3">
-                  <span className="font-mono text-sm text-slate-200">v{v.version}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider ${
-                      v.status === 'published'
-                        ? 'bg-emerald-500/10 text-emerald-300'
-                        : 'bg-slate-500/10 text-slate-400'
-                    }`}
+                  <span className="text-sm font-medium tabular-nums text-white">v{v.version}</span>
+                  <Pill
+                    size="xs"
+                    tone={v.status === 'published' ? 'success' : 'neutral'}
+                    className="capitalize"
                   >
                     {v.status}
-                  </span>
-                  <span className="text-xs text-slate-500">
-                    {formatBytes(v.size_bytes)}
-                    {v.published_at
-                      ? ` · published ${new Date(v.published_at).toLocaleString()}`
-                      : ''}
-                  </span>
+                  </Pill>
+                  <span className="text-xs tabular-nums text-slate-500">{formatBytes(v.size_bytes)}</span>
+                  {v.published_at && (
+                    <span className="text-xs text-slate-500" title={formatDateTimeFull(v.published_at)}>
+                      published {formatDateTime(v.published_at)}
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-0.5">
                   {v.version != null && (
                     <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
+                      <IconButton
+                        icon={<FileInput strokeWidth={1.75} />}
+                        label="Load into editor"
                         onClick={() => handleLoadVersion(v.version!)}
                         disabled={busy}
-                      >
-                        Load into editor
-                      </Button>
+                      />
                       {v.status !== 'published' && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleRevert(v.version!)}
+                        <IconButton
+                          icon={<Rocket strokeWidth={1.75} />}
+                          label="Republish"
+                          onClick={() =>
+                            setConfirm({
+                              title: `Republish version ${v.version}?`,
+                              description: 'It becomes the live template again as a new version; the history stays append-only.',
+                              confirmLabel: 'Republish',
+                              tone: 'default',
+                              run: () => handleRevert(v.version!),
+                            })
+                          }
                           disabled={busy}
-                        >
-                          Republish
-                        </Button>
+                        />
                       )}
                     </>
                   )}
@@ -651,6 +764,72 @@ export default function StatusPageTemplatePage() {
           </div>
         </CollapsibleSection>
       )}
-    </div>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        tone={confirm?.tone ?? 'default'}
+        loading={busy}
+        onConfirm={async () => {
+          const pending = confirm;
+          if (!pending) return;
+          await pending.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+
+      <Dialog
+        open={libraryName !== null}
+        onClose={() => setLibraryName(null)}
+        busy={busy}
+        title="Save to library"
+        description="Stores a copy of the editor content as a reusable template. Pages that apply it later get their own copy."
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setLibraryName(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              variant="accent"
+              size="sm"
+              type="submit"
+              form="save-library-form"
+              loading={busy}
+              disabled={busy || !libraryName?.trim()}
+            >
+              Save to library
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="save-library-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSaveToLibrary(libraryName ?? '');
+          }}
+        >
+          <Input
+            label="Template name"
+            value={libraryName ?? ''}
+            onChange={(event) => setLibraryName(event.target.value)}
+            placeholder={`${statusPage.title} template`}
+            maxLength={120}
+            autoFocus
+          />
+        </form>
+      </Dialog>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".html,.gohtml,.tmpl,.txt"
+        className="hidden"
+        onChange={handleUpload}
+      />
+    </Page>
   );
 }

@@ -1,255 +1,215 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
-import Pill from '@/components/ui/Pill';
+import Callout from '@/components/ui/Callout';
+import Checkbox from '@/components/ui/Checkbox';
+import Input from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
-import { getAISettings, updateAISettings, testAISettings } from '@/lib/api';
+import { useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
+import { getAISettings, updateAISettings, testAISettings, exportAILabels } from '@/lib/api';
+import { labelErrorMessage, labelExportOutcome } from '@/lib/ai-labels';
+import { TRIAGE_SETTING_RANGES, parseSettingInput, triageSettingsForSave } from '@/lib/ai-triage';
+import type { TriageSettingsErrors, TriageSettingsValues } from '@/lib/ai-triage';
 import type { AISettings, AITestResult } from '@/lib/types';
+import { SETTINGS_PANEL_COLUMNS } from './layout';
 
-const SELECT_CLASS =
-  'rounded border border-white/[0.08] bg-slate-800 px-3 py-2 text-xs text-slate-300 focus:border-cyan-500/50 focus:outline-none cursor-pointer';
+// Number inputs hold text so a field can be cleared while typing; the values
+// are parsed and range-checked on save (skipped while the controls are locked).
+type TriageDraft = Record<keyof TriageSettingsValues, string>;
 
-// Provider options — extend as shared/ai gains vendors. The value must match a
-// provider the backend's newProvider() understands.
-const PROVIDERS = [{ value: 'openai_compat', label: 'OpenAI-compatible (OpenAI, Azure, Ollama, vLLM, SGLang, …)' }];
+function triageDraft(s: AISettings): TriageDraft {
+  return {
+    triage_delay_seconds: String(s.triage_delay_seconds),
+    triage_cooldown_seconds: String(s.triage_cooldown_seconds),
+    triage_max_per_hour: String(s.triage_max_per_hour),
+  };
+}
 
-const JSON_MODES = [
-  { value: 'off', label: 'Off — prompt + defensive parsing (most compatible)' },
-  { value: 'json_object', label: 'json_object' },
-  { value: 'json_schema', label: 'json_schema (strict)' },
+const TRIAGE_FIELDS: { key: keyof TriageSettingsValues; label: string }[] = [
+  { key: 'triage_delay_seconds', label: 'Wait before triage (s)' },
+  { key: 'triage_cooldown_seconds', label: 'Cooldown per monitor (s)' },
+  { key: 'triage_max_per_hour', label: 'Max triages per hour' },
 ];
 
-const API_KEY_PLACEHOLDER = '••••••••  (saved — leave blank to keep)';
+// The three triage numbers sit in one row once the well reaches 28rem, else
+// one per row, never 2+1: below 28rem the second max() term turns huge and
+// the track minimum becomes 100%. items-end keeps the inputs level when a
+// label wraps.
+const TRIAGE_FIELDS_GRID =
+  'grid items-end gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,max(calc((100%_-_1.5rem)/3),calc((28rem_-_100%)*999))),1fr))]';
 
-export function AISettingsPanel() {
+// API errors are thrown as plain `{error, message}` objects, not Error instances.
+function errorText(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object' && 'message' in err) {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === 'string' && m) return m;
+  }
+  return fallback;
+}
+
+export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const { showToast } = useToast();
-  const [loading, setLoading] = useState(true);
+  const [settings, setSettings] = useState<AISettings | null>(null);
+  const [enabled, setEnabled] = useState(true);
+  const [autoTriage, setAutoTriage] = useState(false);
+  const [notifyCauses, setNotifyCauses] = useState(false);
+  const [draft, setDraft] = useState<TriageDraft>({ triage_delay_seconds: '60', triage_cooldown_seconds: '900', triage_max_per_hour: '60' });
+  const [fieldErrors, setFieldErrors] = useState<TriageSettingsErrors>({});
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<AITestResult | null>(null);
-
-  const [enabled, setEnabled] = useState(false);
-  const [provider, setProvider] = useState('openai_compat');
-  const [baseURL, setBaseURL] = useState('');
-  const [model, setModel] = useState('');
-  const [jsonMode, setJSONMode] = useState('off');
-  const [maxTokens, setMaxTokens] = useState(1024);
-  const [timeoutSeconds, setTimeoutSeconds] = useState(60);
-  const [hasAPIKey, setHasAPIKey] = useState(false);
-  const [apiKey, setApiKey] = useState(''); // empty = unchanged on save
-
-  const applySettings = (s: AISettings) => {
+  const [probe, setProbe] = useState<AITestResult | null>(null);
+  const isTenantAdmin = useIsTenantAdmin();
+  const [exporting, setExporting] = useState(false);
+  const apply = useCallback((s: AISettings) => {
+    setSettings(s);
     setEnabled(s.enabled);
-    setProvider(s.provider || 'openai_compat');
-    setBaseURL(s.base_url || '');
-    setModel(s.model || '');
-    setJSONMode(s.json_mode || 'off');
-    setMaxTokens(s.max_tokens || 1024);
-    setTimeoutSeconds(s.timeout_seconds || 60);
-    setHasAPIKey(s.has_api_key);
-    setApiKey('');
-  };
-
-  const loadSettings = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      applySettings(await getAISettings());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load AI settings');
-    } finally {
-      setLoading(false);
-    }
+    setAutoTriage(s.auto_triage_enabled);
+    setNotifyCauses(s.triage_notifications_enabled);
+    setDraft(triageDraft(s));
+    setFieldErrors({});
   }, []);
-
-  useEffect(() => {
-    loadSettings();
-  }, [loadSettings]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
+  const load = useCallback(async () => {
+    try { apply(await getAISettings()); }
+    catch (err) { setError(errorText(err, 'Could not load AI settings')); }
+  }, [apply]);
+  useEffect(() => { void load(); }, [load]);
+  // Triage needs AI on for the workspace; the toggle above is the draft value.
+  const triageLocked = readOnly || !settings?.installation_enabled || !enabled;
+  const save = async () => {
+    if (!settings) return;
+    const { payload, errors } = triageSettingsForSave(triageLocked, {
+      auto_triage_enabled: autoTriage,
+      triage_notifications_enabled: notifyCauses,
+      triage_delay_seconds: parseSettingInput(draft.triage_delay_seconds),
+      triage_cooldown_seconds: parseSettingInput(draft.triage_cooldown_seconds),
+      triage_max_per_hour: parseSettingInput(draft.triage_max_per_hour),
+    }, settings);
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+    setSaving(true); setError(null);
     try {
-      const updated = await updateAISettings({
-        enabled,
-        provider,
-        base_url: baseURL,
-        model,
-        json_mode: jsonMode,
-        max_tokens: maxTokens,
-        timeout_seconds: timeoutSeconds,
-        // Only send api_key when the user typed one (else leave unchanged).
-        ...(apiKey ? { api_key: apiKey } : {}),
-      });
-      applySettings(updated);
+      apply(await updateAISettings({ enabled, ...payload }));
       showToast('AI settings saved', 'success');
-    } catch (err) {
-      const msg = err && typeof err === 'object' && 'message' in err
-        ? String((err as { message?: unknown }).message)
-        : 'Failed to save AI settings';
-      setError(msg);
-    } finally {
-      setSaving(false);
     }
+    catch (err) { setError(errorText(err, 'Could not save AI settings')); }
+    finally { setSaving(false); }
   };
-
-  const handleTest = async () => {
+  const test = async () => {
     setTesting(true);
-    setTestResult(null);
+    try { const p = await testAISettings(); setProbe(p); setSettings((s) => s ? { ...s, available: p.ok, model: p.model, message: p.message } : s); }
+    catch (err) { setProbe({ ok: false, message: errorText(err, 'Local service unavailable') }); }
+    finally { setTesting(false); }
+  };
+  // Same download path as the monitor export (app/monitors/page.tsx).
+  const exportLabels = async () => {
+    setExporting(true);
     try {
-      const result = await testAISettings({
-        provider,
-        base_url: baseURL,
-        model,
-        json_mode: jsonMode,
-        ...(apiKey ? { api_key: apiKey } : {}),
-      });
-      setTestResult(result);
+      const { blob, filename, rows, skipped } = await exportAILabels();
+      const outcome = labelExportOutcome(rows, skipped);
+      if (!outcome.download) {
+        showToast(outcome.message, outcome.tone);
+        return;
+      }
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      showToast(outcome.message, outcome.tone);
     } catch (err) {
-      setTestResult({ ok: false, message: err instanceof Error ? err.message : 'Test failed' });
+      showToast(labelErrorMessage(err, 'Could not export training labels'), 'error');
     } finally {
-      setTesting(false);
+      setExporting(false);
     }
   };
-
   return (
-    <Panel
-      title="AI root cause analysis"
-      subtitle="Configure the LLM used to analyze incidents. Works with any OpenAI-compatible endpoint."
-    >
-      {loading ? (
-        <div className="text-sm text-slate-500">Loading…</div>
-      ) : (
-        <div className="space-y-4">
-          {error && (
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-              {error}
+    <Panel title="Local AI analysis" subtitle="CPU analysis of monitoring evidence for dependency suggestions, suspected incident causes and alert triage.">
+      <div className="space-y-4">
+        {error && <Callout tone="danger">{error}</Callout>}
+        {!settings && !error && <p role="status" className="text-sm text-slate-400">Loading…</p>}
+        {settings && <>
+          {/* Workspace switch and service status beside the triage controls
+              once the panel is wide enough; one Save covers both. */}
+          <div className={SETTINGS_PANEL_COLUMNS}>
+            <div className="space-y-4">
+              <Callout tone={settings.available ? 'success' : 'warning'}>
+                {settings.installation_enabled ? (settings.available ? 'Local service available' : 'Local service unavailable') : 'Disabled for this installation'}
+                {settings.model && ` · ${settings.model}`}
+                {/* The disabled headline already says it; the message repeats it. */}
+                {settings.installation_enabled && settings.message && <p className="mt-1">{settings.message}</p>}
+              </Callout>
+              <Checkbox
+                checked={enabled}
+                onChange={setEnabled}
+                disabled={readOnly || !settings.installation_enabled}
+                label="Enable AI analysis for this workspace"
+              />
+              <p className="max-w-prose text-ui text-slate-400">Explanations cite recorded checks and maintained troubleshooting guidance. The model selects a suspected cause and abstains when evidence is insufficient. Controlled-scenario validation does not establish real-world accuracy.</p>
             </div>
-          )}
-
-          <div className="flex items-start gap-3">
-            <input
-              type="checkbox"
-              id="ai-enabled"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
-            />
-            <label htmlFor="ai-enabled" className="text-sm text-slate-300 cursor-pointer">
-              Enable AI analysis for this workspace
-            </label>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Provider</label>
-            <select className={SELECT_CLASS} value={provider} onChange={(e) => setProvider(e.target.value)}>
-              {PROVIDERS.map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Base URL</label>
-            <input
-              className="input"
-              placeholder="http://localhost:30000/v1"
-              value={baseURL}
-              onChange={(e) => setBaseURL(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Model</label>
-            <input
-              className="input"
-              placeholder="gpt-4o-mini"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">
-              API key {hasAPIKey && <span className="text-slate-500">(set)</span>}
-            </label>
-            <input
-              className="input"
-              type="password"
-              placeholder={hasAPIKey ? API_KEY_PLACEHOLDER : 'Optional — leave blank for keyless local servers'}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </div>
-
-          <details className="text-sm">
-            <summary className="cursor-pointer text-xs font-medium text-slate-400">Advanced</summary>
-            <div className="mt-3 grid grid-cols-2 gap-4">
+            <div className="glass-well space-y-3 p-4">
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-400">Structured output</label>
-                <select className={SELECT_CLASS} value={jsonMode} onChange={(e) => setJSONMode(e.target.value)}>
-                  {JSON_MODES.map((m) => (
-                    <option key={m.value} value={m.value}>{m.label}</option>
-                  ))}
-                </select>
+                <h3 className="text-sm font-medium text-slate-200">Automatic alert triage</h3>
+                <p className="mt-1 max-w-prose text-ui text-slate-400">Triage never delays, routes, suppresses or re-prioritises a page. Waits at least two check intervals.</p>
               </div>
-              <div />
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-400">Max tokens</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  value={maxTokens}
-                  onChange={(e) => setMaxTokens(Number(e.target.value))}
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-400">Timeout (seconds)</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  value={timeoutSeconds}
-                  onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
-                />
+              <Checkbox
+                checked={autoTriage}
+                onChange={setAutoTriage}
+                disabled={triageLocked}
+                label="Triage new alerts automatically"
+              />
+              <Checkbox
+                checked={notifyCauses}
+                onChange={setNotifyCauses}
+                disabled={triageLocked || !autoTriage}
+                label="Send suspected causes to alert channels"
+                className="max-w-prose"
+                description="When triage names a cause with medium or high confidence, each channel already paged for the alert gets one follow-up message. Pages are never delayed. PagerDuty and Opsgenie get nothing."
+              />
+              <div className={TRIAGE_FIELDS_GRID}>
+                {TRIAGE_FIELDS.map(({ key, label }) => (
+                  <Input
+                    key={key}
+                    label={label}
+                    type="number"
+                    inputMode="numeric"
+                    step={1}
+                    min={TRIAGE_SETTING_RANGES[key].min}
+                    max={TRIAGE_SETTING_RANGES[key].max}
+                    value={draft[key]}
+                    onChange={(e) => {
+                      const text = e.target.value;
+                      setDraft((d) => ({ ...d, [key]: text }));
+                      setFieldErrors((errs) => ({ ...errs, [key]: undefined }));
+                    }}
+                    disabled={triageLocked}
+                    error={fieldErrors[key]}
+                  />
+                ))}
               </div>
             </div>
-          </details>
-
-          {testResult && (
-            <div
-              className={`rounded-lg border px-3 py-2 text-xs ${
-                testResult.ok
-                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                  : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-              }`}
-            >
-              {testResult.ok ? (
-                <>Connected{testResult.model ? ` — model: ${testResult.model}` : ''}.</>
-              ) : (
-                <>Test failed: {testResult.message}</>
-              )}
-            </div>
-          )}
-
-          <div className="flex items-center justify-end gap-2">
-            <Pill tone={enabled ? 'success' : 'neutral'} size="xs">
-              {enabled ? 'Enabled' : 'Disabled'}
-            </Pill>
-            <Button variant="ghost" size="sm" loading={testing} disabled={testing || !baseURL || !model} onClick={handleTest}>
-              Test connection
-            </Button>
-            <Button variant="accent" size="sm" loading={saving} disabled={saving} onClick={handleSave}>
-              Save
-            </Button>
           </div>
-        </div>
-      )}
+          {probe && <Callout tone={probe.ok ? 'success' : 'danger'}>{probe.ok ? 'Local CPU service is ready.' : probe.message}</Callout>}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" loading={testing} disabled={testing || !settings.installation_enabled} onClick={test}>Test local service</Button>
+            {!readOnly && <Button variant="accent" size="sm" loading={saving} disabled={saving || !settings.installation_enabled} onClick={save}>Save</Button>}
+          </div>
+        </>}
+        {isTenantAdmin && (
+          <div className="flex flex-wrap items-end justify-between gap-3 border-t border-divider pt-4">
+            <div className="max-w-prose">
+              <h3 className="text-sm font-medium text-slate-200">Training labels</h3>
+              <p className="mt-1 text-ui text-slate-400">Download operator-confirmed answers as JSONL for retraining the local model. Rows contain evidence counters and catalogue labels only, with no monitor names or IDs.</p>
+            </div>
+            <Button variant="ghost" size="sm" loading={exporting} disabled={exporting} onClick={exportLabels}>Export labels</Button>
+          </div>
+        )}
+      </div>
     </Panel>
   );
 }

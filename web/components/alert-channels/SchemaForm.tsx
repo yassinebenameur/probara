@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Button from '@/components/ui/Button';
 import FormField from '@/components/ui/FormField';
 import type { PluginField, PluginManifest } from '@/lib/types';
+import Switch from '@/components/ui/Switch';
 
 // What the API substitutes for stored secret values on read. It is only
 // present when a value is stored, so it doubles as "there is something to
@@ -215,29 +216,15 @@ function BoolField({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-white">{field.label}</p>
+    <div>
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-slate-200">{field.label}</p>
           {field.help && <p className="text-xs text-slate-500">{field.help}</p>}
         </div>
-        <button
-          type="button"
-          onClick={() => onChange(!value)}
-          className={`relative h-5 w-9 rounded-full transition-colors ${
-            value ? 'bg-cyan-500' : 'bg-slate-700'
-          }`}
-          aria-pressed={value}
-          aria-label={`Toggle ${field.label}`}
-        >
-          <span
-            className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              value ? 'translate-x-4' : ''
-            }`}
-          />
-        </button>
+        <Switch checked={value} onChange={onChange} label={`Toggle ${field.label}`} />
       </div>
-      {error && <p className="mt-2 text-xs text-rose-400">{error}</p>}
+      {error && <p className="mt-1 text-xs text-rose-300">{error}</p>}
     </div>
   );
 }
@@ -276,8 +263,9 @@ function SecretField({
           value={text}
           onChange={(e) => onChange(e.target.value)}
           autoComplete="off"
+          aria-label={field.label}
         />
-        <Button variant="ghost" size="sm" type="button" onClick={() => setReveal(!reveal)}>
+        <Button variant="ghost" size="sm" type="button" onClick={() => setReveal(!reveal)} aria-pressed={reveal}>
           {reveal ? 'Hide' : 'Show'}
         </Button>
       </div>
@@ -305,9 +293,9 @@ function StoredSecretClear({
   if (!isEdit || !field.secret || field.required) return null;
   if (value === CLEARED_SECRET) {
     return (
-      <p className="mt-2 flex items-center gap-2 text-xs text-amber-400">
+      <p className="mt-2 flex items-center gap-2 text-xs text-amber-300">
         The stored value will be removed when you save.
-        <Button variant="ghost" size="sm" type="button" onClick={() => onChange(MASKED_SECRET)}>
+        <Button variant="ghost" size="xs" type="button" onClick={() => onChange(MASKED_SECRET)}>
           Undo
         </Button>
       </p>
@@ -316,7 +304,7 @@ function StoredSecretClear({
   if (value !== MASKED_SECRET) return null;
   return (
     <div className="mt-2">
-      <Button variant="ghost" size="sm" type="button" onClick={() => onChange(CLEARED_SECRET)}>
+      <Button variant="ghost" size="xs" type="button" onClick={() => onChange(CLEARED_SECRET)}>
         Remove stored value
       </Button>
     </div>

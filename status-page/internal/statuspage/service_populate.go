@@ -3,7 +3,6 @@ package statuspage
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -20,7 +19,8 @@ import (
 //
 // Regular (leaf) monitors are resolved entirely from a handful of batched, page-wide queries.
 // Group monitors aggregate over their member sets via the existing group helpers (bounded by
-// the number of groups, not total monitors). Long-range analytics for both kinds are resolved
+// the number of groups, not total monitors); their 1h strip comes from the page-wide
+// per-minute query. Long-range analytics for both kinds are resolved
 // through a single batched analytics call when available.
 func (s *Service) populatePageMonitors(ctx context.Context, tenantID uuid.UUID, sections []StatusPageSectionData) error {
 	type pageMon struct {
@@ -84,13 +84,33 @@ func (s *Service) populatePageMonitors(ctx context.Context, tenantID uuid.UUID, 
 		}
 	}
 
+	// The 1h strip: one raw per-minute query over every leaf on the page
+	// (regular monitors and all group members), so groups cost no extra
+	// query -- a group's strip is its members' counts summed in Go.
+	leafIDs := append([]uuid.UUID(nil), regularIDs...)
+	for _, m := range mons {
+		if m.isGroup {
+			leafIDs = append(leafIDs, m.members...)
+		}
+	}
+	leafIDs = dedupeMonitorIDs(leafIDs)
+	minuteStart, minuteEnd := oneHourWindow(s.now())
+	minuteByID, err := s.minuteBucketCounts(ctx, leafIDs, tenantID, minuteStart, minuteEnd)
+	if err != nil {
+		return err
+	}
+
 	// Apply short-range data per monitor.
 	for _, m := range mons {
 		if m.isGroup {
 			s.populateGroupMonitorShortRange(ctx, m.ptr, m.members, tenantID)
+			if len(m.members) > 0 {
+				m.ptr.UptimeHistory1h = minuteUptime(sumMinuteBuckets(minuteByID, m.members), minuteStart)
+			}
 			continue
 		}
 		assignRegularShortRange(m.ptr, m.id, statusByID, summaryByID, hourlyByID, historyByID)
+		m.ptr.UptimeHistory1h = minuteUptime(minuteByID[m.id], minuteStart)
 	}
 
 	// Agent monitors: latest host metrics from the metric store for the
@@ -272,17 +292,7 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 			v := int(latencyMS.Int64)
 			cs.LastLatency = &v
 		}
-		if len(metricsJSON) > 0 {
-			var env httpMetricsEnvelope
-			if err := json.Unmarshal(metricsJSON, &env); err == nil && env.HTTP != nil && env.HTTP.TLS != nil {
-				if env.HTTP.TLS.DaysUntilExpiry != nil {
-					cs.TLSDaysUntilExpiry = env.HTTP.TLS.DaysUntilExpiry
-				}
-				if env.HTTP.TLS.NotAfter != "" {
-					cs.TLSNotAfter = env.HTTP.TLS.NotAfter
-				}
-			}
-		}
+		cs.applyCertificate(metricsJSON)
 		result[monitorID] = cs
 	}
 	if err := rows.Err(); err != nil {

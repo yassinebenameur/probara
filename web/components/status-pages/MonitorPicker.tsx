@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Layers, Loader2, Plus, Search } from 'lucide-react';
 import type { Monitor } from '@/lib/types';
+import Button from '@/components/ui/Button';
 import { monitorMatches, sortMonitors, type DerivedState } from './useStatusPageFormState';
+import TypeBadge from '@/components/ui/TypeBadge';
+import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
+import { MONITOR_STATUS_DOT } from '@/lib/status-tones';
+import { leafComponentStatus } from '@/lib/status-page-status';
 
 interface MonitorPickerProps {
   monitors: Monitor[];
@@ -73,43 +78,47 @@ export default function MonitorPicker({
 
   return (
     <div ref={containerRef} className="relative">
-      <button
+      <Button
         type="button"
+        variant="subtle"
+        size="xs"
+        icon={<Plus strokeWidth={1.75} />}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-haspopup="listbox"
-        className="flex items-center gap-1.5 rounded-lg border border-dashed border-white/[0.12] px-3 py-1.5 text-xs text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
       >
-        <Plus className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
         Add monitors
-      </button>
+      </Button>
 
       {open && (
-        <div className="absolute left-0 z-30 mt-2 w-[min(400px,85vw)] overflow-hidden rounded-xl border border-white/[0.1] bg-slate-900/95 shadow-2xl backdrop-blur">
-          <div className="flex items-center gap-2 border-b border-white/[0.06] px-3 py-2.5">
-            <Search className="h-3.5 w-3.5 flex-shrink-0 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
+        // Opaque: inside the section's .glass card the backdrop blur only
+        // samples that card, so the sticky save bar below would show through.
+        <div className="glass-overlay absolute left-0 z-30 mt-2 w-[min(400px,85vw)] origin-top-left animate-pop-in overflow-hidden !rounded-xl bg-[rgb(var(--panel-rgb))]">
+          <div className="flex items-center gap-2 border-b border-divider px-3 py-2.5 focus-within:shadow-[inset_0_-2px_0_var(--focus)]">
+            <Search className="h-4 w-4 flex-shrink-0 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
             <input
               ref={inputRef}
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search by name, URL, tag…"
-              className="w-full bg-transparent text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none"
+              aria-label="Search monitors"
+              className="w-full bg-transparent text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none"
             />
             {addableIds.length > 0 && (
               <button
                 type="button"
                 onClick={() => onAdd(addableIds)}
-                className="flex-shrink-0 whitespace-nowrap text-[11px] font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+                className={`flex-shrink-0 whitespace-nowrap rounded text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200 ${FOCUS_RING}`}
               >
                 Add all{search.trim() ? ` (${addableIds.length})` : ''}
               </button>
             )}
           </div>
 
-          <div className="max-h-72 overflow-y-auto p-1.5" role="listbox" aria-multiselectable="true">
+          <div className="max-h-72 overflow-y-auto p-1" role="listbox" aria-multiselectable="true" aria-label="Monitors">
             {loading ? (
-              <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-500">
+              <div role="status" className="flex items-center justify-center gap-2 py-8 text-xs text-slate-500">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                 Loading monitors…
               </div>
@@ -131,69 +140,73 @@ export default function MonitorPicker({
                     onClick={() =>
                       inThisSection ? onRemove(monitor.id) : onAdd([monitor.id])
                     }
-                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                      inThisSection ? 'bg-cyan-500/[0.08]' : 'hover:bg-white/[0.04]'
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-well-hover active:bg-control-hover ${FOCUS_RING_INSET} ${
+                      inThisSection ? 'bg-well' : ''
                     }`}
                   >
                     <span
                       aria-hidden="true"
-                      className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${
+                      className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] border transition-colors duration-fast ${
                         inThisSection
-                          ? 'border-cyan-400 bg-cyan-500 text-slate-950'
-                          : 'border-white/[0.15] bg-slate-950/50'
+                          ? 'border-white bg-white text-[rgb(var(--panel-rgb))]'
+                          : 'border-[var(--input-edge)] bg-transparent'
                       }`}
                     >
-                      {inThisSection && <Check className="h-3 w-3" strokeWidth={3} />}
+                      {inThisSection && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
                     </span>
                     {monitor.type === 'group' ? (
                       <Layers
-                        className="h-3.5 w-3.5 flex-shrink-0 text-violet-300"
+                        className="h-3.5 w-3.5 flex-shrink-0 text-slate-400"
                         strokeWidth={1.75}
                         aria-hidden="true"
                       />
                     ) : (
                       <span
                         aria-hidden="true"
-                        className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
-                          monitor.enabled ? 'bg-emerald-400' : 'bg-slate-600'
+                        className={`h-2 w-2 flex-shrink-0 rounded-full ${
+                          MONITOR_STATUS_DOT[monitor.enabled ? leafComponentStatus(monitor) : 'paused']
                         }`}
                       />
                     )}
                     <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
                       {monitor.name}
                     </span>
-                    <span className="flex-shrink-0 text-[10px] uppercase tracking-wider text-slate-600">
-                      {elsewhere ? (
-                        <span className="normal-case tracking-normal text-amber-300/80">
-                          in {placement.sectionTitle || 'another section'}
-                        </span>
-                      ) : (
-                        monitor.type
-                      )}
-                    </span>
+                    {monitor.type !== 'group' && (
+                      <span className="sr-only">
+                        , {monitor.enabled ? leafComponentStatus(monitor) : 'paused'}
+                      </span>
+                    )}
+                    {elsewhere ? (
+                      <span className="flex-shrink-0 text-xs text-amber-300">
+                        in {placement.sectionTitle || 'another section'}
+                      </span>
+                    ) : (
+                      <TypeBadge type={monitor.type} config={monitor.config} />
+                    )}
                   </button>
                 );
               })
             )}
             {hidden > 0 && (
-              <p className="px-3 py-2 text-center text-[11px] text-slate-600">
+              <p className="px-3 py-2 text-center text-xs text-slate-500">
                 {hidden} more — refine your search to see them
               </p>
             )}
           </div>
 
-          <div className="flex items-center justify-between border-t border-white/[0.06] px-3 py-2">
-            <span className="text-[11px] text-slate-600">Changes apply instantly</span>
-            <button
+          <div className="flex items-center justify-between border-t border-divider py-1.5 pl-3 pr-1.5">
+            <span className="text-xs text-slate-500">Changes apply instantly</span>
+            <Button
               type="button"
+              variant="subtle"
+              size="xs"
               onClick={() => {
                 setOpen(false);
                 setSearch('');
               }}
-              className="text-[11px] font-medium text-slate-400 transition-colors hover:text-slate-200"
             >
               Done
-            </button>
+            </Button>
           </div>
         </div>
       )}

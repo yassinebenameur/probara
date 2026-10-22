@@ -2,6 +2,8 @@
 
 import { Plus, X } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import FormField from '@/components/ui/FormField';
+import IconButton from '@/components/ui/IconButton';
 import { HTTPDisplayField, MAX_HTTP_DISPLAY_FIELDS } from '@/lib/types';
 
 const COLUMNS = { gridTemplateColumns: '2fr 1fr 2rem' };
@@ -22,44 +24,35 @@ export default function DisplayFieldsEditor({
   const full = value.length >= MAX_HTTP_DISPLAY_FIELDS;
 
   return (
-    <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1.5">
-        List display values <span className="text-slate-600">(optional)</span>
-      </label>
-
+    <FormField label="Show values in monitor list" error={error}>
       {value.length > 0 && (
         <div className="mb-2 space-y-2">
-          <div className="grid gap-2 text-[11px] text-slate-500" style={COLUMNS}>
+          <div className="grid gap-2 text-2xs text-slate-500" style={COLUMNS}>
             <span>JSON path</span>
             <span>Label</span>
           </div>
           {value.map((f, idx) => (
             <div key={`display-${idx}`} className="grid gap-2 items-center" style={COLUMNS}>
               <input
-                className="input text-sm font-mono"
+                className="input font-mono"
                 placeholder="version"
                 aria-label="JSON path"
                 value={f.path}
                 onChange={(e) => update(idx, { path: e.target.value })}
               />
               <input
-                className="input text-sm"
+                className="input"
                 placeholder="None"
                 aria-label="Label"
                 maxLength={32}
                 value={f.label || ''}
                 onChange={(e) => update(idx, { label: e.target.value })}
               />
-              <Button
-                type="button"
-                variant="subtle"
-                size="sm"
-                aria-label="Remove display value"
+              <IconButton
+                label="Remove display value"
                 icon={<X strokeWidth={1.75} />}
                 onClick={() => onChange(value.filter((_, i) => i !== idx))}
-              >
-                <span className="sr-only">Remove</span>
-              </Button>
+              />
             </div>
           ))}
         </div>
@@ -69,21 +62,19 @@ export default function DisplayFieldsEditor({
         type="button"
         variant="ghost"
         size="xs"
-        icon={<Plus strokeWidth={1.75} />}
+        icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
         disabled={full}
         onClick={() => onChange([...value, { label: '', path: '' }])}
       >
         {full ? `Up to ${MAX_HTTP_DISPLAY_FIELDS} values` : 'Add value'}
       </Button>
 
-      {error ? (
-        <p className="mt-1 text-xs text-rose-400">{error}</p>
-      ) : (
+      {!error && (
         <p className="mt-1 text-xs text-slate-500">
-          Shown next to the name in the monitors list, from the latest check (gjson path, e.g.{' '}
-          <code className="text-slate-400">checks.db</code>). Leave the label empty to show only the value.
+          Pull a field from the latest JSON response (e.g. <code className="text-slate-300">checks.db</code>) and
+          show it beside the name. Leave the label empty to show only the value.
         </p>
       )}
-    </div>
+    </FormField>
   );
 }

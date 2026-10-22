@@ -1,10 +1,11 @@
 import { ReactNode } from 'react';
 
 interface PanelProps {
-  title?: string;
+  title?: ReactNode;
   subtitle?: string;
   actions?: ReactNode;
   allowOverflow?: boolean;
+  className?: string;
   children: ReactNode;
 }
 
@@ -13,16 +14,17 @@ export default function Panel({
   subtitle,
   actions,
   allowOverflow = false,
+  className = '',
   children,
 }: PanelProps) {
   return (
-    <div className={`relative ${allowOverflow ? 'overflow-visible' : 'overflow-hidden'} rounded-xl border border-white/[0.06] bg-slate-900/50 p-5`}>
+    <div className={`glass relative ${allowOverflow ? 'overflow-visible' : 'overflow-hidden'} p-5 ${className}`.trim()}>
       {(title || actions) && (
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            {title && <div className="text-sm font-medium text-white">{title}</div>}
+            {title && <h2 className="text-title font-semibold text-white">{title}</h2>}
             {subtitle && (
-              <div className="text-xs text-slate-500">{subtitle}</div>
+              <p className="mt-0.5 max-w-prose text-pretty text-xs text-slate-500">{subtitle}</p>
             )}
           </div>
           {actions && (
@@ -33,8 +35,7 @@ export default function Panel({
         </div>
       )}
 
-      {/* Content */}
-      <div className="mt-1">{children}</div>
+      <div>{children}</div>
     </div>
   );
 }

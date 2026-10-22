@@ -5,7 +5,8 @@ import { createMaintenanceWindow, getGroupMembers, updateMaintenanceWindow } fro
 import type { MaintenanceWindow, Monitor } from '@/lib/types';
 import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 import Button from '@/components/ui/Button';
-import ModalPortal from '@/components/ui/ModalPortal';
+import Callout from '@/components/ui/Callout';
+import Dialog from '@/components/ui/Dialog';
 import { MonitorMultiSelect } from '@/components/monitors/MonitorMultiSelect';
 
 interface MaintenanceWindowModalProps {
@@ -13,6 +14,8 @@ interface MaintenanceWindowModalProps {
   onDone: () => void;
   onCancel: () => void;
 }
+
+const labelClass = 'mb-1.5 block text-ui font-medium text-slate-300';
 
 // datetime-local inputs work in the browser's local timezone; the API speaks
 // ISO/UTC. Convert at the edges.
@@ -80,6 +83,7 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
     };
   }, []);
 
+  const endBeforeStart = startsAt !== '' && endsAt !== '' && new Date(endsAt) <= new Date(startsAt);
   const canSave =
     !saving &&
     title.trim() !== '' &&
@@ -114,120 +118,104 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
   };
 
   return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-        <div className="dashboard-scroll max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-xl border border-white/[0.08] bg-slate-900/95 p-6 shadow-2xl">
-          {/* Header */}
-          <div className="mb-5 flex items-start justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-white">
-                {window ? 'Edit maintenance window' : 'Schedule maintenance'}
-              </h2>
-              <p className="mt-1 text-xs text-slate-500">
-                Alerts for the selected monitors are suppressed during the window. Checks keep running.
-              </p>
-            </div>
-            <button
-              onClick={onCancel}
-              className="text-slate-400 hover:text-white transition-colors"
-              aria-label="Close"
-            >
-              ×
-            </button>
-          </div>
+    <Dialog
+      onClose={onCancel}
+      busy={saving}
+      size="lg"
+      title={window ? 'Edit maintenance window' : 'Schedule maintenance'}
+      description="Alerts for the selected monitors are suppressed during the window. Checks keep running."
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
+            Cancel
+          </Button>
+          <Button variant="accent" size="sm" onClick={save} disabled={!canSave} loading={saving}>
+            {window ? 'Save changes' : 'Schedule'}
+          </Button>
+        </>
+      }
+    >
+      <div>
+        <label className={labelClass} htmlFor="mw-title">
+          Title
+        </label>
+        <input
+          id="mw-title"
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Database upgrade"
+          className="input"
+        />
+      </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-400" htmlFor="mw-title">
-                Title
-              </label>
-              <input
-                id="mw-title"
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Database upgrade"
-                className="input input-sm w-full"
-              />
-            </div>
+      <div>
+        <label className={labelClass} htmlFor="mw-description">
+          Description <span className="font-normal text-slate-500">(shown on status pages)</span>
+        </label>
+        <textarea
+          id="mw-description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={2}
+          placeholder="Optional details for status page viewers"
+          className="input resize-none"
+        />
+      </div>
 
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-400" htmlFor="mw-description">
-                Description <span className="text-slate-600">(shown on status pages)</span>
-              </label>
-              <textarea
-                id="mw-description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                placeholder="Optional details for status page viewers"
-                className="input input-sm w-full resize-none"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400" htmlFor="mw-start">
-                  Starts
-                </label>
-                <input
-                  id="mw-start"
-                  type="datetime-local"
-                  value={startsAt}
-                  onChange={(e) => setStartsAt(e.target.value)}
-                  className="input input-sm w-full"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400" htmlFor="mw-end">
-                  Ends
-                </label>
-                <input
-                  id="mw-end"
-                  type="datetime-local"
-                  value={endsAt}
-                  onChange={(e) => setEndsAt(e.target.value)}
-                  className="input input-sm w-full"
-                />
-              </div>
-            </div>
-            {startsAt && endsAt && new Date(endsAt) <= new Date(startsAt) && (
-              <p className="text-xs text-rose-400">End time must be after start time.</p>
-            )}
-
-            <div>
-              <span className="mb-1 block text-xs font-medium text-slate-400">
-                Monitors <span className="text-slate-600">— pick a group to cover its members</span>
-              </span>
-              {monitorsLoading ? (
-                <div className="rounded-lg border border-white/[0.06] bg-slate-950/40 px-2 py-6">
-                  <p className="text-center text-xs text-slate-500">Loading monitors…</p>
-                </div>
-              ) : (
-                <MonitorMultiSelect
-                  monitors={monitors}
-                  selectedIds={selectedIds}
-                  onChange={setSelectedIds}
-                  groupMembers={groupMembers}
-                  maxHeightClass="max-h-72"
-                  emptyMessage="No monitors available"
-                />
-              )}
-            </div>
-
-            {error && <p className="text-xs text-rose-400">{error}</p>}
-
-            <div className="flex justify-end gap-2 pt-1">
-              <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
-                Cancel
-              </Button>
-              <Button size="sm" onClick={save} disabled={!canSave} loading={saving}>
-                {window ? 'Save changes' : 'Schedule'}
-              </Button>
-            </div>
-          </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelClass} htmlFor="mw-start">
+            Starts
+          </label>
+          <input
+            id="mw-start"
+            type="datetime-local"
+            value={startsAt}
+            onChange={(e) => setStartsAt(e.target.value)}
+            className="input h-10"
+          />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="mw-end">
+            Ends
+          </label>
+          <input
+            id="mw-end"
+            type="datetime-local"
+            value={endsAt}
+            onChange={(e) => setEndsAt(e.target.value)}
+            className="input h-10"
+            aria-invalid={endBeforeStart || undefined}
+            aria-describedby={endBeforeStart ? 'mw-end-error' : undefined}
+          />
         </div>
       </div>
-    </ModalPortal>
+      {endBeforeStart && (
+        <p id="mw-end-error" role="alert" className="text-xs text-rose-300">End time must be after start time.</p>
+      )}
+
+      <div>
+        <span className={labelClass}>
+          Monitors <span className="font-normal text-slate-500">— pick a group to cover its members</span>
+        </span>
+        {monitorsLoading ? (
+          <div className="glass-well px-2 py-6">
+            <p className="text-center text-xs text-slate-500">Loading monitors…</p>
+          </div>
+        ) : (
+          <MonitorMultiSelect
+            monitors={monitors}
+            selectedIds={selectedIds}
+            onChange={setSelectedIds}
+            groupMembers={groupMembers}
+            maxHeightClass="max-h-72"
+            emptyMessage="No monitors available"
+          />
+        )}
+      </div>
+
+      {error && <Callout tone="danger">{error}</Callout>}
+    </Dialog>
   );
 }

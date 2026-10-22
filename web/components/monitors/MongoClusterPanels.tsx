@@ -9,31 +9,26 @@
 // checks is their average rate) while gauges become point samples. Reuses
 // the metric-store chart internals so the panels match the agent dashboard.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Monitor,
-  MonitorAnalyticsRange,
-  MonitorMetricsSnapshotsResponse,
-  MongoDBMetrics,
-  MongoDBMonitorConfig,
-} from '@/lib/types';
-import { getMonitorMetricsSnapshots } from '@/lib/api';
+import { useMemo } from 'react';
+import { Monitor, MonitorAnalyticsRange, MongoDBMetrics, MongoDBMonitorConfig } from '@/lib/types';
+import { formatCount } from '@/lib/format';
 import { formatBytes } from '@/lib/metrics';
+import { pickSnapshots, snapshotStepMs, type TimedSnapshot } from '@/lib/metric-snapshots';
+import { useMetricsSnapshots } from '@/lib/useMetricsSnapshots';
+import Callout from '@/components/ui/Callout';
 import InfoTip from '@/components/ui/InfoTip';
 import {
+  ChartTile,
   MetricChart,
   buildChartRows,
   SERIES_COLORS,
   type ChartRow,
   type ChartSeries,
   type ReferenceThreshold,
-  type TimeRange as ChartTimeRange,
+  chartRangeFor,
 } from './metric-chart';
 
-interface Snapshot {
-  ts: number;
-  m: MongoDBMetrics;
-}
+type Snapshot = TimedSnapshot<MongoDBMetrics>;
 
 interface PanelSpec {
   title: string;
@@ -53,7 +48,7 @@ const BYTES_AXIS_WIDTH = 76;
 type Point = [number, number];
 
 const secondsValue = (v: number) => `${Math.round(v)}s`;
-const countValue = (v: number) => `${Math.round(v).toLocaleString()}`;
+const countValue = (v: number) => formatCount(v);
 const bytesTick = (v: number) => formatBytes(v);
 const rateValue = (v: number) => `${formatBytes(v)}/s`;
 const opsValue = (v: number) => `${v >= 10 ? Math.round(v) : v.toFixed(1)}/s`;
@@ -86,10 +81,6 @@ function gaugePoints(snapshots: Snapshot[], read: (m: MongoDBMetrics) => number 
 
 const last = (points: Point[]): number | undefined => points[points.length - 1]?.[1];
 
-// The chart only distinguishes time-of-day from date axis labels.
-const chartRange = (range: MonitorAnalyticsRange): ChartTimeRange =>
-  range === '1h' || range === '6h' || range === '24h' ? range : '7d';
-
 export default function MongoClusterPanels({
   monitor,
   timeRange,
@@ -101,64 +92,18 @@ export default function MongoClusterPanels({
   latestResultAt?: string;
 }) {
   const config = (monitor.config || {}) as MongoDBMonitorConfig;
-  const [data, setData] = useState<MonitorMetricsSnapshotsResponse | null>(null);
-  const lastFetch = useRef<{ key: string; at: number; bucketMs: number } | null>(null);
-  const fetchSeq = useRef(0);
-
-  useEffect(() => {
-    const key = `${monitor.id}:${timeRange}`;
-    const prev = lastFetch.current;
-    // New checks refetch at most once per bucket: a newer snapshot inside
-    // the current bucket would only replace the last point. Superseded
-    // responses are dropped by sequence, not effect cleanup, so a throttled
-    // re-run never discards the fetch still in flight.
-    if (prev && prev.key === key && Date.now() - prev.at < prev.bucketMs) return;
-    lastFetch.current = { key, at: Date.now(), bucketMs: prev?.key === key ? prev.bucketMs : 0 };
-    const seq = ++fetchSeq.current;
-    getMonitorMetricsSnapshots(monitor.id, { range: timeRange })
-      .then((resp) => {
-        if (seq !== fetchSeq.current) return;
-        lastFetch.current = { key, at: Date.now(), bucketMs: resp.bucket_seconds * 1000 };
-        setData(resp);
-      })
-      .catch((err) => console.error('Failed to load cluster metrics:', err));
-  }, [monitor.id, timeRange, latestResultAt]);
+  const data = useMetricsSnapshots(monitor.id, timeRange, latestResultAt, 'cluster metrics');
 
   const { panels, unauthorized } = useMemo(() => {
-    const snapshots: Snapshot[] = [];
-    for (const s of data?.snapshots ?? []) {
-      const m = (s.metrics_data as { mongodb?: MongoDBMetrics } | null)?.mongodb;
-      if (!m) continue;
-      const ts = Date.parse(s.created_at);
-      if (Number.isFinite(ts)) snapshots.push({ ts, m });
-    }
+    const snapshots: Snapshot[] = pickSnapshots(data, (md) => (md as { mongodb?: MongoDBMetrics } | null)?.mongodb);
 
     const latest = snapshots[snapshots.length - 1]?.m;
     const isUnauthorized = Boolean(latest?.unavailable?.some((u) => u.reason === 'unauthorized'));
 
-    // Snap rows to the observed check cadence (median inter-snapshot delta),
-    // not the configured interval: scheduler ticks land with jitter (e.g.
-    // 35s on a 30s interval), and a too-fine grid turns that jitter into
-    // false line breaks. A genuinely missed check still leaves a >1-bucket
-    // hole, so real gaps keep breaking the line.
-    const deltas = snapshots
-      .slice(1)
-      .map((s, i) => s.ts - snapshots[i].ts)
-      .sort((a, b) => a - b);
-    const medianDelta = deltas[Math.floor(deltas.length / 2)] ?? 0;
-    // The 1.25 pad absorbs fractional drift (35s points on a 35s grid would
-    // still skip a bucket now and then); two checks in one bucket just
-    // overwrite, which is invisible, while a missed check still leaves a hole.
-    // Downsampled, the newest-per-bucket picks sit up to one bucket plus one
-    // check interval apart, so the grid must be that coarse or it breaks the
-    // line between adjacent buckets.
-    const intervalMs = monitor.interval_seconds * 1000;
-    const bucketMs = (data?.bucket_seconds ?? 0) * 1000;
-    const stepMs = Math.max(
-      intervalMs,
-      Math.ceil(medianDelta * 1.25),
-      bucketMs > intervalMs ? bucketMs + intervalMs : 0,
-      1000
+    const stepMs = snapshotStepMs(
+      snapshots.map((snap) => snap.ts),
+      monitor.interval_seconds,
+      data?.bucket_seconds ?? 0
     );
     const specs: PanelSpec[] = [];
 
@@ -268,7 +213,7 @@ export default function MongoClusterPanels({
         series: [
           { key: 'reads', name: 'Reads', color: SERIES_COLORS[2] },
           { key: 'writes', name: 'Writes', color: SERIES_COLORS[1] },
-          { key: 'commands', name: 'Commands', color: SERIES_COLORS[5] },
+          { key: 'commands', name: 'Commands', color: SERIES_COLORS[4] },
         ],
         yTickFormatter: opsValue,
         valueFormatter: opsValue,
@@ -329,12 +274,19 @@ export default function MongoClusterPanels({
     return { panels: specs, unauthorized: isUnauthorized };
   }, [data, monitor.interval_seconds, config.warn_replication_lag_seconds, config.max_replication_lag_seconds]);
 
+  // The range window, clamped like the snapshots to raw retention, so the
+  // charts line up with the response-time chart above them.
+  const xDomain = useMemo<[number, number] | undefined>(() => {
+    const start = data ? Date.parse(data.coverage_start) : NaN;
+    return Number.isFinite(start) ? [start, Date.now()] : undefined;
+  }, [data]);
+
   if (panels.length === 0 && !unauthorized) return null;
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-slate-900/40 p-4">
+    <section className="glass p-5">
       <div className="mb-4 flex items-center gap-1.5">
-        <h3 className="text-sm font-medium text-white">Cluster metrics</h3>
+        <h3 className="text-title font-semibold text-white">Cluster metrics</h3>
         <InfoTip inLabel ariaLabel="About cluster metrics">
           One snapshot per check from the enabled cluster checks (serverStatus / replSetGetStatus, read with the
           clusterMonitor role). Operation and network counters are cumulative on the server and shown here as
@@ -342,48 +294,35 @@ export default function MongoClusterPanels({
           samples while rates stay averaged across the skipped checks.
         </InfoTip>
         {data?.is_partial && (
-          <span className="ml-auto text-[11px] text-slate-500">Last 30 days — raw check retention</span>
+          <span className="ml-auto text-xs text-slate-400">Last 30 days — raw check retention</span>
         )}
       </div>
       {unauthorized && (
-        <p className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-xs text-amber-300">
+        <Callout tone="warning" className={panels.length > 0 ? 'mb-4' : undefined}>
           Cluster checks are enabled but skipped — grant the monitoring user the clusterMonitor role.
-        </p>
+        </Callout>
       )}
-      <div className="grid gap-6 md:grid-cols-2">
+      {/* Three across from 3xl, the detail page's widest layout (it caps at
+          100rem, so 1920 and 2560 look alike). */}
+      <div className="grid gap-4 lg:grid-cols-2 3xl:grid-cols-3">
         {panels.map((panel) => (
-          <div key={panel.title}>
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs text-slate-500">{panel.title}</span>
-              <span className="font-mono text-xs text-slate-400">{panel.headline}</span>
-            </div>
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
-              <MetricChart
-                data={panel.rows}
-                series={panel.series}
-                range={chartRange(timeRange)}
-                yDomain={panel.yDomain}
-                yTickFormatter={panel.yTickFormatter}
-                valueFormatter={panel.valueFormatter}
-                height={150}
-                referenceLines={panel.referenceLines}
-                syncId=""
-                yAxisWidth={panel.yAxisWidth}
-              />
-            </div>
-            {panel.series.length > 1 && (
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
-                {panel.series.map((s) => (
-                  <span key={s.key} className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: s.color }} />
-                    {s.name}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          <ChartTile key={panel.title} title={panel.title} headline={panel.headline} legend={panel.series}>
+            <MetricChart
+              data={panel.rows}
+              series={panel.series}
+              range={chartRangeFor(timeRange)}
+              xDomain={xDomain}
+              yDomain={panel.yDomain}
+              yTickFormatter={panel.yTickFormatter}
+              valueFormatter={panel.valueFormatter}
+              height={160}
+              referenceLines={panel.referenceLines}
+              syncId=""
+              yAxisWidth={panel.yAxisWidth}
+            />
+          </ChartTile>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

@@ -148,6 +148,7 @@ export const AGENTS_PAGE: DocPage = {
           items: [
             "Create an agent monitor and choose its expected interval and optional metric rules.",
             "Create a [tenant API key](/docs/administration/#api-keys) with `write` scope. Read scope cannot submit metrics.",
+            "Fetch the install script with that key (`Authorization: Bearer <write-scope key>`). The key is embedded only then: a script fetched from a signed-in browser session, an MCP token or a read-scope key carries no key and refuses to run before touching the host.",
             "Open the monitor's agent install instructions and select the target platform.",
             "Run the generated script with the privileges required by that platform.",
             "Confirm the first report appears immediately, then verify periodic reports and current state.",
@@ -160,7 +161,7 @@ export const AGENTS_PAGE: DocPage = {
             [
               "Linux",
               "systemd system service `probara-collector.service` (root)",
-              "Config at `/etc/probara-collector/config.yaml` (0644, references `${env:…}` only); `EnvironmentFile=/etc/probara-collector/collector.env` (0600) holds `PROBARA_API_KEY` and `PROBARA_AGENT_ID`",
+              "Config at `/etc/probara-collector/config.yaml` (0644, references `${env:…}` only); `EnvironmentFile=/etc/probara-collector/collector.env` (created 0600, never briefly readable) holds `PROBARA_API_KEY` and `PROBARA_AGENT_ID`",
             ],
             [
               "macOS",
@@ -169,7 +170,7 @@ export const AGENTS_PAGE: DocPage = {
             ],
             [
               "Windows",
-              "native service `ProbaraCollector` registered via `sc.exe`",
+              "native service `ProbaraCollector` registered with `New-Service`",
               "Run from elevated PowerShell; secrets live in the service's registry `Environment` value, not in the config file",
             ],
           ],
@@ -177,7 +178,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Install scripts download the platform binary from `GET /static/collector/probara-collector-{linux,darwin}-{amd64,arm64}` (or `-windows-amd64.exe`), verify its SHA-256 against the published `checksums.txt`, and first remove any legacy `probara-agent` installation (systemd/launchd/NSSM service, binary, and config) before installing. Re-running the installer on a host is therefore also the [migration path](/docs/agents/#migrating-legacy). Uninstall scripts clean up both generations.",
+            "Install scripts download the platform binary from `GET /static/collector/probara-collector-{linux,darwin}-{amd64,arm64}` (or `-windows-amd64.exe`), verify its SHA-256 against the published `checksums.txt` (if `checksums.txt` cannot be downloaded the installer aborts rather than install an unverified binary; only a binary with no published entry installs with a warning), and first remove any legacy `probara-agent` installation (systemd/launchd/NSSM service, binary, and config) before installing. Re-running the installer on a host is therefore also the [migration path](/docs/agents/#migrating-legacy). Re-running the install one-liner also upgrades in place: it replaces the binary, configuration and credentials and restarts the service (systemd `restart`, launchd `kickstart -k`; on Windows the binary is swapped and the service re-created), so it is the path for upgrades, key rotation and interval changes too. Uninstall scripts clean up both generations.",
         },
         {
           type: "callout",

@@ -100,6 +100,16 @@ func TestDumpPreviews(t *testing.T) {
 	mesh.Alert.LastError = str("mesh probe timeout: no response in 5s")
 	cases["mesh"] = mesh
 
+	cause := base()
+	cause.Type = "suspected_cause"
+	cause.Timestamp = now.Add(5 * time.Minute)
+	cause.Alert.SuspectedCause = &notifications.SuspectedCause{
+		TriageID: "5d1e7c2a-9b3f-4e60-8a71-0c2d4e6f8a10", Key: "dns_failure",
+		Title: "DNS resolution failure", Confidence: "medium",
+		Actions: []string{"Check resolver reachability and query the monitored record from the affected location."},
+	}
+	cases["suspected_cause"] = cause
+
 	for name, event := range cases {
 		html, err := RenderHTML(event, Templates{}, "https://probara.example.com")
 		if err != nil {

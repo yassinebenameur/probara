@@ -1,9 +1,11 @@
-// Package aisettings exposes per-tenant LLM configuration endpoints, including
+// Package aisettings exposes workspace enablement for local AI endpoints, including
 // a connectivity test used by the settings UI.
 package aisettings
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -22,6 +24,11 @@ type Handlers struct {
 
 // NewHandlers creates a new AI settings handler.
 func NewHandlers(service *svc.Service, log *logger.Logger) *Handlers {
+	// The service logs detailed probe errors (internal dial addresses) that
+	// never reach a response; give it the API logger.
+	if service != nil {
+		service.SetLogger(log)
+	}
 	return &Handlers{service: service, logger: log}
 }
 
@@ -62,14 +69,19 @@ func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req svc.UpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+	if err := decodeSettings(w, r, &req); err != nil {
+		apierrors.WriteValidationError(w, updateFieldsHint+err.Error())
 		return
 	}
 	settings, err := h.service.Update(r.Context(), tenantUUID, req)
 	if err != nil {
-		// Validation-style errors surface to the user; everything else is 500.
-		apierrors.WriteValidationError(w, err.Error())
+		var validation *svc.ValidationError
+		if errors.As(err, &validation) {
+			apierrors.WriteValidationError(w, validation.Msg)
+			return
+		}
+		h.logger.WithError(err).Error("Failed to update AI settings")
+		apierrors.WriteInternalError(w, "failed to update AI settings")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -85,11 +97,27 @@ func (h *Handlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req svc.TestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+	if err := decodeSettings(w, r, &req); err != nil {
+		apierrors.WriteValidationError(w, "Connection tests accept an empty object: "+err.Error())
 		return
 	}
 	result := h.service.Test(r.Context(), tenantUUID, req)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+// updateFieldsHint prefixes a PUT decode error. Unknown fields (the retired
+// external provider's base_url, api_key, provider, model) are rejected.
+const updateFieldsHint = "Updates accept enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds, triage_max_per_hour and triage_notifications_enabled; external provider fields are retired: "
+
+func decodeSettings(w http.ResponseWriter, r *http.Request, out any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }

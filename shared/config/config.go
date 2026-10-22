@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"github.com/yassinebenameur/probara/shared/ai"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -140,16 +142,11 @@ type APIConfig struct {
 	CheckJobStream     string
 	CheckResultSubject string
 	AIRCASubject       string
-	AIAnalysisEnabled  bool
-	// LLM_* env defaults — optional global fallback used when a tenant has no
-	// ai_settings row. Mirrors the worker's fields.
-	LLMProvider           string
-	LLMBaseURL            string
-	LLMAPIKey             string
-	LLMModel              string
-	LLMJSONMode           string
-	LLMMaxTokens          int
-	LLMTimeoutSeconds     int
+	LocalAI            ai.Config
+	// AITriageEnabled is AI_TRIAGE_ENABLED (default true). The API never
+	// publishes triage jobs; it reads the kill switch so SLA reports do not
+	// list alerts as "Triage pending" while the relay claims nothing.
+	AITriageEnabled       bool
 	AdminJWTSecret        string
 	AdminAccessTTLMinutes int
 	AdminRefreshTTLDays   int
@@ -254,19 +251,35 @@ type WorkerConfig struct {
 	HTTPAllowedCIDRs      []*net.IPNet
 	SyntheticArtifactsDir string
 
-	// AI root cause analysis consumer + LLM provider settings. The consumer is
-	// enabled only when LLMBaseURL is set; otherwise the worker skips it and
-	// the feature degrades to "not configured".
+	// SIPCallEnabled lets this worker place SIP test calls (INVITE monitors:
+	// real, possibly billed, calls). SIP_CALL_ENABLED; defaults to true on
+	// platform workers and false on private-location workers (LocationID
+	// set), so a customer-run worker places no call until its operator opts
+	// in.
+	SIPCallEnabled bool
+	// SIPCallAllowedDestinations, when non-empty, limits test calls to
+	// Request-URI user parts (the called number) matching one of these
+	// patterns, each anchored to the whole user part.
+	// SIP_CALL_ALLOWED_DESTINATIONS, comma-separated regular expressions; an
+	// invalid one fails startup.
+	SIPCallAllowedDestinations []*regexp.Regexp
+
+	// Installation-owned local inference configuration; private workers receive none.
 	AIRCAStream       string
 	AIRCASubject      string
 	AIRCAConsumerName string
-	LLMProvider       string
-	LLMBaseURL        string
-	LLMAPIKey         string
-	LLMModel          string
-	LLMJSONMode       string
-	LLMMaxTokens      int
-	LLMTimeoutSeconds int
+	LocalAI           ai.Config
+
+	// Automatic alert triage (worker/internal/airca relay and triage
+	// consumer). Read only by DB-connected platform workers; the API never
+	// publishes triage jobs and reads only the kill switch
+	// (APIConfig.AITriageEnabled). Triage never changes
+	// paging; the alerter honours the same kill switch for its opt-in
+	// suspected-cause follow-ups (AlerterConfig.SuspectedCausesDisabled).
+	AITriageEnabled      bool   // AI_TRIAGE_ENABLED, default true; kill switch: no new claims, queued rows drain as skipped
+	AITriageStream       string // AI_TRIAGE_STREAM, default "AI_TRIAGE"
+	AITriageSubject      string // AI_TRIAGE_SUBJECT, default "ai.triage.jobs"
+	AITriageConsumerName string // AI_TRIAGE_CONSUMER_NAME, default "ai-triage-workers"
 
 	// Notification dispatch consumer settings — only used when the alerter is
 	// publishing to the NOTIFICATIONS stream (ALERTER_ASYNC_DISPATCH=true).
@@ -297,6 +310,13 @@ type AlerterConfig struct {
 	AsyncDispatch            bool
 	NotificationsStream      string
 	NotificationsSubjectGlob string
+
+	// SuspectedCausesDisabled turns off the opt-in suspected-cause follow-ups
+	// (alerter dispatchSuspectedCauses) for the whole installation. It is set
+	// by the local AI kill switches, LOCAL_AI_DISABLED=true or
+	// AI_TRIAGE_ENABLED=false, so disabling AI also stops follow-ups from
+	// triages that were already ready. The zero value sends them.
+	SuspectedCausesDisabled bool
 }
 
 // StatusPageConfig contains configuration for the status page service
@@ -439,31 +459,14 @@ func LoadAPIConfig() (*APIConfig, error) {
 		cfg.MeshProbeTimeoutSeconds = n
 	}
 
-	// LLM_* env defaults — optional global fallback. When set, the API can build
-	// an analyzer/advisor and gate AI features even before a tenant configures
-	// its own ai_settings row.
-	cfg.LLMProvider = envOrDefault("LLM_PROVIDER", "openai_compat")
-	cfg.LLMBaseURL = strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
-	cfg.LLMAPIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
-	cfg.LLMModel = strings.TrimSpace(os.Getenv("LLM_MODEL"))
-	cfg.LLMJSONMode = strings.TrimSpace(os.Getenv("LLM_JSON_MODE"))
-	cfg.LLMMaxTokens = 1024
-	if v := strings.TrimSpace(os.Getenv("LLM_MAX_TOKENS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("invalid LLM_MAX_TOKENS: %q", v)
-		}
-		cfg.LLMMaxTokens = n
+	cfg.LocalAI, err = loadLocalAIConfig()
+	if err != nil {
+		return nil, err
 	}
-	cfg.LLMTimeoutSeconds = 60
-	if v := strings.TrimSpace(os.Getenv("LLM_TIMEOUT_SECONDS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("invalid LLM_TIMEOUT_SECONDS: %q", v)
-		}
-		cfg.LLMTimeoutSeconds = n
+	cfg.AITriageEnabled, err = loadAITriageEnabled()
+	if err != nil {
+		return nil, err
 	}
-	cfg.AIAnalysisEnabled = cfg.LLMBaseURL != ""
 
 	// ADMIN_JWT_SECRET
 	adminJWTSecret := os.Getenv("ADMIN_JWT_SECRET")
@@ -967,6 +970,22 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		return nil, fmt.Errorf("LOCATION_CREDENTIAL requires WORKER_LOCATION_ID")
 	}
 
+	// SIP_CALL_ENABLED — the default depends on the location mode, so it is
+	// read after WORKER_LOCATION_ID.
+	cfg.SIPCallEnabled = cfg.LocationID == ""
+	if v := strings.TrimSpace(os.Getenv("SIP_CALL_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SIP_CALL_ENABLED: %w", err)
+		}
+		cfg.SIPCallEnabled = enabled
+	}
+	allowed, err := parseSIPCallAllowedDestinations(os.Getenv("SIP_CALL_ALLOWED_DESTINATIONS"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.SIPCallAllowedDestinations = allowed
+
 	// MAX_HTTP_TIMEOUT_SECONDS
 	maxTimeoutStr := os.Getenv("MAX_HTTP_TIMEOUT_SECONDS")
 	if maxTimeoutStr == "" {
@@ -1041,31 +1060,25 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
 	cfg.NotificationsConsumerName = envOrDefault("NOTIFICATIONS_CONSUMER_NAME", "notifications-worker")
 
-	// AI root cause analysis — provider-agnostic LLM, wired by env. The
-	// consumer self-disables when LLM_BASE_URL is unset.
 	cfg.AIRCAStream = envOrDefault("AI_RCA_STREAM", "AI_RCA")
 	cfg.AIRCASubject = envOrDefault("AI_RCA_SUBJECT", "ai.rca.jobs")
 	cfg.AIRCAConsumerName = envOrDefault("AI_RCA_CONSUMER_NAME", "ai-rca-workers")
-	cfg.LLMProvider = envOrDefault("LLM_PROVIDER", "openai_compat")
-	cfg.LLMBaseURL = strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
-	cfg.LLMAPIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
-	cfg.LLMModel = strings.TrimSpace(os.Getenv("LLM_MODEL"))
-	cfg.LLMJSONMode = strings.TrimSpace(os.Getenv("LLM_JSON_MODE"))
-	cfg.LLMMaxTokens = 1024
-	if v := strings.TrimSpace(os.Getenv("LLM_MAX_TOKENS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("invalid LLM_MAX_TOKENS: %q", v)
-		}
-		cfg.LLMMaxTokens = n
+	cfg.LocalAI, err = loadLocalAIConfig()
+	if err != nil {
+		return nil, err
 	}
-	cfg.LLMTimeoutSeconds = 60
-	if v := strings.TrimSpace(os.Getenv("LLM_TIMEOUT_SECONDS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("invalid LLM_TIMEOUT_SECONDS: %q", v)
-		}
-		cfg.LLMTimeoutSeconds = n
+
+	cfg.AITriageEnabled, err = loadAITriageEnabled()
+	if err != nil {
+		return nil, err
+	}
+	cfg.AITriageStream = envOrDefault("AI_TRIAGE_STREAM", "AI_TRIAGE")
+	cfg.AITriageSubject = envOrDefault("AI_TRIAGE_SUBJECT", "ai.triage.jobs")
+	cfg.AITriageConsumerName = envOrDefault("AI_TRIAGE_CONSUMER_NAME", "ai-triage-workers")
+	// Sharing a stream or subject would hand triage jobs to the RCA consumer
+	// (and the reverse), which drops them as unknown payloads.
+	if cfg.AITriageStream == cfg.AIRCAStream || cfg.AITriageSubject == cfg.AIRCASubject {
+		return nil, fmt.Errorf("AI_TRIAGE_STREAM/AI_TRIAGE_SUBJECT must differ from AI_RCA_STREAM/AI_RCA_SUBJECT")
 	}
 
 	// SMTP — only required when the email plugin is registered AND the
@@ -1206,7 +1219,46 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 	cfg.NotificationsStream = envOrDefault("NOTIFICATIONS_STREAM", "NOTIFICATIONS")
 	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
 
+	// The alerter never calls local AI; it reads only the two kill switches.
+	localAIDisabled, err := loadLocalAIDisabled()
+	if err != nil {
+		return nil, err
+	}
+	triageEnabled, err := loadAITriageEnabled()
+	if err != nil {
+		return nil, err
+	}
+	cfg.SuspectedCausesDisabled = localAIDisabled || !triageEnabled
+
 	return cfg, nil
+}
+
+// loadAITriageEnabled parses AI_TRIAGE_ENABLED (default true), the platform
+// kill switch for automatic alert triage, shared by the worker, the alerter
+// and the API (SLA cause breakdown).
+func loadAITriageEnabled() (bool, error) {
+	v := strings.TrimSpace(os.Getenv("AI_TRIAGE_ENABLED"))
+	if v == "" {
+		return true, nil
+	}
+	enabled, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("invalid AI_TRIAGE_ENABLED: %w", err)
+	}
+	return enabled, nil
+}
+
+// loadLocalAIDisabled parses LOCAL_AI_DISABLED (default false).
+func loadLocalAIDisabled() (bool, error) {
+	v := os.Getenv("LOCAL_AI_DISABLED")
+	if v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("invalid LOCAL_AI_DISABLED")
+	}
+	return b, nil
 }
 
 // LoadStatusPageConfig loads status page service configuration
@@ -1257,4 +1309,43 @@ func envDurationSeconds(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+// loadLocalAIConfig is shared by API and platform worker. Retired LLM_*
+// variables are ignored, including legacy destination and credential values.
+func loadLocalAIConfig() (ai.Config, error) {
+	c := ai.Config{BaseURL: envOrDefault("LOCAL_AI_URL", "http://127.0.0.1:8090"), APIKey: strings.TrimSpace(os.Getenv("LOCAL_AI_TOKEN")), Timeout: 90 * time.Second}
+	disabled, err := loadLocalAIDisabled()
+	if err != nil {
+		return c, err
+	}
+	c.Disabled = disabled
+	if v := os.Getenv("LOCAL_AI_TIMEOUT_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 300 {
+			return c, fmt.Errorf("LOCAL_AI_TIMEOUT_SECONDS must be 1..300")
+		}
+		c.Timeout = time.Duration(n) * time.Second
+	}
+	return c, nil
+}
+
+// parseSIPCallAllowedDestinations compiles SIP_CALL_ALLOWED_DESTINATIONS:
+// comma-separated patterns, each anchored so it must match the whole called
+// user part (`\+33.*` allows French numbers, never one that merely contains
+// them). Empty allows every destination.
+func parseSIPCallAllowedDestinations(raw string) ([]*regexp.Regexp, error) {
+	var patterns []*regexp.Regexp
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		re, err := regexp.Compile(`^(?:` + p + `)$`)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SIP_CALL_ALLOWED_DESTINATIONS entry %q: %w", p, err)
+		}
+		patterns = append(patterns, re)
+	}
+	return patterns, nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/triageview"
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
 )
@@ -33,7 +34,8 @@ func NewService(db *db.Client, incidents incidentAutomation) *Service {
 
 // alertDetailSelect is the shared projection for AlertWithDetails. Monitors
 // are LEFT JOINed because mesh_edge alerts have no monitor — their subject is
-// a directed location pair (sl → tl).
+// a directed location pair (sl → tl). The trailing triage columns and join
+// come from triageview (read-only; triage never changes paging).
 var alertDetailSelect = `
 	SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 		a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
@@ -45,7 +47,8 @@ var alertDetailSelect = `
 		a.source_location_id, a.target_location_id, sl.name, tl.name,
 		CASE WHEN ` + alertSuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonDependency + `' END,
 		CASE WHEN a.status IN ('active', 'acknowledged') AND a.kind = 'availability'
-			THEN json_array_length(` + alertrouting.ImpactedMonitorsSubquery("a.monitor_id") + `) ELSE 0 END
+			THEN json_array_length(` + alertrouting.ImpactedMonitorsSubquery("a.monitor_id") + `) ELSE 0 END,
+		` + triageview.Columns + `
 	FROM alerts a
 	LEFT JOIN monitors m ON a.monitor_id = m.id
 	LEFT JOIN tenants te ON te.id = a.tenant_id
@@ -53,6 +56,7 @@ var alertDetailSelect = `
 	LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 	LEFT JOIN locations sl ON sl.id = a.source_location_id
 	LEFT JOIN locations tl ON tl.id = a.target_location_id
+	` + triageview.Join + `
 `
 
 // alertSuppressedPredicate is TRUE for an open alert whose notifications the
@@ -73,7 +77,8 @@ const alertVisibleClause = `(a.monitor_id IS NULL OR m.deleted_at IS NULL)`
 // scanAlertWithDetails scans one alertDetailSelect row.
 func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWithDetails, error) {
 	var alert models.AlertWithDetails
-	err := scan(
+	var triage triageview.Scan
+	err := scan(append([]any{
 		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
@@ -83,15 +88,17 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		&alert.SourceLocationID, &alert.TargetLocationID, &alert.SourceLocationName, &alert.TargetLocationName,
 		&alert.SuppressionReason, &alert.ImpactedCount,
-	)
+	}, triage.Dest()...)...)
 	if err != nil {
 		return nil, err
 	}
+	alert.Triage = triage.Build()
 	return &alert, nil
 }
 
-// ListAlerts lists alerts with filtering and pagination
-func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *models.AlertListParams) (*models.AlertListResponse, error) {
+// ListAlerts lists alerts with filtering, sorting (ListSort; the zero value
+// is newest first) and pagination.
+func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *models.AlertListParams, sort ListSort) (*models.AlertListResponse, error) {
 	if params.Page < 1 {
 		params.Page = 1
 	}
@@ -139,6 +146,13 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 
 	whereClause := strings.Join(whereParts, " AND ")
 
+	// Under a one-status filter every row ranks the same, so a status sort is
+	// its tiebreak order (newest first): say so, and the triggered_at index
+	// serves it instead of a sort over the computed rank.
+	if params.Status != nil && sort.Column == SortStatus {
+		sort = ListSort{}
+	}
+
 	// Count total
 	countQuery := fmt.Sprintf(`
 		SELECT COUNT(*)
@@ -156,9 +170,9 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 	query := fmt.Sprintf(`
 		%s
 		WHERE %s AND %s
-		ORDER BY a.triggered_at DESC
+		ORDER BY %s
 		LIMIT $%d OFFSET $%d
-	`, alertDetailSelect, whereClause, alertVisibleClause, argIndex, argIndex+1)
+	`, alertDetailSelect, whereClause, alertVisibleClause, sort.orderBy(), argIndex, argIndex+1)
 
 	args = append(args, params.PageSize, offset)
 
@@ -189,8 +203,25 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 	}, nil
 }
 
-// GetAlert retrieves an alert by ID
+// GetAlert retrieves an alert by ID. A labelable triage also carries its
+// label context (the triage label dialog reads it from this route only).
 func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
+	alert, err := s.getAlert(ctx, tenantID, alertID)
+	if err != nil {
+		return nil, err
+	}
+	if alert.Triage != nil && alert.Triage.Labelable {
+		labelContext, err := triageview.LoadLabelContext(ctx, s.db, tenantID, alert.Triage.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load triage label context: %w", err)
+		}
+		alert.Triage.LabelContext = labelContext
+	}
+	return alert, nil
+}
+
+// getAlert retrieves an alert by ID with its compact triage.
+func (s *Service) getAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
 	query := alertDetailSelect + `
 		WHERE a.id = $1 AND a.tenant_id = $2 AND ` + alertVisibleClause
 
@@ -304,7 +335,7 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 		return nil, fmt.Errorf("failed to acknowledge alert: %w", err)
 	}
 
-	return s.GetAlert(ctx, tenantID, alertID)
+	return s.getAlert(ctx, tenantID, alertID)
 }
 
 // ResolveAlert marks an alert as resolved
@@ -343,7 +374,7 @@ func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID)
 		return nil, fmt.Errorf("commit alert transaction: %w", err)
 	}
 
-	return s.GetAlert(ctx, tenantID, alertID)
+	return s.getAlert(ctx, tenantID, alertID)
 }
 
 // CreateAlert creates a new alert

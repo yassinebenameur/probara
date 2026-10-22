@@ -1,3 +1,5 @@
+//go:build !unit
+
 package monitors
 
 // Lock-order race tests for S-O1 / S-E4 (docs/state-semantics.md):

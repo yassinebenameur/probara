@@ -2,6 +2,7 @@ package monitors
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -9,6 +10,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 )
 
@@ -63,6 +65,10 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 	updated, err := h.service.BulkUpdateAlerting(r.Context(), tenantUUID, monitorIDs,
 		req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels)
 	if err != nil {
+		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
+			errors.WriteForbiddenError(w, err.Error())
+			return
+		}
 		msg := err.Error()
 		if msg == "one or more monitors not found or do not belong to tenant" {
 			errors.WriteNotFoundError(w, "one or more monitors not found")

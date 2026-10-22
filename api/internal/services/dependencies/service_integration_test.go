@@ -1,3 +1,5 @@
+//go:build !unit
+
 package dependencies_test
 
 import (
