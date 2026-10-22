@@ -5,9 +5,6 @@ infrastructure.** Probara checks web apps, APIs, databases, voice trunks and
 hosts from every network you control. Alerting, incidents, status pages and
 SLA reports come in the same install.
 
-> **Status:** 2.0 is in alpha ([releases](https://github.com/yassinebenameur/probara/releases)).
-> Expect breaking changes between releases.
-
 [Docs](https://probara-uptime.com/docs/getting-started/) ·
 [Quick start](#quick-start) ·
 [How it compares](#how-it-compares) ·
@@ -203,7 +200,6 @@ Checked against each project's public repository, docs and pricing pages on
   Checkly's root-cause analysis) investigate telemetry freely. Probara's
   model only picks from eight named causes, or answers "insufficient
   evidence".
-- **Maturity.** Probara 2.0 is in alpha.
 
 **Coming from Uptime Kuma?** Import its backup file directly, or pull
 monitors from a live Kuma 2.x with
@@ -240,12 +236,11 @@ You need Docker with Compose v2, `make`, Node.js 20.9 or newer, and free
 ports 3000, 4222, 5432 and 8080–8084.
 
 ```bash
-git clone -b dev https://github.com/yassinebenameur/probara.git && cd probara
+git clone https://github.com/yassinebenameur/probara.git && cd probara
 (cd web && npm ci)
-LOCAL_AI_IMAGE=ghcr.io/yassinebenameur/probara-local-ai:alpha make start-all
+make start-all
 ```
 
-- 2.0 lives on the `dev` branch until it is stable; `main` is still 1.0.
 - The backend runs in containers built from source; the first build takes
   10 minutes or more. The UI runs on your machine as a Next.js dev server
   (log: `/tmp/probara-ui.log`).
@@ -267,19 +262,16 @@ the [production checklist](https://probara-uptime.com/docs/deployment/#productio
 ### Kubernetes
 
 ```bash
-helm install probara oci://ghcr.io/yassinebenameur/charts/probara --devel \
+helm install probara oci://ghcr.io/yassinebenameur/charts/probara \
   -n probara --create-namespace \
   --set secrets.adminJwtSecret="$(openssl rand -hex 32)" \
   --set secrets.probaraSecretsKey="$(openssl rand -base64 32)"
 kubectl -n probara port-forward svc/probara-frontend 3000:3000
 ```
 
-`--devel` installs the newest 2.0 prerelease; without it, Helm picks the 1.0
-chart. Pin `--version 2.0.0-alpha.N` for repeatable installs. The images are
-linux/amd64 only, and the bundled Postgres and NATS need a default
-StorageClass. Add `--set localAI.enabled=false` to skip the AI pod. If you
-pull images yourself, use `:alpha` or an exact version: `:latest` is still
-1.0, including in the location-worker snippet the UI generates.
+Pin `--version 2.0.0` for repeatable installs. The images are linux/amd64
+only, and the bundled Postgres and NATS need a default StorageClass. Add
+`--set localAI.enabled=false` to skip the AI pod.
 
 ## Going further
 
