@@ -168,6 +168,44 @@ export const assertionValuePlaceholder = (target: SyntheticAPIAssertionTarget, o
   return 'expected value';
 };
 
+/**
+ * Whether an assertion compares text: every header and body op, and the json
+ * contains/regex ops. The worker matches these against the value's text
+ * (shared/models SyntheticAPIAssertionConfig.ValueText), so the input is
+ * submitted as the text typed: `1.50`, `{"status":"ok"}` or a long id would
+ * otherwise go out as a number or object and lose its spelling.
+ */
+export const isTextAssertion = (target: SyntheticAPIAssertionTarget, op: string): boolean => {
+  if (target === 'header' || target === 'body') return true;
+  if (target !== 'json') return false;
+  const normalizedOp = op.trim().toLowerCase();
+  return normalizedOp === 'contains' || normalizedOp === 'not_contains' || normalizedOp === 'regex' || normalizedOp === 'not_regex';
+};
+
+/**
+ * The value an assertion's input submits. The input is a JSON literal or
+ * plain text: for json equals, `123`, `true` and `null` are those types and
+ * `"123"` (quoted) is the string. Text assertions always submit a string —
+ * the quoted literal's content, else the input as typed (trimmed).
+ */
+export const assertionValueFromInput = (target: SyntheticAPIAssertionTarget, op: string, input: string): unknown => {
+  const parsed = parseAssertionValueInput(input);
+  if (parsed === undefined || typeof parsed === 'string' || !isTextAssertion(target, op)) return parsed;
+  return input.trim();
+};
+
+/**
+ * The input a stored assertion value hydrates into, chosen so a save submits
+ * the same value back: a string that would read as another type (`"123"`,
+ * `"true"`, or one with edge whitespace or quotes) is shown quoted. Stored
+ * values from before the form kept strings (`123` that meant a string) stay
+ * as they are; a text assertion re-saves them as their text.
+ */
+export const assertionValueToInput = (target: SyntheticAPIAssertionTarget, op: string, value: unknown): string => {
+  if (typeof value !== 'string') return stringifyAssertionValueInput(value);
+  return assertionValueFromInput(target, op, value) === value ? value : JSON.stringify(value);
+};
+
 export const stringifyAssertionValueInput = (value: unknown): string => {
   if (value === undefined || value === null) return '';
   if (typeof value === 'string') return value;
@@ -190,7 +228,7 @@ export const mapSyntheticAPIAssertionsToDraft = (assertions?: SyntheticAPIAssert
       target,
       op,
       path: assertion.path || '',
-      value_input: stringifyAssertionValueInput(assertion.value),
+      value_input: assertionValueToInput(target, op, assertion.value),
     };
   });
 };

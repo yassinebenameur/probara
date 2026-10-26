@@ -554,6 +554,11 @@ export const MONITORS_PAGE: DocPage = {
             "Assertions can target status, response headers, body text, or JSON paths. Status supports equality, inequality, and membership. Text and header checks support existence, equality, containment, regular expressions, and negative forms. JSON checks additionally support numeric and boolean operations.",
         },
         {
+          type: "paragraph",
+          text:
+            "An assertion's `value` is a JSON value, and its type decides the comparison. Header and body operations, and JSON `contains`, `regex` and their negative forms, compare text: a string's content, else the value's compact JSON text, which storage can normalize (object keys are reordered), so send text as a JSON string. JSON `equals` and `not_equals` compare by type: a string matches the value's text (`\"123\"` also matches the number `123`); a number or boolean matches a value of that type or a string that parses as one; arrays and objects compare structurally; and a missing path equals nothing, so `not_equals` passes on it. In the operator UI the value input is a JSON literal or plain text: for JSON equals, `123` and `true` are a number and a boolean and `\"123\"` (quoted) is the string, while text assertions always submit what was typed.",
+        },
+        {
           type: "code",
           language: "json",
           title: "Two-step API journey",

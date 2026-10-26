@@ -1,6 +1,10 @@
 package models
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
 
 type HTTPStatusRange struct {
 	Min int `json:"min"`
@@ -131,6 +135,26 @@ type SyntheticAPIAssertionConfig struct {
 	Op     string          `json:"op"`     // target-dependent
 	Path   string          `json:"path,omitempty"`
 	Value  json.RawMessage `json:"value,omitempty"`
+}
+
+// ValueText is the text a text operator (every header and body op, json
+// contains/not_contains/regex/not_regex) compares against: a JSON string's
+// content, else the value's literal JSON text, compacted. The worker matches
+// it and the API compiles it as the regex, so both read the same pattern.
+// Never fmt.Sprint the decoded value: an object renders as Go's map[k:v], a
+// big integer as 1.2345678901234567e+19, 1.50 as 1.5.
+func (a SyntheticAPIAssertionConfig) ValueText() string {
+	if raw := bytes.TrimSpace(a.Value); len(raw) > 0 && raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return s
+		}
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, a.Value); err == nil {
+		return compact.String()
+	}
+	return strings.TrimSpace(string(a.Value))
 }
 
 type SyntheticAPIExtractConfig struct {

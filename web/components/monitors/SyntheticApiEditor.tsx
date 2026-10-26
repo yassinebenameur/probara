@@ -409,7 +409,11 @@ function SyntheticApiStepCard({
               );
             })}
           </div>
-          <p className="text-xs text-slate-500">Value accepts plain text or JSON literals (e.g. <code>200</code>, <code>true</code>, <code>[200,201]</code>).</p>
+          <p className="text-xs text-slate-500">
+            Header and body checks, and json contains/regex, match the value as typed. For json equals, <code>123</code> and{' '}
+            <code>true</code> are a number and a boolean; quote them (<code>&quot;123&quot;</code>) to match a string. Status takes a
+            code or a list like <code>[200,201]</code>.
+          </p>
         </div>
       )}
 
