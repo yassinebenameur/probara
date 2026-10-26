@@ -272,9 +272,10 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 	return alerts, nil
 }
 
-// GetRecentAlertsForTags retrieves recent alerts for monitors matching all
-// selected tags. Mesh alerts carry no monitor (and no tags), so the tag
-// filter naturally excludes them.
+// GetRecentAlertsForTags retrieves recent alerts for monitors carrying any of
+// the selected tags (array overlap: the dashboard tag scope, see the comment
+// in services/dashboard/service.go). Mesh alerts carry no monitor (and no
+// tags), so the tag filter naturally excludes them.
 func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID, tags []string, limit int) ([]models.AlertWithDetails, error) {
 	if len(tags) == 0 {
 		return s.GetRecentAlerts(ctx, tenantID, limit)
@@ -289,7 +290,7 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	query := alertDetailSelect + `
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
-		  AND m.tags @> $2::text[]
+		  AND m.tags && $2::text[]
 		  AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $3

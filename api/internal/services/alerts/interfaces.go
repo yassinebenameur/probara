@@ -19,7 +19,7 @@ type AlertService interface {
 	// GetRecentAlerts retrieves the most recent alerts for dashboard
 	GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit int) ([]models.AlertWithDetails, error)
 
-	// GetRecentAlertsForTags retrieves recent alerts scoped to monitors matching all tags.
+	// GetRecentAlertsForTags retrieves recent alerts scoped to monitors carrying any of the tags.
 	GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID, tags []string, limit int) ([]models.AlertWithDetails, error)
 
 	// AcknowledgeAlert marks an alert as acknowledged

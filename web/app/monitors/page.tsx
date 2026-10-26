@@ -50,6 +50,7 @@ import {
   DEFAULT_MONITOR_SORT,
   formatMonitorListParams,
   getAllMonitors,
+  matchesAnyTag,
   MONITOR_SORT_DEFAULT_DIR,
   MONITOR_SORT_KEYS,
   MONITOR_STATUS_FILTERS,
@@ -1818,8 +1819,7 @@ export default function MonitorsPage() {
       (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
       (statusFilter === 'paused' && status === 'paused') ||
       (statusFilter === 'maintenance' && status === 'maintenance');
-    const matchesTags = ignore === 'tags' || selectedTags.size === 0 ||
-      Boolean(monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
+    const matchesTags = ignore === 'tags' || matchesAnyTag(monitor.tags, selectedTags);
     const matchesRouting =
       !unroutedOnly || (monitor.enabled && monitor.alert_routing?.reachable === false);
     return matchesSearch && matchesType && matchesStatus && matchesTags && matchesRouting;

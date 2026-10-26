@@ -171,7 +171,7 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect+`
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
-		  AND m.tags @> $2::text[]
+		  AND m.tags && $2::text[]
 		  AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $3

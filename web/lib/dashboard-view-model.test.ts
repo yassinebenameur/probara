@@ -341,6 +341,27 @@ test('downMonitorsHref carries the dashboard tag scope to the monitors list', ()
     tags: ['demo'],
   });
   assert.deepEqual(summary.primaryAction, { label: 'Review 1 down', href: '/monitors?status=down&tag=demo' });
+  const unrouted = buildOperationalSummary({
+    opsSummary: {
+      up_monitors: 3,
+      down_monitors: 0,
+      paused_monitors: 0,
+      maintenance_monitors: 0,
+      active_alerts: 0,
+      acknowledged_alerts: 0,
+      suppressed_alerts: 0,
+      unrouted_monitors: 2,
+    },
+    problemMonitorsCount: 0,
+    recentFailuresCount: 0,
+    overallUptime: 100,
+    avgResponseMs: 0,
+    tags: ['demo', 'team a'],
+  });
+  assert.equal(
+    unrouted.metrics.find((m) => m.label === 'Unrouted')?.href,
+    '/monitors?tag=demo&tag=team+a&routing=unrouted'
+  );
   // HTTP checks ran but none succeeded: not "no HTTP checks".
   assert.equal(summary.metrics.find((m) => m.label === 'Avg HTTP latency')?.detail, 'No successful checks in range');
 });

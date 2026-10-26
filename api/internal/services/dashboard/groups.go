@@ -202,7 +202,7 @@ func (s *Service) queryMonitorsForGroupsRaw(
 	tagClause := ""
 	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
 	if len(filterTags) > 0 {
-		tagClause = "AND m.tags @> $4::text[]"
+		tagClause = "AND m.tags && $4::text[]"
 		args = append(args, pq.Array(filterTags))
 	}
 
@@ -346,7 +346,7 @@ func (s *Service) listGroupMonitorRows(ctx context.Context, tenantID uuid.UUID, 
 	tagClause := ""
 	args := []interface{}{tenantID}
 	if len(filterTags) > 0 {
-		tagClause = "AND m.tags @> $2::text[]"
+		tagClause = "AND m.tags && $2::text[]"
 		args = append(args, pq.Array(filterTags))
 	}
 	query := fmt.Sprintf(`
@@ -386,7 +386,7 @@ func (s *Service) queryMonitorsForGroupsRollup(
 	tagClause := ""
 	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
 	if len(filterTags) > 0 {
-		tagClause = "AND m.tags @> $4::text[]"
+		tagClause = "AND m.tags && $4::text[]"
 		args = append(args, pq.Array(filterTags))
 	}
 
@@ -534,7 +534,7 @@ func (s *Service) GetGroupSparkline(
 // monitorIDsForGroup returns the IDs of enabled non-group monitors that:
 //   - have `tag` in m.tags (if tag != nil), OR
 //   - have none of the tenant's curated dashboard_group_tags (if tag == nil — ungrouped),
-//   - AND match the top-level filterTags filter (m.tags @> filterTags).
+//   - AND match the top-level filterTags filter (any of them: m.tags && filterTags).
 func (s *Service) monitorIDsForGroup(
 	ctx context.Context,
 	tenantID uuid.UUID,
@@ -556,7 +556,7 @@ func (s *Service) monitorIDsForGroup(
         `
 		args = append(args, *tag)
 		if len(filterTags) > 0 {
-			query += ` AND tags @> $3::text[]`
+			query += ` AND tags && $3::text[]`
 			args = append(args, pq.Array(filterTags))
 		}
 	} else {
@@ -579,7 +579,7 @@ func (s *Service) monitorIDsForGroup(
         `
 		args = append(args, pq.Array(curated))
 		if len(filterTags) > 0 {
-			query += ` AND tags @> $3::text[]`
+			query += ` AND tags && $3::text[]`
 			args = append(args, pq.Array(filterTags))
 		}
 	}

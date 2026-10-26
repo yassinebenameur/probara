@@ -705,7 +705,10 @@ or imported groups come back empty. Any other path that creates groups through
   `formatMonitorListParams` in `lib/monitor-list.ts`; link to the filtered
   list rather than adding page-local query handling. The list order is
   `sortMonitorList`: groups and monitors sort together, a group ranking by
-  its worst member under status.
+  its worst member under status. Tags match ANY selected tag
+  (`matchesAnyTag`), and every dashboard endpoint's `tag` scope is the same
+  rule (`tags && $n`, never `@>`) so a dashboard count and the list it links
+  to agree.
   Likewise the one-alert `/alerts?alert=<id>&tenant=<id>` link notifications
   carry (built in `present.suspectedCauseAction`) is parsed only by
   `lib/alert-links.ts`.

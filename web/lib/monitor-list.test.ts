@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   formatMonitorListParams,
   getAllMonitors,
+  matchesAnyTag,
   type MonitorSortContext,
   parseMonitorListParams,
   sortMonitorList,
@@ -125,6 +126,20 @@ test('parseMonitorListParams reads deep links and falls back to defaults', () =>
   assert.equal(parseMonitorListParams('?status=degraded').status, 'down');
   assert.equal(parseMonitorListParams('?status=bogus').status, 'all');
   assert.deepEqual(parseMonitorListParams('?tag=a&tag=a,%20b').tags, ['a', 'b']);
+});
+
+// The dashboard API scopes its `tag` filter to the same any-tag rule
+// (services/dashboard), so a dashboard count and the ?tag= list it opens
+// cover the same monitors.
+test('the tag filter matches a monitor carrying any selected tag', () => {
+  const selected = new Set(['prod', 'api']);
+  assert.equal(matchesAnyTag(['prod', 'api'], selected), true);
+  assert.equal(matchesAnyTag(['prod'], selected), true);
+  assert.equal(matchesAnyTag(['api', 'eu'], selected), true);
+  assert.equal(matchesAnyTag(['other'], selected), false);
+  assert.equal(matchesAnyTag([], selected), false);
+  assert.equal(matchesAnyTag(undefined, selected), false);
+  assert.equal(matchesAnyTag(undefined, new Set()), true);
 });
 
 test('formatMonitorListParams omits defaults, keeps other params and round-trips', () => {

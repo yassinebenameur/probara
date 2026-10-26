@@ -6,7 +6,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 )
 
-var tagFilter = param{Name: "tag", Type: "array", Description: "Only monitors with these tags (repeatable)."}
+var tagFilter = param{Name: "tag", Type: "array", Description: "Only monitors carrying any of these tags (repeatable)."}
 
 func observabilityTools() []spec {
 	return []spec{
