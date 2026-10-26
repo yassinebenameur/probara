@@ -36,7 +36,8 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   (take the next free number), applied by `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
   Compose job, Helm a post-install/upgrade hook Job
-- `cmd/` — `migrate` plus one-off admin tools in `cmd/admin/` (VAPID keypair
+- `cmd/` — `migrate` plus one-off admin tools in `cmd/admin/` (`cmd/admin`
+  itself upserts a superadmin, like the first-user form; VAPID keypair
   minting, secret encryption backfills)
 - `collector/` — OCB manifest for `probara-collector`, the minimal OTel
   Collector distribution that agent monitors install on hosts (built by

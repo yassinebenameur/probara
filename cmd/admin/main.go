@@ -47,17 +47,34 @@ func main() {
 		os.Exit(1)
 	}
 
-	query := `
-		INSERT INTO admin_users (username, password_hash)
-		VALUES ($1, $2)
-		ON CONFLICT (username)
-		DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = NOW(), disabled_at = NULL
-	`
-
-	if _, err := client.ExecContext(context.Background(), query, username, passwordHash); err != nil {
+	if err := upsertSuperadmin(context.Background(), client, username, passwordHash); err != nil {
 		fmt.Fprintln(os.Stderr, "Failed to create admin user:", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Admin user created/updated:", username)
+	fmt.Printf("Admin user created/updated: %s (platform role %s)\n", username, auth.PlatformRoleSuperadmin)
+}
+
+// upsertSuperadmin creates the user, or resets an existing one's password and
+// re-enables it, and in both cases makes it a platform superadmin.
+//
+// The role must be explicit: admin_users.platform_role defaults to 'member'
+// (migration 000073), and a member with no tenant_memberships can do nothing,
+// so relying on the default leaves a fresh install unadministrable. This
+// matches the API's first-admin form (adminusers CreateFirstUser) and the
+// first OIDC login: a superadmin with no tenant memberships, which it does not
+// need — superadmins reach every tenant. Promoting on conflict is deliberate:
+// this is the break-glass path for an operator with database access, and its
+// whole point is to leave behind an account that can administer the install.
+func upsertSuperadmin(ctx context.Context, client *db.Client, username, passwordHash string) error {
+	_, err := client.ExecContext(ctx, `
+		INSERT INTO admin_users (username, password_hash, platform_role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (username)
+		DO UPDATE SET password_hash = EXCLUDED.password_hash,
+		              platform_role = EXCLUDED.platform_role,
+		              updated_at = NOW(),
+		              disabled_at = NULL
+	`, username, passwordHash, auth.PlatformRoleSuperadmin)
+	return err
 }
