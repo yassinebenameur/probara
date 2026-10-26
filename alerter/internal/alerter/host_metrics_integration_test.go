@@ -74,21 +74,6 @@ func seedFreshSeries(ctx context.Context, t *testing.T, dbClient *shareddb.Clien
 	return id
 }
 
-// insertAgentMetricsResult inserts a successful check result carrying the
-// given metrics_data JSON (still used by the TLS-expiry evaluator tests,
-// which read metrics_data rather than the metric store).
-func insertAgentMetricsResult(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID, monitorID uuid.UUID, createdAt time.Time, metricsJSON string) {
-	t.Helper()
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO check_results (
-			id, monitor_id, tenant_id, job_id, status, latency_ms, created_at, started_at, completed_at,
-			result_source, metrics_data
-		) VALUES ($1, $2, $3, $4, 'success', 5, $5, $5, $5, 'monitor', $6::jsonb)
-	`, uuid.New(), monitorID, tenantID, uuid.New(), createdAt.UTC(), metricsJSON); err != nil {
-		t.Fatalf("insert agent metrics result: %v", err)
-	}
-}
-
 func countHostMetricAlerts(ctx context.Context, t *testing.T, dbClient *shareddb.Client, monitorID uuid.UUID, metric, status string) int {
 	t.Helper()
 	var count int

@@ -299,9 +299,9 @@ or imported groups come back empty. Any other path that creates groups through
   (`metric_series`/`metric_samples`, daily partitions, hourly rollups via the
   `metric_rollup_dirty` ledger); each accepted export records ONE success
   heartbeat via `monitorstate.Record` with **server-clock** `StartedAt`
-  (S-O3). The legacy `POST /api/v1/agent/metrics` stays accepting (with
-  Deprecation/Sunset headers) until the sunset date in
-  `api/internal/handlers/agent/handler.go`, then becomes a 410 tombstone.
+  (S-O3) and no `metrics_data` — every reader queries the store. The
+  legacy `POST /api/v1/agent/metrics` is a 410 tombstone
+  (`HandleLegacyMetricsGone`); keep it routed, never revive an ingest there.
   Host alerting is `metric_rules` on the agent config (native units — ratio
   0-1 for `*.utilization`; validated in `AgentConfigValidator`), evaluated by
   the alerter against the store with a freshness bound.

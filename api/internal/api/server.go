@@ -286,7 +286,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			r.Get("/auth-context", authHandlers.AuthContext)
 
 			// Agent service and handlers (needed by monitors route)
-			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
+			agentService := agentservice.NewService(dbClient.DB)
 			agentHandlers := agenthandlers.NewHandler(agentService, log, cfg.PublicBaseURL)
 
 			// OTLP metrics ingest (OTel collector push for agent monitors)
@@ -437,8 +437,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/{id}/snooze", maintenanceHandlers.SnoozeMonitor)
 			})
 
-			// Agent metrics endpoint (legacy custom-agent push; superseded by OTLP)
-			r.Post("/agent/metrics", agentHandlers.HandleReceiveMetrics)
+			// Legacy custom-agent push — retired 2026-11-18, superseded by
+			// OTLP below. A 410 tombstone that names the successor.
+			r.Post("/agent/metrics", agentHandlers.HandleLegacyMetricsGone)
 
 			// OTLP/HTTP metrics export. The path ends in /v1/metrics because
 			// the collector's otlphttp exporter appends it: its config is

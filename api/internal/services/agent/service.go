@@ -3,108 +3,20 @@ package agent
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/shared/models"
-	"github.com/yassinebenameur/probara/shared/monitorstate"
-	"github.com/yassinebenameur/probara/shared/statusupdates"
-)
-
-var (
-	ErrAgentUnavailable = errors.New("agent monitor not found")
-	ErrAgentDisabled    = errors.New("agent monitor disabled")
 )
 
 // Service handles agent-related business logic
 type Service struct {
-	db        *sql.DB
-	publisher *statusupdates.Publisher
+	db *sql.DB
 }
 
 // NewService creates a new agent service
-func NewService(db *sql.DB, publisher *statusupdates.Publisher) *Service {
-	return &Service{db: db, publisher: publisher}
-}
-
-// ProcessMetrics processes incoming agent metrics and stores them as check results
-func (s *Service) ProcessMetrics(ctx context.Context, payload models.AgentMetricsPayload, tenantID uuid.UUID) error {
-	// Verify that the agent exists and belongs to the tenant
-	var monitorID uuid.UUID
-	var monitorName string
-	var enabled bool
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, enabled FROM monitors
-		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent' AND deleted_at IS NULL`,
-		payload.AgentID, tenantID,
-	).Scan(&monitorID, &monitorName, &enabled)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("%w: %s", ErrAgentUnavailable, payload.AgentID)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to lookup agent: %w", err)
-	}
-	if !enabled {
-		return fmt.Errorf("%w: %s", ErrAgentDisabled, payload.AgentID)
-	}
-
-	// Determine status based on metrics
-	// For now, we always mark it as success if we received metrics
-	// In the future, we can add threshold-based status determination
-	status := "success"
-
-	// Calculate latency (time since metrics were collected)
-	latencyMs := int(time.Since(payload.Metrics.Timestamp).Milliseconds())
-	if latencyMs < 0 {
-		latencyMs = 0
-	}
-
-	// Marshal metrics to JSON
-	metricsJSON, err := json.Marshal(payload.Metrics)
-	if err != nil {
-		return fmt.Errorf("failed to marshal metrics: %w", err)
-	}
-
-	// Generate a job ID for this metrics report
-	jobID := uuid.New()
-
-	// Insert the check result and advance the monitor state machine in one
-	// transaction so dashboard health reflects agent reports.
-	latency := int64(latencyMs)
-	if _, err := monitorstate.Record(ctx, s.db, monitorstate.Result{
-		MonitorID:    monitorID,
-		TenantID:     tenantID,
-		JobID:        jobID,
-		Status:       status,
-		ResultSource: string(models.ResultSourceMonitor),
-		LatencyMs:    &latency,
-		MetricsData:  metricsJSON,
-		StartedAt:    payload.Metrics.Timestamp,
-		CompletedAt:  time.Now(),
-	}); err != nil {
-		return fmt.Errorf("failed to record check result: %w", err)
-	}
-
-	s.publishStatusUpdate(monitorID, tenantID)
-	return nil
-}
-
-func (s *Service) publishStatusUpdate(monitorID, tenantID uuid.UUID) {
-	if s.publisher == nil {
-		return
-	}
-	event := statusupdates.Event{
-		Type:      "check_result",
-		MonitorID: monitorID.String(),
-		TenantID:  tenantID.String(),
-		Timestamp: time.Now().UTC(),
-	}
-	if err := s.publisher.Publish(event); err != nil {
-		// Best-effort; ignore publish errors.
-	}
+func NewService(db *sql.DB) *Service {
+	return &Service{db: db}
 }
 
 // GetMonitorByAgentID retrieves a monitor by its agent ID

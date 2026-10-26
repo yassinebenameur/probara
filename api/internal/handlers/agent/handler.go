@@ -2,7 +2,6 @@ package agent
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -11,12 +10,14 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/agent"
 	"github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
-	"github.com/yassinebenameur/probara/shared/models"
 )
 
-// legacyAgentSunset is the HTTP Sunset date advertised on the legacy
-// /agent/metrics endpoint; after the window it becomes a 410 tombstone.
-const legacyAgentSunset = "Wed, 18 Nov 2026 00:00:00 GMT"
+// The legacy /agent/metrics tombstone: the successor endpoint, and the
+// migration guide as the RFC 8594 "sunset" link.
+const (
+	legacyMetricsLink     = `</api/v1/otlp/v1/metrics>; rel="successor-version", <https://probara-uptime.com/docs/agents/#migrating-legacy>; rel="sunset"`
+	legacyMetricsGoneBody = `{"error":"POST /api/v1/agent/metrics was retired on 2026-11-18; send OTLP to POST /api/v1/otlp/v1/metrics (reinstall with the OpenTelemetry Collector)"}` + "\n"
+)
 
 // Handler handles agent-related HTTP requests
 type Handler struct {
@@ -53,75 +54,24 @@ func (h *Handler) resolveBackendURL(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-// HandleReceiveMetrics handles POST /api/v1/agent/metrics — the LEGACY
-// custom-agent push protocol, kept through the deprecation window so
-// already-deployed agents keep reporting. New installs run the OTel
-// Collector against POST /api/v1/otlp/v1/metrics. The Deprecation/Sunset
-// headers and the warn log below are the operator's straggler finder.
-func (h *Handler) HandleReceiveMetrics(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	w.Header().Set("Deprecation", "true")
-	w.Header().Set("Sunset", legacyAgentSunset)
-	w.Header().Set("Link", "<https://probara.dev/docs/agents#migrating-from-the-legacy-agent>; rel=\"deprecation\"")
-
-	// Get tenant ID from context (set by auth middleware)
-	tenantIDStr, ok := context.GetTenantID(ctx)
-	if !ok {
-		h.log.Warn("tenant_id not found in context")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Parse tenant ID to UUID
-	tenantID, err := uuid.Parse(tenantIDStr)
-	if err != nil {
-		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Parse request body
-	var payload models.AgentMetricsPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		h.log.WithError(err).Warn("failed to decode metrics payload")
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Validate payload
-	if payload.AgentID == "" {
-		http.Error(w, "agent_id is required", http.StatusBadRequest)
-		return
-	}
-
-	// Per-report straggler visibility: which tenants/agents still run the
-	// legacy binary (the OTLP path never hits this handler).
+// HandleLegacyMetricsGone answers POST /api/v1/agent/metrics, the retired
+// custom-agent push protocol (sunset 2026-11-18), with 410 Gone. The route
+// stays registered so a straggler gets a pointer to the OTLP endpoint rather
+// than a bare 404; the handler never reads the body or touches the database.
+// A legacy agent started with --allow-remote-disable reads any 410 as
+// "monitor deleted" and runs its uninstall command, which is the cleanup it
+// needs anyway. The warn log is the operator's straggler finder.
+func (h *Handler) HandleLegacyMetricsGone(w http.ResponseWriter, r *http.Request) {
+	tenantID, _ := context.GetTenantID(r.Context())
 	h.log.WithFields(map[string]interface{}{
-		"tenant_id": tenantIDStr,
-		"agent_id":  payload.AgentID,
-	}).Warn("legacy agent push received (deprecated endpoint)")
+		"tenant_id":  tenantID,
+		"user_agent": r.UserAgent(),
+	}).Warn("legacy agent push rejected: endpoint retired, reinstall with the OpenTelemetry Collector")
 
-	// Process metrics
-	if err := h.service.ProcessMetrics(ctx, payload, tenantID); err != nil {
-		h.log.WithError(err).Error("failed to process metrics")
-		if errors.Is(err, agent.ErrAgentUnavailable) {
-			http.Error(w, "agent monitor deleted", http.StatusGone)
-			return
-		}
-		if errors.Is(err, agent.ErrAgentDisabled) {
-			http.Error(w, "agent monitor disabled", http.StatusForbidden)
-			return
-		}
-		http.Error(w, "failed to process metrics", http.StatusInternalServerError)
-		return
-	}
-
-	// Return success
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
-	})
+	w.Header().Set("Link", legacyMetricsLink)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusGone)
+	_, _ = w.Write([]byte(legacyMetricsGoneBody))
 }
 
 // HandleGetInstallCommand handles GET /api/v1/monitors/{id}/agent/install

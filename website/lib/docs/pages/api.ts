@@ -843,7 +843,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/agent/metrics`",
-              "Deprecated legacy-agent ingest (Sunset: 18 Nov 2026, then `410`); tenant write API key",
+              "Retired legacy-agent ingest (sunset 18 Nov 2026): an authenticated request gets `410 Gone`, a JSON `error` naming the OTLP endpoint, and a `Link: </api/v1/otlp/v1/metrics>; rel=\"successor-version\"` header. The body is not read and nothing is stored",
             ],
             [
               "`GET /api/v1/monitors/{id}/agent/install`",

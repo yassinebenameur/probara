@@ -202,7 +202,7 @@ func (s *Service) Ingest(ctx context.Context, tenantID uuid.UUID, agentIDHeader 
 
 		// Heartbeat: the export request itself is the liveness evidence —
 		// even a fully capped batch proves the host's collector is up.
-		if err := s.heartbeat(ctx, tenantID, monitorID, bodyDigest, points, maxTS, now); err != nil {
+		if err := s.heartbeat(ctx, tenantID, monitorID, bodyDigest, maxTS, now); err != nil {
 			return res, err
 		}
 		s.publishStatusUpdate(monitorID, tenantID)
@@ -420,8 +420,10 @@ func (s *Service) writeBatchOnce(ctx context.Context, tenantID, monitorID uuid.U
 // heartbeat records the availability evidence for one accepted export
 // request. StartedAt is the SERVER clock (deliberate: agent clocks are
 // untrusted for state; see docs/state-semantics.md S-F1/S-O2). LatencyMs is
-// informational: receipt delay vs the newest data point.
-func (s *Service) heartbeat(ctx context.Context, tenantID, monitorID uuid.UUID, bodyDigest [32]byte, points []seriesPoint, maxTS, receivedAt time.Time) error {
+// informational: receipt delay vs the newest data point. The row carries no
+// metrics_data: the samples live in the metric store, which every reader
+// (charts, host-metric alerts, status pages, AI evidence) queries.
+func (s *Service) heartbeat(ctx context.Context, tenantID, monitorID uuid.UUID, bodyDigest [32]byte, maxTS, receivedAt time.Time) error {
 	jobID := uuid.NewSHA1(jobIDNamespace, append(bodyDigest[:], monitorID[:]...))
 	var latency int64
 	if !maxTS.IsZero() {
@@ -437,7 +439,6 @@ func (s *Service) heartbeat(ctx context.Context, tenantID, monitorID uuid.UUID, 
 		Status:       "success",
 		ResultSource: string(models.ResultSourceMonitor),
 		LatencyMs:    &latency,
-		MetricsData:  buildLegacySnapshot(points, receivedAt),
 		StartedAt:    receivedAt,
 		CompletedAt:  receivedAt,
 	}); err != nil {

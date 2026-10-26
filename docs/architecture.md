@@ -32,7 +32,9 @@ result's `metrics_data`, so no message, ingest or schema contract changes. `agen
 Host monitoring uses **probara-collector**, an OpenTelemetry Collector
 distribution defined by the OCB manifest in `collector/`. Collectors send OTLP
 metrics to the API at `/api/v1/otlp/v1/metrics`; there is no custom host-agent
-implementation in this repository.
+implementation in this repository. The retired custom-agent push,
+`POST /api/v1/agent/metrics`, stays routed only as a `410 Gone` tombstone that
+names the OTLP endpoint; it reads no body and writes nothing.
 
 ## Messaging contracts
 

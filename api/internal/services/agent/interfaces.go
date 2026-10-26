@@ -10,9 +10,6 @@ import (
 
 // AgentService defines the interface for agent operations
 type AgentService interface {
-	// ProcessMetrics processes incoming agent metrics and stores them as check results
-	ProcessMetrics(ctx context.Context, payload models.AgentMetricsPayload, tenantID uuid.UUID) error
-
 	// GetMonitorByAgentID retrieves a monitor by its agent ID
 	GetMonitorByAgentID(ctx context.Context, agentID string, tenantID uuid.UUID) (uuid.UUID, error)
 

@@ -188,7 +188,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, the legacy agent endpoint, `/push/{token}`); the retired alert-policy routes (410); and the OAuth protocol routes themselves.",
+            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the retired legacy agent endpoint and alert-policy routes (410); and the OAuth protocol routes themselves.",
         },
       ],
     },
