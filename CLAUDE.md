@@ -135,7 +135,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   stored, `""` → clear, anything else → replace (map fields keep the stored
   map only when the whole field is absent; a submitted map is edited per key).
   So a form that drops a stored secret on purpose — a Clear button, switching
-  a database monitor between connection-string and discrete-field mode — must
+  a database monitor between connection-string and discrete-field mode,
+  turning a database monitor's TLS off (its client key) — must
   submit `""`, never omit the field. On create there is nothing to keep, so
   `***` is dropped (`TestCreateMonitor_NeverPersistsAMaskedSecret`); the UI
   clone strips masks for every type first (`stripMaskedSecrets` in

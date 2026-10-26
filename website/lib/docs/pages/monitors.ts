@@ -502,7 +502,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`tls_client_cert_pem`", "Client certificate for mutual TLS"],
             [
               "`tls_client_key_pem`",
-              "Client private key; must be paired with the client certificate",
+              "Client private key; must be paired with the client certificate. Turning TLS off in the operator UI (or PostgreSQL `ssl_mode` `disable`) submits it as `\"\"`, clearing the stored key along with the certificate",
             ],
           ],
         },
