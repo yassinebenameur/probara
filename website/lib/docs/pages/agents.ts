@@ -33,7 +33,7 @@ export const AGENTS_PAGE: DocPage = {
             ],
             [
               "Host metrics",
-              "OS metrics via `hostmetrics`; any OTel metric a collector sends is stored",
+              "OS metrics via the `host_metrics` receiver; any OTel metric a collector sends is stored",
               "Arbitrary submitted key/value metrics",
               "Worker process metrics only",
             ],
@@ -115,7 +115,7 @@ export const AGENTS_PAGE: DocPage = {
         },
         {
           type: "table",
-          columns: ["Platform", "Enabled `hostmetrics` scrapers", "Consequence"],
+          columns: ["Platform", "Enabled `host_metrics` scrapers", "Consequence"],
           rows: [
             [
               "Linux",
@@ -228,7 +228,7 @@ export const AGENTS_PAGE: DocPage = {
           tone: "info",
           title: "It is a standard OpenTelemetry Collector",
           text:
-            "`probara-collector` accepts the usual collector flags, and the generated config runs unchanged on a stock `otelcol-contrib` build if you prefer to distribute upstream binaries — see [migrating and extending](/docs/agents/#migrating-legacy).",
+            "`probara-collector` accepts the usual collector flags, and the generated config runs unchanged on a stock `otelcol-contrib` build (0.153.0 or newer) if you prefer to distribute upstream binaries — see [migrating and extending](/docs/agents/#migrating-legacy).",
         },
       ],
     },
@@ -252,7 +252,7 @@ export const AGENTS_PAGE: DocPage = {
           rows: [
             [
               "`system.cpu.utilization{state=used}`",
-              "A `metricstransform` processor aggregates per-CPU non-idle states into one used ratio",
+              "A `metrics_transform` processor aggregates per-CPU non-idle states into one used ratio",
             ],
             ["`system.memory.utilization` / `system.memory.usage`", "Memory ratio and bytes"],
             ["`system.paging.*`", "Swap utilization and usage"],
@@ -405,12 +405,12 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Air-gapped or mirror-constrained environments do not need the `probara-collector` binary at all: the generated configuration is a standard OpenTelemetry Collector config, and a stock `otelcol-contrib` build runs it unchanged. Fetch the YAML from `GET /api/v1/monitors/{id}/agent/config.yaml` and distribute upstream binaries from your own mirror.",
+            "Air-gapped or mirror-constrained environments do not need the `probara-collector` binary at all: the generated configuration is a standard OpenTelemetry Collector config, and a stock `otelcol-contrib` build runs it unchanged. It uses the current snake_case component names (`host_metrics`, `resource_detection`, `metrics_transform`, `otlp_http`), which need `otelcol-contrib` 0.153.0 or newer; an older upstream build rejects them as unknown components. Configs written by earlier installers use the old names (`hostmetrics`, `resourcedetection`, `metricstransform`, `otlphttp`), which the bundled collector still accepts as deprecated aliases, logging a warning at startup; re-running the install one-liner rewrites the config with the current names. Fetch the YAML from `GET /api/v1/monitors/{id}/agent/config.yaml` and distribute upstream binaries from your own mirror.",
         },
         {
           type: "paragraph",
           text:
-            "The configuration is also an extension point: add more `hostmetrics` scrapers, or additional receivers entirely (with `otelcol-contrib`), pushing to the same OTLP endpoint. Any metric that arrives is stored, chartable, and alertable through metric rules — subject to the [per-monitor series and rate limits](/docs/agents/#reporting).",
+            "The configuration is also an extension point: add more `host_metrics` scrapers, or additional receivers entirely (with `otelcol-contrib`), pushing to the same OTLP endpoint. Any metric that arrives is stored, chartable, and alertable through metric rules — subject to the [per-monitor series and rate limits](/docs/agents/#reporting).",
         },
       ],
     },

@@ -866,9 +866,10 @@ or imported groups come back empty. Any other path that creates groups through
   and surfaced as `CollectorVersion` in
   `api/internal/services/agent/collector_install.go` — bump all three
   together, and re-run
-  `go test ./api/internal/services/agent/ -run TestGeneratedConfigValidates`
+  `go test ./api/internal/services/agent/ -run TestGeneratedConfig`
   after `make build-collector-static` (it runs the real binary's `validate`
-  against the generated config).
+  on every OS variant of the generated config, then starts it and fails on
+  any deprecation warning; it skips when the binary is not built).
 - **Brand mark lives in four runtimes** and they must change together:
   `web/components/ui/BrandMark.tsx` (operator UI logo — sidebar, login,
   connect), `web/app/icon.svg` (dashboard favicon), `website/app/icon.svg`
