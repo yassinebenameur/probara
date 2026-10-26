@@ -136,7 +136,11 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   map only when the whole field is absent; a submitted map is edited per key).
   So a form that drops a stored secret on purpose — a Clear button, switching
   a database monitor between connection-string and discrete-field mode — must
-  submit `""`, never omit the field.
+  submit `""`, never omit the field. On create there is nothing to keep, so
+  `***` is dropped (`TestCreateMonitor_NeverPersistsAMaskedSecret`); the UI
+  clone strips masks for every type first (`stripMaskedSecrets` in
+  `web/lib/monitor-clone.ts`), and a form marks a masked value "stored" only
+  in edit mode.
 - **Channel config secrets** are the plugin manifest's `secret` fields, and
   they merge differently (`secrets.MergePreserveSecrets`): absent, `""` and
   `***` all **keep** the stored value (the channel form submits every secret

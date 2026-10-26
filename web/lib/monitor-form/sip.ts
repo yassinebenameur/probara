@@ -1,5 +1,5 @@
 import { CreateMonitorRequest, Monitor, SIPMonitorConfig } from '../types';
-import { buildScheduledMonitorRequest, initialScheduledFormFields } from './common';
+import { buildScheduledMonitorRequest, initialScheduledFormFields, unmaskedCloneSecret } from './common';
 import { SipFormFields, buildSipConfig, sipCallFormFields } from '../sip-config';
 
 // SipForm's state and request. The config itself is built by
@@ -56,7 +56,7 @@ export function initialSipFormState(monitor?: Monitor, initialData?: CreateMonit
     nameserver: editSipConfig?.nameserver || initialSipConfig?.nameserver || '',
     method: normalizeSipMethod(editSipConfig?.method || initialSipConfig?.method),
     username: editSipConfig?.username || initialSipConfig?.username || '',
-    password: editSipConfig?.password || initialSipConfig?.password || '',
+    password: editSipConfig?.password || unmaskedCloneSecret(initialSipConfig?.password) || '',
     domain: editSipConfig?.domain || initialSipConfig?.domain || '',
     tls_skip_verify: editSipConfig?.tls_skip_verify ?? initialSipConfig?.tls_skip_verify ?? false,
     tls_server_name: editSipConfig?.tls_server_name || initialSipConfig?.tls_server_name || '',

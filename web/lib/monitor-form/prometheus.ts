@@ -6,7 +6,7 @@ import {
   NotificationMode,
   PrometheusMonitorConfig,
 } from '../types';
-import { buildScheduledMonitorRequest } from './common';
+import { buildScheduledMonitorRequest, unmaskedCloneSecret } from './common';
 
 // PrometheusForm's state and request. password and bearer_token are monitor
 // secrets: the stored monitor carries "***", which the form submits back
@@ -32,8 +32,8 @@ export function initialPrometheusFormState(monitor?: Monitor, initialData?: Crea
     no_data_status: existingConfig?.no_data_status ?? initialConfig?.no_data_status ?? 'failure',
     auth_type: existingConfig?.auth_type ?? initialConfig?.auth_type ?? 'none',
     username: existingConfig?.username ?? initialConfig?.username ?? '',
-    password: existingConfig?.password ?? initialConfig?.password ?? '',
-    bearer_token: existingConfig?.bearer_token ?? initialConfig?.bearer_token ?? '',
+    password: existingConfig?.password ?? unmaskedCloneSecret(initialConfig?.password) ?? '',
+    bearer_token: existingConfig?.bearer_token ?? unmaskedCloneSecret(initialConfig?.bearer_token) ?? '',
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
     timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,

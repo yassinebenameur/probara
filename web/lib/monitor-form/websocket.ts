@@ -1,4 +1,4 @@
-import { CreateMonitorRequest, Monitor, WebSocketMonitorConfig } from '../types';
+import { CreateMonitorRequest, MASKED_SECRET, Monitor, WebSocketMonitorConfig } from '../types';
 import { buildScheduledMonitorRequest, initialScheduledFormFields } from './common';
 
 // WebsocketForm's state and request. Handshake headers are a secret map
@@ -13,13 +13,22 @@ import { buildScheduledMonitorRequest, initialScheduledFormFields } from './comm
  */
 export type WebsocketHeaderRow = { key: string; value: string; hasStoredValue?: boolean; originalKey?: string };
 
-export function headersToRows(headers?: Record<string, string>): WebsocketHeaderRow[] {
-  return Object.entries(headers || {}).map(([key, value]) => ({
-    key,
-    value: value === '***' ? '' : value,
-    hasStoredValue: value === '***',
-    originalKey: value === '***' ? key : undefined,
-  }));
+/**
+ * The rows for a loaded header map. Only an edit has a stored value behind a
+ * mask; on create (a clone) a "***" row starts blank and must be re-entered,
+ * since the API drops a mask it has nothing to resolve against.
+ */
+export function headersToRows(headers: Record<string, string> | undefined, isEditMode: boolean): WebsocketHeaderRow[] {
+  return Object.entries(headers || {}).map(([key, value]) => {
+    const masked = value === MASKED_SECRET;
+    const stored = masked && isEditMode;
+    return {
+      key,
+      value: masked ? '' : value,
+      hasStoredValue: stored,
+      originalKey: stored ? key : undefined,
+    };
+  });
 }
 
 /** A header row after its name is edited: renaming it away drops the stored value. */
@@ -43,7 +52,7 @@ export function initialWebsocketFormState(monitor?: Monitor, initialData?: Creat
   return {
     ...initialScheduledFormFields(monitor, initialData),
     url: sourceConfig?.url ?? '',
-    headers: headersToRows(sourceConfig?.headers),
+    headers: headersToRows(sourceConfig?.headers, isEditMode),
     tls_skip_verify: sourceConfig?.tls_skip_verify ?? false,
     send_message: sourceConfig?.send_message ?? '',
     expected_substring: sourceConfig?.expected_substring ?? '',

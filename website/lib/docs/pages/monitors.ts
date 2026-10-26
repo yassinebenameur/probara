@@ -659,6 +659,7 @@ export const MONITORS_PAGE: DocPage = {
             "Submit a new value to replace and encrypt it.",
             "Submit an empty string to clear a protected field. That is the only spelling that removes a stored secret.",
             "WebSocket header names remain visible while their values are masked. Submitting the `headers` object edits it key by key, so a key left out of a submitted object is removed; omitting the whole object keeps the stored headers.",
+            "On create there is no stored value, so `***` is dropped exactly like an omitted field and the monitor is created without that secret. Cloning a monitor in the operator UI therefore never copies its secrets: the clone keeps WebSocket header names with blank values and leaves passwords, tokens, connection strings and client keys empty, to be entered again.",
           ],
         },
         {
