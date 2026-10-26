@@ -549,7 +549,7 @@ export const ALERTING_PAGE: DocPage = {
             ["`source`", "`manual` or automatically created"],
             [
               "Linked resources",
-              "Attach or detach alerts and monitors as investigation changes",
+              "Attach or detach alerts and monitors as investigation changes. The alert picker searches the workspace's whole alert history by monitor or location name, or alert ID, newest first, so an older alert can be attached too",
             ],
           ],
         },

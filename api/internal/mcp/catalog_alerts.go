@@ -19,6 +19,7 @@ func alertTools() []spec {
 				param{Name: "status", Enum: []string{"active", "acknowledged", "resolved"}, Description: "Only alerts in this state."},
 				param{Name: "monitor_id", Description: "Only this monitor's alerts."},
 				param{Name: "since", Description: "RFC 3339; alerts open at any point after it."},
+				param{Name: "q", Description: "Search: alerts whose monitor (or, for a mesh alert, either location) name contains this, case-insensitive, or whose ID it is. Max 200 characters."},
 				param{Name: "suppressed", Type: "boolean", Description: "true: only alerts whose notifications are suppressed (e.g. upstream dependency down); false: only unsuppressed."},
 				param{Name: "sort", Enum: []string{"triggered_at", "status", "monitor", "duration"}, Description: "Order (default triggered_at): status ranks active, acknowledged, resolved; monitor is the subject name; duration counts open alerts to now."},
 				param{Name: "dir", Enum: []string{"asc", "desc"}, Description: "Direction; default desc for triggered_at and duration, asc otherwise."},

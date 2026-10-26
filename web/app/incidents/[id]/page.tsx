@@ -7,7 +7,6 @@ import {
   addIncidentTimelineEntry,
   attachIncidentAlert,
   attachIncidentMonitor,
-  getAlerts,
   getIncident,
   publishIncidentToStatusPage,
   transitionIncidentState,
@@ -15,9 +14,10 @@ import {
   detachIncidentMonitor,
   unpublishIncidentFromStatusPage,
 } from '@/lib/api';
-import type { Alert, IncidentDetail, IncidentState, Monitor } from '@/lib/types';
+import type { IncidentDetail, IncidentState, Monitor } from '@/lib/types';
 import { getAllMonitors } from '@/lib/monitor-list';
 import AIRootCausePanel from '@/components/incidents/AIRootCausePanel';
+import AttachAlertsDialog from '@/components/incidents/AttachAlertsDialog';
 import TriagePill from '@/components/alerts/TriagePill';
 import IncidentPublicationEditor from '@/components/incidents/IncidentPublicationEditor';
 import IncidentTimeline from '@/components/incidents/IncidentTimeline';
@@ -54,11 +54,10 @@ export default function IncidentDetailPage() {
   const incidentId = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
   const [incident, setIncident] = useState<IncidentDetail | null>(null);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [selectedAlertId, setSelectedAlertId] = useState('');
+  const [attachAlertsOpen, setAttachAlertsOpen] = useState(false);
   const [selectedMonitorId, setSelectedMonitorId] = useState('');
   const [transitioning, setTransitioning] = useState<IncidentState | null>(null);
   const [confirmResolve, setConfirmResolve] = useState(false);
@@ -84,18 +83,12 @@ export default function IncidentDetailPage() {
     }
   }, [incidentId]);
 
+  // Every monitor (attach can target any of them). Alerts are not preloaded:
+  // AttachAlertsDialog searches and pages the whole alert history itself.
   const loadResources = useCallback(async () => {
     try {
-      // Every monitor (attach can target any of them); alerts stay the newest
-      // page, which is what an operator attaches during an incident.
-      const [alertsResponse, allMonitors] = await Promise.all([
-        getAlerts({ page_size: 100 }),
-        getAllMonitors(),
-      ]);
-      setAlerts(alertsResponse.items || []);
-      setMonitors(allMonitors);
+      setMonitors(await getAllMonitors());
     } catch {
-      setAlerts([]);
       setMonitors([]);
     }
   }, []);
@@ -148,18 +141,18 @@ export default function IncidentDetailPage() {
     );
   };
 
-  const handleAttachAlert = async () => {
-    if (!incident || !selectedAlertId) {
+  // One request per alert (the API attaches one at a time). Each response is
+  // the updated incident, so a failure part-way keeps what was attached and
+  // the dialog stays open on the error.
+  const handleAttachAlerts = async (alertIds: string[]) => {
+    if (!incident) {
       return;
     }
-    try {
-      const response = await attachIncidentAlert(incident.id, selectedAlertId);
+    for (const alertId of alertIds) {
+      const response = await attachIncidentAlert(incident.id, alertId);
       setIncident(response);
-      setSelectedAlertId('');
-      showToast('Alert attached to incident', 'success');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to attach alert', 'error');
     }
+    showToast(alertIds.length === 1 ? 'Alert attached to incident' : `${alertIds.length} alerts attached to incident`, 'success');
   };
 
   const handleDetachAlert = async (alertId: string) => {
@@ -258,7 +251,6 @@ export default function IncidentDetailPage() {
   const incidentPublications = incident.publications || [];
   const linkedAlertIDs = new Set(incidentAlerts.map((alert) => alert.id));
   const linkedMonitorIDs = new Set(incidentMonitors.map((monitor) => monitor.id));
-  const availableAlerts = alerts.filter((alert) => !linkedAlertIDs.has(alert.id));
   const availableMonitors = monitors.filter((monitor) => !linkedMonitorIDs.has(monitor.id));
 
   const resolved = incident.state === 'resolved';
@@ -430,26 +422,18 @@ export default function IncidentDetailPage() {
               </ul>
             )}
             {canWrite && (
-              <div className="mt-4 flex items-center gap-2">
-                <select
-                  className={ATTACH_SELECT}
-                  value={selectedAlertId}
-                  onChange={(event) => setSelectedAlertId(event.target.value)}
-                  aria-label="Alert to attach"
-                >
-                  <option value="" data-prompt>
-                    {availableAlerts.length === 0 ? 'No other alerts' : 'Attach an alert…'}
-                  </option>
-                  {availableAlerts.map((alert) => (
-                    <option key={alert.id} value={alert.id}>
-                      {alert.monitor_name || alert.id} ({ALERT_STATUS_LABEL[alert.status].toLowerCase()})
-                    </option>
-                  ))}
-                </select>
-                <Button variant="ghost" onClick={handleAttachAlert} disabled={!selectedAlertId}>
-                  Attach
+              <div className="mt-4">
+                <Button variant="ghost" onClick={() => setAttachAlertsOpen(true)}>
+                  Attach alerts…
                 </Button>
               </div>
+            )}
+            {attachAlertsOpen && (
+              <AttachAlertsDialog
+                linkedAlertIds={linkedAlertIDs}
+                onAttach={handleAttachAlerts}
+                onClose={() => setAttachAlertsOpen(false)}
+              />
             )}
           </Panel>
 

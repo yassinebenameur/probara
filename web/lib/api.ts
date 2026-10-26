@@ -576,6 +576,8 @@ export async function getAlerts(params?: {
   status?: string;
   monitor_id?: string;
   since?: string;
+  /** Server-side search: subject (monitor or mesh location name) substring, or an exact alert ID. */
+  q?: string;
   page?: number;
   page_size?: number;
   /** Server-side order for paged views (default triggered_at, newest first). */
@@ -586,6 +588,7 @@ export async function getAlerts(params?: {
   if (params?.status) queryParams.append('status', params.status);
   if (params?.monitor_id) queryParams.append('monitor_id', params.monitor_id);
   if (params?.since) queryParams.append('since', params.since);
+  if (params?.q) queryParams.append('q', params.q);
   if (params?.page) queryParams.append('page', String(params.page));
   if (params?.page_size) queryParams.append('page_size', String(params.page_size));
   if (params?.sort) queryParams.append('sort', params.sort);

@@ -97,6 +97,9 @@ type AlertListParams struct {
 	// Suppressed filters on whether the alerter is currently suppressing the
 	// alert's notifications (see AlertWithDetails.SuppressionReason).
 	Suppressed *bool
-	Page       int
-	PageSize   int
+	// Query narrows to alerts whose subject (monitor name, or either mesh
+	// location's name) contains it, case-insensitively, or whose ID it is.
+	Query    string
+	Page     int
+	PageSize int
 }

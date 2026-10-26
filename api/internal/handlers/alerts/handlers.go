@@ -2,9 +2,12 @@ package alerts
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -15,6 +18,9 @@ import (
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
+
+// maxAlertQueryLength bounds the list's q= search term.
+const maxAlertQueryLength = 200
 
 // Handlers handles alert HTTP requests
 type Handlers struct {
@@ -96,6 +102,16 @@ func (h *Handlers) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		if suppressed, err := strconv.ParseBool(suppressedStr); err == nil {
 			params.Suppressed = &suppressed
 		}
+	}
+
+	// q= searches the alert's subject (monitor or mesh location name) or ID,
+	// so pickers can reach alerts beyond the newest page.
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		if utf8.RuneCountInString(q) > maxAlertQueryLength {
+			errors.WriteValidationError(w, fmt.Sprintf("q must be at most %d characters", maxAlertQueryLength))
+			return
+		}
+		params.Query = q
 	}
 
 	// sort=triggered_at|status|monitor|duration, dir=asc|desc (whitelisted
