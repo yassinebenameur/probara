@@ -899,8 +899,8 @@ or imported groups come back empty. Any other path that creates groups through
   INVITE code, the 18x in ring mode, never the BYE's).
 - SIP dev against the host: `SIP_LOCALHOST_AS_HOST_GATEWAY=true` rewrites
   each loopback target host (configured host or SRV target) to
-  `host.docker.internal` before resolving it; the Compose worker and
-  `start-local-services.sh` (local-process workers) both default it on.
+  `host.docker.internal` before resolving it — Compose worker only;
+  `start-local-services.sh` (host processes) defaults it off.
 - SIP resolves its own targets (`sip_resolve.go`: A/AAAA, or opt-in RFC
   3263 NAPTR (`sip_naptr.go`, best effort) and SRV with failover) into
   IP-literal candidates; each attempt dials one through `dialGuard`. SIP

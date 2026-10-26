@@ -351,7 +351,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             [
               '`SIP_LOCALHOST_AS_HOST_GATEWAY`',
               '`false` outside local development',
-              'Keeps a SIP target host that is `localhost` or a loopback IP (the monitor host or an SRV target) from being rewritten to `host.docker.internal`. The Compose worker and `make start-all-local` turn the rewrite on for development; the rewritten host is still dialed through the network policy.',
+              'Keeps a SIP target host that is `localhost` or a loopback IP (the monitor host or an SRV target) from being rewritten to `host.docker.internal`. Only the Compose worker turns the rewrite on, for development (`make start-all-local` runs its worker on the host and leaves it off); the rewritten host is still dialed through the network policy.',
             ],
             [
               'Kubernetes/network firewall egress',
