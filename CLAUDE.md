@@ -782,6 +782,9 @@ or imported groups come back empty. Any other path that creates groups through
   `scripts/ci.py` under `.github/workflows/` owns package assignment, JSON
   failure/timing summaries, unexpected-skip checks and coverage merging.
   The aggregate keeps the required `Go test (main module)` check name.
+  The `SonarQube Cloud` job scans with that merged Go coverage; its scope
+  lives in `sonar-project.properties`, and it skips without `SONAR_TOKEN`.
+  Free plan: it runs only for `dev` (Sonar's main branch) and PRs into `dev`.
   `docs/testing.md` documents the suites, intentional optional skips and
   conservative AI checkpoint selection; update it when changing the workflow.
 - Web/website: CI runs `npm run lint`, `npx tsc --noEmit` and `npm run build`

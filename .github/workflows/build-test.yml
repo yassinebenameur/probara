@@ -402,11 +402,46 @@ jobs:
           files: ./coverage-main.out
           flags: main
           fail_ci_if_error: false
+      # Named outside the coverage-* pattern above: a re-run attempt would
+      # otherwise download it as an unexpected shard profile.
+      - uses: actions/upload-artifact@v4
+        if: steps.coverage.outcome == 'success'
+        with:
+          name: merged-coverage
+          path: coverage-main.out
+          retention-days: 7
       - name: Verify all required results
         if: always()
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
         run: python3 .github/workflows/scripts/ci.py required-results --suite go
+
+  sonar:
+    # Runs only after every Go group passed, so partial coverage never
+    # reaches SonarQube Cloud. Scope and exclusions: sonar-project.properties.
+    name: SonarQube Cloud
+    needs: go-test
+    # The Free plan analyzes only the project's main branch (set to dev in
+    # SonarQube Cloud) and PRs targeting it; any other branch fails the scan.
+    if: github.ref == 'refs/heads/dev' || github.base_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Fork and Dependabot PRs get no secrets; skip rather than fail there.
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        if: env.SONAR_TOKEN != ''
+        with:
+          # Blame data decides what counts as new code.
+          fetch-depth: 0
+          lfs: false
+      - uses: actions/download-artifact@v4
+        if: env.SONAR_TOKEN != ''
+        with:
+          name: merged-coverage
+      - uses: SonarSource/sonarqube-scan-action@v8
+        if: env.SONAR_TOKEN != ''
 
   local-ai:
     # The existing required AI status covers fast checks and selected validation.
