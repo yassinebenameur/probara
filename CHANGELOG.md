@@ -1,3 +1,22 @@
+# [2.0.0-alpha.9](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.8...v2.0.0-alpha.9) (2026-10-28)
+
+
+### Bug Fixes
+
+* **admin:** make cmd/admin create a platform superadmin ([7814b41](https://github.com/yassinebenameur/probara/commit/7814b416b63c79197c2f0ec45d7fac191aa9017a))
+* **agent:** use current collector component names in the generated config ([0371f96](https://github.com/yassinebenameur/probara/commit/0371f9652fe759ea32241a8b1ec6b9f268cf42d8))
+* **dashboard:** scope the tag filter to any selected tag, matching /monitors ([d74af31](https://github.com/yassinebenameur/probara/commit/d74af31562d5257ddabbf4c546798398559166b3))
+* **incidents:** search and page the whole alert history when attaching alerts ([60e1ca2](https://github.com/yassinebenameur/probara/commit/60e1ca2944a9e98501be0087e852aeb151831f9f))
+* **local:** default SIP loopback rewrite off for host-process workers ([56777cf](https://github.com/yassinebenameur/probara/commit/56777cfa29c0e4bffa791ad6555c4402932a6c64))
+* **synthetic:** keep the typed type of API assertion values from form to worker ([019b6fc](https://github.com/yassinebenameur/probara/commit/019b6fc476fc44ebf07efc64c566b0c37323bcb3))
+* **web:** clear a database monitor's stored TLS client key when TLS is turned off ([a4de6b3](https://github.com/yassinebenameur/probara/commit/a4de6b3bc5fe1b52857118c29384df9372f9c4b0))
+* **web:** strip masked secrets from every monitor clone ([52068b6](https://github.com/yassinebenameur/probara/commit/52068b699a0953fa73bb3c22d16ce3166a81f45f))
+
+
+### Features
+
+* **api:** retire the legacy agent metrics endpoint as a 410 tombstone ([e6d010c](https://github.com/yassinebenameur/probara/commit/e6d010c575c2c0dc0bfda862869b9ac71737cb63))
+
 # [2.0.0-alpha.8](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.7...v2.0.0-alpha.8) (2026-10-21)
 
 
