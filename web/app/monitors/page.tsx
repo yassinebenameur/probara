@@ -29,11 +29,12 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
+import AgentHostGlance from '@/components/monitors/AgentHostGlance';
 import CheckTrace from '@/components/monitors/CheckTrace';
 import TagPill, { getTagColor } from '@/components/monitors/TagPill';
 import { type LiveLoadOptions, useLiveRefresh } from '@/lib/useLiveRefresh';
 import { flashStyle, useRowFlash } from '@/lib/useRowFlash';
-import { Monitor, CheckResult, AgentMetrics, HTTPDisplayValue } from '@/lib/types';
+import { Monitor, CheckResult, HTTPDisplayValue, AgentMonitorConfig } from '@/lib/types';
 import {
   deleteMonitor,
   MONITOR_RESULTS_BATCH_MAX_IDS,
@@ -49,6 +50,7 @@ import {
   DEFAULT_MONITOR_SORT,
   formatMonitorListParams,
   getAllMonitors,
+  matchesAnyTag,
   MONITOR_SORT_DEFAULT_DIR,
   MONITOR_SORT_KEYS,
   MONITOR_STATUS_FILTERS,
@@ -408,51 +410,6 @@ function RowMetrics({
   );
 }
 
-// Format bytes to human readable
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-// Agent metrics mini display
-function AgentMetricsMini({ metrics }: { metrics: AgentMetrics }) {
-  return (
-    <span className="hidden flex-shrink-0 items-center gap-3 text-2xs text-slate-500 sm:flex">
-      <span>
-        CPU <span className="font-medium tabular-nums text-slate-300">{metrics.cpu_percent.toFixed(0)}%</span>
-      </span>
-      <span>
-        Mem{' '}
-        <span className="font-medium tabular-nums text-slate-300">
-          {((metrics.memory_used / metrics.memory_total) * 100).toFixed(0)}%
-        </span>
-      </span>
-      <span>
-        Disk{' '}
-        <span className="font-medium tabular-nums text-slate-300">
-          {((metrics.disk_used / metrics.disk_total) * 100).toFixed(0)}%
-        </span>
-      </span>
-    </span>
-  );
-}
-
-function isAgentMetrics(metrics: unknown): metrics is AgentMetrics {
-  if (!metrics || typeof metrics !== 'object') return false;
-  const candidate = metrics as AgentMetrics;
-  return (
-    typeof candidate.cpu_percent === 'number' &&
-    typeof candidate.memory_used === 'number' &&
-    typeof candidate.memory_total === 'number' &&
-    typeof candidate.disk_used === 'number' &&
-    typeof candidate.disk_total === 'number' &&
-    typeof candidate.load_avg_1 === 'number'
-  );
-}
-
 // Values the worker read from the latest JSON response (HTTP display_fields).
 // Neutral and squared-off on purpose, so they never read as tags. Shown at
 // every width (the list is the only place they appear outside the preview),
@@ -617,8 +574,6 @@ function MonitorRow({
   const layout = useRowLayout();
   const flashClass = useContext(RowFlashContext);
   const status = getEffectiveMonitorStatus(monitor, results);
-  const latestResult = results[0];
-  const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
   const displayValues = getHTTPDisplayValues(results);
 
   return (
@@ -657,7 +612,6 @@ function MonitorRow({
           <span className={`flex min-w-0 items-center ${layout.targetInline}`}>
             <TargetLine monitor={monitor} />
           </span>
-          {monitor.type === 'agent' && agentMetrics && <AgentMetricsMini metrics={agentMetrics} />}
         </div>
       </div>
 
@@ -1050,7 +1004,6 @@ function DetailPanel({
   const operationalCount = countOperationalResults(results);
   const latencyStats = calculateLatencyStats(results);
   const latestResult = results[0];
-  const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
   const displayValues = getHTTPDisplayValues(results);
   const target = monitorTarget(monitor);
 
@@ -1064,7 +1017,6 @@ function DetailPanel({
   const memberOther = memberStatuses.length - memberUp - memberDown - memberPaused - memberMaintenance;
 
   const sectionTitle = 'mb-2 text-xs font-medium text-slate-400';
-  const meterTrack = 'mt-2 h-1 overflow-hidden rounded-full bg-well-hover';
 
   return (
     <div className="glass">
@@ -1189,61 +1141,14 @@ function DetailPanel({
           </div>
         )}
 
-        {/* Agent Metrics Section */}
-        {monitor.type === 'agent' && agentMetrics && (
-          <div>
-            <h4 className={sectionTitle}>System metrics</h4>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="glass-well p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">CPU</span>
-                  <span className="text-xs font-medium tabular-nums text-white">{agentMetrics.cpu_percent.toFixed(1)}%</span>
-                </div>
-                <div className={meterTrack}>
-                  <div className="h-full rounded-full bg-sky-500" style={{ width: `${agentMetrics.cpu_percent}%` }} />
-                </div>
-              </div>
-              <div className="glass-well p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Memory</span>
-                  <span className="text-xs font-medium tabular-nums text-white">
-                    {((agentMetrics.memory_used / agentMetrics.memory_total) * 100).toFixed(1)}%
-                  </span>
-                </div>
-                <div className={meterTrack}>
-                  <div className="h-full rounded-full bg-sky-500" style={{ width: `${(agentMetrics.memory_used / agentMetrics.memory_total) * 100}%` }} />
-                </div>
-              </div>
-              <div className="glass-well p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Disk</span>
-                  <span className="text-xs font-medium tabular-nums text-white">
-                    {((agentMetrics.disk_used / agentMetrics.disk_total) * 100).toFixed(1)}%
-                  </span>
-                </div>
-                <div className={meterTrack}>
-                  <div className="h-full rounded-full bg-sky-500" style={{ width: `${(agentMetrics.disk_used / agentMetrics.disk_total) * 100}%` }} />
-                </div>
-              </div>
-              <div className="glass-well p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400">Load avg</span>
-                  <span className="text-xs font-medium tabular-nums text-white">{agentMetrics.load_avg_1.toFixed(2)}</span>
-                </div>
-                <p className="mt-1.5 text-2xs text-slate-500">{agentMetrics.process_count} processes</p>
-              </div>
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-              <div className="flex justify-between text-slate-500">
-                <span>Network in</span>
-                <span className="tabular-nums text-slate-300">{formatBytes(agentMetrics.network_bytes_in)}</span>
-              </div>
-              <div className="flex justify-between text-slate-500">
-                <span>Network out</span>
-                <span className="tabular-nums text-slate-300">{formatBytes(agentMetrics.network_bytes_out)}</span>
-              </div>
-            </div>
-          </div>
+        {monitor.type === 'agent' && (
+          <AgentHostGlance
+            monitorId={monitor.id}
+            intervalSeconds={(monitor.config as AgentMonitorConfig | undefined)?.expected_interval_seconds ?? monitor.interval_seconds}
+            metricRules={(monitor.config as AgentMonitorConfig | undefined)?.metric_rules}
+            refreshKey={latestResult?.created_at}
+            titleClassName={sectionTitle}
+          />
         )}
 
         {/* Tags */}
@@ -1914,8 +1819,7 @@ export default function MonitorsPage() {
       (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
       (statusFilter === 'paused' && status === 'paused') ||
       (statusFilter === 'maintenance' && status === 'maintenance');
-    const matchesTags = ignore === 'tags' || selectedTags.size === 0 ||
-      Boolean(monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
+    const matchesTags = ignore === 'tags' || matchesAnyTag(monitor.tags, selectedTags);
     const matchesRouting =
       !unroutedOnly || (monitor.enabled && monitor.alert_routing?.reachable === false);
     return matchesSearch && matchesType && matchesStatus && matchesTags && matchesRouting;

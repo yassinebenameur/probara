@@ -157,7 +157,11 @@ Identity mapping on callback:
 
 **Bootstrap × SSO:** on an install with zero active admins, the first
 OIDC login JIT-provisions a *superadmin* (mirroring the password
-bootstrap guard). Whichever path runs first claims superadmin.
+bootstrap guard). Whichever path runs first claims superadmin. The
+DB-side `cmd/admin` tool (`ADMIN_USERNAME`/`ADMIN_PASSWORD`) always upserts
+a superadmin — no memberships, same as the password bootstrap — and on an
+existing username resets the password, re-enables and promotes it (the
+break-glass path).
 
 ### Group→role mappings
 

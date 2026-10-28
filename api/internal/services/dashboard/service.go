@@ -35,6 +35,14 @@ const (
 // truncated — results stay correct, only slower.
 const rollupCursorLagWarnThreshold = 2 * time.Hour
 
+// The `tag` filter on every dashboard endpoint scopes to monitors carrying ANY
+// of the selected tags (`tags && $n::text[]`, array overlap), never all of
+// them (`@>`): the dashboard links its counts into /monitors with the same
+// tags (web/lib/dashboard-view-model.ts), and that list matches any tag
+// (monitorMatchesFilters in web/app/monitors/page.tsx), as SLA tag scopes do.
+// With containment the two views counted different monitors. Every tag
+// clause in this package and alerts.GetRecentAlertsForTags must use overlap.
+
 // tenantSettingsReader is the minimal slice of the tenant service used by the dashboard
 // service for resolving the curated dashboard_group_tags list.
 type tenantSettingsReader interface {
@@ -344,7 +352,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	`
 	countArgs := []interface{}{tenantID}
 	if len(tags) > 0 {
-		countQuery += ` AND tags @> $2::text[]`
+		countQuery += ` AND tags && $2::text[]`
 		countArgs = append(countArgs, pq.Array(tags))
 	}
 	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(
@@ -419,7 +427,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	uptimeTagClause := ""
 	uptimeArgs := []interface{}{tenantID, rangeStart, rangeEnd}
 	if len(tags) > 0 {
-		uptimeTagClause = "AND m.tags @> $4::text[]"
+		uptimeTagClause = "AND m.tags && $4::text[]"
 		uptimeArgs = append(uptimeArgs, pq.Array(tags))
 	}
 	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(uptimeQuery, uptimeTagClause), uptimeArgs...).Scan(&stats.OverallUptime); err != nil {
@@ -451,7 +459,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	latencyTagClause := ""
 	latencyArgs := []interface{}{tenantID, rangeStart, rangeEnd}
 	if len(tags) > 0 {
-		latencyTagClause = "AND m.tags @> $4::text[]"
+		latencyTagClause = "AND m.tags && $4::text[]"
 		latencyArgs = append(latencyArgs, pq.Array(tags))
 	}
 	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(latencyQuery, latencyTagClause), latencyArgs...).Scan(&stats.AvgResponseMS); err != nil {
@@ -534,7 +542,7 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	tagClause := ""
 	args := []interface{}{tenantID, rangeStart, rangeEnd, endExclusive}
 	if len(tags) > 0 {
-		tagClause = "AND m.tags @> $5::text[]"
+		tagClause = "AND m.tags && $5::text[]"
 		args = append(args, pq.Array(tags))
 	}
 
@@ -697,7 +705,7 @@ func (s *Service) listMonitorHealthFromState(ctx context.Context, tenantID uuid.
 	`
 	args := []interface{}{tenantID}
 	if len(tags) > 0 {
-		query += ` AND m.tags @> $2::text[]`
+		query += ` AND m.tags && $2::text[]`
 		args = append(args, pq.Array(tags))
 	}
 	query += ` ORDER BY m.name`
@@ -731,7 +739,7 @@ func (s *Service) batchLatestCheckAt(ctx context.Context, tenantID uuid.UUID, ra
 	tagClause := ""
 	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
 	if len(tags) > 0 {
-		tagClause = "AND m.tags @> $4::text[]"
+		tagClause = "AND m.tags && $4::text[]"
 		args = append(args, pq.Array(tags))
 	}
 
@@ -777,7 +785,7 @@ func (s *Service) getMonitorHealthRollupRange(ctx context.Context, tenantID uuid
 	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
 	whereClause := "WHERE m.tenant_id = $1 AND m.deleted_at IS NULL"
 	if len(tags) > 0 {
-		whereClause += " AND m.tags @> $4::text[]"
+		whereClause += " AND m.tags && $4::text[]"
 		args = append(args, pq.Array(tags))
 	}
 
@@ -869,7 +877,7 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 	`
 	args := []interface{}{tenantID}
 	if len(tags) > 0 {
-		query += ` AND m.tags @> $2::text[]`
+		query += ` AND m.tags && $2::text[]`
 		args = append(args, pq.Array(tags))
 	}
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts, &summary.SuppressedAlerts); err != nil {
@@ -885,7 +893,7 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 		  AND ` + alertrouting.UnreachablePredicate("m")
 	unroutedArgs := []interface{}{tenantID}
 	if len(tags) > 0 {
-		unroutedQuery += ` AND m.tags @> $2::text[]`
+		unroutedQuery += ` AND m.tags && $2::text[]`
 		unroutedArgs = append(unroutedArgs, pq.Array(tags))
 	}
 	if err := s.db.QueryRowContext(ctx, unroutedQuery, unroutedArgs...).Scan(&summary.UnroutedMonitors); err != nil {
@@ -999,7 +1007,7 @@ func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, 
 	limitPlaceholder := 4
 	args := []interface{}{tenantID, rangeStart, rangeEndExclusive, limit}
 	if len(tags) > 0 {
-		tagClause = "AND m.tags @> $5::text[]"
+		tagClause = "AND m.tags && $5::text[]"
 		args = []interface{}{tenantID, rangeStart, rangeEndExclusive, limit, pq.Array(tags)}
 	}
 
@@ -1054,7 +1062,7 @@ func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, 
 
 func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID, _rangeStart, _rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
 	// The monitor-set predicate (enabled, type<>'group', deleted_at IS NULL,
-	// tags @>) and the totals computation are exactly the ones cached by
+	// tags &&) and the totals computation are exactly the ones cached by
 	// loadRolling24hData, so the parallel summary request's work is reused.
 	data, monitorIDs, err := s.loadRolling24hData(ctx, tenantID, tags)
 	if err != nil {
@@ -1263,7 +1271,7 @@ func (s *Service) listProblemMonitorCandidates(ctx context.Context, tenantID uui
 	tagClause := ""
 	args := []interface{}{tenantID, rangeStart, rangeEndExclusive, limit}
 	if len(tags) > 0 {
-		tagClause = "AND m.tags @> $5::text[]"
+		tagClause = "AND m.tags && $5::text[]"
 		args = append(args, pq.Array(tags))
 	}
 
@@ -1490,7 +1498,7 @@ func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, ran
 	limitPlaceholder := 4
 	args := []interface{}{tenantID, rangeStart, rangeEnd, limit}
 	if len(tags) > 0 {
-		tagClause = "AND m.tags @> $5::text[]"
+		tagClause = "AND m.tags && $5::text[]"
 		args = []interface{}{tenantID, rangeStart, rangeEnd, limit, pq.Array(tags)}
 	}
 
@@ -1561,7 +1569,7 @@ func (s *Service) listEnabledOperationalMonitorIDs(ctx context.Context, tenantID
 			  AND enabled = TRUE
 			  AND type <> 'group'
 			  AND deleted_at IS NULL
-			  AND tags @> $2::text[]
+			  AND tags && $2::text[]
 			ORDER BY id
 		`
 		args = append(args, pq.Array(tags))

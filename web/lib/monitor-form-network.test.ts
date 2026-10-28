@@ -685,3 +685,19 @@ test('sip: a clone builds on the source config but takes no alerting from it', (
     ...NEW_TAIL,
   });
 });
+
+test('websocket: a clone whose initialData still carries masked headers never submits "***"', () => {
+  // buildClonedMonitorInitialData strips masks, but the form must not trust
+  // that: on create there is no stored value for a "***" to keep.
+  const initialData = cloneSource('websocket', { url: 'wss://ws.example.com/socket', headers: { Authorization: '***' } });
+  const form = initialWebsocketFormState(undefined, initialData);
+  assertWire(form.headers, [{ key: 'Authorization', value: '', hasStoredValue: false }]);
+  assertWire(wsHeaders(buildWebsocketRequest(form, false)), { Authorization: '' });
+});
+
+test('sip: a clone whose initialData still carries a masked password never submits "***"', () => {
+  const initialData = cloneSource('sip', { host: 'sbc.example.com', port: 5060, transport: 'udp', username: 'u', password: '***' });
+  const form = initialSipFormState(undefined, initialData);
+  assert.equal(form.password, '');
+  assert.ok(!JSON.stringify(buildSipRequest(form, sipLoadedConfig(undefined, initialData))).includes('***'));
+});

@@ -239,3 +239,51 @@ func TestWebSocketHeaderSecretLifecycle(t *testing.T) {
 		t.Fatal("omitted Origin header should be removed")
 	}
 }
+
+// TestCreateMonitor_NeverPersistsAMaskedSecret pins create-side mask handling
+// for every type with secrets. A clone or a re-imported export submits the
+// "***" a read served; on create there is no stored value for it to keep, so
+// the merge drops it — never encrypting the literal mask as if it were the
+// credential.
+func TestCreateMonitor_NeverPersistsAMaskedSecret(t *testing.T) {
+	enc := testEncryptor(t)
+	types := map[string]bool{}
+	for monitorType := range secrets.MonitorSecretFields {
+		types[monitorType] = true
+	}
+	for monitorType := range secrets.MonitorSecretMapFields {
+		types[monitorType] = true
+	}
+	for monitorType := range types {
+		t.Run(monitorType, func(t *testing.T) {
+			repo := &copyingRepo{MockRepository: NewMockRepository()}
+			svc := NewService(repo)
+			svc.ConfigureEncryption(enc)
+
+			config := map[string]any{"host": "example.internal"}
+			for _, field := range secrets.MonitorSecretFields[monitorType] {
+				config[field] = secrets.MaskedSecret
+			}
+			for _, field := range secrets.MonitorSecretMapFields[monitorType] {
+				config[field] = map[string]string{"Authorization": secrets.MaskedSecret}
+			}
+			raw, _ := json.Marshal(config)
+			if _, err := svc.CreateMonitor(context.Background(), uuid.New(), &models.CreateMonitorRequest{
+				Name: monitorType, Type: models.MonitorType(monitorType), Config: raw,
+				IntervalSeconds: 60, TimeoutSeconds: 10,
+			}); err != nil {
+				t.Fatalf("CreateMonitor: %v", err)
+			}
+
+			stored := decodeConfig(t, repo.createdConfig)
+			for _, field := range append(secrets.MonitorSecretFields[monitorType], secrets.MonitorSecretMapFields[monitorType]...) {
+				if v, present := stored[field]; present {
+					t.Fatalf("stored config keeps %s = %v from a masked create, want it dropped", field, v)
+				}
+			}
+			if stored["host"] != "example.internal" {
+				t.Fatalf("non-secret field lost: %v", stored)
+			}
+		})
+	}
+}

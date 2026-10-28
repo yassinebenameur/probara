@@ -78,7 +78,7 @@ func TestEvaluateTLSExpiryOpensAndResolves(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Latest result carries a cert inside the window (11d < 14d).
-	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), tlsMetrics(11))
+	insertMetricsDataResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), tlsMetrics(11))
 
 	alerter := newHostMetricAlerter(dbClient)
 	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
@@ -116,7 +116,7 @@ func TestEvaluateTLSExpiryOpensAndResolves(t *testing.T) {
 	}
 
 	// Renewal: a newer result with a fresh cert resolves the alert.
-	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-1*time.Second), tlsMetrics(90))
+	insertMetricsDataResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-1*time.Second), tlsMetrics(90))
 	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
 		t.Fatalf("evaluateTLSExpiry(renewed) error = %v", err)
 	}
@@ -138,7 +138,7 @@ func TestEvaluateTLSExpiryOrphanResolution(t *testing.T) {
 		`{"url":"https://example.com","method":"GET","tls_min_days_valid":14}`)
 
 	now := time.Now().UTC()
-	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), tlsMetrics(3))
+	insertMetricsDataResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), tlsMetrics(3))
 
 	alerter := newHostMetricAlerter(dbClient)
 	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
@@ -208,7 +208,7 @@ func TestEvaluateTLSExpirySIPOverTLS(t *testing.T) {
 		`{"host":"sbc.example.com","port":5061,"transport":"tls","tls_min_days_valid":14}`)
 
 	now := time.Now().UTC()
-	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), sipTLSMetrics(6))
+	insertMetricsDataResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), sipTLSMetrics(6))
 
 	alerter := newHostMetricAlerter(dbClient)
 	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
@@ -229,7 +229,7 @@ func TestEvaluateTLSExpirySIPOverTLS(t *testing.T) {
 
 	// A newer plain-SIP row without a certificate does not hide the latest
 	// one that has it; the renewed certificate then resolves the alert.
-	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-5*time.Second), `{"sip":{"method":"OPTIONS","transport":"tls"}}`)
+	insertMetricsDataResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-5*time.Second), `{"sip":{"method":"OPTIONS","transport":"tls"}}`)
 	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
 		t.Fatalf("evaluateTLSExpiry(no cert row) error = %v", err)
 	}
@@ -237,7 +237,7 @@ func TestEvaluateTLSExpirySIPOverTLS(t *testing.T) {
 		t.Fatalf("active tls_expiry alert count after a certificate-less row = %d, want 1", got)
 	}
 
-	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-1*time.Second), sipTLSMetrics(80))
+	insertMetricsDataResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-1*time.Second), sipTLSMetrics(80))
 	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
 		t.Fatalf("evaluateTLSExpiry(renewed) error = %v", err)
 	}
@@ -246,5 +246,20 @@ func TestEvaluateTLSExpirySIPOverTLS(t *testing.T) {
 	}
 	if got := countTLSExpiryAlerts(ctx, t, dbClient, monitorID, "resolved"); got != 1 {
 		t.Fatalf("resolved tls_expiry alert count after renewal = %d, want 1", got)
+	}
+}
+
+// insertMetricsDataResult inserts a successful check result carrying the
+// given metrics_data JSON — the certificate an HTTPS or SIP-over-TLS check
+// reports, which the TLS-expiry evaluator reads through shared/tlscert.
+func insertMetricsDataResult(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID, monitorID uuid.UUID, createdAt time.Time, metricsJSON string) {
+	t.Helper()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO check_results (
+			id, monitor_id, tenant_id, job_id, status, latency_ms, created_at, started_at, completed_at,
+			result_source, metrics_data
+		) VALUES ($1, $2, $3, $4, 'success', 5, $5, $5, $5, 'monitor', $6::jsonb)
+	`, uuid.New(), monitorID, tenantID, uuid.New(), createdAt.UTC(), metricsJSON); err != nil {
+		t.Fatalf("insert metrics_data result: %v", err)
 	}
 }

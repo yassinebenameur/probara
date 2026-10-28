@@ -4,6 +4,7 @@ import {
   DependencySuppression,
   Monitor,
   MonitorConfig,
+  MASKED_SECRET,
   MonitorType,
   NotificationMode,
 } from '../types';
@@ -40,6 +41,14 @@ export interface HeartbeatFormFields extends AlertingFormFields {
   tags: string;
   depends_on_ids: string[];
 }
+
+/**
+ * A secret taken from a clone source (`initialData`): a masked "***" there
+ * has no stored value behind it on create, so the field starts blank instead
+ * of submitting the mask. Edit mode reads the stored monitor, never this.
+ */
+export const unmaskedCloneSecret = (value: string | undefined): string | undefined =>
+  value === MASKED_SECRET ? undefined : value;
 
 /** "a, b,, c" -> ["a", "b", "c"]. */
 export const parseTagInput = (tags: string): string[] =>

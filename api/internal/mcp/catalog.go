@@ -46,7 +46,7 @@ var notExposed = map[string]string{
 	"POST /api/v1/users/bootstrap/first": "first-run setup, unauthenticated",
 	"GET /api/v1/push/{token}":           "heartbeat ingest from the monitored job, authenticated by the token in the URL",
 	"POST /api/v1/push/{token}":          "heartbeat ingest from the monitored job",
-	"POST /api/v1/agent/metrics":         "legacy host-agent ingest (deprecated, sunset)",
+	"POST /api/v1/agent/metrics":         "retired (410 Gone); collectors push to /otlp/v1/metrics",
 	"POST /api/v1/otlp/v1/metrics":       "OTLP ingest from collectors, not an operator action",
 	"GET /api/v1/alerts/stream":          "server-sent events; wait_for_alert_events reads it for a bounded window",
 	"POST /api/v1/alert-policies":        "retired (410 Gone); notification settings replaced alert policies",

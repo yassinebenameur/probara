@@ -406,6 +406,9 @@ func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
 	}
 }
 
+// The tag filter matches monitors carrying ANY selected tag, the rule the
+// /monitors list applies to the same ?tag= link the dashboard hands it. A
+// monitor carrying none of them (monitorD) stays out of every panel.
 func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -418,14 +421,16 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
 	monitorC := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-c")
+	monitorD := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-d")
 
 	setMonitorTags(ctx, t, dbClient, monitorA, []string{"prod", "api"})
 	setMonitorTags(ctx, t, dbClient, monitorB, []string{"prod"})
 	setMonitorTags(ctx, t, dbClient, monitorC, []string{"api"})
+	setMonitorTags(ctx, t, dbClient, monitorD, []string{"other"})
 
-	// monitorA is confirmed down in the state machine; ops summary follows
-	// current_state (D1), not the rollup latest_status.
-	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = $1`, monitorA); err != nil {
+	// monitorA and monitorD are confirmed down in the state machine; ops
+	// summary follows current_state (D1), not the rollup latest_status.
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = ANY($1)`, pq.Array([]uuid.UUID{monitorA, monitorD})); err != nil {
 		t.Fatalf("set current_state down: %v", err)
 	}
 
@@ -434,12 +439,15 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorA, bucketDay, 10, 7, 700, 7, "error", bucketDay.Add(23*time.Hour))
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorB, bucketDay, 10, 10, 900, 10, "success", bucketDay.Add(22*time.Hour))
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorC, bucketDay, 10, 8, 800, 8, "failure", bucketDay.Add(21*time.Hour))
+	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorD, bucketDay, 10, 0, 0, 0, "failure", bucketDay.Add(20*time.Hour))
 
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-72*time.Hour), "failure", "monitor", nil)
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-48*time.Hour), "error", "monitor", nil)
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-24*time.Hour), "failure", "monitor", nil)
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, now.Add(-24*time.Hour), "success", "monitor", testutil.IntPtr(110))
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorC, now.Add(-12*time.Hour), "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorD, now.Add(-30*time.Minute), "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorD, now.Add(-6*time.Hour), "failure", "monitor", nil)
 
 	policyID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
@@ -451,11 +459,14 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
 		VALUES
-			($1, $3, $4, $6, 'active', NOW(), 3, NOW(), NOW()),
-			($2, $3, $5, $6, 'acknowledged', NOW(), 2, NOW(), NOW())
-	`, uuid.New(), uuid.New(), tenantID, monitorA, monitorC, policyID); err != nil {
+			($1, $4, $5, $8, 'active', NOW(), 3, NOW(), NOW()),
+			($2, $4, $6, $8, 'acknowledged', NOW(), 2, NOW(), NOW()),
+			($3, $4, $7, $8, 'active', NOW(), 2, NOW(), NOW())
+	`, uuid.New(), uuid.New(), uuid.New(), tenantID, monitorA, monitorC, monitorD, policyID); err != nil {
 		t.Fatalf("insert alerts: %v", err)
 	}
+
+	inScope := map[uuid.UUID]bool{monitorA: true, monitorB: true, monitorC: true}
 
 	overview, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
 		Range:         models.DashboardRange30d,
@@ -467,29 +478,70 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 		t.Fatalf("GetOverview(30d, tags) error = %v", err)
 	}
 
-	if len(overview.AvailableTags) != 2 || overview.AvailableTags[0] != "api" || overview.AvailableTags[1] != "prod" {
-		t.Fatalf("AvailableTags = %#v, want [api prod]", overview.AvailableTags)
+	if len(overview.AvailableTags) != 3 || overview.AvailableTags[0] != "api" || overview.AvailableTags[1] != "other" || overview.AvailableTags[2] != "prod" {
+		t.Fatalf("AvailableTags = %#v, want [api other prod]", overview.AvailableTags)
 	}
-	if overview.Stats.TotalMonitors != 1 || overview.Stats.ActiveMonitors != 1 || overview.Stats.HTTPMonitors != 1 {
-		t.Fatalf("Stats = %+v, want one matching monitor", overview.Stats)
+	if overview.Stats.TotalMonitors != 3 || overview.Stats.ActiveMonitors != 3 || overview.Stats.HTTPMonitors != 3 {
+		t.Fatalf("Stats = %+v, want the three monitors carrying prod or api", overview.Stats)
 	}
-	assertDashboardClose(t, derefUptime(t, overview.Stats.OverallUptime), 70.0)
-	if overview.OpsSummary.UpMonitors != 0 || overview.OpsSummary.DownMonitors != 1 || overview.OpsSummary.ActiveAlerts != 1 || overview.OpsSummary.AcknowledgedAlerts != 0 {
-		t.Fatalf("OpsSummary = %+v, want one down monitor and one active alert", overview.OpsSummary)
+	// (7 + 10 + 8) successes of 30 checks; monitorD's 0/10 stays out.
+	assertDashboardClose(t, derefUptime(t, overview.Stats.OverallUptime), 25.0/30.0*100)
+	if overview.OpsSummary.DownMonitors != 1 || overview.OpsSummary.ActiveAlerts != 1 || overview.OpsSummary.AcknowledgedAlerts != 1 {
+		t.Fatalf("OpsSummary = %+v, want monitorA down, its active alert and monitorC's acknowledged one", overview.OpsSummary)
 	}
-	if len(overview.ProblemMonitors) != 1 || overview.ProblemMonitors[0].MonitorID != monitorA {
-		t.Fatalf("ProblemMonitors = %+v, want only monitorA", overview.ProblemMonitors)
+	if len(overview.ProblemMonitors) == 0 || overview.ProblemMonitors[0].MonitorID != monitorA {
+		t.Fatalf("ProblemMonitors = %+v, want monitorA first", overview.ProblemMonitors)
 	}
-	if len(overview.RecentFailures) != 3 {
-		t.Fatalf("RecentFailures length = %d, want 3", len(overview.RecentFailures))
-	}
-	for _, failure := range overview.RecentFailures {
-		if failure.MonitorID != monitorA {
-			t.Fatalf("RecentFailures included monitor %s, want only %s", failure.MonitorID, monitorA)
+	for _, problem := range overview.ProblemMonitors {
+		if !inScope[problem.MonitorID] {
+			t.Fatalf("ProblemMonitors included out-of-scope monitor %s", problem.MonitorID)
 		}
 	}
-	if len(overview.RecentAlerts) != 1 || overview.RecentAlerts[0].MonitorID == nil || *overview.RecentAlerts[0].MonitorID != monitorA {
-		t.Fatalf("RecentAlerts = %+v, want only monitorA alert", overview.RecentAlerts)
+	if len(overview.RecentFailures) != 4 {
+		t.Fatalf("RecentFailures length = %d, want 4 (monitorA's 3, monitorC's 1)", len(overview.RecentFailures))
+	}
+	for _, failure := range overview.RecentFailures {
+		if !inScope[failure.MonitorID] {
+			t.Fatalf("RecentFailures included out-of-scope monitor %s", failure.MonitorID)
+		}
+	}
+	if len(overview.RecentAlerts) != 2 {
+		t.Fatalf("RecentAlerts = %+v, want monitorA's and monitorC's alerts", overview.RecentAlerts)
+	}
+	for _, alert := range overview.RecentAlerts {
+		if alert.MonitorID == nil || !inScope[*alert.MonitorID] {
+			t.Fatalf("RecentAlerts included out-of-scope alert %+v", alert)
+		}
+	}
+
+	// Every range takes its own query path (raw, rolling 24h, rollups); each
+	// must apply the same any-tag scope.
+	for _, rng := range []models.DashboardRange{models.DashboardRange1h, models.DashboardRange24h, models.DashboardRange7d, models.DashboardRange90d} {
+		scoped, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
+			Range: rng,
+			Tags:  []string{"api", "prod"},
+		})
+		if err != nil {
+			t.Fatalf("GetOverview(%s, tags) error = %v", rng, err)
+		}
+		if scoped.Stats.TotalMonitors != 3 || scoped.OpsSummary.DownMonitors != 1 {
+			t.Fatalf("%s: Stats = %+v, OpsSummary = %+v, want 3 monitors with monitorA the only one down", rng, scoped.Stats, scoped.OpsSummary)
+		}
+		for _, problem := range scoped.ProblemMonitors {
+			if !inScope[problem.MonitorID] {
+				t.Fatalf("%s: ProblemMonitors included out-of-scope monitor %s", rng, problem.MonitorID)
+			}
+		}
+		for _, failure := range scoped.RecentFailures {
+			if !inScope[failure.MonitorID] {
+				t.Fatalf("%s: RecentFailures included out-of-scope monitor %s", rng, failure.MonitorID)
+			}
+		}
+		for _, row := range scoped.MonitorHealth {
+			if !inScope[row.MonitorID] {
+				t.Fatalf("%s: MonitorHealth included out-of-scope monitor %s", rng, row.MonitorID)
+			}
+		}
 	}
 
 	zeroMatch, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
@@ -506,8 +558,8 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	if len(zeroMatch.ProblemMonitors) != 0 || len(zeroMatch.RecentFailures) != 0 || len(zeroMatch.RecentAlerts) != 0 {
 		t.Fatalf("zero-match lists should be empty, got problems=%d failures=%d alerts=%d", len(zeroMatch.ProblemMonitors), len(zeroMatch.RecentFailures), len(zeroMatch.RecentAlerts))
 	}
-	if len(zeroMatch.AvailableTags) != 2 || zeroMatch.AvailableTags[0] != "api" || zeroMatch.AvailableTags[1] != "prod" {
-		t.Fatalf("zero-match available tags = %#v, want [api prod]", zeroMatch.AvailableTags)
+	if len(zeroMatch.AvailableTags) != 3 {
+		t.Fatalf("zero-match available tags = %#v, want [api other prod]", zeroMatch.AvailableTags)
 	}
 }
 

@@ -36,7 +36,8 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   (take the next free number), applied by `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
   Compose job, Helm a post-install/upgrade hook Job
-- `cmd/` — `migrate` plus one-off admin tools in `cmd/admin/` (VAPID keypair
+- `cmd/` — `migrate` plus one-off admin tools in `cmd/admin/` (`cmd/admin`
+  itself upserts a superadmin, like the first-user form; VAPID keypair
   minting, secret encryption backfills)
 - `collector/` — OCB manifest for `probara-collector`, the minimal OTel
   Collector distribution that agent monitors install on hosts (built by
@@ -135,8 +136,13 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   stored, `""` → clear, anything else → replace (map fields keep the stored
   map only when the whole field is absent; a submitted map is edited per key).
   So a form that drops a stored secret on purpose — a Clear button, switching
-  a database monitor between connection-string and discrete-field mode — must
-  submit `""`, never omit the field.
+  a database monitor between connection-string and discrete-field mode,
+  turning a database monitor's TLS off (its client key) — must
+  submit `""`, never omit the field. On create there is nothing to keep, so
+  `***` is dropped (`TestCreateMonitor_NeverPersistsAMaskedSecret`); the UI
+  clone strips masks for every type first (`stripMaskedSecrets` in
+  `web/lib/monitor-clone.ts`), and a form marks a masked value "stored" only
+  in edit mode.
 - **Channel config secrets** are the plugin manifest's `secret` fields, and
   they merge differently (`secrets.MergePreserveSecrets`): absent, `""` and
   `***` all **keep** the stored value (the channel form submits every secret
@@ -299,9 +305,9 @@ or imported groups come back empty. Any other path that creates groups through
   (`metric_series`/`metric_samples`, daily partitions, hourly rollups via the
   `metric_rollup_dirty` ledger); each accepted export records ONE success
   heartbeat via `monitorstate.Record` with **server-clock** `StartedAt`
-  (S-O3). The legacy `POST /api/v1/agent/metrics` stays accepting (with
-  Deprecation/Sunset headers) until the sunset date in
-  `api/internal/handlers/agent/handler.go`, then becomes a 410 tombstone.
+  (S-O3) and no `metrics_data` — every reader queries the store. The
+  legacy `POST /api/v1/agent/metrics` is a 410 tombstone
+  (`HandleLegacyMetricsGone`); keep it routed, never revive an ingest there.
   Host alerting is `metric_rules` on the agent config (native units — ratio
   0-1 for `*.utilization`; validated in `AgentConfigValidator`), evaluated by
   the alerter against the store with a freshness bound.
@@ -700,7 +706,10 @@ or imported groups come back empty. Any other path that creates groups through
   `formatMonitorListParams` in `lib/monitor-list.ts`; link to the filtered
   list rather than adding page-local query handling. The list order is
   `sortMonitorList`: groups and monitors sort together, a group ranking by
-  its worst member under status.
+  its worst member under status. Tags match ANY selected tag
+  (`matchesAnyTag`), and every dashboard endpoint's `tag` scope is the same
+  rule (`tags && $n`, never `@>`) so a dashboard count and the list it links
+  to agree.
   Likewise the one-alert `/alerts?alert=<id>&tenant=<id>` link notifications
   carry (built in `present.suspectedCauseAction`) is parsed only by
   `lib/alert-links.ts`.
@@ -857,9 +866,10 @@ or imported groups come back empty. Any other path that creates groups through
   and surfaced as `CollectorVersion` in
   `api/internal/services/agent/collector_install.go` — bump all three
   together, and re-run
-  `go test ./api/internal/services/agent/ -run TestGeneratedConfigValidates`
+  `go test ./api/internal/services/agent/ -run TestGeneratedConfig`
   after `make build-collector-static` (it runs the real binary's `validate`
-  against the generated config).
+  on every OS variant of the generated config, then starts it and fails on
+  any deprecation warning; it skips when the binary is not built).
 - **Brand mark lives in four runtimes** and they must change together:
   `web/components/ui/BrandMark.tsx` (operator UI logo — sidebar, login,
   connect), `web/app/icon.svg` (dashboard favicon), `website/app/icon.svg`
@@ -890,8 +900,8 @@ or imported groups come back empty. Any other path that creates groups through
   INVITE code, the 18x in ring mode, never the BYE's).
 - SIP dev against the host: `SIP_LOCALHOST_AS_HOST_GATEWAY=true` rewrites
   each loopback target host (configured host or SRV target) to
-  `host.docker.internal` before resolving it; the Compose worker and
-  `start-local-services.sh` (local-process workers) both default it on.
+  `host.docker.internal` before resolving it — Compose worker only;
+  `start-local-services.sh` (host processes) defaults it off.
 - SIP resolves its own targets (`sip_resolve.go`: A/AAAA, or opt-in RFC
   3263 NAPTR (`sip_naptr.go`, best effort) and SRV with failover) into
   IP-literal candidates; each attempt dials one through `dialGuard`. SIP

@@ -1809,7 +1809,6 @@ export interface CheckResult {
   latency_ms?: number;
   error_message?: string;
   metrics_data?:
-    | AgentMetrics
     | PushMetrics
     | HTTPMetricsEnvelope
     | GRPCMetricsEnvelope
@@ -1821,38 +1820,6 @@ export interface CheckResult {
   location_id?: string; // Absent = default fleet
   location_name?: string;
   created_at: string;
-}
-
-// Legacy agent metrics blob (pre-OTel host agent). New agent monitors emit
-// heartbeat check results without metrics_data; historical results may still
-// carry this shape, so the list-page mini view keeps rendering it.
-export interface AgentDiskMount {
-  path: string;
-  used: number;
-  total: number;
-  fstype: string;
-}
-
-export interface AgentMetrics {
-  cpu_percent: number;
-  cpu_cores?: number;
-  memory_used: number;
-  memory_total: number;
-  swap_used?: number;
-  swap_total?: number;
-  disk_used: number;
-  disk_total: number;
-  disk_mounts?: AgentDiskMount[];
-  disk_read_bytes?: number;
-  disk_write_bytes?: number;
-  network_bytes_in: number;
-  network_bytes_out: number;
-  load_avg_1: number;
-  load_avg_5: number;
-  load_avg_15: number;
-  process_count: number;
-  uptime_seconds?: number;
-  timestamp: string;
 }
 
 // Agent Install Command types (OpenTelemetry Collector distribution)

@@ -73,6 +73,18 @@ export interface MonitorListParams {
   sort: MonitorListSort;
 }
 
+/**
+ * The tag filter rule: with no tag selected every monitor matches, otherwise
+ * a monitor matches when it carries ANY selected tag. The dashboard API's
+ * `tag` scope is the same rule (`tags && $n`, see
+ * api/internal/services/dashboard/service.go), so a dashboard count and the
+ * `?tag=` list it links to cover the same monitors.
+ */
+export function matchesAnyTag(monitorTags: readonly string[] | null | undefined, selected: ReadonlySet<string>): boolean {
+  if (selected.size === 0) return true;
+  return Boolean(monitorTags?.some((tag) => selected.has(tag)));
+}
+
 export function isMonitorStatusFilter(value: string | null | undefined): value is MonitorStatusFilter {
   return (MONITOR_STATUS_FILTERS as readonly string[]).includes(value ?? '');
 }

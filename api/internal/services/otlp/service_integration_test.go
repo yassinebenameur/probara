@@ -147,15 +147,12 @@ func TestIngestPersistsSeriesSamplesAndHeartbeat(t *testing.T) {
 		t.Fatalf("monitor state = %s, want up", state)
 	}
 
-	// Legacy snapshot keeps the pre-OTel readers alive mid-rollout.
-	var cpuPercent float64
-	if err := dbClient.QueryRowContext(ctx, `
-		SELECT (metrics_data->>'cpu_percent')::float8 FROM check_results WHERE monitor_id = $1
-	`, monitorID).Scan(&cpuPercent); err != nil {
-		t.Fatalf("query snapshot: %v", err)
-	}
-	if cpuPercent < 41.9 || cpuPercent > 42.1 {
-		t.Fatalf("snapshot cpu_percent = %v, want 42", cpuPercent)
+	// The heartbeat carries no metrics_data: the samples live only in the
+	// metric store (the legacy AgentMetrics snapshot is retired).
+	if n := countRows(ctx, t, dbClient, `
+		SELECT COUNT(*) FROM check_results WHERE monitor_id = $1 AND metrics_data IS NOT NULL
+	`, monitorID); n != 0 {
+		t.Fatalf("heartbeat rows with metrics_data = %d, want 0", n)
 	}
 
 	// Same digest again = otlphttp retry after a dropped response: samples

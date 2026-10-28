@@ -74,6 +74,28 @@ var alertSuppressedPredicate = `(a.status IN ('active', 'acknowledged') AND COAL
 // monitor-less (mesh) alerts visible.
 const alertVisibleClause = `(a.monitor_id IS NULL OR m.deleted_at IS NULL)`
 
+// alertSearchPredicate matches an alert's subject as the list shows it — the
+// monitor's name, or either location of a mesh alert — by case-insensitive
+// substring ($patternArg, already escaped and wrapped in %), or its exact ID
+// ($idArg, lower-cased). It needs only the a and m aliases, so the count and
+// page queries share it; the locations it reads are the alert's own, which the
+// tenant filter on a already scopes.
+func alertSearchPredicate(patternArg, idArg int) string {
+	return fmt.Sprintf(`(m.name ILIKE $%[1]d
+		OR EXISTS (
+			SELECT 1 FROM locations l
+			WHERE l.id IN (a.source_location_id, a.target_location_id)
+			  AND l.name ILIKE $%[1]d
+		)
+		OR a.id::text = $%[2]d)`, patternArg, idArg)
+}
+
+// escapeLikePattern makes s match literally inside a LIKE pattern (backslash
+// is Postgres's default LIKE escape).
+func escapeLikePattern(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
 // scanAlertWithDetails scans one alertDetailSelect row.
 func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWithDetails, error) {
 	var alert models.AlertWithDetails
@@ -142,6 +164,12 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 		whereParts = append(whereParts, fmt.Sprintf("%s = $%d", alertSuppressedPredicate, argIndex))
 		args = append(args, *params.Suppressed)
 		argIndex++
+	}
+
+	if params.Query != "" {
+		whereParts = append(whereParts, alertSearchPredicate(argIndex, argIndex+1))
+		args = append(args, "%"+escapeLikePattern(params.Query)+"%", strings.ToLower(params.Query))
+		argIndex += 2
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
@@ -272,9 +300,10 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 	return alerts, nil
 }
 
-// GetRecentAlertsForTags retrieves recent alerts for monitors matching all
-// selected tags. Mesh alerts carry no monitor (and no tags), so the tag
-// filter naturally excludes them.
+// GetRecentAlertsForTags retrieves recent alerts for monitors carrying any of
+// the selected tags (array overlap: the dashboard tag scope, see the comment
+// in services/dashboard/service.go). Mesh alerts carry no monitor (and no
+// tags), so the tag filter naturally excludes them.
 func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID, tags []string, limit int) ([]models.AlertWithDetails, error) {
 	if len(tags) == 0 {
 		return s.GetRecentAlerts(ctx, tenantID, limit)
@@ -289,7 +318,7 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	query := alertDetailSelect + `
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
-		  AND m.tags @> $2::text[]
+		  AND m.tags && $2::text[]
 		  AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $3

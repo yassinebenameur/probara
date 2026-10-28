@@ -123,8 +123,9 @@ const LIST_HEIGHT = 'max-h-[32rem] xl:max-h-none';
  * The dashboard's tag scope: the shared FilterPopover (as on /monitors), fed
  * the tags the dashboard reports. It has no per-tag counts, so rows carry
  * none; the page keeps its sorted array, so each change maps back onto
- * toggle/clear. Unlike /monitors (any tag), the dashboard API scopes to
- * monitors carrying every selected tag (`tags @>`), so the popup says so.
+ * toggle/clear. Like /monitors (matchesAnyTag in lib/monitor-list.ts), the
+ * dashboard API scopes to monitors carrying any selected tag, so a count and
+ * the ?tag= list it links to agree.
  * Sized md to line up with the RangePicker and button beside it.
  */
 function TagFilterPicker({
@@ -154,8 +155,8 @@ function TagFilterPicker({
       options={options}
       selected={selected}
       size="md"
-      popupLabel="Scope to monitors with all of these tags"
-      hint="Monitors must carry every selected tag."
+      popupLabel="Scope to monitors with any of these tags"
+      hint="Monitors carrying any selected tag."
       onChange={(next) => {
         if (next.size === 0) {
           onClear();
@@ -635,7 +636,7 @@ function UptimeResponseChart({
                 {noMatchingMonitors ? 'No monitors match these tags' : 'Not enough trend data yet'}
               </p>
               <p className="mt-1 text-ui text-slate-500">
-                {noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Trend lines will appear after at least two populated buckets.'}
+                {noMatchingMonitors ? 'Add or change tags to widen the dashboard scope.' : 'Trend lines will appear after at least two populated buckets.'}
               </p>
             </div>
           </div>
@@ -739,7 +740,7 @@ function NeedsAttentionPanel({
           title={noMatchingMonitors ? 'No monitors match these tags' : 'Nothing needs attention'}
           description={
             noMatchingMonitors
-              ? 'Choose fewer tags to widen the dashboard scope.'
+              ? 'Add or change tags to widen the dashboard scope.'
               : `No failed checks in the ${rangeLabel.toLowerCase()}.`
           }
         />

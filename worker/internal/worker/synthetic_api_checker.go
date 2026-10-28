@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -424,6 +425,7 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 				return nil, fmt.Errorf("assert[%d] invalid value: %w", i, err)
 			}
 		}
+		expectedText := assertion.ValueText()
 
 		switch target {
 		case "status":
@@ -437,7 +439,7 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 		case "header":
 			headerName := strings.TrimSpace(assertion.Path)
 			actual := resp.Header.Get(headerName)
-			ok, err := evaluateSyntheticStringAssertion(actual, op, expected)
+			ok, err := evaluateSyntheticStringAssertion(actual, op, expectedText)
 			if err != nil {
 				return nil, fmt.Errorf("assert[%d] header: %w", i, err)
 			}
@@ -445,7 +447,7 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 				failures = append(failures, fmt.Sprintf("header assertion failed: header=%s op=%s expected=%v actual=%q", headerName, op, expected, actual))
 			}
 		case "body":
-			ok, err := evaluateSyntheticStringAssertion(body, op, expected)
+			ok, err := evaluateSyntheticStringAssertion(body, op, expectedText)
 			if err != nil {
 				return nil, fmt.Errorf("assert[%d] body: %w", i, err)
 			}
@@ -453,7 +455,7 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 				failures = append(failures, fmt.Sprintf("body assertion failed: op=%s expected=%v", op, expected))
 			}
 		case "json":
-			ok, err := evaluateSyntheticJSONAssertion(body, assertion.Path, op, expected)
+			ok, err := evaluateSyntheticJSONAssertion(body, assertion.Path, op, expected, expectedText)
 			if err != nil {
 				return nil, fmt.Errorf("assert[%d] json: %w", i, err)
 			}
@@ -502,26 +504,26 @@ func evaluateSyntheticStatusAssertion(actual int, op string, expected interface{
 	}
 }
 
-func evaluateSyntheticStringAssertion(actual, op string, expected interface{}) (bool, error) {
+func evaluateSyntheticStringAssertion(actual, op, expected string) (bool, error) {
 	switch op {
 	case "exists":
 		return strings.TrimSpace(actual) != "", nil
 	case "equals":
-		return actual == fmt.Sprint(expected), nil
+		return actual == expected, nil
 	case "not_equals":
-		return actual != fmt.Sprint(expected), nil
+		return actual != expected, nil
 	case "contains":
-		return strings.Contains(actual, fmt.Sprint(expected)), nil
+		return strings.Contains(actual, expected), nil
 	case "not_contains":
-		return !strings.Contains(actual, fmt.Sprint(expected)), nil
+		return !strings.Contains(actual, expected), nil
 	case "regex":
-		re, err := regexp.Compile(fmt.Sprint(expected))
+		re, err := regexp.Compile(expected)
 		if err != nil {
 			return false, err
 		}
 		return re.MatchString(actual), nil
 	case "not_regex":
-		re, err := regexp.Compile(fmt.Sprint(expected))
+		re, err := regexp.Compile(expected)
 		if err != nil {
 			return false, err
 		}
@@ -531,7 +533,7 @@ func evaluateSyntheticStringAssertion(actual, op string, expected interface{}) (
 	}
 }
 
-func evaluateSyntheticJSONAssertion(body, path, op string, expected interface{}) (bool, error) {
+func evaluateSyntheticJSONAssertion(body, path, op string, expected interface{}, expectedText string) (bool, error) {
 	if !gjson.Valid(body) {
 		return false, fmt.Errorf("response body is not valid JSON")
 	}
@@ -546,17 +548,17 @@ func evaluateSyntheticJSONAssertion(body, path, op string, expected interface{})
 	case "not_equals":
 		return !syntheticJSONEquals(result, expected), nil
 	case "contains":
-		return strings.Contains(result.String(), fmt.Sprint(expected)), nil
+		return strings.Contains(result.String(), expectedText), nil
 	case "not_contains":
-		return !strings.Contains(result.String(), fmt.Sprint(expected)), nil
+		return !strings.Contains(result.String(), expectedText), nil
 	case "regex":
-		re, err := regexp.Compile(fmt.Sprint(expected))
+		re, err := regexp.Compile(expectedText)
 		if err != nil {
 			return false, err
 		}
 		return re.MatchString(result.String()), nil
 	case "not_regex":
-		re, err := regexp.Compile(fmt.Sprint(expected))
+		re, err := regexp.Compile(expectedText)
 		if err != nil {
 			return false, err
 		}
@@ -643,16 +645,47 @@ func extractSyntheticVariables(
 	return extracted, nil
 }
 
+// syntheticJSONEquals compares by the expected value's JSON type, so the
+// type the operator typed survives to the comparison. A missing path equals
+// nothing. A string compares the value's text, so "123" also matches the
+// number 123. A number or boolean needs a JSON value of that type or a
+// string that parses as one: assertions saved before the form kept typed
+// strings were coerced ("123" stored as 123), and the string branch keeps
+// those passing — but a missing path, null or unrelated text is never 0 or
+// false. null matches only null; arrays and objects compare structurally.
 func syntheticJSONEquals(actual gjson.Result, expected interface{}) bool {
+	if !actual.Exists() {
+		return false
+	}
 	switch v := expected.(type) {
-	case bool:
-		return actual.Bool() == v
-	case float64:
-		return actual.Float() == v
 	case string:
 		return actual.String() == v
+	case float64:
+		switch actual.Type {
+		case gjson.Number:
+			return actual.Float() == v
+		case gjson.String:
+			f, err := strconv.ParseFloat(strings.TrimSpace(actual.Str), 64)
+			return err == nil && f == v
+		}
+		return false
+	case bool:
+		switch actual.Type {
+		case gjson.True, gjson.False:
+			return actual.Bool() == v
+		case gjson.String:
+			b, err := strconv.ParseBool(strings.TrimSpace(strings.ToLower(actual.Str)))
+			return err == nil && b == v
+		}
+		return false
+	case nil:
+		return actual.Type == gjson.Null
 	default:
-		return actual.String() == fmt.Sprint(expected)
+		var decoded interface{}
+		if err := json.Unmarshal([]byte(actual.Raw), &decoded); err != nil {
+			return false
+		}
+		return reflect.DeepEqual(decoded, expected)
 	}
 }
 

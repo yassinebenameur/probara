@@ -279,6 +279,11 @@ export function buildDatabaseConfig(
       // clear — omitting the field would keep the stored key.
       config.tls_client_key_pem = '';
     }
+  } else if (storedClientKey) {
+    // TLS turned off (the toggle, or Postgres sslmode=disable): the CA and
+    // cert are not sent, so they drop, but an omitted secret is kept — clear
+    // the key with "" or it outlives its certificate.
+    config.tls_client_key_pem = '';
   }
 
   if (type === 'redis' && form.expected_role) config.expected_role = form.expected_role;

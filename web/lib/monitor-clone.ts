@@ -107,12 +107,8 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
       delete cfg.password;
       return cfg;
     }
-    case 'prometheus': {
-      const cfg = cloneObject(monitor.config as PrometheusMonitorConfig);
-      if (cfg.password === MASKED_SECRET) delete cfg.password;
-      if (cfg.bearer_token === MASKED_SECRET) delete cfg.bearer_token;
-      return cfg;
-    }
+    case 'prometheus':
+      return cloneObject(monitor.config as PrometheusMonitorConfig);
     case 'websocket': {
       const cfg = (monitor.config as WebSocketMonitorConfig | undefined) || { url: '' };
       return cloneObject(cfg);
@@ -121,17 +117,10 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
     case 'postgres':
     case 'mongodb':
     case 'rabbitmq':
-    case 'mysql': {
-      // Secrets come back masked from the API and can't carry over to a new
-      // monitor — drop them so the clone starts with a clean credential slate.
-      const cfg = cloneObject(
+    case 'mysql':
+      return cloneObject(
         (monitor.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig & MySQLMonitorConfig | undefined) || {}
       );
-      if (cfg.password === MASKED_SECRET) delete cfg.password;
-      if (cfg.connection_string === MASKED_SECRET) delete cfg.connection_string;
-      if (cfg.tls_client_key_pem === MASKED_SECRET) delete cfg.tls_client_key_pem;
-      return cfg;
-    }
     case 'synthetic_api': {
       const cfg = (monitor.config as SyntheticAPIMonitorConfig | undefined) || { steps: [] };
       return cloneObject(cfg);
@@ -148,13 +137,41 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
   }
 }
 
+/**
+ * Removes the masked secrets a monitor read carries, for every type. Reads
+ * serve each secret as "***" (shared/secrets MonitorSecretFields, scalar
+ * config keys, and MonitorSecretMapFields, objects whose every value is a
+ * secret), and on create there is no stored value for "***" to keep: the API
+ * drops it, so a clone that kept the mask would silently lose the credential
+ * while its form claimed a stored value. Rather than mirror the server's
+ * per-type field list, this strips the mask wherever a secret can sit: a
+ * top-level "***" string is deleted (the form shows the field empty), and a
+ * "***" value inside a top-level object becomes "" so the key (a header
+ * name) survives and the form asks for its value again.
+ */
+export function stripMaskedSecrets(config: MonitorConfig): MonitorConfig {
+  const cfg = config as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(cfg)) {
+    if (value === MASKED_SECRET) {
+      delete cfg[key];
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const values = value as Record<string, unknown>;
+      for (const [inner, innerValue] of Object.entries(values)) {
+        if (innerValue === MASKED_SECRET) values[inner] = '';
+      }
+    }
+  }
+  return config;
+}
+
 export function buildClonedMonitorInitialData(monitor: Monitor): CreateMonitorRequest {
   const name = `${monitor.name} (Copy)`;
 
   return {
     name,
     type: monitor.type,
-    config: buildClonedConfig(monitor),
+    // buildClonedConfig returns a deep copy, so the strip never reaches the source.
+    config: stripMaskedSecrets(buildClonedConfig(monitor)),
     interval_seconds: monitor.interval_seconds || 60,
     timeout_seconds: monitor.timeout_seconds || 30,
     enabled: monitor.enabled ?? true,

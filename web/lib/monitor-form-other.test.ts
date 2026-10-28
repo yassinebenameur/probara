@@ -461,3 +461,16 @@ test('prometheus: a clone also copies the source alerting settings', () => {
     [5, 'custom', 'off', [{ channel_id: 'ch-1', delay_seconds: 0 }]]
   );
 });
+
+test('prometheus: a clone whose initialData still carries masked credentials never submits "***"', () => {
+  const initialData: CreateMonitorRequest = {
+    name: 'Copy',
+    type: 'prometheus',
+    config: { url: 'https://prom.example.com', query: 'up', operator: 'lt', threshold: 1, auth_type: 'bearer', bearer_token: '***', password: '***' },
+    interval_seconds: 60,
+    timeout_seconds: 10,
+  };
+  const form = initialPrometheusFormState(undefined, initialData);
+  assertWire([form.password, form.bearer_token], ['', '']);
+  assert.ok(!JSON.stringify(buildPrometheusRequest(form)).includes('***'));
+});
