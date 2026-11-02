@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUpDown, KeyRound, Plus, Radar, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { ArrowUpDown, Download, KeyRound, Pencil, Plus, Radar, RefreshCw, Search, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import LiveStatus from '@/components/ui/LiveStatus';
@@ -22,12 +22,15 @@ import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite, useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import ServiceTable, { rowGaps } from '@/components/discovery/ServiceTable';
 import ConnectClusterModal from '@/components/discovery/ConnectClusterModal';
+import EditIntegrationModal from '@/components/discovery/EditIntegrationModal';
+import { saveDownload } from '@/components/slas/SlaVisuals';
 import ApproveModal from '@/components/discovery/ApproveModal';
 import LinkMonitorModal from '@/components/discovery/LinkMonitorModal';
-import { deleteDiscoveryIntegration, getAlertChannels, getDiscoveryCoverage, getDiscoveryIntegrations, getLocations, rotateDiscoveryToken, unlinkDiscoveryMonitor } from '@/lib/api';
+import { deleteDiscoveryIntegration, getAlertChannels, getDiscoveryCoverage, getDiscoveryIntegrations, getDiscoveryNamespaces, getLocations, rotateDiscoveryToken, unlinkDiscoveryMonitor } from '@/lib/api';
 import {
-  collectorHealth, DISCOVERY_PAGE_SIZE, errorMessage, gapInfo, installCommands, isNotFound, pageAfterShrink,
-  type DiscoveryCoverage, type DiscoveryIntegration, type DiscoveryMonitor, type DiscoveryService, type DiscoverySort, type DiscoverySuggestion,
+  accessManifestCommands, collectorAccessManifest, collectorHealth, DISCOVERY_PAGE_SIZE, errorMessage, gapInfo, installCommands, isNotFound,
+  namespacePill, namespaceRows, pageAfterShrink, pendingReasonInfo,
+  type DiscoveryCoverage, type DiscoveryIntegration, type DiscoveryNamespace, type DiscoveryMonitor, type DiscoveryService, type DiscoverySort, type DiscoverySuggestion,
 } from '@/lib/discovery';
 import { pluralize } from '@/lib/format';
 import type { SortDir, SortState } from '@/lib/sort';
@@ -48,6 +51,7 @@ const DEFAULT_SORT: SortState<DiscoverySort> = { key: 'name', dir: 'asc' };
 
 type Modal =
   | { kind: 'connect' }
+  | { kind: 'edit'; integration: DiscoveryIntegration }
   | { kind: 'install'; integration: DiscoveryIntegration & { token: string } }
   | { kind: 'approve'; service: DiscoveryService; suggestion: DiscoverySuggestion }
   | { kind: 'link'; service: DiscoveryService; suggestion?: DiscoverySuggestion; monitorId?: string };
@@ -72,6 +76,8 @@ export default function DiscoveryPage() {
   const [channels, setChannels] = useState<AlertChannel[]>([]);
 
   const [coverage, setCoverage] = useState<DiscoveryCoverage | null>(null);
+  // Per-namespace state and counts, tagged with the cluster they belong to.
+  const [namespaceState, setNamespaceState] = useState<{ id: string; items: DiscoveryNamespace[] } | null>(null);
   const [coverageError, setCoverageError] = useState('');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -130,9 +136,15 @@ export default function DiscoveryPage() {
   const loadCoverage = useCallback(async ({ silent }: { silent: boolean }) => {
     if (!selectedId) return true;
     const request = ++coverageRequest.current;
+    // Namespace pills ride the same refresh (a pending namespace is promoted
+    // by a scan); their failure only leaves the last known pills.
+    const id = selectedId;
+    const namespaces = getDiscoveryNamespaces(id).then((v) => v.items, () => null);
     try {
       const v = await getDiscoveryCoverage(selectedId, { page, q, gaps: gapsOnly, sort });
       if (request !== coverageRequest.current) return true;
+      const items = await namespaces;
+      if (items && request === coverageRequest.current) setNamespaceState({ id, items });
       // The page ran past the end (services covered while working through
       // "With gaps", a poll after deletions): move to the last page that has
       // rows, keeping the current rows until it loads, instead of showing an
@@ -212,6 +224,17 @@ export default function DiscoveryPage() {
   const filtered = Boolean(q || gapsOnly);
   const pageCount = coverage ? Math.max(1, Math.ceil(coverage.total / (coverage.page_size || DISCOVERY_PAGE_SIZE))) : 1;
   const commands = integration ? installCommands(integration) : null;
+  const namespaceItems = namespaceState?.id === selectedId ? namespaceState.items : null;
+  const rows = integration ? namespaceRows(integration, namespaceItems) : [];
+  const pendingRows = rows.filter((r) => r.state === 'pending');
+  const access = integration ? accessManifestCommands(integration) : null;
+  // Token-free: Roles and RoleBindings for every configured namespace, so it
+  // can be applied again whenever namespaces are added.
+  const downloadAccess = () => {
+    if (!integration || !access) return;
+    const content = collectorAccessManifest(integration, rows.map((r) => r.namespace));
+    saveDownload({ blob: new Blob([content], { type: 'application/yaml' }), filename: access.file });
+  };
 
   const openConnect = () => setModal({ kind: 'connect' });
   const clearFilters = () => { setSearch(''); setQ(''); setGapsOnly(false); setPage(1); };
@@ -269,17 +292,49 @@ export default function DiscoveryPage() {
               <HealthPill health={health} />
               <RelativeTime value={lastSeen} prefix="Last scan " fallback="No scan yet" className="text-xs text-slate-500" />
               <div className="flex min-w-0 basis-full flex-wrap items-center gap-1 sm:basis-auto sm:flex-1">
-                {integration.namespaces.map((ns) => <Pill key={ns} size="xs" className="whitespace-nowrap font-mono">{ns}</Pill>)}
+                {rows.map((row) => {
+                  const view = namespacePill(row, Boolean(lastSeen));
+                  return (
+                    <Pill key={row.namespace} size="xs" tone={view.tone} className="whitespace-nowrap font-mono">
+                      {row.namespace}
+                      {view.count !== undefined && <span className="font-sans tabular-nums opacity-70">{view.count}<span className="sr-only"> {view.count === 1 ? 'service' : 'services'}</span></span>}
+                      {view.detail && <span className="font-sans font-normal opacity-80">· {view.detail}</span>}
+                    </Pill>
+                  );
+                })}
               </div>
               {writable && (
                 <div className="flex items-center gap-0.5">
                   <IconButton icon={<KeyRound strokeWidth={1.75} />} label="Rotate credential and reinstall collector" onClick={() => setConfirm({ kind: 'rotate', integration })} />
+                  <IconButton icon={<Pencil strokeWidth={1.75} />} label="Edit cluster" onClick={() => setModal({ kind: 'edit', integration })} />
                   <IconButton icon={<Trash2 strokeWidth={1.75} />} label="Remove cluster" danger onClick={() => setConfirm({ kind: 'remove', integration })} />
                 </div>
               )}
             </div>
             {coverage?.summary && coverage.summary.services > 0 && <SummaryRow summary={coverage.summary} />}
           </div>
+
+          {pendingRows.length > 0 && access && (
+            // Live region: a scan can promote or skip a namespace while the page is open.
+            <Callout
+              tone="warning"
+              live="polite"
+              title={pendingRows.length === 1 ? `${pendingRows[0].namespace} is not scanned yet` : `${pendingRows.length} namespaces are not scanned yet`}
+              action={<Button variant="ghost" size="xs" icon={<Download strokeWidth={1.75} />} onClick={downloadAccess}>Access manifest</Button>}
+            >
+              <ul className="space-y-0.5">
+                {pendingRows.map((row) => (
+                  <li key={row.namespace}>
+                    <span className="font-mono text-white">{row.namespace}</span>: {row.reason ? pendingReasonInfo(row.reason).label : 'Waiting for the first scan'}
+                    {row.checked_at && <> <span className="text-xs text-slate-500">(<RelativeTime value={row.checked_at} prefix="checked " />)</span></>}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5">
+                Apply the access manifest so the collector can read {pendingRows.length === 1 ? 'it' : 'them'}: <CopyableTarget value={access.apply} label="command" size="xs" href={null} className="align-middle" />. The other namespaces keep syncing meanwhile.
+              </p>
+            </Callout>
+          )}
 
           {coverage?.inventory_stale && health === 'stale' && (
             // Live region: a poll can flip the collector to stale while the page is open.
@@ -387,6 +442,19 @@ export default function DiscoveryPage() {
           locations={locations}
           onCreated={(created) => void loadIntegrations(created.id)}
           onClose={() => { setModal(null); reloadCoverage(); }}
+        />
+      )}
+      {modal?.kind === 'edit' && (
+        <EditIntegrationModal
+          integration={modal.integration}
+          locations={locations}
+          onSaved={(updated) => {
+            setIntegrations((list) => list.map((i) => (i.id === updated.id ? { ...i, ...updated } : i)));
+            // Pills fall back to the saved integration until the reload brings counts.
+            setNamespaceState(null);
+            reloadCoverage();
+          }}
+          onClose={() => setModal(null)}
         />
       )}
       {modal?.kind === 'install' && (

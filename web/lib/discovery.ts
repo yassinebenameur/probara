@@ -1,9 +1,31 @@
+import { pluralize } from './format';
 import type { StatusTone } from './status-tones';
 import type { MonitorState } from './types';
 
+/** Why the collector skipped a pending namespace on its last scan. */
+export type PendingReason = 'forbidden' | 'too_large' | 'inventory_limit' | 'deadline' | 'error';
 export interface DiscoveryIntegration {
-  id: string; name: string; namespaces: string[]; location_id: string | null;
+  id: string; name: string;
+  /** Active namespaces: every scan covers them (stored order). */
+  namespaces: string[];
+  /** Where the collector runs (ServiceAccount, Secret, Deployment); always active. */
+  home_namespace: string;
+  /** Added but not yet scanned successfully; promoted to `namespaces` by the first scan that reads them. */
+  pending_namespaces: string[];
+  pending_status: Record<string, { reason: PendingReason; checked_at: string }>;
+  location_id: string | null;
   last_seen_at: string | null; revision: number; token?: string;
+}
+/** One row of GET /discovery/integrations/{id}/namespaces: home first, then active, then pending. */
+export interface DiscoveryNamespace {
+  namespace: string; state: 'active' | 'pending'; home: boolean;
+  reason?: PendingReason | string; checked_at?: string;
+  /** Discovered services in the namespace, and how many of them have a monitor link. */
+  services: number; linked_services: number;
+}
+/** PATCH body: a delta, so concurrent edits merge. `location_id` absent keeps it, null clears it. */
+export interface DiscoveryIntegrationPatch {
+  name?: string; location_id?: string | null; add_namespaces?: string[]; remove_namespaces?: string[];
 }
 export interface DiscoverySuggestion {
   key: string; type: 'http' | 'tcp'; target: string; port?: number; internal: boolean; reason: string;
@@ -178,8 +200,125 @@ export function installCommands(integration: DiscoveryIntegration, context = 'yo
   return {
     file: `${name}.yaml`,
     apply: `kubectl --context ${context} apply -f ${name}.yaml`,
-    logs: `kubectl --context ${context} -n ${integration.namespaces[0]} logs deployment/${name}`,
+    logs: `kubectl --context ${context} -n ${integration.home_namespace} logs deployment/${name}`,
   };
+}
+
+/** Every namespace the collector is asked to read: active first, then pending, without repeats. */
+export function configuredNamespaces(integration: Pick<DiscoveryIntegration, 'namespaces' | 'pending_namespaces'>): string[] {
+  return [...new Set([...integration.namespaces, ...(integration.pending_namespaces ?? [])])];
+}
+/** The namespace list with the home namespace first and present: the edit form cannot drop it. */
+export function withHomeLocked(home: string, namespaces: string[]): string[] {
+  return [home, ...namespaces.filter((ns) => ns !== home)];
+}
+/**
+ * Where the chip at index sits among the chip input's remove buttons, which
+ * skip non-removable (locked) chips: after removing it, the button at this
+ * position belongs to the chip that took its place.
+ */
+export function removeButtonIndex(value: string[], index: number, removable: (namespace: string) => boolean): number {
+  return value.slice(0, index).filter(removable).length;
+}
+/**
+ * What an edited namespace list adds and removes relative to the stored one
+ * (active and pending alike). The home namespace is never removed: removing it
+ * is refused by the API, and the form locks its chip.
+ */
+export function namespaceDelta(integration: Pick<DiscoveryIntegration, 'namespaces' | 'pending_namespaces' | 'home_namespace'>, edited: string[]): { add: string[]; remove: string[] } {
+  const current = configuredNamespaces(integration);
+  const next = new Set(withHomeLocked(integration.home_namespace, edited));
+  const have = new Set(current);
+  return {
+    add: [...next].filter((ns) => !have.has(ns)),
+    remove: current.filter((ns) => !next.has(ns)),
+  };
+}
+export interface IntegrationEditValues { name: string; locationId: string; namespaces: string[] }
+/**
+ * The PATCH body for an edit: only what changed (a field left out is kept by
+ * the API), or null when nothing did. An empty location clears it.
+ */
+export function integrationPatch(integration: DiscoveryIntegration, values: IntegrationEditValues): DiscoveryIntegrationPatch | null {
+  const patch: DiscoveryIntegrationPatch = {};
+  const name = values.name.trim();
+  if (name !== integration.name) patch.name = name;
+  const location = values.locationId || null;
+  if (location !== integration.location_id) patch.location_id = location;
+  const { add, remove } = namespaceDelta(integration, values.namespaces);
+  if (add.length) patch.add_namespaces = add;
+  if (remove.length) patch.remove_namespaces = remove;
+  return Object.keys(patch).length ? patch : null;
+}
+/** The edit form's inline errors; {} when it can be submitted. */
+export function integrationEditErrors(values: IntegrationEditValues, draft: string[] = []): { name?: string; namespaces?: string } {
+  const errors: { name?: string; namespaces?: string } = {};
+  if (!values.name.trim()) errors.name = 'Enter a cluster name';
+  const namespaces = namespaceFieldError(values.namespaces, draft)
+    ?? (draft.some((ns) => !validNamespace(ns)) ? `Not a valid namespace: ${draft.filter((ns) => !validNamespace(ns)).join(', ')}` : undefined);
+  if (namespaces) errors.namespaces = namespaces;
+  return errors;
+}
+
+/** The review step's sentence for an added namespace. */
+export const ADDED_NAMESPACE_TEXT = 'Scanned once the collector can read it. Apply the access manifest. Nothing else changes until then.';
+/**
+ * The review step's sentence for a removed namespace, from its counts in
+ * GET …/namespaces (undefined when they could not be loaded).
+ */
+export function removedNamespaceText(namespace: string, counts?: Pick<DiscoveryNamespace, 'services' | 'linked_services'>): string {
+  const untouched = 'Monitors and history are not touched.';
+  if (!counts) return `Its services leave coverage now. They and their monitor links are deleted after 7 days unless you add ${namespace} back. ${untouched}`;
+  if (counts.services === 0) return `No discovered services leave coverage. ${untouched}`;
+  const one = counts.services === 1;
+  // linked_services counts services with at least one link, not links: one
+  // service can be linked to several monitors.
+  const linked = Math.min(counts.linked_services, counts.services);
+  const subject = linked === 0 ? (one ? 'It is' : 'They are')
+    : linked === counts.services ? `${one ? 'It and its' : 'They and their'} monitor links are`
+      : `They and the monitor links of ${linked} of them are`;
+  return `${pluralize(counts.services, 'service')} ${one ? 'leaves' : 'leave'} coverage now. ${subject} deleted after 7 days unless you add ${namespace} back. ${untouched}`;
+}
+
+export const pendingReasons: Record<PendingReason, { short: string; label: string; tone: GapTone }> = {
+  forbidden: { short: 'Can’t read', label: 'Can’t read: the namespace doesn’t exist or the access manifest isn’t applied', tone: 'warning' },
+  too_large: { short: 'Too large', label: 'Too large to scan: over the per-scan limit of 2,000 resources, or a 4 MiB list page or upload', tone: 'warning' },
+  inventory_limit: { short: 'Inventory full', label: 'Not added: its resources would exceed the cluster’s 10,000 stored resources', tone: 'warning' },
+  deadline: { short: 'Not reached', label: 'Not reached: the scan ran out of time before this namespace', tone: 'neutral' },
+  error: { short: 'Scan failed', label: 'Scan failed: the collector could not list it; check its logs', tone: 'warning' },
+};
+export function pendingReasonInfo(reason: string) {
+  return pendingReasons[reason as PendingReason] || { short: reason, label: reason, tone: 'neutral' as GapTone };
+}
+/**
+ * The namespace rows to show: the API's list when loaded, else the same
+ * shape from the integration itself (no counts), in the API's order: home,
+ * then active in stored order, then pending.
+ */
+export function namespaceRows(integration: DiscoveryIntegration, items?: DiscoveryNamespace[] | null): (Omit<DiscoveryNamespace, 'services' | 'linked_services'> & Partial<Pick<DiscoveryNamespace, 'services' | 'linked_services'>>)[] {
+  if (items) return items;
+  const home = integration.home_namespace;
+  const active = withHomeLocked(home, integration.namespaces).map((namespace) => ({ namespace, state: 'active' as const, home: namespace === home }));
+  const pending = (integration.pending_namespaces ?? []).filter((ns) => !integration.namespaces.includes(ns)).map((namespace) => {
+    const status = integration.pending_status?.[namespace];
+    return { namespace, state: 'pending' as const, home: false, reason: status?.reason, checked_at: status?.checked_at };
+  });
+  return [...active, ...pending];
+}
+/**
+ * A namespace pill's tone and short detail: active with its service count (an
+ * active namespace with none after a scan stands out: a typo under broad RBAC
+ * reads the same), pending waiting for its first scan, or skipped with why.
+ */
+export function namespacePill(row: { state: 'active' | 'pending'; reason?: string; services?: number }, scanned: boolean): { tone: GapTone; detail?: string; count?: number } {
+  if (row.state === 'pending') {
+    if (!row.reason) return { tone: 'neutral', detail: 'waiting for first scan' };
+    const info = pendingReasonInfo(row.reason);
+    return { tone: info.tone, detail: info.short.toLowerCase() };
+  }
+  if (row.services === undefined) return { tone: 'neutral' };
+  if (row.services === 0 && scanned) return { tone: 'warning', detail: 'no services' };
+  return { tone: 'neutral', count: row.services };
 }
 
 /** The published collector repository (docker-build.yml); its tags are the release versions. */
@@ -212,29 +351,56 @@ export function manifestInputErrors(origin: string, image: string): { origin?: s
   return errors;
 }
 
+// Read access to one namespace: a Role and a RoleBinding to the collector's
+// ServiceAccount, which lives in the home namespace.
+function accessDocuments(integration: Pick<DiscoveryIntegration, 'id' | 'home_namespace'>, namespaces: string[]): object[] {
+  const name = collectorName(integration);
+  return namespaces.flatMap((ns) => [
+    { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'Role', metadata: { name, namespace: ns }, rules: [
+      { apiGroups: [''], resources: ['services'], verbs: ['list'] },
+      { apiGroups: ['networking.k8s.io'], resources: ['ingresses'], verbs: ['list'] },
+    ] },
+    { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'RoleBinding', metadata: { name, namespace: ns }, subjects: [{ kind: 'ServiceAccount', name, namespace: integration.home_namespace }], roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name } },
+  ]);
+}
+function yamlDocuments(documents: object[]): string {
+  return documents.map((d) => JSON.stringify(d, null, 2)).join('\n---\n') + '\n';
+}
+
+/**
+ * Only the Roles and RoleBindings for `namespaces`: no Secret and no token, so
+ * it can be downloaded and re-applied any number of times after a namespace
+ * edit without rotating the collector credential.
+ */
+export function collectorAccessManifest(integration: Pick<DiscoveryIntegration, 'id' | 'home_namespace'>, namespaces: string[]): string {
+  return yamlDocuments(accessDocuments(integration, namespaces));
+}
+export function accessManifestCommands(integration: Pick<DiscoveryIntegration, 'id'>, context = 'your-cluster') {
+  const file = `${collectorName(integration)}-access.yaml`;
+  return { file, apply: `kubectl --context ${context} apply -f ${file}` };
+}
+/** Deletes the collector's Role and RoleBinding from removed namespaces, one line each; '' for none. */
+export function accessCleanupCommand(integration: Pick<DiscoveryIntegration, 'id'>, removed: string[], context = 'your-cluster'): string {
+  const name = collectorName(integration);
+  return removed.map((ns) => `kubectl --context ${context} -n ${ns} delete role,rolebinding ${name} --ignore-not-found`).join('\n');
+}
+
 // JSON documents are valid YAML. Values are serialized, never interpolated into
 // executable shell commands or YAML scalars. No secret is retained in storage.
+// A full (re)install grants access to pending namespaces too, so they are read
+// from the first scan.
 export function collectorManifest(integration: DiscoveryIntegration, origin: string, image: string, token: string): string {
   const invalid = manifestInputErrors(origin, image);
   if (invalid.origin) throw new Error('Enter an HTTPS API origin, without a path.');
   if (invalid.image) throw new Error('Enter a collector image available to your cluster, with its tag.');
   const url = new URL(origin);
   const name = collectorName(integration);
-  const namespace = integration.namespaces[0];
-  const metadata = { name, namespace };
+  const metadata = { name, namespace: integration.home_namespace };
   const documents: object[] = [
     { apiVersion: 'v1', kind: 'ServiceAccount', metadata },
     { apiVersion: 'v1', kind: 'Secret', metadata, type: 'Opaque', stringData: { token } },
+    ...accessDocuments(integration, configuredNamespaces(integration)),
   ];
-  for (const ns of integration.namespaces) {
-    documents.push(
-      { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'Role', metadata: { name, namespace: ns }, rules: [
-        { apiGroups: [''], resources: ['services'], verbs: ['list'] },
-        { apiGroups: ['networking.k8s.io'], resources: ['ingresses'], verbs: ['list'] },
-      ] },
-      { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'RoleBinding', metadata: { name, namespace: ns }, subjects: [{ kind: 'ServiceAccount', name, namespace }], roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name } },
-    );
-  }
   documents.push({ apiVersion: 'apps/v1', kind: 'Deployment', metadata, spec: {
     replicas: 1, strategy: { type: 'Recreate' }, selector: { matchLabels: { app: name } }, template: {
       metadata: { labels: { app: name } }, spec: {
@@ -246,7 +412,7 @@ export function collectorManifest(integration: DiscoveryIntegration, origin: str
       },
     },
   } });
-  return documents.map((d) => JSON.stringify(d, null, 2)).join('\n---\n') + '\n';
+  return yamlDocuments(documents);
 }
 
 /** apiRequest throws `{ error, message }` objects for API errors and Error for transport failures. */

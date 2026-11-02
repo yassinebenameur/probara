@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  accessCleanupCommand, accessManifestCommands, ADDED_NAMESPACE_TEXT, collectorAccessManifest, configuredNamespaces, installCommands,
+  integrationEditErrors, integrationPatch, namespaceDelta, namespacePill, namespaceRows, pendingReasonInfo, removeButtonIndex, removedNamespaceText, withHomeLocked,
   approveFormErrors, COLLECTOR_IMAGE_PREFILL, COLLECTOR_IMAGE_REPOSITORY, collectorHealth, collectorManifest, coverageGaps, coverageQueryString, errorMessage, gapInfo,
   initialCollectorImage, isDuplicateTarget, isNotFound, linkBlocked, manifestInputErrors, MAX_NAMESPACES, namespaceFieldError, pageAfterShrink, parseExpectedStatus,
   parseNamespaces, pendingSuggestionCount, serviceSuggestions, suggestionCover, suggestionTarget, validNamespace,
@@ -9,8 +11,15 @@ import {
 
 const integration: DiscoveryIntegration = {
   id: 'c952c53e-d8c8-4e16-8e94-a9ec57690c11', name: 'Production',
-  namespaces: ['payments', 'orders'], location_id: null, last_seen_at: null, revision: 0,
+  namespaces: ['payments', 'orders'], home_namespace: 'payments', pending_namespaces: [], pending_status: {},
+  location_id: null, last_seen_at: null, revision: 0,
 };
+// Home is not first in the stored list, and one namespace waits for its first scan.
+const edited: DiscoveryIntegration = {
+  ...integration, namespaces: ['orders', 'payments'], home_namespace: 'payments',
+  pending_namespaces: ['extra'], pending_status: { extra: { reason: 'forbidden', checked_at: '2026-11-02T10:00:00Z' } },
+};
+const parse = (yaml: string) => yaml.split('\n---\n').map((v) => JSON.parse(v));
 test('collector deployment grants only namespaced inventory reads', () => {
   const docs = collectorManifest(integration, 'https://api.example.com', 'example/collector:v1', 'test-token').split('\n---\n').map((v) => JSON.parse(v));
   const roles = docs.filter((d) => d.kind === 'Role');
@@ -164,4 +173,96 @@ test('a remembered published image drops its old tag; a custom one is kept', () 
   assert.equal(initialCollectorImage(COLLECTOR_IMAGE_REPOSITORY), COLLECTOR_IMAGE_PREFILL);
   assert.equal(initialCollectorImage(' registry.example.com/probara-discovery:discovery-v1 '), 'registry.example.com/probara-discovery:discovery-v1');
   assert.equal(initialCollectorImage(`${COLLECTOR_IMAGE_REPOSITORY}-fork:1.0`), `${COLLECTOR_IMAGE_REPOSITORY}-fork:1.0`);
+});
+
+test('the access manifest holds only Roles and RoleBindings bound to the home ServiceAccount', () => {
+  const yaml = collectorAccessManifest(edited, configuredNamespaces(edited));
+  const docs = parse(yaml);
+  assert.deepEqual(docs.map((d) => `${d.kind}/${d.metadata.namespace}`), [
+    'Role/orders', 'RoleBinding/orders', 'Role/payments', 'RoleBinding/payments', 'Role/extra', 'RoleBinding/extra',
+  ]);
+  assert.equal(docs.some((d) => d.kind === 'Secret' || d.kind === 'Deployment' || d.kind === 'ServiceAccount'), false);
+  assert.equal(/token/i.test(yaml), false, 'no credential in a re-appliable file');
+  for (const binding of docs.filter((d) => d.kind === 'RoleBinding')) {
+    assert.deepEqual(binding.subjects, [{ kind: 'ServiceAccount', name: 'probara-discovery-c952c53e', namespace: 'payments' }]);
+    assert.equal(binding.roleRef.name, 'probara-discovery-c952c53e');
+  }
+  assert.deepEqual(accessManifestCommands(edited), {
+    file: 'probara-discovery-c952c53e-access.yaml',
+    apply: 'kubectl --context your-cluster apply -f probara-discovery-c952c53e-access.yaml',
+  });
+});
+test('a full install runs in the home namespace and grants pending namespaces too', () => {
+  const docs = parse(collectorManifest(edited, 'https://api.example.com', 'example/collector:v1', 'test-token'));
+  for (const kind of ['ServiceAccount', 'Secret', 'Deployment']) assert.equal(docs.find((d) => d.kind === kind).metadata.namespace, 'payments', kind);
+  assert.deepEqual(docs.filter((d) => d.kind === 'Role').map((d) => d.metadata.namespace), ['orders', 'payments', 'extra']);
+  assert.equal(installCommands(edited).logs, 'kubectl --context your-cluster -n payments logs deployment/probara-discovery-c952c53e');
+});
+test('cleanup deletes the collector Role and RoleBinding per removed namespace, idempotently', () => {
+  assert.equal(accessCleanupCommand(integration, ['orders']), 'kubectl --context your-cluster -n orders delete role,rolebinding probara-discovery-c952c53e --ignore-not-found');
+  assert.equal(accessCleanupCommand(integration, ['a', 'b'], 'prod').split('\n').length, 2);
+  assert.equal(accessCleanupCommand(integration, []), '');
+});
+test('the home namespace is locked first and never removed', () => {
+  assert.deepEqual(withHomeLocked('payments', ['orders', 'payments', 'extra']), ['payments', 'orders', 'extra']);
+  assert.deepEqual(withHomeLocked('payments', ['orders']), ['payments', 'orders']);
+  assert.deepEqual(namespaceDelta(edited, ['orders']), { add: [], remove: ['extra'] }, 'dropping home from the list keeps it');
+});
+test('the namespace delta covers active and pending namespaces', () => {
+  assert.deepEqual(namespaceDelta(edited, ['payments', 'orders', 'extra']), { add: [], remove: [] });
+  assert.deepEqual(namespaceDelta(edited, ['payments', 'extra', 'new-one']), { add: ['new-one'], remove: ['orders'] });
+  assert.deepEqual(configuredNamespaces({ namespaces: ['a', 'b'], pending_namespaces: ['b', 'c'] }), ['a', 'b', 'c']);
+});
+test('the edit PATCH sends only what changed', () => {
+  const same = { name: 'Production', locationId: '', namespaces: ['payments', 'orders', 'extra'] };
+  assert.equal(integrationPatch(edited, same), null);
+  assert.deepEqual(integrationPatch(edited, { ...same, name: '  Prod EU ' }), { name: 'Prod EU' });
+  assert.deepEqual(integrationPatch(edited, { ...same, locationId: 'loc-1' }), { location_id: 'loc-1' });
+  assert.deepEqual(integrationPatch({ ...edited, location_id: 'loc-1' }, same), { location_id: null }, 'None clears the location');
+  assert.deepEqual(integrationPatch(edited, { ...same, namespaces: ['payments', 'shop'] }), { add_namespaces: ['shop'], remove_namespaces: ['orders', 'extra'] });
+});
+test('the edit form reports a blank name and bad namespaces', () => {
+  assert.deepEqual(integrationEditErrors({ name: 'x', locationId: '', namespaces: ['payments'] }), {});
+  assert.ok(integrationEditErrors({ name: '  ', locationId: '', namespaces: ['payments'] }).name);
+  assert.equal(integrationEditErrors({ name: 'x', locationId: '', namespaces: ['payments', 'Bad_NS'] }).namespaces, 'Not a valid namespace: Bad_NS');
+  assert.equal(integrationEditErrors({ name: 'x', locationId: '', namespaces: ['payments'] }, ['bad_draft']).namespaces, 'Not a valid namespace: bad_draft', 'submit refuses an invalid draft');
+});
+test('the review explains what an add and a remove do', () => {
+  assert.equal(ADDED_NAMESPACE_TEXT, 'Scanned once the collector can read it. Apply the access manifest. Nothing else changes until then.');
+  // linked_services counts linked services, not links (a service can have several).
+  assert.equal(removedNamespaceText('shop', { services: 3, linked_services: 2 }),
+    '3 services leave coverage now. They and the monitor links of 2 of them are deleted after 7 days unless you add shop back. Monitors and history are not touched.');
+  assert.equal(removedNamespaceText('shop', { services: 3, linked_services: 3 }),
+    '3 services leave coverage now. They and their monitor links are deleted after 7 days unless you add shop back. Monitors and history are not touched.');
+  assert.equal(removedNamespaceText('shop', { services: 1, linked_services: 1 }),
+    '1 service leaves coverage now. It and its monitor links are deleted after 7 days unless you add shop back. Monitors and history are not touched.');
+  assert.equal(removedNamespaceText('shop', { services: 2, linked_services: 0 }),
+    '2 services leave coverage now. They are deleted after 7 days unless you add shop back. Monitors and history are not touched.');
+  assert.equal(removedNamespaceText('shop', { services: 0, linked_services: 0 }), 'No discovered services leave coverage. Monitors and history are not touched.');
+  assert.match(removedNamespaceText('shop'), /unless you add shop back/);
+});
+test('namespace rows fall back to the integration in the API order', () => {
+  assert.deepEqual(namespaceRows(edited).map((r) => [r.namespace, r.state, r.home, r.reason]), [
+    ['payments', 'active', true, undefined], ['orders', 'active', false, undefined], ['extra', 'pending', false, 'forbidden'],
+  ]);
+  const items = [{ namespace: 'payments', state: 'active' as const, home: true, services: 2, linked_services: 1 }];
+  assert.equal(namespaceRows(edited, items), items);
+});
+test('namespace pills show the count, the wait or why a scan skipped it', () => {
+  assert.deepEqual(namespacePill({ state: 'active', services: 4 }, true), { tone: 'neutral', count: 4 });
+  assert.deepEqual(namespacePill({ state: 'active', services: 0 }, true), { tone: 'warning', detail: 'no services' });
+  assert.deepEqual(namespacePill({ state: 'active', services: 0 }, false), { tone: 'neutral', count: 0 }, 'before the first scan, empty is expected');
+  assert.deepEqual(namespacePill({ state: 'active' }, true), { tone: 'neutral' });
+  assert.deepEqual(namespacePill({ state: 'pending' }, true), { tone: 'neutral', detail: 'waiting for first scan' });
+  assert.deepEqual(namespacePill({ state: 'pending', reason: 'forbidden' }, true), { tone: 'warning', detail: 'can’t read' });
+  assert.equal(pendingReasonInfo('forbidden').label, 'Can’t read: the namespace doesn’t exist or the access manifest isn’t applied');
+  assert.deepEqual(pendingReasonInfo('new_reason'), { short: 'new_reason', label: 'new_reason', tone: 'neutral' });
+});
+test('chip removal refocuses by position among the remove buttons, skipping the locked home chip', () => {
+  const value = ['home', 'a', 'b', 'c'];
+  const removable = (ns: string) => ns !== 'home';
+  // Removing a leaves the buttons [b, c]; b took a's place, at button 0.
+  assert.equal(removeButtonIndex(value, 1, removable), 0);
+  assert.equal(removeButtonIndex(value, 3, removable), 2);
+  assert.equal(removeButtonIndex(['a', 'b'], 1, () => true), 1);
 });

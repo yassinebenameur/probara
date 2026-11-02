@@ -1487,6 +1487,12 @@ export function getDiscoveryIntegrations() {
 export function createDiscoveryIntegration(data: { name: string; namespaces: string[]; location_id: string | null }) {
   return apiRequest<import('./discovery').DiscoveryIntegration>('POST', '/v1/discovery/integrations', data);
 }
+export function updateDiscoveryIntegration(id: string, data: import('./discovery').DiscoveryIntegrationPatch) {
+  return apiRequest<import('./discovery').DiscoveryIntegration>('PATCH', `/v1/discovery/integrations/${id}`, data);
+}
+export function getDiscoveryNamespaces(id: string) {
+  return apiRequest<{ items: import('./discovery').DiscoveryNamespace[] }>('GET', `/v1/discovery/integrations/${id}/namespaces`);
+}
 export function getDiscoveryCoverage(id: string, query: import('./discovery').DiscoveryCoverageQuery) {
   return apiRequest<import('./discovery').DiscoveryCoverage>('GET', `/v1/discovery/integrations/${id}/coverage?${coverageQueryString(query)}`);
 }

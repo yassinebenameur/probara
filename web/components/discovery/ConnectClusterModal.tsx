@@ -1,7 +1,7 @@
 'use client';
 
-import { FormEvent, KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
-import { Check, Copy, Download, KeyRound, X } from 'lucide-react';
+import { FormEvent, useId, useState } from 'react';
+import { Check, Copy, Download, KeyRound } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import FormField from '@/components/ui/FormField';
@@ -10,14 +10,13 @@ import Dialog from '@/components/ui/Dialog';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import { SELECTED_SEGMENT } from '@/components/ui/roving';
-import { FOCUS_RING } from '@/components/ui/focus';
+import NamespaceChipsInput from '@/components/discovery/NamespaceChipsInput';
 import { saveDownload } from '@/components/slas/SlaVisuals';
 import { createDiscoveryIntegration } from '@/lib/api';
 import {
-  collectorManifest, errorMessage, initialCollectorImage, installCommands, manifestInputErrors, MAX_NAMESPACES, namespaceFieldError,
+  collectorManifest, configuredNamespaces, errorMessage, initialCollectorImage, installCommands, manifestInputErrors, MAX_NAMESPACES, namespaceFieldError,
   parseNamespaces, validNamespace, type DiscoveryIntegration,
 } from '@/lib/discovery';
-import { TONE_TEXT } from '@/lib/status-tones';
 import type { Location } from '@/lib/types';
 
 // Per-viewer convenience only: the origin and image are not secrets and are
@@ -61,31 +60,6 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
   const [downloaded, setDownloaded] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
 
-  // Removing a chip unmounts its focused × button: focus the chip that took
-  // its place, else the one before, else the namespace input (as TagFilter).
-  const chipsRef = useRef<HTMLDivElement>(null);
-  const draftRef = useRef<HTMLInputElement>(null);
-  const refocusChip = useRef<number | null>(null);
-  useEffect(() => {
-    const index = refocusChip.current;
-    if (index === null) return;
-    refocusChip.current = null;
-    const chips = chipsRef.current?.querySelectorAll<HTMLElement>('[data-namespace-remove]');
-    (chips?.[Math.min(index, chips.length - 1)] ?? draftRef.current)?.focus();
-  }, [namespaces]);
-
-  // Every entry is kept, even past the limit: the field error says how many to
-  // remove and canCreate blocks, rather than silently dropping the overflow
-  // (namespaces cannot be changed after creation).
-  const commitDraft = () => {
-    const added = parseNamespaces(draft);
-    if (added.length) setNamespaces((current) => [...new Set([...current, ...added])]);
-    setDraft('');
-  };
-  const onNamespaceKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' || e.key === ',' || e.key === ' ') { e.preventDefault(); commitDraft(); }
-    if (e.key === 'Backspace' && !draft && namespaces.length) setNamespaces(namespaces.slice(0, -1));
-  };
   const draftNamespaces = parseNamespaces(draft);
   const allNamespaces = [...new Set([...namespaces, ...draftNamespaces])];
   // The draft counts toward the limit but is name-checked only once committed
@@ -129,6 +103,7 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
   // prefilled image that still needs its tag.
   const focusImage = !fieldErrors.origin && fieldErrors.image !== undefined && image.trim().endsWith(':');
   const commands = integration ? installCommands(integration) : null;
+  const readable = integration ? configuredNamespaces(integration).length : 0;
 
   return (
     <>
@@ -156,32 +131,11 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
             <FormField
               label="Namespaces"
               required
-              description={`The collector lists Services and Ingresses in these namespaces only (up to ${MAX_NAMESPACES}). They must already exist.`}
+              description={`The collector lists Services and Ingresses in these namespaces only (up to ${MAX_NAMESPACES}) and runs in the first one. They must already exist; you can add or remove them later.`}
               error={namespaceError}
             >
               {(field) => (
-                <div ref={chipsRef} className="input flex min-h-10 flex-wrap items-center gap-1.5 !py-1.5 focus-within:!border-[var(--focus)] focus-within:bg-control-hover focus-within:shadow-[0_0_0_1px_var(--focus)]">
-                  {namespaces.map((ns, index) => (
-                    // Removable chip; an invalid namespace, or one past the
-                    // limit, takes Pill's danger tint.
-                    <span key={ns} className={`inline-flex h-6 items-center gap-1 rounded-full pl-2.5 pr-0.5 font-mono text-xs ${validNamespace(ns) && index < MAX_NAMESPACES ? 'bg-well-hover text-slate-200' : `bg-rose-500/[0.13] ${TONE_TEXT.danger}`}`}>
-                      {ns}
-                      <button type="button" data-namespace-remove="" aria-label={`Remove ${ns}`} className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-control-hover hover:text-white ${FOCUS_RING}`} onClick={() => { refocusChip.current = index; setNamespaces(namespaces.filter((n) => n !== ns)); }}>
-                        <X className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                      </button>
-                    </span>
-                  ))}
-                  <input
-                    {...field}
-                    ref={draftRef}
-                    className="min-w-[8rem] flex-1 border-0 bg-transparent p-0 font-mono text-sm text-white shadow-none outline-none ring-0 placeholder:font-sans placeholder:text-slate-500 focus:outline-none focus:ring-0 focus-visible:outline-none"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={onNamespaceKey}
-                    onBlur={commitDraft}
-                    placeholder={namespaces.length ? 'Add another…' : 'Type a namespace and press Enter'}
-                  />
-                </div>
+                <NamespaceChipsInput field={field} value={namespaces} onChange={setNamespaces} draft={draft} onDraftChange={setDraft} />
               )}
             </FormField>
             <FormField label="Default private location" description="Pre-selected when you approve checks of cluster-internal targets. Optional.">
@@ -218,7 +172,7 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
               <CommandBlock label="2. Check the first scan" value={commands.logs} />
             </div>
             <p className="text-xs text-slate-500">
-              Runs in <span className="font-mono text-slate-300">{integration.namespaces[0]}</span> with list-only access to Services and Ingresses in {integration.namespaces.length === 1 ? 'that namespace' : `${integration.namespaces.length} namespaces`}. The first scan starts immediately, then every 5 minutes.
+              Runs in <span className="font-mono text-slate-300">{integration.home_namespace}</span> with list-only access to Services and Ingresses in {readable === 1 ? 'that namespace' : `${readable} namespaces`}. The first scan starts immediately, then every 5 minutes.
             </p>
           </div>
         )}
@@ -235,8 +189,8 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
   );
 }
 
-function Steps({ step }: { step: number }) {
-  const items = ['Cluster', 'Install collector'];
+/** Step indicator for the discovery dialogs' description line; `step` is 1-based. */
+export function Steps({ step, items = ['Cluster', 'Install collector'] }: { step: number; items?: string[] }) {
   return (
     <ol className="flex items-center gap-3 text-xs">
       {items.map((label, i) => {
