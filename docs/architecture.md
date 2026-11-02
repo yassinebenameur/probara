@@ -309,13 +309,30 @@ failure, records `failed`. `AI_TRIAGE_ENABLED=false` or
 ## Monitoring discovery
 
 Discovery collectors list Services and Ingresses in an explicit namespace allowlist.
-They upload bounded complete snapshots with an integration-scoped token to
-`/api/v1/discovery-collectors/{id}/snapshot`. The API serializes reconciliation
-under the integration row lock and rejects stale revisions. Partial scans never
-mark resources missing; server receipt time determines inventory freshness.
+They read `GET /api/v1/discovery-collectors/{id}/config` (`{namespaces, pending,
+revision}`) every cycle and upload bounded complete snapshots with an
+integration-scoped token to `/api/v1/discovery-collectors/{id}/snapshot`.
+Active namespaces (`discovery_integrations.namespaces`) must all be scanned, and
+any failure in one aborts the upload; pending namespaces (added by
+`PATCH /api/v1/discovery/integrations/{id}`, `pending_namespaces`) are scanned
+all-or-nothing after them, and a failed one (including one that would take the
+upload past its 4 MiB cap) is reported in the snapshot's `skipped`
+(`{namespace: reason}`) instead. The first snapshot that scans a
+pending namespace promotes it to active; skip reasons land in `pending_status`.
+`home_namespace`, where the collector runs, is fixed at creation and always
+active. The API serializes reconciliation and namespace edits under the
+integration row lock and rejects stale revisions (409); an edit does not bump
+the revision, and a snapshot that scanned a namespace removed meanwhile gets
+409 with `Retry-After: 10`, which the collector honors. Coverage, approval and
+linking read only services in active namespaces, so a removed namespace leaves
+at once and its inventory is pruned by the normal 7-day retention. Partial
+scans never mark resources missing; server receipt time determines inventory
+freshness.
 Snapshots that reach reconciliation (applied, or refused with 422) are limited
 to one per minute per integration (429 with `Retry-After`), stored inventory to
-10,000 resources per integration (422), and the snapshot transaction prunes
+10,000 resources per integration (422, or, when pending namespaces would cause
+it, those namespaces stay pending as `inventory_limit` and the active ones
+apply), and the snapshot transaction prunes
 resources missing for 7 days and services left without resources (linked ones
 once absent for 7 days, with their links).
 

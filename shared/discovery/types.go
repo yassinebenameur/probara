@@ -19,14 +19,37 @@ var DNSLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 func ValidNamespace(s string) bool { return len(s) > 0 && len(s) <= 63 && DNSLabel.MatchString(s) }
 
+// Skip reasons: why a pending namespace was left out of a snapshot. The
+// collector reports the first four (Snapshot.Skipped); the API alone assigns
+// SkipInventoryLimit, when storing the namespace would exceed the stored
+// resource cap.
+const (
+	SkipForbidden      = "forbidden"       // HTTP 401/403: no Role yet, or no such namespace
+	SkipTooLarge       = "too_large"       // a page over 4 MiB, the MaxResources budget, or the 4 MiB upload
+	SkipDeadline       = "deadline"        // not scanned within the cycle's time budget
+	SkipError          = "error"           // any other failure
+	SkipInventoryLimit = "inventory_limit" // assigned by the API, never the collector
+)
+
+// Config is what the collector scans. Namespaces are the active ones: every
+// snapshot must cover them, and any failure in one aborts the scan, so a lost
+// Role can never make their inventory look deleted. Pending namespaces were
+// added but have not been scanned successfully yet; each is all-or-nothing
+// and a failure only skips it (Snapshot.Skipped).
 type Config struct {
 	Namespaces []string `json:"namespaces"`
+	Pending    []string `json:"pending"`
 	Revision   int64    `json:"revision"`
 }
+
+// Snapshot is one complete scan. Namespaces lists what was scanned in full:
+// every active namespace plus the pending ones that succeeded. Skipped gives
+// the reason for each pending namespace that was not.
 type Snapshot struct {
-	Revision   int64      `json:"revision"`
-	Namespaces []string   `json:"namespaces"`
-	Resources  []Resource `json:"resources"`
+	Revision   int64             `json:"revision"`
+	Namespaces []string          `json:"namespaces"`
+	Skipped    map[string]string `json:"skipped,omitempty"`
+	Resources  []Resource        `json:"resources"`
 }
 type Resource struct {
 	UID         string       `json:"uid"`
@@ -55,12 +78,33 @@ func (r Resource) ServiceKey() string {
 	}
 	return r.Namespace + "/" + r.Kind + "/" + r.Name
 }
-func (s *Snapshot) Validate(namespaces []string) error {
-	expected, actual := slices.Clone(namespaces), slices.Clone(s.Namespaces)
-	slices.Sort(expected)
-	slices.Sort(actual)
-	if !slices.Equal(expected, actual) {
-		return fmt.Errorf("snapshot must cover exactly the configured namespaces")
+
+// Validate checks a snapshot against the configured active and pending
+// namespaces: active ⊆ Namespaces ⊆ active ∪ pending, Skipped ⊆ pending and
+// disjoint from Namespaces, and every resource inside Namespaces. A skip
+// reason the API does not know (a newer collector) is stored as SkipError.
+func (s *Snapshot) Validate(active, pending []string) error {
+	scanned := map[string]bool{}
+	for _, ns := range s.Namespaces {
+		if scanned[ns] || (!slices.Contains(active, ns) && !slices.Contains(pending, ns)) {
+			return fmt.Errorf("snapshot must cover only configured namespaces, each once")
+		}
+		scanned[ns] = true
+	}
+	for _, ns := range active {
+		if !scanned[ns] {
+			return fmt.Errorf("snapshot must cover every active namespace")
+		}
+	}
+	for ns, reason := range s.Skipped {
+		if !slices.Contains(pending, ns) || scanned[ns] {
+			return fmt.Errorf("only pending namespaces that were not scanned can be skipped")
+		}
+		switch reason {
+		case SkipForbidden, SkipTooLarge, SkipDeadline, SkipError:
+		default:
+			s.Skipped[ns] = SkipError
+		}
 	}
 	if s.Resources == nil || len(s.Resources) > MaxResources {
 		return fmt.Errorf("resources must be an array of at most %d entries", MaxResources)
@@ -72,7 +116,7 @@ func (s *Snapshot) Validate(namespaces []string) error {
 			return fmt.Errorf("invalid or duplicate resource UID")
 		}
 		seen[r.UID] = true
-		if !slices.Contains(namespaces, r.Namespace) || r.Name == "" || len(r.Name) > 253 || len(r.Service) > 100 {
+		if !scanned[r.Namespace] || r.Name == "" || len(r.Name) > 253 || len(r.Service) > 100 {
 			return fmt.Errorf("invalid resource metadata")
 		}
 		if r.Kind != "Service" && r.Kind != "Ingress" {

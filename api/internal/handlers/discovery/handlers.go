@@ -29,6 +29,8 @@ type auditRecorder interface {
 type Backend interface {
 	List(ctx context.Context, tenant uuid.UUID) ([]svc.Integration, error)
 	Create(ctx context.Context, tenant uuid.UUID, req svc.CreateRequest) (*svc.Integration, error)
+	Update(ctx context.Context, tenant, id uuid.UUID, req svc.UpdateRequest) (*svc.Integration, svc.UpdateChanges, error)
+	Namespaces(ctx context.Context, tenant, id uuid.UUID) (svc.NamespaceList, error)
 	Rotate(ctx context.Context, tenant, id uuid.UUID) (string, error)
 	Delete(ctx context.Context, tenant, id uuid.UUID) error
 	Overview(ctx context.Context, tenant, integration uuid.UUID, q svc.OverviewQuery) (svc.Overview, error)
@@ -67,7 +69,9 @@ func (h *Handlers) record(r *http.Request, status int, action, resourceType stri
 func (h *Handlers) Routes(r chi.Router) {
 	r.Get("/integrations", h.list)
 	r.Post("/integrations", h.create)
+	r.Patch("/integrations/{id}", h.update)
 	r.Delete("/integrations/{id}", h.remove)
+	r.Get("/integrations/{id}/namespaces", h.namespaces)
 	r.Post("/integrations/{id}/rotate-token", h.rotate)
 	r.Get("/integrations/{id}/coverage", h.coverage)
 	r.Post("/services/{id}/approve", h.approve)
@@ -97,11 +101,15 @@ func (h *Handlers) fail(w http.ResponseWriter, err error) {
 	var bad svc.Invalid
 	var limited svc.RateLimited
 	var full svc.InventoryFull
+	var changed svc.ConfigChanged
 	switch {
 	case errors.Is(err, svc.ErrNotFound):
 		apierrors.WriteError(w, 404, "not_found", "discovery resource not found")
 	case errors.Is(err, svc.ErrConflict):
 		apierrors.WriteError(w, 409, "conflict", err.Error())
+	case errors.As(err, &changed):
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(svc.ConfigRetryAfter/time.Second), 10))
+		apierrors.WriteError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.As(err, &limited):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64((limited.RetryAfter+time.Second-1)/time.Second), 10))
 		apierrors.WriteError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
@@ -187,6 +195,55 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	}
 	h.record(r, 201, "discovery-integration.create", "discovery-integration", v.ID, map[string]any{"name": v.Name})
 	write(w, 201, v)
+}
+func (h *Handlers) update(w http.ResponseWriter, r *http.Request) {
+	t, ok := tenant(w, r)
+	if !ok {
+		return
+	}
+	i, ok := id(w, r, "id")
+	if !ok {
+		return
+	}
+	var req svc.UpdateRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	v, changes, e := h.Service.Update(r.Context(), t, i, req)
+	if e != nil {
+		h.fail(w, e)
+		return
+	}
+	// A request that changed nothing (every delta a no-op) is not audited.
+	if changes.Any() {
+		h.record(r, 200, "discovery-integration.update", "discovery-integration", i, map[string]any{
+			"added": nonNil(changes.Added), "removed": nonNil(changes.Removed),
+			"name_changed": changes.NameChanged, "location_changed": changes.LocationChanged,
+		})
+	}
+	write(w, 200, v)
+}
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+func (h *Handlers) namespaces(w http.ResponseWriter, r *http.Request) {
+	t, ok := tenant(w, r)
+	if !ok {
+		return
+	}
+	i, ok := id(w, r, "id")
+	if !ok {
+		return
+	}
+	v, e := h.Service.Namespaces(r.Context(), t, i)
+	if e != nil {
+		h.fail(w, e)
+		return
+	}
+	write(w, 200, v)
 }
 func (h *Handlers) remove(w http.ResponseWriter, r *http.Request) {
 	t, ok := tenant(w, r)

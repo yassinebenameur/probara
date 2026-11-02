@@ -2,7 +2,17 @@ CREATE TABLE discovery_integrations (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
+    -- Active namespaces: every snapshot must cover them, and a failure in any
+    -- of them aborts the scan, so a lost Role never fakes deleted inventory.
     namespaces TEXT[] NOT NULL,
+    -- Where the collector Deployment, ServiceAccount and Secret live: set at
+    -- create, never re-derived from list order, and always active.
+    home_namespace TEXT NOT NULL,
+    -- Added but not scanned successfully yet: scanned all-or-nothing, a failure
+    -- only skips them. Active plus pending are at most 20.
+    pending_namespaces TEXT[] NOT NULL DEFAULT '{}',
+    -- Last skip per pending namespace: {"ns": {"reason": …, "checked_at": …}}.
+    pending_status JSONB NOT NULL DEFAULT '{}',
     location_id UUID REFERENCES locations(id) ON DELETE SET NULL,
     token_hash TEXT NOT NULL,
     revision BIGINT NOT NULL DEFAULT 0,
@@ -12,6 +22,7 @@ CREATE TABLE discovery_integrations (
     -- inventory cap: the snapshot rate limit.
     last_attempt_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (home_namespace = ANY(namespaces)),
     UNIQUE (tenant_id, name),
     UNIQUE (tenant_id, id)
 );

@@ -910,7 +910,15 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET/POST /api/v1/discovery/integrations`",
-              "Authenticated; list or create a [Kubernetes discovery](/docs/discovery/) integration. Create (write access) returns the collector token once",
+              "Authenticated; list or create a [Kubernetes discovery](/docs/discovery/) integration. Create (write access) returns the collector token once; the first namespace becomes `home_namespace`. An integration carries `namespaces` (active), `home_namespace`, `pending_namespaces` (always an array) and `pending_status` (always an object of `{reason, checked_at}` per pending namespace with a recorded skip)",
+            ],
+            [
+              "`PATCH /api/v1/discovery/integrations/{id}`",
+              "Write access; any of `name` (1–100 characters), `location_id` (an enabled location, `null` clears, absent keeps), `add_namespaces`, `remove_namespaces` (each at most 20). Added namespaces become pending; the home namespace cannot be removed; at most 20 namespaces active and pending together. Namespaces change only as this delta: an unknown field such as `namespaces` is a 400. Returns 200 with the integration (no token); an edit that changes nothing returns 200 and is not audited. See [Change namespaces](/docs/discovery/#namespaces)",
+            ],
+            [
+              "`GET /api/v1/discovery/integrations/{id}/namespaces`",
+              "Authenticated; `items`: home first, then the other active namespaces, then pending ones, each with `namespace`, `state` (`active`/`pending`), `home`, `reason` and `checked_at` (pending with a recorded skip only), `services` (stored, present or missing) and `linked_services` (linked to a monitor that is not deleted), counted whatever the state",
             ],
             [
               "`DELETE /api/v1/discovery/integrations/{id}`",
@@ -922,7 +930,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/discovery/integrations/{id}/coverage`",
-              "Authenticated; `page`, `q` (service or namespace), `gaps=true`, `sort=name|gaps` apply across all services; `summary` is unfiltered. `summary.missing` counts `resource_missing` only, `summary.missing_grace` counts `resource_missing_grace`. `inventory_stale` is reported once at the top level and prefixed to every row's `gaps`, but the summary counts, `gaps=true` and `sort=gaps` ignore it",
+              "Authenticated; `page`, `q` (service or namespace), `gaps=true`, `sort=name|gaps` apply across all services in the integration's active namespaces; `summary` is unfiltered. `summary.missing` counts `resource_missing` only, `summary.missing_grace` counts `resource_missing_grace`. `inventory_stale` is reported once at the top level and prefixed to every row's `gaps`, but the summary counts, `gaps=true` and `sort=gaps` ignore it",
             ],
             [
               "`POST /api/v1/discovery/services/{id}/approve`",
@@ -934,14 +942,14 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/discovery-collectors/{id}/config`, `POST …/snapshot`",
-              "Integration-scoped collector token only (Bearer); never valid on other routes",
+              "Integration-scoped collector token only (Bearer); never valid on other routes. Config returns `{namespaces, pending, revision}`; a snapshot reports pending namespaces it could not scan in `skipped` (`{namespace: reason}`)",
             ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "`POST /api/v1/discovery-collectors/{id}/snapshot` returns 204 when the snapshot is applied, 401 for a missing or malformed bearer, 404 for an unknown integration or wrong token, 400 for an invalid body (unknown JSON fields are ignored, so a newer collector still syncs; known fields are fully validated), 409 for a stale or replayed revision, 429 `rate_limited` with `Retry-After` (whole seconds) when a snapshot was applied, or refused with 422, less than 60 seconds earlier, and 422 `inventory_limit` when the integration would store more than 10,000 resources after reconciliation. A refused snapshot leaves the inventory, revision and last-seen time unchanged; a 422 still counts against the rate limit, since it did the reconciliation work. The token and the rate limit are checked before the body of up to 4 MiB is read.",
+            "`POST /api/v1/discovery-collectors/{id}/snapshot` returns 204 when the snapshot is applied, 401 for a missing or malformed bearer, 404 for an unknown integration or wrong token, 400 for an invalid body (unknown JSON fields are ignored, so a newer collector still syncs; known fields are fully validated), 409 for a stale or replayed revision (no `Retry-After`), 409 with `Retry-After: 10` when it scanned a namespace that was removed meanwhile (not counted against the rate limit), 429 `rate_limited` with `Retry-After` (whole seconds) when a snapshot was applied, or refused with 422, less than 60 seconds earlier, and 422 `inventory_limit` when the integration would store more than 10,000 resources after reconciling its active namespaces (pending namespaces that would exceed it are left pending as `inventory_limit` and the snapshot is applied without them). A refused snapshot leaves the inventory, revision and last-seen time unchanged; a 422 still counts against the rate limit, since it did the reconciliation work. The token and the rate limit are checked before the body of up to 4 MiB is read.",
         },
       ],
     },

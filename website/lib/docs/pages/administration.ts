@@ -369,7 +369,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Kubernetes discovery writes record named events: `discovery-integration.create`, `.delete` and `.rotate-token` (resource `discovery-integration/{id}`), `discovery-link.create` and `.delete` (resource `discovery-service/{id}`, `details.monitor_id`), and `discovery.approve`, filed under the monitor the approval created (resource `monitor/{id}`, with `details.discovered_service_id` and `details.suggestion_key`); a repeated approval that only returns the already linked monitor (`created: false`) writes nothing and records no event. As with bulk triage, these replace the request-level event on success, and a refused or failed discovery write records one request-level event.",
+            "Kubernetes discovery writes record named events: `discovery-integration.create`, `.update`, `.delete` and `.rotate-token` (resource `discovery-integration/{id}`; `.update` carries `details.added` and `details.removed`, the namespaces actually added or removed, plus `details.name_changed` and `details.location_changed`, and an edit that changes nothing records no event), `discovery-link.create` and `.delete` (resource `discovery-service/{id}`, `details.monitor_id`), and `discovery.approve`, filed under the monitor the approval created (resource `monitor/{id}`, with `details.discovered_service_id` and `details.suggestion_key`); a repeated approval that only returns the already linked monitor (`created: false`) writes nothing and records no event. As with bulk triage, these replace the request-level event on success, and a refused or failed discovery write records one request-level event.",
         },
         {
           type: "paragraph",

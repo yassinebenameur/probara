@@ -922,18 +922,18 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The collector waits five minutes between cycles, or the `Retry-After` delay (1 second to 1 hour) when the API answers 429 or 503. A refused request is logged with the HTTP status and up to 512 bytes of the response body, which carries the API\'s reason (for example `rate_limited` or `inventory_limit`).',
+            'The collector reads its configuration (active and pending namespaces) at the start of every cycle and waits five minutes between cycles, or the `Retry-After` delay (1 second to 1 hour) when the API answers 409, 429 or 503; the API sends a 10-second `Retry-After` with a 409 when a namespace was removed during the scan, and none for a stale revision. A refused request is logged with the HTTP status and up to 512 bytes of the response body, which carries the API\'s reason (for example `rate_limited` or `inventory_limit`). Pending namespaces are scanned after the active ones and stop 30 seconds before the two-minute cycle deadline; each one skipped is logged as `Pending namespace <ns> skipped (<reason>): <hint>` (see [Change namespaces](/docs/discovery/#namespaces)).',
         },
         {
           type: 'paragraph',
           text:
-            'Probara origin behind an internal CA: store the CA certificate in a ConfigMap in the collector\'s namespace (the first selected namespace), mount it, and point `SSL_CERT_FILE` at it. A bundle holding only that CA is enough, since the Probara origin is the only peer verified against it. The generated manifest does not include this, so reapply the patch after applying a regenerated manifest (reinstall rotates the token).',
+            'Probara origin behind an internal CA: store the CA certificate in a ConfigMap in the collector\'s namespace (the integration\'s home namespace, the first one entered at setup), mount it, and point `SSL_CERT_FILE` at it. A bundle holding only that CA is enough, since the Probara origin is the only peer verified against it. The generated manifest does not include this, so reapply the patch after applying a regenerated manifest (reinstall rotates the token).',
         },
         {
           type: 'code',
           language: 'bash',
           code:
-            "kubectl -n <first-namespace> create configmap probara-ca --from-file=ca.crt=internal-ca.pem\nkubectl -n <first-namespace> patch deployment probara-discovery-<integration-prefix> -p '{\"spec\":{\"template\":{\"spec\":{\n  \"volumes\":[{\"name\":\"probara-ca\",\"configMap\":{\"name\":\"probara-ca\"}}],\n  \"containers\":[{\"name\":\"collector\",\n    \"env\":[{\"name\":\"SSL_CERT_FILE\",\"value\":\"/etc/probara-ca/ca.crt\"}],\n    \"volumeMounts\":[{\"name\":\"probara-ca\",\"mountPath\":\"/etc/probara-ca\",\"readOnly\":true}]}]}}}}'",
+            "kubectl -n <home-namespace> create configmap probara-ca --from-file=ca.crt=internal-ca.pem\nkubectl -n <home-namespace> patch deployment probara-discovery-<integration-prefix> -p '{\"spec\":{\"template\":{\"spec\":{\n  \"volumes\":[{\"name\":\"probara-ca\",\"configMap\":{\"name\":\"probara-ca\"}}],\n  \"containers\":[{\"name\":\"collector\",\n    \"env\":[{\"name\":\"SSL_CERT_FILE\",\"value\":\"/etc/probara-ca/ca.crt\"}],\n    \"volumeMounts\":[{\"name\":\"probara-ca\",\"mountPath\":\"/etc/probara-ca\",\"readOnly\":true}]}]}}}}'",
         },
       ],
     },

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -80,6 +81,19 @@ func (e InventoryFull) Error() string {
 	return fmt.Sprintf("this snapshot would leave the integration storing %d resources, above the limit of %d; resources missing for more than %d days are pruned automatically, so wait for that or connect a replacement integration with fewer namespaces", e.Stored, e.Limit, int(MissingRetention/(24*time.Hour)))
 }
 
+// ConfigRetryAfter is the Retry-After of a ConfigChanged refusal.
+const ConfigRetryAfter = 10 * time.Second
+
+// ConfigChanged refuses a snapshot that covers a namespace which is neither
+// active nor pending any more: it was removed while the collector scanned it
+// (HTTP 409 with Retry-After ConfigRetryAfter, so the collector re-reads its
+// configuration within seconds). It does not count against the rate limit.
+type ConfigChanged struct{ Namespace string }
+
+func (e ConfigChanged) Error() string {
+	return fmt.Sprintf("namespace %s is no longer configured for this integration; re-read the configuration and scan again", e.Namespace)
+}
+
 type Service struct {
 	db *db.Client
 	// minSnapshotInterval is MinSnapshotInterval; tests lower it.
@@ -90,15 +104,62 @@ func New(database *db.Client) *Service {
 	return &Service{db: database, minSnapshotInterval: MinSnapshotInterval}
 }
 
+// MaxNamespaces bounds an integration's active plus pending namespaces.
+const MaxNamespaces = 20
+
+// Integration is one connected cluster. Namespaces are the active ones (in
+// stored order, HomeNamespace among them); PendingNamespaces were added but
+// not scanned successfully yet, and PendingStatus holds the last reason each
+// was skipped.
 type Integration struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	Namespaces []string   `json:"namespaces"`
-	LocationID *uuid.UUID `json:"location_id"`
-	LastSeenAt *time.Time `json:"last_seen_at"`
-	Revision   int64      `json:"revision"`
-	Token      string     `json:"token,omitempty"`
+	ID                uuid.UUID                `json:"id"`
+	Name              string                   `json:"name"`
+	Namespaces        []string                 `json:"namespaces"`
+	HomeNamespace     string                   `json:"home_namespace"`
+	PendingNamespaces []string                 `json:"pending_namespaces"`
+	PendingStatus     map[string]PendingStatus `json:"pending_status"`
+	LocationID        *uuid.UUID               `json:"location_id"`
+	LastSeenAt        *time.Time               `json:"last_seen_at"`
+	Revision          int64                    `json:"revision"`
+	Token             string                   `json:"token,omitempty"`
 }
+
+// PendingStatus is why a pending namespace was left out of the last snapshot
+// that reported on it: a contract.Skip* reason, on the DB clock.
+type PendingStatus struct {
+	Reason    string    `json:"reason"`
+	CheckedAt time.Time `json:"checked_at"`
+}
+
+// integrationColumns and scanIntegration read one Integration row.
+const integrationColumns = `id,name,namespaces,home_namespace,pending_namespaces,pending_status,location_id,last_seen_at,revision`
+
+func scanIntegration(row interface{ Scan(...any) error }) (Integration, error) {
+	var i Integration
+	var status []byte
+	if err := row.Scan(&i.ID, &i.Name, pq.Array(&i.Namespaces), &i.HomeNamespace, pq.Array(&i.PendingNamespaces), &status, &i.LocationID, &i.LastSeenAt, &i.Revision); err != nil {
+		return i, err
+	}
+	if err := json.Unmarshal(status, &i.PendingStatus); err != nil {
+		return i, err
+	}
+	i.normalize()
+	return i, nil
+}
+
+// normalize renders empty lists and maps as [] and {}, never null.
+func (i *Integration) normalize() {
+	if i.Namespaces == nil {
+		i.Namespaces = []string{}
+	}
+	if i.PendingNamespaces == nil {
+		i.PendingNamespaces = []string{}
+	}
+	if i.PendingStatus == nil {
+		i.PendingStatus = map[string]PendingStatus{}
+	}
+}
+
 type CreateRequest struct {
 	Name       string     `json:"name"`
 	Namespaces []string   `json:"namespaces"`
@@ -116,7 +177,7 @@ func tokenPair() (string, string, error) {
 func hash(t string) string { s := sha256.Sum256([]byte(t)); return hex.EncodeToString(s[:]) }
 func (s *Service) Create(ctx context.Context, tenant uuid.UUID, req CreateRequest) (*Integration, error) {
 	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" || len(req.Name) > 100 || len(req.Namespaces) == 0 || len(req.Namespaces) > 20 {
+	if req.Name == "" || len(req.Name) > 100 || len(req.Namespaces) == 0 || len(req.Namespaces) > MaxNamespaces {
 		return nil, invalid("name and 1–20 namespaces are required")
 	}
 	seen := map[string]bool{}
@@ -130,7 +191,9 @@ func (s *Service) Create(ctx context.Context, tenant uuid.UUID, req CreateReques
 	if err != nil {
 		return nil, err
 	}
-	out := &Integration{ID: uuid.New(), Name: req.Name, Namespaces: req.Namespaces, LocationID: req.LocationID, Token: token}
+	// The first namespace is home: the collector runs there for good.
+	out := &Integration{ID: uuid.New(), Name: req.Name, Namespaces: req.Namespaces, HomeNamespace: req.Namespaces[0], LocationID: req.LocationID, Token: token}
+	out.normalize()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -159,7 +222,7 @@ func (s *Service) Create(ctx context.Context, tenant uuid.UUID, req CreateReques
 			return nil, invalid("choose an enabled location in this workspace")
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO discovery_integrations(id,tenant_id,name,namespaces,location_id,token_hash) VALUES($1,$2,$3,$4,$5,$6)`, out.ID, tenant, out.Name, pq.Array(out.Namespaces), out.LocationID, digest)
+	_, err = tx.ExecContext(ctx, `INSERT INTO discovery_integrations(id,tenant_id,name,namespaces,home_namespace,location_id,token_hash) VALUES($1,$2,$3,$4,$5,$6,$7)`, out.ID, tenant, out.Name, pq.Array(out.Namespaces), out.HomeNamespace, out.LocationID, digest)
 	if err != nil {
 		var pe *pq.Error
 		if errors.As(err, &pe) && pe.Code == "23505" {
@@ -173,15 +236,15 @@ func (s *Service) Create(ctx context.Context, tenant uuid.UUID, req CreateReques
 	return out, nil
 }
 func (s *Service) List(ctx context.Context, tenant uuid.UUID) ([]Integration, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,namespaces,location_id,last_seen_at,revision FROM discovery_integrations WHERE tenant_id=$1 ORDER BY name`, tenant)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+integrationColumns+` FROM discovery_integrations WHERE tenant_id=$1 ORDER BY name`, tenant)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Integration{}
 	for rows.Next() {
-		var i Integration
-		if err = rows.Scan(&i.ID, &i.Name, pq.Array(&i.Namespaces), &i.LocationID, &i.LastSeenAt, &i.Revision); err != nil {
+		i, err := scanIntegration(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, i)
@@ -216,9 +279,12 @@ func (s *Service) Delete(ctx context.Context, tenant, id uuid.UUID) error {
 }
 func (s *Service) CollectorConfig(ctx context.Context, id uuid.UUID, token string) (contract.Config, error) {
 	var cfg contract.Config
-	err := s.db.QueryRowContext(ctx, `SELECT namespaces,revision FROM discovery_integrations WHERE id=$1 AND token_hash=$2`, id, hash(token)).Scan(pq.Array(&cfg.Namespaces), &cfg.Revision)
+	err := s.db.QueryRowContext(ctx, `SELECT namespaces,pending_namespaces,revision FROM discovery_integrations WHERE id=$1 AND token_hash=$2`, id, hash(token)).Scan(pq.Array(&cfg.Namespaces), pq.Array(&cfg.Pending), &cfg.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cfg, ErrNotFound
+	}
+	if cfg.Pending == nil {
+		cfg.Pending = []string{}
 	}
 	return cfg, err
 }
@@ -251,6 +317,12 @@ func (s *Service) AuthorizeSnapshot(ctx context.Context, id uuid.UUID, token str
 	return nil
 }
 
+// Snapshot applies one complete scan. It promotes the pending namespaces the
+// scan covered into the active list and records why the others were skipped.
+// A promotion that would push stored inventory past MaxStoredResources is
+// withdrawn instead of refusing the scan: the active namespaces are reconciled
+// alone and those pending namespaces are marked inventory_limit, so adding a
+// namespace can never stall the active ones.
 func (s *Service) Snapshot(ctx context.Context, id uuid.UUID, token string, snapshot contract.Snapshot) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -258,10 +330,12 @@ func (s *Service) Snapshot(ctx context.Context, id uuid.UUID, token string, snap
 	}
 	defer tx.Rollback()
 	var tenant uuid.UUID
-	var namespaces []string
+	var active, pending []string
+	var statusRaw []byte
 	var revision int64
 	var retry int
-	err = tx.QueryRowContext(ctx, `SELECT tenant_id,namespaces,revision,`+s.retryAfterSQL()+` FROM discovery_integrations WHERE id=$1 AND token_hash=$2 FOR UPDATE`, id, hash(token)).Scan(&tenant, pq.Array(&namespaces), &revision, &retry)
+	var now time.Time
+	err = tx.QueryRowContext(ctx, `SELECT tenant_id,namespaces,pending_namespaces,pending_status,revision,`+s.retryAfterSQL()+`,NOW() FROM discovery_integrations WHERE id=$1 AND token_hash=$2 FOR UPDATE`, id, hash(token)).Scan(&tenant, pq.Array(&active), pq.Array(&pending), &statusRaw, &revision, &retry, &now)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -274,8 +348,36 @@ func (s *Service) Snapshot(ctx context.Context, id uuid.UUID, token string, snap
 	if snapshot.Revision != revision {
 		return ErrConflict
 	}
-	if err = snapshot.Validate(namespaces); err != nil {
+	// A namespace removed while the collector scanned it: not an invalid
+	// snapshot, an outdated configuration. Refused before last_attempt_at, so
+	// the collector's prompt retry is not rate-limited.
+	for _, ns := range snapshot.Namespaces {
+		if !slices.Contains(active, ns) && !slices.Contains(pending, ns) {
+			return ConfigChanged{Namespace: ns}
+		}
+	}
+	// A skip report for a namespace removed meanwhile is moot, not a refusal.
+	for ns := range snapshot.Skipped {
+		if !slices.Contains(pending, ns) {
+			delete(snapshot.Skipped, ns)
+		}
+	}
+	if err = snapshot.Validate(active, pending); err != nil {
 		return invalid(err.Error())
+	}
+	status := map[string]PendingStatus{}
+	if err = json.Unmarshal(statusRaw, &status); err != nil {
+		return err
+	}
+	promoted := []string{}
+	for _, ns := range pending {
+		if slices.Contains(snapshot.Namespaces, ns) {
+			promoted = append(promoted, ns)
+		}
+	}
+	skipped := maps.Clone(snapshot.Skipped)
+	if skipped == nil {
+		skipped = map[string]string{}
 	}
 	// Past the cheap refusals, the snapshot counts against the rate limit
 	// whether or not it is applied. last_attempt_at is written before a
@@ -288,7 +390,20 @@ func (s *Service) Snapshot(ctx context.Context, id uuid.UUID, token string, snap
 	if _, err = tx.ExecContext(ctx, `SAVEPOINT reconcile`); err != nil {
 		return err
 	}
-	if err = s.reconcile(ctx, tx, id, tenant, snapshot); err != nil {
+	err = s.reconcile(ctx, tx, id, tenant, snapshot)
+	var full InventoryFull
+	if errors.As(err, &full) && len(promoted) > 0 {
+		// Withdraw the promotions and reconcile the active namespaces alone.
+		// ROLLBACK TO keeps the savepoint for a second refusal.
+		if _, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT reconcile`); err == nil {
+			for _, ns := range promoted {
+				skipped[ns] = contract.SkipInventoryLimit
+			}
+			promoted = []string{}
+			err = s.reconcile(ctx, tx, id, tenant, activeOnly(snapshot, active))
+		}
+	}
+	if err != nil {
 		if _, rbErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT reconcile`); rbErr == nil && tx.Commit() == nil {
 			return err
 		}
@@ -301,11 +416,43 @@ func (s *Service) Snapshot(ctx context.Context, id uuid.UUID, token string, snap
 		_, _ = s.db.ExecContext(rctx, `UPDATE discovery_integrations SET last_attempt_at=NOW() WHERE id=$1`, id)
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE discovery_integrations SET revision=revision+1,last_seen_at=NOW() WHERE id=$1`, id)
+	// Promote in pending order; record this scan's skips. A pending namespace
+	// the scan did not report on (added after the collector read its
+	// configuration) keeps its previous status.
+	nextActive := append(slices.Clone(active), promoted...)
+	nextPending := []string{}
+	nextStatus := map[string]PendingStatus{}
+	for _, ns := range pending {
+		if slices.Contains(promoted, ns) {
+			continue
+		}
+		nextPending = append(nextPending, ns)
+		if reason, ok := skipped[ns]; ok {
+			nextStatus[ns] = PendingStatus{Reason: reason, CheckedAt: now}
+		} else if previous, ok := status[ns]; ok {
+			nextStatus[ns] = previous
+		}
+	}
+	statusJSON, err := json.Marshal(nextStatus)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE discovery_integrations SET namespaces=$2,pending_namespaces=$3,pending_status=$4::jsonb,revision=revision+1,last_seen_at=NOW() WHERE id=$1`, id, pq.Array(nextActive), pq.Array(nextPending), string(statusJSON))
 	if err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// activeOnly narrows a snapshot to the active namespaces and their resources.
+func activeOnly(snapshot contract.Snapshot, active []string) contract.Snapshot {
+	out := contract.Snapshot{Revision: snapshot.Revision, Namespaces: slices.Clone(active), Resources: []contract.Resource{}}
+	for _, r := range snapshot.Resources {
+		if slices.Contains(active, r.Namespace) {
+			out.Resources = append(out.Resources, r)
+		}
+	}
+	return out
 }
 
 // reconcile replaces the integration's observed inventory with a validated
@@ -500,13 +647,18 @@ func (s *Service) Overview(ctx context.Context, tenant, integration uuid.UUID, q
 
 	// Presence per service, folded into the two facts gapsFor needs. An
 	// absent service (resources missing, or none left after a grouping
-	// change) is in grace while absent_since is recent.
+	// change) is in grace while absent_since is recent. Only services in
+	// active namespaces count: a removed namespace leaves coverage (summary,
+	// total and paging alike) at once, though its inventory is deleted only
+	// after MissingRetention; a pending one joins at its first full scan.
 	grace := sqlInterval(MissingGrace)
 	rows, err := s.db.QueryContext(ctx, `SELECT s.id,s.name,s.namespace,
    COALESCE(bool_or(r.uid IS NOT NULL AND r.missing_since IS NULL),false),
    COALESCE(bool_or(r.missing_since>NOW()-`+grace+`),false) OR COALESCE(s.absent_since>NOW()-`+grace+`,false)
-   FROM discovered_services s LEFT JOIN discovered_resources r ON r.service_id=s.id
-   WHERE s.tenant_id=$1 AND s.integration_id=$2 GROUP BY s.id`, tenant, integration)
+   FROM discovered_services s
+   JOIN discovery_integrations i ON i.id=s.integration_id AND i.tenant_id=s.tenant_id
+   LEFT JOIN discovered_resources r ON r.service_id=s.id
+   WHERE s.tenant_id=$1 AND s.integration_id=$2 AND s.namespace=ANY(i.namespaces) GROUP BY s.id`, tenant, integration)
 	if err != nil {
 		return out, err
 	}

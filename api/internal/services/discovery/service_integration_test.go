@@ -4,11 +4,13 @@ package discovery
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	"github.com/yassinebenameur/probara/shared/db"
 	contract "github.com/yassinebenameur/probara/shared/discovery"
@@ -533,4 +535,340 @@ func TestStaleInventoryIsPageLevelAndBlocksApproval(t *testing.T) {
 	key := o.Items[0].Resources[0].Suggestions[0].Key
 	_, _, err = s.Approve(ctx, tenant, web, ApproveRequest{Key: key, Name: "Web", IntervalSeconds: 60, ExpectedStatus: 200})
 	require.ErrorContains(t, err, "stale")
+}
+
+func ingressIn(ns, uid string) contract.Resource {
+	r := ingress(uid, "")
+	r.Namespace = ns
+	return r
+}
+
+// scanOf submits a snapshot at the current revision covering namespaces
+// (active plus whichever pending ones it scanned), with skip reasons.
+func scanOf(ctx context.Context, t *testing.T, s *Service, i *Integration, namespaces []string, skipped map[string]string, resources ...contract.Resource) error {
+	t.Helper()
+	cfg, err := s.CollectorConfig(ctx, i.ID, i.Token)
+	require.NoError(t, err)
+	if resources == nil {
+		resources = []contract.Resource{}
+	}
+	return s.Snapshot(ctx, i.ID, i.Token, contract.Snapshot{Revision: cfg.Revision, Namespaces: namespaces, Skipped: skipped, Resources: resources})
+}
+
+func getIntegration(ctx context.Context, t *testing.T, s *Service, tenant, id uuid.UUID) Integration {
+	t.Helper()
+	all, err := s.List(ctx, tenant)
+	require.NoError(t, err)
+	for _, i := range all {
+		if i.ID == id {
+			return i
+		}
+	}
+	t.Fatalf("integration %s not listed", id)
+	return Integration{}
+}
+
+func TestAddedNamespaceIsPendingUntilScanned(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, database, "pending")
+	s := New(database)
+	s.minSnapshotInterval = 0
+	i, err := s.Create(ctx, tenant, CreateRequest{Name: "cluster", Namespaces: []string{"prod", "ops"}})
+	require.NoError(t, err)
+	require.Equal(t, "prod", i.HomeNamespace)
+	require.Equal(t, []string{}, i.PendingNamespaces)
+	require.Equal(t, map[string]PendingStatus{}, i.PendingStatus)
+	require.NoError(t, scanOf(ctx, t, s, i, []string{"prod", "ops"}, nil, ingressIn("prod", "web")))
+	before := getIntegration(ctx, t, s, tenant, i.ID)
+
+	updated, changes, err := s.Update(ctx, tenant, i.ID, UpdateRequest{AddNamespaces: []string{"shop", "pay", "shop", "ops"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"shop", "pay"}, changes.Added, "adding an active or repeated namespace is a no-op")
+	require.Equal(t, []string{"prod", "ops"}, updated.Namespaces)
+	require.Equal(t, []string{"shop", "pay"}, updated.PendingNamespaces)
+	require.Equal(t, before.Revision, updated.Revision, "edits do not bump the revision")
+	cfg, err := s.CollectorConfig(ctx, i.ID, i.Token)
+	require.NoError(t, err)
+	require.Equal(t, contract.Config{Namespaces: []string{"prod", "ops"}, Pending: []string{"shop", "pay"}, Revision: before.Revision}, cfg)
+
+	// A pending namespace is not coverage yet.
+	o, err := s.Overview(ctx, tenant, i.ID, OverviewQuery{Page: 1})
+	require.NoError(t, err)
+	require.Equal(t, 1, o.Summary.Services)
+
+	// shop is scanned and promoted; pay is refused and stays pending.
+	require.NoError(t, scanOf(ctx, t, s, i, []string{"prod", "ops", "shop"}, map[string]string{"pay": contract.SkipForbidden}, ingressIn("prod", "web"), ingressIn("shop", "cart")))
+	after := getIntegration(ctx, t, s, tenant, i.ID)
+	require.Equal(t, []string{"prod", "ops", "shop"}, after.Namespaces)
+	require.Equal(t, []string{"pay"}, after.PendingNamespaces)
+	require.Equal(t, contract.SkipForbidden, after.PendingStatus["pay"].Reason)
+	require.WithinDuration(t, time.Now(), after.PendingStatus["pay"].CheckedAt, time.Minute)
+	require.Len(t, after.PendingStatus, 1)
+	o, err = s.Overview(ctx, tenant, i.ID, OverviewQuery{Page: 1})
+	require.NoError(t, err)
+	require.Equal(t, 2, o.Summary.Services, "a promoted namespace's services join coverage")
+
+	// A scan from a configuration older than the add reports nothing on a
+	// pending namespace: its status is kept.
+	_, _, err = s.Update(ctx, tenant, i.ID, UpdateRequest{AddNamespaces: []string{"late"}})
+	require.NoError(t, err)
+	require.NoError(t, s.Snapshot(ctx, i.ID, i.Token, contract.Snapshot{Revision: after.Revision, Namespaces: []string{"prod", "ops", "shop"}, Resources: []contract.Resource{ingressIn("prod", "web"), ingressIn("shop", "cart")}}))
+	after = getIntegration(ctx, t, s, tenant, i.ID)
+	require.Equal(t, []string{"pay", "late"}, after.PendingNamespaces)
+	require.Equal(t, contract.SkipForbidden, after.PendingStatus["pay"].Reason)
+
+	// The namespace list: home first, active in order, then pending.
+	list, err := s.Namespaces(ctx, tenant, i.ID)
+	require.NoError(t, err)
+	require.Len(t, list.Items, 5)
+	require.Equal(t, NamespaceStatus{Namespace: "prod", State: "active", Home: true, Services: 1}, list.Items[0])
+	require.Equal(t, NamespaceStatus{Namespace: "ops", State: "active"}, list.Items[1], "an active namespace with no services stands out")
+	require.Equal(t, NamespaceStatus{Namespace: "shop", State: "active", Services: 1}, list.Items[2])
+	require.Equal(t, "pay", list.Items[3].Namespace)
+	require.Equal(t, "pending", list.Items[3].State)
+	require.Equal(t, contract.SkipForbidden, list.Items[3].Reason)
+	require.NotNil(t, list.Items[3].CheckedAt)
+	require.Equal(t, NamespaceStatus{Namespace: "late", State: "pending"}, list.Items[4])
+	_, err = s.Namespaces(ctx, testutil.InsertTenant(ctx, t, database, "stranger"), i.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestUpdateRules(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, database, "rules")
+	other := testutil.InsertTenant(ctx, t, database, "rules-other")
+	s := New(database)
+	i, err := s.Create(ctx, tenant, CreateRequest{Name: "cluster", Namespaces: []string{"prod", "ops"}})
+	require.NoError(t, err)
+	_, err = s.Create(ctx, tenant, CreateRequest{Name: "taken", Namespaces: []string{"prod"}})
+	require.NoError(t, err)
+	var bad Invalid
+	for name, req := range map[string]UpdateRequest{
+		"remove home":         {RemoveNamespaces: []string{"prod"}},
+		"add and remove":      {AddNamespaces: []string{"shop"}, RemoveNamespaces: []string{"shop"}},
+		"invalid namespace":   {AddNamespaces: []string{"Not_A_Label"}},
+		"empty name":          {Name: ptr("  ")},
+		"duplicate name":      {Name: ptr("taken")},
+		"bad location":        {LocationID: []byte(`"nope"`)},
+		"foreign location":    {LocationID: []byte(`"` + uuid.NewString() + `"`)},
+		"over the namespaces": {AddNamespaces: namespacesN("n", 19)},
+	} {
+		_, _, err := s.Update(ctx, tenant, i.ID, req)
+		require.ErrorAs(t, err, &bad, name)
+	}
+	_, _, err = s.Update(ctx, other, i.ID, UpdateRequest{Name: ptr("x")})
+	require.ErrorIs(t, err, ErrNotFound)
+	current := getIntegration(ctx, t, s, tenant, i.ID)
+	require.Equal(t, "cluster", current.Name)
+	require.Equal(t, []string{"prod", "ops"}, current.Namespaces)
+
+	// Exactly 20, active and pending together, is accepted; removing an
+	// absent namespace is a no-op.
+	updated, changes, err := s.Update(ctx, tenant, i.ID, UpdateRequest{AddNamespaces: namespacesN("n", 18), RemoveNamespaces: []string{"never-there"}})
+	require.NoError(t, err)
+	require.Len(t, updated.PendingNamespaces, 18)
+	require.Empty(t, changes.Removed)
+
+	location := uuid.New()
+	_, err = database.ExecContext(ctx, `INSERT INTO locations(id,tenant_id,name,slug) VALUES($1,$2,'private','private')`, location, tenant)
+	require.NoError(t, err)
+	updated, changes, err = s.Update(ctx, tenant, i.ID, UpdateRequest{Name: ptr(" renamed "), LocationID: []byte(`"` + location.String() + `"`)})
+	require.NoError(t, err)
+	require.Equal(t, UpdateChanges{NameChanged: true, LocationChanged: true}, changes)
+	require.Equal(t, "renamed", updated.Name)
+	require.Equal(t, &location, updated.LocationID)
+	_, changes, err = s.Update(ctx, tenant, i.ID, UpdateRequest{Name: ptr("renamed"), LocationID: []byte(`"` + location.String() + `"`)})
+	require.NoError(t, err)
+	require.False(t, changes.Any(), "setting the same values changes nothing")
+	updated, changes, err = s.Update(ctx, tenant, i.ID, UpdateRequest{LocationID: []byte(`null`)})
+	require.NoError(t, err)
+	require.True(t, changes.LocationChanged)
+	require.Nil(t, updated.LocationID)
+	updated, _, err = s.Update(ctx, tenant, i.ID, UpdateRequest{})
+	require.NoError(t, err)
+	require.Nil(t, updated.LocationID, "an absent location_id keeps it")
+	require.Equal(t, current.Revision, updated.Revision)
+}
+
+func ptr(s string) *string { return &s }
+func namespacesN(prefix string, n int) []string {
+	out := []string{}
+	for k := range n {
+		out = append(out, prefix+strconv.Itoa(k))
+	}
+	return out
+}
+
+func TestConcurrentNamespaceDeltasMerge(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, database, "merge")
+	s := New(database)
+	i, err := s.Create(ctx, tenant, CreateRequest{Name: "cluster", Namespaces: []string{"prod", "old"}})
+	require.NoError(t, err)
+	var wg sync.WaitGroup
+	errs := make([]error, 3)
+	for n, req := range []UpdateRequest{{AddNamespaces: []string{"a"}}, {AddNamespaces: []string{"b"}}, {RemoveNamespaces: []string{"old"}}} {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _, errs[n] = s.Update(ctx, tenant, i.ID, req) }()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+	got := getIntegration(ctx, t, s, tenant, i.ID)
+	require.Equal(t, []string{"prod"}, got.Namespaces)
+	require.ElementsMatch(t, []string{"a", "b"}, got.PendingNamespaces, "every editor's delta survives")
+}
+
+func TestRemovedNamespaceLeavesCoverageAndComesBackWithLinks(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, database, "removal")
+	s := New(database)
+	s.minSnapshotInterval = 0
+	i, err := s.Create(ctx, tenant, CreateRequest{Name: "cluster", Namespaces: []string{"prod", "shop"}})
+	require.NoError(t, err)
+	require.NoError(t, scanOf(ctx, t, s, i, []string{"prod", "shop"}, nil, ingressIn("prod", "web"), ingressIn("shop", "cart"), ingressIn("shop", "pay")))
+	cart := serviceIDOf(ctx, t, database, i.ID, "cart")
+	pay := serviceIDOf(ctx, t, database, i.ID, "pay")
+	monitor := testutil.InsertHTTPMonitor(ctx, t, database, tenant, "cart")
+	require.NoError(t, s.Link(ctx, tenant, cart, monitor, nil))
+	o, err := s.Overview(ctx, tenant, i.ID, OverviewQuery{Page: 1})
+	require.NoError(t, err)
+	var payKey string
+	for _, c := range o.Items {
+		if c.ID == pay {
+			payKey = c.Resources[0].Suggestions[0].Key
+		}
+	}
+	approved, created, err := s.Approve(ctx, tenant, pay, ApproveRequest{Key: payKey, Name: "Pay", IntervalSeconds: 60, ExpectedStatus: 200})
+	require.NoError(t, err)
+	require.True(t, created)
+	list, err := s.Namespaces(ctx, tenant, i.ID)
+	require.NoError(t, err)
+	require.Equal(t, NamespaceStatus{Namespace: "shop", State: "active", Services: 2, LinkedServices: 2}, list.Items[1])
+
+	_, changes, err := s.Update(ctx, tenant, i.ID, UpdateRequest{RemoveNamespaces: []string{"shop"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"shop"}, changes.Removed)
+	// Gone from coverage at once: summary, total and paging agree.
+	o, err = s.Overview(ctx, tenant, i.ID, OverviewQuery{Page: 1})
+	require.NoError(t, err)
+	require.Equal(t, 1, o.Summary.Services)
+	require.Equal(t, 1, o.Total)
+	require.Len(t, o.Items, 1)
+	require.Equal(t, "web", o.Items[0].Name)
+	o, err = s.Overview(ctx, tenant, i.ID, OverviewQuery{Page: 1, Query: "cart"})
+	require.NoError(t, err)
+	require.Zero(t, o.Total)
+	// Approve (its idempotent replay too) and keyless Link refuse it.
+	_, _, err = s.Approve(ctx, tenant, pay, ApproveRequest{Key: payKey, Name: "Pay", IntervalSeconds: 60, ExpectedStatus: 200})
+	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, s.Link(ctx, tenant, cart, testutil.InsertHTTPMonitor(ctx, t, database, tenant, "other"), nil), ErrNotFound)
+
+	// The next scan no longer covers shop: its resources go missing, kept for
+	// the retention with their links; monitors are untouched.
+	require.NoError(t, scanOf(ctx, t, s, i, []string{"prod"}, nil, ingressIn("prod", "web")))
+	require.Equal(t, 2, countRows(ctx, t, database, `SELECT count(*) FROM discovered_resources WHERE integration_id=$1 AND namespace='shop' AND missing_since IS NOT NULL`, i.ID))
+	require.Equal(t, 2, countRows(ctx, t, database, `SELECT count(*) FROM discovery_monitor_links WHERE service_id=ANY($1)`, pq.Array([]uuid.UUID{cart, pay})))
+	require.Equal(t, 2, countRows(ctx, t, database, `SELECT count(*) FROM monitors WHERE id=ANY($1) AND deleted_at IS NULL`, pq.Array([]uuid.UUID{monitor, approved})))
+
+	// Re-added within the retention: pending, then promoted with its links.
+	_, _, err = s.Update(ctx, tenant, i.ID, UpdateRequest{AddNamespaces: []string{"shop"}})
+	require.NoError(t, err)
+	list, err = s.Namespaces(ctx, tenant, i.ID)
+	require.NoError(t, err)
+	require.Equal(t, NamespaceStatus{Namespace: "shop", State: "pending", Services: 2, LinkedServices: 2}, list.Items[1], "counts show what re-adding brings back")
+	require.NoError(t, scanOf(ctx, t, s, i, []string{"prod", "shop"}, nil, ingressIn("prod", "web"), ingressIn("shop", "cart"), ingressIn("shop", "pay")))
+	require.Equal(t, cart, serviceIDOf(ctx, t, database, i.ID, "cart"))
+	o, err = s.Overview(ctx, tenant, i.ID, OverviewQuery{Page: 1})
+	require.NoError(t, err)
+	require.Equal(t, 3, o.Summary.Services)
+	for _, c := range o.Items {
+		if c.ID == cart || c.ID == pay {
+			require.Len(t, c.Monitors, 1, c.Name)
+			require.NotContains(t, c.Gaps, "resource_missing")
+		}
+	}
+	replayed, created, err := s.Approve(ctx, tenant, pay, ApproveRequest{Key: payKey, Name: "Pay", IntervalSeconds: 60, ExpectedStatus: 200})
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Equal(t, approved, replayed)
+}
+
+func TestSnapshotRacingRemovalIsRefusedForRetry(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, database, "race")
+	s := New(database)
+	i, err := s.Create(ctx, tenant, CreateRequest{Name: "cluster", Namespaces: []string{"prod", "shop"}})
+	require.NoError(t, err)
+	_, _, err = s.Update(ctx, tenant, i.ID, UpdateRequest{AddNamespaces: []string{"new"}})
+	require.NoError(t, err)
+	cfg, err := s.CollectorConfig(ctx, i.ID, i.Token)
+	require.NoError(t, err)
+	// The collector read this config, then shop and new were removed.
+	_, _, err = s.Update(ctx, tenant, i.ID, UpdateRequest{RemoveNamespaces: []string{"shop", "new"}})
+	require.NoError(t, err)
+	err = s.Snapshot(ctx, i.ID, i.Token, contract.Snapshot{Revision: cfg.Revision, Namespaces: []string{"prod", "shop"}, Skipped: map[string]string{"new": contract.SkipForbidden}, Resources: []contract.Resource{ingressIn("prod", "web"), ingressIn("shop", "cart")}})
+	var changed ConfigChanged
+	require.ErrorAs(t, err, &changed)
+	require.Equal(t, "shop", changed.Namespace)
+	require.Zero(t, countRows(ctx, t, database, `SELECT count(*) FROM discovery_integrations WHERE id=$1 AND last_attempt_at IS NOT NULL`, i.ID), "a refused race does not count against the rate limit")
+	require.Zero(t, countRows(ctx, t, database, `SELECT count(*) FROM discovered_resources WHERE integration_id=$1`, i.ID))
+	// The retry with the fresh config succeeds; a stale skip report for a
+	// namespace removed meanwhile is dropped, not refused.
+	require.NoError(t, s.Snapshot(ctx, i.ID, i.Token, contract.Snapshot{Revision: cfg.Revision, Namespaces: []string{"prod"}, Skipped: map[string]string{"new": contract.SkipForbidden}, Resources: []contract.Resource{ingressIn("prod", "web")}}))
+	got := getIntegration(ctx, t, s, tenant, i.ID)
+	require.Empty(t, got.PendingStatus)
+	// An active namespace left out is still an invalid snapshot.
+	_, _, err = s.Update(ctx, tenant, i.ID, UpdateRequest{AddNamespaces: []string{"x"}})
+	require.NoError(t, err)
+	s.minSnapshotInterval = 0
+	var bad Invalid
+	require.ErrorAs(t, scanOf(ctx, t, s, i, []string{"x"}, nil), &bad)
+}
+
+func TestPendingNamespaceOverStoredCapIsWithdrawn(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, database, "pending-cap")
+	s := New(database)
+	s.minSnapshotInterval = 0
+	i, err := s.Create(ctx, tenant, CreateRequest{Name: "cluster", Namespaces: []string{"prod"}})
+	require.NoError(t, err)
+	require.NoError(t, snapshotOf(ctx, t, s, i, ingress("keep", "")))
+	service := serviceIDOf(ctx, t, database, i.ID, "keep")
+	// One below the cap: the active scan's one new resource fits, the
+	// pending namespace's does not.
+	_, err = database.ExecContext(ctx, `INSERT INTO discovered_resources(integration_id,uid,service_id,kind,name,namespace,missing_since)
+	 SELECT $1,'old-'||g,$2,'Ingress','old','prod',NOW()-interval '1 day' FROM generate_series(1,$3::int) g`, i.ID, service, MaxStoredResources-2)
+	require.NoError(t, err)
+	_, _, err = s.Update(ctx, tenant, i.ID, UpdateRequest{AddNamespaces: []string{"big"}})
+	require.NoError(t, err)
+	before := getIntegration(ctx, t, s, tenant, i.ID)
+
+	require.NoError(t, scanOf(ctx, t, s, i, []string{"prod", "big"}, nil, ingress("keep", ""), ingress("fresh", ""), ingressIn("big", "b1")),
+		"the active namespaces sync although the pending one does not fit")
+	after := getIntegration(ctx, t, s, tenant, i.ID)
+	require.Equal(t, []string{"prod"}, after.Namespaces)
+	require.Equal(t, []string{"big"}, after.PendingNamespaces)
+	require.Equal(t, contract.SkipInventoryLimit, after.PendingStatus["big"].Reason)
+	require.Equal(t, before.Revision+1, after.Revision)
+	require.True(t, after.LastSeenAt != nil && (before.LastSeenAt == nil || after.LastSeenAt.After(*before.LastSeenAt)))
+	require.Zero(t, countRows(ctx, t, database, `SELECT count(*) FROM discovered_resources WHERE integration_id=$1 AND namespace='big'`, i.ID))
+	require.Equal(t, 1, countRows(ctx, t, database, `SELECT count(*) FROM discovered_resources WHERE integration_id=$1 AND uid='fresh'`, i.ID), "the active namespace's new resources are stored")
+
+	// Active alone over the cap is still refused as before.
+	var full InventoryFull
+	require.ErrorAs(t, scanOf(ctx, t, s, i, []string{"prod"}, nil, ingress("keep", ""), ingress("fresh", ""), ingress("more", "")), &full)
 }

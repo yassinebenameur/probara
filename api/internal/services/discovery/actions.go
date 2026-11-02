@@ -35,10 +35,13 @@ type LinkRequest struct {
 }
 
 // lockService serializes approval/linking against snapshot reconciliation and
-// reports whether the inventory is stale, aged on the DB clock.
+// namespace edits, and reports whether the inventory is stale, aged on the DB
+// clock. A service outside the integration's active namespaces (removed, its
+// inventory awaiting deletion) is not found: Approve, including its
+// idempotent replay, and Link refuse it, as Overview no longer lists it.
 func (s *Service) lockService(ctx context.Context, tx *sql.Tx, tenant, service uuid.UUID) (bool, error) {
 	var stale bool
-	err := tx.QueryRowContext(ctx, `SELECT i.last_seen_at IS NULL OR i.last_seen_at<NOW()-`+sqlInterval(InventoryStaleAfter)+` FROM discovery_integrations i JOIN discovered_services s ON s.integration_id=i.id AND s.tenant_id=i.tenant_id WHERE s.id=$1 AND s.tenant_id=$2 FOR UPDATE OF i`, service, tenant).Scan(&stale)
+	err := tx.QueryRowContext(ctx, `SELECT i.last_seen_at IS NULL OR i.last_seen_at<NOW()-`+sqlInterval(InventoryStaleAfter)+` FROM discovery_integrations i JOIN discovered_services s ON s.integration_id=i.id AND s.tenant_id=i.tenant_id WHERE s.id=$1 AND s.tenant_id=$2 AND s.namespace=ANY(i.namespaces) FOR UPDATE OF i`, service, tenant).Scan(&stale)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrNotFound
 	}

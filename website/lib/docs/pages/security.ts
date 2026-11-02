@@ -149,7 +149,7 @@ export const SECURITY_PAGE: DocPage = {
             [
               'Discovery collector token',
               '32 random bytes; only its SHA-256 hash is stored, in `discovery_integrations.token_hash`. The plaintext is shown only in the response that creates the integration or rotates its token',
-              'Valid only on `/api/v1/discovery-collectors/{id}/*` for its own integration (config and snapshot upload), never on tenant APIs, so it cannot read coverage or create monitors. It lives in the Kubernetes Secret of the [generated manifest](/docs/discovery/#setup); delete the downloaded file after applying it. Rotating (or reinstalling) invalidates the old token at once.',
+              'Valid only on `/api/v1/discovery-collectors/{id}/*` for its own integration (config and snapshot upload), never on tenant APIs, so it cannot read coverage or create monitors. It lives in the Kubernetes Secret of the [generated manifest](/docs/discovery/#setup); delete the downloaded file after applying it. The access manifest offered after adding namespaces holds only Roles and RoleBindings, never the token. Rotating (or reinstalling) invalidates the old token at once.',
             ],
           ],
         },

@@ -11,8 +11,11 @@ It is not a measure of all your infrastructure or an application-quality score.
    normal migration workflow. Deploy the web application from the same revision.
 2. As an editor or admin, select **Connect cluster**. Enter a cluster name and
    1–20 existing namespaces (entering more shows an error naming how many to
-   remove; nothing is dropped). Optionally select an existing private check
-   location.
+   remove; nothing is dropped). The first one is the integration's **home
+   namespace** (`home_namespace`), where the collector runs; it is fixed for
+   the life of the integration. The others can be added or removed later (see
+   [Change namespaces](#change-namespaces)). Optionally select an existing
+   private check location.
 3. Enter the externally reachable **HTTPS API origin** and the collector image.
    The image field is prefilled with the published repository
    (`ghcr.io/yassinebenameur/probara-discovery-collector:`); add your release
@@ -21,8 +24,8 @@ It is not a measure of all your infrastructure or an application-quality score.
    without its tag (it named the previous release), an image of your own as is.
    Download the generated manifest. Its Secret contains an integration-scoped
    random token, available only at creation or rotation. Keep the file private.
-4. Apply it to the intended cluster. The collector runs in the first selected
-   namespace; each selected namespace receives a Role and RoleBinding.
+4. Apply it to the intended cluster. The collector runs in the home namespace;
+   each configured namespace receives a Role and RoleBinding.
 5. Wait for the first complete scan, then expand services to review suggestions.
 
 Use the published collector image for your release,
@@ -72,14 +75,14 @@ service-account CA and token.
 
 The collector verifies the Probara origin against the public CA roots in its
 image. If the origin's certificate comes from an internal CA, put that CA in a
-ConfigMap in the collector's namespace (the first selected namespace), mount
+ConfigMap in the collector's namespace (the home namespace), mount
 it, and set `SSL_CERT_FILE` to the mounted file. A bundle holding only that CA
 is enough: the Probara origin is the only peer verified against it (the
 Kubernetes API connection uses the service-account CA).
 
 ```sh
-kubectl -n <first-namespace> create configmap probara-ca --from-file=ca.crt=internal-ca.pem
-kubectl -n <first-namespace> patch deployment probara-discovery-<integration-prefix> -p '{"spec":{"template":{"spec":{
+kubectl -n <home-namespace> create configmap probara-ca --from-file=ca.crt=internal-ca.pem
+kubectl -n <home-namespace> patch deployment probara-discovery-<integration-prefix> -p '{"spec":{"template":{"spec":{
   "volumes":[{"name":"probara-ca","configMap":{"name":"probara-ca"}}],
   "containers":[{"name":"collector",
     "env":[{"name":"SSL_CERT_FILE","value":"/etc/probara-ca/ca.crt"}],
@@ -93,14 +96,14 @@ Apply the downloaded file using the intended kubeconfig context:
 
 ```sh
 kubectl --context your-cluster apply -f probara-discovery-<integration-prefix>.yaml
-kubectl --context your-cluster -n <first-namespace> logs \
+kubectl --context your-cluster -n <home-namespace> logs \
   deployment/probara-discovery-<integration-prefix>
 ```
 
 Remove the downloaded credential file after installation. The generated
 Deployment uses one replica, a non-root container, read-only root filesystem,
 resource limits, and a mounted Secret. Role grants are **list Services and
-Ingresses only**, scoped to the selected namespaces. The collector does not
+Ingresses only**, scoped to the configured namespaces. The collector does not
 read Kubernetes Secrets, Pods, logs, or workloads, and cannot modify cluster
 resources. No Kubernetes credentials, tenant API key, NATS credential, or
 PostgreSQL credential is sent to Probara or included in the snapshot.
@@ -189,6 +192,72 @@ inventory and links, but retains monitors and result history. Retention (see
 below) deletes inventory rows and, for a long-empty service, its links, never a
 monitor. There is no target rewrite when a resource changes or disappears.
 
+## Change namespaces
+
+As an editor or admin, select **Edit cluster** (the pencil in the cluster
+header) to rename the integration, change its default private location, or add
+and remove namespaces. An integration has at most 20 namespaces, active and
+pending together. The home namespace is locked: the collector's Deployment,
+ServiceAccount and Secret live there, so moving the collector means connecting
+a new integration and explicitly linking existing monitors to it. A name or
+location change saves at once; a namespace change goes through a review step
+that states what each change does, with counts from the namespaces endpoint.
+Edits take effect at the next scan (at most five minutes; the collector reads
+its configuration every cycle, so it needs no restart).
+
+**Adding** a namespace makes it **pending**. Nothing else changes until the
+collector can read it. Each cycle scans the active namespaces first, then each
+pending one all-or-nothing: a failure only skips that namespace, with a reason,
+and every other namespace keeps syncing. The first snapshot that scans it in
+full promotes it to active, and its services join coverage. Until then the
+Discovery page shows a pill per pending namespace ("waiting for first scan", or
+the skip reason with when it was checked) and a warning with the access
+manifest. An active namespace's pill shows its service count, and one that is
+still empty after a scan is flagged "no services" (a misspelled namespace under
+cluster-wide RBAC would scan fine and find nothing). The collector logs each
+skip as `Pending namespace <ns> skipped (<reason>): <hint>`.
+
+| Reason | Meaning |
+|---|---|
+| `forbidden` | Kubernetes answered 401 or 403: the namespace does not exist, or the access manifest is not applied there. |
+| `too_large` | A list page over 4 MiB, or the namespace would take the snapshot past 2,000 resources or the 4 MiB upload cap. The collector fits pending namespaces into the upload in scan order, so a smaller one after it can still be promoted. |
+| `inventory_limit` | Promoting it would leave the integration storing more than 10,000 resources (assigned by the API; the active namespaces were still applied). |
+| `deadline` | The scan reached the last 30 seconds of its two-minute deadline before this namespace (kept for the upload). |
+| `error` | Any other failure: another HTTP status, an unreadable or invalid list response, a transport error. |
+
+A skipped namespace stays pending and is retried every cycle. The **access
+manifest** (Apply step of the edit, or the warning's **Access manifest**
+button) holds only a Role and RoleBinding per configured namespace, bound to
+the collector's ServiceAccount in the home namespace. It has no Secret and no
+token, so it can be applied any number of times without rotating the
+credential:
+
+```sh
+kubectl --context your-cluster apply -f probara-discovery-<integration-prefix>-access.yaml
+```
+
+**Removing** a namespace takes it out of coverage at once: summary, totals,
+search and paging leave its services out, and approving a suggestion or
+linking a monitor on them is refused (404). The next complete scan marks its
+resources missing, and retention deletes them, with their services and monitor
+links, 7 days after they went missing. Monitors and their history are never
+touched. Adding the namespace back within those 7 days brings back the same
+services and links once it is promoted again (while it is pending, its stored
+resources stay missing and out of coverage). The collector's Role in a removed
+namespace is not deleted for you; the Apply step gives the cleanup command:
+
+```sh
+kubectl --context your-cluster -n <removed-namespace> delete role,rolebinding \
+  probara-discovery-<integration-prefix> --ignore-not-found
+```
+
+Edits are deltas, so two editors (or an MCP agent) merge rather than overwrite
+each other: adding a namespace that is already active or pending, or removing
+one that is not configured, does nothing. An edit does not change the inventory
+revision, so it never conflicts with a scan in flight; a scan that raced a
+removal is refused with 409 and `Retry-After: 10` and the collector retries
+with its new configuration.
+
 ## Interpret coverage
 
 | Finding | Meaning |
@@ -210,7 +279,9 @@ The first release does not assess functional journeys, expected geographic
 redundancy, dependency completeness, notification-provider delivery, ownership,
 or criticality. A generic linked monitor does not certify every discovered
 endpoint. Inspect suggestions to assess additional targets. No composite score
-is shown. The summary counts every service of the integration; search, the
+is shown. The summary counts every service in the integration's active
+namespaces (a pending namespace joins at its first full scan, a removed one
+leaves at once); search, the
 gaps-only filter and sorting apply across all services before paging (50 per
 page). The setup location and channel pickers show the
 first 100 entries; configure other choices from the regular monitor editor.
@@ -222,14 +293,23 @@ Each cycle has a two-minute deadline and 30-second request timeout. It reloads
 projected Kubernetes and Probara tokens; HTTPS certificate checks stay enabled
 and redirects are refused. Kubernetes list pagination is followed to completion.
 A forbidden list, expired continuation, oversized page, or failed namespace
-aborts the whole scan; it never uploads a partial inventory as a complete one.
+aborts the whole scan when the namespace is active; it never uploads a partial
+inventory as a complete one. A pending namespace (added, not scanned
+successfully yet) is scanned after the active ones and all-or-nothing: on any
+failure its resources are dropped from the snapshot and it is reported in
+`skipped` with a reason instead (see [Change namespaces](#change-namespaces)).
 
 Snapshots carry a server-issued inventory revision. The API checks that revision
-and the complete namespace set under an integration row lock, validates the whole
-payload, then replaces the observed membership in one transaction. Out-of-order
-or replayed revisions return 409. An empty **valid** snapshot marks everything
+and the namespace set under an integration row lock (every active namespace
+scanned, otherwise only pending ones, each once; `skipped` names only pending
+namespaces that were not scanned), validates the whole payload, then replaces
+the observed membership in one transaction. Out-of-order or replayed revisions
+return 409. A snapshot that scanned a namespace removed meanwhile returns 409
+with `Retry-After: 10`, so the collector re-reads its configuration within
+seconds. An empty **valid** snapshot marks everything
 missing; malformed or incomplete uploads do not. Limits are 20 integrations per
-workspace, 20 namespaces and 2,000 resources per scan, 32 suggestions per resource,
+workspace, 20 namespaces per integration (active and pending together), 2,000
+resources per scan, 32 suggestions per resource,
 4 MiB per Kubernetes page and uploaded snapshot. The collector retains the first
 32 distinct suggestions per resource; this is a bounded suggestion list, not
 proof of full endpoint coverage.
@@ -241,8 +321,9 @@ be repeated back to back while holding the integration lock. An earlier one
 gets 429 `rate_limited` with `Retry-After` in whole seconds; the token and this
 limit are checked before the body is read, and again under the row lock. The
 cheap refusals (400, 409) do not count. The
-collector waits for `Retry-After` (bounded to 1 second–1 hour) on 429 or 503
-instead of its five-minute interval, and logs every refusal with its status and
+collector waits for `Retry-After` (bounded to 1 second–1 hour) on 409, 429 or
+503 instead of its five-minute interval (a stale-revision 409 carries none, so
+it waits the interval), and logs every refusal with its status and
 up to 512 bytes of the response body. Unknown JSON fields in a snapshot are
 ignored, so a newer collector image keeps syncing with an older API.
 
@@ -264,20 +345,26 @@ Retention, applied in the snapshot transaction (constants in
   present and missing together, counted after reconciliation and pruning. A
   snapshot that would exceed it is refused with 422 `inventory_limit` and
   rolled back (inventory, revision and last-seen time unchanged; only the
-  rate-limit attempt time is kept). Wait for retention, or connect a
-  replacement integration with fewer namespaces (configuration is immutable).
+  rate-limit attempt time is kept). When the snapshot includes pending
+  namespaces, it is not refused: the active namespaces are reconciled alone and
+  those pending namespaces stay pending with reason `inventory_limit`. To free
+  room, wait for retention, remove namespaces (their resources still count
+  until they are pruned, 7 days after they go missing), or connect a
+  replacement integration with fewer namespaces.
 - Monitors and their history are never deleted.
 
-Configuration is immutable in this first release. To change namespaces or grouping
-scope, create a replacement integration and explicitly link existing monitors.
 The reinstall action rotates the collector credential: reapply its new manifest
 before expecting scans to resume. Rotation invalidates old snapshot revisions.
+The reinstall manifest grants access to active and pending namespaces alike.
 
 ## API
 
 Normal endpoints use existing tenant authentication and write permissions:
 
 - `GET/POST /api/v1/discovery/integrations`
+- `PATCH /api/v1/discovery/integrations/{id}` (`name`, `location_id`,
+  `add_namespaces`, `remove_namespaces`; see below)
+- `GET /api/v1/discovery/integrations/{id}/namespaces`
 - `DELETE /api/v1/discovery/integrations/{id}`
 - `POST /api/v1/discovery/integrations/{id}/rotate-token`
 - `GET /api/v1/discovery/integrations/{id}/coverage?page=1&q=&gaps=true&sort=name|gaps`
@@ -296,10 +383,40 @@ Collectors use only their scoped bearer token on:
 - `GET /api/v1/discovery-collectors/{id}/config`
 - `POST /api/v1/discovery-collectors/{id}/snapshot`
 
-The snapshot route answers 204 when applied, 401 for a missing or malformed
-bearer, 404 for an unknown integration or wrong token, 400 for an invalid body,
-409 for a stale revision, 429 `rate_limited` and 422 `inventory_limit` (see
-above). `POST /api/v1/discovery/services/{id}/approve` returns
+An integration carries `namespaces` (active), `home_namespace`,
+`pending_namespaces` (always an array) and `pending_status` (always an object,
+`{"<ns>": {"reason": …, "checked_at": …}}` for pending namespaces with a
+recorded skip).
+
+`PATCH …/integrations/{id}` takes any of `name` (trimmed, 1–100 characters),
+`location_id` (an enabled location of the workspace, or `null` to clear;
+absent keeps it), `add_namespaces` and `remove_namespaces` (each at most 20
+valid namespace names; a name cannot be in both, and the home namespace cannot
+be removed). Unknown fields, including a full `namespaces` list, are refused
+with 400. It returns 200 with the integration (never the token), 400
+`validation_error` for an invalid edit, a duplicate name, or more than 20
+namespaces active and pending together, and 404 for an unknown integration.
+A request that changes nothing returns 200 and records no audit event; an
+effective one records `discovery-integration.update` with `details.added`,
+`details.removed` (effective changes only), `details.name_changed` and
+`details.location_changed`.
+
+`GET …/integrations/{id}/namespaces` returns `items`: the home namespace first,
+then the other active ones in stored order, then the pending ones, each with
+`namespace`, `state` (`active` or `pending`), `home`, `reason` and
+`checked_at` (only for a pending namespace with a recorded skip), `services`
+(stored discovered services in the namespace, present or missing) and
+`linked_services` (those linked to a monitor that is not deleted). The counts ignore state, so a
+re-added namespace shows what it brings back.
+
+The collector's `GET …/config` returns `{namespaces, pending, revision}`; its
+snapshot adds `skipped` (`{"<ns>": "<reason>"}`, omitted when empty; an
+unknown reason is stored as `error`). The snapshot route answers 204 when
+applied, 401 for a missing or malformed bearer, 404 for an unknown integration
+or wrong token, 400 for an invalid body (including one that leaves out an
+active namespace), 409 for a stale revision, 409 with `Retry-After: 10` when it
+scanned a namespace that is no longer configured, 429 `rate_limited` and 422
+`inventory_limit` (see above). `POST /api/v1/discovery/services/{id}/approve` returns
 `{"monitor_id": …, "created": true|false}`. In the coverage response,
 `summary.missing` counts `resource_missing` only and `summary.missing_grace`
 counts `resource_missing_grace`.
@@ -349,3 +466,8 @@ the same and `created` is `false`; unlink and relink it; remove the Service and 
 after the next scan; restore it and verify service identity and monitor history
 remain. Revoke the collector's Ingress-list permission and confirm inventory is
 retained, then becomes stale rather than marking all resources missing.
+Add a namespace that has a Service but no Role: its pill shows it cannot be
+read while the others keep syncing; apply the access manifest and confirm it is
+promoted at the next scan. Remove a namespace with a linked monitor: its
+services leave coverage and the monitor stays; add it back and confirm the link
+returns.

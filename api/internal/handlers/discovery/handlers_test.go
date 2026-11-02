@@ -24,7 +24,7 @@ func TestReadOnlyCannotMutateDiscovery(t *testing.T) {
 	r.Use(middleware.RequireWrite)
 	r.Route("/api/v1/discovery", h.Routes)
 	for _, ctx := range []context.Context{ctxpkg.WithRole(context.Background(), "viewer"), ctxpkg.WithAuthScope(context.Background(), "read")} {
-		for _, route := range []struct{ method, path string }{{"POST", "/integrations"}, {"POST", "/integrations/id/rotate-token"}, {"DELETE", "/integrations/id"}, {"POST", "/services/id/approve"}, {"POST", "/services/id/links"}, {"DELETE", "/services/id/links/monitor"}} {
+		for _, route := range []struct{ method, path string }{{"POST", "/integrations"}, {"POST", "/integrations/id/rotate-token"}, {"DELETE", "/integrations/id"}, {"PATCH", "/integrations/id"}, {"POST", "/services/id/approve"}, {"POST", "/services/id/links"}, {"DELETE", "/services/id/links/monitor"}} {
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(route.method, "/api/v1/discovery"+route.path, nil).WithContext(ctx))
 			require.Equal(t, http.StatusForbidden, w.Code, route.path)
@@ -56,6 +56,8 @@ func TestDecodeRequiresOneBoundedStrictObject(t *testing.T) {
 // returns canned results.
 type fakeBackend struct {
 	approveCreated bool
+	updateChanges  svc.UpdateChanges
+	updateReq      *svc.UpdateRequest
 	authorizeErr   error
 	snapshotErr    error
 	snapshotToken  string
@@ -65,6 +67,13 @@ type fakeBackend struct {
 func (f *fakeBackend) List(context.Context, uuid.UUID) ([]svc.Integration, error) { return nil, nil }
 func (f *fakeBackend) Create(_ context.Context, _ uuid.UUID, req svc.CreateRequest) (*svc.Integration, error) {
 	return &svc.Integration{ID: integrationID, Name: req.Name}, nil
+}
+func (f *fakeBackend) Update(_ context.Context, _ uuid.UUID, id uuid.UUID, req svc.UpdateRequest) (*svc.Integration, svc.UpdateChanges, error) {
+	f.updateReq = &req
+	return &svc.Integration{ID: id, Name: "prod"}, f.updateChanges, nil
+}
+func (f *fakeBackend) Namespaces(context.Context, uuid.UUID, uuid.UUID) (svc.NamespaceList, error) {
+	return svc.NamespaceList{Items: []svc.NamespaceStatus{{Namespace: "prod", State: "active", Home: true, Services: 2, LinkedServices: 1}}}, nil
 }
 func (f *fakeBackend) Rotate(context.Context, uuid.UUID, uuid.UUID) (string, error) { return "t", nil }
 func (f *fakeBackend) Delete(context.Context, uuid.UUID, uuid.UUID) error           { return nil }
@@ -121,13 +130,14 @@ func TestOperatorWritesRecordAuditEvents(t *testing.T) {
 	}{
 		{"POST", "/integrations", `{"name":"prod","namespaces":["prod"]}`, 201, "discovery-integration.create", "discovery-integration", integrationID},
 		{"DELETE", "/integrations/" + integrationID.String(), "", 204, "discovery-integration.delete", "discovery-integration", integrationID},
+		{"PATCH", "/integrations/" + integrationID.String(), `{"add_namespaces":["shop"]}`, 200, "discovery-integration.update", "discovery-integration", integrationID},
 		{"POST", "/integrations/" + integrationID.String() + "/rotate-token", "", 200, "discovery-integration.rotate-token", "discovery-integration", integrationID},
 		{"POST", "/services/" + serviceID.String() + "/approve", `{"key":"k","name":"Web","interval_seconds":60}`, 200, "discovery.approve", "monitor", monitorID},
 		{"POST", "/services/" + serviceID.String() + "/links", `{"monitor_id":"` + monitorID.String() + `"}`, 204, "discovery-link.create", "discovery-service", serviceID},
 		{"DELETE", "/services/" + serviceID.String() + "/links/" + monitorID.String(), "", 204, "discovery-link.delete", "discovery-service", serviceID},
 	} {
 		rec := &fakeAudit{}
-		h := &Handlers{Service: &fakeBackend{approveCreated: true}, Audit: rec}
+		h := &Handlers{Service: &fakeBackend{approveCreated: true, updateChanges: svc.UpdateChanges{Added: []string{"shop"}}}, Audit: rec}
 		w := operatorRequest(t, h, tc.method, tc.path, tc.body)
 		require.Equal(t, tc.status, w.Code, tc.path)
 		require.Len(t, rec.events, 1, tc.path)
@@ -187,4 +197,38 @@ func TestSnapshotRefusalsMapToStatus(t *testing.T) {
 	backend = &fakeBackend{authorizeErr: svc.ErrNotFound}
 	w = collectorSnapshot(&Handlers{Service: backend}, `{}`)
 	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestUpdateAuditsOnlyEffectiveChanges(t *testing.T) {
+	rec := &fakeAudit{}
+	backend := &fakeBackend{updateChanges: svc.UpdateChanges{Removed: []string{"old"}, LocationChanged: true}}
+	w := operatorRequest(t, &Handlers{Service: backend, Audit: rec}, "PATCH", "/integrations/"+integrationID.String(), `{"remove_namespaces":["old"],"location_id":null}`)
+	require.Equal(t, 200, w.Code, w.Body.String())
+	require.Len(t, rec.events, 1)
+	require.Equal(t, map[string]any{"added": []string{}, "removed": []string{"old"}, "name_changed": false, "location_changed": true}, rec.events[0].Details)
+	require.Equal(t, "null", string(backend.updateReq.LocationID), "an explicit null reaches the service, distinct from an absent field")
+
+	rec = &fakeAudit{}
+	backend = &fakeBackend{}
+	w = operatorRequest(t, &Handlers{Service: backend, Audit: rec}, "PATCH", "/integrations/"+integrationID.String(), `{"add_namespaces":["prod"]}`)
+	require.Equal(t, 200, w.Code)
+	require.Empty(t, rec.events, "a delta that changed nothing is not audited")
+	require.Nil(t, backend.updateReq.LocationID, "an absent location_id keeps the location")
+
+	w = operatorRequest(t, &Handlers{Service: &fakeBackend{}}, "PATCH", "/integrations/"+integrationID.String(), `{"namespaces":["prod"]}`)
+	require.Equal(t, 400, w.Code, "the full list is not accepted; edits are deltas")
+}
+
+func TestNamespacesRoute(t *testing.T) {
+	w := operatorRequest(t, &Handlers{Service: &fakeBackend{}}, "GET", "/integrations/"+integrationID.String()+"/namespaces", "")
+	require.Equal(t, 200, w.Code)
+	require.JSONEq(t, `{"items":[{"namespace":"prod","state":"active","home":true,"services":2,"linked_services":1}]}`, w.Body.String())
+}
+
+func TestSnapshotRacingAnEditIsRetriedSoon(t *testing.T) {
+	backend := &fakeBackend{snapshotErr: svc.ConfigChanged{Namespace: "gone"}}
+	w := collectorSnapshot(&Handlers{Service: backend}, `{"revision":0,"namespaces":["prod","gone"],"resources":[]}`)
+	require.Equal(t, http.StatusConflict, w.Code)
+	require.Equal(t, "10", w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), "gone")
 }

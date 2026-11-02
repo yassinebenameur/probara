@@ -11,11 +11,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -109,7 +112,7 @@ func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastRe
 type httpError struct {
 	Status     int
 	Body       string
-	RetryAfter time.Duration // only for 429/503 with a usable Retry-After
+	RetryAfter time.Duration // only for 409/429/503 with a usable Retry-After
 }
 
 func (e *httpError) Error() string {
@@ -152,8 +155,10 @@ func nextDelay(err error) time.Duration {
 
 // platformRequest sends one authenticated request and returns the body of a
 // 2xx response (at most maxResponse bytes). A non-2xx response becomes an
-// *httpError carrying up to maxErrorBody bytes of the body and, for 429/503,
-// the requested Retry-After.
+// *httpError carrying up to maxErrorBody bytes of the body and, for 409, 429
+// and 503, the requested Retry-After. The API answers 409 with Retry-After
+// when a namespace was removed while this cycle scanned it, so the collector
+// re-reads its configuration within seconds instead of a full scan interval.
 func platformRequest(ctx context.Context, c *http.Client, method, target, token string, body []byte) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
 	if err != nil {
@@ -169,7 +174,8 @@ func platformRequest(ctx context.Context, c *http.Client, method, target, token 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		he := &httpError{Status: resp.StatusCode, Body: strings.TrimSpace(string(snippet))}
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+		switch resp.StatusCode {
+		case http.StatusConflict, http.StatusTooManyRequests, http.StatusServiceUnavailable:
 			if d, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok {
 				he.RetryAfter = d
 			}
@@ -179,6 +185,9 @@ func platformRequest(ctx context.Context, c *http.Client, method, target, token 
 	return io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 }
 
+// errPayloadTooLarge is an encoded snapshot above the API's body limit.
+var errPayloadTooLarge = errors.New("inventory payload exceeds 4 MiB")
+
 // encodeSnapshot serializes a snapshot, refusing one above the API's limit.
 func encodeSnapshot(snapshot discovery.Snapshot) ([]byte, error) {
 	b, err := json.Marshal(snapshot)
@@ -186,9 +195,67 @@ func encodeSnapshot(snapshot discovery.Snapshot) ([]byte, error) {
 		return nil, err
 	}
 	if len(b) > maxPayload {
-		return nil, fmt.Errorf("inventory payload exceeds 4 MiB")
+		return nil, errPayloadTooLarge
 	}
 	return b, nil
+}
+
+// fitSnapshot encodes a snapshot within the upload cap. The cap is part of a
+// pending namespace's all-or-nothing rule, like the resource budget in
+// Collect: when the full snapshot is too large, the active namespaces are
+// kept and each promoted pending namespace is added back in scan order only
+// if the payload still fits; one that does not is dropped with its resources
+// and reported as too_large. A big new namespace therefore never stops the
+// active ones, or a smaller pending one, from syncing. Active namespaces
+// alone above the cap still fail the cycle, as any active failure does.
+func fitSnapshot(s discovery.Snapshot, active []string) ([]byte, discovery.Snapshot, error) {
+	b, err := encodeSnapshot(s)
+	if !errors.Is(err, errPayloadTooLarge) {
+		return b, s, err
+	}
+	byNamespace := map[string][]discovery.Resource{}
+	for _, r := range s.Resources {
+		byNamespace[r.Namespace] = append(byNamespace[r.Namespace], r)
+	}
+	// Every promoted namespace starts out skipped and loses its entry when it
+	// fits, so each encoding below already carries the final skip list and the
+	// last successful one is exactly what is uploaded.
+	fitted := discovery.Snapshot{Revision: s.Revision, Namespaces: []string{}, Skipped: maps.Clone(s.Skipped), Resources: []discovery.Resource{}}
+	var promoted []string
+	for _, ns := range s.Namespaces {
+		if slices.Contains(active, ns) {
+			fitted.Namespaces = append(fitted.Namespaces, ns)
+			fitted.Resources = append(fitted.Resources, byNamespace[ns]...)
+			continue
+		}
+		promoted = append(promoted, ns)
+		if fitted.Skipped == nil {
+			fitted.Skipped = map[string]string{}
+		}
+		fitted.Skipped[ns] = discovery.SkipTooLarge
+	}
+	if b, err = encodeSnapshot(fitted); err != nil {
+		return nil, s, err
+	}
+	for _, ns := range promoted {
+		candidate := fitted
+		candidate.Namespaces = append(slices.Clip(fitted.Namespaces), ns)
+		candidate.Resources = append(slices.Clip(fitted.Resources), byNamespace[ns]...)
+		candidate.Skipped = maps.Clone(fitted.Skipped)
+		delete(candidate.Skipped, ns)
+		if len(candidate.Skipped) == 0 {
+			candidate.Skipped = nil
+		}
+		encoded, err := encodeSnapshot(candidate)
+		if errors.Is(err, errPayloadTooLarge) {
+			continue
+		}
+		if err != nil {
+			return nil, s, err
+		}
+		fitted, b = candidate, encoded
+	}
+	return b, fitted, nil
 }
 
 func cycle(ctx context.Context, c *http.Client, k discovery.Kubernetes, endpoint, tokenPath string) error {
@@ -209,10 +276,37 @@ func cycle(ctx context.Context, c *http.Client, k discovery.Kubernetes, endpoint
 	if err != nil {
 		return err
 	}
-	b, err = encodeSnapshot(snapshot)
+	b, snapshot, err = fitSnapshot(snapshot, cfg.Namespaces)
 	if err != nil {
 		return err
 	}
+	logSkipped(snapshot.Skipped)
 	_, err = platformRequest(ctx, c, http.MethodPost, endpoint+"/snapshot", token, b)
 	return err
+}
+
+// skipHints explains each skip reason in the collector log, where the
+// operator applying an access manifest looks first.
+var skipHints = map[string]string{
+	discovery.SkipForbidden: "cannot list Services/Ingresses there: the namespace does not exist or the access manifest is not applied",
+	discovery.SkipTooLarge:  "the namespace exceeds the per-scan limits (a 4 MiB list page, 2,000 resources or the 4 MiB upload)",
+	discovery.SkipDeadline:  "not scanned within this cycle's time budget",
+	discovery.SkipError:     "the Kubernetes API refused or failed the listing",
+}
+
+// logSkipped reports, in a stable order, each pending namespace left out of
+// this snapshot. It stays pending and is retried every cycle.
+func logSkipped(skipped map[string]string) {
+	names := make([]string, 0, len(skipped))
+	for ns := range skipped {
+		names = append(names, ns)
+	}
+	sort.Strings(names)
+	for _, ns := range names {
+		hint := skipHints[skipped[ns]]
+		if hint == "" {
+			hint = skipped[ns]
+		}
+		log.Printf("Pending namespace %s skipped (%s): %s", ns, skipped[ns], hint)
+	}
 }

@@ -464,7 +464,15 @@ or imported groups come back empty. Any other path that creates groups through
   atomic approval; `/discovery` is the operator UI. Setup and limitations:
   `docs/monitoring-discovery.md`, `website/lib/docs/pages/discovery.ts`.
 - Snapshot revisions and namespace completeness are checked under the integration
-  row lock. Failed/partial scans never mark resources missing. Removing inventory
+  row lock. Failed/partial scans never mark resources missing.
+- Integration namespaces are `namespaces` (active: every snapshot covers them,
+  one failure aborts the scan), `pending_namespaces` (added via PATCH, scanned
+  all-or-nothing, a failure only skips, promoted at the first full scan) and the
+  fixed `home_namespace` (always active). Edits are deltas under the same row
+  lock and never bump the revision. Any query that reads a service for
+  coverage, approval or linking filters `s.namespace = ANY(i.namespaces)`
+  (`Overview`, `lockService`), so a removed namespace leaves at once and only
+  retention deletes it. Removing inventory
   never removes monitors. Routing assessment uses `shared/alertrouting`;
   check freshness uses `monitorstate.EvidenceWindowSeconds` over
   `COALESCE(last_result_at, created_at)` (S-F1), as the absence watchdog does.

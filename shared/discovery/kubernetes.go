@@ -3,21 +3,34 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Kubernetes uses a caller-supplied TLS client and reloads the projected token
-// per request. A failed/expired paginated list aborts the ENTIRE snapshot.
+// per request. A failed/expired paginated list in an ACTIVE namespace aborts
+// the entire snapshot; a pending namespace is all-or-nothing and only skipped.
 type Kubernetes struct {
 	BaseURL string
 	Client  *http.Client
 	Token   func() (string, error)
+	// Reserve is the part of the cycle's deadline that pending namespaces may
+	// not use, kept for the upload; zero means PendingReserve.
+	Reserve time.Duration
 }
+
+// PendingReserve is how much of the cycle's time budget is kept for the
+// upload: pending namespaces stop being scanned once only this much remains,
+// and the rest are skipped with SkipDeadline.
+const PendingReserve = 30 * time.Second
+
 type kubeObject struct {
 	Metadata struct {
 		UID         string            `json:"uid"`
@@ -40,79 +53,167 @@ type kubeObject struct {
 	} `json:"spec"`
 }
 
+// scanError is a namespace scan failure with the skip reason it maps to when
+// the namespace is pending.
+type scanError struct {
+	reason string
+	err    error
+}
+
+func (e *scanError) Error() string { return e.err.Error() }
+func (e *scanError) Unwrap() error { return e.err }
+func failScan(reason, format string, args ...any) error {
+	return &scanError{reason: reason, err: fmt.Errorf(format, args...)}
+}
+
+// Collect scans the active namespaces first, exactly as configured: any
+// failure there aborts the scan. Then each pending namespace is scanned
+// all-or-nothing: on any failure its resources are dropped (truncated back to
+// what preceded it) and it is reported in Skipped instead of Namespaces.
 func (k Kubernetes) Collect(ctx context.Context, cfg Config) (Snapshot, error) {
-	out := Snapshot{Revision: cfg.Revision, Namespaces: cfg.Namespaces, Resources: []Resource{}}
+	out := Snapshot{Revision: cfg.Revision, Namespaces: slices.Clone(cfg.Namespaces), Resources: []Resource{}}
+	if out.Namespaces == nil {
+		out.Namespaces = []string{}
+	}
 	for _, ns := range cfg.Namespaces {
 		if !ValidNamespace(ns) {
 			return out, fmt.Errorf("invalid namespace")
 		}
-		for _, kind := range []string{"Service", "Ingress"} {
-			path := "/api/v1/namespaces/" + ns + "/services"
-			if kind == "Ingress" {
-				path = "/apis/networking.k8s.io/v1/namespaces/" + ns + "/ingresses"
-			}
-			continuation := ""
-			seen := map[string]bool{}
-			for {
-				token, err := k.Token()
-				if err != nil {
-					return out, err
-				}
-				endpoint := k.BaseURL + path + "?limit=200"
-				if continuation != "" {
-					endpoint += "&continue=" + url.QueryEscape(continuation)
-				}
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-				if err != nil {
-					return out, err
-				}
-				req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
-				resp, err := k.Client.Do(req)
-				if err != nil {
-					return out, fmt.Errorf("Kubernetes request failed: %w", err)
-				}
-				var page struct {
-					Metadata struct {
-						Continue string `json:"continue"`
-					} `json:"metadata"`
-					Items []kubeObject `json:"items"`
-				}
-				if resp.StatusCode != http.StatusOK {
-					resp.Body.Close()
-					return out, fmt.Errorf("list %s in %s returned HTTP %d", kind, ns, resp.StatusCode)
-				}
-				data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
-				resp.Body.Close()
-				if err != nil || len(data) > 4<<20 {
-					return out, fmt.Errorf("Kubernetes page exceeds limit or could not be read")
-				}
-				if err = json.Unmarshal(data, &page); err != nil || page.Items == nil {
-					return out, fmt.Errorf("invalid Kubernetes list response")
-				}
-				for _, obj := range page.Items {
-					if obj.Metadata.Namespace != ns {
-						return out, fmt.Errorf("Kubernetes namespace mismatch")
-					}
-					if obj.Metadata.Annotations["probara.io/discover"] == "false" {
-						continue
-					}
-					out.Resources = append(out.Resources, resourceFromObject(kind, obj))
-					if len(out.Resources) > MaxResources {
-						return out, fmt.Errorf("inventory exceeds %d resources", MaxResources)
-					}
-				}
-				continuation = page.Metadata.Continue
-				if continuation == "" {
-					break
-				}
-				if seen[continuation] {
-					return out, fmt.Errorf("repeated pagination token")
-				}
-				seen[continuation] = true
-			}
+		if err := k.scanNamespace(ctx, ns, &out.Resources); err != nil {
+			return out, err
 		}
 	}
-	return out, out.Validate(cfg.Namespaces)
+	// Pending namespaces run against a deadline that keeps Reserve of the
+	// cycle for the upload, so a slow new namespace never costs the snapshot.
+	pctx, cancel := ctx, context.CancelFunc(func() {})
+	if deadline, ok := ctx.Deadline(); ok {
+		reserve := k.Reserve
+		if reserve <= 0 {
+			reserve = PendingReserve
+		}
+		pctx, cancel = context.WithDeadline(ctx, deadline.Add(-reserve))
+	}
+	defer cancel()
+	skip := func(ns, reason string) {
+		if out.Skipped == nil {
+			out.Skipped = map[string]string{}
+		}
+		out.Skipped[ns] = reason
+	}
+	for _, ns := range cfg.Pending {
+		if slices.Contains(out.Namespaces, ns) || out.Skipped[ns] != "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return out, err // the whole cycle was cancelled
+		}
+		if pctx.Err() != nil {
+			skip(ns, SkipDeadline)
+			continue
+		}
+		if !ValidNamespace(ns) {
+			skip(ns, SkipError)
+			continue
+		}
+		mark := len(out.Resources)
+		err := k.scanNamespace(pctx, ns, &out.Resources)
+		if err == nil {
+			out.Namespaces = append(out.Namespaces, ns)
+			continue
+		}
+		out.Resources = out.Resources[:mark]
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
+		reason := SkipError
+		var se *scanError
+		if pctx.Err() != nil {
+			reason = SkipDeadline
+		} else if errors.As(err, &se) {
+			reason = se.reason
+		}
+		skip(ns, reason)
+	}
+	return out, out.Validate(cfg.Namespaces, cfg.Pending)
+}
+
+// scanNamespace lists the Services and Ingresses of one namespace, appending
+// them to resources. On error, what it appended is left in place; the caller
+// aborts (active) or truncates (pending).
+func (k Kubernetes) scanNamespace(ctx context.Context, ns string, resources *[]Resource) error {
+	for _, kind := range []string{"Service", "Ingress"} {
+		path := "/api/v1/namespaces/" + ns + "/services"
+		if kind == "Ingress" {
+			path = "/apis/networking.k8s.io/v1/namespaces/" + ns + "/ingresses"
+		}
+		continuation := ""
+		seen := map[string]bool{}
+		for {
+			token, err := k.Token()
+			if err != nil {
+				return err
+			}
+			endpoint := k.BaseURL + path + "?limit=200"
+			if continuation != "" {
+				endpoint += "&continue=" + url.QueryEscape(continuation)
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+			resp, err := k.Client.Do(req)
+			if err != nil {
+				return fmt.Errorf("Kubernetes request failed: %w", err)
+			}
+			var page struct {
+				Metadata struct {
+					Continue string `json:"continue"`
+				} `json:"metadata"`
+				Items []kubeObject `json:"items"`
+			}
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				reason := SkipError
+				if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+					reason = SkipForbidden
+				}
+				return failScan(reason, "list %s in %s returned HTTP %d", kind, ns, resp.StatusCode)
+			}
+			data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
+			resp.Body.Close()
+			if err != nil {
+				return fmt.Errorf("Kubernetes page could not be read: %w", err)
+			}
+			if len(data) > 4<<20 {
+				return failScan(SkipTooLarge, "Kubernetes page exceeds limit")
+			}
+			if err = json.Unmarshal(data, &page); err != nil || page.Items == nil {
+				return fmt.Errorf("invalid Kubernetes list response")
+			}
+			for _, obj := range page.Items {
+				if obj.Metadata.Namespace != ns {
+					return fmt.Errorf("Kubernetes namespace mismatch")
+				}
+				if obj.Metadata.Annotations["probara.io/discover"] == "false" {
+					continue
+				}
+				*resources = append(*resources, resourceFromObject(kind, obj))
+				if len(*resources) > MaxResources {
+					return failScan(SkipTooLarge, "inventory exceeds %d resources", MaxResources)
+				}
+			}
+			continuation = page.Metadata.Continue
+			if continuation == "" {
+				break
+			}
+			if seen[continuation] {
+				return fmt.Errorf("repeated pagination token")
+			}
+			seen[continuation] = true
+		}
+	}
+	return nil
 }
 func resourceFromObject(kind string, o kubeObject) Resource {
 	r := Resource{UID: o.Metadata.UID, Kind: kind, Name: o.Metadata.Name, Namespace: o.Metadata.Namespace, Service: o.Metadata.Annotations["probara.io/service"], Suggestions: []Suggestion{}}

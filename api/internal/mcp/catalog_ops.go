@@ -201,8 +201,11 @@ func discoveryTools() []spec {
 		{
 			Name:  "list_discovery_integrations",
 			Title: "List Kubernetes discovery integrations",
-			Description: "Connected Kubernetes clusters: each integration's namespace allowlist, the private location " +
-				"its internal checks run from, when its collector last uploaded a snapshot, and the inventory revision.",
+			Description: "Connected Kubernetes clusters: each integration's active namespaces (namespaces), the namespace " +
+				"its collector runs in (home_namespace), namespaces added but not scanned successfully yet " +
+				"(pending_namespaces, with the last skip reason and time in pending_status: forbidden, too_large, " +
+				"inventory_limit, deadline or error), the private location its internal checks run from, when its " +
+				"collector last uploaded a snapshot, and the inventory revision.",
 			Method: http.MethodGet, Route: "/discovery/integrations",
 		},
 		{
@@ -214,9 +217,41 @@ func discoveryTools() []spec {
 			Method: http.MethodPost, Route: "/discovery/integrations",
 			Body: typeOf[discoveryservice.CreateRequest](), Required: []string{"name", "namespaces"},
 			FieldDocs: map[string]string{
-				"namespaces":  "1-20 existing Kubernetes namespaces the collector may list Services and Ingresses in.",
+				"namespaces":  "1-20 existing Kubernetes namespaces the collector may list Services and Ingresses in; the first is home_namespace, where the collector runs, and can never be removed.",
 				"location_id": "Enabled private location (list_locations) for checks of cluster-internal services; null for none.",
 			},
+		},
+		{
+			Name:  "update_discovery_integration",
+			Title: "Update Kubernetes discovery integration",
+			Description: "Rename an integration, change its private location, or add/remove namespaces as a delta " +
+				"(adding a namespace already configured, or removing one that is not, does nothing). Added namespaces " +
+				"are pending until the collector lists them successfully (their Role/RoleBinding must exist; the " +
+				"Discovery page offers an access manifest), then turn active. A removed namespace leaves coverage at " +
+				"once; its discovered services and their monitor links are deleted after 7 days unless it is added back " +
+				"(links included). Monitors are never touched. The home namespace cannot be removed; at most 20 " +
+				"namespaces, active and pending together. Returns the updated integration (no token).",
+			Method: http.MethodPatch, Route: "/discovery/integrations/{id}",
+			PathDocs: integration,
+			Body:     typeOf[discoveryservice.UpdateRequest](),
+			FieldDocs: map[string]string{
+				"name":              "New name (1-100 characters); omit to keep.",
+				"location_id":       "Enabled private location (list_locations) for internal checks; null to clear; omit to keep.",
+				"add_namespaces":    "Namespaces to add (as pending). get_discovery_namespaces shows their state.",
+				"remove_namespaces": "Namespaces to remove (active or pending); never home_namespace.",
+			},
+			Destructive: true,
+		},
+		{
+			Name:  "get_discovery_namespaces",
+			Title: "Get Kubernetes discovery namespaces",
+			Description: "One integration's namespaces: home first, then active, then pending. Each has state " +
+				"(active or pending), home, for a pending one the last skip reason (forbidden: the namespace does not " +
+				"exist or its access manifest is not applied; too_large; inventory_limit; deadline; error) and " +
+				"checked_at, and counts of its discovered services and of those linked to a monitor. Use it before " +
+				"removing a namespace to see what leaves coverage.",
+			Method: http.MethodGet, Route: "/discovery/integrations/{id}/namespaces",
+			PathDocs: integration,
 		},
 		{
 			Name:  "delete_discovery_integration",
@@ -243,7 +278,8 @@ func discoveryTools() []spec {
 				"no_enabled_monitor, stale_checks, unrouted, freshness_unavailable, resource_missing(_grace), " +
 				"inventory_stale. The summary counts every service before filtering and ignores inventory_stale " +
 				"(reported once as inventory_stale); missing counts resource_missing, missing_grace " +
-				"resource_missing_grace. Coverage is not health.",
+				"resource_missing_grace. Only services in the integration's active namespaces are counted: a removed " +
+				"namespace leaves at once, a pending one joins after its first successful scan. Coverage is not health.",
 			Method: http.MethodGet, Route: "/discovery/integrations/{id}/coverage",
 			PathDocs: integration,
 			Query: []param{
