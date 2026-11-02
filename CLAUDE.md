@@ -467,7 +467,12 @@ or imported groups come back empty. Any other path that creates groups through
   row lock. Failed/partial scans never mark resources missing. Removing inventory
   never removes monitors. Routing assessment uses `shared/alertrouting`;
   check freshness uses `monitorstate.EvidenceWindowSeconds` over
-  `last_result_at` (S-F1), the same window as the absence watchdog.
+  `COALESCE(last_result_at, created_at)` (S-F1), as the absence watchdog does.
+- Discovery timing and bounds are the constants at the top of
+  `services/discovery/service.go` (grace, staleness, 7-day retention,
+  per-integration resource cap, snapshot rate limit); every age compares on the
+  DB clock (`sqlInterval`), never `time.Since`. `pruneInventory` deletes
+  inventory and links, never monitors.
 - Snapshot data is untrusted: `Snapshot.Validate` recomputes each suggestion's
   `Internal` flag (which gates approval from the shared fleet) and its key, and
   rejects Service targets other than the Service's own `.svc` name. Never read
@@ -481,6 +486,7 @@ or imported groups come back empty. Any other path that creates groups through
 - Operator writes record their own named audit events
   (`handlers/discovery`, `Handlers.Audit`); `/api/v1/discovery/` is in
   `auditItemizedPrefixes`, so a new operator write route must record one too.
+  An approval replay (`created: false`) writes nothing and is not audited.
 - The operator routes are MCP tools (`discoveryTools`,
   `api/internal/mcp/catalog_ops.go`); the collector routes sit in
   `notExposed` beside the other ingest routes.

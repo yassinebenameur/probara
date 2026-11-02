@@ -916,7 +916,24 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`PROBARA_URL`', 'None; required', 'HTTPS origin of the Probara API, with no path, query or credentials; anything else fails startup.'],
             ['`PROBARA_DISCOVERY_ID`', 'None; required', 'The discovery integration UUID.'],
             ['`PROBARA_DISCOVERY_TOKEN_FILE`', '`/var/run/probara/token`', 'File holding the integration-scoped collector token (the manifest mounts its Secret there).'],
+            ['`SSL_CERT_FILE`', 'Unset: the image\'s public CA bundle', 'PEM bundle the collector trusts for the Probara origin; needed only when that origin uses a certificate from an internal CA. The Kubernetes API connection always uses the service-account CA instead.'],
           ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The collector waits five minutes between cycles, or the `Retry-After` delay (1 second to 1 hour) when the API answers 429 or 503. A refused request is logged with the HTTP status and up to 512 bytes of the response body, which carries the API\'s reason (for example `rate_limited` or `inventory_limit`).',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Probara origin behind an internal CA: store the CA certificate in a ConfigMap in the collector\'s namespace (the first selected namespace), mount it, and point `SSL_CERT_FILE` at it. A bundle holding only that CA is enough, since the Probara origin is the only peer verified against it. The generated manifest does not include this, so reapply the patch after applying a regenerated manifest (reinstall rotates the token).',
+        },
+        {
+          type: 'code',
+          language: 'bash',
+          code:
+            "kubectl -n <first-namespace> create configmap probara-ca --from-file=ca.crt=internal-ca.pem\nkubectl -n <first-namespace> patch deployment probara-discovery-<integration-prefix> -p '{\"spec\":{\"template\":{\"spec\":{\n  \"volumes\":[{\"name\":\"probara-ca\",\"configMap\":{\"name\":\"probara-ca\"}}],\n  \"containers\":[{\"name\":\"collector\",\n    \"env\":[{\"name\":\"SSL_CERT_FILE\",\"value\":\"/etc/probara-ca/ca.crt\"}],\n    \"volumeMounts\":[{\"name\":\"probara-ca\",\"mountPath\":\"/etc/probara-ca\",\"readOnly\":true}]}]}}}}'",
         },
       ],
     },

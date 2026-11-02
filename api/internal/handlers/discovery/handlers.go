@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,8 +25,23 @@ type auditRecorder interface {
 	Record(event audit.Event)
 }
 
+// Backend is the discovery service as the handlers use it (*svc.Service).
+type Backend interface {
+	List(ctx context.Context, tenant uuid.UUID) ([]svc.Integration, error)
+	Create(ctx context.Context, tenant uuid.UUID, req svc.CreateRequest) (*svc.Integration, error)
+	Rotate(ctx context.Context, tenant, id uuid.UUID) (string, error)
+	Delete(ctx context.Context, tenant, id uuid.UUID) error
+	Overview(ctx context.Context, tenant, integration uuid.UUID, q svc.OverviewQuery) (svc.Overview, error)
+	Approve(ctx context.Context, tenant, service uuid.UUID, req svc.ApproveRequest) (uuid.UUID, bool, error)
+	Link(ctx context.Context, tenant, service, monitor uuid.UUID, key *string) error
+	Unlink(ctx context.Context, tenant, service, monitor uuid.UUID) error
+	CollectorConfig(ctx context.Context, id uuid.UUID, token string) (contract.Config, error)
+	AuthorizeSnapshot(ctx context.Context, id uuid.UUID, token string) error
+	Snapshot(ctx context.Context, id uuid.UUID, token string, snapshot contract.Snapshot) error
+}
+
 type Handlers struct {
-	Service *svc.Service
+	Service Backend
 	Log     *logger.Logger
 	// Audit records each successful operator write explicitly. Its success
 	// events replace the middleware's request-level ones ("/api/v1/discovery/"
@@ -79,11 +95,18 @@ func write(w http.ResponseWriter, status int, v any) {
 }
 func (h *Handlers) fail(w http.ResponseWriter, err error) {
 	var bad svc.Invalid
+	var limited svc.RateLimited
+	var full svc.InventoryFull
 	switch {
 	case errors.Is(err, svc.ErrNotFound):
 		apierrors.WriteError(w, 404, "not_found", "discovery resource not found")
 	case errors.Is(err, svc.ErrConflict):
 		apierrors.WriteError(w, 409, "conflict", err.Error())
+	case errors.As(err, &limited):
+		w.Header().Set("Retry-After", strconv.FormatInt(int64((limited.RetryAfter+time.Second-1)/time.Second), 10))
+		apierrors.WriteError(w, http.StatusTooManyRequests, "rate_limited", err.Error())
+	case errors.As(err, &full):
+		apierrors.WriteError(w, http.StatusUnprocessableEntity, "inventory_limit", err.Error())
 	case errors.As(err, &bad):
 		apierrors.WriteValidationError(w, bad.Error())
 	default:
@@ -113,9 +136,19 @@ func id(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
 	return v, true
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	return decodeBody(w, r, v, true)
+}
+
+// decodeBody reads one JSON object of at most 4 MiB. strict refuses unknown
+// fields; the collector snapshot is decoded leniently so a collector image
+// newer than the API still syncs (its known fields are validated in full by
+// Snapshot.Validate).
+func decodeBody(w http.ResponseWriter, r *http.Request, v any, strict bool) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(v); err != nil {
 		apierrors.WriteValidationError(w, "invalid request body")
 		return false
@@ -237,15 +270,19 @@ func (h *Handlers) approve(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	v, e := h.Service.Approve(r.Context(), t, i, req)
+	v, created, e := h.Service.Approve(r.Context(), t, i, req)
 	if e != nil {
 		h.fail(w, e)
 		return
 	}
 	// Approval creates the monitor without passing through POST /monitors, so
-	// the event is filed under the new monitor's own ID.
-	h.record(r, 200, "discovery.approve", "monitor", v, map[string]any{"discovered_service_id": i.String(), "suggestion_key": req.Key})
-	write(w, 200, map[string]uuid.UUID{"monitor_id": v})
+	// the event is filed under the new monitor's own ID. A replay that only
+	// returns the monitor already linked to the suggestion (retry, double
+	// click, earlier manual link) wrote nothing and is not audited.
+	if created {
+		h.record(r, 200, "discovery.approve", "monitor", v, map[string]any{"discovered_service_id": i.String(), "suggestion_key": req.Key})
+	}
+	write(w, 200, map[string]any{"monitor_id": v, "created": created})
 }
 func (h *Handlers) link(w http.ResponseWriter, r *http.Request) {
 	t, ok := tenant(w, r)
@@ -320,12 +357,13 @@ func (h *Handlers) snapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, e := h.Service.CollectorConfig(r.Context(), i, token); e != nil {
+	// Authenticate and rate-limit before reading a body of up to 4 MiB.
+	if e := h.Service.AuthorizeSnapshot(r.Context(), i, token); e != nil {
 		h.fail(w, e)
 		return
 	}
 	var req contract.Snapshot
-	if !decode(w, r, &req) {
+	if !decodeBody(w, r, &req, false) {
 		return
 	}
 	if e := h.Service.Snapshot(r.Context(), i, token, req); e != nil {

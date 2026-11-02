@@ -313,6 +313,11 @@ They upload bounded complete snapshots with an integration-scoped token to
 `/api/v1/discovery-collectors/{id}/snapshot`. The API serializes reconciliation
 under the integration row lock and rejects stale revisions. Partial scans never
 mark resources missing; server receipt time determines inventory freshness.
+Snapshots that reach reconciliation (applied, or refused with 422) are limited
+to one per minute per integration (429 with `Retry-After`), stored inventory to
+10,000 resources per integration (422), and the snapshot transaction prunes
+resources missing for 7 days and services left without resources (linked ones
+once absent for 7 days, with their links).
 
 The API stores discovered services/resources and explicit monitor links. Operator
 approval creates a regular monitor plus its initial state interval and assignments

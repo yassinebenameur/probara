@@ -10,8 +10,15 @@ It is not a measure of all your infrastructure or an application-quality score.
 1. Upgrade the API and apply migration `000098_monitoring_discovery` using the
    normal migration workflow. Deploy the web application from the same revision.
 2. As an editor or admin, select **Connect cluster**. Enter a cluster name and
-   1–20 existing namespaces. Optionally select an existing private check location.
+   1–20 existing namespaces (entering more shows an error naming how many to
+   remove; nothing is dropped). Optionally select an existing private check
+   location.
 3. Enter the externally reachable **HTTPS API origin** and the collector image.
+   The image field is prefilled with the published repository
+   (`ghcr.io/yassinebenameur/probara-discovery-collector:`); add your release
+   version as the tag, or replace it with your own build. The browser remembers
+   the image of the last downloaded manifest: a published image comes back
+   without its tag (it named the previous release), an image of your own as is.
    Download the generated manifest. Its Secret contains an integration-scoped
    random token, available only at creation or rotation. Keep the file private.
 4. Apply it to the intended cluster. The collector runs in the first selected
@@ -55,10 +62,32 @@ need these when writing your own manifest:
 | `PROBARA_URL` | none (required) | HTTPS origin of the Probara API, with no path, query or credentials |
 | `PROBARA_DISCOVERY_ID` | none (required) | The integration's UUID |
 | `PROBARA_DISCOVERY_TOKEN_FILE` | `/var/run/probara/token` | File holding the integration's collector token (the mounted Secret) |
+| `SSL_CERT_FILE` | unset (the image's public CA bundle) | PEM bundle trusted for the Probara origin; only for an origin behind an internal CA |
 
 The collector reaches the Kubernetes API through the in-cluster
 `KUBERNETES_SERVICE_HOST`/`KUBERNETES_SERVICE_PORT` and the mounted
 service-account CA and token.
+
+### Probara behind an internal CA
+
+The collector verifies the Probara origin against the public CA roots in its
+image. If the origin's certificate comes from an internal CA, put that CA in a
+ConfigMap in the collector's namespace (the first selected namespace), mount
+it, and set `SSL_CERT_FILE` to the mounted file. A bundle holding only that CA
+is enough: the Probara origin is the only peer verified against it (the
+Kubernetes API connection uses the service-account CA).
+
+```sh
+kubectl -n <first-namespace> create configmap probara-ca --from-file=ca.crt=internal-ca.pem
+kubectl -n <first-namespace> patch deployment probara-discovery-<integration-prefix> -p '{"spec":{"template":{"spec":{
+  "volumes":[{"name":"probara-ca","configMap":{"name":"probara-ca"}}],
+  "containers":[{"name":"collector",
+    "env":[{"name":"SSL_CERT_FILE","value":"/etc/probara-ca/ca.crt"}],
+    "volumeMounts":[{"name":"probara-ca","mountPath":"/etc/probara-ca","readOnly":true}]}]}}}}'
+```
+
+The generated manifest does not include this, so reapply the patch after
+applying a regenerated manifest (reinstalling rotates the token).
 
 Apply the downloaded file using the intended kubeconfig context:
 
@@ -106,8 +135,15 @@ The discovery collector is not a check worker.
   integration** under one service. Without this annotation, the identity is
   namespace/kind/name. Resources retain Kubernetes UIDs and first/last-seen times.
   A recreated resource with a new UID can therefore join the same service while
-  the old resource remains marked missing. Changing the grouping annotation
-  moves the resource; existing monitor links are not silently reassigned.
+  the old resource remains marked missing (until it is pruned after 7 days).
+  Changing the grouping annotation moves the resource; existing monitor links
+  are not silently reassigned. The old service, now empty, is deleted at once
+  when nothing links to it; with links it stays and is reported missing (grace,
+  then missing) until 7 days after it last had a present resource, when it is
+  deleted with its links. Its expanded row says its resources moved: link the
+  monitors to the new service and unlink them from the old one. Reverting the
+  grouping within that time moves the resources back and clears the missing
+  state.
 
 Example Service annotations:
 
@@ -142,25 +178,28 @@ private location; an Ingress hostname does not imply public accessibility.
 
 Creation, initial state interval, location/channel assignments, and the inventory
 link commit atomically. Repeating an approval for an already linked suggestion
-returns the existing monitor. An exact target/location match is refused with a
+returns the existing monitor with `"created": false` (the first approval
+returns `"created": true`); a replay writes nothing and records no
+`discovery.approve` audit event. An exact target/location match is refused with a
 request to link the existing monitor. This is conservative duplicate prevention
 for discovery approvals, not a global uniqueness constraint on monitor CRUD.
 
 Unlinking does not delete the monitor. Removing an integration deletes its
-inventory and links, but retains monitors and result history. There is no
-automatic deletion or target rewrite when a resource changes or disappears.
+inventory and links, but retains monitors and result history. Retention (see
+below) deletes inventory rows and, for a long-empty service, its links, never a
+monitor. There is no target rewrite when a resource changes or disappears.
 
 ## Interpret coverage
 
 | Finding | Meaning |
 |---|---|
 | No enabled monitor linked | No explicit link points to a nondeleted, enabled monitor. An unlinked match remains a candidate. |
-| No recent results | An enabled linked non-group monitor has no result received by the platform within its S-F1 freshness window: `max(90 seconds, 3 × interval)`, or `interval + grace_period_seconds` for push monitors (`monitorstate.EvidenceWindowSeconds`, the same window the absence watchdog uses). Worker-reported timestamps are not used. |
+| No recent results | An enabled linked non-group monitor has no result received by the platform within its S-F1 freshness window: `max(90 seconds, 3 × interval)`, or `interval + grace_period_seconds` for push monitors (`monitorstate.EvidenceWindowSeconds`, the same window the absence watchdog uses). Like the watchdog, the age runs from the last result, or from monitor creation before the first one, so a just-approved monitor is fresh. Worker-reported timestamps are not used. |
 | No reachable alert channel | The shared alert-routing rules find no active destination, including group roll-up rules. This does not test delivery to the external provider. |
 | Group freshness not assessed | Group state is derived rather than checked. Link leaf checks to assess their result freshness. |
-| Inventory stale | No complete snapshot has arrived for 15 minutes, or no snapshot has ever arrived. New approvals are blocked. |
-| Resource missing, grace | All resources for the service are absent from a complete snapshot, with at least one missing for less than 15 minutes. |
-| Resource missing | All resources have remained absent past the grace period. Monitors remain intact. |
+| Inventory stale | No complete snapshot has arrived for 15 minutes, or no snapshot has ever arrived (database clock). New approvals are blocked; linking existing monitors is not. It is a fact of the whole integration: the response reports it once (`inventory_stale`) and prefixes it to every row, but the summary counts, the gaps-only filter and the gaps sort ignore it. |
+| Resource missing, grace | All resources for the service are absent from a complete snapshot, with at least one missing for less than 15 minutes, or the service's last present resource went missing or moved away (a grouping change) less than 15 minutes ago. Counted in `summary.missing_grace`. |
+| Resource missing | All resources have remained absent past the grace period. Counted in `summary.missing`. Monitors remain intact. |
 
 Observed monitor health is displayed separately from coverage. A failing but
 fresh, routed monitor can have no gaps in these assessed dimensions. A successful
@@ -193,8 +232,41 @@ missing; malformed or incomplete uploads do not. Limits are 20 integrations per
 workspace, 20 namespaces and 2,000 resources per scan, 32 suggestions per resource,
 4 MiB per Kubernetes page and uploaded snapshot. The collector retains the first
 32 distinct suggestions per resource; this is a bounded suggestion list, not
-proof of full endpoint coverage. Missing historical resources remain stored until
-the integration is removed.
+proof of full endpoint coverage.
+
+The API processes at most one snapshot per minute per integration
+(`discovery_integrations.last_attempt_at`): applied ones, and ones refused with
+422 `inventory_limit` after doing the reconciliation work, so a refusal cannot
+be repeated back to back while holding the integration lock. An earlier one
+gets 429 `rate_limited` with `Retry-After` in whole seconds; the token and this
+limit are checked before the body is read, and again under the row lock. The
+cheap refusals (400, 409) do not count. The
+collector waits for `Retry-After` (bounded to 1 second–1 hour) on 429 or 503
+instead of its five-minute interval, and logs every refusal with its status and
+up to 512 bytes of the response body. Unknown JSON fields in a snapshot are
+ignored, so a newer collector image keeps syncing with an older API.
+
+Retention, applied in the snapshot transaction (constants in
+`api/internal/services/discovery/service.go`, all ages on the database clock):
+
+- A resource keeps the time it first went missing; once that is more than
+  7 days ago (`MissingRetention`) the resource is deleted.
+- A service is absent from the first complete snapshot without a present
+  resource of it (`discovered_services.absent_since`, maintained before
+  resources are pruned). Left with no stored resources, it is deleted at once
+  when no monitor is linked to it. A linked one stays (reported missing after
+  its 15-minute grace) until it has been absent for 7 days, then is deleted
+  with its links. One emptied by the 7-day pruning alone has been absent that
+  long already, so it goes with its links straight away; one whose last present
+  resource moved away gets the full 7 days, even if a sibling resource is
+  pruned in the same snapshot.
+- An integration stores at most 10,000 resources (`MaxStoredResources`),
+  present and missing together, counted after reconciliation and pruning. A
+  snapshot that would exceed it is refused with 422 `inventory_limit` and
+  rolled back (inventory, revision and last-seen time unchanged; only the
+  rate-limit attempt time is kept). Wait for retention, or connect a
+  replacement integration with fewer namespaces (configuration is immutable).
+- Monitors and their history are never deleted.
 
 Configuration is immutable in this first release. To change namespaces or grouping
 scope, create a replacement integration and explicitly link existing monitors.
@@ -224,16 +296,35 @@ Collectors use only their scoped bearer token on:
 - `GET /api/v1/discovery-collectors/{id}/config`
 - `POST /api/v1/discovery-collectors/{id}/snapshot`
 
+The snapshot route answers 204 when applied, 401 for a missing or malformed
+bearer, 404 for an unknown integration or wrong token, 400 for an invalid body,
+409 for a stale revision, 429 `rate_limited` and 422 `inventory_limit` (see
+above). `POST /api/v1/discovery/services/{id}/approve` returns
+`{"monitor_id": …, "created": true|false}`. In the coverage response,
+`summary.missing` counts `resource_missing` only and `summary.missing_grace`
+counts `resource_missing_grace`.
+
 A collector token cannot use ordinary authenticated APIs or create monitors.
-Read-only users can inspect coverage but cannot obtain/rotate credentials or
-mutate inventory links. Snapshot data is untrusted and is never executed as a
-check without operator approval and normal worker network guards. The API
+Only its SHA-256 hash is stored (`discovery_integrations.token_hash`); the
+plaintext is shown only at creation or rotation. If a manifest or token leaks,
+rotate the token (or delete the integration), apply the new manifest, and
+review the inventory and recent approvals for resources that do not exist in
+the cluster. Read-only users can inspect coverage but cannot obtain/rotate
+credentials or mutate inventory links. Snapshot data is untrusted and is never
+executed as a check without operator approval. The API
 derives which targets are internal instead of trusting the collector: every
 Service suggestion (which must target that Service's own
 `<name>.<namespace>.svc` address), plus Ingress hosts that are single-label,
 IP literals, or end in `.svc`, `.cluster.local`, `.local` or `.internal`.
 Internal targets can only be approved with a private location. Ingress
 suggestions must be `http(s)://host/` without a port or path.
+
+The internal flag is a routing hint, not an SSRF control. It is decided from
+the name alone, so a public-looking Ingress host that resolves to a private
+address is classed external and can be approved onto the shared fleet. Set
+`HTTP_BLOCK_PRIVATE_IPS=true` on every fleet that runs discovered checks (the
+code default is `false`), and give a private location only the cluster ranges
+it needs through `HTTP_ALLOWED_CIDRS`.
 
 ## Verify
 
@@ -254,7 +345,7 @@ For a real-cluster acceptance test, use a disposable namespace: deploy a small
 HTTP service with the health annotations and an Ingress; connect that namespace;
 verify the internal and external suggestions; approve the internal check with a
 reachable private location; re-submit approval and verify the monitor ID stays
-the same; unlink and relink it; remove the Service and verify missing/grace state
+the same and `created` is `false`; unlink and relink it; remove the Service and verify missing/grace state
 after the next scan; restore it and verify service identity and monitor history
 remain. Revoke the collector's Ingress-list permission and confirm inventory is
 retained, then becomes stale rather than marking all resources missing.

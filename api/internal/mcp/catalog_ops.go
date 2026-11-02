@@ -241,7 +241,9 @@ func discoveryTools() []spec {
 				"Services/Ingresses with suggested HTTP/TCP checks (key, target, internal), linked monitors (enabled, " +
 				"state, fresh evidence, alert routing), existing monitors matching a suggestion (candidates) and gaps: " +
 				"no_enabled_monitor, stale_checks, unrouted, freshness_unavailable, resource_missing(_grace), " +
-				"inventory_stale. The summary counts every service before filtering. Coverage is not health.",
+				"inventory_stale. The summary counts every service before filtering and ignores inventory_stale " +
+				"(reported once as inventory_stale); missing counts resource_missing, missing_grace " +
+				"resource_missing_grace. Coverage is not health.",
 			Method: http.MethodGet, Route: "/discovery/integrations/{id}/coverage",
 			PathDocs: integration,
 			Query: []param{
@@ -255,8 +257,8 @@ func discoveryTools() []spec {
 			Name:  "approve_discovery_suggestion",
 			Title: "Approve discovery suggestion",
 			Description: "Create a monitor (tagged \"discovered\") from one suggestion of a discovered service, together " +
-				"with its location, channels and inventory link. Idempotent per suggestion: approving again returns the " +
-				"monitor already linked. Refused while the inventory is stale, for an internal target without a private " +
+				"with its location, channels and inventory link. Returns monitor_id and created. Idempotent per " +
+				"suggestion: approving again returns the monitor already linked with created false. Refused while the inventory is stale, for an internal target without a private " +
 				"location, and when an existing monitor checks the target from that location (link it instead).",
 			Method: http.MethodPost, Route: "/discovery/services/{id}/approve",
 			PathDocs: service,

@@ -922,11 +922,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/discovery/integrations/{id}/coverage`",
-              "Authenticated; `page`, `q` (service or namespace), `gaps=true`, `sort=name|gaps` apply across all services; `summary` is unfiltered",
+              "Authenticated; `page`, `q` (service or namespace), `gaps=true`, `sort=name|gaps` apply across all services; `summary` is unfiltered. `summary.missing` counts `resource_missing` only, `summary.missing_grace` counts `resource_missing_grace`. `inventory_stale` is reported once at the top level and prefixed to every row's `gaps`, but the summary counts, `gaps=true` and `sort=gaps` ignore it",
             ],
             [
               "`POST /api/v1/discovery/services/{id}/approve`",
-              "Write access; create and link a monitor from a suggestion",
+              "Write access; create and link a monitor from a suggestion. Returns `{monitor_id, created}` with 200; a repeat for an already linked suggestion returns that monitor with `created: false`, writes nothing and is not audited",
             ],
             [
               "`POST /api/v1/discovery/services/{id}/links`, `DELETE …/links/{monitorID}`",
@@ -937,6 +937,11 @@ export const API_PAGE: DocPage = {
               "Integration-scoped collector token only (Bearer); never valid on other routes",
             ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "`POST /api/v1/discovery-collectors/{id}/snapshot` returns 204 when the snapshot is applied, 401 for a missing or malformed bearer, 404 for an unknown integration or wrong token, 400 for an invalid body (unknown JSON fields are ignored, so a newer collector still syncs; known fields are fully validated), 409 for a stale or replayed revision, 429 `rate_limited` with `Retry-After` (whole seconds) when a snapshot was applied, or refused with 422, less than 60 seconds earlier, and 422 `inventory_limit` when the integration would store more than 10,000 resources after reconciliation. A refused snapshot leaves the inventory, revision and last-seen time unchanged; a 422 still counts against the rate limit, since it did the reconciliation work. The token and the rate limit are checked before the body of up to 4 MiB is read.",
         },
       ],
     },
