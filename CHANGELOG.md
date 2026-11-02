@@ -1,3 +1,18 @@
+# [2.0.0-alpha.10](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.9...v2.0.0-alpha.10) (2026-11-02)
+
+
+### Bug Fixes
+
+* **discovery:** bound stored inventory and rate-limit collector snapshots ([78c10f2](https://github.com/yassinebenameur/probara/commit/78c10f2ca0dc21bbe5fbad3a8228f3dee74c0844))
+* **web:** surface discovery form errors and keep coverage pagination in range ([a9bd422](https://github.com/yassinebenameur/probara/commit/a9bd422e71daeef934c3aa8a8a03d4948ed2428e))
+
+
+### Features
+
+* **discovery:** Kubernetes discovery and monitoring coverage ([96b5d9c](https://github.com/yassinebenameur/probara/commit/96b5d9c537f11bd0c3c9a041a77c6e4eaa6dea32))
+* **discovery:** make integration namespaces editable without breaking scans ([5a2037c](https://github.com/yassinebenameur/probara/commit/5a2037c898c81729cc675cc2a23a079c672e7016))
+* **web:** edit a discovery cluster's name, location and namespaces ([857ccb9](https://github.com/yassinebenameur/probara/commit/857ccb9508cd9b25fec2f3370960ccc9bf91984d))
+
 # [2.0.0-alpha.9](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.8...v2.0.0-alpha.9) (2026-10-28)
 
 
