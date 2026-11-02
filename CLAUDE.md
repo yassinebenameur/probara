@@ -36,9 +36,10 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   (take the next free number), applied by `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
   Compose job, Helm a post-install/upgrade hook Job
-- `cmd/` — `migrate` plus one-off admin tools in `cmd/admin/` (`cmd/admin`
-  itself upserts a superadmin, like the first-user form; VAPID keypair
-  minting, secret encryption backfills)
+- `cmd/` — `migrate`, `discovery-collector` (the in-cluster Kubernetes
+  inventory collector, own image), plus one-off admin tools in `cmd/admin/`
+  (`cmd/admin` itself upserts a superadmin, like the first-user form; VAPID
+  keypair minting, secret encryption backfills)
 - `collector/` — OCB manifest for `probara-collector`, the minimal OTel
   Collector distribution that agent monitors install on hosts (built by
   `scripts/build-collector.sh` into `static/collector/`; no in-repo agent code)
@@ -63,7 +64,7 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
 - `docs/` — `architecture.md` (see below), `state-semantics.md`,
   `auth-and-rbac.md`, `location-worker-auth.md`, `correctness-notes.md`,
-  `testing.md` (test suites and CI jobs)
+  `testing.md` (test suites and CI jobs), `monitoring-discovery.md`
 - `helm/monitoring-platform/` — chart; `docker-compose.yml` — full local stack;
   `infra/` — dev infra config (dex for the SSO profile)
 
@@ -452,6 +453,51 @@ or imported groups come back empty. Any other path that creates groups through
   session only, outside the write gate, with their own audit events.
 - `tools/list` filtering by capability is UX; enforcement is the inner
   dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
+
+## Kubernetes discovery
+
+- `cmd/discovery-collector` reads only Services/Ingresses in configured namespaces
+  and sends bounded complete snapshots over HTTPS using an integration-scoped
+  token. It does not execute checks or receive database/NATS/platform credentials.
+- `shared/discovery` owns the snapshot contract and Kubernetes translation;
+  `api/internal/services/discovery` owns reconciliation, explicit links and
+  atomic approval; `/discovery` is the operator UI. Setup and limitations:
+  `docs/monitoring-discovery.md`, `website/lib/docs/pages/discovery.ts`.
+- Snapshot revisions and namespace completeness are checked under the integration
+  row lock. Failed/partial scans never mark resources missing.
+- Integration namespaces are `namespaces` (active: every snapshot covers them,
+  one failure aborts the scan), `pending_namespaces` (added via PATCH, scanned
+  all-or-nothing, a failure only skips, promoted at the first full scan) and the
+  fixed `home_namespace` (always active). Edits are deltas under the same row
+  lock and never bump the revision. Any query that reads a service for
+  coverage, approval or linking filters `s.namespace = ANY(i.namespaces)`
+  (`Overview`, `lockService`), so a removed namespace leaves at once and only
+  retention deletes it. Removing inventory
+  never removes monitors. Routing assessment uses `shared/alertrouting`;
+  check freshness uses `monitorstate.EvidenceWindowSeconds` over
+  `COALESCE(last_result_at, created_at)` (S-F1), as the absence watchdog does.
+- Discovery timing and bounds are the constants at the top of
+  `services/discovery/service.go` (grace, staleness, 7-day retention,
+  per-integration resource cap, snapshot rate limit); every age compares on the
+  DB clock (`sqlInterval`), never `time.Since`. `pruneInventory` deletes
+  inventory and links, never monitors.
+- Snapshot data is untrusted: `Snapshot.Validate` recomputes each suggestion's
+  `Internal` flag (which gates approval from the shared fleet) and its key, and
+  rejects Service targets other than the Service's own `.svc` name. Never read
+  a reachability decision from collector input.
+- Candidate matching and the approval duplicate refusal share `targetForms` /
+  `targetMatchSQL` (`services/discovery/service.go`); change them together.
+- Approval reuses `monitors.PostgresRepository.CreateInTx` to commit the monitor,
+  its initial timeline interval, location/channels and inventory link together.
+  Collector tokens authorize only collector config/snapshot routes, never monitor
+  creation. The Docker build matrix publishes its separate collector image.
+- Operator writes record their own named audit events
+  (`handlers/discovery`, `Handlers.Audit`); `/api/v1/discovery/` is in
+  `auditItemizedPrefixes`, so a new operator write route must record one too.
+  An approval replay (`created: false`) writes nothing and is not audited.
+- The operator routes are MCP tools (`discoveryTools`,
+  `api/internal/mcp/catalog_ops.go`); the collector routes sit in
+  `notExposed` beside the other ingest routes.
 
 ## Notifications
 

@@ -25,7 +25,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The API serves an MCP endpoint at `{API_ORIGIN}/api/v1/mcp` (Streamable HTTP, stateless, JSON responses). It exposes every operator capability of the [REST API](/docs/api/) as an MCP tool: monitors and their analytics, alerts, incidents, maintenance, locations and mesh, SLAs, status pages and templates, notification routing and channels, local AI, API keys, audit log, users and SSO mappings.",
+            "The API serves an MCP endpoint at `{API_ORIGIN}/api/v1/mcp` (Streamable HTTP, stateless, JSON responses). It exposes every operator capability of the [REST API](/docs/api/) as an MCP tool: monitors and their analytics, alerts, incidents, maintenance, locations and mesh, Kubernetes discovery, SLAs, status pages and templates, notification routing and channels, local AI, API keys, audit log, users and SSO mappings.",
         },
         {
           type: "paragraph",
@@ -158,6 +158,7 @@ export const MCP_PAGE: DocPage = {
             ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `bulk_acknowledge_alerts`, `bulk_resolve_alerts`, `label_alert_triage`, `wait_for_alert_events`"],
             ["Incidents", "create, update, state transitions, timeline entries, alert/monitor links, status-page publishing, AI analysis request/read/label"],
             ["Operations", "maintenance windows, private locations and their deploy info, `get_mesh`, `get_mesh_edge_history`, `probe_mesh_edge`"],
+            ["Kubernetes discovery", "`list_discovery_integrations`, `create_discovery_integration`, `update_discovery_integration` (rename, location, namespace add/remove; destructive), `get_discovery_namespaces`, `get_discovery_coverage`, `approve_discovery_suggestion`, monitor link/unlink, collector token rotation"],
             ["Reporting", "SLAs, live reports (`format` json/csv/pdf returns a file), issued reports"],
             ["Status pages", "pages, sections and settings, custom template draft/publish/revert, template library"],
             ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message)"],
@@ -188,7 +189,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the retired legacy agent endpoint and alert-policy routes (410); and the OAuth protocol routes themselves.",
+            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); and the OAuth protocol routes themselves.",
         },
       ],
     },

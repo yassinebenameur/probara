@@ -901,6 +901,43 @@ export const CONFIGURATION_PAGE: DocPage = {
       ],
     },
     {
+      id: 'discovery-collector',
+      title: 'Discovery collector settings',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'The [Kubernetes discovery](/docs/discovery/) collector (`probara-discovery-collector`) runs in the cluster from the manifest the setup form generates, which sets `PROBARA_URL` and `PROBARA_DISCOVERY_ID` and mounts the token Secret at the default `PROBARA_DISCOVERY_TOKEN_FILE` path; you only need these when writing your own manifest. It reaches the Kubernetes API through the in-cluster `KUBERNETES_SERVICE_HOST`/`KUBERNETES_SERVICE_PORT` and the mounted service-account CA and token.',
+        },
+        {
+          type: 'table',
+          columns: ['Environment variable', 'Default', 'Description'],
+          rows: [
+            ['`PROBARA_URL`', 'None; required', 'HTTPS origin of the Probara API, with no path, query or credentials; anything else fails startup.'],
+            ['`PROBARA_DISCOVERY_ID`', 'None; required', 'The discovery integration UUID.'],
+            ['`PROBARA_DISCOVERY_TOKEN_FILE`', '`/var/run/probara/token`', 'File holding the integration-scoped collector token (the manifest mounts its Secret there).'],
+            ['`SSL_CERT_FILE`', 'Unset: the image\'s public CA bundle', 'PEM bundle the collector trusts for the Probara origin; needed only when that origin uses a certificate from an internal CA. The Kubernetes API connection always uses the service-account CA instead.'],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The collector reads its configuration (active and pending namespaces) at the start of every cycle and waits five minutes between cycles, or the `Retry-After` delay (1 second to 1 hour) when the API answers 409, 429 or 503; the API sends a 10-second `Retry-After` with a 409 when a namespace was removed during the scan, and none for a stale revision. A refused request is logged with the HTTP status and up to 512 bytes of the response body, which carries the API\'s reason (for example `rate_limited` or `inventory_limit`). Pending namespaces are scanned after the active ones and stop 30 seconds before the two-minute cycle deadline; each one skipped is logged as `Pending namespace <ns> skipped (<reason>): <hint>` (see [Change namespaces](/docs/discovery/#namespaces)).',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Probara origin behind an internal CA: store the CA certificate in a ConfigMap in the collector\'s namespace (the integration\'s home namespace, the first one entered at setup), mount it, and point `SSL_CERT_FILE` at it. A bundle holding only that CA is enough, since the Probara origin is the only peer verified against it. The generated manifest does not include this, so reapply the patch after applying a regenerated manifest (reinstall rotates the token).',
+        },
+        {
+          type: 'code',
+          language: 'bash',
+          code:
+            "kubectl -n <home-namespace> create configmap probara-ca --from-file=ca.crt=internal-ca.pem\nkubectl -n <home-namespace> patch deployment probara-discovery-<integration-prefix> -p '{\"spec\":{\"template\":{\"spec\":{\n  \"volumes\":[{\"name\":\"probara-ca\",\"configMap\":{\"name\":\"probara-ca\"}}],\n  \"containers\":[{\"name\":\"collector\",\n    \"env\":[{\"name\":\"SSL_CERT_FILE\",\"value\":\"/etc/probara-ca/ca.crt\"}],\n    \"volumeMounts\":[{\"name\":\"probara-ca\",\"mountPath\":\"/etc/probara-ca\",\"readOnly\":true}]}]}}}}'",
+        },
+      ],
+    },
+    {
       id: 'maintenance-and-tooling',
       title: 'Maintenance, build, and test variables',
       blocks: [

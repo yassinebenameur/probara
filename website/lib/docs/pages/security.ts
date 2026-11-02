@@ -146,6 +146,11 @@ export const SECURITY_PAGE: DocPage = {
               'Opaque `pbm_at_` (1 hour) and `pbm_rt_` (30 days) values, SHA-256 hashed in `mcp_oauth_tokens`; refresh tokens rotate on every use with no reuse window',
               'Presenting a rotated refresh token or replaying an authorization code revokes the whole connection. Access tokens act as the consenting user, are accepted only on the MCP endpoint and requests it dispatches, and their read/write scope can only narrow the user\'s role. See [MCP authentication](/docs/mcp/#authentication).',
             ],
+            [
+              'Discovery collector token',
+              '32 random bytes; only its SHA-256 hash is stored, in `discovery_integrations.token_hash`. The plaintext is shown only in the response that creates the integration or rotates its token',
+              'Valid only on `/api/v1/discovery-collectors/{id}/*` for its own integration (config and snapshot upload), never on tenant APIs, so it cannot read coverage or create monitors. It lives in the Kubernetes Secret of the [generated manifest](/docs/discovery/#setup); delete the downloaded file after applying it. The access manifest offered after adding namespaces holds only Roles and RoleBindings, never the token. Rotating (or reinstalling) invalidates the old token at once.',
+            ],
           ],
         },
         {
@@ -238,6 +243,11 @@ export const SECURITY_PAGE: DocPage = {
               'Location credential',
               'API database and one location fleet',
               'Regenerate deployment info and replace every worker replica for that location.',
+            ],
+            [
+              'Discovery collector token',
+              'API database (hash only) and the collector Secret in one cluster',
+              'Rotate with `POST /api/v1/discovery/integrations/{id}/rotate-token` (or Reinstall in the UI), then apply the new manifest; the old token stops working immediately.',
             ],
             [
               'SMTP password / webhook HMAC secret',
@@ -371,6 +381,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Browser validation rejects a hostname if any returned address is blocked, reducing mixed public/private DNS selection risk.',
             'Use a [dedicated location worker](/docs/locations/#target-policy) for internal monitoring and grant that location only the internal CIDRs it owns.',
             'Do not globally disable blocking to monitor one private target.',
+            "[Kubernetes discovery](/docs/discovery/#limits) marks a suggestion internal from its name alone (Service addresses, IP literals, single-label names and `.svc`, `.cluster.local`, `.local`, `.internal` hosts) and requires a private location only for those. That flag is a routing hint, not an SSRF control: a public-looking Ingress host that resolves to a private address is classed external and can be approved onto the shared fleet. Keep `HTTP_BLOCK_PRIVATE_IPS=true` on every fleet that runs discovered checks, with `HTTP_ALLOWED_CIDRS` granting a private location only the cluster ranges it should reach.",
             'Treat `tls_skip_verify` and custom CA settings as scoped exceptions; prefer correct certificate chains and server names.',
             'Run workers without cloud instance metadata access and with a minimally privileged service account.',
           ],
@@ -646,6 +657,10 @@ go run ./cmd/admin/encrypt_existing_channels`,
             [
               'Location credential/deploy URL',
               'Regenerate/revoke the location credential, restart all location workers, and inspect NATS authorization/subject activity.',
+            ],
+            [
+              'Discovery collector token/manifest',
+              'Rotate the token (or delete the integration), apply the new manifest so the cluster Secret holds the new token, and review the integration\'s inventory, and any suggestion approved since the exposure, for resources that do not exist in the cluster: a token holder can submit invented Services and Ingresses within the configured namespaces. A token holder can only replace that integration\'s inventory (at most one processed snapshot a minute, refused ones included, and 10,000 stored resources); it cannot create or change monitors.',
             ],
             [
               'NATS platform credential or issuer seed',

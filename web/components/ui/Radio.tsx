@@ -15,6 +15,8 @@ export interface RadioProps extends NativeInputProps {
   label?: ReactNode;
   description?: ReactNode;
   size?: 'sm' | 'md';
+  /** Let the label column take the remaining width (full-width picker rows). */
+  stretch?: boolean;
   className?: string;
 }
 
@@ -34,6 +36,7 @@ export default function Radio({
   label,
   description,
   size = 'md',
+  stretch = false,
   disabled = false,
   className = '',
   ...inputProps
@@ -67,7 +70,7 @@ export default function Radio({
   return (
     <label className={`group/check inline-flex items-start gap-2.5 py-1 ${state} ${className}`.trim()}>
       {box}
-      <span className="min-w-0">
+      <span className={stretch ? 'min-w-0 flex-1' : 'min-w-0'}>
         {label !== undefined && <span className="block text-sm text-slate-200">{label}</span>}
         {description !== undefined && <span className="mt-0.5 block text-xs text-slate-500">{description}</span>}
       </span>

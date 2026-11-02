@@ -291,6 +291,7 @@ pull images yourself, use `:alpha` or an exact version: `:latest` is still
 | Private-location workers and the mesh | [Locations](https://probara-uptime.com/docs/locations/) · [`docs/location-worker-auth.md`](docs/location-worker-auth.md) |
 | Monitor types and their options | [Monitors](https://probara-uptime.com/docs/monitors/) · [`docs/prometheus-monitors.md`](docs/prometheus-monitors.md) |
 | Host metrics, collector installers, push heartbeats | [Agents](https://probara-uptime.com/docs/agents/) |
+| Kubernetes discovery and monitoring coverage | [Discovery](https://probara-uptime.com/docs/discovery/) · [`docs/monitoring-discovery.md`](docs/monitoring-discovery.md) |
 | Alert routing, incidents, AI triage | [Alerting](https://probara-uptime.com/docs/alerting/) · [Dependencies](https://probara-uptime.com/docs/dependencies/) · [SLAs](https://probara-uptime.com/docs/slas/) · [Status pages](https://probara-uptime.com/docs/status-pages/) |
 | Users, roles, SSO, API keys, audit, import | [Administration](https://probara-uptime.com/docs/administration/) · [Security](https://probara-uptime.com/docs/security/) |
 | REST API and MCP clients | [API](https://probara-uptime.com/docs/api/) · [MCP](https://probara-uptime.com/docs/mcp/) |

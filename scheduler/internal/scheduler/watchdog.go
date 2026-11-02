@@ -25,7 +25,6 @@ package scheduler
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -342,20 +341,7 @@ func (s *Scheduler) watchdogHeartbeatPass(ctx context.Context, monitorType strin
 			}
 			batchLen++
 			cursor = c.id
-			windowSeconds := monitorstate.FreshnessHorizonSeconds(intervalSeconds)
-			if monitorType == "push" {
-				// A pointer distinguishes an explicit grace of 0 (stale
-				// right after the interval) from an absent/malformed one
-				// (fall back to a full extra interval).
-				var cfg struct {
-					GracePeriodSeconds *int `json:"grace_period_seconds"`
-				}
-				grace := intervalSeconds
-				if err := json.Unmarshal(configJSON, &cfg); err == nil && cfg.GracePeriodSeconds != nil && *cfg.GracePeriodSeconds >= 0 {
-					grace = *cfg.GracePeriodSeconds
-				}
-				windowSeconds = intervalSeconds + grace
-			}
+			windowSeconds := monitorstate.EvidenceWindowSeconds(monitorType, intervalSeconds, configJSON)
 			c.deadline = c.lastSeen.Add(time.Duration(windowSeconds) * time.Second)
 			cands = append(cands, c)
 		}
