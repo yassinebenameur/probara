@@ -20,7 +20,13 @@ export interface DiscoveryService {
   resources: DiscoveryResource[];
   monitors: DiscoveryMonitor[]; gaps: string[]; candidates: Record<string, DiscoveryMonitor[]>;
 }
-export interface DiscoverySummary { services: number; covered: number; with_gaps: number; unmonitored: number; missing: number }
+export interface DiscoverySummary {
+  services: number; covered: number; with_gaps: number; unmonitored: number;
+  /** Services with a resource missing past the grace period (`resource_missing`). */
+  missing: number;
+  /** Services whose only missing resources are still within the grace period, when the API reports it. */
+  missing_grace?: number;
+}
 export interface DiscoveryCoverage {
   last_seen_at: string | null; inventory_stale: boolean;
   items: DiscoveryService[];
@@ -33,6 +39,17 @@ export type DiscoverySort = 'name' | 'gaps';
 export interface DiscoveryCoverageQuery { page: number; q?: string; gaps?: boolean; sort?: DiscoverySort }
 
 export const DISCOVERY_PAGE_SIZE = 50;
+
+/**
+ * Where to go when a page came back empty because the result set shrank under
+ * it (rows covered while working through "With gaps", a search narrowed): the
+ * last page that still has rows, or null when the response needs no move.
+ */
+export function pageAfterShrink(page: number, total: number, itemCount: number, pageSize = DISCOVERY_PAGE_SIZE): number | null {
+  if (itemCount > 0 || total <= 0 || page <= 1) return null;
+  const last = Math.max(1, Math.ceil(total / (pageSize || DISCOVERY_PAGE_SIZE)));
+  return last < page ? last : null;
+}
 /** Mirrors the API's inventory staleness bound. */
 export const INVENTORY_STALE_MS = 15 * 60 * 1000;
 
@@ -81,12 +98,73 @@ export function serviceSuggestions(service: DiscoveryService): { suggestion: Dis
   }
   return out;
 }
+/**
+ * The linked monitor that covers a suggestion: the one linked for its key, or
+ * else one linked to the service without a key (the row-level Link) that
+ * checks the same target, i.e. is among the suggestion's candidates.
+ */
+export function suggestionCover(service: Pick<DiscoveryService, 'monitors' | 'candidates'>, key: string): DiscoveryMonitor | undefined {
+  const keyed = service.monitors.find((m) => m.suggestion_key === key);
+  if (keyed) return keyed;
+  const candidates = service.candidates[key] || [];
+  return service.monitors.find((m) => m.suggestion_key === null && candidates.some((c) => c.id === m.id));
+}
+/** Present suggestions no linked monitor covers yet ("N to review"). */
+export function pendingSuggestionCount(service: DiscoveryService): number {
+  return serviceSuggestions(service).filter(({ suggestion }) => !suggestionCover(service, suggestion.key)).length;
+}
+/**
+ * Whether linking `monitorId` is a no-op the dialog should refuse: it is
+ * already linked to the service, unless a suggestion is being attached to a
+ * link that has none yet (the API then sets the link's suggestion key).
+ */
+export function linkBlocked(service: Pick<DiscoveryService, 'monitors'>, monitorId: string, suggestionKey?: string): boolean {
+  const link = service.monitors.find((m) => m.id === monitorId);
+  if (!link) return false;
+  return !(suggestionKey && link.suggestion_key === null);
+}
 export function suggestionTarget(s: DiscoverySuggestion): string {
   return s.port ? `${s.target}:${s.port}` : s.target;
 }
 
 const NAMESPACE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 export function validNamespace(ns: string): boolean { return ns.length > 0 && ns.length <= 63 && NAMESPACE.test(ns); }
+/** The API's per-integration namespace limit. */
+export const MAX_NAMESPACES = 20;
+/**
+ * The namespace field's error: invalid names and/or too many, or undefined when
+ * the list is acceptable. Only committed chips are name-checked; the draft
+ * still being typed counts toward the limit but is not flagged (`kube-` is on
+ * its way to `kube-system`). Callers still refuse an invalid draft on submit.
+ */
+export function namespaceFieldError(committed: string[], draft: string[] = []): string | undefined {
+  const problems: string[] = [];
+  const invalid = committed.filter((ns) => !validNamespace(ns));
+  if (invalid.length) problems.push(`Not a valid namespace: ${invalid.join(', ')}`);
+  const total = new Set([...committed, ...draft]).size;
+  if (total > MAX_NAMESPACES) problems.push(`At most ${MAX_NAMESPACES} namespaces — remove ${total - MAX_NAMESPACES}`);
+  return problems.length ? problems.join('. ') : undefined;
+}
+
+/** An expected HTTP status as typed: a whole number from 100 to 599, else null. */
+export function parseExpectedStatus(text: string): number | null {
+  const t = text.trim();
+  if (!/^\d+$/.test(t)) return null;
+  const n = Number(t);
+  return n >= 100 && n <= 599 ? n : null;
+}
+export interface ApproveFormValues {
+  name: string; status: string; locationId: string; mode: 'default' | 'custom'; channelIds: string[];
+}
+/** The approve form's inline errors, keyed by its field names; {} when it can be submitted. */
+export function approveFormErrors(values: ApproveFormValues, suggestion: Pick<DiscoverySuggestion, 'type' | 'internal'>): Partial<Record<keyof ApproveFormValues, string>> {
+  const errors: Partial<Record<keyof ApproveFormValues, string>> = {};
+  if (!values.name.trim()) errors.name = 'Enter a monitor name';
+  if (suggestion.type === 'http' && parseExpectedStatus(values.status) === null) errors.status = 'Enter a status between 100 and 599';
+  if (suggestion.internal && !values.locationId) errors.locationId = 'Choose a private location that can reach the cluster';
+  if (values.mode === 'custom' && values.channelIds.length === 0) errors.channelIds = 'Select at least one channel, or use the workspace defaults';
+  return errors;
+}
 /** Splits free text (commas, whitespace) into namespaces, keeping order and dropping repeats. */
 export function parseNamespaces(text: string): string[] {
   return [...new Set(text.split(/[\s,]+/).map((n) => n.trim().toLowerCase()).filter(Boolean))];
@@ -104,6 +182,21 @@ export function installCommands(integration: DiscoveryIntegration, context = 'yo
   };
 }
 
+/** The published collector repository (docker-build.yml); its tags are the release versions. */
+export const COLLECTOR_IMAGE_REPOSITORY = 'ghcr.io/yassinebenameur/probara-discovery-collector';
+/** The published repository, waiting for the release version tag. */
+export const COLLECTOR_IMAGE_PREFILL = `${COLLECTOR_IMAGE_REPOSITORY}:`;
+/**
+ * The image field's starting value from the one remembered by the last
+ * download. A published image goes back to the bare repository, so an upgrade
+ * never re-offers the previous release's tag; a custom image is kept.
+ */
+export function initialCollectorImage(saved: string): string {
+  const ref = saved.trim();
+  if (!ref || ref === COLLECTOR_IMAGE_REPOSITORY || ref.startsWith(COLLECTOR_IMAGE_PREFILL) || ref.startsWith(`${COLLECTOR_IMAGE_REPOSITORY}@`)) return COLLECTOR_IMAGE_PREFILL;
+  return ref;
+}
+
 /** Validates the install form; returns an error per field, or {} when a manifest can be built. */
 export function manifestInputErrors(origin: string, image: string): { origin?: string; image?: string } {
   const errors: { origin?: string; image?: string } = {};
@@ -113,16 +206,19 @@ export function manifestInputErrors(origin: string, image: string): { origin?: s
   } catch {
     errors.origin = 'Enter an HTTPS origin without a path, e.g. https://probara.example.com';
   }
-  if (!image.trim() || /\s/.test(image.trim())) errors.image = 'Enter an image reference your cluster can pull';
+  const ref = image.trim();
+  if (!ref || /\s/.test(ref)) errors.image = 'Enter an image reference your cluster can pull';
+  else if (/[:@]$/.test(ref)) errors.image = 'Add the image tag: this release’s version, such as 2.0.0';
   return errors;
 }
 
 // JSON documents are valid YAML. Values are serialized, never interpolated into
 // executable shell commands or YAML scalars. No secret is retained in storage.
 export function collectorManifest(integration: DiscoveryIntegration, origin: string, image: string, token: string): string {
+  const invalid = manifestInputErrors(origin, image);
+  if (invalid.origin) throw new Error('Enter an HTTPS API origin, without a path.');
+  if (invalid.image) throw new Error('Enter a collector image available to your cluster, with its tag.');
   const url = new URL(origin);
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('Enter an HTTPS API origin, without a path.');
-  if (!image.trim() || /\s/.test(image.trim())) throw new Error('Enter a collector image available to your cluster.');
   const name = collectorName(integration);
   const namespace = integration.namespaces[0];
   const metadata = { name, namespace };

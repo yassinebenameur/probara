@@ -11,11 +11,13 @@ import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import { SELECTED_SEGMENT } from '@/components/ui/roving';
 import { FOCUS_RING } from '@/components/ui/focus';
+import { saveDownload } from '@/components/slas/SlaVisuals';
 import { createDiscoveryIntegration } from '@/lib/api';
 import {
-  collectorManifest, errorMessage, installCommands, manifestInputErrors, parseNamespaces, validNamespace,
-  type DiscoveryIntegration,
+  collectorManifest, errorMessage, initialCollectorImage, installCommands, manifestInputErrors, MAX_NAMESPACES, namespaceFieldError,
+  parseNamespaces, validNamespace, type DiscoveryIntegration,
 } from '@/lib/discovery';
+import { TONE_TEXT } from '@/lib/status-tones';
 import type { Location } from '@/lib/types';
 
 // Per-viewer convenience only: the origin and image are not secrets and are
@@ -52,7 +54,9 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [origin, setOrigin] = useState(defaultOrigin);
-  const [image, setImage] = useState(() => remembered(IMAGE_KEY));
+  // The published repository with the tag left to type (a remembered published
+  // tag is dropped: it names the previous release), or a remembered own build.
+  const [image, setImage] = useState(() => initialCollectorImage(remembered(IMAGE_KEY)));
   const [touched, setTouched] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
@@ -70,18 +74,24 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
     (chips?.[Math.min(index, chips.length - 1)] ?? draftRef.current)?.focus();
   }, [namespaces]);
 
-  const invalidNamespaces = namespaces.filter((ns) => !validNamespace(ns));
+  // Every entry is kept, even past the limit: the field error says how many to
+  // remove and canCreate blocks, rather than silently dropping the overflow
+  // (namespaces cannot be changed after creation).
   const commitDraft = () => {
     const added = parseNamespaces(draft);
-    if (added.length) setNamespaces((current) => [...new Set([...current, ...added])].slice(0, 20));
+    if (added.length) setNamespaces((current) => [...new Set([...current, ...added])]);
     setDraft('');
   };
   const onNamespaceKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === ',' || e.key === ' ') { e.preventDefault(); commitDraft(); }
     if (e.key === 'Backspace' && !draft && namespaces.length) setNamespaces(namespaces.slice(0, -1));
   };
-  const allNamespaces = [...new Set([...namespaces, ...parseNamespaces(draft)])];
-  const canCreate = !saving && name.trim() !== '' && allNamespaces.length > 0 && allNamespaces.length <= 20 && allNamespaces.every(validNamespace);
+  const draftNamespaces = parseNamespaces(draft);
+  const allNamespaces = [...new Set([...namespaces, ...draftNamespaces])];
+  // The draft counts toward the limit but is name-checked only once committed
+  // (no error after each hyphen of `kube-system`); submit still refuses it.
+  const namespaceError = namespaceFieldError(namespaces, draftNamespaces);
+  const canCreate = !saving && name.trim() !== '' && allNamespaces.length > 0 && allNamespaces.every(validNamespace) && !namespaceError;
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
@@ -105,10 +115,7 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
     if (!integration || fieldErrors.origin || fieldErrors.image) return;
     try {
       const content = collectorManifest(integration, origin, image, integration.token);
-      const url = URL.createObjectURL(new Blob([content], { type: 'application/yaml' }));
-      const a = document.createElement('a');
-      a.href = url; a.download = installCommands(integration).file; a.click();
-      URL.revokeObjectURL(url);
+      saveDownload({ blob: new Blob([content], { type: 'application/yaml' }), filename: installCommands(integration).file });
       remember(ORIGIN_KEY, new URL(origin).origin); remember(IMAGE_KEY, image.trim());
       setDownloaded(true);
     } catch (e) {
@@ -118,6 +125,9 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
   const requestClose = () => { if (integration && !downloaded) setConfirmClose(true); else onClose(); };
 
   const step = integration ? 2 : 1;
+  // Step 2 opens on the first field still to fill: a missing origin, else a
+  // prefilled image that still needs its tag.
+  const focusImage = !fieldErrors.origin && fieldErrors.image !== undefined && image.trim().endsWith(':');
   const commands = integration ? installCommands(integration) : null;
 
   return (
@@ -146,14 +156,15 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
             <FormField
               label="Namespaces"
               required
-              description="The collector lists Services and Ingresses in these namespaces only (up to 20). They must already exist."
-              error={invalidNamespaces.length ? `Not a valid namespace: ${invalidNamespaces.join(', ')}` : undefined}
+              description={`The collector lists Services and Ingresses in these namespaces only (up to ${MAX_NAMESPACES}). They must already exist.`}
+              error={namespaceError}
             >
               {(field) => (
                 <div ref={chipsRef} className="input flex min-h-10 flex-wrap items-center gap-1.5 !py-1.5 focus-within:!border-[var(--focus)] focus-within:bg-control-hover focus-within:shadow-[0_0_0_1px_var(--focus)]">
                   {namespaces.map((ns, index) => (
-                    // Removable chip; an invalid namespace takes Pill's danger tint.
-                    <span key={ns} className={`inline-flex h-6 items-center gap-1 rounded-full pl-2.5 pr-0.5 font-mono text-xs ${validNamespace(ns) ? 'bg-well-hover text-slate-200' : 'bg-rose-500/[0.13] text-rose-300'}`}>
+                    // Removable chip; an invalid namespace, or one past the
+                    // limit, takes Pill's danger tint.
+                    <span key={ns} className={`inline-flex h-6 items-center gap-1 rounded-full pl-2.5 pr-0.5 font-mono text-xs ${validNamespace(ns) && index < MAX_NAMESPACES ? 'bg-well-hover text-slate-200' : `bg-rose-500/[0.13] ${TONE_TEXT.danger}`}`}>
                       {ns}
                       <button type="button" data-namespace-remove="" aria-label={`Remove ${ns}`} className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-control-hover hover:text-white ${FOCUS_RING}`} onClick={() => { refocusChip.current = index; setNamespaces(namespaces.filter((n) => n !== ns)); }}>
                         <X className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
@@ -188,10 +199,18 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
             </Callout>
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField label="Probara API origin" required error={touched ? fieldErrors.origin : undefined} description="HTTPS origin the cluster can reach.">
-                <Input className="font-mono" value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="https://probara.example.com" />
+                <Input className="font-mono" value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="https://probara.example.com" autoFocus={!origin.trim()} />
               </FormField>
-              <FormField label="Collector image" required error={touched ? fieldErrors.image : undefined} description="The discovery-collector image from this release.">
-                <Input className="font-mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="ghcr.io/…/probara-discovery-collector:tag" />
+              <FormField label="Collector image" required error={touched ? fieldErrors.image : undefined} description="The discovery-collector image tagged with this release’s version.">
+                <Input
+                  className="font-mono"
+                  value={image}
+                  onChange={(e) => setImage(e.target.value)}
+                  placeholder="ghcr.io/…/probara-discovery-collector:tag"
+                  autoFocus={focusImage}
+                  // Caret after the prefilled repository, ready for the tag.
+                  onFocus={(e) => { const el = e.currentTarget; if (el.value.endsWith(':')) el.setSelectionRange(el.value.length, el.value.length); }}
+                />
               </FormField>
             </div>
             <div className="space-y-3">

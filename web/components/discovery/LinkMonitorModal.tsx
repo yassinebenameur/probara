@@ -12,7 +12,7 @@ import TableSkeleton from '@/components/ui/TableSkeleton';
 import TypeBadge from '@/components/ui/TypeBadge';
 import { linkDiscoveryMonitor } from '@/lib/api';
 import { getAllMonitors } from '@/lib/monitor-list';
-import { errorMessage, suggestionTarget, type DiscoveryMonitor, type DiscoveryService, type DiscoverySuggestion } from '@/lib/discovery';
+import { errorMessage, linkBlocked, suggestionTarget, type DiscoveryMonitor, type DiscoveryService, type DiscoverySuggestion } from '@/lib/discovery';
 import { displayStatusFromState, monitorTarget } from '@/lib/monitor-utils';
 import { MONITOR_STATUS_DOT } from '@/lib/status-tones';
 import type { Monitor, MonitorState } from '@/lib/types';
@@ -38,6 +38,9 @@ export default function LinkMonitorModal({ service, suggestion, candidates, init
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const linkedIds = useMemo(() => new Set(service.monitors.map((m) => m.id)), [service.monitors]);
+  // A monitor linked to the service without a suggestion can still be
+  // attached to this suggestion; any other existing link is a no-op.
+  const blocked = (id: string) => linkBlocked(service, id, suggestion?.key);
   const candidateIds = useMemo(() => new Set(candidates.map((m) => m.id)), [candidates]);
 
   useEffect(() => {
@@ -51,7 +54,7 @@ export default function LinkMonitorModal({ service, suggestion, candidates, init
     return (monitors || []).filter((m) => !candidateIds.has(m.id) && (!q || m.name.toLowerCase().includes(q) || (monitorTarget(m) ?? '').toLowerCase().includes(q)));
   }, [monitors, query, candidateIds]);
 
-  const canSubmit = Boolean(selected) && !saving && !linkedIds.has(selected);
+  const canSubmit = Boolean(selected) && !saving && !blocked(selected);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
@@ -85,7 +88,7 @@ export default function LinkMonitorModal({ service, suggestion, candidates, init
             <h3 className="text-ui font-medium text-slate-300">Checks the same target</h3>
             <p className="mb-2 mt-0.5 text-xs text-slate-500">Verify its assertions and location before linking.</p>
             <div role="radiogroup" aria-label="Monitors that check the same target" className="glass-well space-y-1 p-1.5">
-              {candidates.map((m) => <MonitorOption key={m.id} name={radioName} id={m.id} label={m.name} type={m.type} state={m.state} paused={!m.enabled} selected={selected === m.id} linked={linkedIds.has(m.id)} onSelect={setSelected} />)}
+              {candidates.map((m) => <MonitorOption key={m.id} name={radioName} id={m.id} label={m.name} type={m.type} state={m.state} paused={!m.enabled} selected={selected === m.id} linked={linkedIds.has(m.id)} disabled={blocked(m.id)} onSelect={setSelected} />)}
             </div>
           </section>
         )}
@@ -103,7 +106,7 @@ export default function LinkMonitorModal({ service, suggestion, candidates, init
             <div className="glass-well relative p-1.5">
               <ScrollList maxHeight="18rem" label="Monitors" className="dashboard-scroll">
                 <div role="radiogroup" aria-label="Monitors" className="space-y-1">
-                  {matches.slice(0, MAX_ROWS).map((m) => <MonitorOption key={m.id} name={radioName} id={m.id} label={m.name} type={m.type} state={m.current_state} target={monitorTarget(m) ?? ''} paused={!m.enabled} selected={selected === m.id} linked={linkedIds.has(m.id)} onSelect={setSelected} />)}
+                  {matches.slice(0, MAX_ROWS).map((m) => <MonitorOption key={m.id} name={radioName} id={m.id} label={m.name} type={m.type} state={m.current_state} target={monitorTarget(m) ?? ''} paused={!m.enabled} selected={selected === m.id} linked={linkedIds.has(m.id)} disabled={blocked(m.id)} onSelect={setSelected} />)}
                 </div>
               </ScrollList>
             </div>
@@ -115,8 +118,8 @@ export default function LinkMonitorModal({ service, suggestion, candidates, init
   );
 }
 
-function MonitorOption({ name, id, label, type, state, target, paused, selected, linked, onSelect }: {
-  name: string; id: string; label: string; type: string; state?: MonitorState; target?: string; paused: boolean; selected: boolean; linked: boolean; onSelect: (id: string) => void;
+function MonitorOption({ name, id, label, type, state, target, paused, selected, linked, disabled, onSelect }: {
+  name: string; id: string; label: string; type: string; state?: MonitorState; target?: string; paused: boolean; selected: boolean; linked: boolean; disabled: boolean; onSelect: (id: string) => void;
 }) {
   const dot = MONITOR_STATUS_DOT[displayStatusFromState({ enabled: !paused, current_state: state })];
   // The whole row is the radio's label; its text column stretches so the
@@ -126,10 +129,10 @@ function MonitorOption({ name, id, label, type, state, target, paused, selected,
       name={name}
       value={id}
       checked={selected}
-      disabled={linked}
+      disabled={disabled}
       onChange={() => onSelect(id)}
       stretch
-      className={`w-full rounded-lg px-3 !py-2 transition-colors ${selected ? 'bg-well-strong' : linked ? '' : 'hover:bg-well-hover'}`}
+      className={`w-full rounded-lg px-3 !py-2 transition-colors ${selected ? 'bg-well-strong' : disabled ? '' : 'hover:bg-well-hover'}`}
       label={
         <span className="flex items-center gap-3">
           <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} aria-hidden="true" />

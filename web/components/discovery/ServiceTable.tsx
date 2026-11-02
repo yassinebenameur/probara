@@ -13,7 +13,7 @@ import { FOCUS_RING } from '@/components/ui/focus';
 import { formatDateTimeFull, pluralize } from '@/lib/format';
 import type { SortState } from '@/lib/sort';
 import { MONITOR_STATUS_DOT, MONITOR_STATUS_LABEL, MONITOR_STATUS_TONE, TONE_TEXT } from '@/lib/status-tones';
-import { gapInfo, serviceSuggestions, suggestionTarget, type DiscoveryMonitor, type DiscoveryResource, type DiscoveryService, type DiscoverySort, type DiscoverySuggestion } from '@/lib/discovery';
+import { gapInfo, pendingSuggestionCount, serviceSuggestions, suggestionCover, suggestionTarget, type DiscoveryMonitor, type DiscoveryResource, type DiscoveryService, type DiscoverySort, type DiscoverySuggestion } from '@/lib/discovery';
 import { displayStatusFromState } from '@/lib/monitor-utils';
 
 interface ServiceTableProps {
@@ -70,8 +70,7 @@ export default function ServiceTable({ items, expanded, onToggle, writable, stal
           {items.map((s) => {
             const open = expanded === s.id;
             const gaps = rowGaps(s);
-            const suggestions = serviceSuggestions(s);
-            const pending = suggestions.filter(({ suggestion }) => !s.monitors.some((m) => m.suggestion_key === suggestion.key)).length;
+            const pending = pendingSuggestionCount(s);
             const flash = rowFlash?.(s);
             return (
               <Fragment key={s.id}>
@@ -143,9 +142,15 @@ export default function ServiceTable({ items, expanded, onToggle, writable, stal
   );
 }
 
+// The pill shows the short name; the full explanation is read out with it
+// (sr-only) and is listed in the open row's detail for touch and keyboard
+// users, so the hover title is only a shortcut.
 function CoveragePills({ gaps }: { gaps: string[] }) {
   if (gaps.length === 0) return <Pill size="xs" tone="success" dot>Covered</Pill>;
-  return <>{gaps.map((g) => { const info = gapInfo(g); return <span key={g} title={info.label}><Pill size="xs" tone={info.tone} className="whitespace-nowrap">{info.short}</Pill></span>; })}</>;
+  return <>{gaps.map((g) => {
+    const info = gapInfo(g);
+    return <span key={g} title={info.label}><Pill size="xs" tone={info.tone} className="whitespace-nowrap">{info.short}<span className="sr-only">: {info.label}</span></Pill></span>;
+  })}</>;
 }
 
 function PendingPill({ pending }: { pending: number }) {
@@ -177,16 +182,25 @@ function MonitorBadge({ monitor: m }: { monitor: DiscoveryMonitor }) {
 
 function ServiceDetail({ service: s, writable, stale, onApprove, onLink, onUnlink }: Omit<ServiceTableProps, 'items' | 'expanded' | 'onToggle' | 'sort' | 'onSort' | 'rowFlash'> & { service: DiscoveryService }) {
   const suggestions = serviceSuggestions(s);
+  const gaps = rowGaps(s);
+  // Kept only by its links: its resources all moved to another service (the
+  // probara.io/service grouping changed). Suggestions and resources would
+  // both be empty, so say what happened instead.
+  const emptied = s.resources.length === 0;
   return (
     <div className="glass-well grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
       <section className="min-w-0">
         <h4 className="mb-2 text-ui font-medium text-slate-300">Suggested checks</h4>
-        {suggestions.length === 0 ? (
+        {emptied ? (
+          <p className="text-xs text-slate-500">No resources left: they moved to another service when the <span className="font-mono">probara.io/service</span> grouping changed. Link these monitors to that service and unlink them here — this service is deleted, with its links, once it has been absent for 7 days.</p>
+        ) : suggestions.length === 0 ? (
           <p className="text-xs text-slate-500">No check can be inferred. Link an existing monitor, or add a <span className="font-mono">probara.io/health-path</span> annotation to the Service.</p>
         ) : (
           <ul className="divide-y divide-divider">
             {suggestions.map(({ suggestion: p, resource }) => {
-              const linked = s.monitors.find((m) => m.suggestion_key === p.key);
+              // Also a monitor linked to the service without a key that checks
+              // this target: it already covers the suggestion.
+              const linked = suggestionCover(s, p.key);
               const candidates = s.candidates[p.key] || [];
               return (
                 <li key={p.key} className="flex flex-wrap items-start gap-3 py-2.5 first:pt-0 last:pb-0">
@@ -200,7 +214,7 @@ function ServiceDetail({ service: s, writable, stale, onApprove, onLink, onUnlin
                     </div>
                     <p className="mt-1 text-xs text-slate-500">{resource.kind} {resource.name} · {p.reason}</p>
                     {!linked && candidates.length > 0 && (
-                      <p className="mt-1 text-xs text-amber-300">
+                      <p className={`mt-1 text-xs ${TONE_TEXT.warning}`}>
                         {candidates.length === 1 ? <>Already checked by <strong className="font-medium">{candidates[0].name}</strong> — link it instead of creating a duplicate.</> : <>{candidates.length} existing monitors check this target — link one instead of creating a duplicate.</>}
                       </p>
                     )}
@@ -219,17 +233,35 @@ function ServiceDetail({ service: s, writable, stale, onApprove, onLink, onUnlin
         )}
       </section>
       <div className="space-y-4 border-t border-divider pt-4 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
+        {gaps.length > 0 && (
+          <section>
+            <h4 className="mb-2 text-ui font-medium text-slate-300">Gaps</h4>
+            <ul className="space-y-1.5">
+              {gaps.map((g) => {
+                const info = gapInfo(g);
+                return (
+                  <li key={g} className="flex items-start gap-2 text-xs">
+                    <Pill size="xs" tone={info.tone} className="shrink-0 whitespace-nowrap">{info.short}</Pill>
+                    <span className="min-w-0 text-slate-400">{info.label}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
         <section>
           <h4 className="mb-2 text-ui font-medium text-slate-300">Resources</h4>
-          <ul className="space-y-1.5">
-            {s.resources.map((r) => (
-              <li key={r.uid} className="flex items-center gap-2 text-xs">
-                {r.kind === 'Ingress' ? <Globe className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" /> : <Server className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />}
-                <span className="min-w-0 flex-1 truncate" title={`${r.kind}/${r.name}`}><span className="font-mono text-slate-300">{r.name}</span> <span className="text-slate-500">{r.kind}</span></span>
-                {r.missing_since && <span title={`Absent from complete scans since ${formatDateTimeFull(r.missing_since)}`}><Pill size="xs" tone="warning" className="whitespace-nowrap tabular-nums">Missing <ElapsedTime start={r.missing_since} /></Pill></span>}
-              </li>
-            ))}
-          </ul>
+          {emptied ? <p className="text-xs text-slate-500">None — moved to another service.</p> : (
+            <ul className="space-y-1.5">
+              {s.resources.map((r) => (
+                <li key={r.uid} className="flex items-center gap-2 text-xs">
+                  {r.kind === 'Ingress' ? <Globe className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" /> : <Server className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />}
+                  <span className="min-w-0 flex-1 truncate" title={`${r.kind}/${r.name}`}><span className="font-mono text-slate-300">{r.name}</span> <span className="text-slate-500">{r.kind}</span></span>
+                  {r.missing_since && <span title={`Absent from complete scans since ${formatDateTimeFull(r.missing_since)}`}><Pill size="xs" tone="warning" className="whitespace-nowrap tabular-nums">Missing <ElapsedTime start={r.missing_since} /></Pill></span>}
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
         <section>
           <h4 className="mb-2 text-ui font-medium text-slate-300">Linked monitors</h4>

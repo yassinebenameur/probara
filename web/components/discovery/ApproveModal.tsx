@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useId, useState } from 'react';
+import { FormEvent, useId, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Link2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
@@ -13,9 +13,14 @@ import Pill from '@/components/ui/Pill';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Select from '@/components/ui/Select';
 import TypeBadge from '@/components/ui/TypeBadge';
+import { revealFirstError, useClearErrorsOnEdit } from '@/components/monitors/form-kit';
 import { approveDiscoverySuggestion } from '@/lib/api';
 import { formatDuration } from '@/lib/format';
-import { errorMessage, isDuplicateTarget, suggestionTarget, type DiscoveryMonitor, type DiscoveryService, type DiscoverySuggestion } from '@/lib/discovery';
+import {
+  approveFormErrors, errorMessage, isDuplicateTarget, parseExpectedStatus, suggestionTarget,
+  type ApproveFormValues, type DiscoveryMonitor, type DiscoveryService, type DiscoverySuggestion,
+} from '@/lib/discovery';
+import { TONE_TEXT } from '@/lib/status-tones';
 import type { AlertChannel, Location } from '@/lib/types';
 import { INLINE_LINK } from './styles';
 
@@ -26,6 +31,8 @@ const ROUTING_OPTIONS = [
   { value: 'default', label: 'Workspace defaults' },
   { value: 'custom', label: 'Specific channels' },
 ] as const;
+// Switching to workspace defaults resolves a "select a channel" error.
+const RELATED_FIELDS: Record<string, string[]> = { channelIds: ['mode'] };
 
 interface ApproveModalProps {
   service: DiscoveryService;
@@ -46,23 +53,36 @@ export default function ApproveModal({ service, suggestion, candidates, location
   const activeChannels = channels.filter((c) => c.is_active);
   const [name, setName] = useState(`${service.name}${suggestion.internal ? ' (internal)' : ''}`);
   const [interval, setInterval] = useState(60);
-  const [status, setStatus] = useState(200);
+  // Kept as typed, so the field can be cleared and retyped; parsed on submit.
+  const [status, setStatus] = useState('200');
   const [locationId, setLocationId] = useState(defaultLocationId && enabledLocations.some((l) => l.id === defaultLocationId) ? defaultLocationId : '');
   const [mode, setMode] = useState<RoutingMode>('default');
   const [channelIds, setChannelIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<{ message: string; duplicate: boolean } | null>(null);
+  // The monitor forms' pattern (components/monitors/form-kit.tsx): rules run
+  // on submit and render inline; editing a field clears its message.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const values: ApproveFormValues = useMemo(() => ({ name, status, locationId, mode, channelIds }), [name, status, locationId, mode, channelIds]);
+  useClearErrorsOnEdit(values, setFieldErrors, RELATED_FIELDS);
+  const formRef = useRef<HTMLFormElement>(null);
+  const channelsErrorId = `${formId}-channels-error`;
 
-  const needsLocation = suggestion.internal && !locationId;
-  const canSubmit = !saving && !stale && name.trim() !== '' && !needsLocation && (mode === 'default' || channelIds.length > 0) && (suggestion.type !== 'http' || (status >= 100 && status <= 599));
+  const canSubmit = !saving && !stale;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
+    const invalid = approveFormErrors(values, suggestion);
+    if (Object.keys(invalid).length > 0) {
+      setFieldErrors(invalid as Record<string, string>);
+      revealFirstError(formRef.current);
+      return;
+    }
     setSaving(true); setError(null);
     try {
       const result = await approveDiscoverySuggestion(service.id, {
-        key: suggestion.key, name: name.trim(), interval_seconds: interval, expected_status: suggestion.type === 'http' ? status : 0,
+        key: suggestion.key, name: name.trim(), interval_seconds: interval, expected_status: suggestion.type === 'http' ? parseExpectedStatus(status) ?? 0 : 0,
         location_id: locationId || null, notification_mode: mode, channel_ids: mode === 'custom' ? channelIds : [],
       });
       onCreated(result.monitor_id, name.trim());
@@ -100,14 +120,14 @@ export default function ApproveModal({ service, suggestion, candidates, location
         </Callout>
       )}
 
-      <form id={formId} noValidate onSubmit={(e) => void submit(e)} className="space-y-5">
+      <form ref={formRef} id={formId} noValidate onSubmit={(e) => void submit(e)} className="space-y-5">
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
           <TypeBadge type={suggestion.type} />
           {suggestion.internal && <Pill size="xs" tone="info">Cluster-internal</Pill>}
           <span className="min-w-0">{suggestion.reason}</span>
         </div>
 
-        <FormField label="Name" required>
+        <FormField label="Name" required error={fieldErrors.name || undefined}>
           <Input value={name} maxLength={200} onChange={(e) => setName(e.target.value)} />
         </FormField>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -117,8 +137,8 @@ export default function ApproveModal({ service, suggestion, candidates, location
             </Select>
           </FormField>
           {suggestion.type === 'http' && (
-            <FormField label="Expected HTTP status" required>
-              <Input className="tabular-nums" type="number" min={100} max={599} value={status} onChange={(e) => setStatus(Number(e.target.value))} />
+            <FormField label="Expected HTTP status" required error={fieldErrors.status || undefined}>
+              <Input className="tabular-nums" type="number" inputMode="numeric" min={100} max={599} step={1} value={status} onChange={(e) => setStatus(e.target.value)} />
             </FormField>
           )}
         </div>
@@ -126,6 +146,7 @@ export default function ApproveModal({ service, suggestion, candidates, location
           label="Run from"
           required={suggestion.internal}
           description={suggestion.internal ? 'Cluster-internal target: pick a private location whose worker can reach it.' : undefined}
+          error={fieldErrors.locationId || undefined}
         >
           {suggestion.internal && enabledLocations.length === 0 ? (
             <Callout tone="warning">
@@ -147,7 +168,12 @@ export default function ApproveModal({ service, suggestion, candidates, location
                 No active channels. <Link href="/settings?tab=channels" className={INLINE_LINK}>Add one in Settings</Link>.
               </Callout>
             ) : (
-              <div role="group" aria-label="Alert channels" className="glass-well mt-3 space-y-1 p-1.5">
+              <div
+                role="group"
+                aria-label="Alert channels"
+                aria-describedby={fieldErrors.channelIds ? channelsErrorId : undefined}
+                className="glass-well mt-3 space-y-1 p-1.5"
+              >
                 {activeChannels.map((c) => {
                   const checked = channelIds.includes(c.id);
                   return (
@@ -169,6 +195,7 @@ export default function ApproveModal({ service, suggestion, candidates, location
               </div>
             )
           )}
+          {fieldErrors.channelIds && <p id={channelsErrorId} className={`mt-1 text-xs ${TONE_TEXT.danger}`}>{fieldErrors.channelIds}</p>}
         </div>
         <p className="text-xs text-slate-500">Created enabled with a 10-second timeout and two-failure confirmation. Edit the monitor afterwards for paths, assertions or credentials.</p>
       </form>

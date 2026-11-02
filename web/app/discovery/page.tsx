@@ -26,7 +26,7 @@ import ApproveModal from '@/components/discovery/ApproveModal';
 import LinkMonitorModal from '@/components/discovery/LinkMonitorModal';
 import { deleteDiscoveryIntegration, getAlertChannels, getDiscoveryCoverage, getDiscoveryIntegrations, getLocations, rotateDiscoveryToken, unlinkDiscoveryMonitor } from '@/lib/api';
 import {
-  collectorHealth, DISCOVERY_PAGE_SIZE, errorMessage, gapInfo, installCommands, isNotFound,
+  collectorHealth, DISCOVERY_PAGE_SIZE, errorMessage, gapInfo, installCommands, isNotFound, pageAfterShrink,
   type DiscoveryCoverage, type DiscoveryIntegration, type DiscoveryMonitor, type DiscoveryService, type DiscoverySort, type DiscoverySuggestion,
 } from '@/lib/discovery';
 import { pluralize } from '@/lib/format';
@@ -132,7 +132,14 @@ export default function DiscoveryPage() {
     const request = ++coverageRequest.current;
     try {
       const v = await getDiscoveryCoverage(selectedId, { page, q, gaps: gapsOnly, sort });
-      if (request === coverageRequest.current) { setCoverage(v); setCoverageError(''); }
+      if (request !== coverageRequest.current) return true;
+      // The page ran past the end (services covered while working through
+      // "With gaps", a poll after deletions): move to the last page that has
+      // rows, keeping the current rows until it loads, instead of showing an
+      // empty state for a result set that is not empty.
+      const last = pageAfterShrink(page, v.total, v.items.length, v.page_size);
+      if (last !== null) { setPage(last); return true; }
+      setCoverage(v); setCoverageError('');
       return true;
     } catch (e) {
       if (request !== coverageRequest.current) return true;
@@ -327,7 +334,7 @@ export default function DiscoveryPage() {
                 </Callout>
               ) : !coverage ? (
                 <TableSkeleton rows={5} columns={3} label="Loading services" />
-              ) : coverage.items.length === 0 ? (
+              ) : coverage.total === 0 ? (
                 filtered ? (
                   <EmptyState
                     icon={<Search strokeWidth={1.5} />}
@@ -448,14 +455,18 @@ function HealthPill({ health }: { health: ReturnType<typeof collectorHealth> }) 
 }
 
 // KPI row in the cluster panel, laid out like SlaReportView's tiles. A count
-// takes its status tone only when non-zero; zero stays neutral.
+// takes its status tone only when non-zero; zero stays neutral. Counts of one
+// gap take that gap's tone, so a tile and the row pills it counts agree:
+// `missing` is resource_missing only, and services still within the grace
+// period (neutral pills) are noted under it when the API reports them.
 function SummaryRow({ summary }: { summary: NonNullable<DiscoveryCoverage['summary']> }) {
-  const tiles: { label: string; value: number; tone?: StatusTone }[] = [
+  const grace = summary.missing_grace ?? 0;
+  const tiles: { label: string; value: number; tone?: StatusTone; note?: string }[] = [
     { label: 'Services', value: summary.services },
     { label: 'Fully covered', value: summary.covered, tone: 'success' },
     { label: 'With gaps', value: summary.with_gaps, tone: 'warning' },
-    { label: 'Unmonitored', value: summary.unmonitored, tone: 'warning' },
-    { label: 'Missing', value: summary.missing, tone: 'danger' },
+    { label: 'Unmonitored', value: summary.unmonitored, tone: gapInfo('no_enabled_monitor').tone },
+    { label: 'Missing', value: summary.missing, tone: gapInfo('resource_missing').tone, note: grace > 0 ? `+${grace} in grace period` : undefined },
   ];
   return (
     <dl className="grid grid-cols-2 gap-4 border-t border-divider px-5 py-4 sm:grid-cols-3 lg:grid-cols-5">
@@ -463,6 +474,7 @@ function SummaryRow({ summary }: { summary: NonNullable<DiscoveryCoverage['summa
         <div key={t.label}>
           <dt className="text-xs text-slate-400">{t.label}</dt>
           <dd className={`mt-1 text-metric font-semibold tabular-nums ${t.tone && t.value > 0 ? TONE_TEXT[t.tone] : 'text-white'}`}>{t.value}</dd>
+          {t.note && <dd className="mt-0.5 text-xs tabular-nums text-slate-500">{t.note}</dd>}
         </div>
       ))}
     </dl>
