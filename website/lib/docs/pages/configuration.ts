@@ -857,6 +857,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Server-side destination for `/api` and downloadable agent-binary proxy routes.',
             ],
             [
+              '`API_PROXY_TRUST_FORWARDED_FOR`',
+              '`false`',
+              'When `true`, the `/api` proxy forwards the incoming `X-Forwarded-For` / `X-Real-IP` to the API. Set it only when a proxy you run appends those headers in front of the UI, and list the frontend in `TRUSTED_PROXY_CIDRS`; otherwise they are dropped, because a browser can set them. See [proxy trust](/docs/security/#audit-proxy-trust).',
+            ],
+            [
               '`NEXT_PUBLIC_API_URL`',
               '`/api`',
               'Browser API base. Compiled into the Next.js client bundle.',

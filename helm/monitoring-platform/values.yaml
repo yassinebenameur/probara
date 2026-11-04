@@ -242,6 +242,10 @@ appBaseURL: ""
 # contains clients lets them forge their address. Rendered as
 # TRUSTED_PROXY_CIDRS into api and status-page.
 # Example: ["10.0.0.0/8"] (the cluster pod CIDR an ingress controller uses).
+# The frontend's /api proxy drops X-Forwarded-For unless its
+# API_PROXY_TRUST_FORWARDED_FOR=true (frontend.extraEnv), so a range that
+# covers the frontend pods is safe; the bundled ingress sends /api straight to
+# the api anyway.
 trustedProxyCIDRs: []
 
 # =============================================================================

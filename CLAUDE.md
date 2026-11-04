@@ -416,6 +416,9 @@ or imported groups come back empty. Any other path that creates groups through
   MCP carries the resolved IP to its inner dispatch as the inner
   `RemoteAddr` (`clientIPHeader`), not as a forwarding header. The deprecated
   `STATUS_PAGE_TRUSTED_PROXY=true` trusts every peer while the list is unset.
+  The UI's `/api` proxy cannot append to the chain, so it drops
+  `X-Forwarded-For`/`X-Real-IP` (`web/lib/proxy-headers.ts`) unless
+  `API_PROXY_TRUST_FORWARDED_FOR=true`; never make it pass them by default.
 - **`LOCATION_WORKER_IMAGE`** (api): the image private-location deploy
   snippets reference. Unset defaults to the worker at the api's
   `buildinfo.Version` (`:alpha` for unreleased builds) —
