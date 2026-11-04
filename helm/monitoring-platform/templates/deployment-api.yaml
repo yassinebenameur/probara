@@ -99,6 +99,13 @@ spec:
         - name: PUBLIC_NATS_URL
           value: {{ . | quote }}
         {{- end }}
+        # Deploy snippets for private locations reference the worker this
+        # release ships, never a floating tag (see api.locationWorkerImage).
+        - name: LOCATION_WORKER_IMAGE
+          value: {{ .Values.api.locationWorkerImage | default (printf "%s-worker:%s" .Values.image.repository (include "monitoring-platform.imageTag" .)) | quote }}
+        {{- with (include "monitoring-platform.trustedProxyEnv" .) }}
+        {{- . | nindent 8 }}
+        {{- end }}
         - name: AUDIT_RETENTION_DAYS
           value: {{ .Values.auth.auditRetentionDays | quote }}
         {{- if .Values.auth.oidc.enabled }}

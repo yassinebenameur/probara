@@ -460,6 +460,16 @@ kubectl -n probara get jobs`,
               'External API origin and optional external TLS/WSS NATS endpoint.',
             ],
             [
+              '`api.locationWorkerImage`',
+              'Empty: `{image.repository}-worker:{image tag}`',
+              'Image the generated [location-worker snippets](/docs/locations/#create-and-deploy) reference (`LOCATION_WORKER_IMAGE`). The default is the worker this release deploys; override it when remote sites pull from a mirror.',
+            ],
+            [
+              '`trustedProxyCIDRs`',
+              '`[]`',
+              'CIDRs or IPs of your ingress controller or load balancer, rendered as `TRUSTED_PROXY_CIDRS` into the API and status-page. Only these peers’ `X-Forwarded-For` / `X-Real-IP` resolve [client IPs](/docs/security/#audit-proxy-trust) for audit records, sessions, and the push rate limit; empty records the ingress pod address.',
+            ],
+            [
               '`scheduler.enabled`, `.replicas`, `.metricsPort`, `.logLevel`',
               '`true`, `1`, `9090`, `info`',
               'Scheduling and retention workload.',
@@ -935,7 +945,7 @@ api:
           items: [
             'Pin immutable backend, frontend, local AI, collector, migration, PostgreSQL, and NATS versions.',
             'Use managed/HA PostgreSQL and NATS or define tested backup and restore objectives for embedded state.',
-            'Configure HTTPS, `ADMIN_COOKIE_SECURE=true`, a correct `PUBLIC_BASE_URL`, and trusted reverse-proxy headers.',
+            'Configure HTTPS, `ADMIN_COOKIE_SECURE=true`, a correct `PUBLIC_BASE_URL`, and `TRUSTED_PROXY_CIDRS` (Helm `trustedProxyCIDRs`) listing exactly your reverse proxies, so audit and session IPs are the clients’ and cannot be forged.',
             'Use stable random JWT, encryption, local AI token, OIDC, preview, SMTP, webhook, database, and NATS secrets, sourced [from your secret manager](#external-secrets) rather than written into the values file.',
             'Confirm the cluster CNI enforces the [local AI NetworkPolicy](#helm-values-local-ai), or isolate the service another way.',
             'Align every NATS stream, subject, consumer, and status-update subject across services.',

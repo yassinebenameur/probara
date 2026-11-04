@@ -44,6 +44,9 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	if cfg.WebPushConfigured() {
 		pushes = newPushStore(dbClient.DB)
 	}
+	if cfg.LegacyTrustedProxy {
+		log.Warn("STATUS_PAGE_TRUSTED_PROXY is deprecated and trusts X-Forwarded-For from any peer; set TRUSTED_PROXY_CIDRS to your proxies' ranges instead")
+	}
 	handlers := NewHandlers(service, cfg, log, hub, renderCache, pushes)
 
 	// The push sender owns the reconcile-and-send loop. It exists only when

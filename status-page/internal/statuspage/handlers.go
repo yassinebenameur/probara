@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
@@ -34,6 +35,9 @@ type Handlers struct {
 	// routes 404.
 	pushStore   *pushStore
 	pushLimiter *pushRateLimiter
+	// clientIPs keys pushLimiter: forwarding headers count only from
+	// TRUSTED_PROXY_CIDRS peers, so a visitor cannot spoof a fresh bucket.
+	clientIPs *clientip.Resolver
 }
 
 // NewHandlers creates a new status page handlers
@@ -46,7 +50,15 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		cache:       cache,
 		pushStore:   pushes,
 		pushLimiter: newPushRateLimiter(),
+		clientIPs:   newClientIPResolver(cfg),
 	}
+}
+
+func newClientIPResolver(cfg *config.StatusPageConfig) *clientip.Resolver {
+	if cfg == nil {
+		return clientip.NewResolver(nil)
+	}
+	return clientip.NewResolver(cfg.TrustedProxyCIDRs)
 }
 
 // HandleStatusPage handles GET /public/status/{slug} and GET /public/status/{slug}/data

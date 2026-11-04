@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"github.com/yassinebenameur/probara/shared/ai"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -130,6 +132,18 @@ func loadNotificationEgressConfig() (NotificationEgressConfig, error) {
 	return cfg, nil
 }
 
+// loadTrustedProxyCIDRs reads TRUSTED_PROXY_CIDRS: comma-separated CIDRs or
+// bare IPs of the reverse proxies whose X-Forwarded-For / X-Real-IP the
+// service believes (shared/clientip). Sole parser for it. Empty (the default)
+// means no proxy is trusted and the client address is the TCP peer.
+func loadTrustedProxyCIDRs() ([]netip.Prefix, error) {
+	trusted, err := clientip.ParseTrustedProxies(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid TRUSTED_PROXY_CIDRS: %w", err)
+	}
+	return trusted, nil
+}
+
 // APIConfig contains configuration for the API service
 type APIConfig struct {
 	BaseConfig
@@ -183,6 +197,13 @@ type APIConfig struct {
 	// minute (excess gets 429 + Retry-After, which the collector retries).
 	OTLPMaxSeriesPerMonitor int
 	OTLPMonitorRatePerMin   int
+	// TrustedProxyCIDRs is TRUSTED_PROXY_CIDRS: the proxies whose forwarding
+	// headers resolve the client address (audit log, session IPs).
+	TrustedProxyCIDRs []netip.Prefix
+	// LocationWorkerImage is LOCATION_WORKER_IMAGE, the image private-location
+	// deploy snippets reference. Empty means the locations service default
+	// (the worker image at this build's release version).
+	LocationWorkerImage string
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -345,6 +366,15 @@ type StatusPageConfig struct {
 	// VAPIDSubject is the JWT "sub" claim: a mailto: or https: contact the push
 	// service can reach. Some push services reject a missing or malformed one.
 	VAPIDSubject string
+
+	// TrustedProxyCIDRs is TRUSTED_PROXY_CIDRS (see loadTrustedProxyCIDRs);
+	// it keys the push endpoints' per-IP rate limit.
+	TrustedProxyCIDRs []netip.Prefix
+	// LegacyTrustedProxy reports that the deprecated
+	// STATUS_PAGE_TRUSTED_PROXY=true stood in for an unset
+	// TRUSTED_PROXY_CIDRS, so TrustedProxyCIDRs trusts every peer (its old
+	// leftmost-X-Forwarded-For behavior). The service logs a warning.
+	LegacyTrustedProxy bool
 }
 
 // LoadBaseConfig loads base configuration from environment variables
@@ -595,6 +625,11 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, err
 	}
 	cfg.NotificationEgressConfig = egressCfg
+
+	if cfg.TrustedProxyCIDRs, err = loadTrustedProxyCIDRs(); err != nil {
+		return nil, err
+	}
+	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
 
 	return cfg, nil
 }
@@ -1285,6 +1320,17 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 	cfg.VAPIDPublicKey = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_PUBLIC_KEY"))
 	cfg.VAPIDPrivateKey = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_PRIVATE_KEY"))
 	cfg.VAPIDSubject = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_SUBJECT"))
+
+	if cfg.TrustedProxyCIDRs, err = loadTrustedProxyCIDRs(); err != nil {
+		return nil, err
+	}
+	// STATUS_PAGE_TRUSTED_PROXY=true predates TRUSTED_PROXY_CIDRS and
+	// believed X-Forwarded-For from any peer. Honored only while the new
+	// variable is unset, so an upgrade keeps per-visitor rate limiting.
+	if len(cfg.TrustedProxyCIDRs) == 0 && strings.EqualFold(strings.TrimSpace(os.Getenv("STATUS_PAGE_TRUSTED_PROXY")), "true") {
+		cfg.TrustedProxyCIDRs = clientip.TrustAll()
+		cfg.LegacyTrustedProxy = true
+	}
 
 	return cfg, nil
 }

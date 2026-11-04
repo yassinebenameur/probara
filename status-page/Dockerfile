@@ -11,7 +11,11 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/status-page ./status-page/cmd/status-page
+# Release version stamped into shared/buildinfo (docker-build.yml passes the
+# metadata action's version). Declared just before the build so a new version
+# only invalidates this layer.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags "-X github.com/yassinebenameur/probara/shared/buildinfo.Version=${VERSION}" -o /app/status-page ./status-page/cmd/status-page
 
 # Runtime stage
 FROM alpine:latest

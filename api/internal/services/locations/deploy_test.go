@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yassinebenameur/probara/shared/buildinfo"
 	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -64,5 +65,36 @@ func TestLocationWorkerNATSURLRejectsUnsafeBase(t *testing.T) {
 		if _, err := locationWorkerNATSURL(base, "location-id", "secret"); err == nil {
 			t.Fatalf("expected %q to be rejected", base)
 		}
+	}
+}
+
+func TestDeployWorkerImage(t *testing.T) {
+	orig := buildinfo.Version
+	t.Cleanup(func() { buildinfo.Version = orig })
+
+	for _, tc := range []struct{ version, want string }{
+		{"2.0.0-alpha.10", "ghcr.io/yassinebenameur/probara-worker:2.0.0-alpha.10"},
+		{"2.1.0", "ghcr.io/yassinebenameur/probara-worker:2.1.0"},
+		{"v2.1.0", "ghcr.io/yassinebenameur/probara-worker:2.1.0"},
+		{"dev", "ghcr.io/yassinebenameur/probara-worker:alpha"},
+		{"main", "ghcr.io/yassinebenameur/probara-worker:alpha"},
+	} {
+		buildinfo.Version = tc.version
+		if got := (&Service{}).deployWorkerImage(); got != tc.want {
+			t.Errorf("version %q: image %q, want %q", tc.version, got, tc.want)
+		}
+		if strings.HasSuffix(DefaultWorkerImage(), ":latest") {
+			t.Errorf("version %q: default image must never be :latest", tc.version)
+		}
+	}
+
+	svc := &Service{}
+	svc.ConfigureWorkerImage("  registry.example/probara-worker:2.0.0 ")
+	if got := svc.deployWorkerImage(); got != "registry.example/probara-worker:2.0.0" {
+		t.Errorf("configured image = %q", got)
+	}
+	svc.ConfigureWorkerImage("")
+	if got := svc.deployWorkerImage(); got != DefaultWorkerImage() {
+		t.Errorf("empty LOCATION_WORKER_IMAGE = %q, want the default", got)
 	}
 }

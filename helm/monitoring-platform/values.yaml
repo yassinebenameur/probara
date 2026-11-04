@@ -230,6 +230,21 @@ extraEnv: []
 appBaseURL: ""
 
 # =============================================================================
+# TRUSTED PROXIES (client IP resolution)
+# =============================================================================
+# CIDRs or bare IPs of the reverse proxies in front of the api and status-page
+# (ingress controller pods, a cloud load balancer). Their X-Forwarded-For /
+# X-Real-IP headers resolve the client address for the audit log, session IPs
+# and the status page's push rate limit; X-Forwarded-For is walked right to
+# left and the first address outside this list is the client. Empty (the
+# default) trusts no proxy: the client is the TCP peer, which behind an
+# ingress is the ingress pod. List only proxies you run -- a range that also
+# contains clients lets them forge their address. Rendered as
+# TRUSTED_PROXY_CIDRS into api and status-page.
+# Example: ["10.0.0.0/8"] (the cluster pod CIDR an ingress controller uses).
+trustedProxyCIDRs: []
+
+# =============================================================================
 # SMTP (builtin email notification channels)
 # =============================================================================
 # Process-level mail transport for email alert channels. Rendered into the
@@ -298,6 +313,11 @@ api:
   # before pointing external locations at it.
   # Example: "tls://nats.example.com:4222"
   publicNatsURL: ""
+  # Image the private-location deploy snippets (docker run / Compose) tell
+  # remote sites to run. Empty = "{image.repository}-worker:{image tag}", the
+  # same worker this release deploys. Set it when remote sites pull from a
+  # different registry or mirror. Rendered as LOCATION_WORKER_IMAGE.
+  locationWorkerImage: ""
   resources:
     requests:
       cpu: "100m"

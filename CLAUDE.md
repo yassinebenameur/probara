@@ -33,7 +33,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
 - `shared/db/migrations/` — golang-migrate pairs `NNNNNN_name.{up,down}.sql`
-  (take the next free number), applied by `cmd/migrate` — from the repo root
+  (take the next free number; numbering must stay contiguous — a gap is
+  silently skipped on upgraded installs, and `TestMigrationNumbering` fails on
+  one not in `knownMigrationGaps`), applied by `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
   Compose job, Helm a post-install/upgrade hook Job
 - `cmd/` — `migrate`, `discovery-collector` (the in-cluster Kubernetes
@@ -404,6 +406,25 @@ or imported groups come back empty. Any other path that creates groups through
   `go run ./cmd/admin/gen_vapid_keys`; never generate it at startup, and
   rotating it invalidates **every** stored subscription (`statusPage.vapid`
   in `values.yaml` explains both).
+- **`TRUSTED_PROXY_CIDRS`**: api and status-page. Every client IP (audit
+  log, session IPs, rate-limit keys) comes from `shared/clientip`, which
+  believes `X-Forwarded-For`/`X-Real-IP` only from those peers; never read a
+  forwarding header or `RemoteAddr` yourself — use `clientip.FromRequest`
+  (api, behind the router's resolver middleware) or a `Resolver`. Parsed once
+  in `shared/config` (`loadTrustedProxyCIDRs`); Compose passes it through to
+  both, Helm renders top-level `trustedProxyCIDRs` via `trustedProxyEnv`.
+  MCP carries the resolved IP to its inner dispatch as the inner
+  `RemoteAddr` (`clientIPHeader`), not as a forwarding header. The deprecated
+  `STATUS_PAGE_TRUSTED_PROXY=true` trusts every peer while the list is unset.
+- **`LOCATION_WORKER_IMAGE`** (api): the image private-location deploy
+  snippets reference. Unset defaults to the worker at the api's
+  `buildinfo.Version` (`:alpha` for unreleased builds) —
+  `locations.DefaultWorkerImage`; never `:latest`. Helm sets
+  `{image.repository}-worker:{imageTag}` (override `api.locationWorkerImage`);
+  Compose passes it through. `shared/buildinfo.Version` is stamped by
+  `-ldflags -X` from each Go Dockerfile's `VERSION` build-arg
+  (`docker-build.yml`: the metadata action's version; Compose:
+  `PROBARA_VERSION`); a new Go Dockerfile must stamp it too.
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job, but
   never the local AI pod, which holds no platform credentials — it has
   `localAI.extraEnv`) and `<service>.extraEnv`; `worker.extraEnv` also

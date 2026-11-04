@@ -296,3 +296,15 @@ the fail cases for an underivable token live in secret.yaml.
 {{- sha256sum (printf "probara/local-ai-token/v1:%s" .Values.secrets.adminJwtSecret) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+TRUSTED_PROXY_CIDRS for the workloads that resolve client addresses (api,
+status-page) from the top-level trustedProxyCIDRs list. Emits nothing when
+the list is empty, which is the code default (no proxy trusted).
+*/}}
+{{- define "monitoring-platform.trustedProxyEnv" -}}
+{{- with .Values.trustedProxyCIDRs }}
+- name: TRUSTED_PROXY_CIDRS
+  value: {{ join "," . | quote }}
+{{- end }}
+{{- end }}

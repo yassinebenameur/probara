@@ -74,6 +74,7 @@ import (
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -127,7 +128,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	r.Use(apimiddleware.RecoveryMiddleware(log))
 	r.Use(apimiddleware.LoggingMiddleware(log))
 	r.Use(apimiddleware.MetricsMiddleware(cfg.ServiceName))
-	r.Use(middleware.RealIP)
+	// Client address for audit and session IPs: forwarding headers count only
+	// from TRUSTED_PROXY_CIDRS peers (chi's RealIP believed them from anyone).
+	r.Use(clientip.NewResolver(cfg.TrustedProxyCIDRs).Middleware)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 
@@ -158,6 +161,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	locationSvc := locationservice.NewService(dbClient)
 	locationSvc.ConfigureEncryption(secretsEncryptor)
+	locationSvc.ConfigureWorkerImage(cfg.LocationWorkerImage)
 	var locationAuthorizer *locationnatsauthservice.Service
 	var locationAuthErr error
 	if cfg.NATSLocationAuthIssuerSeed != "" {
