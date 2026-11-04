@@ -171,6 +171,19 @@ func TargetsSQL() string {
 	return targetsSQL("$1", func(col string) string { return col + " = ANY($2)" })
 }
 
+// TenantTargetsSQL returns the `$1` tenant's default routes as
+// `(channel_id, delay_seconds, pos)`: the routing a default-mode monitor
+// inherits through TargetsSQL, without a monitor. Alerts that have no monitor
+// (mesh edges) route through it, so they follow the same tenant defaults a
+// default-mode monitor does. Like TargetsSQL it ignores is_active; callers
+// join alert_channels and order by pos.
+func TenantTargetsSQL() string {
+	return `
+		SELECT tdc.channel_id, tdc.delay_seconds, tdc.position AS pos
+		FROM tenant_default_channels tdc
+		WHERE tdc.tenant_id = $1`
+}
+
 // RoutesToChannelPredicate returns a SQL boolean that is TRUE when the monitor
 // aliased by monAlias currently routes to the channel channelIDExpr, i.e. when
 // TargetsSQL for that monitor would emit the channel. It is TargetsSQL's own

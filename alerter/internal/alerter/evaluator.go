@@ -1141,7 +1141,9 @@ func (a *Alerter) dispatchNotifications(
 }
 
 // shouldSendNotification is the in-memory pre-filter mirroring the claim
-// predicates in claimNotificationTx. Keep the two in step.
+// predicates in claimNotificationTx. Its created/reminder cases are dueEvent's
+// rule (dispatch_due.go) minus the escalation delay, which the legacy path
+// does not apply. Keep all three in step.
 func shouldSendNotification(eventType string, state *notificationState, now time.Time, reminderInterval time.Duration) bool {
 	switch eventType {
 	case "created":
@@ -1149,10 +1151,7 @@ func shouldSendNotification(eventType string, state *notificationState, now time
 	case "resolved":
 		return state == nil || state.LastEventType != "resolved"
 	case "reminder":
-		if state == nil || state.LastEventType == "resolved" || reminderInterval <= 0 {
-			return false
-		}
-		return now.Sub(state.LastSentAt) >= reminderInterval
+		return reminderDue(state, now, reminderInterval)
 	case "acknowledged":
 		return state != nil && state.LastEventType != "resolved" && state.AcknowledgedSentAt == nil
 	case "suspected_cause":

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
@@ -193,14 +194,14 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 }
 
 // resolveTenantDefaultChannels returns the tenant's default channel routing —
-// the only routing a monitor-less mesh alert can use.
+// the only routing a monitor-less mesh alert can use — from the shared
+// alertrouting.TenantTargetsSQL definition.
 func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uuid.UUID) ([]channelTarget, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, tdc.delay_seconds
-		FROM tenant_default_channels tdc
-		JOIN alert_channels ac ON ac.id = tdc.channel_id
-		WHERE tdc.tenant_id = $1
-		ORDER BY tdc.position, ac.id
+		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, x.delay_seconds
+		FROM (`+alertrouting.TenantTargetsSQL()+`) x
+		JOIN alert_channels ac ON ac.id = x.channel_id
+		ORDER BY x.pos, ac.id
 	`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve tenant default channels: %w", err)
@@ -283,16 +284,9 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 		reminderInterval := time.Duration(oa.reminderSeconds) * time.Second
 
 		for _, target := range targets {
-			if !target.channel.IsActive {
-				continue
-			}
 			state := getNotificationState(states, oa.edge.alertID, target.channel.ID)
-			switch {
-			case state == nil && alertAge >= target.delay:
-				a.fireChannel(ctx, "created", binding, &record, target.channel, now, reminderInterval)
-			case state != nil && state.LastEventType != "resolved" && reminderInterval > 0 &&
-				now.Sub(state.LastSentAt) >= reminderInterval:
-				a.fireChannel(ctx, "reminder", binding, &record, target.channel, now, reminderInterval)
+			if eventType, ok := dueEvent(now, state, target, alertAge, reminderInterval, DispatchGate{}); ok {
+				a.fireChannel(ctx, eventType, binding, &record, target.channel, now, reminderInterval)
 			}
 		}
 	}
