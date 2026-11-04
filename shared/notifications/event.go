@@ -127,14 +127,20 @@ func (d AlertDetails) ImpactedMonitorNames() []string {
 	return names
 }
 
-// KindAvailability, KindLatencyAnomaly, KindHostMetric, KindMeshEdge and
-// KindTLSExpiry are the alert kinds.
+// The alert kinds. This block mirrors the alerts_kind_check SQL constraint
+// (latest rewrite: migration 000100); change them together. KindDomainExpiry,
+// KindSLOBurn, KindLocationOffline and KindCheckWarning are reserved there
+// ahead of the features that open them.
 const (
-	KindAvailability   = "availability"
-	KindLatencyAnomaly = "latency_anomaly"
-	KindHostMetric     = "host_metric"
-	KindMeshEdge       = "mesh_edge"
-	KindTLSExpiry      = "tls_expiry"
+	KindAvailability    = "availability"
+	KindLatencyAnomaly  = "latency_anomaly"
+	KindHostMetric      = "host_metric"
+	KindMeshEdge        = "mesh_edge"
+	KindTLSExpiry       = "tls_expiry"
+	KindDomainExpiry    = "domain_expiry"
+	KindSLOBurn         = "slo_burn"
+	KindLocationOffline = "location_offline"
+	KindCheckWarning    = "check_warning"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.

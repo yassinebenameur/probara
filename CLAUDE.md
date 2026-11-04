@@ -277,7 +277,11 @@ or imported groups come back empty. Any other path that creates groups through
    the shared struct, so put `Validate()` on it rather than duplicating rules
 2. Validator in `api/internal/validation/` + register in `registry.go`, and
    its `ConfigType()` in `config_types.go` (the struct MCP's
-   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`)
+   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`);
+   an active type also goes in `activeCheckTypes` (`validation.go`). No
+   migration: `monitors_timeout_check` (000099) only names the passive types
+   (`shared/models/passive.go`), so a new passive type is the one case that
+   rewrites it
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
    through `dialGuard` (SSRF policy)
@@ -292,10 +296,17 @@ or imported groups come back empty. Any other path that creates groups through
    secrets coverage) — import/export support is automatic via the registry
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
    in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
+   `TypeIcon` in `shared/statustemplate/statustemplate.go`, the target
+   extractor in `newMonitorPresenters` (`status-page/internal/statuspage/presenter.go`),
    `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
-   `badge`), and the type count + `monitorGroups` on the
-   landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
+   `badge`), `monitorTargetLabel`/`monitorTarget` in `web/lib/monitor-utils.ts`,
+   the per-type case in `buildClonedConfig` (`web/lib/monitor-clone.ts`; drop
+   secrets the clone must re-enter), `monitorGroups` in
+   `website/lib/monitor-types.ts` (the landing and docs pages derive the type
+   count from it) and the count in the README prose
+8. Import: when Uptime Kuma has the type, map it in `kumaTypeTargets` and drop it
+   from `kumaSkipReasons` (`api/internal/services/import/kuma.go`)
 
 ## Cross-service contracts
 
@@ -528,6 +539,14 @@ or imported groups come back empty. Any other path that creates groups through
   there, never in a plugin or template. Email wraps it (`email/view.go`:
   `alertView` = `present.Message` + palette) so `alert.gohtml` (HTML part)
   and `renderAlertText` (plain-text part) render from one model.
+- **Alert kinds**: `alerts_kind_check` (latest rewrite 000100) and the
+  `Kind*` constants in `shared/notifications/event.go` list the same kinds;
+  a new kind rewrites the CHECK in one migration and adds its constant.
+- **Transactional mail** (invites, resets, subscriber mail, reports) goes
+  through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
+  MIME builder; `Message.Validate` is the header-injection guard. It never
+  falls back to the alert default recipients. Alert email stays on
+  `SendAlert`.
 - **Channel plugins** (`shared/notifications/plugin/builtin/<type>/`,
   registered in `builtin.go`) follow the checklist in the `plugin` package
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and
