@@ -174,7 +174,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (`TestUnreachablePredicateMatchesClassify` pins the pair).
   `RoutesToChannelPredicate` is `TargetsSQL`'s own union correlated per row,
   for batch queries that must drop unrouted pairs before a `LIMIT`
-  (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Escalation delays
+  (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Monitor-less alerts
+  (mesh edges) route through `TenantTargetsSQL`, the tenant defaults without
+  a monitor (`TestTenantTargetsSQLMatchesDefaults`). Escalation delays
   count from `DispatchEligibleSinceExpr` (the end of a cleared root cause's
   grace period, else `triggered_at`). Known asymmetry: member suppression
   ignores the group's `enabled` flag, so a paused `group`-rollup group
@@ -519,6 +521,11 @@ or imported groups come back empty. Any other path that creates groups through
   without leader election. The claim
   predicates in `claimNotificationTx` and the in-memory pre-filter
   `shouldSendNotification` encode the same due rules; change them together.
+  `dueEvent` (`dispatch_due.go`) is the single created/reminder due rule
+  for the open-alert loops (`dispatchOpenAlerts`, `dispatchOpenMeshAlerts`);
+  `shouldSendNotification` mirrors it minus the escalation delay
+  (`TestDueEvent` pins the pair). Alert-level holds (ack, snooze) go in its
+  `DispatchGate`, never in a loop.
   The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
   never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
@@ -534,7 +541,9 @@ or imported groups come back empty. Any other path that creates groups through
 - **Alert wording lives in `shared/notifications/present`**, for every
   channel. `present.Build` turns an event into one `Message` (label, summary,
   metric, facts, deep link, tone); plugins reach it via
-  `DispatchRequest.View()` and own layout only. Add a new alert kind's or
+  `DispatchRequest.View()`, which passes the delivery context (base URL,
+  channel, link signer) as `present.Options` to `BuildWith`, and own layout
+  only. Add a new alert kind's or
   event type's wording in `labelFor`/`summaryFor`/`toneFor`/`metricFor`
   there, never in a plugin or template. Email wraps it (`email/view.go`:
   `alertView` = `present.Message` + palette) so `alert.gohtml` (HTML part)

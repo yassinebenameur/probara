@@ -625,16 +625,9 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		reminderInterval := time.Duration(oa.reminderSeconds) * time.Second
 
 		for _, target := range targets {
-			if !target.channel.IsActive {
-				continue
-			}
 			state := getNotificationState(states, oa.record.ID, target.channel.ID)
-			switch {
-			case state == nil && alertAge >= target.delay:
-				a.fireChannel(ctx, "created", binding, &oa.record, target.channel, now, reminderInterval)
-			case state != nil && state.LastEventType != "resolved" && reminderInterval > 0 &&
-				now.Sub(state.LastSentAt) >= reminderInterval:
-				a.fireChannel(ctx, "reminder", binding, &oa.record, target.channel, now, reminderInterval)
+			if eventType, ok := dueEvent(now, state, target, alertAge, reminderInterval, DispatchGate{}); ok {
+				a.fireChannel(ctx, eventType, binding, &oa.record, target.channel, now, reminderInterval)
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -690,6 +691,66 @@ func TestRoutesToChannelPredicateMatchesTargetsSQL(t *testing.T) {
 	}
 	if pairs != len(monitors)*4 {
 		t.Fatalf("compared %d pairs, want %d", pairs, len(monitors)*4)
+	}
+}
+
+// TenantTargetsSQL is the default branch of TargetsSQL without a monitor: for
+// a default-mode monitor the two must emit the same (channel, delay, pos)
+// routes, or mesh alerts and monitor alerts would follow different tenant
+// defaults. A custom-mode monitor never sees them.
+func TestTenantTargetsSQLMatchesDefaults(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	type route struct {
+		channel uuid.UUID
+		delay   int
+		pos     int
+	}
+	collect := func(query string, args ...any) []route {
+		t.Helper()
+		rows, err := db.QueryContext(ctx, `SELECT channel_id, delay_seconds, pos FROM (`+query+`) x ORDER BY pos, channel_id`, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []route
+		for rows.Next() {
+			var r route
+			if err := rows.Scan(&r.channel, &r.delay, &r.pos); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, r)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	for i := 0; i < 2; i++ {
+		tenant := testutil.InsertTenant(ctx, t, db, "")
+		insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		later := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		disabled := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		mustExec(ctx, t, db, `UPDATE tenant_default_channels SET delay_seconds = 300 WHERE channel_id = $1`, later)
+		mustExec(ctx, t, db, `UPDATE alert_channels SET is_active = FALSE WHERE id = $1`, disabled)
+		def := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "default")
+		custom := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "custom")
+		mustExec(ctx, t, db, `UPDATE monitors SET notification_mode = 'custom' WHERE id = $1`, custom)
+
+		tenantRoutes := collect(alertrouting.TenantTargetsSQL(), tenant)
+		if len(tenantRoutes) != 3 {
+			t.Fatalf("tenant %d: TenantTargetsSQL returned %d routes, want 3 (disabled channels included)", i, len(tenantRoutes))
+		}
+		monitorRoutes := collect(alertrouting.TargetsSQL(), tenant, pq.Array([]uuid.UUID{def}))
+		if !reflect.DeepEqual(tenantRoutes, monitorRoutes) {
+			t.Fatalf("tenant %d: TenantTargetsSQL %v, TargetsSQL for a default-mode monitor %v", i, tenantRoutes, monitorRoutes)
+		}
+		if got := collect(alertrouting.TargetsSQL(), tenant, pq.Array([]uuid.UUID{custom})); len(got) != 0 {
+			t.Fatalf("tenant %d: custom-mode monitor inherited tenant defaults %v", i, got)
+		}
 	}
 }
 

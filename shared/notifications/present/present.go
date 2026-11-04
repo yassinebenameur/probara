@@ -105,10 +105,40 @@ type Message struct {
 	Resolved  bool
 }
 
+// LinkSigner mints the signed token behind a one-click action link (for
+// example "acknowledge this alert") for one alert as delivered on one channel.
+// Options.Links may be nil, and a nil signer means no action links: Build
+// renders none today either way.
+type LinkSigner interface {
+	// ActionToken returns an opaque, URL-safe token authorizing action on
+	// alertID in tenantID, as delivered on channelID, or an error when no
+	// token can be minted (no key configured).
+	ActionToken(action, tenantID, alertID, channelID string) (string, error)
+}
+
+// Options is the delivery context a Message is built for, beyond the event
+// itself.
+type Options struct {
+	// AppBaseURL is the public operator-UI origin; empty omits every link.
+	AppBaseURL string
+	// Links signs action links; nil omits them.
+	Links LinkSigner
+	// ChannelID is the channel this Message is delivered on, which action
+	// links are scoped to. Empty for channel-less renders (previews).
+	ChannelID string
+}
+
 // Build resolves an event into a Message. eventType overrides event.Type when
 // set (dispatch requests carry both). appBaseURL is the public operator-UI
-// origin; empty omits the deep link.
+// origin; empty omits the deep link. It is BuildWith with only AppBaseURL set.
 func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message {
+	return BuildWith(event, eventType, Options{AppBaseURL: appBaseURL})
+}
+
+// BuildWith resolves an event into a Message for the delivery context opts.
+// eventType overrides event.Type when set (dispatch requests carry both).
+func BuildWith(event notifications.AlertEvent, eventType string, opts Options) Message {
+	appBaseURL := opts.AppBaseURL
 	if eventType == "" {
 		eventType = event.Type
 	}

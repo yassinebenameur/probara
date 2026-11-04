@@ -22,18 +22,18 @@ type AlertService interface {
 	// GetRecentAlertsForTags retrieves recent alerts scoped to monitors carrying any of the tags.
 	GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID, tags []string, limit int) ([]models.AlertWithDetails, error)
 
-	// AcknowledgeAlert marks an alert as acknowledged
-	AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error)
+	// AcknowledgeAlert marks an alert as acknowledged by actor
+	AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error)
 
-	// ResolveAlert marks an alert as resolved
-	ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error)
+	// ResolveAlert marks an alert as resolved by actor
+	ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error)
 
 	// BulkAcknowledge acknowledges each listed active alert; the rest are
 	// reported per id, never failing the batch.
-	BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error)
+	BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID, actor Actor) (*BulkResult, error)
 
 	// BulkResolve resolves each listed open alert; the rest are reported per id.
-	BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error)
+	BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID, actor Actor) (*BulkResult, error)
 
 	// CreateAlert creates a new alert (used by alerter service)
 	CreateAlert(ctx context.Context, tenantID, monitorID, policyID uuid.UUID, failureCount int, lastError *string) (*models.AlertWithDetails, error)

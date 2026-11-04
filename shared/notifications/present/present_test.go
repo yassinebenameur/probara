@@ -1,6 +1,7 @@
 package present
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,33 @@ func TestBuildCreated(t *testing.T) {
 	}
 	if m.Duration() != "" {
 		t.Errorf("a fresh alert has no duration yet, got %q", m.Duration())
+	}
+}
+
+type stubSigner struct{ calls int }
+
+func (s *stubSigner) ActionToken(action, tenantID, alertID, channelID string) (string, error) {
+	s.calls++
+	return "token", nil
+}
+
+// Build is BuildWith with only AppBaseURL set, and the delivery context the
+// later action links need (signer, channel) changes nothing yet.
+func TestBuildWithMatchesBuild(t *testing.T) {
+	base := "https://probara.example.com/"
+	for _, eventType := range []string{"", EventCreated, EventReminder, EventResolved, EventAcknowledged, EventSuspectedCause} {
+		want := Build(sample(), eventType, base)
+		if got := BuildWith(sample(), eventType, Options{AppBaseURL: base}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%q: BuildWith %+v, Build %+v", eventType, got, want)
+		}
+		signer := &stubSigner{}
+		got := BuildWith(sample(), eventType, Options{AppBaseURL: base, Links: signer, ChannelID: "c-1"})
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%q: signer and channel changed the message: %+v", eventType, got)
+		}
+		if signer.calls != 0 {
+			t.Fatalf("%q: signer called %d times, want none", eventType, signer.calls)
+		}
 	}
 }
 

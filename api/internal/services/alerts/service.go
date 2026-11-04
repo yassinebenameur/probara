@@ -345,8 +345,9 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	return alerts, nil
 }
 
-// AcknowledgeAlert marks an alert as acknowledged
-func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
+// AcknowledgeAlert marks an alert as acknowledged. actor is accepted but not
+// persisted yet.
+func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error) {
 	now := time.Now()
 	query := `
 		UPDATE alerts
@@ -367,8 +368,9 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 	return s.getAlert(ctx, tenantID, alertID)
 }
 
-// ResolveAlert marks an alert as resolved
-func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
+// ResolveAlert marks an alert as resolved. actor is accepted but not
+// persisted yet.
+func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error) {
 	now := time.Now()
 	query := `
 		UPDATE alerts

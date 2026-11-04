@@ -91,7 +91,7 @@ func TestServiceResolveAlertInvokesIncidentRecoveryAutomation(t *testing.T) {
 	}
 	svc := NewService(dbClient, automation)
 
-	if _, err := svc.ResolveAlert(ctx, tenantID, alertID); err != nil {
+	if _, err := svc.ResolveAlert(ctx, tenantID, alertID, Actor{Via: ViaAPI}); err != nil {
 		t.Fatalf("ResolveAlert() error = %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestServiceResolveAlertRollsBackWhenIncidentAutomationFails(t *testing.T) {
 	automation := &fakeIncidentAutomation{recoveryErr: errors.New("recovery failed")}
 	svc := NewService(dbClient, automation)
 
-	if _, err := svc.ResolveAlert(ctx, tenantID, alertID); err == nil {
+	if _, err := svc.ResolveAlert(ctx, tenantID, alertID, Actor{Via: ViaAPI}); err == nil {
 		t.Fatalf("expected ResolveAlert() error")
 	}
 
