@@ -27,12 +27,12 @@ type fakeBulkService struct {
 	result    *alertservice.BulkResult
 }
 
-func (f *fakeBulkService) BulkAcknowledge(_ context.Context, tenantID uuid.UUID, ids []uuid.UUID) (*alertservice.BulkResult, error) {
+func (f *fakeBulkService) BulkAcknowledge(_ context.Context, tenantID uuid.UUID, ids []uuid.UUID, _ alertservice.Actor) (*alertservice.BulkResult, error) {
 	f.gotTenant, f.gotIDs = tenantID, ids
 	return f.result, nil
 }
 
-func (f *fakeBulkService) BulkResolve(_ context.Context, tenantID uuid.UUID, ids []uuid.UUID) (*alertservice.BulkResult, error) {
+func (f *fakeBulkService) BulkResolve(_ context.Context, tenantID uuid.UUID, ids []uuid.UUID, _ alertservice.Actor) (*alertservice.BulkResult, error) {
 	f.gotTenant, f.gotIDs = tenantID, ids
 	return f.result, nil
 }

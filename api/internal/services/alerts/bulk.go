@@ -61,8 +61,9 @@ const bulkTargetCTE = `
 
 // BulkAcknowledge acknowledges every listed alert that is still active. The
 // others are reported in Failed (not found, already acknowledged or already
-// resolved); they never fail the request.
-func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error) {
+// resolved); they never fail the request. actor is accepted but not
+// persisted yet.
+func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID, actor Actor) (*BulkResult, error) {
 	ids := dedupeIDs(alertIDs)
 	now := time.Now()
 	changed, err := collectIDs(s.db.QueryContext(ctx, bulkTargetCTE+`
@@ -80,8 +81,9 @@ func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alert
 
 // BulkResolve resolves every listed alert that is still open (active or
 // acknowledged), recording incident recovery for each in the same
-// transaction as ResolveAlert does. The others are reported in Failed.
-func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error) {
+// transaction as ResolveAlert does. The others are reported in Failed. actor
+// is accepted but not persisted yet.
+func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID, actor Actor) (*BulkResult, error) {
 	ids := dedupeIDs(alertIDs)
 	now := time.Now()
 

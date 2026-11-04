@@ -232,7 +232,7 @@ func (h *Handlers) AcknowledgeAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	alert, err := h.service.AcknowledgeAlert(r.Context(), tenantUUID, alertID)
+	alert, err := h.service.AcknowledgeAlert(r.Context(), tenantUUID, alertID, alertservice.ActorFromContext(r.Context()))
 	if err != nil {
 		if err.Error() == "alert not found or not active" {
 			errors.WriteNotFoundError(w, err.Error())
@@ -275,7 +275,7 @@ func (h *Handlers) ResolveAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	alert, err := h.service.ResolveAlert(r.Context(), tenantUUID, alertID)
+	alert, err := h.service.ResolveAlert(r.Context(), tenantUUID, alertID, alertservice.ActorFromContext(r.Context()))
 	if err != nil {
 		if err.Error() == "alert not found or already resolved" {
 			errors.WriteNotFoundError(w, err.Error())

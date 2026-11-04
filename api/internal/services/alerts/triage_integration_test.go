@@ -208,11 +208,11 @@ func TestAlertsCarryTriage(t *testing.T) {
 
 	// Ack/resolve responses carry the compact triage without label context,
 	// and triage never touches the alert row itself.
-	acked, err := svc.AcknowledgeAlert(ctx, tenant, ready)
+	acked, err := svc.AcknowledgeAlert(ctx, tenant, ready, Actor{Via: ViaAPI})
 	if err != nil || acked.Triage == nil || acked.Triage.Status != "ready" || acked.Triage.LabelContext != nil {
 		t.Fatalf("ack: %+v %v", acked, err)
 	}
-	resolved, err := svc.ResolveAlert(ctx, tenant, pending)
+	resolved, err := svc.ResolveAlert(ctx, tenant, pending, Actor{Via: ViaAPI})
 	if err != nil || resolved.Triage == nil || resolved.Triage.Status != "pending" {
 		t.Fatalf("resolve: %+v %v", resolved, err)
 	}
