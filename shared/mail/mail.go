@@ -22,6 +22,10 @@ type Sender interface {
 
 // Message is one transactional email. From is the mailer's configured sender.
 // To is required and never falls back to the alert default-recipient list.
+// Every address in To appears in the one To: header that all of them receive
+// (there is no Bcc), so audience mail — status-page subscribers, report
+// recipients outside the tenant — must send one Message per recipient;
+// batching them would disclose each address to the others.
 // Text is the required plain-text part; HTML, when set, makes the body
 // multipart/alternative, and Attachments wrap it in multipart/mixed.
 type Message struct {
