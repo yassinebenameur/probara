@@ -403,6 +403,15 @@ or imported groups come back empty. Any other path that creates groups through
   MCP carries the resolved IP to its inner dispatch as the inner
   `RemoteAddr` (`clientIPHeader`), not as a forwarding header. The deprecated
   `STATUS_PAGE_TRUSTED_PROXY=true` trusts every peer while the list is unset.
+- **`LOCATION_WORKER_IMAGE`** (api): the image private-location deploy
+  snippets reference. Unset defaults to the worker at the api's
+  `buildinfo.Version` (`:alpha` for unreleased builds) —
+  `locations.DefaultWorkerImage`; never `:latest`. Helm sets
+  `{image.repository}-worker:{imageTag}` (override `api.locationWorkerImage`);
+  Compose passes it through. `shared/buildinfo.Version` is stamped by
+  `-ldflags -X` from each Go Dockerfile's `VERSION` build-arg
+  (`docker-build.yml`: the metadata action's version; Compose:
+  `PROBARA_VERSION`); a new Go Dockerfile must stamp it too.
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job, but
   never the local AI pod, which holds no platform credentials — it has
   `localAI.extraEnv`) and `<service>.extraEnv`; `worker.extraEnv` also

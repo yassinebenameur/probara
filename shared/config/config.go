@@ -200,6 +200,10 @@ type APIConfig struct {
 	// TrustedProxyCIDRs is TRUSTED_PROXY_CIDRS: the proxies whose forwarding
 	// headers resolve the client address (audit log, session IPs).
 	TrustedProxyCIDRs []netip.Prefix
+	// LocationWorkerImage is LOCATION_WORKER_IMAGE, the image private-location
+	// deploy snippets reference. Empty means the locations service default
+	// (the worker image at this build's release version).
+	LocationWorkerImage string
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -625,6 +629,7 @@ func LoadAPIConfig() (*APIConfig, error) {
 	if cfg.TrustedProxyCIDRs, err = loadTrustedProxyCIDRs(); err != nil {
 		return nil, err
 	}
+	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
 
 	return cfg, nil
 }

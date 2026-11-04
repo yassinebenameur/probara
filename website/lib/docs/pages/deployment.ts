@@ -460,6 +460,11 @@ kubectl -n probara get jobs`,
               'External API origin and optional external TLS/WSS NATS endpoint.',
             ],
             [
+              '`api.locationWorkerImage`',
+              'Empty: `{image.repository}-worker:{image tag}`',
+              'Image the generated [location-worker snippets](/docs/locations/#create-and-deploy) reference (`LOCATION_WORKER_IMAGE`). The default is the worker this release deploys; override it when remote sites pull from a mirror.',
+            ],
+            [
               '`trustedProxyCIDRs`',
               '`[]`',
               'CIDRs or IPs of your ingress controller or load balancer, rendered as `TRUSTED_PROXY_CIDRS` into the API and status-page. Only these peers’ `X-Forwarded-For` / `X-Real-IP` resolve [client IPs](/docs/security/#audit-proxy-trust) for audit records, sessions, and the push rate limit; empty records the ingress pod address.',

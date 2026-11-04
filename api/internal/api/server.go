@@ -161,6 +161,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	locationSvc := locationservice.NewService(dbClient)
 	locationSvc.ConfigureEncryption(secretsEncryptor)
+	locationSvc.ConfigureWorkerImage(cfg.LocationWorkerImage)
 	var locationAuthorizer *locationnatsauthservice.Service
 	var locationAuthErr error
 	if cfg.NATSLocationAuthIssuerSeed != "" {

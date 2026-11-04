@@ -44,6 +44,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.migrations
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-migrations
     environment:
       POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
@@ -127,6 +129,11 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+      # Stamped into shared/buildinfo. A release number (e.g. 2.0.0-alpha.10)
+      # also makes the api default LOCATION_WORKER_IMAGE to the worker at that
+      # tag; unset builds report "dev" and default it to :alpha.
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-api
     environment:
       # Local AI client (api + worker only; same token as the local-ai service).
@@ -171,6 +178,9 @@ services:
       # audit and session IPs (comma-separated CIDRs or IPs). Empty = the TCP
       # peer only. Set the same value on status-page.
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      # Image the private-location deploy snippets reference. Empty = the
+      # worker at this api's release version (see the build args above).
+      LOCATION_WORKER_IMAGE: "${LOCATION_WORKER_IMAGE:-}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -197,6 +207,8 @@ services:
     build:
       context: .
       dockerfile: scheduler/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-scheduler
     environment:
       HTTP_PORT: "8081"
@@ -236,6 +248,8 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-worker
     environment:
       # Local AI client (api + worker only; same token as the local-ai service).
@@ -317,6 +331,8 @@ services:
     build:
       context: .
       dockerfile: status-page/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-status-page
     environment:
       HTTP_PORT: "8082"
@@ -367,6 +383,8 @@ services:
     build:
       context: .
       dockerfile: alerter/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-alerter
     environment:
       HTTP_PORT: "8084"

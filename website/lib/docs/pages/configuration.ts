@@ -191,6 +191,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected.',
             ],
             [
+              '`LOCATION_WORKER_IMAGE`',
+              'Empty: `ghcr.io/yassinebenameur/probara-worker:<API version>`, or `:alpha` for an unreleased build',
+              'Image the generated location-worker snippets reference. Released API images default to the worker at their own version, so a new location runs the same release as the platform; builds without a release version (local, Compose without `PROBARA_VERSION`) fall back to the newest prerelease tag. Helm sets it to `{image.repository}-worker:{image tag}` (override with `api.locationWorkerImage`); Compose passes it through from the shell. Set it for a mirror registry.',
+            ],
+            [
               '`NATS_LOCATION_AUTH_ISSUER_SEED`',
               'Empty',
               'Required whenever `PUBLIC_NATS_URL` is nonempty. It must be a NATS account seed for the API-hosted authorization callout.',

@@ -5,15 +5,44 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/buildinfo"
 )
 
-// workerImage is the published worker image the deploy snippets reference
-// (matches the Helm chart's "{repository}-worker:{tag}" convention).
-const workerImage = "ghcr.io/yassinebenameur/probara-worker:latest"
+// workerImageRepository is the published worker image (the Helm chart's
+// "{repository}-worker" convention, at its default repository).
+const workerImageRepository = "ghcr.io/yassinebenameur/probara-worker"
+
+// DefaultWorkerImage is the image deploy snippets reference when
+// LOCATION_WORKER_IMAGE is unset: the worker at this API's own release
+// version, so a location worker speaks the same NATS contract as the
+// platform it joins. Every release, prerelease included, pushes that exact
+// tag. Unreleased builds (dev, branch builds) have no matching tag, so they
+// fall back to "alpha", the newest prerelease. Never "latest": it moves only
+// on stable releases and lagged the platform by a major version.
+func DefaultWorkerImage() string {
+	if v, ok := buildinfo.ReleaseVersion(); ok {
+		return workerImageRepository + ":" + v
+	}
+	return workerImageRepository + ":alpha"
+}
+
+// ConfigureWorkerImage sets the image deploy snippets reference
+// (LOCATION_WORKER_IMAGE). Empty keeps DefaultWorkerImage.
+func (s *Service) ConfigureWorkerImage(image string) {
+	s.workerImage = strings.TrimSpace(image)
+}
+
+func (s *Service) deployWorkerImage() string {
+	if s.workerImage != "" {
+		return s.workerImage
+	}
+	return DefaultWorkerImage()
+}
 
 // GenerateDeployInfo builds ready-to-paste deployment snippets for a
 // location's worker. The worker only needs NATS reachability — results travel
@@ -50,6 +79,7 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
 		"METRICS_PORT":        "9090",
 	}
 
+	image := s.deployWorkerImage()
 	containerName := "probara-worker-" + location.Slug
 	// Port 8080 is the mesh echo endpoint (GET /mesh/echo). Publish it and set
 	// this host's reachable host:port as the location's "Mesh endpoint" to let
@@ -63,7 +93,7 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
   -e LOCATION_CREDENTIAL=%q \
   -e HTTP_PORT=8080 \
   -e METRICS_PORT=9090 \
-  %s`, containerName, natsURL, location.ID.String(), credential, workerImage)
+  %s`, containerName, natsURL, location.ID.String(), credential, image)
 
 	compose := fmt.Sprintf(`services:
   worker-%s:
@@ -78,7 +108,7 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
       LOCATION_CREDENTIAL: %q
       HTTP_PORT: "8080"
       METRICS_PORT: "9090"
-`, location.Slug, workerImage, natsURL, location.ID.String(), credential)
+`, location.Slug, image, natsURL, location.ID.String(), credential)
 
 	return &models.LocationDeployInfo{
 		LocationID:        location.ID,

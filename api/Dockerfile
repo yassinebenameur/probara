@@ -10,14 +10,18 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the API application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/api ./api/cmd/api
-
 # Build probara-collector binaries for distribution (minimal OTel Collector,
 # OCB manifest in collector/manifest.yaml; scripts/build-collector.sh is the
 # same pipeline for local dev). The pinned builder version must match the
 # manifest's component versions — bump together.
 RUN BUILD_DIR=/app/static/collector sh scripts/build-collector.sh
+
+# Release version stamped into shared/buildinfo (docker-build.yml passes the
+# metadata action's version). Declared just before the build so a new version
+# only invalidates this layer.
+ARG VERSION=dev
+# Build the API application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags "-X github.com/yassinebenameur/probara/shared/buildinfo.Version=${VERSION}" -o /app/api ./api/cmd/api
 
 # Runtime stage
 FROM alpine:latest

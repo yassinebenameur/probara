@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/shared/buildinfo"
 	"github.com/yassinebenameur/probara/shared/clientip"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -142,7 +142,7 @@ type Handler struct {
 func NewHandler(log *logger.Logger, resourceMetadata func(*http.Request) string) *Handler {
 	return &Handler{
 		log:              log,
-		version:          buildVersion(),
+		version:          buildinfo.Version,
 		resourceMetadata: resourceMetadata,
 		servers:          map[capability]*mcp.Server{},
 	}
@@ -407,13 +407,4 @@ func (h *Handler) ToolNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// buildVersion reports the module version the binary was built at, for the
-// MCP server's implementation info.
-func buildVersion() string {
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-	return "dev"
 }

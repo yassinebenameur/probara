@@ -313,6 +313,11 @@ api:
   # before pointing external locations at it.
   # Example: "tls://nats.example.com:4222"
   publicNatsURL: ""
+  # Image the private-location deploy snippets (docker run / Compose) tell
+  # remote sites to run. Empty = "{image.repository}-worker:{image tag}", the
+  # same worker this release deploys. Set it when remote sites pull from a
+  # different registry or mirror. Rendered as LOCATION_WORKER_IMAGE.
+  locationWorkerImage: ""
   resources:
     requests:
       cpu: "100m"

@@ -334,24 +334,29 @@ func TestLoadWorkerConfig_SIPCall(t *testing.T) {
 	}
 }
 
-func TestLoadAPIConfig_TrustedProxies(t *testing.T) {
+func TestLoadAPIConfig_TrustedProxiesAndWorkerImage(t *testing.T) {
 	setRequiredAPIEnv(t)
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("LOCATION_WORKER_IMAGE", "")
 	cfg, err := LoadAPIConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.TrustedProxyCIDRs) != 0 {
-		t.Fatalf("default trusted = %v", cfg.TrustedProxyCIDRs)
+	if len(cfg.TrustedProxyCIDRs) != 0 || cfg.LocationWorkerImage != "" {
+		t.Fatalf("defaults: trusted=%v image=%q", cfg.TrustedProxyCIDRs, cfg.LocationWorkerImage)
 	}
 
 	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.168.1.7")
+	t.Setenv("LOCATION_WORKER_IMAGE", " registry.example/probara-worker:2.0.0 ")
 	cfg, err = LoadAPIConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[1].String() != "192.168.1.7/32" {
 		t.Fatalf("trusted = %v", cfg.TrustedProxyCIDRs)
+	}
+	if cfg.LocationWorkerImage != "registry.example/probara-worker:2.0.0" {
+		t.Fatalf("image = %q", cfg.LocationWorkerImage)
 	}
 
 	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8,proxy.internal")

@@ -42,6 +42,8 @@ const connectedWindow = time.Minute
 type Service struct {
 	db        *db.Client
 	encryptor secrets.Encryptor
+	// workerImage is LOCATION_WORKER_IMAGE; empty means DefaultWorkerImage.
+	workerImage string
 }
 
 // NewService creates a new locations service.
