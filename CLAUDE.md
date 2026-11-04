@@ -33,7 +33,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
 - `shared/db/migrations/` — golang-migrate pairs `NNNNNN_name.{up,down}.sql`
-  (take the next free number), applied by `cmd/migrate` — from the repo root
+  (take the next free number; numbering must stay contiguous — a gap is
+  silently skipped on upgraded installs, and `TestMigrationNumbering` fails on
+  one not in `knownMigrationGaps`), applied by `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
   Compose job, Helm a post-install/upgrade hook Job
 - `cmd/` — `migrate`, `discovery-collector` (the in-cluster Kubernetes
