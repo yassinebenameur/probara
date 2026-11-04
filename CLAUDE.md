@@ -282,7 +282,9 @@ or imported groups come back empty. Any other path that creates groups through
 2. Validator in `api/internal/validation/` + register in `registry.go`, and
    its `ConfigType()` in `config_types.go` (the struct MCP's
    `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`);
-   an active type also goes in `activeCheckTypes` (`validation.go`). No
+   an active type also goes in `activeCheckTypes` (`validation.go`) —
+   `TestRegistryTypesArePartitionedActiveOrPassive` fails otherwise, since the
+   database no longer lists types. No
    migration: `monitors_timeout_check` (000099) only names the passive types
    (`shared/models/passive.go`), so a new passive type is the one case that
    rewrites it
