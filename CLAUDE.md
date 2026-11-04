@@ -277,7 +277,11 @@ or imported groups come back empty. Any other path that creates groups through
    the shared struct, so put `Validate()` on it rather than duplicating rules
 2. Validator in `api/internal/validation/` + register in `registry.go`, and
    its `ConfigType()` in `config_types.go` (the struct MCP's
-   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`)
+   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`);
+   an active type also goes in `activeCheckTypes` (`validation.go`). No
+   migration: `monitors_timeout_check` (000099) only names the passive types
+   (`shared/models/passive.go`), so a new passive type is the one case that
+   rewrites it
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
    through `dialGuard` (SSRF policy)
@@ -528,6 +532,9 @@ or imported groups come back empty. Any other path that creates groups through
   there, never in a plugin or template. Email wraps it (`email/view.go`:
   `alertView` = `present.Message` + palette) so `alert.gohtml` (HTML part)
   and `renderAlertText` (plain-text part) render from one model.
+- **Alert kinds**: `alerts_kind_check` (latest rewrite 000100) and the
+  `Kind*` constants in `shared/notifications/event.go` list the same kinds;
+  a new kind rewrites the CHECK in one migration and adds its constant.
 - **Channel plugins** (`shared/notifications/plugin/builtin/<type>/`,
   registered in `builtin.go`) follow the checklist in the `plugin` package
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and

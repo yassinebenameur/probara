@@ -5,7 +5,9 @@ package models
 // receives. The scheduler never dispatches them, run-now refuses them, the
 // worker skips any stray job for one, and the stale watchdog leaves them to
 // the heartbeat pass. web/app/monitors/[id]/page.tsx (PASSIVE_TYPES) mirrors
-// this list.
+// this list, and so does the monitors_timeout_check SQL constraint (migration
+// 000099): only these types skip its 0 < timeout < interval rule, so adding a
+// passive type means a migration rewriting it; active types need none.
 var PassiveMonitorTypes = []string{"group", "push", "agent"}
 
 // IsPassiveMonitorType reports whether monitorType is in PassiveMonitorTypes.
