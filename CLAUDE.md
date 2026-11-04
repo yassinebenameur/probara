@@ -530,7 +530,9 @@ or imported groups come back empty. Any other path that creates groups through
 - **Alert wording lives in `shared/notifications/present`**, for every
   channel. `present.Build` turns an event into one `Message` (label, summary,
   metric, facts, deep link, tone); plugins reach it via
-  `DispatchRequest.View()` and own layout only. Add a new alert kind's or
+  `DispatchRequest.View()`, which passes the delivery context (base URL,
+  channel, link signer) as `present.Options` to `BuildWith`, and own layout
+  only. Add a new alert kind's or
   event type's wording in `labelFor`/`summaryFor`/`toneFor`/`metricFor`
   there, never in a plugin or template. Email wraps it (`email/view.go`:
   `alertView` = `present.Message` + palette) so `alert.gohtml` (HTML part)
