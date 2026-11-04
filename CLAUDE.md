@@ -296,10 +296,17 @@ or imported groups come back empty. Any other path that creates groups through
    secrets coverage) — import/export support is automatic via the registry
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
    in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
+   `TypeIcon` in `shared/statustemplate/statustemplate.go`, the target
+   extractor in `newMonitorPresenters` (`status-page/internal/statuspage/presenter.go`),
    `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
-   `badge`), and the type count + `monitorGroups` on the
-   landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
+   `badge`), `monitorTargetLabel`/`monitorTarget` in `web/lib/monitor-utils.ts`,
+   the per-type case in `buildClonedConfig` (`web/lib/monitor-clone.ts`; drop
+   secrets the clone must re-enter), `monitorGroups` in
+   `website/lib/monitor-types.ts` (the landing and docs pages derive the type
+   count from it) and the count in the README prose
+8. Import: when Uptime Kuma has the type, map it in `kumaTypeTargets` and drop it
+   from `kumaSkipReasons` (`api/internal/services/import/kuma.go`)
 
 ## Cross-service contracts
 

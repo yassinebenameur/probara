@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { DOC_NAVIGATION } from '@/lib/docs/navigation';
 import { CodeBlock } from '@/components/docs/CodeBlock';
+import { MONITOR_TYPE_COUNT } from '@/lib/monitor-types';
 
 export const metadata: Metadata = {
   title: 'Documentation',
@@ -31,7 +32,7 @@ const paths = [
   },
   {
     title: 'Build your monitor fleet',
-    text: 'Configure all 18 monitor types, locations, quorum, dependencies, agents, and pushes.',
+    text: `Configure all ${MONITOR_TYPE_COUNT} monitor types, locations, quorum, dependencies, agents, and pushes.`,
     href: '/docs/monitors/',
     icon: Stethoscope,
   },
