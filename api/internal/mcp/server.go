@@ -23,6 +23,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
@@ -299,9 +300,12 @@ func (h *Handler) Protect(auth func(http.Handler) http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.Clone(r.Context())
 		r.Header.Del("Cookie")
-		if r.Header.Get("X-Forwarded-For") == "" {
-			r.Header.Set("X-Forwarded-For", clientIP(r.RemoteAddr))
-		}
+		// The tool call reaches dispatch with only this request's headers,
+		// so the client address resolved here (shared/clientip, behind the
+		// trusted-proxy list) rides in a header the caller cannot set: Set
+		// overwrites anything they sent. buildRequest turns it into the
+		// inner request's RemoteAddr.
+		r.Header.Set(clientIPHeader, clientip.FromRequest(r))
 		var challenge string
 		if h.resourceMetadata != nil {
 			challenge = fmt.Sprintf(`Bearer resource_metadata=%q`, h.resourceMetadata(r))

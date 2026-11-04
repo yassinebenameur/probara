@@ -158,6 +158,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`365`; nonnegative integer; `0` keeps records forever',
               'Compose and Helm expose the audit-retention setting; the API owns pruning.',
             ],
+            [
+              '`TRUSTED_PROXY_CIDRS`',
+              'Empty (no proxy trusted: the TCP peer is the client); comma-separated CIDRs or bare IPs, an invalid entry stops startup',
+              'The [trusted proxies](/docs/security/#audit-proxy-trust) whose `X-Forwarded-For` / `X-Real-IP` resolve the IP in audit records and admin sessions. Read by the API and the status-page service. Compose passes it through from the shell to both; Helm renders the top-level `trustedProxyCIDRs` list into both.',
+            ],
           ],
         },
         {
@@ -815,9 +820,14 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Cap on stored subscriptions per status page. Invalid or nonpositive input falls back to the default.',
             ],
             [
+              '`TRUSTED_PROXY_CIDRS`',
+              'Empty',
+              'Same variable and meaning as on the API: the [trusted proxies](/docs/security/#audit-proxy-trust) whose forwarding headers key the push subscribe rate limit. Empty uses the TCP peer.',
+            ],
+            [
               '`STATUS_PAGE_TRUSTED_PROXY`',
               '`false`',
-              'Honor `X-Forwarded-For` when rate-limiting push subscribes. Off by default because the header is client-settable.',
+              'Deprecated. `true` trusts `X-Forwarded-For` from every peer, and applies only while `TRUSTED_PROXY_CIDRS` is unset; the service logs a warning. Use `TRUSTED_PROXY_CIDRS`.',
             ],
           ],
         },
@@ -1025,6 +1035,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],
             ['Status cache, proxy, preview, timeout, update subject', 'Preview only; most defaults', 'Not wired'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
+            ['Trusted proxies (`TRUSTED_PROXY_CIDRS`)', 'Passed through from the shell to API and status-page', 'Top-level `trustedProxyCIDRs` rendered into API and status-page'],
             ['Arbitrary extra environment', 'Requires editing Compose', 'No `extraEnv`; requires chart template change'],
           ],
         },

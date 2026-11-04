@@ -333,3 +333,65 @@ func TestLoadWorkerConfig_SIPCall(t *testing.T) {
 		t.Fatalf("invalid pattern accepted: %v", err)
 	}
 }
+
+func TestLoadAPIConfig_TrustedProxies(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 {
+		t.Fatalf("default trusted = %v", cfg.TrustedProxyCIDRs)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.168.1.7")
+	cfg, err = LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[1].String() != "192.168.1.7/32" {
+		t.Fatalf("trusted = %v", cfg.TrustedProxyCIDRs)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8,proxy.internal")
+	if _, err := LoadAPIConfig(); err == nil || !strings.Contains(err.Error(), "TRUSTED_PROXY_CIDRS") {
+		t.Fatalf("expected a TRUSTED_PROXY_CIDRS error, got %v", err)
+	}
+}
+
+func TestLoadStatusPageConfig_TrustedProxies(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8082")
+	t.Setenv("METRICS_PORT", "9093")
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("STATUS_PAGE_TRUSTED_PROXY", "")
+	cfg, err := LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 || cfg.LegacyTrustedProxy {
+		t.Fatalf("default should trust nothing: %v %v", cfg.TrustedProxyCIDRs, cfg.LegacyTrustedProxy)
+	}
+
+	// The deprecated flag keeps its old trust-everyone meaning while the
+	// new variable is unset.
+	t.Setenv("STATUS_PAGE_TRUSTED_PROXY", "true")
+	cfg, err = LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.LegacyTrustedProxy || len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("legacy flag: %v %v", cfg.TrustedProxyCIDRs, cfg.LegacyTrustedProxy)
+	}
+
+	// TRUSTED_PROXY_CIDRS wins over the legacy flag.
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
+	cfg, err = LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LegacyTrustedProxy || len(cfg.TrustedProxyCIDRs) != 1 || cfg.TrustedProxyCIDRs[0].String() != "10.0.0.0/8" {
+		t.Fatalf("explicit list: %v %v", cfg.TrustedProxyCIDRs, cfg.LegacyTrustedProxy)
+	}
+}

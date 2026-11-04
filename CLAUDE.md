@@ -393,6 +393,16 @@ or imported groups come back empty. Any other path that creates groups through
   `go run ./cmd/admin/gen_vapid_keys`; never generate it at startup, and
   rotating it invalidates **every** stored subscription (`statusPage.vapid`
   in `values.yaml` explains both).
+- **`TRUSTED_PROXY_CIDRS`**: api and status-page. Every client IP (audit
+  log, session IPs, rate-limit keys) comes from `shared/clientip`, which
+  believes `X-Forwarded-For`/`X-Real-IP` only from those peers; never read a
+  forwarding header or `RemoteAddr` yourself — use `clientip.FromRequest`
+  (api, behind the router's resolver middleware) or a `Resolver`. Parsed once
+  in `shared/config` (`loadTrustedProxyCIDRs`); Compose passes it through to
+  both, Helm renders top-level `trustedProxyCIDRs` via `trustedProxyEnv`.
+  MCP carries the resolved IP to its inner dispatch as the inner
+  `RemoteAddr` (`clientIPHeader`), not as a forwarding header. The deprecated
+  `STATUS_PAGE_TRUSTED_PROXY=true` trusts every peer while the list is unset.
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job, but
   never the local AI pod, which holds no platform credentials — it has
   `localAI.extraEnv`) and `<service>.extraEnv`; `worker.extraEnv` also

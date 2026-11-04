@@ -167,6 +167,10 @@ services:
       OIDC_SCOPES: "${OIDC_SCOPES:-openid profile email}"
       OIDC_GROUPS_CLAIM: "${OIDC_GROUPS_CLAIM:-groups}"
       AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-365}"
+      # Reverse proxies whose X-Forwarded-For / X-Real-IP are believed for
+      # audit and session IPs (comma-separated CIDRs or IPs). Empty = the TCP
+      # peer only. Set the same value on status-page.
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -339,6 +343,8 @@ services:
       STATUS_PAGE_VAPID_PUBLIC_KEY: "${STATUS_PAGE_VAPID_PUBLIC_KEY:-}"
       STATUS_PAGE_VAPID_PRIVATE_KEY: "${STATUS_PAGE_VAPID_PRIVATE_KEY:-}"
       STATUS_PAGE_VAPID_SUBJECT: "${STATUS_PAGE_VAPID_SUBJECT:-}"
+      # Keys the push endpoints' per-IP rate limit; same value as on api.
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
     ports:
       - "8082:8082"
       - "9093:9093"

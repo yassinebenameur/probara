@@ -79,6 +79,9 @@ spec:
         - name: STATUS_PAGE_VAPID_SUBJECT
           value: "{{ .Values.statusPage.vapid.subject }}"
         {{- end }}
+        {{- with (include "monitoring-platform.trustedProxyEnv" .) }}
+        {{- . | nindent 8 }}
+        {{- end }}
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPageVapidPrivateKey "secret" .Values.secrets.statusPageVapidPrivateKeyExistingSecret) }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_VAPID_PRIVATE_KEY" "key" "status_page_vapid_private_key" "secret" .Values.secrets.statusPageVapidPrivateKeyExistingSecret "secretKey" .Values.secrets.statusPageVapidPrivateKeyExistingSecretKey) | nindent 8 }}
         {{- end }}

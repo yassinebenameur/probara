@@ -18,6 +18,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	"github.com/yassinebenameur/probara/shared/auth"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -118,7 +119,7 @@ func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
-	if err := h.service.RotateSession(r.Context(), oldHash, newHash, adminID, time.Now().Add(refreshTTL), clientIP(r), r.UserAgent()); err != nil {
+	if err := h.service.RotateSession(r.Context(), oldHash, newHash, adminID, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent()); err != nil {
 		h.logger.WithError(err).Error("Failed to rotate refresh token")
 		errors.WriteInternalError(w, "failed to refresh session")
 		return
@@ -225,7 +226,7 @@ func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID 
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
-	if err := h.service.CreateSession(r.Context(), adminID, refreshHash, time.Now().Add(refreshTTL), clientIP(r), r.UserAgent()); err != nil {
+	if err := h.service.CreateSession(r.Context(), adminID, refreshHash, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent()); err != nil {
 		return err
 	}
 
@@ -328,12 +329,4 @@ func generateRefreshToken() (string, string, error) {
 func hashToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])
-}
-
-func clientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	return r.RemoteAddr
 }

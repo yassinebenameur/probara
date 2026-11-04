@@ -47,7 +47,12 @@ func TestBuildRequestMapsArguments(t *testing.T) {
 	if _, err := tl.inputSchema(true); err != nil {
 		t.Fatal(err)
 	}
-	header := http.Header{"Authorization": {"Bearer pk_x"}, "Cookie": {"admin_access=steal"}}
+	header := http.Header{
+		"Authorization":   {"Bearer pk_x"},
+		"Cookie":          {"admin_access=steal"},
+		"X-Forwarded-For": {"6.6.6.6"},
+		clientIPHeader:    {"198.51.100.9"},
+	}
 	req, err := tl.buildRequest(t.Context(), json.RawMessage(`{"id":"a/b","tag":["x","y"],"name":"n","tenant_id":"T"}`), header)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +68,11 @@ func TestBuildRequestMapsArguments(t *testing.T) {
 	}
 	if req.Header.Get("Authorization") != "Bearer pk_x" || req.Header.Get("X-Tenant-ID") != "T" {
 		t.Errorf("headers: %v", req.Header)
+	}
+	// The client address Protect resolved becomes the inner peer; a
+	// forwarding header never crosses, so the inner resolver cannot be fed one.
+	if req.RemoteAddr != "198.51.100.9" || req.Header.Get("X-Forwarded-For") != "" {
+		t.Errorf("client address: RemoteAddr=%q X-Forwarded-For=%q", req.RemoteAddr, req.Header.Get("X-Forwarded-For"))
 	}
 	if req.Context().Value(struct{}{}) != nil {
 		t.Error("inner context must not inherit values")

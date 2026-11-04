@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"mime"
 	mimemultipart "mime/multipart"
-	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -150,8 +149,11 @@ func (t *tool) buildRequest(ctx context.Context, raw json.RawMessage, outer http
 	if auth := outer.Get("Authorization"); auth != "" {
 		inner.Header.Set("Authorization", auth)
 	}
-	if xff := outer.Get("X-Forwarded-For"); xff != "" {
-		inner.Header.Set("X-Forwarded-For", xff)
+	// The inner request is the client's own call, so it carries the client
+	// address Protect resolved as its peer, and no forwarding header: the
+	// inner chain's resolver then records exactly that address.
+	if ip := outer.Get(clientIPHeader); ip != "" {
+		inner.RemoteAddr = ip
 	}
 	ua := "probara-mcp"
 	if outerUA := outer.Get("User-Agent"); outerUA != "" {
@@ -400,10 +402,6 @@ func withVia(ctx context.Context) context.Context {
 	return ctxpkg.WithVia(ctx, ctxpkg.ViaMCP)
 }
 
-// clientIP is the address recorded for audit when no proxy header exists.
-func clientIP(remoteAddr string) string {
-	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
-		return host
-	}
-	return remoteAddr
-}
+// clientIPHeader carries the client address from the /mcp request, where
+// Protect resolves it, to the tool dispatch, which only sees headers.
+const clientIPHeader = "X-Probara-Mcp-Client-Ip"
