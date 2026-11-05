@@ -179,7 +179,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`headers`", "Request header map, stored in plaintext. A credential-named header (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-API-Key`, `Api-Key`, `X-Auth-Token`, or any name containing `token`, `secret`, `password`, `apikey` or `api-key`) is moved to `secret_headers` on save"],
             ["`secret_headers`", "Request header map whose values are [secret](#secrets): encrypted at rest, returned as `***`. A name may not appear in both maps"],
             ["`basic_auth_username`", "HTTP basic auth user; cannot contain `:`, or be combined with an `Authorization` header"],
-            ["`basic_auth_password`", "HTTP basic auth password, a [secret](#secrets); requires `basic_auth_username`"],
+            ["`basic_auth_password`", "HTTP basic auth password, a [secret](#secrets); requires `basic_auth_username`. A redirect to another host or port, or from `https` to plain `http`, is still followed but without credentials: every `secret_headers` entry, `Authorization` (so basic auth) and any other credential-named header are dropped from that hop"],
             ["`body`", "Optional request body"],
             [
               "`expected_status`",
@@ -554,7 +554,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Put credentials in `secret_variables` and reference them the same way, for example `\"Authorization\": \"Bearer {{api_token}}\"`. Their values are [secret](#secrets), and the worker replaces every occurrence of one (also URL-encoded) with `[REDACTED]` in what the check records: step URLs, errors, assertion messages and extracted values. A name may not be in both `variables` and `secret_variables`, and saving refuses a `{{name}}` that no variable, secret variable or extraction defines. A credential-named step header written as a literal value is moved into a generated secret variable on save (`<step id>_<header>`, for example `{{login_authorization}}`).",
+            "Put credentials in `secret_variables` and reference them the same way, for example `\"Authorization\": \"Bearer {{api_token}}\"`. Their values are [secret](#secrets), and the worker replaces every occurrence of one (also URL-encoded) with `[REDACTED]` in what the check records: step URLs, errors, assertion messages and extracted values. A name may not be in both `variables` and `secret_variables`, and saving refuses a `{{name}}` that no variable, secret variable or extraction defines. A credential-named step header written as a literal value is moved into a generated secret variable on save (`<step id>_<header>`, for example `{{login_authorization}}`). When a step is redirected to another host or port, or from `https` to `http`, the redirected request drops every header that references a secret variable and every credential-named header, as HTTP monitors do.",
         },
         {
           type: "paragraph",
