@@ -63,6 +63,7 @@ func NewAlerter(cfg *config.AlerterConfig, log *logger.Logger, metricsRegistry *
 		stop:      make(chan struct{}),
 	}
 	a.sendFunc = a.sendChannelNotification
+	a.sendFunc = a.recordDeliveries(a.sendFunc)
 	if metricsRegistry != nil {
 		a.locationsOffline = metricsRegistry.NewGauge("locations_offline",
 			"Check locations offline under their tenant's threshold (rule S-F6), alerting or not", []string{})

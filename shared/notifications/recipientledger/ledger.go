@@ -63,6 +63,7 @@ func (l *ledger) Delivered(ctx context.Context, recipients []string) (map[string
 	}
 	done := map[string]bool{}
 	if len(hashes) == 0 {
+		tallyFrom(ctx).observe(0, 0)
 		return done, nil
 	}
 	rows, err := l.db.QueryContext(ctx, `
@@ -75,6 +76,7 @@ func (l *ledger) Delivered(ctx context.Context, recipients []string) (map[string
 		if isUndefinedTable(err) {
 			// Rollout window before migration 000097: with no table nothing
 			// can have been recorded, so "none delivered" is exact.
+			tallyFrom(ctx).observe(len(byHash), 0)
 			return done, nil
 		}
 		return nil, err
@@ -89,7 +91,11 @@ func (l *ledger) Delivered(ctx context.Context, recipients []string) (map[string
 			done[r] = true
 		}
 	}
-	return done, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	tallyFrom(ctx).observe(len(byHash), len(done))
+	return done, nil
 }
 
 func (l *ledger) Record(ctx context.Context, recipient string) error {
@@ -105,6 +111,9 @@ func (l *ledger) Record(ctx context.Context, recipient string) error {
 		WHERE a.id = $1
 		ON CONFLICT DO NOTHING`,
 		l.alertID, l.channelID, l.eventKey, hash(recipient))
+	if err == nil {
+		tallyFrom(ctx).observe(0, 1)
+	}
 	return err
 }
 

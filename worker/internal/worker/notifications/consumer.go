@@ -30,6 +30,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
@@ -219,6 +220,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			return err
 		}
 		entry.WithField("alert_status", alertStatus).Info("Alert acknowledged or snoozed since publish; dropping held event")
+		c.recordDrop(ctx, msg, envelope, channel.Name, deliverylog.OutcomeDroppedAck)
 		return nil
 	}
 	if superseded {
@@ -227,6 +229,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// have yet as a no-op, so a late trigger would open an incident that
 		// nothing ever closes.
 		entry.WithField("alert_status", alertStatus).Info("Alert resolved since publish; dropping superseded event")
+		c.recordDrop(ctx, msg, envelope, channel.Name, deliverylog.OutcomeDroppedSuperseded)
 		return nil
 	}
 
@@ -267,6 +270,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			Recipients: recipients,
 		})
 	}
+	ctx, tally := recipientledger.WithTally(ctx)
 	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
 	if err == nil && ackOvertaken(p.Manifest(), envelope.EventType, alertStatus) {
 		// The operator acknowledged while this trigger sat on a retry
@@ -282,6 +286,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		ack.Alert.Status = alertStatus
 		err = send(present.EventAcknowledged, notifications.OvertakenAckKey, ack)
 	}
+	c.recordAttempt(ctx, msg, envelope, channel.Name, tally, err)
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted

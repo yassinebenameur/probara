@@ -199,6 +199,9 @@ func TestTenantPurgeCoversEveryTenantTable(t *testing.T) {
 	// Kept on purpose: the audit trail outlives the workspace and has its
 	// own retention.
 	covered["audit_log"] = "retained"
+	// Alert children: they cascade with their alert, which either phase
+	// deletes in batches, and are pruned by age in between.
+	covered["alert_notification_deliveries"] = "alert cascade"
 	covered["monitors"] = "monitor phase"
 
 	rows, err := dbClient.QueryContext(ctx, `
