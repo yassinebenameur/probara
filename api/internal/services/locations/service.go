@@ -427,6 +427,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 			SET location_quorum = GREATEST(1, LEAST(m.location_quorum, sub.remaining)),
 				current_state = CASE WHEN sub.remaining = 0 THEN 'unknown' ELSE m.current_state END,
 				consecutive_failures = CASE WHEN sub.remaining = 0 THEN 0 ELSE m.consecutive_failures END,
+				consecutive_successes = CASE WHEN sub.remaining = 0 THEN 0 ELSE m.consecutive_successes END,
 				updated_at = NOW()
 			FROM (
 				SELECT m2.id, COUNT(ml.location_id)::int AS remaining

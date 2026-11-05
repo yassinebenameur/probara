@@ -19,3 +19,20 @@ func TestValidateDependencySuppression(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRecoveryThreshold(t *testing.T) {
+	n := func(v int) *int { return &v }
+	if err := ValidateRecoveryThreshold(nil); err != nil {
+		t.Fatalf("nil (field absent) must be accepted, got %v", err)
+	}
+	for _, ok := range []int{1, 3, 10} {
+		if err := ValidateRecoveryThreshold(n(ok)); err != nil {
+			t.Fatalf("%d must be accepted, got %v", ok, err)
+		}
+	}
+	for _, bad := range []int{-1, 0, 11} {
+		if err := ValidateRecoveryThreshold(n(bad)); err == nil {
+			t.Fatalf("%d must be rejected [S-T7]", bad)
+		}
+	}
+}

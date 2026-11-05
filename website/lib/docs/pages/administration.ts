@@ -528,7 +528,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, retry thresholds, and group membership names. Compatibility data can include legacy alert-policy names, but policy management is retired. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
+            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, retry thresholds, recovery confirmation (`recovery_threshold`, written only when above the default of 1), and group membership names. Compatibility data can include legacy alert-policy names, but policy management is retired. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
         },
         {
           type: "callout",

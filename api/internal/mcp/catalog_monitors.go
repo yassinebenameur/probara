@@ -18,6 +18,7 @@ var monitorFieldDocs = map[string]string{
 	"timeout_seconds":                "Per-check timeout in seconds; must be below interval_seconds (active check types only).",
 	"tags":                           "Free-form tags; dashboards, SLAs and status filters group by them.",
 	"consecutive_failures_threshold": "Failed checks in a row before the monitor is down and alerts, 1-10.",
+	"recovery_threshold":             "Passing checks in a row a down monitor needs before it is up and its alert resolves, 1-10 (default 1).",
 	"notification_mode":              "\"default\" routes alerts to the workspace default channels (notification settings); \"custom\" uses notification_channels.",
 	"notification_channels":          "Channels for notification_mode \"custom\": channel_id (from list_alert_channels) and an optional delay_seconds before paging.",
 	"member_alert_rollup":            "Groups only: \"per_monitor\" alerts per member, \"group\" raises one alert for the group and silences members.",
