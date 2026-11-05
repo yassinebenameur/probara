@@ -461,8 +461,9 @@ or imported groups come back empty. Any other path that creates groups through
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs). `docker-compose.release.yml`
-  overrides only images, ports, credentials (every one `${VAR:?}`, no
-  defaults) and the client-IP chain (`edge`, fixed subnet, below), and never
+  overrides only images, ports, credentials (platform ones `${VAR:?}`;
+  optional features' never a dev default — `OIDC_CLIENT_SECRET` is `:-`
+  empty; the deployment docs list both sets) and the client-IP chain (`edge`, fixed subnet, below), and never
   re-declares wiring: new env goes in the base file.
   The base has no `ADMIN_JWT_SECRET` default, so every `docker compose`
   command needs it (Make falls back to `.dev-admin-jwt-secret`, CI sets a

@@ -74,6 +74,21 @@ func tenantFixture(ctx context.Context, t *testing.T, dbClient *shareddb.Client,
 		      VALUES ($1, $2, $3, 'Pod', $2, 'default')`, integration, fmt.Sprintf("pod-%d", i), service)
 	}
 	exec(`INSERT INTO discovery_monitor_links (tenant_id, service_id, monitor_id) VALUES ($1, $2, $3)`, tenantID, service, liveMonitor)
+
+	// An escalation policy referenced by NO ACTION FKs from both a monitor
+	// and the tenant row, a monitor's config history and an SLA report
+	// schedule: each must cascade without blocking the purge.
+	policy, sla := uuid.New(), uuid.New()
+	exec(`INSERT INTO escalation_policies (id, tenant_id, name) VALUES ($1, $2, 'primary')`, policy, tenantID)
+	exec(`UPDATE monitors SET notification_mode = 'policy', escalation_policy_id = $1 WHERE id = $2`, policy, liveMonitor)
+	exec(`UPDATE tenants SET default_escalation_policy_id = $1 WHERE id = $2`, policy, tenantID)
+	for i := 1; i <= n; i++ {
+		exec(`INSERT INTO monitor_config_versions (tenant_id, monitor_id, version, snapshot, snapshot_hash, actor_type, source)
+		      VALUES ($1, $2, $3, '{}', 'hash', 'system', 'api')`, tenantID, liveMonitor, i)
+	}
+	exec(`INSERT INTO slas (id, tenant_id, name, target_pct) VALUES ($1, $2, 'core', 99.9)`, sla, tenantID)
+	exec(`INSERT INTO sla_report_schedules (tenant_id, sla_id, recipients, next_run_at, unsubscribe_key)
+	      VALUES ($1, $2, ARRAY['ops@example.com'], NOW(), '\x00')`, tenantID, sla)
 	return tenantID, liveMonitor
 }
 
@@ -94,6 +109,9 @@ func tenantRowCounts(ctx context.Context, t *testing.T, dbClient *shareddb.Clien
 		"discovered_services":            `SELECT COUNT(*) FROM discovered_services WHERE tenant_id = $1`,
 		"discovered_resources":           `SELECT COUNT(*) FROM discovered_resources r JOIN discovered_services s ON s.id = r.service_id WHERE s.tenant_id = $1`,
 		"discovery_monitor_links":        `SELECT COUNT(*) FROM discovery_monitor_links WHERE tenant_id = $1`,
+		"escalation_policies":            `SELECT COUNT(*) FROM escalation_policies WHERE tenant_id = $1`,
+		"monitor_config_versions":        `SELECT COUNT(*) FROM monitor_config_versions WHERE tenant_id = $1`,
+		"sla_report_schedules":           `SELECT COUNT(*) FROM sla_report_schedules WHERE tenant_id = $1`,
 	}
 	counts := make(map[string]int, len(queries))
 	for table, query := range queries {
@@ -186,6 +204,9 @@ func TestTenantPurgeCoversEveryTenantTable(t *testing.T) {
 	} {
 		covered[table] = "monitor phase"
 	}
+	// Config history cascades with its monitor row and is capped at 100
+	// versions per monitor (pruned on insert).
+	covered["monitor_config_versions"] = "monitor phase"
 	// Small configuration tables: the tenant row's cascade removes them.
 	for _, table := range []string{
 		"ai_label_salts", "ai_settings", "alert_channels", "alert_policies", "api_keys",
@@ -196,6 +217,14 @@ func TestTenantPurgeCoversEveryTenantTable(t *testing.T) {
 	} {
 		covered[table] = "tenant cascade"
 	}
+	// Escalation policies cascade their steps and targets; the NO ACTION
+	// FKs to them from monitors and tenants are checked at statement end, by
+	// when the monitor phase and the tenant row's cascade have removed both
+	// sides.
+	covered["escalation_policies"] = "tenant cascade"
+	// Report schedules are small configuration rows; they cascade their
+	// unsubscribes.
+	covered["sla_report_schedules"] = "tenant cascade"
 	// Maintenance occurrences cascade with their window and their tenant.
 	covered["maintenance_window_occurrences"] = "tenant cascade"
 	// People layer: schedules cascade their rotations, members and
