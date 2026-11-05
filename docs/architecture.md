@@ -145,10 +145,16 @@ alerter sees an ordinary acknowledgement. Nothing about the link is stored.
 An async envelope may carry `contact_id` instead of relying on the channel's
 own recipients: the delivery worker reads and decrypts that verified
 `user_contacts` address and hands it to a plugin advertising
-`CapabilityDirectRecipient`, so a person's address never rides on NATS. Nothing
-publishes such envelopes yet; escalation policies will.
+`CapabilityDirectRecipient`, so a person's address never rides on NATS. The
+alerter's escalation loop publishes them for escalation-policy pages and
+notices: an SMS contact through the workspace's personal SMS channel, an
+email contact with no `channel_id` at all (`channel_type` `email`, the
+platform mailer), which the worker sends without loading a channel. Those
+envelopes set `stop_on_ack`, so an ack or snooze since publish drops the page
+(its step claim is not handed back).
 
-Monitor-less alerts route to the tenant defaults through
+Monitor-less alerts route to the tenant defaults (or the channel targets of
+the tenant's default escalation policy) through
 `alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
 S-F6 in [state semantics](state-semantics.md),
 `monitorstate.LocationOfflinePredicate`), one alert per check location that

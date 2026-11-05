@@ -646,7 +646,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`PUT /api/v1/notification-settings`",
-              "Replace tenant notification settings",
+              "Replace tenant notification settings; `default_escalation_policy_id` sets the workspace default [escalation policy](/docs/alerting/#escalation) (`\"\"` clears it, absent keeps it)",
             ],
           ],
         },
@@ -1125,7 +1125,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Personal [contacts](/docs/administration/#contacts) belong to the signed-in user: the `/account/contacts` routes accept a browser session only (API keys and MCP tokens get 403), every role may use them, and they are not MCP tools. [On-call schedules](/docs/alerting/#oncall) are workspace resources: members read them, writers change them, and every route but the calendar feed is an MCP tool. Schedules are informational for now; nothing pages them.",
+            "Personal [contacts](/docs/administration/#contacts) belong to the signed-in user: the `/account/contacts` routes accept a browser session only (API keys and MCP tokens get 403), every role may use them, and they are not MCP tools. [On-call schedules](/docs/alerting/#oncall) are workspace resources: members read them, writers change them, and every route but the calendar feed is an MCP tool. [Escalation policies](#escalation-api) page whoever a schedule has on call.",
         },
         {
           type: "table",
@@ -1154,6 +1154,29 @@ export const API_PAGE: DocPage = {
             ["`POST /api/v1/oncall-schedules/{id}/ical-token`", "Write; turn the calendar feed on with a new link (revoking the old one); returns `token`, `path` and, with `PUBLIC_BASE_URL` set, `url`, once"],
             ["`DELETE /api/v1/oncall-schedules/{id}/ical-token`", "Write; turn the feed off"],
             ["`GET /api/v1/oncall-feeds/{token}.ics`", "Public, no credential but the token; `text/calendar` with the shifts from two weeks back to nine weeks ahead; 404 for an unknown or revoked token. Covered by the anonymous rate limit"],
+          ],
+        },
+      ],
+    },
+    {
+      id: "escalation-api",
+      title: "Escalation policy endpoints",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "[Escalation policies](/docs/alerting/#escalation) are workspace resources: members read them, writers change them, and every route is an MCP tool. A monitor uses one with `notification_mode` `policy` and `escalation_policy_id` on create or update (required when entering the mode; sent alone it switches a monitor already in it); `POST /monitors/bulk/alerting` refuses `policy`. The workspace default is `default_escalation_policy_id` in notification settings.",
+        },
+        {
+          type: "table",
+          columns: ["Method and path", "Required role and purpose"],
+          rows: [
+            ["`GET /api/v1/escalation-policies`", "Authenticated; `items` with `steps[]` (`delay_seconds`, `targets[]` with `kind`, the ID it needs, `label` and `reachable`), `repeat_count`, `repeat_after_seconds`, `monitor_count` and `tenant_default`"],
+            ["`POST /api/v1/escalation-policies`", "Write; create (`name` unique in the workspace, optional `description`, `repeat_count` 0-10, `repeat_after_seconds` 60-86,400 default 1,800, `steps[]`: 1-10 with non-decreasing `delay_seconds` 0-604,800 and 1-20 `targets`: `{kind: user, user_id}`, `{kind: schedule, schedule_id}`, `{kind: all_admins}`, `{kind: channel, channel_id, notify_after_ack}`); a duplicate name is 409"],
+            ["`GET /api/v1/escalation-policies/{id}`", "Authenticated; one policy"],
+            ["`PUT /api/v1/escalation-policies/{id}`", "Write; replace every field and step"],
+            ["`DELETE /api/v1/escalation-policies/{id}`", "Write; 409 while a monitor uses it or it is the workspace default"],
+            ["`POST /api/v1/escalation-policies/convert`", "Write; build a policy from a monitor's custom routes (`monitor_id`) or the workspace default routes (no `monitor_id`), one step per distinct delay; `assign` also switches the monitor to it; optional `name`"],
           ],
         },
       ],

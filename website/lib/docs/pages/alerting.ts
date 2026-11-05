@@ -154,6 +154,16 @@ export const ALERTING_PAGE: DocPage = {
               description:
                 "Only the monitor's assigned active channels are considered, with the delay stored on each assignment.",
             },
+            {
+              term: "Monitor `policy` mode",
+              description:
+                "The monitor follows its [escalation policy](#escalation) (`escalation_policy_id`): the policy's channel targets are routes like any other, and its people are paged step by step.",
+            },
+            {
+              term: "Workspace default escalation policy",
+              description:
+                "When `default_escalation_policy_id` is set, `default`-mode monitors, and the alerts without a monitor (mesh paths, offline locations), follow that policy instead of the default routes, which are kept but unused until it is cleared.",
+            },
           ],
         },
         {
@@ -183,7 +193,7 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`source`",
-              "`custom` or `tenant_default` when the monitor's own routing applies; `group_rollup` when a group rolls its alerts up, so that group's routing decides; `members` for a group that never alerts itself",
+              "`custom` or `tenant_default` when the monitor's own routing applies; `policy` when its own escalation policy does; `group_rollup` when a group rolls its alerts up, so that group's routing decides; `members` for a group that never alerts itself",
             ],
             [
               "`active_channels` / `assigned_channels`",
@@ -191,7 +201,11 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`reason`",
-              "Why an unreachable monitor is unreachable: `no_custom_channels`, `custom_channels_disabled`, `no_tenant_default_channels`, `tenant_default_channels_disabled`, or `group_rollup_unrouted`",
+              "Why an unreachable monitor is unreachable: `no_custom_channels`, `custom_channels_disabled`, `no_tenant_default_channels`, `tenant_default_channels_disabled`, `group_rollup_unrouted`, `group_rollup_paused`, or `policy_no_targets` (the escalation policy, its own or the workspace default, has no active channel and nobody who can be paged)",
+            ],
+            [
+              "`escalation_policy_id` / `escalation_policy_name` / `reachable_people`",
+              "The escalation policy that routes the monitor (its own, or the workspace default with `source` `tenant_default`), and how many of its person targets can page somebody: an enabled member, or a superadministrator, with a verified email contact, or an SMS contact while the workspace has an active SMS channel for people. A schedule counts while a pageable person is on one of its current rotations or overrides, even if off shift right now",
             ],
             [
               "`rollup_group_id` / `rollup_group_name`",
@@ -245,6 +259,10 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`ack_stops_notifications`",
               "Defaults to true, for existing workspaces too. Acknowledging an alert stops its unfired escalation tiers and its reminders; routes with `notify_after_ack` keep them. Set false to keep paging acknowledged alerts",
+            ],
+            [
+              "`default_escalation_policy_id`",
+              "Defaults to unset. An [escalation policy](#escalation) that `default`-mode monitors and monitor-less alerts follow instead of `default_channels`; send `\"\"` to clear it",
             ],
             [
               "`alert_reopen_cooldown_seconds`",
@@ -377,7 +395,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every delivery attempt is recorded in the delivery history, kept 90 days: the alert's Deliveries panel (open an alert from a notification link, `/alerts?alert=<id>`) lists each channel it reached, and each channel's page lists every alert it was sent; the channel list flags a channel whose newest delivery failed. A row names the event, the attempt number, who made it (the alerter, or a delivery worker with asynchronous dispatch, where the alerter's own row reads `queued`) and the outcome: `delivered`, `failed` (transient, retried — each retry is its own row), `permanent_failure` (rejected, not retried), `dropped_superseded`, shown as **Dropped (superseded)** (the alert moved on before a queued event went out: it resolved, was unacknowledged, for an acknowledgement, or reopened, for an event of an earlier paging episode — so a superseded `resolved` row can sit on an alert that is open again) or `dropped_ack` (held by an acknowledgement or snooze; it goes out once that lifts). The provider's error is stored cut to 512 characters, with every URL reduced to its host and credential-looking values masked, since channel URLs carry tokens; SMS rows add how many recipients have the message. Only attempts that reach a channel plugin are recorded: a worker that cannot load or decrypt the channel logs it instead, and test sends are not alert deliveries. The same history is available as `GET /alerts/{id}/deliveries` and `GET /alert-channels/{id}/deliveries`.",
+            "Every delivery attempt is recorded in the delivery history, kept 90 days: the alert's Deliveries panel (open an alert from a notification link, `/alerts?alert=<id>`) lists each channel it reached, and each channel's page lists every alert it was sent; the channel list flags a channel whose newest delivery failed. A row names the event, the attempt number, who made it (the alerter, or a delivery worker with asynchronous dispatch, where the alerter's own row reads `queued`) and the outcome: `delivered`, `failed` (transient, retried — each retry is its own row), `permanent_failure` (rejected, not retried), `dropped_superseded`, shown as **Dropped (superseded)** (the alert moved on before a queued event went out: it resolved, was unacknowledged, for an acknowledgement, or reopened, for an event of an earlier paging episode — so a superseded `resolved` row can sit on an alert that is open again) or `dropped_ack` (held by an acknowledgement or snooze; it goes out once that lifts). The provider's error is stored cut to 512 characters, with every URL reduced to its host and credential-looking values masked, since channel URLs carry tokens; SMS rows add how many recipients have the message. Only attempts that reach a channel plugin are recorded: a worker that cannot load or decrypt the channel logs it instead, and test sends are not alert deliveries. [Escalation policy](#escalation) pages to people are recorded too, one row per contact, naming the person (`user_id`, `username`) and the masked address (`recipient`) with the step in `delivery_key` (`escalation:<step>:<repeat>`); an email page has no channel (`channel_id` null, through the platform mailer), and an SMS page names the workspace's SMS channel for people. The same history is available as `GET /alerts/{id}/deliveries` and `GET /alert-channels/{id}/deliveries`.",
         },
         {
           type: "callout",
@@ -465,6 +483,7 @@ export const ALERTING_PAGE: DocPage = {
             "Each link is valid for 72 hours from the notification that carried it; every reminder carries a fresh one. It acknowledges only, only that alert, and only while it is active: an acknowledged or resolved alert is reported as such.",
             "Channel test sends, recoveries, acknowledgement notices and suspected-cause follow-ups carry no link, and neither does a reminder that a `notify_after_ack` route receives after the alert was acknowledged.",
             "Deleting the channel revokes every link it delivered, and deleting the workspace revokes all of its links. See [Security](/docs/security/#action-links) for the token model and key rotation.",
+            "An [escalation policy](#escalation) page to a person carries a link scoped to the contact it went to rather than a channel: acknowledging through it is recorded as that person (`acknowledged_by_user_id`, with `acknowledged_via` `magic_link`), and removing the contact, disabling the user or removing them from the workspace revokes it.",
           ],
         },
       ],
@@ -827,15 +846,79 @@ export const ALERTING_PAGE: DocPage = {
         },
         {
           type: "callout",
-          tone: "warning",
-          title: "Schedules do not page anyone yet",
+          tone: "info",
+          title: "Paging whoever is on call",
           text:
-            "Schedules are informational: no alert, reminder or escalation reaches the person on call through them. Route alerts to [notification channels](#routing) as before. Paging schedules and people directly comes with escalation policies.",
+            "A schedule pages nobody by itself. Put it in an [escalation policy](#escalation) step and the step pages whoever the schedule has on call at the moment it fires (overrides first), at their verified contacts.",
         },
         {
           type: "paragraph",
           text:
             "Editors and admins manage schedules and overrides; viewers read them, and the person picker (`list_oncall_people`) is offered to editors and admins only. Every route is in the [API](/docs/api/#people-api) and, except the calendar feed, an [MCP](/docs/mcp/) tool (`list_oncall_schedules`, `get_oncall_now`, `preview_oncall_schedule`, `create_oncall_override`, …).",
+        },
+      ],
+    },
+    {
+      id: "escalation",
+      title: "Escalation policies",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "An escalation policy pages people as well as channels: first the engineer who owns the service, then whoever is on call, then every workspace admin, each step after a delay, until someone acknowledges. The **Escalation** page (sidebar, under On-call) builds them; a monitor uses one in its Alerting section (**Notify: Escalation policy**), and **Settings, Notifications** can make one the workspace default, which replaces the default channels for `default`-mode monitors and for alerts without a monitor.",
+        },
+        {
+          type: "definitions",
+          items: [
+            {
+              term: "Steps",
+              description:
+                "Up to 10, in order, each with a delay (counted from when the alert started paging, the same clock as [routing](#routing) delays, and never shorter than the previous step's) and up to 20 targets.",
+            },
+            {
+              term: "Person targets",
+              description:
+                "A user (a workspace member or a superadministrator), an [on-call schedule](#oncall) (whoever it has on call when the step fires), or **all workspace admins**. People are paged at every verified [contact](/docs/administration/#contacts): email through the platform mailer (`SMTP_*`), SMS through the workspace's SMS channel for people. Each person is paged once per step, even when two targets name them.",
+            },
+            {
+              term: "Channel targets",
+              description:
+                "An alert channel, paged exactly like a routing tier with the step's delay: the same once-per-event claim, reminders, acknowledgement and snooze rules, and **Keep after ack** (`notify_after_ack`). A channel can be in one step only.",
+            },
+            {
+              term: "Repeat",
+              description:
+                "`repeat_count` (0-10) more walks of the person steps after the last step, `repeat_after_seconds` (1 minute to 24 hours, default 30 minutes) after it. Channel targets do not repeat; they follow the workspace reminders.",
+            },
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "Person steps page only while the alert is **active and not snoozed**, and only when a channel route would page too (not in maintenance, not suppressed by a group roll-up or an upstream dependency). Acknowledging or snoozing stops the walk whatever the workspace's stop-on-ack setting; an unacknowledge or the end of a snooze resumes it, with unfired steps counting their delay from that moment, so nothing pages in a burst.",
+            "Each step fires once per paging episode and repeat. Several alerter replicas never page a step twice: firing claims the step in the database first. A step whose sends fail transiently is retried on the next evaluation cycle, skipping the contacts it already reached; a permanent failure (no SMS channel for people, a rejected number, no SMTP) is recorded and the walk moves on.",
+            "A schedule with nobody on call, or targets with no verified contact, page nobody; the step still counts as fired and the next one follows on time.",
+            "Everyone a policy paged during the alert's current episode is told once when it is acknowledged (except the person who acknowledged it) and once when it resolves. A [relapse](#availability) walks the steps again.",
+            "Every page carries an [acknowledge link](#ack-links) scoped to the person, and every send, notices included, is in the alert's delivery history.",
+            "Mesh-path and offline-location alerts follow the workspace default policy's channel targets only; its people are paged for monitor alerts.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Convert routes** builds a policy that pages exactly what existing routes page: a monitor's custom routes, or the workspace default channels, one step per distinct delay. Converting a monitor's routes can switch the monitor to the new policy in the same change; a converted workspace policy becomes the default once you select it in notification settings. Nothing is converted automatically. A policy assigned to a monitor or used as the workspace default cannot be deleted, and bulk alerting edits do not assign policies.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "A policy can reach nobody",
+          text:
+            "A policy with no active channel and nobody who can be paged makes its monitors unreachable (`alert_routing.reason` `policy_no_targets`); the monitor's detail page and the dashboard's unrouted count report it like any other unrouted monitor. A person counts as reachable with a verified email contact, or an SMS contact while the workspace has an active SMS channel for people; email pages also need SMTP on the alerter (and on the delivery workers with asynchronous dispatch).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Members read policies; editors and admins change them. Every route is in the [API](/docs/api/#escalation-api) and an [MCP](/docs/mcp/) tool (`list_escalation_policies`, `create_escalation_policy`, `convert_routes_to_escalation_policy`, …).",
         },
       ],
     },
