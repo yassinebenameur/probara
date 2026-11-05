@@ -743,6 +743,10 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   `RecipientEventKeyFor`, `OvertakenAckKeyFor`); never build
   `alert:channel:event` by hand. NULL `resolved_via` marks the alerter's own
   resolves, the only ones that reopen, so any new manual resolve path sets it.
+  A reopen clears `acknowledged_at`, so SLA MTTA reads
+  `first_acknowledged_at`/`first_ack_episode_started_at`, set once by every
+  acknowledgement path through `firstAckColumns`
+  (`api/internal/services/alerts/service.go`) and never cleared.
 
 ## Status pages
 

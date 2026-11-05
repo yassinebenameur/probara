@@ -233,6 +233,7 @@ func TestReopenNeverSkipsTheLatestAlert(t *testing.T) {
 // A reopen is a new paging episode: it clears the previous episode's
 // acknowledgement, unacknowledge and snooze, and the one-shot "ack sent"
 // mark, so the relapse pages and a new ack reaches paging channels again.
+// The first acknowledgement (SLA MTTA) is kept.
 // The alert's open incident gets a "relapsed" timeline entry.
 func TestReopenStartsANewEpisode(t *testing.T) {
 	ctx := context.Background()
@@ -253,6 +254,7 @@ func TestReopenStartsANewEpisode(t *testing.T) {
 	// Acknowledged (and the ack sent), snoozed, then auto-resolved.
 	mustExec(ctx, t, dbClient, `UPDATE alerts SET status = 'resolved', resolved_at = NOW() - INTERVAL '1 minute',
 		acknowledged_at = NOW() - INTERVAL '2 minutes', acknowledged_via = 'ui', unacknowledged_at = NOW() - INTERVAL '3 minutes',
+		first_acknowledged_at = NOW() - INTERVAL '4 minutes', first_ack_episode_started_at = triggered_at,
 		snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, alertID)
 	mustExec(ctx, t, dbClient, `UPDATE alert_notification_states SET last_event_type = 'resolved', acknowledged_sent_at = NOW() WHERE alert_id = $1`, alertID)
 
@@ -269,6 +271,15 @@ func TestReopenStartsANewEpisode(t *testing.T) {
 	}
 	if status != "active" || ackedAt != nil || ackVia != nil || unackedAt != nil || snoozedUntil != nil {
 		t.Fatalf("reopen kept episode state: status=%s acked=%v via=%v unacked=%v snoozed=%v", status, ackedAt, ackVia, unackedAt, snoozedUntil)
+	}
+	// The first acknowledgement stays: SLA reports measure MTTA from it.
+	var keptFirstAck bool
+	if err := dbClient.QueryRowContext(ctx, `SELECT first_acknowledged_at IS NOT NULL AND first_ack_episode_started_at = triggered_at
+		FROM alerts WHERE id = $1`, alertID).Scan(&keptFirstAck); err != nil {
+		t.Fatal(err)
+	}
+	if !keptFirstAck {
+		t.Fatal("reopen cleared the first acknowledgement")
 	}
 	if err := dbClient.QueryRowContext(ctx, `SELECT acknowledged_sent_at FROM alert_notification_states WHERE alert_id = $1`, alertID).Scan(&ackSent); err != nil {
 		t.Fatal(err)

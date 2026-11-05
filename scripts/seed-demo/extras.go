@@ -18,10 +18,15 @@ import (
 
 // ── alerts ───────────────────────────────────────────────────────────────
 
+// The seeded alerts never relapse, so an acknowledgement is also the first
+// one (first_acknowledged_at, what SLA reports read for MTTA), of the episode
+// that started at triggered_at.
 const alertInsert = `INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, acknowledged_at, resolved_at, failure_count, last_error,
 	created_at, updated_at, root_cause_monitor_id, root_cause_down_since, kind, baseline_latency_ms, observed_latency_ms, anomaly_score,
-	metric_name, metric_value, threshold_value, source_location_id, target_location_id)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$5,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`
+	metric_name, metric_value, threshold_value, source_location_id, target_location_id,
+	first_acknowledged_at, first_ack_episode_started_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$5,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
+	$6, CASE WHEN $6::timestamptz IS NOT NULL THEN $5::timestamptz END)`
 
 func (w *world) writeAlerts(ctx context.Context, tx pgx.Tx) error {
 	rootDown := map[string]time.Time{}

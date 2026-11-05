@@ -7,6 +7,8 @@ ALTER TABLE alert_notification_states
         CHECK (last_event_type IN ('created', 'resolved', 'reminder'));
 
 ALTER TABLE alerts
+    DROP COLUMN IF EXISTS first_ack_episode_started_at,
+    DROP COLUMN IF EXISTS first_acknowledged_at,
     DROP COLUMN IF EXISTS resolved_via,
     DROP COLUMN IF EXISTS resolved_by_user_id,
     DROP COLUMN IF EXISTS reopened_at,

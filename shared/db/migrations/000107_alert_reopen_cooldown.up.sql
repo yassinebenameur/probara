@@ -17,6 +17,20 @@ ALTER TABLE alerts
     ADD COLUMN resolved_by_user_id UUID REFERENCES admin_users(id) ON DELETE SET NULL,
     ADD COLUMN resolved_via TEXT;
 
+-- A reopen clears acknowledged_at (and an unacknowledge does too), so SLA
+-- reports measure time to acknowledge from these instead: the alert's first
+-- acknowledgement and the start of the paging episode it acknowledged
+-- (triggered_at, or reopened_at for a relapse). Both are set once, by the
+-- first acknowledgement, and nothing clears them.
+ALTER TABLE alerts
+    ADD COLUMN first_acknowledged_at TIMESTAMPTZ,
+    ADD COLUMN first_ack_episode_started_at TIMESTAMPTZ;
+-- Before this migration no alert had reopened, so an alert still holding an
+-- acknowledgement acknowledged its first (and only) episode.
+UPDATE alerts
+SET first_acknowledged_at = acknowledged_at, first_ack_episode_started_at = triggered_at
+WHERE acknowledged_at IS NOT NULL;
+
 -- A route that heard the previous episode's resolve claims the reopened
 -- page as 'reopened' (it is delivered as a 'created' with relapse_count > 0).
 ALTER TABLE alert_notification_states
