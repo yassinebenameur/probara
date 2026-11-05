@@ -332,3 +332,50 @@ podSecurityContext.sysctls wins.
 {{- end -}}
 {{- toYaml $psc -}}
 {{- end -}}
+
+{{/*
+Effective SECURITY_HSTS_MAX_AGE: security.hstsMaxAge when set, else one year
+when the chart's ingress terminates TLS, else 0 (off).
+*/}}
+{{- define "monitoring-platform.hstsMaxAge" -}}
+{{- if ne (toString .Values.security.hstsMaxAge) "" -}}
+{{- .Values.security.hstsMaxAge | int64 -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.tls -}}
+31536000
+{{- else -}}
+0
+{{- end -}}
+{{- end }}
+
+{{/*
+Browser/edge security env for one workload (.component: api, status-page or
+frontend), from the top-level security block. HSTS reaches all three; the
+rate limit and CORS allowlist only the api; the CSP enforce switch only the
+frontend; APP_BASE_URL reaches status-page because every page's CSP
+frame-ancestors admits the operator UI (template editor preview).
+*/}}
+{{- define "monitoring-platform.securityEnv" -}}
+{{- $v := .ctx.Values -}}
+- name: SECURITY_HSTS_MAX_AGE
+  value: {{ include "monitoring-platform.hstsMaxAge" .ctx | quote }}
+{{- if eq .component "api" }}
+- name: API_RATE_LIMIT_PER_MINUTE
+  value: {{ $v.security.apiRateLimitPerMinute | int64 | quote }}
+- name: API_RATE_LIMIT_BURST
+  value: {{ $v.security.apiRateLimitBurst | int64 | quote }}
+{{- with $v.security.apiAllowedOrigins }}
+- name: API_ALLOWED_ORIGINS
+  value: {{ join "," . | quote }}
+{{- end }}
+{{- end }}
+{{- if eq .component "status-page" }}
+{{- with $v.appBaseURL }}
+- name: APP_BASE_URL
+  value: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- if eq .component "frontend" }}
+- name: WEB_CSP_ENFORCE
+  value: {{ $v.security.webCspEnforce | quote }}
+{{- end }}
+{{- end }}

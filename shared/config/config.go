@@ -6,6 +6,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/clientip"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -204,6 +205,18 @@ type APIConfig struct {
 	// deploy snippets reference. Empty means the locations service default
 	// (the worker image at this build's release version).
 	LocationWorkerImage string
+	// HSTSMaxAge is SECURITY_HSTS_MAX_AGE (see loadHSTSMaxAge).
+	HSTSMaxAge int
+	// RateLimitPerMinute and RateLimitBurst are API_RATE_LIMIT_PER_MINUTE
+	// (default 600; 0 disables the limiter) and API_RATE_LIMIT_BURST
+	// (default 120): the general per-credential token bucket, per replica.
+	RateLimitPerMinute int
+	RateLimitBurst     int
+	// AllowedOrigins is API_ALLOWED_ORIGINS: the browser origins allowed to
+	// make credentialed cross-origin calls. Empty (the default) answers no
+	// cross-origin request; the operator UI reaches the API same-origin
+	// through its /api proxy.
+	AllowedOrigins []string
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -378,6 +391,11 @@ type StatusPageConfig struct {
 	// TRUSTED_PROXY_CIDRS, so TrustedProxyCIDRs trusts every peer (its old
 	// leftmost-X-Forwarded-For behavior). The service logs a warning.
 	LegacyTrustedProxy bool
+	// HSTSMaxAge is SECURITY_HSTS_MAX_AGE (see loadHSTSMaxAge).
+	HSTSMaxAge int
+	// AppBaseURL is APP_BASE_URL, the operator UI origin. Status pages allow
+	// it in frame-ancestors so the template editor can preview them.
+	AppBaseURL string
 }
 
 // LoadBaseConfig loads base configuration from environment variables
@@ -634,7 +652,60 @@ func LoadAPIConfig() (*APIConfig, error) {
 	}
 	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
 
+	if cfg.HSTSMaxAge, err = loadHSTSMaxAge(); err != nil {
+		return nil, err
+	}
+	if cfg.RateLimitPerMinute, err = envNonNegativeInt("API_RATE_LIMIT_PER_MINUTE", 600); err != nil {
+		return nil, err
+	}
+	if cfg.RateLimitBurst, err = envNonNegativeInt("API_RATE_LIMIT_BURST", 120); err != nil {
+		return nil, err
+	}
+	if cfg.AllowedOrigins, err = loadAllowedOrigins(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// loadHSTSMaxAge reads SECURITY_HSTS_MAX_AGE, the Strict-Transport-Security
+// max-age in seconds for api, status-page (and the web UI, which reads it
+// itself). 0, the default, sends no HSTS; when positive the header still
+// goes out only on HTTPS requests (shared/securityheaders).
+func loadHSTSMaxAge() (int, error) {
+	return envNonNegativeInt("SECURITY_HSTS_MAX_AGE", 0)
+}
+
+// loadAllowedOrigins reads API_ALLOWED_ORIGINS: comma-separated exact
+// origins (scheme://host[:port]), normalized to lowercase without a trailing
+// slash. "*" is refused: CORS with credentials cannot mean "any origin".
+func loadAllowedOrigins() ([]string, error) {
+	var out []string
+	for _, part := range strings.Split(os.Getenv("API_ALLOWED_ORIGINS"), ",") {
+		part = strings.TrimRight(strings.TrimSpace(part), "/")
+		if part == "" {
+			continue
+		}
+		u, err := url.Parse(part)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.User != nil {
+			return nil, fmt.Errorf("invalid API_ALLOWED_ORIGINS entry %q: want scheme://host[:port]", part)
+		}
+		out = append(out, strings.ToLower(u.Scheme+"://"+u.Host))
+	}
+	return out, nil
+}
+
+// envNonNegativeInt reads an integer >= 0 from key, def when unset.
+func envNonNegativeInt(key string, def int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return n, nil
 }
 
 // OIDCConfig is the platform-level OIDC SSO configuration.
@@ -1341,6 +1412,11 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 		cfg.TrustedProxyCIDRs = clientip.TrustAll()
 		cfg.LegacyTrustedProxy = true
 	}
+
+	if cfg.HSTSMaxAge, err = loadHSTSMaxAge(); err != nil {
+		return nil, err
+	}
+	cfg.AppBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/")
 
 	return cfg, nil
 }

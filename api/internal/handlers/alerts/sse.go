@@ -52,11 +52,8 @@ func (h *Handlers) StreamAlerts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
-	if origin := r.Header.Get("Origin"); origin != "" {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Vary", "Origin")
-	}
+	// Cross-origin access is decided once, by middleware.CORS
+	// (API_ALLOWED_ORIGINS); the stream never echoes Origin itself.
 
 	// Register client for this tenant
 	clientChan := h.hub.Register(tenantUUID)

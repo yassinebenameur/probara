@@ -31,6 +31,15 @@ type StatusPageSettings struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+	// CSPMode is the public page's Content-Security-Policy mode: "strict",
+	// "compatible", "off", or "" for automatic (compatible when the page has
+	// custom head/footer HTML or a published custom template, else strict).
+	// See shared/securityheaders.
+	CSPMode *string `json:"csp_mode,omitempty"`
+	// AllowedEmbedOrigins are the origins (scheme://host[:port], "*." host
+	// wildcard allowed) that may frame the page, on top of the page's own
+	// origin and the operator UI. Absent keeps the stored list; [] clears it.
+	AllowedEmbedOrigins []string `json:"allowed_embed_origins,omitempty"`
 }
 
 // StatusPageTemplateVersion summarizes one stored custom-template row.
@@ -56,6 +65,9 @@ type StatusPageTemplateState struct {
 	// deployment configures STATUS_PAGE_PREVIEW_SECRET; empty otherwise.
 	PreviewToken string `json:"preview_token,omitempty"`
 	MaxSizeBytes int    `json:"max_size_bytes"`
+	// DraftWarnings are non-fatal problems in the draft source, e.g. scripts
+	// without nonce="{{cspNonce}}" (statustemplate.Warnings).
+	DraftWarnings []string `json:"draft_warnings,omitempty"`
 }
 
 // SaveStatusPageTemplateDraftRequest carries a draft template source.

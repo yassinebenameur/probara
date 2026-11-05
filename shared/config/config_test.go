@@ -400,3 +400,59 @@ func TestLoadStatusPageConfig_TrustedProxies(t *testing.T) {
 		t.Fatalf("explicit list: %v %v", cfg.TrustedProxyCIDRs, cfg.LegacyTrustedProxy)
 	}
 }
+
+func TestLoadAPIConfig_EdgeSecurity(t *testing.T) {
+	setRequiredAPIEnv(t)
+	for _, k := range []string{"SECURITY_HSTS_MAX_AGE", "API_RATE_LIMIT_PER_MINUTE", "API_RATE_LIMIT_BURST", "API_ALLOWED_ORIGINS"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HSTSMaxAge != 0 || cfg.RateLimitPerMinute != 600 || cfg.RateLimitBurst != 120 || len(cfg.AllowedOrigins) != 0 {
+		t.Fatalf("defaults: hsts=%d rate=%d burst=%d origins=%v", cfg.HSTSMaxAge, cfg.RateLimitPerMinute, cfg.RateLimitBurst, cfg.AllowedOrigins)
+	}
+
+	t.Setenv("SECURITY_HSTS_MAX_AGE", "31536000")
+	t.Setenv("API_RATE_LIMIT_PER_MINUTE", "0")
+	t.Setenv("API_RATE_LIMIT_BURST", "10")
+	t.Setenv("API_ALLOWED_ORIGINS", "https://Ops.Example.com/, http://localhost:3000")
+	cfg, err = LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HSTSMaxAge != 31536000 || cfg.RateLimitPerMinute != 0 || cfg.RateLimitBurst != 10 {
+		t.Fatalf("explicit: hsts=%d rate=%d burst=%d", cfg.HSTSMaxAge, cfg.RateLimitPerMinute, cfg.RateLimitBurst)
+	}
+	if strings.Join(cfg.AllowedOrigins, ",") != "https://ops.example.com,http://localhost:3000" {
+		t.Fatalf("origins = %v", cfg.AllowedOrigins)
+	}
+
+	for key, bad := range map[string]string{
+		"SECURITY_HSTS_MAX_AGE":     "-1",
+		"API_RATE_LIMIT_PER_MINUTE": "lots",
+		"API_ALLOWED_ORIGINS":       "*",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, bad)
+			if _, err := LoadAPIConfig(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("expected a %s error, got %v", key, err)
+			}
+		})
+	}
+}
+
+func TestLoadStatusPageConfig_EdgeSecurity(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8082")
+	t.Setenv("METRICS_PORT", "9093")
+	t.Setenv("SECURITY_HSTS_MAX_AGE", "600")
+	t.Setenv("APP_BASE_URL", "https://ops.example.com/")
+	cfg, err := LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HSTSMaxAge != 600 || cfg.AppBaseURL != "https://ops.example.com" {
+		t.Fatalf("hsts=%d app=%q", cfg.HSTSMaxAge, cfg.AppBaseURL)
+	}
+}

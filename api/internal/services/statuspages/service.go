@@ -14,6 +14,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -35,6 +36,9 @@ type statusPageSettingsStored struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+
+	CSPMode             string   `json:"csp_mode,omitempty"`
+	AllowedEmbedOrigins []string `json:"allowed_embed_origins,omitempty"`
 }
 
 type statusPageSectionInput struct {
@@ -132,7 +136,32 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 	if patch.CustomFooterHTML != nil {
 		s.CustomFooterHTML = trimOptionalString(patch.CustomFooterHTML)
 	}
+	if patch.CSPMode != nil {
+		// Validation rejects unknown modes; one here (an old row) reads as
+		// automatic.
+		s.CSPMode, _ = securityheaders.ParseCSPMode(*patch.CSPMode)
+	}
+	if patch.AllowedEmbedOrigins != nil {
+		s.AllowedEmbedOrigins = normalizeEmbedOrigins(patch.AllowedEmbedOrigins)
+	}
 	return s
+}
+
+// normalizeEmbedOrigins canonicalizes and de-duplicates embed origins,
+// dropping any that do not validate (the validator already refused them on
+// write; this keeps an old or hand-edited row from widening the policy).
+func normalizeEmbedOrigins(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, o := range raw {
+		origin, err := securityheaders.NormalizeOrigin(o)
+		if err != nil || seen[origin] {
+			continue
+		}
+		seen[origin] = true
+		out = append(out, origin)
+	}
+	return out
 }
 
 func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
@@ -159,6 +188,7 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 	defaultTheme := s.DefaultTheme
 	allowThemeToggle := s.AllowThemeToggle
 	enablePushNotifications := s.EnablePushNotifications
+	cspMode := s.CSPMode
 	return &models.StatusPageSettings{
 		ShowMonitorTags:         &showMonitorTags,
 		ShowMonitorURL:          &showMonitorURL,
@@ -175,6 +205,8 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 		CustomCSS:               s.CustomCSS,
 		CustomHeadHTML:          s.CustomHeadHTML,
 		CustomFooterHTML:        s.CustomFooterHTML,
+		CSPMode:                 &cspMode,
+		AllowedEmbedOrigins:     append([]string(nil), s.AllowedEmbedOrigins...),
 	}
 }
 

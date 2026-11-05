@@ -222,7 +222,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   renderer uses). Plus `web/lib/types.ts` for the UI. The API's stored struct
   re-serializes only the fields it knows, so a setting added to the model but
   not to `applyPatch`/`toAPI` is accepted by the endpoint, silently dropped on
-  write, and never reaches the page — no error anywhere.
+  write, and never reaches the page — no error anywhere. `csp_mode` and
+  `allowed_embed_origins` are the latest pair through all three
+  (`TestStatusPageSettingsCSPRoundTrip` + `TestParseStatusPageSettings_CSPFields`).
 - **Monitor state semantics**: `docs/state-semantics.md` (rules `S-*`).
   Changes to state transitions, quorum aggregation, freshness/absence,
   pause/maintenance handling, or uptime accounting must update the rule
@@ -500,6 +502,16 @@ or imported groups come back empty. Any other path that creates groups through
   that re-parses the value as config (numeric, boolean-ish or
   space/comma/brace passwords abort startup), and quoting the reference
   silently disables the expansion.
+- **Browser/edge security**: `shared/securityheaders` owns the Go services'
+  headers (API strict policy, status-page per-page CSP, HSTS only on HTTPS
+  via `IsHTTPS` + `TRUSTED_PROXY_CIDRS`). The API mounts it, the CORS
+  allowlist (`middleware/cors.go`, `API_ALLOWED_ORIGINS`) and the anonymous
+  rate-limit stage in `useEdgeSecurity` (`api/internal/api/routes_edge.go`);
+  `rateLimiter.Identified` must stay directly after `authMiddleware`, since
+  it keys on the verified credential. Never echo `Origin` in a handler.
+  `SECURITY_HSTS_MAX_AGE` / `API_RATE_LIMIT_*` / `API_ALLOWED_ORIGINS` ride
+  Compose env and the chart's top-level `security:` block
+  (`monitoring-platform.securityEnv`) together.
 
 ## MCP server
 
@@ -688,6 +700,12 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   (`status_page_section_monitors`, legacy `status_page_monitors`), never
   `statusPageSlugQuery`, which resolves upward through `monitor_groups` and
   would push a member's name to a page that only lists its parent group.
+- **Inline scripts need `{{cspNonce}}`.** Pages send a per-response nonce
+  CSP (`status-page/internal/statuspage/csp.go`): the render cache holds
+  HTML with `statustemplate.NoncePlaceholder`, and only a full 200 swaps in
+  a nonce and sets the header — a 304 must not carry a CSP. Every
+  `<script>`/`<style>` in `default.gohtml` carries `nonce="{{cspNonce}}"`;
+  a new one must too, or strict pages silently drop it.
 - **`Subscriber.handleEvent` early-returns** when no SSE client is connected
   and the render cache is empty — exactly when browser notifications matter —
   so the push wake-up sits **above** that guard. Anything hooked in below it
@@ -892,6 +910,10 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus, marks
   `#app-root` inert while open and restores focus on close; pass `onEscape`
   unless the modal handles Escape itself (`Dialog` does).
+- **No inline `<script>` without the CSP nonce**: `proxy.ts` mints one per
+  request (policy in `lib/csp.ts`, report-only until `WEB_CSP_ENFORCE=true`)
+  and `app/layout.tsx` passes `x-nonce` to its boot script. Static security
+  headers live in `next.config.js` `headers()`.
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type

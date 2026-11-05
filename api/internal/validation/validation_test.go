@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -790,6 +791,43 @@ func TestIsValidColor(t *testing.T) {
 			got := isValidColor(tt.color)
 			if got != tt.want {
 				t.Errorf("isValidColor(%q) = %v, want %v", tt.color, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateStatusPageCSPSettings(t *testing.T) {
+	many := make([]string, 21)
+	for i := range many {
+		many[i] = "https://e" + strconv.Itoa(i) + ".example.com"
+	}
+	tests := []struct {
+		name     string
+		settings *models.StatusPageSettings
+		wantErr  string
+	}{
+		{"automatic mode", &models.StatusPageSettings{CSPMode: ptr("")}, ""},
+		{"strict", &models.StatusPageSettings{CSPMode: ptr("strict")}, ""},
+		{"compatible", &models.StatusPageSettings{CSPMode: ptr("Compatible")}, ""},
+		{"off", &models.StatusPageSettings{CSPMode: ptr("off")}, ""},
+		{"unknown mode", &models.StatusPageSettings{CSPMode: ptr("lax")}, "csp_mode"},
+		{"origins", &models.StatusPageSettings{AllowedEmbedOrigins: []string{"https://intranet.example.com", "https://*.corp.example"}}, ""},
+		{"origin with path", &models.StatusPageSettings{AllowedEmbedOrigins: []string{"https://intranet.example.com/status"}}, "allowed_embed_origins"},
+		{"directive injection", &models.StatusPageSettings{AllowedEmbedOrigins: []string{"https://a.example; script-src *"}}, "allowed_embed_origins"},
+		{"wildcard", &models.StatusPageSettings{AllowedEmbedOrigins: []string{"*"}}, "allowed_embed_origins"},
+		{"too many", &models.StatusPageSettings{AllowedEmbedOrigins: many}, "at most 20"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateStatusPageUpdate(&models.UpdateStatusPageRequest{Settings: tt.settings})
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want one containing %q", err, tt.wantErr)
 			}
 		})
 	}

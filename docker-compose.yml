@@ -181,6 +181,15 @@ services:
       # Image the private-location deploy snippets reference. Empty = the
       # worker at this api's release version (see the build args above).
       LOCATION_WORKER_IMAGE: "${LOCATION_WORKER_IMAGE:-}"
+      # Browser/edge security. HSTS max-age in seconds: 0 (off) for local
+      # HTTP; it is only ever sent on HTTPS requests. Set the same value on
+      # status-page. The general rate limit is per credential (else per
+      # client IP), per api replica; 0 disables it. API_ALLOWED_ORIGINS lists
+      # the browser origins allowed credentialed CORS (empty = same-origin).
+      SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
+      API_RATE_LIMIT_PER_MINUTE: "${API_RATE_LIMIT_PER_MINUTE:-600}"
+      API_RATE_LIMIT_BURST: "${API_RATE_LIMIT_BURST:-120}"
+      API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -369,6 +378,11 @@ services:
       STATUS_PAGE_VAPID_SUBJECT: "${STATUS_PAGE_VAPID_SUBJECT:-}"
       # Keys the push endpoints' per-IP rate limit; same value as on api.
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      # Same HSTS max-age as on api. APP_BASE_URL (the operator UI origin)
+      # joins every page's CSP frame-ancestors so the template editor can
+      # preview pages in an iframe.
+      SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
+      APP_BASE_URL: "${APP_BASE_URL:-http://localhost:3000}"
     ports:
       - "8082:8082"
       - "9093:9093"

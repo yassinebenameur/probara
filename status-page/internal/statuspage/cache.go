@@ -39,9 +39,17 @@ func renderCacheTTLFromEnv() time.Duration {
 }
 
 type cacheEntry struct {
-	html    string
+	page    renderedPage
 	etag    string
 	expires time.Time
+}
+
+// renderedPage is one cached render: the HTML (with the CSP nonce still a
+// placeholder) and the page's CSP inputs, so every response can mint its own
+// nonce without re-rendering.
+type renderedPage struct {
+	html string
+	csp  pageCSP
 }
 
 // renderCache caches the rendered HTML of public status pages per slug so N
@@ -77,16 +85,28 @@ func newRenderCache(ttl time.Duration) *renderCache {
 // returned to every waiter of the flight and are never cached. A nil cache
 // degrades to calling build directly.
 func (c *renderCache) Get(slug string, build func() (string, error)) (string, string, error) {
-	if c == nil {
+	page, etag, err := c.GetPage(slug, func() (renderedPage, error) {
 		html, err := build()
+		return renderedPage{html: html}, err
+	})
+	return page.html, etag, err
+}
+
+// GetPage is Get for a full renderedPage. The ETag covers the CSP inputs as
+// well as the HTML: a 304 makes the browser keep its stored headers, so a
+// changed policy (csp_mode, embed origins) must change the ETag even when
+// the markup did not.
+func (c *renderCache) GetPage(slug string, build func() (renderedPage, error)) (renderedPage, string, error) {
+	if c == nil {
+		page, err := build()
 		if err != nil {
-			return "", "", err
+			return renderedPage{}, "", err
 		}
-		return html, computeETag(html), nil
+		return page, page.etag(), nil
 	}
 
 	if entry, ok := c.lookup(slug); ok {
-		return entry.html, entry.etag, nil
+		return entry.page, entry.etag, nil
 	}
 
 	v, err, _ := c.group.Do(slug, func() (interface{}, error) {
@@ -95,23 +115,30 @@ func (c *renderCache) Get(slug string, build func() (string, error)) (string, st
 			return entry, nil
 		}
 		gen := c.generation(slug)
-		html, err := build()
+		page, err := build()
 		if err != nil {
 			return nil, err
 		}
 		entry := &cacheEntry{
-			html:    html,
-			etag:    computeETag(html),
+			page:    page,
+			etag:    page.etag(),
 			expires: c.now().Add(c.ttl),
 		}
 		c.storeIfCurrent(slug, gen, entry)
 		return entry, nil
 	})
 	if err != nil {
-		return "", "", err
+		return renderedPage{}, "", err
 	}
 	entry := v.(*cacheEntry)
-	return entry.html, entry.etag, nil
+	return entry.page, entry.etag, nil
+}
+
+func (p renderedPage) etag() string {
+	if p.csp.mode == "" {
+		return computeETag(p.html)
+	}
+	return computeETag(p.html + "\x00" + p.csp.mode + "\x00" + strings.Join(p.csp.frameAncestors, " "))
 }
 
 // Invalidate drops the cached entry for slug so the next Get rebuilds it.
