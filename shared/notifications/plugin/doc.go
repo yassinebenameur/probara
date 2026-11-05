@@ -10,7 +10,8 @@
 // Plugins live in builtin/<type>/ and are registered in builtin/builtin.go.
 // Every plugin must:
 //
-//   - Build its client with NewHTTPClient and send through PostJSON or Post.
+//   - Build its client with NewHTTPClient and send through PostJSON or Post
+//     (PutJSON for a provider whose send is an idempotent PUT).
 //     The client dials through the egress policy and refuses redirects; Post
 //     classifies the response and strips the URL from transport errors,
 //     because webhook paths and bot tokens are credentials.
