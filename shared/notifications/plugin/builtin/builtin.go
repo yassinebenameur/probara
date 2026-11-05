@@ -17,6 +17,7 @@ import (
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/pagerduty"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/pushover"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/slack"
+	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/slackapp"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/teams"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/telegram"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/twilio"

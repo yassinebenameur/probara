@@ -13,6 +13,7 @@ import FormField from '@/components/ui/FormField';
 import FormActions from '@/components/ui/FormActions';
 import PluginCatalog from './PluginCatalog';
 import SchemaForm, { CLEARED_SECRET } from './SchemaForm';
+import SlackInstall from './SlackInstall';
 import Switch from '@/components/ui/Switch';
 
 interface AlertChannelFormProps {
@@ -152,6 +153,8 @@ export default function AlertChannelForm({
             className="input"
           />
         </FormField>
+
+        {!isEdit && selectedType === 'slack_app' && <SlackInstall />}
 
         {selectedManifest && (
           <SchemaForm

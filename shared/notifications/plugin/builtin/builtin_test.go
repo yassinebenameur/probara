@@ -16,6 +16,7 @@ func TestFollowUpCapability(t *testing.T) {
 		"pagerduty": false, "opsgenie": false,
 		"ntfy": true, "gotify": true, "pushover": true, "mattermost": true,
 		"matrix": true, "google_chat": true,
+		"slack_app": true,
 	}
 	for typ, follow := range want {
 		p, ok := plugin.DefaultRegistry.Get(typ)

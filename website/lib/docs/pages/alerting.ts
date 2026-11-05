@@ -273,6 +273,11 @@ export const ALERTING_PAGE: DocPage = {
               "Slack incoming webhook (Block Kit, with an open-the-monitor button when `APP_BASE_URL` is set)",
             ],
             [
+              "`slack_app`",
+              "Bot `bot_token` (stored encrypted), workspace `team_id` (`T…`), `channel_id` (`C…`), `interactive` (default on); **Add to Slack** fills them in",
+              "One [Slack app](#slack-app) card per alert with an in-Slack **Acknowledge** button; reminders, the recovery and follow-ups reply in the card's thread, and the card is rewritten as the alert is acknowledged, snoozed or resolved",
+            ],
+            [
               "`discord`",
               "HTTPS `webhook_url` on `discord.com` / `discordapp.com` or a subdomain",
               "Discord webhook embed; mentions inside alert text never ping",
@@ -353,6 +358,7 @@ export const ALERTING_PAGE: DocPage = {
             ["`acknowledged`", "Not sent", "Acknowledge, once per paged channel"],
             ["`suspected_cause`", "One follow-up message per paged channel when triage names a cause ([opt-in](#ai-triage))", "Not sent: their APIs add content by re-triggering, and an advisory hint must never re-page"],
             ["`resolved`", "Message", "Resolve / close"],
+            ["`updated`", "Only [Slack app](#slack-app) cards: the card is rewritten in place whenever it shows another state than its alert (acknowledged, unacknowledged, snoozed, snooze over, resolved)", "Not sent"],
           ],
         },
         {
@@ -449,6 +455,7 @@ export const ALERTING_PAGE: DocPage = {
           rows: [
             ["`email`", "Primary button next to the open-the-monitor button, and an `Acknowledge: <url>` line in the plain-text part. Override templates receive it as `ack_url` and `ack_label`"],
             ["`slack`, `teams`, `google_chat`", "Button next to the deep-link button"],
+            ["`slack_app`", "With `interactive` off only: the card's Acknowledge button opens the link, and reminders in the thread carry it. Interactive cards acknowledge in Slack instead"],
             ["`discord`, `mattermost`", "Bold link under the summary"],
             ["`telegram`, `matrix`", "Link above the deep link"],
             ["`ntfy`", "A view action on the notification"],
@@ -466,6 +473,71 @@ export const ALERTING_PAGE: DocPage = {
             "Channel test sends, recoveries, acknowledgement notices and suspected-cause follow-ups carry no link, and neither does a reminder that a `notify_after_ack` route receives after the alert was acknowledged.",
             "Deleting the channel revokes every link it delivered, and deleting the workspace revokes all of its links. See [Security](/docs/security/#action-links) for the token model and key rotation.",
           ],
+        },
+      ],
+    },
+    {
+      id: "slack-app",
+      title: "Slack app",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The `slack_app` channel posts through a Slack app you create for your installation, instead of an incoming webhook. Each alert becomes one card: the trigger posts it with an **Acknowledge** button, reminders, the recovery and [suspected-cause follow-ups](#ai-triage) reply in its thread, and the card itself is rewritten (`chat.update`) whenever the alert's state changes, whoever changed it: pressing Acknowledge in Slack, acknowledging, unacknowledging, snoozing or resolving in Probara, a snooze running out or the monitor recovering. The rewrite lands within one alerter evaluation cycle (`ALERT_EVAL_INTERVAL_SECONDS`) and shows in the delivery history as **Card updated**. A [relapse](#availability) posts a new card; the previous episode's card keeps showing its recovery. The `slack` webhook channel is unchanged and stays available.",
+        },
+        {
+          type: "code",
+          language: "yaml",
+          title: "Slack app manifest (replace probara.example.com with your PUBLIC_BASE_URL)",
+          code: `display_information:
+  name: Probara
+  description: Alert cards from Probara, acknowledged from Slack
+  background_color: "#1c1917"
+features:
+  bot_user:
+    display_name: Probara
+    always_online: true
+oauth_config:
+  redirect_urls:
+    - https://probara.example.com/api/v1/integrations/slack/callback
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.public
+      - incoming-webhook
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://probara.example.com/api/v1/integrations/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false`,
+        },
+        {
+          type: "list",
+          ordered: true,
+          items: [
+            "At [api.slack.com/apps](https://api.slack.com/apps), choose **Create New App → From a manifest**, pick a Slack workspace and paste the manifest with your `PUBLIC_BASE_URL` (the API's public HTTPS origin; Slack must reach it).",
+            "From the app's **Basic Information**, set `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` and `SLACK_SIGNING_SECRET` on the API ([configuration](/docs/configuration/#slack-app); Compose `.env`, or the Helm `slack` values block) and restart it. To install into more than one Slack workspace, also turn on public distribution under **Manage Distribution**.",
+            "In Probara, as a workspace admin: **Settings → Notifications → New channel → Slack app → Add to Slack**. Slack asks which channel to post to; the channel is created and opens in Probara. Send a test, then route monitors to it like any other channel.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Without Add to Slack, install the app from its settings page and fill the form by hand: the **Bot User OAuth Token** (`xoxb-…`), the workspace ID and the channel ID (in Slack, the channel's details). Invite the app to a private channel before using it; `chat:write.public` covers public ones. With no `SLACK_SIGNING_SECRET` (or `interactive` off on the channel) the card's button opens the signed [acknowledge link](#ack-links) instead, which needs `APP_BASE_URL` and `PROBARA_SECRETS_KEY`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Pressing **Acknowledge** acknowledges the alert exactly like any other surface (it stops paging on stop-on-ack routes and counts toward [SLA](/docs/slas/#reports) time to acknowledge), with `acknowledged_via` `slack`; the user who pressed it gets a private confirmation, or is told that the alert was already acknowledged or has resolved. A press is accepted only from the Slack workspace and channel the card was posted to, so one Slack app can serve several Probara workspaces. See [Security](/docs/security/#slack-app) for the signature and install checks.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Known gaps",
+          text:
+            "A press is not mapped to a Probara user: the alert records no acknowledging user, and the audit log names the Slack user (`slack:<name>`). The card offers Acknowledge only; resolve and snooze stay in Probara. A rewrite redraws the state, not the details: failing locations, metrics and the last error stay as the trigger showed them. Socket Mode is not supported, so the API must be reachable from Slack over HTTPS. A card deleted in Slack stops following its alert (the rewrite fails permanently), and so does one whose reference could not be saved after posting; that send is recorded as a permanent failure instead of being retried, so the channel never gets a second card.",
         },
       ],
     },

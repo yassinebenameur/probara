@@ -498,6 +498,16 @@ or imported groups come back empty. Any other path that creates groups through
   `go run ./cmd/admin/gen_vapid_keys`; never generate it at startup, and
   rotating it invalidates **every** stored subscription (`statusPage.vapid`
   in `values.yaml` explains both).
+- **`SLACK_*`** (`SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`,
+  `SLACK_SIGNING_SECRET`): api only, optional, parsed once in `shared/config`
+  (`loadSlackConfig`; ID and secret come as a pair). The alerter and worker
+  never need them: slack_app channels carry their own bot token. Compose
+  passes all three through (empty defaults; `install.sh` writes
+  placeholders); Helm's top-level `slack:` block renders them via
+  `monitoring-platform.secretEnv` (canonical keys `slack_signing_secret`,
+  `slack_client_secret`), and `slack.enabled` fails the render without the
+  signing secret. The OAuth redirect and interactivity URLs hang off
+  `PUBLIC_BASE_URL` (`api/internal/api/routes_chat.go`).
 - **`TRUSTED_PROXY_CIDRS`**: api and status-page. Every client IP (audit
   log, session IPs, rate-limit keys) comes from `shared/clientip`, which
   believes `X-Forwarded-For`/`X-Real-IP` only from those peers; never read a
@@ -555,7 +565,8 @@ or imported groups come back empty. Any other path that creates groups through
   as a literal `value:` in a PodSpec and never hardcode the Secret name — the
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
-  `oidc_client_secret`, `local_ai_token`) are the contract external secret
+  `oidc_client_secret`, `local_ai_token`, `slack_signing_secret`,
+  `slack_client_secret`) are the contract external secret
   managers fill.
   Helm cannot read Secrets, so anything the chart *composes* from a
   credential (the Postgres DSN, the embedded NATS URL) needs the composed

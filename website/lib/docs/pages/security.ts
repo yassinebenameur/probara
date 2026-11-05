@@ -296,6 +296,11 @@ export const SECURITY_PAGE: DocPage = {
               'Coordinate with IdP client rotation.',
             ],
             [
+              '`SLACK_SIGNING_SECRET`, `SLACK_CLIENT_SECRET`',
+              'API only',
+              'Regenerate in the Slack app settings, then update the API. A new signing secret refuses presses signed with the old one at once; a new client secret only affects installs started after it.',
+            ],
+            [
               '`STATUS_PAGE_PREVIEW_SECRET`',
               'API and status-page service',
               'Changing invalidates outstanding one-hour preview tokens.',
@@ -636,6 +641,37 @@ go run ./cmd/admin/encrypt_existing_channels`,
               term: 'Revocation and rotation',
               description:
                 'Delete the channel to revoke the links it delivered, or the workspace to revoke all of its links. Links signed with a key version keep working after a [rotation](#encryption-at-rest) adds `PROBARA_SECRETS_KEY_V<n>`, and stop working when that version is removed. Every service that sends notifications and the API need the same keyring, or links minted by one fail on the other.',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'slack-app',
+      title: 'Slack app callbacks',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'The [Slack app](/docs/alerting/#slack-app) adds two public routes. Like an [acknowledge link](#action-links), its Acknowledge button lets anyone in the Slack channel acknowledge that one alert, without a Probara account; post cards only to channels whose members may take alerts.',
+        },
+        {
+          type: 'definitions',
+          items: [
+            {
+              term: 'Button presses',
+              description:
+                '`POST /api/v1/integrations/slack/interactions` accepts only requests whose `X-Slack-Signature` is Slack\'s v0 HMAC-SHA256 of the raw body under `SLACK_SIGNING_SECRET`, with an `X-Slack-Request-Timestamp` within five minutes of the API\'s clock (else `401`). The button names the alert and the Probara channel; the API then requires that a card of that alert was posted on that channel, that the channel belongs to the alert\'s workspace and posts to the Slack workspace (`team_id`) and channel the press came from, and that the workspace is not deleted, so one Slack app shared by several Probara workspaces cannot cross them (`403`). It acknowledges through the alerts service (`acknowledged_via` `slack`, no user) and audits every press past the signature check as `alert.acknowledge` by `slack:<user>`, with the Slack workspace and user IDs. Without a signing secret the route answers `404`.',
+            },
+            {
+              term: 'Add to Slack',
+              description:
+                '`GET /api/v1/integrations/slack/install` needs a tenant admin\'s signed-in session. It signs an OAuth `state` (HMAC-SHA256 under a key derived from `SLACK_CLIENT_SECRET`) carrying the workspace, the user, a ten-minute expiry and the hash of a random nonce it sets as an `HttpOnly`, `SameSite=Lax` cookie. The public callback creates the channel only when the state verifies, the browser returns the matching nonce, and the user is still an enabled admin of a live workspace, so a link started by someone else cannot attach a channel to their workspace. The bot token is stored encrypted like every channel secret, and the install is audited as `alert_channel.create` by that user.',
+            },
+            {
+              term: 'Scopes and logs',
+              description:
+                'The app requests `chat:write`, `chat:write.public` and `incoming-webhook` (only for Slack\'s channel picker; the webhook URL is discarded). The API request log records the routes\' paths only, never the OAuth `code`, the `state` or a payload. Both routes are charged to the client address by the [anonymous rate limit](#edge-controls) and are not MCP tools.',
             },
           ],
         },

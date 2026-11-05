@@ -130,6 +130,14 @@ spec:
         - name: OIDC_JIT_DEFAULT_TENANT_ID
           value: {{ .Values.auth.oidc.jitDefaultTenantId | quote }}
         {{- end }}
+        {{- if .Values.slack.enabled }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "SLACK_SIGNING_SECRET" "key" "slack_signing_secret" "secret" .Values.slack.signingSecretExistingSecret "secretKey" .Values.slack.signingSecretExistingSecretKey) | nindent 8 }}
+        {{- if .Values.slack.clientId }}
+        - name: SLACK_CLIENT_ID
+          value: {{ .Values.slack.clientId | quote }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "SLACK_CLIENT_SECRET" "key" "slack_client_secret" "secret" .Values.slack.clientSecretExistingSecret "secretKey" .Values.slack.clientSecretExistingSecretKey) | nindent 8 }}
+        {{- end }}
+        {{- end }}
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.probaraSecretsKey "secret" .Values.secrets.probaraSecretsKeyExistingSecret) }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "PROBARA_SECRETS_KEY" "key" "probara_secrets_key" "secret" .Values.secrets.probaraSecretsKeyExistingSecret "secretKey" .Values.secrets.probaraSecretsKeyExistingSecretKey) | nindent 8 }}
         {{- end }}

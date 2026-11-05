@@ -142,6 +142,20 @@ POSTs to the API's public `/api/v1/alert-actions/{token}`; the API
 acknowledges through the alerts service as a `magic_link` actor, so the
 alerter sees an ordinary acknowledgement. Nothing about the link is stored.
 
+Two-way chat channels (plugins with `CapabilityMessageUpdate`, the Slack
+app) save the card they post per alert in `alert_notification_messages`
+(migration 000114, `shared/notifications/messagestore`) with the state it
+shows. Each lifecycle tick the alerter's card reconcile
+(`alerter/internal/alerter/card_updates.go`) sends `updated` to every card
+whose state differs from its alert's (status, snooze end), claimed on that
+row under the alert lock, so acknowledgements, unacknowledgements, snoozes
+and resolves from any surface rewrite the card; reminders and the resolve
+go as thread replies. The Slack app's Acknowledge button posts to the API's
+public `/api/v1/integrations/slack/interactions`, verified with
+`SLACK_SIGNING_SECRET`, which acknowledges through the alerts service as a
+`slack` actor; "Add to Slack" (`/api/v1/integrations/slack/install` and its
+public callback) creates the channel. All `SLACK_*` settings are api-only.
+
 An async envelope may carry `contact_id` instead of relying on the channel's
 own recipients: the delivery worker reads and decrypts that verified
 `user_contacts` address and hands it to a plugin advertising
