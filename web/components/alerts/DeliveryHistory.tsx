@@ -6,7 +6,7 @@ import { Send } from 'lucide-react';
 import type { NotificationDelivery, NotificationDeliveryListResponse } from '@/lib/types';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 import { deliveryOutcomeHint, deliveryOutcomeLabel, deliveryOutcomeTone } from '@/lib/status-tones';
-import { deliveryAlertSubject, deliveryEventLabel, deliveryPathLabel, deliveryRecipients } from '@/lib/deliveries';
+import { deliveryAlertSubject, deliveryEventLabel, deliveryPathLabel, deliveryRecipients, deliveryStepLabel, deliveryTarget } from '@/lib/deliveries';
 import { alertFocusHref } from '@/lib/alert-links';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
@@ -134,7 +134,9 @@ export default function DeliveryHistory({ load, scope, title = 'Deliveries', sub
 
 function DeliveryRow({ delivery: d, scope }: { delivery: NotificationDelivery; scope: 'alert' | 'channel' }) {
   const recipients = deliveryRecipients(d);
-  const event = `${deliveryEventLabel(d.event_type)} · attempt ${d.attempt}`;
+  const step = deliveryStepLabel(d.delivery_key);
+  const event = `${deliveryEventLabel(d.event_type)}${step ? ` (${step})` : ''} · attempt ${d.attempt}`;
+  const target = deliveryTarget(d);
   const detail = [recipients, d.error].filter(Boolean).join(' — ');
   return (
     <tr>
@@ -144,8 +146,9 @@ function DeliveryRow({ delivery: d, scope }: { delivery: NotificationDelivery; s
       </td>
       <td className="max-w-[16rem]">
         {scope === 'alert' ? (
-          <span className="block truncate text-white" title={d.channel_name}>
-            {d.channel_name}
+          <span className="block truncate text-white" title={target.title}>
+            {target.title}
+            {target.via && <span className="ml-1 text-xs text-slate-500">{target.via}</span>}
           </span>
         ) : (
           <Link

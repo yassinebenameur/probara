@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deliveryAlertSubject, deliveryEventLabel, deliveryPathLabel, deliveryRecipients } from './deliveries';
+import {
+  deliveryAlertSubject, deliveryEventLabel, deliveryPathLabel, deliveryRecipients, deliveryStepLabel, deliveryTarget,
+} from './deliveries';
 import { alertFocusHref } from './alert-links';
 import { deliveryFailed, deliveryOutcomeHint, deliveryOutcomeLabel, deliveryOutcomeTone } from './status-tones';
 
@@ -42,4 +44,14 @@ test('alertFocusHref links the focused alert view', () => {
 test('deliveryAlertSubject prefers the monitor', () => {
   assert.equal(deliveryAlertSubject({ monitor_name: 'API', alert_kind: 'availability' }), 'API');
   assert.equal(deliveryAlertSubject({ monitor_name: null, alert_kind: 'mesh_edge' }), 'mesh edge alert');
+});
+
+test('person sends name who was paged and the escalation step', () => {
+  const person = { channel_name: 'Email', channel_id: null, username: 'alice', recipient: 'a***@example.com' };
+  assert.deepEqual(deliveryTarget(person), { title: 'alice · a***@example.com', via: 'Email' });
+  assert.deepEqual(deliveryTarget({ ...person, channel_id: 'c1', channel_name: 'Twilio' }).via, 'via Twilio');
+  assert.deepEqual(deliveryTarget({ channel_name: 'Ops', channel_id: 'c1' }), { title: 'Ops', via: null });
+  assert.equal(deliveryStepLabel('escalation:1:0'), 'Step 2');
+  assert.equal(deliveryStepLabel('escalation:0:2:1'), 'Step 1, repeat 2');
+  assert.equal(deliveryStepLabel('created'), null);
 });

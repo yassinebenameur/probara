@@ -539,6 +539,8 @@ export default function AgentForm({
           onRecoveryThresholdChange={(n) => setFormData((prev) => ({ ...prev, recovery_threshold: n }))}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
+          escalationPolicyId={formData.escalation_policy_id}
+          onEscalationPolicyChange={(id) => setFormData((prev) => ({ ...prev, escalation_policy_id: id }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}

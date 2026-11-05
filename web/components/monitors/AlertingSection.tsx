@@ -3,7 +3,8 @@
 import { type ReactNode, useEffect, useId, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, BellOff } from 'lucide-react';
-import { getNotificationSettings } from '@/lib/api';
+import { getEscalationPolicies, getNotificationSettings } from '@/lib/api';
+import type { EscalationPolicy } from '@/lib/escalation';
 import type {
   AlertChannel,
   ChannelAssignment,
@@ -13,6 +14,7 @@ import type {
   NotificationSettings,
 } from '@/lib/types';
 import ChannelPicker from '@/components/channels/ChannelPicker';
+import { PolicySteps } from '@/components/escalation/PolicySteps';
 import Callout from '@/components/ui/Callout';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import { notifyModeChange } from '@/lib/monitor-form/common';
@@ -25,6 +27,11 @@ const LINK =
 const NOTIFY_OPTIONS = [
   { value: 'default', label: 'Workspace default' },
   { value: 'custom', label: 'Custom' },
+] as const satisfies readonly { value: NotificationMode; label: string }[];
+// With escalation policies (a form that passes onEscalationPolicyChange).
+const NOTIFY_OPTIONS_WITH_POLICY = [
+  ...NOTIFY_OPTIONS,
+  { value: 'policy', label: 'Escalation policy' },
 ] as const satisfies readonly { value: NotificationMode; label: string }[];
 
 // Every option's effect is listed in its row's description (OptionList),
@@ -99,6 +106,11 @@ interface AlertingSectionProps {
   // The control only matters with upstream dependencies, so it is hidden
   // without them — unless a non-default value is stored, which stays visible.
   hasDependencies: boolean;
+  // Escalation policies: the monitor's policy in notification_mode
+  // 'policy'. Omit onEscalationPolicyChange to leave the option out (bulk
+  // alerting assigns no policies).
+  escalationPolicyId?: string;
+  onEscalationPolicyChange?: (id: string) => void;
 }
 
 function graceLabel(seconds: number): string {
@@ -127,8 +139,18 @@ export function AlertingSection({
   mode, onModeChange, customChannels, onCustomChannelsChange,
   rollup, onRollupChange,
   dependencySuppression, onDependencySuppressionChange, hasDependencies,
+  escalationPolicyId, onEscalationPolicyChange,
 }: AlertingSectionProps) {
   const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [policies, setPolicies] = useState<EscalationPolicy[] | null>(null);
+  const withPolicies = !!onEscalationPolicyChange;
+  useEffect(() => {
+    if (withPolicies) getEscalationPolicies().then(setPolicies).catch(() => setPolicies([]));
+  }, [withPolicies]);
+  const policy = policies?.find((p) => p.id === escalationPolicyId);
+  const defaultPolicy = settings?.default_escalation_policy_id
+    ? policies?.find((p) => p.id === settings.default_escalation_policy_id)
+    : undefined;
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   // The form can render more than one AlertingSection.
   const idBase = useId();
@@ -162,9 +184,13 @@ export function AlertingSection({
   const notifyTitleId = `${idBase}-notify`;
 
   const notifyDescription =
-    mode === 'custom'
+    mode === 'policy'
+      ? 'An escalation policy: people and channels paged step by step until someone acknowledges.'
+      : mode === 'custom'
       ? 'Only the channels picked below, whatever the workspace default.'
-      : defaultSummary
+      : settings?.default_escalation_policy_id
+        ? `The workspace default escalation policy${defaultPolicy ? `, ${defaultPolicy.name}` : ''}.`
+        : defaultSummary
         ? `The workspace default: ${defaultSummary}.`
         : 'The workspace default channels.';
 
@@ -291,7 +317,7 @@ export function AlertingSection({
           description={notifyDescription}
           control={({ titleId, descriptionId }) => (
             <SegmentedControl
-              options={NOTIFY_OPTIONS}
+              options={withPolicies || mode === 'policy' ? NOTIFY_OPTIONS_WITH_POLICY : NOTIFY_OPTIONS}
               value={mode}
               onChange={chooseMode}
               labelledBy={titleId}
@@ -300,7 +326,39 @@ export function AlertingSection({
             />
           )}
         >
-          {mode === 'default' && settings && defaults.length === 0 && (
+          {mode === 'policy' && (
+            <div className="mt-3 space-y-2">
+              <select
+                aria-labelledby={notifyTitleId}
+                className="input input-sm"
+                value={escalationPolicyId ?? ''}
+                disabled={!onEscalationPolicyChange}
+                onChange={(e) => onEscalationPolicyChange?.(e.target.value)}
+              >
+                <option value="">Choose a policy…</option>
+                {(policies ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              {policy && (
+                <div className="glass-well px-3 py-2">
+                  <PolicySteps steps={policy.steps} />
+                </div>
+              )}
+              {policies && policies.length === 0 && (
+                <Callout tone="warning">
+                  No escalation policies yet.{' '}
+                  <Link href="/escalation-policies" target="_blank" rel="noopener noreferrer" className={LINK}>
+                    Create one<span className="sr-only"> (opens in a new tab)</span>
+                  </Link>
+                </Callout>
+              )}
+              {policy && policy.steps.every((s) => s.targets.every((t) => t.reachable === false)) && (
+                <Callout tone="danger" icon={<BellOff strokeWidth={1.75} />}>
+                  Nobody in this policy can be paged: no active channel and no member with a verified contact.
+                </Callout>
+              )}
+            </div>
+          )}
+          {mode === 'default' && settings && defaults.length === 0 && !settings.default_escalation_policy_id && (
             <Callout tone="warning" className="mt-3">
               No default configured, so alerts won&apos;t notify anyone.{' '}
               {/* A new tab, so a half-filled monitor form isn't lost. */}

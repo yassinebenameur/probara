@@ -34,3 +34,24 @@ export function deliveryAlertSubject(d: Pick<NotificationDelivery, 'monitor_name
   if (d.monitor_name) return d.monitor_name;
   return `${String(d.alert_kind || 'alert').replace(/_/g, ' ')} alert`;
 }
+
+/**
+ * Where a delivery went: the channel, or for an escalation page the person
+ * paged ("alice · a***@example.com", via the SMS channel when one carried it).
+ */
+export function deliveryTarget(
+  d: Pick<NotificationDelivery, 'channel_name' | 'channel_id' | 'username' | 'recipient'>
+): { title: string; via: string | null } {
+  if (!d.recipient) return { title: d.channel_name, via: null };
+  const who = d.username ?? 'Removed user';
+  return { title: `${who} · ${d.recipient}`, via: d.channel_id ? `via ${d.channel_name}` : 'Email' };
+}
+
+/** "Step 2" (and the repeat cycle) for an escalation page's ledger key, else null. */
+export function deliveryStepLabel(deliveryKey: string): string | null {
+  const m = /^escalation:(\d+):(\d+)/.exec(deliveryKey);
+  if (!m) return null;
+  const step = Number(m[1]) + 1;
+  const cycle = Number(m[2]);
+  return cycle > 0 ? `Step ${step}, repeat ${cycle}` : `Step ${step}`;
+}

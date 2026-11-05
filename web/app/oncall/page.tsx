@@ -71,7 +71,7 @@ export default function OnCallPage() {
     <Page width="data">
       <PageHeader
         title="On-call"
-        subtitle="Who is on call, by rotation and override. Schedules do not page anyone yet: route alerts to channels as before."
+        subtitle="Who is on call, by rotation and override. An escalation policy step with a schedule pages whoever is on call when it fires."
         action={
           canWrite && !(loading || error || schedules.length === 0) ? (
             <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} onClick={openCreate}>

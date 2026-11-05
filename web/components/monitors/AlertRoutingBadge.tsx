@@ -59,6 +59,14 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         } rolls this monitor's alerts into its own but is paused, so neither the group nor this monitor notifies anyone. Resume the group, or stop rolling its members up.`,
         fixHref: '/monitors',
       };
+    case 'policy_no_targets':
+      return {
+        title: 'Alerts reach nobody',
+        detail: `${
+          routing.escalation_policy_name ? `Escalation policy "${routing.escalation_policy_name}"` : 'The escalation policy'
+        }${routing.source === 'tenant_default' ? ', the workspace default,' : ''} has no active channel and nobody who can be paged (an enabled member with a verified contact). Add a target, or have its people verify a contact.`,
+        fixHref: '/escalation-policies',
+      };
     default:
       return {
         title: 'Alerts reach nobody',

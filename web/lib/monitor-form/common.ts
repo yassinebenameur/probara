@@ -19,9 +19,15 @@ export interface AlertingFormFields {
   /** Passing checks a down monitor needs before it is up (S-T7), 1-10. */
   recovery_threshold: number;
   notification_mode: NotificationMode;
+  /** The escalation policy, sent with notification_mode 'policy' only. */
+  escalation_policy_id?: string;
   dependency_suppression: DependencySuppression;
   notification_channels: ChannelAssignment[];
 }
+
+/** The stored escalation policy of a monitor, for a form's initial state. */
+export const initialEscalationPolicy = (monitor?: { escalation_policy_id?: string }) =>
+  monitor?.escalation_policy_id ? { escalation_policy_id: monitor.escalation_policy_id } : {};
 
 /** The shared fields of a form for a scheduled (actively checked) monitor. */
 export interface ScheduledFormFields extends AlertingFormFields {
@@ -75,6 +81,7 @@ export function initialScheduledFormFields(monitor?: Monitor, initialData?: Crea
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     recovery_threshold: monitor?.recovery_threshold ?? 1,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    ...initialEscalationPolicy(monitor),
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? ([] as ChannelAssignment[]),
     location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
@@ -108,6 +115,9 @@ export function buildScheduledMonitorRequest(
   requestData.notification_mode = form.notification_mode;
   requestData.dependency_suppression = form.dependency_suppression;
   requestData.notification_channels = form.notification_mode === 'custom' ? form.notification_channels : [];
+  if (form.notification_mode === 'policy' && form.escalation_policy_id) {
+    requestData.escalation_policy_id = form.escalation_policy_id;
+  }
   if (options.alwaysSendTags || form.tags.trim()) {
     requestData.tags = parseTagInput(form.tags);
   }
@@ -141,6 +151,9 @@ export function buildHeartbeatMonitorRequest(
   requestData.notification_mode = form.notification_mode;
   requestData.dependency_suppression = form.dependency_suppression;
   requestData.notification_channels = form.notification_mode === 'custom' ? form.notification_channels : [];
+  if (form.notification_mode === 'policy' && form.escalation_policy_id) {
+    requestData.escalation_policy_id = form.escalation_policy_id;
+  }
   if (form.tags.trim()) {
     requestData.tags = parseTagInput(form.tags);
   }

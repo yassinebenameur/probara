@@ -11,6 +11,7 @@ import Switch from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/ToastProvider';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import { getNotificationSettings, updateNotificationSettings } from '@/lib/api';
+import { DefaultPolicyRow } from '@/components/escalation/DefaultPolicyRow';
 import { sectionLayout, type SectionLayout } from './layout';
 import type { ChannelAssignment, NotificationSettings } from '@/lib/types';
 
@@ -224,6 +225,8 @@ interface Snapshot {
   locationOfflineEnabled: boolean;
   locationOfflineAfter: number;
   reopenCooldown: number;
+  // Escalation policies: the workspace default policy ('' = none).
+  defaultPolicyId: string;
 }
 
 // Dirty check: channel assignments compare by channel, delay and the
@@ -285,6 +288,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
   const [locationOfflineEnabled, setLocationOfflineEnabled] = useState(true);
   const [locationOfflineAfter, setLocationOfflineAfter] = useState(180);
   const [reopenCooldown, setReopenCooldown] = useState(0);
+  const [defaultPolicyId, setDefaultPolicyId] = useState('');
   // What the server holds; the save bar only appears when the form differs.
   const [saved, setSaved] = useState<Snapshot | null>(null);
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
@@ -304,6 +308,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     locationOfflineEnabled,
     locationOfflineAfter,
     reopenCooldown,
+    defaultPolicyId,
   };
   const dirty = saved !== null && comparable(current) !== comparable(saved);
 
@@ -358,6 +363,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     setLocationOfflineEnabled(s.locationOfflineEnabled);
     setLocationOfflineAfter(s.locationOfflineAfter);
     setReopenCooldown(s.reopenCooldown);
+    setDefaultPolicyId(s.defaultPolicyId);
   };
 
   const loadSettings = async () => {
@@ -379,6 +385,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         locationOfflineEnabled: s.location_offline_alerts_enabled ?? true,
         locationOfflineAfter: s.location_offline_after_seconds ?? 180,
         reopenCooldown: s.alert_reopen_cooldown_seconds ?? 0,
+        defaultPolicyId: s.default_escalation_policy_id ?? '',
       };
       apply(loaded);
       setSaved(loaded);
@@ -412,6 +419,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         location_offline_alerts_enabled: locationOfflineEnabled,
         location_offline_after_seconds: locationOfflineAfter,
         alert_reopen_cooldown_seconds: reopenCooldown,
+        default_escalation_policy_id: defaultPolicyId,
       });
       markFocusReturn();
       setSaved(current);
@@ -453,10 +461,22 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
       }
     >
       <div className="divide-y divide-divider">
+        <DefaultPolicyRow
+          value={defaultPolicyId}
+          onChange={setDefaultPolicyId}
+          readOnly={readOnly}
+          hasDefaultChannels={defaultChannels.length > 0}
+          renderRow={(props) => <SettingRow {...props} />}
+        />
         <SettingRow
           title="Default channels"
           titleId="default-channels-label"
-          description="Every monitor notifies these channels unless it has a custom list. A delay holds a channel back until the alert has lasted that long; Keep after ack keeps a channel paging while the alert is acknowledged."
+          muted={defaultPolicyId !== ''}
+          description={
+            defaultPolicyId
+              ? 'Kept but unused while a default escalation policy is set: default-mode monitors follow the policy.'
+              : 'Every monitor notifies these channels unless it has a custom list. A delay holds a channel back until the alert has lasted that long; Keep after ack keeps a channel paging while the alert is acknowledged.'
+          }
         >
           <div className="mt-3">
             <ChannelPicker
