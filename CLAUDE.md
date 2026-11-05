@@ -156,7 +156,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `IsSensitiveHeaderName` has a TS twin in `web/lib/monitor-form/http.ts`,
   pinned by `shared/secrets/testdata/sensitive_header_names.json`. Skip
   secret work for a config with no secret key via `secrets.HasSecretValues`
-  (byte-level, no decode).
+  (byte-level, no decode). Secret keys match exactly while config structs
+  decode case-insensitively, so `ValidatorRegistry.Validate` refuses a
+  miscapitalized secret key for every type (`validateSecretKeySpelling`).
 - **Channel config secrets** are the plugin manifest's `secret` fields, and
   they merge differently (`secrets.MergePreserveSecrets`): absent, `""` and
   `***` all **keep** the stored value (the channel form submits every secret

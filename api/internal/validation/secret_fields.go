@@ -1,12 +1,15 @@
 package validation
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // Rules for the plain/secret map pairs (http headers, grpc metadata, synthetic
@@ -201,6 +204,33 @@ func validateSyntheticBrowserRefs(config sharedmodels.SyntheticBrowserMonitorCon
 		}
 		if missing := undefinedSyntheticRefs(defined, texts...); len(missing) > 0 {
 			return undefinedRefError(fmt.Sprintf("steps[%d]", i), missing)
+		}
+	}
+	return nil
+}
+
+// validateSecretKeySpelling refuses a top-level config key that matches one of
+// the type's registered secret fields (shared/secrets MonitorSecretFields /
+// MonitorSecretMapFields) case-insensitively but not exactly. Config structs
+// decode case-insensitively, so the validators and the worker would honour
+// `Basic_Auth_Password`, while encryption, masking and the write-only merge
+// match keys exactly and would store and return it in plaintext. Generic over
+// the registry, so a newly registered secret is covered without code here.
+func validateSecretKeySpelling(monitorType models.MonitorType, config json.RawMessage) error {
+	if !secrets.HasMonitorSecrets(string(monitorType)) || len(config) == 0 {
+		return nil
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(config, &keys); err != nil {
+		return nil // not an object: the type's validator reports it
+	}
+	fields := append(append([]string(nil), secrets.MonitorSecretFields[string(monitorType)]...),
+		secrets.MonitorSecretMapFields[string(monitorType)]...)
+	for key := range keys {
+		for _, field := range fields {
+			if key != field && strings.EqualFold(key, field) {
+				return fmt.Errorf("config key %q must be spelled %q", key, field)
+			}
 		}
 	}
 	return nil

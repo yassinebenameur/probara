@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/yassinebenameur/probara/api/internal/models"
 )
 
 func TestRequestSecretFieldValidation(t *testing.T) {
@@ -66,5 +68,37 @@ func TestRequestSecretFieldValidation(t *testing.T) {
 				t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestSecretKeySpelling: a miscapitalized secret key would be honoured by the
+// case-insensitive struct decode yet skipped by exact-key encryption and
+// masking, so the registry refuses it for every secret-bearing type.
+func TestSecretKeySpelling(t *testing.T) {
+	cases := []struct {
+		monitorType models.MonitorType
+		config      string
+		wantErr     string
+	}{
+		{models.MonitorTypeHTTP, `{"url":"https://x.test","method":"GET","Secret_Headers":{"X-Api-Key":"k"}}`, `"Secret_Headers" must be spelled "secret_headers"`},
+		{models.MonitorTypeHTTP, `{"url":"https://x.test","method":"GET","basic_auth_username":"u","Basic_Auth_Password":"pw"}`, `must be spelled "basic_auth_password"`},
+		{models.MonitorTypePostgres, `{"host":"db.test","Password":"pw"}`, `must be spelled "password"`},
+		{models.MonitorTypeWebSocket, `{"url":"wss://x.test","HEADERS":{"a":"b"}}`, `must be spelled "headers"`},
+		{models.MonitorTypeGRPC, `{"host":"g.test","Secret_Metadata":{"a":"b"}}`, `must be spelled "secret_metadata"`},
+		{models.MonitorTypeHTTP, `{"url":"https://x.test","method":"GET","basic_auth_username":"u","basic_auth_password":"pw"}`, ""},
+		// Types without secrets are left to their own validator.
+		{models.MonitorTypePing, `{"host":"x.test","Password":"pw"}`, ""},
+	}
+	for _, tc := range cases {
+		err := DefaultRegistry.Validate(tc.monitorType, json.RawMessage(tc.config))
+		if tc.wantErr == "" {
+			if err != nil {
+				t.Errorf("%s %s: unexpected error %v", tc.monitorType, tc.config, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("%s %s: error = %v, want %q", tc.monitorType, tc.config, err, tc.wantErr)
+		}
 	}
 }
