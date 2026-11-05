@@ -35,6 +35,17 @@ ACCESSING THE APPLICATION:
      Then open: http://localhost:8082/public/status/<slug>
 {{- end }}
 
+{{- if and .Values.ingress.enabled (not .Values.trustedProxyCIDRs) }}
+
+CLIENT IP ADDRESSES:
+
+  trustedProxyCIDRs is empty, so the api and status page take the ingress
+  controller's pod address as the client of every request: audit and session
+  IPs, and per-IP rate limits including the login throttle, all collapse onto
+  it (one abusive client can then lock everyone out of login). Set
+  trustedProxyCIDRs to the CIDR your ingress controller pods use.
+{{- end }}
+
 FIRST LOGIN:
 
   Open the UI. On a fresh install the login page asks you to create the first

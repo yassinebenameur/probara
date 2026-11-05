@@ -138,6 +138,8 @@ func (s *Service) buildReport(ctx context.Context, tenantID uuid.UUID, sla *mode
 
 	report.Summary = summarize(sla, res, 0, members)
 	report.Budget = budgetFor(sla.TargetPct, report.Summary, period)
+	report.BurnDown = burnDown(sla, res, days, members, period, loc)
+	report.Budget.ProjectedExhaustionAt = projectExhaustion(report.Budget, period, end)
 	for i, day := range days {
 		d := summarize(sla, res, i+1, members)
 		report.Daily = append(report.Daily, models.SLAReportDay{
@@ -273,11 +275,18 @@ func outageRow(o sharedanalytics.Outage, name string) models.SLAReportOutage {
 
 // alertResponse fills MTTA from availability alerts triggered in the window,
 // including group roll-up alerts on the SLA's explicit group monitors.
+//
+// A relapse (an alert reopened within the reopen cooldown) is the same
+// alert: it counts once, in the period of its first trigger. MTTA reads the
+// first acknowledgement (first_acknowledged_at), never acknowledged_at, which
+// a reopen or an unacknowledge clears, and measures it from the start of the
+// episode it acknowledged, so a relapse neither erases an earlier ack nor
+// stretches one across the recovered gap.
 func (s *Service) alertResponse(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, window sharedanalytics.TimeRange, out *models.SLAReportResponse) error {
 	var mtta sql.NullFloat64
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*), COUNT(acknowledged_at),
-			AVG(EXTRACT(EPOCH FROM acknowledged_at - triggered_at)) FILTER (WHERE acknowledged_at IS NOT NULL)
+		SELECT COUNT(*), COUNT(first_acknowledged_at),
+			AVG(EXTRACT(EPOCH FROM first_acknowledged_at - first_ack_episode_started_at)) FILTER (WHERE first_acknowledged_at IS NOT NULL)
 		FROM alerts
 		WHERE tenant_id = $1 AND kind = 'availability' AND monitor_id = ANY($2)
 		  AND triggered_at >= $3 AND triggered_at < $4
@@ -364,8 +373,80 @@ func budgetFor(target float64, s models.SLAReportSummary, period sharedanalytics
 	if b.AllowedSeconds > 0 {
 		pct := b.RemainingSeconds / b.AllowedSeconds * 100
 		b.RemainingPct = &pct
+		// S-U8: (1 - A) / (1 - target), which is consumed ÷ allowed since
+		// both scale the same eligible time.
+		rate := b.ConsumedSeconds / b.AllowedSeconds
+		b.BurnRate = &rate
 	}
 	return b
+}
+
+// burnDown is the S-U8 burn-down: after each day, the full period's error
+// budget left. Each point summarizes the period start through that day, so
+// it is exact for both aggregations (per-monitor and composite seconds add
+// up across day buckets; a mean SLA re-averages each monitor's cumulative
+// availability) and the last point consumes exactly the headline's budget.
+func burnDown(sla *models.SLA, res *sharedanalytics.TimelineResult, days []sharedanalytics.TimeRange, members []member,
+	period sharedanalytics.Period, loc *time.Location) []models.SLAReportBurnPoint {
+	if len(days) == 0 {
+		return nil
+	}
+	cum := &sharedanalytics.TimelineResult{
+		PerMonitor: make(map[uuid.UUID][]sharedanalytics.StateSeconds, len(members)),
+		Serial:     make([]sharedanalytics.SerialSeconds, 1),
+	}
+	for _, m := range members {
+		cum.PerMonitor[m.ID] = make([]sharedanalytics.StateSeconds, 1)
+	}
+	out := make([]models.SLAReportBurnPoint, 0, len(days))
+	for i, day := range days {
+		idx := i + 1 // bucket 0 is the whole window
+		s, d := &cum.Serial[0], res.Serial[idx]
+		s.Available += d.Available
+		s.Down += d.Down
+		s.Excluded += d.Excluded
+		s.Window += d.Window
+		for _, m := range members {
+			c, d := &cum.PerMonitor[m.ID][0], res.PerMonitor[m.ID][idx]
+			c.Available += d.Available
+			c.UnplannedDown += d.UnplannedDown
+			c.PlannedDown += d.PlannedDown
+			c.Paused += d.Paused
+			c.Unknown += d.Unknown
+			c.Window += d.Window
+		}
+		b := budgetFor(sla.TargetPct, summarize(sla, cum, 0, members), period)
+		point := models.SLAReportBurnPoint{Date: day.Start.In(loc).Format("2006-01-02"), ConsumedSeconds: b.ConsumedSeconds}
+		if b.BurnRate != nil && b.AllowedFullPeriodSeconds > 0 {
+			pct := (b.AllowedFullPeriodSeconds - b.ConsumedSeconds) / b.AllowedFullPeriodSeconds * 100
+			point.RemainingPct = &pct
+		}
+		out = append(out, point)
+	}
+	return out
+}
+
+// projectExhaustion extrapolates a running period's consumption so far
+// (consumed ÷ elapsed wall time) to the instant the full period's budget is
+// spent (S-U8). Nil when the period is closed, nothing was consumed, the
+// budget is already spent, or it would last past the period end.
+func projectExhaustion(b models.SLAReportBudget, period sharedanalytics.Period, effectiveEnd time.Time) *time.Time {
+	if b.BurnRate == nil || !effectiveEnd.Before(period.End) || b.ConsumedSeconds <= 0 {
+		return nil
+	}
+	left := b.AllowedFullPeriodSeconds - b.ConsumedSeconds
+	elapsed := effectiveEnd.Sub(period.Start).Seconds()
+	if left <= 0 || elapsed <= 0 {
+		return nil
+	}
+	// Compared in seconds before converting, so a slow burn cannot overflow
+	// time.Duration.
+	wait := left / (b.ConsumedSeconds / elapsed)
+	if wait >= period.End.Sub(effectiveEnd).Seconds() {
+		return nil
+	}
+	at := effectiveEnd.Add(time.Duration(wait * float64(time.Second))).UTC()
+	return &at
 }
 
 func meanPtr(values []float64) *float64 {

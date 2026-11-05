@@ -83,7 +83,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Never commit `.env` or generated credentials. Set both `ADMIN_JWT_SECRET` (a random value of 32 or more characters is recommended) and `PUBLIC_BASE_URL` in `.env` before either startup workflow. Docker Compose ships an insecure hardcoded default secret and the local script falls back to an insecure placeholder when the value is unset, so override it explicitly for anything beyond throwaway local development. The [configuration reference](/docs/configuration/#common-service-variables) documents every environment variable.",
+            "Never commit `.env` or generated credentials. Set `PUBLIC_BASE_URL` in `.env` before either startup workflow. `ADMIN_JWT_SECRET` has no shipped default anywhere: the Make targets use yours from the shell or `.env`, else generate a per-checkout random one into the gitignored `.dev-admin-jwt-secret`; raw `docker compose` commands refuse to run until it is exported or in `.env`. To install from prebuilt images instead of a checkout, use the [release Compose install](/docs/deployment/#release-compose). The [configuration reference](/docs/configuration/#common-service-variables) documents every environment variable.",
         },
       ],
     },
@@ -98,7 +98,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
           tone: "warning",
           title: "Populate .env before the first start",
           text:
-            "The local script falls back to an insecure hardcoded placeholder when `ADMIN_JWT_SECRET` is unset, and it never sets `PUBLIC_BASE_URL`. Explicitly set `ADMIN_JWT_SECRET` and `PUBLIC_BASE_URL` in `.env` so the stack does not run on placeholder or missing values.",
+            "The local script never sets `PUBLIC_BASE_URL`; set it in `.env` (agent installers and location workers need it). Without an `ADMIN_JWT_SECRET`, the stack signs sessions with the generated `.dev-admin-jwt-secret`.",
         },
         {
           type: "code",
@@ -120,7 +120,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "If the local startup script runs with `ADMIN_JWT_SECRET` unset, it falls back to a hardcoded development placeholder value. That fallback is an implementation convenience, not a substitute for populating `.env` with a real secret.",
+            "If `ADMIN_JWT_SECRET` is unset, the local startup script reads the per-checkout `.dev-admin-jwt-secret` (creating it with `openssl rand -hex 32` on first use), the same file the Make targets pass to Compose, so no shared placeholder ever signs sessions.",
         },
         {
           type: "code",
@@ -141,7 +141,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
           tone: "warning",
           title: "Required configuration",
           text:
-            "Docker Compose ships an insecure hardcoded `ADMIN_JWT_SECRET` default that you should override for anything beyond local development. Set `ADMIN_JWT_SECRET` to a random value of 32 or more characters and set `PUBLIC_BASE_URL` to the API origin that browsers, agents, remote workers, and generated links can actually reach.",
+            "Docker Compose requires `ADMIN_JWT_SECRET` and has no default; the Make targets fall back to the per-checkout `.dev-admin-jwt-secret`. Set it yourself to a random value of 32 or more characters for anything shared, and set `PUBLIC_BASE_URL` to the API origin that browsers, agents, remote workers, and generated links can actually reach.",
         },
         {
           type: "code",

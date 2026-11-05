@@ -574,6 +574,14 @@ export default function SipForm({
                   </>
                 )}
               </FormField>
+              {formData.tls_min_days_valid.trim() !== '' && (
+                <ToggleRow
+                  title="Include the certificate chain"
+                  description="Alert on the earliest expiry among the server and intermediate certificates, not just the server's"
+                  checked={formData.tls_check_chain}
+                  onChange={(v) => setFormData({ ...formData, tls_check_chain: v })}
+                />
+              )}
             </>
           )}
 
@@ -1116,8 +1124,12 @@ export default function SipForm({
             intervalSeconds={formData.interval_seconds}
             threshold={formData.consecutive_failures_threshold}
             onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
+            recoveryThreshold={formData.recovery_threshold}
+            onRecoveryThresholdChange={(n) => setFormData((prev) => ({ ...prev, recovery_threshold: n }))}
             mode={formData.notification_mode}
             onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
+            escalationPolicyId={formData.escalation_policy_id}
+            onEscalationPolicyChange={(id) => setFormData((prev) => ({ ...prev, escalation_policy_id: id }))}
             dependencySuppression={formData.dependency_suppression}
             hasDependencies={formData.depends_on_ids.length > 0}
             onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}

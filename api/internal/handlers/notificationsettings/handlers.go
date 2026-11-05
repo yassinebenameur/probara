@@ -12,6 +12,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	svc "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // Handlers handles notification settings HTTP requests.
@@ -82,9 +83,21 @@ func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if v := req.LocationOfflineAfterSeconds; v != nil &&
+		(*v < monitorstate.MinLocationOfflineAfterSeconds || *v > svc.MaxLocationOfflineAfterSeconds) {
+		apierrors.WriteValidationError(w, fmt.Sprintf("location_offline_after_seconds must be between %d and %d",
+			monitorstate.MinLocationOfflineAfterSeconds, svc.MaxLocationOfflineAfterSeconds))
+		return
+	}
+	if v := req.AlertReopenCooldownSeconds; v != nil && (*v < 0 || *v > svc.MaxAlertReopenCooldownSeconds) {
+		apierrors.WriteValidationError(w, fmt.Sprintf("alert_reopen_cooldown_seconds must be between 0 and %d",
+			svc.MaxAlertReopenCooldownSeconds))
+		return
+	}
+
 	settings, err := h.service.Update(r.Context(), tenantUUID, req)
 	if err != nil {
-		if errors.Is(err, svc.ErrChannelNotFound) {
+		if errors.Is(err, svc.ErrChannelNotFound) || errors.Is(err, svc.ErrEscalationPolicyNotFound) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}

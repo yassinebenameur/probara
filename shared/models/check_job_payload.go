@@ -60,14 +60,44 @@ type HTTPMonitorConfig struct {
 	MaxRedirects             *int                  `json:"max_redirects,omitempty"`
 	TLSSkipVerify            *bool                 `json:"tls_skip_verify,omitempty"`
 	TLSMinDaysValid          *int                  `json:"tls_min_days_valid,omitempty"`
+	TLSCheckChain            *bool                 `json:"tls_check_chain,omitempty"` // tls_expiry measures the chain's earliest expiry (shared/tlscert)
 	TLSServerName            *string               `json:"tls_server_name,omitempty"`
 	TLSCAPem                 *string               `json:"tls_ca_pem,omitempty"`
 	CollectTiming            *bool                 `json:"collect_timing,omitempty"`
+	// SecretHeaders are request headers whose values are secrets, and
+	// BasicAuthPassword is one (shared/secrets registry); Headers stays
+	// plaintext. The worker sends both maps, secret headers winning.
+	SecretHeaders     map[string]string `json:"secret_headers,omitempty"`
+	BasicAuthUsername string            `json:"basic_auth_username,omitempty"`
+	BasicAuthPassword string            `json:"basic_auth_password,omitempty"`
+	// CaptureFailureResponse records a redacted excerpt of the response a
+	// failed check got (metrics_data.http.failure_response); off by
+	// default. CaptureBodyBytes caps its body excerpt (absent = 2048,
+	// HTTPCaptureDefaultBodyBytes; at most HTTPCaptureMaxBodyBytes).
+	CaptureFailureResponse *bool `json:"capture_failure_response,omitempty"`
+	CaptureBodyBytes       *int  `json:"capture_body_bytes,omitempty"`
 }
 
-// PingMonitorConfig represents configuration for ping monitors
-type PingMonitorConfig struct {
-	Host string `json:"host"`
+// Failure-response capture bounds (HTTPMonitorConfig.CaptureBodyBytes).
+const (
+	HTTPCaptureDefaultBodyBytes = 2048
+	HTTPCaptureMaxBodyBytes     = 8192
+)
+
+// CaptureEnabled reports whether a failed check records its response.
+func (c HTTPMonitorConfig) CaptureEnabled() bool {
+	return c.CaptureFailureResponse != nil && *c.CaptureFailureResponse
+}
+
+// CaptureBodyLimit is the body excerpt budget of a failure capture.
+func (c HTTPMonitorConfig) CaptureBodyLimit() int {
+	if c.CaptureBodyBytes == nil || *c.CaptureBodyBytes <= 0 {
+		return HTTPCaptureDefaultBodyBytes
+	}
+	if *c.CaptureBodyBytes > HTTPCaptureMaxBodyBytes {
+		return HTTPCaptureMaxBodyBytes
+	}
+	return *c.CaptureBodyBytes
 }
 
 // DNSMonitorConfig represents configuration for DNS monitors
@@ -87,16 +117,10 @@ type GRPCMonitorConfig struct {
 	Port    int    `json:"port,omitempty"`
 	Service string `json:"service,omitempty"`
 	UseTLS  *bool  `json:"use_tls,omitempty"`
-}
-
-// TCPMonitorConfig represents configuration for raw TCP connect monitors. It
-// validates that a host:port accepts a connection (route/SG/listener
-// reachability), optionally completing a TLS handshake.
-type TCPMonitorConfig struct {
-	Host          string `json:"host"`
-	Port          int    `json:"port"`
-	UseTLS        *bool  `json:"use_tls,omitempty"`         // perform a TLS handshake after connecting
-	TLSSkipVerify *bool  `json:"tls_skip_verify,omitempty"` // accept self-signed / mismatched certs
+	// Metadata is sent with the health RPC; SecretMetadata too, but its
+	// values are secrets (shared/secrets registry).
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	SecretMetadata map[string]string `json:"secret_metadata,omitempty"`
 }
 
 // GroupMonitorConfig represents configuration for group monitors
@@ -110,6 +134,10 @@ type SyntheticAPIMonitorConfig struct {
 	FailureMode string                   `json:"failure_mode,omitempty"` // fail_fast (default) | continue
 	Variables   map[string]string        `json:"variables,omitempty"`
 	Steps       []SyntheticAPIStepConfig `json:"steps"`
+	// SecretVariables resolve {{name}} like Variables, but are secrets
+	// (shared/secrets registry) and the worker redacts their values from
+	// everything a check reports.
+	SecretVariables map[string]string `json:"secret_variables,omitempty"`
 }
 
 type SyntheticAPIStepConfig struct {
@@ -172,6 +200,8 @@ type SyntheticBrowserMonitorConfig struct {
 	Variables   map[string]string            `json:"variables,omitempty"`
 	Artifacts   SyntheticBrowserArtifacts    `json:"artifacts,omitempty"`
 	Steps       []SyntheticBrowserStepConfig `json:"steps"`
+	// SecretVariables: see SyntheticAPIMonitorConfig.SecretVariables.
+	SecretVariables map[string]string `json:"secret_variables,omitempty"`
 }
 
 type SyntheticBrowserArtifacts struct {

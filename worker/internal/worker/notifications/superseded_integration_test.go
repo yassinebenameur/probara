@@ -129,3 +129,167 @@ func TestHandle_ResolveWaitsForInFlightTrigger(t *testing.T) {
 		t.Fatalf("delivery order = %v, want [created resolved]", raceStub.order)
 	}
 }
+
+// A tier published with StopOnAck and delivered after the operator
+// acknowledged is dropped under the row lock; so is anything on a snoozed
+// alert. Runs the real query against a migrated schema.
+func TestHandle_StopOnAckDropsAfterAck(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "stop-on-ack")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	channelID, alertID := uuid.New(), uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
+		VALUES ($1, $2, 'pager', $3, '{}'::jsonb, TRUE, NOW(), NOW())
+	`, channelID, tenantID, raceStubType); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+			triggered_at, acknowledged_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, 'availability', 'acknowledged', NOW(), NOW(), 3, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
+		t.Fatalf("insert alert: %v", err)
+	}
+
+	raceStub.mu.Lock()
+	raceStub.order = nil
+	raceStub.mu.Unlock()
+	worker := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
+	deliver := func(eventType string, stopOnAck bool) {
+		t.Helper()
+		raw, _ := json.Marshal(notifications.DispatchEnvelope{
+			V: 1, ChannelID: channelID.String(), ChannelType: raceStubType,
+			AlertID: alertID.String(), EventType: eventType, StopOnAck: stopOnAck,
+			Event: notifications.AlertEvent{Type: eventType},
+		})
+		if err := worker.handle(ctx, &queue.Message{Data: raw}); err != nil {
+			t.Fatalf("handle %s: %v", eventType, err)
+		}
+	}
+	sends := func() int {
+		raceStub.mu.Lock()
+		defer raceStub.mu.Unlock()
+		return len(raceStub.order)
+	}
+
+	deliver("reminder", true)
+	if n := sends(); n != 0 {
+		t.Fatalf("StopOnAck reminder on an acknowledged alert was delivered (%d sends)", n)
+	}
+	deliver("reminder", false) // a notify_after_ack route keeps hearing
+	if n := sends(); n != 1 {
+		t.Fatalf("notify_after_ack reminder: %d sends, want 1", n)
+	}
+
+	if _, err := dbClient.ExecContext(ctx,
+		`UPDATE alerts SET snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, alertID); err != nil {
+		t.Fatalf("snooze: %v", err)
+	}
+	deliver("reminder", false)
+	if n := sends(); n != 1 {
+		t.Fatalf("reminder on a snoozed alert was delivered (%d sends)", n)
+	}
+}
+
+// A trigger waiting on a retry backoff when the operator acknowledges is
+// dropped, and its claim is released under the lock: the alerter's created
+// slot is free again, so after the unack the route is paged (a paging
+// provider ignores reminders, so a kept claim would never page it again).
+// A held suspected-cause follow-up likewise frees its one-shot slot.
+func TestHandle_MutedDropReleasesClaim(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "release-claim")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	channelID, alertID := uuid.New(), uuid.New()
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := dbClient.ExecContext(ctx, q, args...); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
+		VALUES ($1, $2, 'pager', $3, '{}'::jsonb, TRUE, NOW(), NOW())`, channelID, tenantID, raceStubType)
+	mustExec(`INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW(), 3, NOW(), NOW())`, alertID, tenantID, monitorID)
+
+	// The alerter claimed "created" at claimedAt and published the trigger;
+	// the first delivery failed, and the message waits on the backoff.
+	claimedAt := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Minute)
+	mustExec(`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
+		VALUES ($1, $2, $3, 'created', NOW(), NOW())`, alertID, channelID, claimedAt)
+
+	raceStub.mu.Lock()
+	raceStub.order = nil
+	raceStub.mu.Unlock()
+	worker := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
+	deliver := func(eventType string, at time.Time) {
+		t.Helper()
+		raw, _ := json.Marshal(notifications.DispatchEnvelope{
+			V: 1, ChannelID: channelID.String(), ChannelType: raceStubType,
+			AlertID: alertID.String(), EventType: eventType, StopOnAck: true,
+			Event: notifications.AlertEvent{Type: eventType, Timestamp: at},
+		})
+		if err := worker.handle(ctx, &queue.Message{Data: raw}); err != nil {
+			t.Fatalf("handle %s: %v", eventType, err)
+		}
+	}
+	sends := func() []string {
+		raceStub.mu.Lock()
+		defer raceStub.mu.Unlock()
+		return append([]string(nil), raceStub.order...)
+	}
+	stateRows := func() int {
+		var n int
+		if err := dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM alert_notification_states WHERE alert_id = $1`, alertID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	// Acknowledged during the backoff: the retry is dropped and the claim released.
+	mustExec(`UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW() WHERE id = $1`, alertID)
+	deliver("created", claimedAt)
+	if got := sends(); len(got) != 0 {
+		t.Fatalf("held trigger delivered: %v", got)
+	}
+	if n := stateRows(); n != 0 {
+		t.Fatalf("held trigger kept its claim (%d state rows)", n)
+	}
+
+	// Unacknowledged: the alerter finds the slot free and claims created
+	// again; that trigger is delivered.
+	mustExec(`UPDATE alerts SET status = 'active', acknowledged_at = NULL, unacknowledged_at = NOW() WHERE id = $1`, alertID)
+	reclaimedAt := time.Now().UTC().Truncate(time.Microsecond)
+	mustExec(`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
+		VALUES ($1, $2, $3, 'created', NOW(), NOW())`, alertID, channelID, reclaimedAt)
+	deliver("created", reclaimedAt)
+	if got := sends(); len(got) != 1 || got[0] != "created" {
+		t.Fatalf("trigger after unack: sends = %v, want [created]", got)
+	}
+
+	// A stale copy of the first trigger must not release the new claim.
+	mustExec(`UPDATE alerts SET snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, alertID)
+	deliver("created", claimedAt)
+	if n := stateRows(); n != 1 {
+		t.Fatalf("a stale held trigger released the newer claim (%d state rows)", n)
+	}
+
+	// A suspected-cause follow-up held by the snooze frees its one-shot slot.
+	followUpAt := reclaimedAt.Add(time.Minute)
+	mustExec(`UPDATE alert_notification_states SET suspected_cause_sent_at = $2 WHERE alert_id = $1`, alertID, followUpAt)
+	deliver("suspected_cause", followUpAt)
+	var sentAt *time.Time
+	if err := dbClient.QueryRowContext(ctx, `SELECT suspected_cause_sent_at FROM alert_notification_states WHERE alert_id = $1`, alertID).Scan(&sentAt); err != nil {
+		t.Fatal(err)
+	}
+	if sentAt != nil {
+		t.Fatal("a held suspected-cause follow-up kept its one-shot claim")
+	}
+}

@@ -174,6 +174,8 @@ func locationTools() []spec {
 			FieldDocs: map[string]string{
 				"starts_at": "Start (RFC 3339).",
 				"ends_at":   "End (RFC 3339), after starts_at and in the future.",
+
+				"recurrence": maintenanceRecurrenceDoc,
 			},
 		},
 		{
@@ -183,6 +185,8 @@ func locationTools() []spec {
 			Method:      http.MethodPatch, Route: "/maintenance-windows/{id}",
 			PathDocs: map[string]string{"id": "Maintenance window ID."},
 			Body:     typeOf[models.UpdateMaintenanceWindowRequest](),
+
+			FieldDocs: map[string]string{"recurrence": maintenanceRecurrenceDoc},
 		},
 		{
 			Name:        "delete_maintenance_window",

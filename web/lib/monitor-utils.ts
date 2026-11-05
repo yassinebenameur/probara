@@ -197,6 +197,8 @@ export function monitorTargetLabel(type?: MonitorType | string): string {
       return 'host';
     case 'sip':
       return 'SIP target';
+    case 'domain':
+      return 'domain';
     default:
       return 'endpoint';
   }
@@ -291,6 +293,7 @@ export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>)
       const port = (config.port as number | undefined) || (config.use_tls === false ? 80 : 443);
       return `${host}:${port}`;
     }
+    if (monitor.type === 'domain') return str('domain');
     if (monitor.type === 'tcp' && host) {
       return config.port ? `${host}:${config.port}` : host;
     }

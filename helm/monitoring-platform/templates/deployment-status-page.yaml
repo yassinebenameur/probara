@@ -79,8 +79,18 @@ spec:
         - name: STATUS_PAGE_VAPID_SUBJECT
           value: "{{ .Values.statusPage.vapid.subject }}"
         {{- end }}
+        {{- with (include "monitoring-platform.trustedProxyEnv" .) }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- include "monitoring-platform.securityEnv" (dict "ctx" . "component" "status-page") | nindent 8 }}
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPageVapidPrivateKey "secret" .Values.secrets.statusPageVapidPrivateKeyExistingSecret) }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_VAPID_PRIVATE_KEY" "key" "status_page_vapid_private_key" "secret" .Values.secrets.statusPageVapidPrivateKeyExistingSecret "secretKey" .Values.secrets.statusPageVapidPrivateKeyExistingSecretKey) | nindent 8 }}
+        {{- end }}
+        {{- /* Visitor sessions for password and private pages. Optional: a
+        Secret without the key leaves those pages unavailable (fail closed)
+        instead of blocking the pod, so public pages keep serving. */}}
+        {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPageSessionSecret "secret" .Values.secrets.statusPageSessionSecretExistingSecret) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_SESSION_SECRET" "key" "status_page_session_secret" "secret" .Values.secrets.statusPageSessionSecretExistingSecret "secretKey" .Values.secrets.statusPageSessionSecretExistingSecretKey "optional" true) | nindent 8 }}
         {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}

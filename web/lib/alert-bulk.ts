@@ -7,22 +7,31 @@ import type { Alert, AlertBulkFailureReason, AlertBulkResult } from './types';
  * reports them in `failed`, and this turns that into one message.
  */
 
-export type BulkAction = 'acknowledge' | 'resolve';
+export type BulkAction = 'acknowledge' | 'resolve' | 'unacknowledge';
 
-/** The selected alerts an action can move: acknowledge takes active ones, resolve any open one. */
+/**
+ * The selected alerts an action can move: acknowledge takes active ones,
+ * unacknowledge acknowledged ones, resolve any open one.
+ */
 export function bulkTargets(alerts: readonly Alert[]): Record<BulkAction, string[]> {
   return {
     acknowledge: alerts.filter((a) => a.status === 'active').map((a) => a.id),
     resolve: alerts.filter((a) => a.status !== 'resolved').map((a) => a.id),
+    unacknowledge: alerts.filter((a) => a.status === 'acknowledged').map((a) => a.id),
   };
 }
 
-const PAST: Record<BulkAction, string> = { acknowledge: 'acknowledged', resolve: 'resolved' };
+const PAST: Record<BulkAction, string> = {
+  acknowledge: 'acknowledged',
+  resolve: 'resolved',
+  unacknowledge: 'unacknowledged',
+};
 
 const REASON_LABEL: Record<AlertBulkFailureReason, string> = {
   already_acknowledged: 'already acknowledged',
   already_resolved: 'already resolved',
   not_found: 'not found',
+  not_acknowledged: 'not acknowledged',
 };
 
 const plural = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;

@@ -31,7 +31,8 @@ type Alert struct {
 	LastError      *string     `json:"last_error,omitempty"`
 	// Kind distinguishes an availability outage ("availability") from the
 	// orthogonal alert kinds: "latency_anomaly", "host_metric", "mesh_edge",
-	// and "tls_expiry" (certificate inside its expiry window, endpoint up).
+	// "tls_expiry" (certificate inside its expiry window, endpoint up) and
+	// "domain_expiry" (domain registration inside its expiry window).
 	Kind string `json:"kind"`
 	// Latency-anomaly annotation: populated when Kind == "latency_anomaly".
 	BaselineLatencyMs *float64 `json:"baseline_latency_ms,omitempty"`
@@ -73,6 +74,33 @@ type AlertWithDetails struct {
 	// Triage is the alert's automatic AI triage (read-only). Absent when
 	// the alert has no triage row, and always absent on SSE events.
 	Triage *AlertTriage `json:"triage,omitempty"`
+	// AcknowledgedByUserID / AcknowledgedVia record who acknowledged the
+	// alert and through which surface (ui, api, mcp, magic_link). Cleared
+	// on unack.
+	AcknowledgedByUserID *uuid.UUID `json:"acknowledged_by_user_id,omitempty"`
+	AcknowledgedVia      *string    `json:"acknowledged_via,omitempty"`
+	// UnacknowledgedAt is the last unacknowledge; escalation tiers and
+	// reminders count from it.
+	UnacknowledgedAt *time.Time `json:"unacknowledged_at,omitempty"`
+	// SnoozedUntil mutes every tier, reminder and suspected-cause follow-up
+	// while in the future; a past value is when the last snooze ended.
+	SnoozedUntil    *time.Time `json:"snoozed_until,omitempty"`
+	SnoozedByUserID *uuid.UUID `json:"snoozed_by_user_id,omitempty"`
+	// MutedReason says why this open alert is not paging right now:
+	// "snoozed", or "acknowledged" (the tenant stops paging on ack; routes
+	// marked notify_after_ack still hear). Computed from the predicates the
+	// alerter dispatches with (alertrouting.MutedReasonExpr).
+	MutedReason *string `json:"muted_reason,omitempty"`
+	// RelapseCount is how many times the alert reopened within the
+	// workspace's alert_reopen_cooldown_seconds (each a new paging episode);
+	// ReopenedAt is the last reopen.
+	RelapseCount int        `json:"relapse_count"`
+	ReopenedAt   *time.Time `json:"reopened_at,omitempty"`
+	// ResolvedByUserID / ResolvedVia record a manual resolve (ui, api,
+	// mcp); both stay empty when the alerter resolved it. A manually
+	// resolved alert never reopens.
+	ResolvedByUserID *uuid.UUID `json:"resolved_by_user_id,omitempty"`
+	ResolvedVia      *string    `json:"resolved_via,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts

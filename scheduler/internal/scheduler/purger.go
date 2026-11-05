@@ -96,19 +96,36 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 		}
 	}()
 
-	purged := 0
-	rowsBudget := p.opts.MaxRowsPerRun
+	// Monitors and credentials a deleted workspace gained after its delete
+	// (a request that passed auth just before the delete committed) are
+	// tombstoned or revoked first, so late monitors join this run's queue.
+	tenantPhase, err := p.cutOffDeletedTenants(ctx, conn)
+	if err != nil {
+		return 0, err
+	}
 
+	purged, rowsBudget, err := p.drainMonitors(ctx, conn, p.opts.MaxRowsPerRun)
+	if err != nil || rowsBudget <= 0 || !tenantPhase {
+		return purged, err
+	}
+	return purged, p.purgeDeletedTenants(ctx, conn, rowsBudget)
+}
+
+// drainMonitors purges tombstoned monitors, oldest first, until the queue is
+// empty or rowsBudget runs out. It returns the monitors fully purged and the
+// budget left (0 when it stopped partway through a monitor).
+func (p *purger) drainMonitors(ctx context.Context, conn *sql.Conn, rowsBudget int) (int, int, error) {
+	purged := 0
 	for rowsBudget > 0 {
 		mon, err := p.claimNextTombstonedMonitor(ctx, conn)
 		if err != nil {
-			return purged, err
+			return purged, 0, err
 		}
 		if mon == nil {
 			if purged == 0 {
 				p.logger.Debug("monitor purge: no tombstoned monitors")
 			}
-			return purged, nil
+			return purged, rowsBudget, nil
 		}
 
 		p.logger.WithFields(logrus.Fields{
@@ -124,7 +141,7 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 			p.logger.WithError(err).WithFields(logrus.Fields{
 				"monitor_id": *mon,
 			}).Error("purge monitor failed; will retry on next run")
-			return purged, err
+			return purged, 0, err
 		}
 		rowsBudget -= spent
 		if !done {
@@ -136,7 +153,7 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 				"monitor_id":  *mon,
 				"rows_purged": spent,
 			}).Debug("monitor purge paused at row budget; resuming next tick")
-			return purged, nil
+			return purged, 0, nil
 		}
 		purged++
 
@@ -149,7 +166,7 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 		}).Info("monitor fully purged")
 	}
 
-	return purged, nil
+	return purged, rowsBudget, nil
 }
 
 // claimNextTombstonedMonitor returns the oldest tombstoned monitor (FIFO by deleted_at)
@@ -187,10 +204,7 @@ func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uui
 	// itself. Order matters only when a downstream FK could block deletion; the
 	// cascade chains (alerts -> alert_notification_states, alerts -> incident_alerts)
 	// will be cleaned up automatically when we delete the alert row.
-	type batchedDelete struct {
-		name string
-		sql  string
-	}
+	//
 	// Tables ordered safest-first. Each child table is drained before the monitor
 	// row itself. Tables with no surrogate `id` column (the rollups and downtime
 	// tables — see shared/db/migrations/000035_create_monitor_rollups.up.sql:13,
@@ -237,57 +251,10 @@ func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uui
 			             WHERE monitor_id = ANY($1) LIMIT $2)`},
 	}
 
-	for _, d := range deletes {
-		tableSpent := 0
-		for {
-			limit := p.opts.BatchSize
-			if limit > rowsBudget {
-				limit = rowsBudget
-			}
-			if limit <= 0 {
-				// Budget exhausted exactly at a batch boundary; we don't know
-				// whether this table is drained without an extra round-trip,
-				// and the monitor row hasn't been deleted yet. Return done=false
-				// so runOnce defers the rest to the next tick — this is NOT
-				// an error.
-				p.logger.WithFields(logrus.Fields{
-					"monitor_id":       monitorID,
-					"table":            d.name,
-					"rows_in_table":    tableSpent,
-					"rows_in_run":      spent,
-					"rows_budget_left": rowsBudget,
-				}).Debug("monitor purge: row budget exhausted at batch boundary; resuming next tick")
-				return spent, false, nil
-			}
-
-			result, execErr := conn.ExecContext(ctx, d.sql, pq.Array(ids), limit)
-			if execErr != nil {
-				return spent, false, fmt.Errorf("delete %s: %w", d.name, execErr)
-			}
-			rowsAffected, raErr := result.RowsAffected()
-			if raErr != nil {
-				return spent, false, fmt.Errorf("rows affected for %s: %w", d.name, raErr)
-			}
-			spent += int(rowsAffected)
-			tableSpent += int(rowsAffected)
-			rowsBudget -= int(rowsAffected)
-			if p.metrics != nil {
-				p.metrics.rows.With(prometheus.Labels{}).Add(float64(rowsAffected))
-			}
-
-			p.logger.WithFields(logrus.Fields{
-				"monitor_id":       monitorID,
-				"table":            d.name,
-				"batch_rows":       rowsAffected,
-				"rows_in_table":    tableSpent,
-				"rows_in_run":      spent,
-				"rows_budget_left": rowsBudget,
-			}).Debug("monitor purge: batch deleted")
-
-			if rowsAffected < int64(limit) {
-				break // table is drained for this monitor
-			}
-		}
+	spent, drained, err := p.runBatchedDeletes(ctx, conn, deletes, pq.Array(ids), rowsBudget,
+		logrus.Fields{"monitor_id": monitorID})
+	if err != nil || !drained {
+		return spent, false, err
 	}
 
 	// Detach auto-created incidents before the monitor row goes away. The FK
@@ -312,6 +279,70 @@ func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uui
 		`DELETE FROM monitors WHERE id = $1`, monitorID,
 	); execErr != nil {
 		return spent, false, fmt.Errorf("delete monitor row: %w", execErr)
+	}
+	return spent, true, nil
+}
+
+// batchedDelete is one bounded delete: $1 is the subject (monitor IDs or a
+// tenant ID) and $2 the batch size.
+type batchedDelete struct {
+	name string
+	sql  string
+}
+
+// runBatchedDeletes drains each table in order, batch by batch, until it is
+// empty for the subject or rowsBudget runs out. drained is false when the
+// budget ran out first: a benign stop the next tick resumes, not an error.
+func (p *purger) runBatchedDeletes(ctx context.Context, conn *sql.Conn, deletes []batchedDelete, subject any, rowsBudget int, fields logrus.Fields) (spent int, drained bool, err error) {
+	for _, d := range deletes {
+		tableSpent := 0
+		for {
+			limit := p.opts.BatchSize
+			if limit > rowsBudget {
+				limit = rowsBudget
+			}
+			if limit <= 0 {
+				// Budget exhausted exactly at a batch boundary; we don't know
+				// whether this table is drained without an extra round-trip,
+				// and the subject row hasn't been deleted yet. Report
+				// drained=false so runOnce defers the rest to the next tick —
+				// this is NOT an error.
+				p.logger.WithFields(fields).WithFields(logrus.Fields{
+					"table":            d.name,
+					"rows_in_table":    tableSpent,
+					"rows_in_run":      spent,
+					"rows_budget_left": rowsBudget,
+				}).Debug("purge: row budget exhausted at batch boundary; resuming next tick")
+				return spent, false, nil
+			}
+
+			result, execErr := conn.ExecContext(ctx, d.sql, subject, limit)
+			if execErr != nil {
+				return spent, false, fmt.Errorf("delete %s: %w", d.name, execErr)
+			}
+			rowsAffected, raErr := result.RowsAffected()
+			if raErr != nil {
+				return spent, false, fmt.Errorf("rows affected for %s: %w", d.name, raErr)
+			}
+			spent += int(rowsAffected)
+			tableSpent += int(rowsAffected)
+			rowsBudget -= int(rowsAffected)
+			if p.metrics != nil {
+				p.metrics.rows.With(prometheus.Labels{}).Add(float64(rowsAffected))
+			}
+
+			p.logger.WithFields(fields).WithFields(logrus.Fields{
+				"table":            d.name,
+				"batch_rows":       rowsAffected,
+				"rows_in_table":    tableSpent,
+				"rows_in_run":      spent,
+				"rows_budget_left": rowsBudget,
+			}).Debug("purge: batch deleted")
+
+			if rowsAffected < int64(limit) {
+				break // table is drained for this subject
+			}
+		}
 	}
 	return spent, true, nil
 }

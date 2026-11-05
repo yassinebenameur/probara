@@ -47,9 +47,14 @@ type alertView struct {
 }
 
 // newAlertView resolves an event into the presentation model. appBaseURL is the
-// public operator-UI origin; empty disables the call-to-action button.
-func newAlertView(event notifications.AlertEvent, appBaseURL string) alertView {
+// public operator-UI origin; empty disables the call-to-action button. The
+// acknowledge link comes from templates (minted by Send for this delivery),
+// and only on the events present gives one to.
+func newAlertView(event notifications.AlertEvent, templates Templates, appBaseURL string) alertView {
 	msg := present.Build(event, event.Type, appBaseURL)
+	if t := msg.EventType; templates.AckURL != "" && (t == present.EventCreated || t == present.EventReminder) && !msg.Resolved {
+		msg.AckURL, msg.AckLabel = templates.AckURL, templates.AckLabel
+	}
 	v := alertView{Message: msg, Preheader: msg.Summary}
 	switch msg.Tone {
 	case present.ToneUp:

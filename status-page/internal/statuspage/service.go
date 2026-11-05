@@ -13,8 +13,11 @@ import (
 	"github.com/lib/pq"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
@@ -64,9 +67,20 @@ type StatusPageData struct {
 	CustomCSS        string `json:"-"` // For template use only
 	CustomHeadHTML   string `json:"-"` // For template use only
 	CustomFooterHTML string `json:"-"` // For template use only
+	// CSPMode is the stored csp_mode ("" = automatic) and AllowedEmbedOrigins
+	// the stored allowed_embed_origins; the handler turns them into the
+	// page's Content-Security-Policy (csp.go).
+	CSPMode             string   `json:"-"`
+	AllowedEmbedOrigins []string `json:"-"`
 	// Published custom template ("" = render with the built-in template).
 	CustomTemplateSource  string `json:"-"` // For template use only
 	CustomTemplateVersion int    `json:"-"` // For template use only
+	// SEODescription is the stored seo_description setting ("" = fall back
+	// to the description). CanonicalURL is the page's absolute public URL,
+	// injected by the handler from STATUS_PAGE_BASE_URL like PushPublicKey;
+	// "" when the deployment does not name its public origin.
+	SEODescription string `json:"-"` // For template use only
+	CanonicalURL   string `json:"-"` // For template use only
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (1-min buckets)
@@ -108,6 +122,15 @@ type StatusPageMaintenanceWindow struct {
 	EndsAt           time.Time `json:"ends_at"`
 	IsActive         bool      `json:"is_active"`
 	AffectedMonitors []string  `json:"affected_monitors,omitempty"`
+	// Repeating marks a recurring window; StartsAt/EndsAt are then its
+	// earliest listed occurrence and NextStartsAt the following ones (up to
+	// three, within the 14-day look-ahead).
+	Repeating    bool        `json:"repeating,omitempty"`
+	NextStartsAt []time.Time `json:"next_starts_at,omitempty"`
+	// ID and UpdatedAt identify the window in the Atom feed (stable entry id
+	// and its last-modified time); not part of the /data JSON.
+	ID        string    `json:"-"`
+	UpdatedAt time.Time `json:"-"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -266,6 +289,11 @@ type statusPageSettingsPatch struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+
+	CSPMode             *string  `json:"csp_mode,omitempty"`
+	AllowedEmbedOrigins []string `json:"allowed_embed_origins,omitempty"`
+
+	SEODescription *string `json:"seo_description,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -286,6 +314,11 @@ type statusPageSettingsStored struct {
 	CustomCSS        string
 	CustomHeadHTML   string
 	CustomFooterHTML string
+
+	CSPMode             string
+	AllowedEmbedOrigins []string
+
+	SEODescription string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -369,6 +402,16 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	}
 	if patch.CustomFooterHTML != nil {
 		stored.CustomFooterHTML = strings.TrimSpace(*patch.CustomFooterHTML)
+	}
+	if patch.CSPMode != nil {
+		// An unknown value reads as automatic; ResolveCSPMode decides.
+		stored.CSPMode, _ = securityheaders.ParseCSPMode(*patch.CSPMode)
+	}
+	if patch.AllowedEmbedOrigins != nil {
+		stored.AllowedEmbedOrigins = patch.AllowedEmbedOrigins
+	}
+	if patch.SEODescription != nil {
+		stored.SEODescription = strings.TrimSpace(*patch.SEODescription)
 	}
 	return stored
 }
@@ -459,6 +502,13 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 		}
 		return nil, fmt.Errorf("failed to get status page: %w", err)
 	}
+	// A deleted workspace's pages stop serving at once, before the purger
+	// removes them (shared/tenancy).
+	if deleted, err := tenancy.IsDeleted(ctx, s.db, tenantID); err != nil {
+		return nil, err
+	} else if deleted {
+		return nil, ErrStatusPageNotFound
+	}
 
 	page.ID = pageID.String()
 
@@ -509,6 +559,9 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.CustomCSS = settings.CustomCSS
 	page.CustomHeadHTML = settings.CustomHeadHTML
 	page.CustomFooterHTML = settings.CustomFooterHTML
+	page.CSPMode = settings.CSPMode
+	page.AllowedEmbedOrigins = settings.AllowedEmbedOrigins
+	page.SEODescription = settings.SEODescription
 
 	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
 		return nil, fmt.Errorf("failed to get custom template: %w", err)
@@ -534,20 +587,24 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	return &page, nil
 }
 
-// loadMaintenanceWindows returns active and upcoming (next 14 days) maintenance
-// windows that affect at least one monitor on this status page, directly or via
-// a targeted group. Affected monitor names are page-scoped.
+// loadMaintenanceWindows returns the maintenance windows with an occurrence
+// in progress or starting in the next 14 days that affects at least one
+// monitor on this status page, directly or via a targeted group. Coverage is
+// the shared occurrence fragment (S-M5), never the window's rule. Each window
+// is listed once, at its earliest such occurrence; a repeating window also
+// carries the starts of up to maxListedNextStarts later ones. Affected
+// monitor names are page-scoped.
 func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageMaintenanceWindow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT mw.title, mw.description, mw.starts_at, mw.ends_at,
-			NOW() >= mw.starts_at AS is_active,
-			array_agg(DISTINCT pm.name) AS affected
-		FROM maintenance_windows mw
-		JOIN maintenance_window_monitors mwm ON mwm.maintenance_window_id = mw.id
-		JOIN monitors pm ON pm.tenant_id = mw.tenant_id AND pm.deleted_at IS NULL
-			AND (pm.id = mwm.monitor_id
-				OR pm.id IN (SELECT mg.monitor_id FROM monitor_groups mg WHERE mg.group_id = mwm.monitor_id))
-		WHERE mw.tenant_id = $2
+		SELECT mw.id, mw.title, mw.description, mo.starts_at, mo.ends_at,
+			NOW() >= mo.starts_at AS is_active,
+			mw.recurrence <> 'none' AS repeating,
+			array_agg(DISTINCT pm.name) AS affected,
+			mw.updated_at
+		FROM monitors pm
+		CROSS JOIN LATERAL `+maintenance.OccurrenceRangesSQL("$2", "pm.id", "NOW()", "NOW() + INTERVAL '14 days'")+` mo
+		JOIN maintenance_windows mw ON mw.id = mo.window_id AND mw.tenant_id = $2
+		WHERE pm.tenant_id = $2 AND pm.deleted_at IS NULL
 		  AND pm.id IN (
 			SELECT spsm.monitor_id
 			FROM status_page_section_monitors spsm
@@ -556,10 +613,8 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 			UNION
 			SELECT spm.monitor_id FROM status_page_monitors spm WHERE spm.status_page_id = $1
 		  )
-		  AND mw.ends_at > NOW()
-		  AND mw.starts_at < NOW() + INTERVAL '14 days'
-		GROUP BY mw.id
-		ORDER BY mw.starts_at
+		GROUP BY mw.id, mo.starts_at, mo.ends_at
+		ORDER BY mo.starts_at, mw.id
 	`, statusPageID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("query maintenance windows: %w", err)
@@ -567,13 +622,24 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 	defer rows.Close()
 
 	windows := make([]StatusPageMaintenanceWindow, 0)
+	index := map[uuid.UUID]int{}
 	for rows.Next() {
+		var id uuid.UUID
 		var w StatusPageMaintenanceWindow
 		var affected []string
-		if err := rows.Scan(&w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, pq.Array(&affected)); err != nil {
+		if err := rows.Scan(&id, &w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, &w.Repeating, pq.Array(&affected), &w.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan maintenance window: %w", err)
 		}
+		w.ID = id.String()
+		if i, seen := index[id]; seen {
+			// A later occurrence of a window already listed.
+			if len(windows[i].NextStartsAt) < maxListedNextStarts {
+				windows[i].NextStartsAt = append(windows[i].NextStartsAt, w.StartsAt)
+			}
+			continue
+		}
 		w.AffectedMonitors = affected
+		index[id] = len(windows)
 		windows = append(windows, w)
 	}
 	if err := rows.Err(); err != nil {
@@ -582,6 +648,15 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 	return windows, nil
 }
 
+// maxListedNextStarts caps the "then" starts a repeating window shows.
+const maxListedNextStarts = 3
+
+// maxPageIncidents bounds the incidents a page renders: every open one
+// first, then the most recently updated resolved ones. Publications are never
+// pruned, so without a bound a long-lived page would load its whole history
+// (and every public update of it) on each render.
+const maxPageIncidents = 50
+
 func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id, i.title, COALESCE(i.summary, ''), i.state, isp.published_at, i.resolved_at
@@ -589,7 +664,8 @@ func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tena
 		JOIN incidents i ON i.id = isp.incident_id AND i.tenant_id = isp.tenant_id
 		WHERE isp.status_page_id = $1 AND isp.tenant_id = $2 AND isp.unpublished_at IS NULL
 		ORDER BY CASE WHEN i.state = 'resolved' THEN 1 ELSE 0 END, i.updated_at DESC, isp.published_at DESC
-	`, statusPageID, tenantID)
+		LIMIT $3
+	`, statusPageID, tenantID, maxPageIncidents)
 	if err != nil {
 		return nil, fmt.Errorf("query published incidents: %w", err)
 	}
@@ -1186,19 +1262,22 @@ type CurrentStatus struct {
 }
 
 // applyCertificate copies the certificate a check recorded in its
-// metrics_data (an HTTPS or SIP-over-TLS check's) onto the status. The
-// location is shared/tlscert's, the same one the alerter's tls_expiry
-// evaluation reads, so the page and the alert never disagree on it.
-func (cs *CurrentStatus) applyCertificate(metricsJSON []byte) {
+// metrics_data (an HTTPS, SIP-over-TLS or TLS-wrapped TCP check's) onto the
+// status. The location is shared/tlscert's, the same one the alerter's
+// tls_expiry evaluation reads, and so is the expiry: checkChain (the
+// monitor's tls_check_chain, read through tlscert.CheckChainSQL) picks the
+// chain's earliest, so the page and the alert never disagree on it.
+func (cs *CurrentStatus) applyCertificate(metricsJSON []byte, checkChain bool) {
 	info := tlscert.Extract(metricsJSON)
 	if info == nil {
 		return
 	}
-	if info.DaysUntilExpiry != nil {
-		cs.TLSDaysUntilExpiry = info.DaysUntilExpiry
+	notAfter, days := info.Expiry(checkChain)
+	if days != nil {
+		cs.TLSDaysUntilExpiry = days
 	}
-	if info.NotAfter != "" {
-		cs.TLSNotAfter = info.NotAfter
+	if notAfter != "" {
+		cs.TLSNotAfter = notAfter
 	}
 }
 
@@ -1207,7 +1286,8 @@ func (cs *CurrentStatus) applyCertificate(metricsJSON []byte) {
 // raw result status, for consistency with batchCurrentStatus.
 func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenantID uuid.UUID) (*CurrentStatus, error) {
 	query := `
-		SELECT mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+		SELECT mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data,
+			` + tlscert.CheckChainSQL("mon.config") + `
 		FROM monitors mon
 		LEFT JOIN LATERAL (
 			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
@@ -1225,8 +1305,9 @@ func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenant
 	var latencyMS sql.NullInt64
 	var createdAt sql.NullTime
 	var metricsJSON []byte
+	var checkChain bool
 
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON)
+	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON, &checkChain)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("no check results found")
@@ -1252,7 +1333,7 @@ func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenant
 		result.LastLatency = &latencyInt
 	}
 
-	result.applyCertificate(metricsJSON)
+	result.applyCertificate(metricsJSON, checkChain)
 
 	return result, nil
 }

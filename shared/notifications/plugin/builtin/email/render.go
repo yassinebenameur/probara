@@ -135,6 +135,14 @@ func renderAlertText(v alertView) string {
 		}
 	}
 
+	if v.AckURL != "" {
+		b.WriteString("\n")
+		b.WriteString(v.AckLabel)
+		b.WriteString(": ")
+		b.WriteString(v.AckURL)
+		b.WriteString("\n")
+	}
+
 	if v.ActionURL != "" {
 		b.WriteString("\n")
 		b.WriteString(v.ActionLabel)

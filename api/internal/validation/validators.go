@@ -55,6 +55,14 @@ func (v *HTTPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		return fmt.Errorf("method must be one of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
 	}
 
+	if err := validateHTTPCredentials(config); err != nil {
+		return err
+	}
+
+	if err := validateHTTPCapture(config); err != nil {
+		return err
+	}
+
 	if config.ExpectedStatus != nil && (*config.ExpectedStatus < 100 || *config.ExpectedStatus > 599) {
 		return fmt.Errorf("expected_status must be between 100 and 599")
 	}
@@ -293,26 +301,19 @@ func validateHTTPJSONAssertions(assertions []sharedmodels.HTTPJSONAssertion) err
 // PingConfigValidator validates ping monitor configuration
 type PingConfigValidator struct{}
 
-// ValidateConfig validates ping monitor config
+// ValidateConfig validates ping monitor config (sharedmodels.PingMonitorConfig.Validate).
 func (v *PingConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	var config sharedmodels.PingMonitorConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		return fmt.Errorf("invalid ping config: %w", err)
 	}
+	return config.Validate()
+}
 
-	if config.Host == "" {
-		return fmt.Errorf("host is required")
-	}
-
-	// Validate host is either a valid hostname or IP address
-	if ip := net.ParseIP(config.Host); ip == nil {
-		// Not an IP, check if it's a valid hostname
-		if !isValidHostname(config.Host) {
-			return fmt.Errorf("host must be a valid IP address or hostname")
-		}
-	}
-
-	return nil
+// ValidateSchedule checks that the configured echoes fit the timeout
+// (sharedmodels.ValidatePingSchedule).
+func (v *PingConfigValidator) ValidateSchedule(configRaw json.RawMessage, intervalSeconds, timeoutSeconds int) error {
+	return sharedmodels.ValidatePingSchedule(configRaw, intervalSeconds, timeoutSeconds)
 }
 
 // DNSConfigValidator validates DNS monitor configuration
@@ -386,35 +387,23 @@ func (v *GRPCConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		return fmt.Errorf("service cannot be empty")
 	}
 
+	if err := validateGRPCMetadata(config); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // TCPConfigValidator validates raw TCP connect monitor configuration
 type TCPConfigValidator struct{}
 
-// ValidateConfig validates TCP monitor config
+// ValidateConfig validates TCP monitor config (sharedmodels.TCPMonitorConfig.Validate).
 func (v *TCPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	var config sharedmodels.TCPMonitorConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		return fmt.Errorf("invalid tcp config: %w", err)
 	}
-
-	host := strings.TrimSpace(config.Host)
-	if host == "" {
-		return fmt.Errorf("host is required")
-	}
-
-	if ip := net.ParseIP(host); ip == nil {
-		if !isValidHostname(host) {
-			return fmt.Errorf("host must be a valid IP address or hostname")
-		}
-	}
-
-	if config.Port < 1 || config.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-
-	return nil
+	return config.Validate()
 }
 
 // WebSocketConfigValidator validates WebSocket monitor configuration
@@ -675,6 +664,9 @@ func (v *SyntheticAPIConfigValidator) ValidateConfig(configRaw json.RawMessage) 
 			return fmt.Errorf("variables cannot contain empty keys")
 		}
 	}
+	if err := validateSyntheticVariables(config.Variables, config.SecretVariables); err != nil {
+		return err
+	}
 
 	validMethods := map[string]bool{
 		"GET":     true,
@@ -770,6 +762,10 @@ func (v *SyntheticAPIConfigValidator) ValidateConfig(configRaw json.RawMessage) 
 		}
 	}
 
+	if err := validateSyntheticAPIRefs(config); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -807,6 +803,9 @@ func (v *SyntheticBrowserConfigValidator) ValidateConfig(configRaw json.RawMessa
 		if strings.TrimSpace(key) == "" {
 			return fmt.Errorf("variables cannot contain empty keys")
 		}
+	}
+	if err := validateSyntheticVariables(config.Variables, config.SecretVariables); err != nil {
+		return err
 	}
 
 	stepIDs := make(map[string]bool, len(config.Steps))
@@ -862,6 +861,10 @@ func (v *SyntheticBrowserConfigValidator) ValidateConfig(configRaw json.RawMessa
 		default:
 			return fmt.Errorf("steps[%d].action must be one of: goto, click, fill, wait_for, assert_visible, assert_text, assert_url", i)
 		}
+	}
+
+	if err := validateSyntheticBrowserRefs(config); err != nil {
+		return err
 	}
 
 	return nil
@@ -1089,3 +1092,4 @@ var (
 )
 
 var _ ScheduleAwareValidator = (*SIPConfigValidator)(nil)
+var _ ScheduleAwareValidator = (*PingConfigValidator)(nil)

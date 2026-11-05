@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,11 +76,33 @@ func reconnectOptions() []nats.Option {
 	}
 }
 
+// websocketPath lets a ws:// or wss:// URL carry an HTTP path, as in
+// "wss://probara.example.com/nats" behind a path-routed ingress. nats.go
+// ignores the URL path and upgrades on "/" unless nats.ProxyPath is set, so
+// the path moves into that option. Other schemes, server lists and path-less
+// URLs pass through unchanged; userinfo (location credentials) is kept.
+func websocketPath(natsURL string) (string, []nats.Option) {
+	if strings.Contains(natsURL, ",") {
+		return natsURL, nil
+	}
+	u, err := url.Parse(natsURL)
+	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return natsURL, nil
+	}
+	path := strings.TrimRight(u.Path, "/")
+	if path == "" {
+		return natsURL, nil
+	}
+	u.Path, u.RawPath = "", ""
+	return u.String(), []nats.Option{nats.ProxyPath(path)}
+}
+
 // NewClient creates a new NATS JetStream client. The connection retries
 // forever (initial connect and reconnects) so a NATS outage never leaves
 // the client permanently disconnected.
 func NewClient(natsURL string) (*Client, error) {
-	nc, err := nats.Connect(natsURL, reconnectOptions()...)
+	natsURL, pathOpts := websocketPath(natsURL)
+	nc, err := nats.Connect(natsURL, append(reconnectOptions(), pathOpts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}

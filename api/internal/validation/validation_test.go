@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -792,5 +793,54 @@ func TestIsValidColor(t *testing.T) {
 				t.Errorf("isValidColor(%q) = %v, want %v", tt.color, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidateStatusPageCSPSettings(t *testing.T) {
+	many := make([]string, 21)
+	for i := range many {
+		many[i] = "https://e" + strconv.Itoa(i) + ".example.com"
+	}
+	tests := []struct {
+		name     string
+		settings *models.StatusPageSettings
+		wantErr  string
+	}{
+		{"automatic mode", &models.StatusPageSettings{CSPMode: ptr("")}, ""},
+		{"strict", &models.StatusPageSettings{CSPMode: ptr("strict")}, ""},
+		{"compatible", &models.StatusPageSettings{CSPMode: ptr("Compatible")}, ""},
+		{"off", &models.StatusPageSettings{CSPMode: ptr("off")}, ""},
+		{"unknown mode", &models.StatusPageSettings{CSPMode: ptr("lax")}, "csp_mode"},
+		{"origins", &models.StatusPageSettings{AllowedEmbedOrigins: []string{"https://intranet.example.com", "https://*.corp.example"}}, ""},
+		{"origin with path", &models.StatusPageSettings{AllowedEmbedOrigins: []string{"https://intranet.example.com/status"}}, "allowed_embed_origins"},
+		{"directive injection", &models.StatusPageSettings{AllowedEmbedOrigins: []string{"https://a.example; script-src *"}}, "allowed_embed_origins"},
+		{"wildcard", &models.StatusPageSettings{AllowedEmbedOrigins: []string{"*"}}, "allowed_embed_origins"},
+		{"too many", &models.StatusPageSettings{AllowedEmbedOrigins: many}, "at most 20"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateStatusPageUpdate(&models.UpdateStatusPageRequest{Settings: tt.settings})
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want one containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateStatusPageSEODescription(t *testing.T) {
+	ok := strings.Repeat("é", models.MaxSEODescriptionLength)
+	long := strings.Repeat("a", models.MaxSEODescriptionLength+1)
+	if err := ValidateStatusPageUpdate(&models.UpdateStatusPageRequest{Settings: &models.StatusPageSettings{SEODescription: &ok}}); err != nil {
+		t.Fatalf("%d multibyte characters rejected: %v", models.MaxSEODescriptionLength, err)
+	}
+	err := ValidateStatusPageUpdate(&models.UpdateStatusPageRequest{Settings: &models.StatusPageSettings{SEODescription: &long}})
+	if err == nil || !strings.Contains(err.Error(), "seo_description") {
+		t.Fatalf("error = %v, want a seo_description length error", err)
 	}
 }

@@ -1,18 +1,8 @@
 import { NextRequest } from 'next/server';
+import { copyProxyRequestHeaders } from '@/lib/proxy-headers';
 
 const API_PROXY_TARGET = process.env.API_PROXY_TARGET || 'http://localhost:8080';
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-  'host',
-  'content-length',
-]);
+const API_PROXY_TRUST_FORWARDED_FOR = process.env.API_PROXY_TRUST_FORWARDED_FOR === 'true';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,16 +16,6 @@ function buildTargetUrl(requestUrl: string, path: string[]): string {
   const targetPath = path.join('/');
   const query = incoming.search || '';
   return `${API_PROXY_TARGET}/api/${targetPath}${query}`;
-}
-
-function copyHeaders(requestHeaders: Headers): Headers {
-  const headers = new Headers();
-  requestHeaders.forEach((value, key) => {
-    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
-      headers.set(key, value);
-    }
-  });
-  return headers;
 }
 
 function copyResponseHeaders(upstream: Response): Headers {
@@ -76,7 +56,7 @@ function copyResponseHeaders(upstream: Response): Headers {
 async function proxyRequest(req: NextRequest, ctx: RouteContext): Promise<Response> {
   const { path } = await ctx.params;
   const targetUrl = buildTargetUrl(req.url, path);
-  const headers = copyHeaders(req.headers);
+  const headers = copyProxyRequestHeaders(req.headers, API_PROXY_TRUST_FORWARDED_FOR);
   // The API builds absolute URLs (MCP OAuth metadata and redirects) from
   // the origin the client used; the Host header is dropped above, so pass it
   // on as the forwarded host when no outer proxy already did.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -411,7 +412,7 @@ func TestSuspectedCauseResolveRace(t *testing.T) {
 	record := alertRecord{ID: c.alertID, TenantID: c.tenantID, MonitorID: c.monitorID, Status: "active"}
 	channel := alertChannel{ID: c.channelID, Type: followUpStubType, IsActive: true}
 	sent, err := a.deliverNotification(ctx, "suspected_cause", policyBinding{MonitorID: c.monitorID, TenantID: c.tenantID},
-		&record, nil, channel, time.Now(), 0)
+		&record, nil, channel, time.Now(), 0, false)
 	if err != nil || sent || sends != 0 {
 		t.Fatalf("resolved alert: sent=%v err=%v sends=%d", sent, err, sends)
 	}
@@ -466,7 +467,7 @@ func TestClaimSuspectedCause(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback() }()
-		ok, _, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0)
+		ok, _, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -639,7 +640,7 @@ func TestRoutesToChannelPredicateMatchesTargetsSQL(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		tenant := testutil.InsertTenant(ctx, t, db, "")
 		d1 := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
-		insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		d2 := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
 		def := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "default")
 		custom := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "custom")
 		emptyCustom := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "custom-empty")
@@ -647,7 +648,16 @@ func TestRoutesToChannelPredicateMatchesTargetsSQL(t *testing.T) {
 		mustExec(ctx, t, db, `INSERT INTO monitor_channels (monitor_id, channel_id) VALUES ($1, $2)`, custom, d1)
 		// A custom assignment on a default-mode monitor is ignored.
 		mustExec(ctx, t, db, `INSERT INTO monitor_channels (monitor_id, channel_id) VALUES ($1, $2)`, def, d1)
-		for _, m := range []uuid.UUID{def, custom, emptyCustom} {
+		// Escalation policies: a policy-mode monitor routes to its policy's
+		// channel targets; in the second workspace a default policy also
+		// replaces the tenant default channels for default-mode monitors.
+		policy := insertEscalationPolicy(ctx, t, db, tenant, 0, 1800, policyStep{delay: 120, targets: []policyTarget{{kind: "channel", id: d2}}})
+		policyMonitor := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "policy")
+		mustExec(ctx, t, db, `UPDATE monitors SET notification_mode = 'policy', escalation_policy_id = $2 WHERE id = $1`, policyMonitor, policy)
+		if i == 1 {
+			mustExec(ctx, t, db, `UPDATE tenants SET default_escalation_policy_id = $2 WHERE id = $1`, tenant, policy)
+		}
+		for _, m := range []uuid.UUID{def, custom, emptyCustom, policyMonitor} {
 			monitors = append(monitors, m)
 			tenants[m] = tenant
 		}
@@ -690,6 +700,66 @@ func TestRoutesToChannelPredicateMatchesTargetsSQL(t *testing.T) {
 	}
 	if pairs != len(monitors)*4 {
 		t.Fatalf("compared %d pairs, want %d", pairs, len(monitors)*4)
+	}
+}
+
+// TenantTargetsSQL is the default branch of TargetsSQL without a monitor: for
+// a default-mode monitor the two must emit the same (channel, delay, pos)
+// routes, or mesh alerts and monitor alerts would follow different tenant
+// defaults. A custom-mode monitor never sees them.
+func TestTenantTargetsSQLMatchesDefaults(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	type route struct {
+		channel uuid.UUID
+		delay   int
+		pos     int
+	}
+	collect := func(query string, args ...any) []route {
+		t.Helper()
+		rows, err := db.QueryContext(ctx, `SELECT channel_id, delay_seconds, pos FROM (`+query+`) x ORDER BY pos, channel_id`, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []route
+		for rows.Next() {
+			var r route
+			if err := rows.Scan(&r.channel, &r.delay, &r.pos); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, r)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	for i := 0; i < 2; i++ {
+		tenant := testutil.InsertTenant(ctx, t, db, "")
+		insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		later := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		disabled := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		mustExec(ctx, t, db, `UPDATE tenant_default_channels SET delay_seconds = 300 WHERE channel_id = $1`, later)
+		mustExec(ctx, t, db, `UPDATE alert_channels SET is_active = FALSE WHERE id = $1`, disabled)
+		def := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "default")
+		custom := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "custom")
+		mustExec(ctx, t, db, `UPDATE monitors SET notification_mode = 'custom' WHERE id = $1`, custom)
+
+		tenantRoutes := collect(alertrouting.TenantTargetsSQL(), tenant)
+		if len(tenantRoutes) != 3 {
+			t.Fatalf("tenant %d: TenantTargetsSQL returned %d routes, want 3 (disabled channels included)", i, len(tenantRoutes))
+		}
+		monitorRoutes := collect(alertrouting.TargetsSQL(), tenant, pq.Array([]uuid.UUID{def}))
+		if !reflect.DeepEqual(tenantRoutes, monitorRoutes) {
+			t.Fatalf("tenant %d: TenantTargetsSQL %v, TargetsSQL for a default-mode monitor %v", i, tenantRoutes, monitorRoutes)
+		}
+		if got := collect(alertrouting.TargetsSQL(), tenant, pq.Array([]uuid.UUID{custom})); len(got) != 0 {
+			t.Fatalf("tenant %d: custom-mode monitor inherited tenant defaults %v", i, got)
+		}
 	}
 }
 

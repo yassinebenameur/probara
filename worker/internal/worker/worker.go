@@ -197,6 +197,13 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 		[]string{"type"},
 	)
 
+	// Ping socket mode (WORKER_PING_MODE).
+	if checker, err := w.checkerRegistry.Get("ping"); err == nil {
+		if ping, ok := checker.(*PingChecker); ok {
+			ping.SetMode(cfg.PingMode)
+		}
+	}
+
 	// SIP test calls: whether this worker places them (SIP_CALL_ENABLED,
 	// off by default on private-location workers, which also gates their
 	// media) and to which numbers (SIP_CALL_ALLOWED_DESTINATIONS), plus the

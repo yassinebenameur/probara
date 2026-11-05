@@ -15,6 +15,8 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { usePluginNames } from './usePluginNames';
+import { deliveryFailed, deliveryOutcomeTone } from '@/lib/status-tones';
+import { formatRelativeTime } from '@/lib/format';
 
 // The workspace's alert channels, shown on the Notifications tab of Settings
 // under the default routing.
@@ -75,6 +77,23 @@ export default function AlertChannelList() {
       {channel.is_active ? 'Active' : 'Inactive'}
     </Pill>
   );
+
+  // A channel whose newest delivery failed: the badge links to its history.
+  const lastDeliveryBadge = (channel: AlertChannel) => {
+    const last = channel.last_delivery;
+    if (!last || !deliveryFailed(last.outcome)) return null;
+    const when = formatRelativeTime(last.created_at);
+    return (
+      <Link
+        href={`/alert-channels/${channel.id}`}
+        title={`${last.outcome === 'permanent_failure' ? 'Rejected' : 'Failed'} ${when}${last.error ? `: ${last.error}` : ''}`}
+      >
+        <Pill tone={deliveryOutcomeTone(last.outcome)} size="xs">
+          {last.outcome === 'permanent_failure' ? 'Delivery rejected' : 'Delivery failing'}
+        </Pill>
+      </Link>
+    );
+  };
 
   // Ghost "New channel": the page's one accent button is Save notifications
   // above, and the empty state carries its own.
@@ -156,10 +175,16 @@ export default function AlertChannelList() {
                         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400 sm:hidden">
                           <span>{pluginName(channel.type)}</span>
                           {status(channel)}
+                          {lastDeliveryBadge(channel)}
                         </div>
                       </td>
                       <td className="hidden text-ui text-slate-400 sm:table-cell">{pluginName(channel.type)}</td>
-                      <td className="hidden sm:table-cell">{status(channel)}</td>
+                      <td className="hidden sm:table-cell">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {status(channel)}
+                          {lastDeliveryBadge(channel)}
+                        </div>
+                      </td>
                       <td className="text-right">
                         {canWrite && <div className="inline-flex items-center gap-0.5">
                           <IconButton

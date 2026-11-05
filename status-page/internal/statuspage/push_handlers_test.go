@@ -2,11 +2,13 @@ package statuspage
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
@@ -14,10 +16,14 @@ import (
 
 // pushTestHandlers builds Handlers with no database. Every test below is
 // rejected by a guard that runs before any query, which is the point: these
-// are the checks that must hold without touching Postgres.
+// are the checks that must hold without touching Postgres. The visibility
+// gate runs first, so it gets an in-memory store in which every slug is a
+// public page.
 func pushTestHandlers(t *testing.T, cfg *config.StatusPageConfig) *Handlers {
 	t.Helper()
-	return NewHandlers(nil, cfg, logger.New("status-page", "error"), NewHub(), newRenderCache(0), nil)
+	h := NewHandlers(nil, cfg, logger.New("status-page", "error"), NewHub(), newRenderCache(0), nil)
+	h.access.store = allPublicAccess{}
+	return h
 }
 
 func pushConfiguredConfig() *config.StatusPageConfig {
@@ -170,6 +176,40 @@ func TestHandlePushSubscribe_RateLimits(t *testing.T) {
 	}
 	if !limited {
 		t.Fatalf("no request was rate limited after %d attempts", pushRateBurst+5)
+	}
+}
+
+// A visitor who rotates X-Forwarded-For must not get a fresh bucket per
+// request unless the peer is a trusted proxy; behind one, each forwarded
+// client has its own bucket.
+func TestHandlePushSubscribe_RateLimitKeyHonoursTrustedProxiesOnly(t *testing.T) {
+	burst := func(h *Handlers, remote string) bool {
+		for i := 0; i < pushRateBurst+5; i++ {
+			req := httptest.NewRequest(http.MethodPost, "/public/status/acme/push/subscribe", strings.NewReader(`{"endpoint":"https://evil.example.com/x/aaaaaaaaaaaaaaaaaa"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = remote
+			req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i+1))
+			rec := httptest.NewRecorder()
+			h.HandleStatusPage(rec, req)
+			if rec.Code == http.StatusTooManyRequests {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !burst(pushTestHandlers(t, pushConfiguredConfig()), "203.0.113.7:4000") {
+		t.Fatal("spoofed X-Forwarded-For from an untrusted peer escaped the rate limit")
+	}
+
+	cfg := pushConfiguredConfig()
+	trusted, err := clientip.ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.TrustedProxyCIDRs = trusted
+	if burst(pushTestHandlers(t, cfg), "10.0.0.2:4000") {
+		t.Fatal("distinct clients behind a trusted proxy shared one rate-limit bucket")
 	}
 }
 

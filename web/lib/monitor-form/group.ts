@@ -7,7 +7,7 @@ import {
   Monitor,
   NotificationMode,
 } from '../types';
-import { parseTagInput } from './common';
+import { parseTagInput, initialEscalationPolicy } from './common';
 
 // GroupForm's state and request. A group's members live in the
 // monitor_groups junction table: the stored monitor reports them as
@@ -26,6 +26,7 @@ export function initialGroupFormState(monitor?: Monitor, initialData?: CreateMon
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    ...initialEscalationPolicy(monitor),
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     member_alert_rollup: (monitor?.member_alert_rollup ?? 'per_monitor') as MemberAlertRollup,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
@@ -42,6 +43,7 @@ export function groupFormStateFromMonitor(monitor: Monitor): GroupFormState {
     enabled: monitor.enabled ?? true,
     tags: monitor.tags?.join(', ') || '',
     notification_mode: (monitor.notification_mode ?? 'default') as NotificationMode,
+    ...initialEscalationPolicy(monitor),
     dependency_suppression: (monitor.dependency_suppression ?? 'inherit') as DependencySuppression,
     member_alert_rollup: (monitor.member_alert_rollup ?? 'per_monitor') as MemberAlertRollup,
     notification_channels: monitor.notification_channels ?? [],
@@ -80,6 +82,9 @@ export function buildGroupRequest(form: GroupFormState): CreateMonitorRequest {
   requestData.dependency_suppression = form.dependency_suppression;
   requestData.member_alert_rollup = form.member_alert_rollup;
   requestData.notification_channels = form.notification_mode === 'custom' ? form.notification_channels : [];
+  if (form.notification_mode === 'policy' && form.escalation_policy_id) {
+    requestData.escalation_policy_id = form.escalation_policy_id;
+  }
   if (form.tags.trim()) {
     requestData.tags = parseTagInput(form.tags);
   }

@@ -13,7 +13,10 @@ import {
   syntheticBrowserTemplateFields,
   validateMonitorForm,
 } from './monitor-form/inline';
+import { buildClonedMonitorInitialData } from './monitor-clone';
+import { renameSecretRow, toggleSecretRow } from './monitor-form/secret-map';
 import { DEFAULT_ALERTING, STORED_ALERTING, assertWire, storedMonitor } from './monitor-form/testing';
+import { MASKED_SECRET } from './types';
 import type {
   CreateMonitorRequest,
   HTTPMonitorConfig,
@@ -23,8 +26,10 @@ import type {
 } from './types';
 
 // MonitorForm's own types: http, ping, dns, synthetic_api, synthetic_browser.
-// None of them has a monitor secret (shared/secrets MonitorSecretFields), so
-// the edit round trips pin that every stored field survives a save.
+// The edit round trips pin that every stored field survives a save; the
+// secret-bearing fields (http secret_headers + basic_auth_password, synthetic
+// secret_variables: shared/secrets MonitorSecretFields/MonitorSecretMapFields)
+// have their own tests below each type, pinning the merge contract.
 
 /** A fresh create: the form starts on http, then the operator picks `type`. */
 function freshCreate(type: CreateMonitorRequest['type'], patch: Partial<MonitorFormState> = {}): MonitorFormState {
@@ -104,6 +109,7 @@ test('http: create from a fully filled form', () => {
     interval_seconds: 30,
     timeout_seconds: 5,
     consecutive_failures_threshold: 3,
+    recovery_threshold: 2,
     notification_mode: 'custom',
     dependency_suppression: 'on',
     notification_channels: [{ channel_id: 'ch-9', delay_seconds: 0 }],
@@ -119,7 +125,8 @@ test('http: create from a fully filled form', () => {
     config: {
       url: 'https://api.example.com/v1/ping',
       method: 'POST',
-      headers: { Authorization: 'Bearer abc', 'X-Trace': ' 1 ' },
+      headers: { 'X-Trace': ' 1 ' },
+      secret_headers: { Authorization: 'Bearer abc' },
       expected_statuses: [200],
       expected_status_ranges: [{ min: 201, max: 204 }],
       expected_status_classes: ['3xx'],
@@ -137,6 +144,7 @@ test('http: create from a fully filled form', () => {
       collect_timing: true,
       tls_skip_verify: true,
       tls_min_days_valid: 14,
+      tls_check_chain: true,
       tls_server_name: 'api.internal',
       tls_ca_pem: '-----BEGIN CERTIFICATE-----',
     },
@@ -144,6 +152,7 @@ test('http: create from a fully filled form', () => {
     timeout_seconds: 5,
     enabled: true,
     consecutive_failures_threshold: 3,
+    recovery_threshold: 2,
     notification_mode: 'custom',
     dependency_suppression: 'on',
     notification_channels: [{ channel_id: 'ch-9', delay_seconds: 0 }],
@@ -158,7 +167,10 @@ test('http: edit round trip keeps the stored config and shared fields', () => {
   const config: HTTPMonitorConfig = {
     url: 'https://api.example.com/health',
     method: 'POST',
-    headers: { Authorization: 'Bearer stored' },
+    headers: { 'X-Env': 'prod' },
+    secret_headers: { Authorization: '***' },
+    basic_auth_username: 'robot',
+    basic_auth_password: '***',
     expected_statuses: [200, 204],
     expected_status_ranges: [{ min: 300, max: 399 }],
     expected_status_classes: ['5xx'],
@@ -188,7 +200,11 @@ test('http: edit round trip keeps the stored config and shared fields', () => {
     config: {
       url: 'https://api.example.com/health',
       method: 'POST',
-      headers: { Authorization: 'Bearer stored' },
+      headers: { 'X-Env': 'prod' },
+      // Masked stored secrets submit back as "***" (keep).
+      secret_headers: { Authorization: '***' },
+      basic_auth_username: 'robot',
+      basic_auth_password: '***',
       expected_statuses: [200, 204],
       expected_status_ranges: [{ min: 300, max: 399 }],
       expected_status_classes: ['5xx'],
@@ -248,6 +264,7 @@ test('http: a clone takes config, schedule and locations from initialData, not i
     enabled: false,
     tags: ['copied'],
     consecutive_failures_threshold: 5,
+    recovery_threshold: 4,
     notification_mode: 'custom',
     notification_channels: [{ channel_id: 'ch-1', delay_seconds: 0 }],
     depends_on_ids: ['dep-2'],
@@ -313,7 +330,7 @@ test('ping: create from defaults', () => {
   assertWire(buildMonitorFormRequest('ping', form, false), {
     name: 'Gateway',
     type: 'ping',
-    config: { host: '8.8.8.8' },
+    config: { host: '8.8.8.8', count: 3 },
     ...NEW_SCHEDULE,
     ...DEFAULT_ALERTING,
     ...NEW_TAIL,
@@ -333,7 +350,7 @@ test('ping: create from a filled form and an edit round trip', () => {
   assertWire(buildMonitorFormRequest('ping', filled, false), {
     name: 'Edge',
     type: 'ping',
-    config: { host: 'edge.example.com' },
+    config: { host: 'edge.example.com', count: 3 },
     interval_seconds: 30,
     timeout_seconds: 5,
     enabled: true,
@@ -478,7 +495,8 @@ test('synthetic_api: create from the health + auth template, customized', () => 
       },
     ],
     base_url: 'https://api.example.com',
-    variables: { email: 'monitor@example.com', password: 'change-me' },
+    variables: { email: 'monitor@example.com' },
+    secret_variables: { password: 'change-me' },
   });
 });
 
@@ -673,8 +691,9 @@ const GUIDED_LOGIN_CONFIG = {
     { id: 'assert_url', action: 'assert_url', value: '/dashboard' },
   ],
   artifacts: { screenshot_on_failure: true, trace_on_failure: false, har_on_failure: false },
-  // Not a monitor secret: synthetic variables are stored and served in plain text.
-  variables: { username: 'robot@example.com', password: 's3cret' },
+  variables: { username: 'robot@example.com' },
+  // The password is a secret variable: encrypted, masked, redacted from results.
+  secret_variables: { password: 's3cret' },
 };
 
 test('synthetic_browser: create from a filled guided login flow', () => {
@@ -714,7 +733,8 @@ test('synthetic_browser: create from an expert template, customized', () => {
       { id: 'assert_url', action: 'assert_url', value: '/dashboard' },
     ],
     artifacts: { screenshot_on_failure: true, trace_on_failure: true, har_on_failure: false },
-    variables: { email: 'monitor@example.com', password: 'change-me' },
+    variables: { email: 'monitor@example.com' },
+    secret_variables: { password: 'change-me' },
   });
 });
 
@@ -769,4 +789,192 @@ test('synthetic_browser: validation messages', () => {
   assert.deepEqual(validateMonitorForm('synthetic_browser', expert, false), {
     synthetic_browser_steps: "Step 'open' requires a URL",
   });
+});
+
+// --- secrets: http secret_headers + basic auth ------------------------------
+
+test('http secrets: create splits plain and secret headers and sends basic auth', () => {
+  const form = freshCreate('http', {
+    name: 'Private API',
+    url: 'https://api.example.com',
+    request_headers: [
+      { key: 'X-Env', value: 'prod' },
+      // Toggled secret by the operator.
+      toggleSecretRow({ key: 'X-Internal', value: 'abc' }, true),
+      // Credential-named: secret even though its toggle was never touched.
+      { key: 'X-API-Key', value: 'k-123', secret: false },
+    ],
+    basic_auth_username: ' robot ',
+    basic_auth_password: 'pw',
+  });
+  assert.deepEqual(validateMonitorForm('http', form, false), {});
+  assertWire(buildMonitorFormRequest('http', form, false).config, {
+    url: 'https://api.example.com',
+    method: 'GET',
+    headers: { 'X-Env': 'prod' },
+    secret_headers: { 'X-Internal': 'abc', 'X-API-Key': 'k-123' },
+    basic_auth_username: 'robot',
+    basic_auth_password: 'pw',
+    follow_redirects: true,
+    max_redirects: 10,
+    collect_timing: false,
+  });
+});
+
+const storedSecretHTTP = () =>
+  storedMonitor('http', {
+    url: 'https://api.example.com',
+    method: 'GET',
+    secret_headers: { 'X-Token': MASKED_SECRET, 'X-Custom': MASKED_SECRET, 'X-Gone': MASKED_SECRET },
+    basic_auth_username: 'robot',
+    basic_auth_password: MASKED_SECRET,
+  } as HTTPMonitorConfig);
+
+test('http secrets: edit keeps, replaces and removes stored headers per key', () => {
+  const form = initialMonitorFormState(storedSecretHTTP());
+  assert.deepEqual(
+    form.request_headers.map((row) => [row.key, row.value, Boolean(row.hasStoredValue)]),
+    [
+      ['X-Token', '', true],
+      ['X-Custom', '', true],
+      ['X-Gone', '', true],
+    ]
+  );
+  form.request_headers = [
+    { ...form.request_headers[0], value: 't-new' }, // replace
+    renameSecretRow(form.request_headers[1], 'x-custom'), // case-only rename keeps it
+    // X-Gone removed: omitted from the submitted map, so the API deletes it.
+  ];
+  assert.deepEqual(validateMonitorForm('http', form, false), {});
+  const config = buildMonitorFormRequest('http', form, false).config as HTTPMonitorConfig;
+  assert.deepEqual(config.secret_headers, { 'X-Token': 't-new', 'x-custom': MASKED_SECRET });
+  assert.equal(config.basic_auth_username, 'robot');
+  assert.equal(config.basic_auth_password, MASKED_SECRET);
+});
+
+test('http secrets: a stored header renamed away must be re-entered', () => {
+  const form = initialMonitorFormState(storedSecretHTTP());
+  form.request_headers = [renameSecretRow(form.request_headers[1], 'X-Renamed')];
+  assert.equal(validateMonitorForm('http', form, false).request_headers, 'Headers must have both a name and a value');
+});
+
+test('http secrets: removing every stored header submits an empty map, which clears them', () => {
+  const form = initialMonitorFormState(storedSecretHTTP());
+  form.request_headers = [{ key: '', value: '' }];
+  const config = buildMonitorFormRequest('http', form, false).config as HTTPMonitorConfig;
+  assert.deepEqual(config.secret_headers, {});
+});
+
+test('http secrets: Clear sends "" for the stored password, as does dropping the username', () => {
+  const cleared = { ...initialMonitorFormState(storedSecretHTTP()), basic_auth_password_state: 'cleared' as const };
+  let config = buildMonitorFormRequest('http', cleared, false).config as HTTPMonitorConfig;
+  assert.equal(config.basic_auth_username, 'robot');
+  assert.equal(config.basic_auth_password, '');
+
+  const noUser = { ...initialMonitorFormState(storedSecretHTTP()), basic_auth_username: '  ' };
+  config = buildMonitorFormRequest('http', noUser, false).config as HTTPMonitorConfig;
+  assert.equal(config.basic_auth_username, undefined);
+  assert.equal(config.basic_auth_password, '');
+
+  const replaced = { ...initialMonitorFormState(storedSecretHTTP()), basic_auth_password: 'new-pw' };
+  config = buildMonitorFormRequest('http', replaced, false).config as HTTPMonitorConfig;
+  assert.equal(config.basic_auth_password, 'new-pw');
+});
+
+test('http secrets: a legacy plaintext credential header is resubmitted as a secret', () => {
+  const form = initialMonitorFormState(
+    storedMonitor('http', { url: 'https://api.example.com', method: 'GET', headers: { Cookie: 'sid=1' } })
+  );
+  const config = buildMonitorFormRequest('http', form, false).config as HTTPMonitorConfig;
+  assert.equal(config.headers, undefined);
+  assert.deepEqual(config.secret_headers, { Cookie: 'sid=1' });
+});
+
+test('http secrets: a clone carries header names and the username, never a mask', () => {
+  const clone = buildClonedMonitorInitialData(storedSecretHTTP());
+  const form = initialMonitorFormState(undefined, clone);
+  assert.ok(form.request_headers.every((row) => !row.hasStoredValue && row.value === ''));
+  assert.equal(form.basic_auth_password_state, 'none');
+  assert.equal(form.basic_auth_username, 'robot');
+  // Untouched, the clone cannot be saved: the secrets must be re-entered.
+  assert.equal(validateMonitorForm('http', form, false).request_headers, 'Headers must have both a name and a value');
+  form.request_headers = form.request_headers.map((row) => ({ ...row, value: 'v' }));
+  assert.ok(!JSON.stringify(buildMonitorFormRequest('http', form, false)).includes(MASKED_SECRET));
+});
+
+test('http secrets: validation messages', () => {
+  const base = freshCreate('http', { name: 'x', url: 'https://api.example.com' });
+  const errors = (patch: Partial<MonitorFormState>) => validateMonitorForm('http', { ...base, ...patch }, false);
+  assert.equal(
+    errors({ request_headers: [{ key: 'X-Id', value: '1' }, toggleSecretRow({ key: 'x-id', value: '2' }, true)] })
+      .request_headers,
+    '"x-id" is set more than once'
+  );
+  assert.equal(
+    errors({ request_headers: [{ key: 'X-Id', value: 'a\r\nInjected: 1' }] }).request_headers,
+    'Headers cannot contain line breaks'
+  );
+  assert.equal(
+    errors({ basic_auth_username: 'u', request_headers: [{ key: 'authorization', value: 'Bearer t' }] }).basic_auth,
+    'Use basic auth or an Authorization header, not both'
+  );
+  assert.equal(errors({ basic_auth_password: 'pw' }).basic_auth, 'Basic auth needs a username');
+});
+
+// --- secrets: synthetic secret_variables -----------------------------------
+
+test('synthetic_api secrets: edit keeps, drops and validates secret variables', () => {
+  const config: SyntheticAPIMonitorConfig = {
+    variables: { email: 'a@b.c' },
+    secret_variables: { token: MASKED_SECRET, old: MASKED_SECRET },
+    steps: [{ id: 's1', request: { method: 'GET', url: 'https://api.example.com/{{token}}' } }],
+  };
+  assert.equal(hasAdvancedSyntheticAPIConfig({ steps: [], secret_variables: { t: MASKED_SECRET } }), true);
+  const form = initialMonitorFormState(storedMonitor('synthetic_api', config));
+  form.synthetic_api_secret_variables = form.synthetic_api_secret_variables.filter((row) => row.key !== 'old');
+  assert.deepEqual(validateMonitorForm('synthetic_api', form, false), {});
+  let built = buildMonitorFormRequest('synthetic_api', form, false).config as SyntheticAPIMonitorConfig;
+  assert.deepEqual(built.secret_variables, { token: MASKED_SECRET });
+
+  form.synthetic_api_secret_variables = [];
+  built = buildMonitorFormRequest('synthetic_api', form, false).config as SyntheticAPIMonitorConfig;
+  assert.deepEqual(built.secret_variables, {}, 'an edit that removed every secret submits {} to clear them');
+
+  form.synthetic_api_secret_variables = [{ key: 'email', value: 'x', secret: true }];
+  assert.equal(
+    validateMonitorForm('synthetic_api', form, false).synthetic_api_secret_variables,
+    '"email" is both a variable and a secret variable'
+  );
+});
+
+test('synthetic_browser secrets: a guided edit keeps the stored password', () => {
+  const monitor = storedMonitor('synthetic_browser', {
+    ...GUIDED_LOGIN_CONFIG,
+    secret_variables: { password: MASKED_SECRET },
+  } as SyntheticBrowserMonitorConfig);
+  const form = initialMonitorFormState(monitor);
+  assert.equal(form.synthetic_browser_guided_password, '');
+  assert.equal(form.synthetic_browser_guided_password_stored, true);
+  const login: MonitorFormState = { ...form, synthetic_browser_guided_template: 'login_flow' };
+  const built = buildMonitorFormRequest('synthetic_browser', login, true).config as SyntheticBrowserMonitorConfig;
+  assert.deepEqual(built.secret_variables, { password: MASKED_SECRET });
+  assert.ok(built.steps.some((step) => step.id === 'fill_password'));
+
+  // Switching to expert carries the stored password as a kept secret row.
+  const expert = { ...login, ...syntheticBrowserGuidedToExpertFields(login) };
+  const expertBuilt = buildMonitorFormRequest('synthetic_browser', expert, false).config as SyntheticBrowserMonitorConfig;
+  assert.deepEqual(expertBuilt.secret_variables, { password: MASKED_SECRET });
+});
+
+test('synthetic_browser secrets: a clone never submits the masked password', () => {
+  const monitor = storedMonitor('synthetic_browser', {
+    ...GUIDED_LOGIN_CONFIG,
+    secret_variables: { password: MASKED_SECRET },
+  } as SyntheticBrowserMonitorConfig);
+  const form = initialMonitorFormState(undefined, buildClonedMonitorInitialData(monitor));
+  assert.equal(form.synthetic_browser_secret_variables[0].hasStoredValue, false);
+  assert.equal(
+    validateMonitorForm('synthetic_browser', form, false).synthetic_browser_secret_variables,
+    'Secret variables must have both a name and a value'
+  );
 });

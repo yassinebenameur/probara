@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
 // TCPChecker implements Checker for raw TCP connect monitors. It validates that
@@ -37,6 +39,10 @@ type tcpMetrics struct {
 	Port       int    `json:"port,omitempty"`
 	UseTLS     bool   `json:"use_tls"`
 	TLSVersion string `json:"tls_version,omitempty"`
+	// TLS is the server certificate (shared/tlscert owns where readers find
+	// it: tcp.tls), recorded under tls_skip_verify too.
+	TLS              *tlscert.Info `json:"tls,omitempty"`
+	AssertionsFailed []string      `json:"assertions_failed,omitempty"`
 }
 
 // Check performs a TCP connect (and optional TLS handshake).
@@ -47,17 +53,12 @@ func (c *TCPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		return CheckResult{Status: "error", ErrorMessage: &errMsg}
 	}
 
+	if err := config.Validate(); err != nil {
+		errMsg := err.Error()
+		return CheckResult{Status: "error", ErrorMessage: &errMsg}
+	}
 	host := strings.TrimSpace(config.Host)
-	if host == "" {
-		errMsg := "host is required"
-		return CheckResult{Status: "error", ErrorMessage: &errMsg}
-	}
-	if config.Port < 1 || config.Port > 65535 {
-		errMsg := "port must be between 1 and 65535"
-		return CheckResult{Status: "error", ErrorMessage: &errMsg}
-	}
-
-	useTLS := config.UseTLS != nil && *config.UseTLS
+	useTLS := config.TLSEnabled()
 
 	timeout := time.Duration(timeoutSeconds) * time.Second
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -84,9 +85,10 @@ func (c *TCPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	metrics := tcpMetrics{Host: host, Port: config.Port, UseTLS: useTLS}
 
 	if useTLS {
-		tlsCfg := &tls.Config{ServerName: host}
-		if config.TLSSkipVerify != nil && *config.TLSSkipVerify {
-			tlsCfg.InsecureSkipVerify = true
+		tlsCfg, err := tcpTLSConfig(&config, host)
+		if err != nil {
+			errMsg := err.Error()
+			return CheckResult{Status: "error", ErrorMessage: &errMsg}
 		}
 		tlsConn := tls.Client(conn, tlsCfg)
 		if err := tlsConn.HandshakeContext(checkCtx); err != nil {
@@ -94,12 +96,49 @@ func (c *TCPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 			errMsg := fmt.Sprintf("tls handshake: %v", err)
 			return CheckResult{Status: "failure", ErrorMessage: &errMsg, LatencyMs: &latencyMs}
 		}
-		metrics.TLSVersion = tlsVersionName(tlsConn.ConnectionState().Version)
+		state := tlsConn.ConnectionState()
+		metrics.TLSVersion = tlsVersionName(state.Version)
+		metrics.TLS = tlscert.FromConnectionState(state, tlsCfg.ServerName, time.Now())
 	}
 
 	latencyMs := time.Since(startTime).Milliseconds()
+	// A certificate inside the tls_min_days_valid window does NOT fail the
+	// check: the alerter reads the recorded expiry (shared/tlscert) and opens
+	// a tls_expiry alert. Only a handshake that yielded no certificate to
+	// inspect fails, since the threshold could never be evaluated.
+	if config.TLSMinDaysValid != nil && (metrics.TLS == nil || metrics.TLS.DaysUntilExpiry == nil) {
+		const assertion = "tls: missing certificate info"
+		metrics.AssertionsFailed = append(metrics.AssertionsFailed, assertion)
+		metricsJSON, _ := json.Marshal(tcpMetricsEnvelope{TCP: &metrics})
+		errMsg := assertion
+		return CheckResult{Status: "failure", ErrorMessage: &errMsg, LatencyMs: &latencyMs, MetricsData: metricsJSON}
+	}
 	metricsJSON, _ := json.Marshal(tcpMetricsEnvelope{TCP: &metrics})
 	return CheckResult{Status: "success", LatencyMs: &latencyMs, MetricsData: metricsJSON}
+}
+
+// tcpTLSConfig is the client TLS config: SNI and verification name from
+// tls_server_name (else host), tls_ca_pem added to the system roots, and
+// tls_skip_verify.
+func tcpTLSConfig(config *models.TCPMonitorConfig, host string) (*tls.Config, error) {
+	tlsCfg := &tls.Config{ServerName: host}
+	if config.TLSServerName != nil && strings.TrimSpace(*config.TLSServerName) != "" {
+		tlsCfg.ServerName = strings.TrimSpace(*config.TLSServerName)
+	}
+	if config.TLSSkipVerify != nil && *config.TLSSkipVerify {
+		tlsCfg.InsecureSkipVerify = true
+	}
+	if config.TLSCAPem != nil && strings.TrimSpace(*config.TLSCAPem) != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM([]byte(*config.TLSCAPem)) {
+			return nil, fmt.Errorf("tls_ca_pem: failed to parse PEM")
+		}
+		tlsCfg.RootCAs = pool
+	}
+	return tlsCfg, nil
 }
 
 func tcpErrorReason(err error) string {

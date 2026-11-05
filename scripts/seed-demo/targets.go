@@ -238,8 +238,8 @@ func (t *targets) reload(ctx context.Context) (otlpDue time.Time) {
 	maint := map[string]time.Time{}
 	for path, id := range maintIDs {
 		var ends *time.Time
-		if err := t.pool.QueryRow(ctx, `SELECT max(mw.ends_at) FROM maintenance_windows mw JOIN maintenance_window_monitors m ON m.maintenance_window_id = mw.id
-			WHERE m.monitor_id = $1 AND mw.starts_at <= now() AND mw.ends_at > now()`, id).Scan(&ends); err == nil && ends != nil {
+		if err := t.pool.QueryRow(ctx, `SELECT max(mo.ends_at) FROM maintenance_window_occurrences mo JOIN maintenance_window_monitors m ON m.maintenance_window_id = mo.window_id
+			WHERE m.monitor_id = $1 AND mo.starts_at <= now() AND mo.ends_at > now()`, id).Scan(&ends); err == nil && ends != nil {
 			maint[path] = ends.Add(-10 * time.Minute)
 		}
 	}

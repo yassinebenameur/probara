@@ -81,7 +81,7 @@ func TestBulkAcknowledgeAndResolve_PartialResults(t *testing.T) {
 
 	t.Run("acknowledge changes only active alerts and explains the rest", func(t *testing.T) {
 		res, err := svc.BulkAcknowledge(ctx, tenantID,
-			[]uuid.UUID{active2, acked, active1, resolved, foreign, hidden, missing, active1})
+			[]uuid.UUID{active2, acked, active1, resolved, foreign, hidden, missing, active1}, alertsvc.Actor{Via: alertsvc.ViaAPI})
 		require.NoError(t, err)
 
 		require.Len(t, res.Items, 2)
@@ -106,7 +106,7 @@ func TestBulkAcknowledgeAndResolve_PartialResults(t *testing.T) {
 	})
 
 	t.Run("resolve closes open alerts and records incident recovery for each", func(t *testing.T) {
-		res, err := svc.BulkResolve(ctx, tenantID, []uuid.UUID{active1, acked, resolved, foreign})
+		res, err := svc.BulkResolve(ctx, tenantID, []uuid.UUID{active1, acked, resolved, foreign}, alertsvc.Actor{Via: alertsvc.ViaAPI})
 		require.NoError(t, err)
 
 		require.Len(t, res.Items, 2)
@@ -125,7 +125,7 @@ func TestBulkAcknowledgeAndResolve_PartialResults(t *testing.T) {
 	})
 
 	t.Run("a batch where nothing applies still succeeds", func(t *testing.T) {
-		res, err := svc.BulkResolve(ctx, tenantID, []uuid.UUID{resolved})
+		res, err := svc.BulkResolve(ctx, tenantID, []uuid.UUID{resolved}, alertsvc.Actor{Via: alertsvc.ViaAPI})
 		require.NoError(t, err)
 		require.Empty(t, res.Items)
 		require.NotNil(t, res.Items, "items encode as [] not null")

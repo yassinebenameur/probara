@@ -1,14 +1,20 @@
 import {
   AlertCircle,
   Bell,
+  BellDot,
   BellRing,
+  Brackets,
   Mail,
+  Megaphone,
   MessageCircle,
   MessageSquare,
+  MessageSquareText,
+  MessagesSquare,
   Send,
   Siren,
   Slack,
   Smartphone,
+  TabletSmartphone,
   Webhook,
   type LucideIcon,
 } from 'lucide-react';
@@ -28,6 +34,12 @@ const iconMap: Record<string, LucideIcon> = {
   opsgenie: BellRing,
   telegram: Send,
   sms: Smartphone,
+  ntfy: Megaphone,
+  gotify: BellDot,
+  pushover: TabletSmartphone,
+  mattermost: MessagesSquare,
+  matrix: Brackets,
+  google_chat: MessageSquareText,
 };
 
 export function iconFor(key: string | undefined): LucideIcon {

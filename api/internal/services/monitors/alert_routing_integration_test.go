@@ -254,11 +254,41 @@ func TestUnreachablePredicateMatchesClassify(t *testing.T) {
 	addGroupMember(ctx, t, dbClient, unroutedGroup, multiGroupMember, "group")
 	addGroupMember(ctx, t, dbClient, routedGroup, multiGroupMember, "group")
 
-	// Run the matrix twice: with and without tenant defaults, so 'default'
-	// mode monitors are exercised on both sides of the boundary.
-	for _, withDefaults := range []bool{false, true} {
-		if withDefaults {
+	// Escalation policies: person targets count when they can page somebody
+	// (an enabled member with a verified contact), channel targets when
+	// active; a policy with neither is policy_no_targets.
+	policies := newPolicyFixtures(ctx, t, dbClient, tenantID, activeChannel, disabledChannel)
+	newPolicyMonitor := func(name string, policy uuid.UUID) uuid.UUID {
+		id := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, name)
+		setEscalationPolicy(ctx, t, dbClient, id, policy)
+		ids = append(ids, id)
+		return id
+	}
+	for name, policy := range policies {
+		newPolicyMonitor("p-"+name, policy)
+	}
+	personGroup := testutil.InsertGroupMonitor(ctx, t, dbClient, tenantID, "g-policy-person")
+	setEscalationPolicy(ctx, t, dbClient, personGroup, policies["person"])
+	ids = append(ids, personGroup)
+	addGroupMember(ctx, t, dbClient, personGroup, newHTTP("g-policy-person-member", "custom"), "group")
+	nobodyGroup := testutil.InsertGroupMonitor(ctx, t, dbClient, tenantID, "g-policy-nobody")
+	setEscalationPolicy(ctx, t, dbClient, nobodyGroup, policies["nobody"])
+	ids = append(ids, nobodyGroup)
+	addGroupMember(ctx, t, dbClient, nobodyGroup, newHTTP("g-policy-nobody-member", "custom"), "group")
+
+	// Run the matrix with and without tenant defaults, so 'default' mode
+	// monitors are exercised on both sides of the boundary, then under a
+	// workspace default escalation policy that reaches nobody and one that
+	// reaches a person (it replaces the default channels).
+	for phase := 0; phase < 4; phase++ {
+		withDefaults := phase > 0
+		switch phase {
+		case 1:
 			addTenantDefaultChannel(ctx, t, dbClient, tenantID, activeChannel, 0)
+		case 2:
+			setTenantDefaultPolicy(ctx, t, dbClient, tenantID, policies["nobody"])
+		case 3:
+			setTenantDefaultPolicy(ctx, t, dbClient, tenantID, policies["person"])
 		}
 
 		routing, err := repo.GetAlertRoutingForMonitors(ctx, ids)
@@ -282,8 +312,8 @@ func TestUnreachablePredicateMatchesClassify(t *testing.T) {
 			status, ok := routing[id]
 			require.True(t, ok, "missing routing verdict")
 			require.Equalf(t, !status.Reachable, sqlUnreachable[id],
-				"SQL predicate and Classify disagree on %s (source %s, defaults=%v)",
-				id, status.Source, withDefaults)
+				"SQL predicate and Classify disagree on %s (source %s, defaults=%v, phase %d)",
+				id, status.Source, withDefaults, phase)
 		}
 	}
 }

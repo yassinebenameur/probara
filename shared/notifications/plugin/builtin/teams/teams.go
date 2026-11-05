@@ -161,12 +161,19 @@ func buildMessageCard(m present.Message) messageCard {
 		Text:       m.Summary,
 		Sections:   []section{{Facts: facts, Markdown: false}},
 	}
+	if m.AckURL != "" {
+		card.PotentialAction = append(card.PotentialAction, openURIAction{
+			Type:    "OpenUri",
+			Name:    m.AckLabel,
+			Targets: []uriTarget{{OS: "default", URI: m.AckURL}},
+		})
+	}
 	if m.ActionURL != "" {
-		card.PotentialAction = []openURIAction{{
+		card.PotentialAction = append(card.PotentialAction, openURIAction{
 			Type:    "OpenUri",
 			Name:    m.ActionLabel,
 			Targets: []uriTarget{{OS: "default", URI: m.ActionURL}},
-		}}
+		})
 	}
 	return card
 }
@@ -220,8 +227,11 @@ func buildAdaptiveCardMessage(m present.Message) adaptiveMessage {
 		Body:    body,
 		MSTeams: map[string]any{"width": "Full"},
 	}
+	if m.AckURL != "" {
+		card.Actions = append(card.Actions, map[string]any{"type": "Action.OpenUrl", "title": m.AckLabel, "url": m.AckURL, "style": "positive"})
+	}
 	if m.ActionURL != "" {
-		card.Actions = []map[string]any{{"type": "Action.OpenUrl", "title": m.ActionLabel, "url": m.ActionURL}}
+		card.Actions = append(card.Actions, map[string]any{"type": "Action.OpenUrl", "title": m.ActionLabel, "url": m.ActionURL})
 	}
 	return adaptiveMessage{
 		Type: "message",

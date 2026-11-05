@@ -1,21 +1,35 @@
 import { HTTPMonitorConfig, HTTPStatusRange } from '../types';
+import { SecretKV, plainRowsFromMap, secretRowsFromMap } from './secret-map';
 
 // Pure HTTP (and DNS) helpers for MonitorForm: the form-state shapes, status
 // rule parsing, and header rows. No React here, so lib tests can pin them.
 
-export type HeaderKV = { key: string; value: string; reveal?: boolean };
+/** A request header row; `secret` rows submit to `secret_headers`. */
+export type HeaderKV = SecretKV;
 
-export const isSensitiveHeaderName = (name: string) => {
+const SENSITIVE_HEADER_EXACT = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'x-api-key',
+  'api-key',
+  'x-auth-token',
+]);
+const SENSITIVE_HEADER_MARKERS = ['token', 'secret', 'password', 'apikey', 'api-key'];
+
+/**
+ * Whether a header name conventionally carries a credential. TS twin of
+ * IsSensitiveHeaderName in shared/secrets/sensitive_headers.go: the API moves
+ * such headers into the encrypted `secret_headers` map on every write, so the
+ * form shows them as secret (locked on) to match. Keep the two rules in step;
+ * shared/secrets/testdata/sensitive_header_names.json is read by both test
+ * suites (lib/monitor-form-http.test.ts here) and pins the pair.
+ */
+export const isSensitiveHeaderName = (name: string): boolean => {
   const n = name.trim().toLowerCase();
   if (!n) return false;
-  if (n === 'authorization') return true;
-  if (n === 'cookie') return true;
-  if (n === 'x-api-key') return true;
-  if (n === 'api-key') return true;
-  if (n === 'x-auth-token') return true;
-  if (n.includes('token')) return true;
-  if (n.includes('secret')) return true;
-  return false;
+  if (SENSITIVE_HEADER_EXACT.has(n)) return true;
+  return SENSITIVE_HEADER_MARKERS.some((marker) => n.includes(marker));
 };
 
 export const buildStatusRulesFromHTTPConfig = (cfg?: HTTPMonitorConfig) => {
@@ -88,8 +102,21 @@ export const parseDNSExpectedAnswers = (input: string): string[] => {
 
 export const defaultHeaderRows = (): HeaderKV[] => [{ key: '', value: '', reveal: false }];
 
-export const mapHeadersToRows = (headers?: Record<string, string>): HeaderKV[] => {
-  if (!headers || Object.keys(headers).length === 0) return defaultHeaderRows();
-  const rows = Object.entries(headers).map(([key, value]) => ({ key, value, reveal: false }));
+/**
+ * Header rows for a loaded config: plain `headers`, then `secretHeaders`
+ * (masked on read; a stored value is only marked in edit mode). A legacy
+ * credential-named header still in plain `headers` loads as a plain row with
+ * its value; the form submits it as secret, which migrates it.
+ */
+export const mapHeadersToRows = (
+  headers?: Record<string, string>,
+  secretHeaders?: Record<string, string>,
+  isEditMode = false
+): HeaderKV[] => {
+  const rows = [...plainRowsFromMap(headers), ...secretRowsFromMap(secretHeaders, isEditMode)];
   return rows.length > 0 ? rows : defaultHeaderRows();
 };
+
+/** Failure-response capture budget (shared/models HTTPCaptureDefaultBodyBytes / HTTPCaptureMaxBodyBytes). */
+export const HTTP_CAPTURE_DEFAULT_BODY_BYTES = 2048;
+export const HTTP_CAPTURE_MAX_BODY_BYTES = 8192;

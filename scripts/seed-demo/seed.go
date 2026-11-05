@@ -26,6 +26,7 @@ type world struct {
 	env        Env
 	startedAt  time.Time // local clock when seed started
 	now        time.Time
+	adminID    string // the -user superadmin, looked up by name: IDs differ per database
 	start      time.Time
 	rawStart   time.Time
 	specs      []Spec
@@ -79,6 +80,9 @@ func runSeed(ctx context.Context, o options) error {
 		return err
 	}
 	w.now = w.now.UTC()
+	if err := pool.QueryRow(ctx, "SELECT id FROM admin_users WHERE username = $1", o.user).Scan(&w.adminID); err != nil {
+		return fmt.Errorf("look up superadmin %q (create it first, e.g. POST /api/v1/users/bootstrap/first): %w", o.user, err)
+	}
 	w.start = w.now.Truncate(24*time.Hour).AddDate(0, 0, -o.historyDays)
 	w.rawStart = w.now.Truncate(time.Hour).Add(-time.Duration(o.rawHours) * time.Hour)
 	w.specs = catalog(w.env)
@@ -96,7 +100,7 @@ func runSeed(ctx context.Context, o options) error {
 	if _, err := pool.Exec(ctx, `INSERT INTO tenants (id, name, data_retention_days, created_at, updated_at) VALUES ($1, $2, 90, $3, $3)`, TenantID, TenantName, w.start.Add(-48*time.Hour)); err != nil {
 		return fmt.Errorf("insert tenant: %w", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO tenant_memberships (admin_user_id, tenant_id, role) VALUES ($1, $2, 'admin') ON CONFLICT DO NOTHING`, AdminUserID, TenantID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO tenant_memberships (admin_user_id, tenant_id, role) VALUES ($1, $2, 'admin') ON CONFLICT DO NOTHING`, w.adminID, TenantID); err != nil {
 		logf("warn: admin membership: %v", err)
 	}
 
@@ -658,6 +662,12 @@ func (w *world) seedHistory(ctx context.Context, _ *apiClient, pool *pgx.Conn) e
 		mw.id = uuid.NewString()
 		if _, err := tx.Exec(ctx, `INSERT INTO maintenance_windows (id, tenant_id, title, description, starts_at, ends_at, created_at, updated_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`, mw.id, TenantID, mw.title, mw.desc, mw.start, mw.end, minTime(mw.start.Add(-5*24*time.Hour), w.now.Add(-2*time.Hour))); err != nil {
+			return err
+		}
+		// Coverage is the occurrence, never the rule (S-M5): a one-off window
+		// is exactly one.
+		if _, err := tx.Exec(ctx, `INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at)
+			VALUES ($1,$2,$3,$4)`, mw.id, TenantID, mw.start, mw.end); err != nil {
 			return err
 		}
 		for _, k := range mw.keys {

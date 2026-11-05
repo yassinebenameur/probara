@@ -55,7 +55,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A populated .env file does not configure every Docker service',
           text:
-            'Compose has no `env_file` declaration. SMTP, notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services.',
+            'Compose has no `env_file` declaration. Notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services; `SMTP_*` and `APP_BASE_URL` to the api, worker, and alerter; `PUBLIC_BASE_URL` and the optional `SLACK_*` variables to the api.',
         },
         {
           type: 'callout',
@@ -107,7 +107,7 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`NATS_URL`',
               '`nats://localhost:4222`',
               'API, scheduler, worker, alerter, status page updates',
-              'Scheduler and worker require NATS. API and status live-update paths degrade when it is unavailable; alerter can run synchronous dispatch without it.',
+              'Scheduler and worker require NATS. API and status live-update paths degrade when it is unavailable; alerter can run synchronous dispatch without it. Besides `nats://` and `tls://`, the check-job client accepts `ws://` and `wss://` (the broker\'s websocket listener); a path in a websocket URL (`wss://host/nats`) is sent in the upgrade request, for path-routed ingresses.',
             ],
           ],
         },
@@ -131,7 +131,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`ADMIN_JWT_SECRET`',
               'Required; validation only rejects an empty value. Use at least 32 random characters.',
-              'Compose ships an insecure hardcoded default and the Helm values ship a placeholder default; override both for production.',
+              'Compose has no default and refuses to start without it: the `make` targets supply a per-checkout random value (gitignored `.dev-admin-jwt-secret`) and `scripts/install.sh` writes one into `.env`. The Helm values still ship a placeholder default; override it for production.',
             ],
             [
               '`ADMIN_ACCESS_TTL_MINUTES`',
@@ -158,6 +158,31 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`365`; nonnegative integer; `0` keeps records forever',
               'Compose and Helm expose the audit-retention setting; the API owns pruning.',
             ],
+            [
+              '`TRUSTED_PROXY_CIDRS`',
+              'Empty (no proxy trusted: the TCP peer is the client); comma-separated CIDRs or bare IPs, an invalid entry stops startup',
+              'The [trusted proxies](/docs/security/#audit-proxy-trust) whose `X-Forwarded-For` / `X-Real-IP` resolve the IP in audit records and admin sessions. Read by the API and the status-page service. Compose passes it through from the shell to both; Helm renders the top-level `trustedProxyCIDRs` list into both.',
+            ],
+            [
+              '`SECURITY_HSTS_MAX_AGE`',
+              '`0` (no HSTS); nonnegative integer seconds, anything else stops startup',
+              '[HSTS](/docs/security/#edge-controls) max-age for API, status-page and frontend, sent only on HTTPS requests (direct TLS, or `X-Forwarded-Proto: https` from a trusted proxy). Compose passes it through (default `0`); Helm renders `security.hstsMaxAge`, which defaults to one year when `ingress.tls` is set and `0` otherwise.',
+            ],
+            [
+              '`API_RATE_LIMIT_PER_MINUTE`',
+              '`600`; nonnegative integer; `0` disables the limiter',
+              'General [API rate limit](/docs/security/#edge-controls): per validated credential, per client IP only for authentication failures and unauthenticated routes, in memory on each API replica. Compose and Helm (`security.apiRateLimitPerMinute`) wire it.',
+            ],
+            [
+              '`API_RATE_LIMIT_BURST`',
+              '`120`; nonnegative integer',
+              'Bucket size of the general limiter. Compose and Helm (`security.apiRateLimitBurst`) wire it.',
+            ],
+            [
+              '`API_ALLOWED_ORIGINS`',
+              'Empty (same-origin only); comma-separated `scheme://host[:port]` origins, an invalid entry or `*` stops startup',
+              'Browser origins allowed credentialed cross-origin API calls ([CORS](/docs/security/#passwords-api-keys-sessions)). Compose passes it through; Helm renders `security.apiAllowedOrigins`.',
+            ],
           ],
         },
         {
@@ -178,12 +203,17 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PUBLIC_BASE_URL`',
               'Empty; surrounding whitespace and trailing slash removed',
-              'Externally reachable API origin used in agent installers, push webhooks, the default OIDC callback, and the [MCP](/docs/mcp/#authentication) OAuth issuer and discovery metadata (derived from the request when empty). Compose and Helm require it for normal deployment.',
+              'Externally reachable API origin used in agent installers, push webhooks, the default OIDC callback, and the [MCP](/docs/mcp/#authentication) OAuth issuer and discovery metadata (derived from the request when empty). Helm requires it; Compose passes it through from the shell or `.env` to the API.',
             ],
             [
               '`PUBLIC_NATS_URL`',
               'Empty',
-              'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected.',
+              'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected. `wss://` targets the broker\'s websocket listener behind an HTTPS ingress, so locations need only outbound 443; Helm derives it from `nats.websocket.ingress.host` (and `.path`) when `api.publicNatsURL` is empty.',
+            ],
+            [
+              '`LOCATION_WORKER_IMAGE`',
+              'Empty: `ghcr.io/yassinebenameur/probara-worker:<API version>`, or `:alpha` for an unreleased build',
+              'Image the generated location-worker snippets reference. Released API images default to the worker at their own version, so a new location runs the same release as the platform; builds without a release version (local, Compose without `PROBARA_VERSION`) fall back to the newest prerelease tag. Helm sets it to `{image.repository}-worker:{image tag}` (override with `api.locationWorkerImage`); Compose passes it through from the shell. Set it for a mirror registry.',
             ],
             [
               '`NATS_LOCATION_AUTH_ISSUER_SEED`',
@@ -207,7 +237,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A public URL does not expose NATS for you',
           text:
-            'The embedded Helm NATS Service is ClusterIP-only, and local Compose NATS is unauthenticated plaintext. Production private locations need an independently exposed [TLS/WSS broker path](/docs/security/#private-locations-nats), authentication enabled, and the issuer/key configuration shared with the API.',
+            'The embedded Helm NATS Service is ClusterIP-only unless `nats.websocket.ingress` is enabled, and the development Compose NATS is unauthenticated plaintext (the [release Compose stack](/docs/deployment/#release-compose) enables auth and publishes the websocket listener on loopback for your TLS proxy). Production private locations need an exposed [TLS/WSS broker path](/docs/security/#private-locations-nats), authentication enabled, and the issuer/key configuration shared with the API.',
         },
       ],
     },
@@ -264,7 +294,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`OIDC_JIT_DEFAULT_TENANT_ID`',
               '`00000000-0000-0000-0000-000000000001`',
-              'Tenant receiving JIT users. The loader does not validate UUID syntax; verify it refers to the intended tenant.',
+              'Tenant receiving JIT users. The loader does not validate UUID syntax; verify it refers to the intended tenant. The API refuses to delete this workspace.',
             ],
           ],
         },
@@ -272,6 +302,38 @@ export const CONFIGURATION_PAGE: DocPage = {
           type: 'paragraph',
           text:
             'Compose includes development-oriented Dex defaults under its optional profile. Helm exposes the platform OIDC settings and stores the client secret separately. In production, register an exact HTTPS callback and choose the [least-privileged JIT role](/docs/security/#oidc-security).',
+        },
+      ],
+    },
+    {
+      id: 'slack-app',
+      title: 'Slack app',
+      blocks: [
+        {
+          type: 'table',
+          columns: ['Variable', 'Default / validation', 'Description'],
+          rows: [
+            [
+              '`SLACK_CLIENT_ID`',
+              'Empty; set together with `SLACK_CLIENT_SECRET`',
+              'Client ID of your [Slack app](/docs/alerting/#slack-app). With the secret it turns on **Add to Slack**, which also needs `PUBLIC_BASE_URL`: the OAuth redirect URL is `PUBLIC_BASE_URL` + `/api/v1/integrations/slack/callback`.',
+            ],
+            [
+              '`SLACK_CLIENT_SECRET`',
+              'Empty; set together with `SLACK_CLIENT_ID`',
+              'The app\'s client secret, used to exchange the install code and to sign the install state. Store it as a secret.',
+            ],
+            [
+              '`SLACK_SIGNING_SECRET`',
+              'Empty',
+              'Verifies the Acknowledge button presses Slack posts to `PUBLIC_BASE_URL` + `/api/v1/integrations/slack/interactions`. Empty turns that endpoint off (404); channels then carry the signed acknowledge link instead of an in-Slack button.',
+            ],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'All three are optional and read by the API only: the alerter and the delivery workers post with each channel\'s own bot token. A client ID without its secret (or the reverse) stops the API at startup. Compose passes all three through from the shell or `.env` (the release installer writes empty placeholders); Helm renders them from the `slack` values block, with both secrets through the chart\'s Secret sources (canonical keys `slack_signing_secret` and `slack_client_secret`).',
         },
       ],
     },
@@ -286,12 +348,12 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY`',
               'Base64 encoding of exactly 32 bytes',
-              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback).',
+              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback). Also signs the [acknowledge links](/docs/alerting/#ack-links) in notifications (an HKDF-derived key, never the key itself); without it notifications carry none.',
             ],
             [
               '`PROBARA_SECRETS_KEY_V2` … `PROBARA_SECRETS_KEY_V100`',
               'Each is base64 encoding of exactly 32 bytes',
-              'Optional rotation keys. The highest configured version encrypts new writes; older keys remain available for decryption.',
+              'Optional rotation keys. The highest configured version encrypts new writes and signs new acknowledge links; older keys remain available for decryption and keep the links they signed valid.',
             ],
           ],
         },
@@ -564,6 +626,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Empty (every destination)',
               'Comma-separated regular expressions; a test call is placed only when the called user part (`call.number`, or the decoded user part of `call.target_uri`, which may carry no `;parameters` or `:password`) matches one in full (each is anchored), else it fails with `policy: destination not allowed by worker policy` before sending anything. An invalid expression fails startup.',
             ],
+            [
+              '`WORKER_PING_MODE`',
+              '`unprivileged`; `unprivileged`, `privileged` or `auto`',
+              'Socket type for [ping monitors](/docs/monitors/#network-protocols). `unprivileged` sends echoes over Linux ICMP datagram sockets: no capability, but the process group must sit inside the kernel\'s `net.ipv4.ping_group_range`, which the Helm chart (`worker.ping.sysctl`) and Compose set to `0 2147483647` (Docker 20.10+ sets it too). `privileged` opens raw ICMP sockets and needs `CAP_NET_RAW`; in Kubernetes a non-root container never holds it, so that means running the worker as root with the capability added. `auto` tries unprivileged and falls back to raw sockets only when the datagram socket is refused for lack of permission. Any other value fails startup.',
+            ],
           ],
         },
         {
@@ -571,7 +638,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'The HTTP prefix is historical',
           text:
-            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, browser, TCP, gRPC, database, broker, and other [outbound dial paths](/docs/security/#ssrf-network-policy). Disabling the policy grants broad internal-network reach to monitor configuration.',
+            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, browser, ping, TCP, gRPC, database, broker, and other [outbound dial paths](/docs/security/#ssrf-network-policy). Disabling the policy grants broad internal-network reach to monitor configuration.',
         },
       ],
     },
@@ -688,7 +755,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
+            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process, and sends account mail (invites, password resets, email-change confirmations, contact verification codes). An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The API also emails [scheduled SLA reports](/docs/slas/#schedules); without SMTP on the API a report schedule cannot be enabled. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
         },
         {
           type: 'table',
@@ -712,7 +779,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel; omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one).',
+              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel, and (with `PROBARA_SECRETS_KEY`) the one-click [acknowledge link](/docs/alerting/#ack-links) to triggers and reminders; both are omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one), and builds [invite, password-reset and email-confirmation links](/docs/security/#account-recovery) on it: without it (or without `SMTP_*` on the API) the login page offers no **Forgot password**, email changes are refused, and superadministrators get those links to hand over instead. [Scheduled SLA reports](/docs/slas/#schedules) need it on the API for their unsubscribe links.',
             ],
           ],
         },
@@ -757,7 +824,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_BASE_URL`',
               'Empty',
-              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications); when empty, the notification opens the page via the service worker scope rather than a guessed host.',
+              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications), each page’s [canonical link and `og:url`](/docs/status-pages/#seo), `page.url` in [`summary.json`](/docs/status-pages/#summary-json) and absolute links in the [Atom feed](/docs/status-pages/#feed). When empty, pages carry no canonical link, the feed links by path and notifications open the page via the service worker scope — never a guessed host.',
             ],
             [
               '`STATUS_PAGE_API_BASE_URL`',
@@ -783,6 +850,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`STATUS_PAGE_PREVIEW_SECRET`',
               'Empty',
               'HMAC secret shared with API for one-hour [preview tokens](/docs/status-pages/#preview-security). With no secret, preview verification is not enforced.',
+            ],
+            [
+              '`STATUS_PAGE_SESSION_SECRET`',
+              'Empty',
+              'Signs visitor sessions on [password and private pages](/docs/status-pages/#visibility). At least 32 characters (a shorter value stops the service at startup). Empty leaves password and private pages unavailable (503 and 404) while public and unlisted pages serve as usual. Every replica needs the same value; changing it signs every visitor and kiosk out. `scripts/install.sh` generates one; Helm: `secrets.statusPageSessionSecret`.',
             ],
             [
               '`STATUSPAGE_UPDATES_SUBJECT`',
@@ -815,16 +887,31 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Cap on stored subscriptions per status page. Invalid or nonpositive input falls back to the default.',
             ],
             [
+              '`TRUSTED_PROXY_CIDRS`',
+              'Empty',
+              'Same variable and meaning as on the API: the [trusted proxies](/docs/security/#audit-proxy-trust) whose forwarding headers key the push subscribe rate limit. Empty uses the TCP peer.',
+            ],
+            [
               '`STATUS_PAGE_TRUSTED_PROXY`',
               '`false`',
-              'Honor `X-Forwarded-For` when rate-limiting push subscribes. Off by default because the header is client-settable.',
+              'Deprecated. `true` trusts `X-Forwarded-For` from every peer, and applies only while `TRUSTED_PROXY_CIDRS` is unset; the service logs a warning. Use `TRUSTED_PROXY_CIDRS`.',
+            ],
+            [
+              '`APP_BASE_URL`',
+              'Empty',
+              'Operator UI origin. Every page’s [CSP](/docs/status-pages/#content-security-policy) `frame-ancestors` admits it so the template editor can preview pages in an iframe. Compose passes it through from the shell (empty by default); Helm renders the top-level `appBaseURL`. Unset, the draft preview route may be framed by any site, so the template editor works from whatever host serves the UI; set it to restrict the preview to that origin.',
+            ],
+            [
+              '`SECURITY_HSTS_MAX_AGE`',
+              '`0`',
+              'Same variable as on the API: [HSTS](/docs/security/#edge-controls) on HTTPS responses.',
             ],
           ],
         },
         {
           type: 'paragraph',
           text:
-            'The restricted proxy permits GET under `/api/v1/monitors` and PATCH under `/api/v1/status-pages/…`; it is not a general API proxy. Helm currently wires only basic status values and the status base URL, not the API proxy, cache, preview, timeout, or update-subject variables.',
+            'The restricted proxy permits GET under `/api/v1/monitors` and PATCH under `/api/v1/status-pages/…`; it is not a general API proxy. Helm currently wires only basic status values, the status base URL, `APP_BASE_URL` and `SECURITY_HSTS_MAX_AGE`, not the API proxy, cache, preview, timeout, or update-subject variables.',
         },
       ],
     },
@@ -840,6 +927,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`API_PROXY_TARGET`',
               '`http://localhost:8080`',
               'Server-side destination for `/api` and downloadable agent-binary proxy routes.',
+            ],
+            [
+              '`API_PROXY_TRUST_FORWARDED_FOR`',
+              '`false`',
+              'When `true`, the `/api` proxy forwards the incoming `X-Forwarded-For` / `X-Real-IP` to the API. Set it only when a proxy you run appends those headers in front of the UI, and list the frontend in `TRUSTED_PROXY_CIDRS`; otherwise they are dropped, because a browser can set them. See [proxy trust](/docs/security/#audit-proxy-trust).',
             ],
             [
               '`NEXT_PUBLIC_API_URL`',
@@ -863,6 +955,16 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             ['`PORT`', 'Docker image sets `3000`', 'Next.js listener port.'],
             ['`HOSTNAME`', 'Docker image sets `0.0.0.0`', 'Next.js bind address.'],
+            [
+              '`WEB_CSP_ENFORCE`',
+              '`false`',
+              'The UI’s nonce-based [Content-Security-Policy](/docs/security/#edge-controls) ships as `Content-Security-Policy-Report-Only` (violations only reported in the browser console) unless this is `true`. Read at runtime. Helm renders `security.webCspEnforce`.',
+            ],
+            [
+              '`SECURITY_HSTS_MAX_AGE`',
+              '`0`',
+              'Same variable as on the API: HSTS on pages served over HTTPS (`https:` or `X-Forwarded-Proto: https`). Read at runtime; Helm renders `security.hstsMaxAge`.',
+            ],
           ],
         },
         {
@@ -948,6 +1050,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`MIGRATIONS_PATH`', '`./migrations`', '`go run ./cmd/migrate`; local workflow supplies `./shared/db/migrations`.'],
             ['`ADMIN_USERNAME`', 'Required', '`go run ./cmd/admin` administrator upsert.'],
             ['`ADMIN_PASSWORD`', 'Required', '`go run ./cmd/admin`; do not expose in shell history in production.'],
+            ['`-reset-2fa <username>`', 'Flag', '`go run ./cmd/admin -reset-2fa alice` turns off that user\'s two-factor and exits; needs only `POSTGRES_URL`.'],
             ['`BOOTSTRAP_DB_USER`', '`probara`', '`scripts/bootstrap-local-db.sh`.'],
             ['`OCB_VERSION`', '`v0.159.0`', '`scripts/build-collector.sh`; pinned OpenTelemetry Collector Builder version, must match `collector/manifest.yaml`.'],
             ['`BUILD_DIR`', '`./static/collector`', 'Output directory for downloadable collector binaries and `checksums.txt`.'],
@@ -1008,16 +1111,22 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             [
               'Admin JWT and public API URL',
-              'Required interpolation',
+              '`ADMIN_JWT_SECRET` required interpolation (no default); `PUBLIC_BASE_URL` passed through',
               'Required chart validation',
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
-            ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
+            ['Slack app', '`SLACK_*` passed through to the API (empty by default)', '`slack` values block rendered into the API; secrets through the chart\'s Secret sources'],
+            ['Encryption keyring', 'Base key passed through to API, scheduler, worker and alerter (required by the release override); rotation keys not wired', 'Base key wired to API, scheduler, worker and alerter; rotation keys through `extraEnv`'],
             ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker, `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` also to the alerter, `AI_TRIAGE_ENABLED` also to the API; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only (the alerter gets only `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED`; `AI_TRIAGE_ENABLED` also reaches the API)'],
             [
               'SMTP',
-              'Not wired',
+              '`SMTP_*` and `APP_BASE_URL` passed through to API, worker, and alerter',
               '`smtp` values block wired to API, worker, and alerter',
+            ],
+            [
+              'Private-location broker',
+              'Development: unauthenticated, websocket listener on 8443. Release override: auth callout on, websocket published on `127.0.0.1:8443`, issuer seed and `PUBLIC_NATS_URL` on the API',
+              '`nats.auth.*`; `nats.websocket.*` (listener on 8443, Service port, Ingress) and `api.publicNatsURL`',
             ],
             ['Notification dispatch mode', 'Not wired', 'Not wired'],
             ['Scheduler result ingest', 'Code defaults only', 'Code defaults only'],
@@ -1025,6 +1134,8 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],
             ['Status cache, proxy, preview, timeout, update subject', 'Preview only; most defaults', 'Not wired'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
+            ['Trusted proxies (`TRUSTED_PROXY_CIDRS`)', 'Passed through from the shell to API and status-page; the release override sets the API\'s to the Compose network behind its `edge` proxy', 'Top-level `trustedProxyCIDRs` rendered into API and status-page'],
+            ['Security headers, API rate limit, CORS allowlist', '`SECURITY_HSTS_MAX_AGE` (default `0`) and the `API_*` limits passed through from the shell to the API (HSTS also to status-page)', 'Top-level `security` block rendered into API, status-page and frontend'],
             ['Arbitrary extra environment', 'Requires editing Compose', 'No `extraEnv`; requires chart template change'],
           ],
         },

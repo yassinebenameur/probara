@@ -3,13 +3,13 @@
 import Link from 'next/link';
 import { Info } from 'lucide-react';
 import {
-  causeShare, dayTone, formatSlaDate, formatSlaDuration, formatSlaPct, formatTarget, showSuspectedCauses, slaCausesCaveat, slaTone,
+  burnRateTone, causeShare, dayTone, formatBurnRate, formatSlaDate, formatSlaDuration, formatSlaPct, formatTarget, showSuspectedCauses, slaCausesCaveat, slaTone,
   type SlaReport, type SlaReportOutage, type SlaReportSuspectedCauses,
 } from '@/lib/sla';
 import { formatDate, formatDateTime, formatUptime } from '@/lib/format';
 import TypeBadge from '@/components/ui/TypeBadge';
 import Panel from '@/components/ui/Panel';
-import { AvailabilityFigure, BudgetBar, SlaStatusPill, TONE_BG, TONE_TEXT } from './SlaVisuals';
+import { AvailabilityFigure, BudgetBar, BurnDownChart, SlaStatusPill, TONE_BG, TONE_TEXT } from './SlaVisuals';
 
 function formatInZone(iso: string, timeZone: string, withTime = true): string {
   // The report reads in the SLA's own timezone, not the browser's.
@@ -193,6 +193,34 @@ export function SlaReportView({ report }: { report: SlaReport }) {
               </dd>
             </div>
           </dl>
+          {/* S-U8. Absent on reports issued before burn existed: those keep
+              exactly the panel they had. */}
+          {budget.burn_rate !== undefined && (
+            <dl className="mt-3 grid grid-cols-3 gap-3 text-sm">
+              <div>
+                <dt className="text-xs text-slate-400" title="(1 − availability) ÷ (1 − target): 1× spends the budget exactly at the allowed pace">
+                  Burn rate
+                </dt>
+                <dd className={`mt-0.5 tabular-nums ${TONE_TEXT[burnRateTone(budget.burn_rate)]}`}>{formatBurnRate(budget.burn_rate)}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-xs text-slate-400">Projected exhaustion</dt>
+                <dd className="mt-0.5 tabular-nums text-slate-200">
+                  {budget.projected_exhaustion_at
+                    ? `${formatInZone(budget.projected_exhaustion_at, tz)} at this pace`
+                    : budget.consumed_seconds >= budget.allowed_full_period_seconds
+                      ? 'Full-period budget spent'
+                      : !running ? '—' : budget.consumed_seconds > 0 ? 'Not before the period ends' : 'Nothing consumed yet'}
+                </dd>
+              </div>
+            </dl>
+          )}
+          {report.burn_down && report.burn_down.length > 1 && (
+            <div className="mt-4">
+              <div className="mb-1 text-xs text-slate-400">Full-period budget left, by day</div>
+              <BurnDownChart points={report.burn_down} />
+            </div>
+          )}
         </Panel>
 
         <Panel title="Response">

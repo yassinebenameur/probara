@@ -70,6 +70,11 @@ func TestDiscoveryLifecycle(t *testing.T) {
 	var count int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM monitor_state_intervals WHERE monitor_id=$1`, monitor).Scan(&count))
 	require.Equal(t, 1, count)
+	// Approval records the monitor's first config version in its transaction.
+	var source string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*), max(source) FROM monitor_config_versions WHERE monitor_id=$1`, monitor).Scan(&count, &source))
+	require.Equal(t, 1, count)
+	require.Equal(t, "discovery", source)
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM monitors WHERE tenant_id=$1`, tenant).Scan(&count))
 	require.Equal(t, 1, count)
 	overview, err = s.Overview(ctx, tenant, i.ID, OverviewQuery{Page: 1})

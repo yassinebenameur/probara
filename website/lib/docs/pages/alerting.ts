@@ -49,8 +49,18 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`tls_expiry`",
-              "An HTTPS or SIP-over-TLS monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
+              "An HTTPS, SIP-over-TLS or TLS-wrapped TCP monitor's certificate (with `tls_check_chain`, the earliest-expiring certificate of its chain) has fewer remaining validity days than `tls_min_days_valid`",
               "A renewed certificate is observed, or the threshold is removed",
+            ],
+            [
+              "`domain_expiry`",
+              "A [domain monitor](/docs/monitors/#domain)'s registration has fewer whole days left than `min_days_valid`, or has expired",
+              "A renewed expiry date is observed, or the threshold is removed",
+            ],
+            [
+              "`location_offline`",
+              "A check location that reported in the last 7 days sends no heartbeat for the workspace's `location_offline_after_seconds` ([details](/docs/locations/#heartbeats)); routed to the default channels, and its mesh paths go quiet meanwhile",
+              "The location reports again, is disabled or deleted, or the workspace turns these alerts off; the closing notification says which",
             ],
           ],
         },
@@ -68,10 +78,20 @@ export const ALERTING_PAGE: DocPage = {
         },
         {
           type: "callout",
-          tone: "warning",
-          title: "Acknowledgement does not silence reminders",
+          tone: "info",
+          title: "Acknowledging stops the paging",
           text:
-            "Acknowledging records operator ownership but leaves the condition open. Reminder notifications to chat, email, SMS and webhook channels continue at the configured interval until resolution or until reminders are disabled. Paging channels (PagerDuty, Opsgenie / JSM) are the exception: they receive the acknowledgement itself and never receive reminders, because the provider runs its own escalation.",
+            "Acknowledging records who owns the alert (`acknowledged_by_user_id`, and `acknowledged_via`: `ui`, `api`, `mcp` or `magic_link`, the [acknowledge link](#ack-links) in a notification) and leaves the condition open. By default it also stops the paging: escalation tiers that have not fired yet never fire, and reminders stop, until the alert resolves or is unacknowledged. Paging channels (PagerDuty, Opsgenie / JSM) also receive the acknowledgement itself, once, so the provider stops its own escalation. A route marked **keep notifying after ack** (`notify_after_ack`, on a tenant default route or a monitor's custom route) keeps its tiers and reminders, for example a status-room channel. Turning off the workspace setting `ack_stops_notifications` restores the older behaviour, where reminders continued after an acknowledgement. Suspected-cause follow-ups still reach acknowledged alerts. With asynchronous dispatch, a tier or reminder already queued when the acknowledgement lands is dropped by the delivery worker, and a dropped tier counts as not sent: it pages after an unacknowledge like any unfired tier.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Unacknowledge** (`POST /alerts/{id}/unacknowledge`, or in bulk) returns an alert to `active` and resumes paging. On every route the acknowledgement held, the clocks restart from the unacknowledge: an unfired tier fires its delay later and the next reminder comes one reminder interval later, so nothing fires all at once. Routes it never held (`notify_after_ack`, or every route when `ack_stops_notifications` is off) keep their schedule. A later acknowledgement reaches paging channels again. Known limitation: a PagerDuty or Opsgenie alert that was acknowledged stays acknowledged at the provider, because their event APIs cannot un-acknowledge.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Snooze** (`POST /alerts/{id}/snooze` with `minutes` or `until`, 1 minute to 7 days; `POST /alerts/{id}/unsnooze` ends it) mutes one open alert: no escalation tier, reminder or suspected-cause follow-up goes out on any route, `notify_after_ack` routes included, until the snooze ends. Its clocks then restart, as after an unacknowledge. A snooze is independent of acknowledgement, a resolve ends it, and it never creates a maintenance window, so SLA planned downtime is untouched (snoozing the *monitor* does open one). Acknowledgements and resolves of a snoozed alert still notify. Alerts report why they are quiet in `muted_reason`: `snoozed`, or `acknowledged` when the workspace stops paging on ack.",
         },
         {
           type: "paragraph",
@@ -91,8 +111,8 @@ export const ALERTING_PAGE: DocPage = {
             "A check failure first passes through the monitor's consecutive-failure confirmation and, when locations are selected, its [location failure quorum](/docs/locations/#assignment). A check's `error` and `failure` are both failing evidence, including a check's own assertions: a SIP test call failing a [call-quality](/docs/monitors/#network-protocols) threshold (`max_loss_pct`, `min_mos`, …) is a failure like any other, while its `warn_*` thresholds only add warnings to the check and never alert.",
             "The alerter opens an availability alert only when effective state is `down`, the monitor is enabled, and maintenance/rollup rules do not mute it.",
             "The initial notification is sent through eligible routes after each route's configured delay.",
-            "While the condition remains down, reminders are sent at the tenant reminder interval.",
-            "When the monitor is fully `up`, the alert resolves and resolution notifications go only to channels that previously received that alert.",
+            "While the condition remains down, reminders are sent at the tenant reminder interval, until the alert is acknowledged (unless the workspace keeps paging after an acknowledgement) or while it is snoozed.",
+            "When the monitor is fully `up`, the alert resolves and resolution notifications go only to channels that previously received that alert. A monitor with a `recovery_threshold` above 1 is `up` only after that many consecutive passing checks, so a target that flaps between one pass and a failure keeps one open alert instead of resolving and re-opening it.",
           ],
         },
         {
@@ -104,6 +124,11 @@ export const ALERTING_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Location-aware availability alerts include failing-location context so operators can distinguish a regional failure from a broad outage.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Reopen within cooldown (flap suppression).** With the workspace setting `alert_reopen_cooldown_seconds` above 0 (it defaults to 0, off), a monitor that goes down again less than that long after the alerter resolved its last availability alert gets that alert back instead of a new one: the alert returns to `active`, `relapse_count` goes up by one and `reopened_at` records when. A flapping target therefore keeps one alert, and one automatic incident, for the whole flapping period. Each reopen is a new paging episode: it clears the previous episode's acknowledgement, unacknowledge and snooze (they were for the outage that recovered), escalation tiers count from `reopened_at`, and every route pages again, a route that already heard the previous recovery included. The page reads **Down again (relapse n)** and is delivered as a `created` event whose `alert.relapse_count` is above 0; reminders and the next recovery follow as usual. Only the alerter's own resolves reopen: an alert resolved by hand (`resolved_via` is `ui`, `api` or `mcp`, with `resolved_by_user_id` for an operator) never does, and only the monitor's latest availability alert is considered. Other alert kinds never reopen. Each open incident linked to the alert gets a system timeline entry when it relapses, and the Alerts page marks relapsed alerts with their count. With asynchronous dispatch, a recovery notice still waiting on the delivery worker's retry backoff when its alert reopens is dropped, as is anything else published in an earlier episode, so a late recovery can never close the provider incident of the relapse. The route that recovery was meant for never heard it, so it counts as still paged for the relapse: it is not paged again, gets the relapse's reminders, and its incident is closed by the relapse's recovery, even when that comes before the route's escalation delay. In [SLA reports](/docs/slas/#reports) a relapse is the same alert: it counts once, in the period it first triggered, and its time to acknowledge is the first acknowledgement, measured from the start of the episode it acknowledged, so clearing the acknowledgement on reopen never erases or stretches it.",
         },
       ],
     },
@@ -117,7 +142,7 @@ export const ALERTING_PAGE: DocPage = {
             {
               term: "Tenant default routes",
               description:
-                "An ordered list of active alert channels, each with `channel_id`, display metadata, and a non-negative `delay_seconds`.",
+                "An ordered list of active alert channels, each with `channel_id`, display metadata, a non-negative `delay_seconds`, and `notify_after_ack` (keep paging this route while the alert is acknowledged).",
             },
             {
               term: "Monitor `default` mode",
@@ -129,12 +154,22 @@ export const ALERTING_PAGE: DocPage = {
               description:
                 "Only the monitor's assigned active channels are considered, with the delay stored on each assignment.",
             },
+            {
+              term: "Monitor `policy` mode",
+              description:
+                "The monitor follows its [escalation policy](#escalation) (`escalation_policy_id`): the policy's channel targets are routes like any other, and its people are paged step by step.",
+            },
+            {
+              term: "Workspace default escalation policy",
+              description:
+                "When `default_escalation_policy_id` is set, `default`-mode monitors, and the alerts without a monitor (mesh paths, offline locations), follow that policy instead of the default routes, which are kept but unused until it is cleared.",
+            },
           ],
         },
         {
           type: "paragraph",
           text:
-            "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
+            "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open, and not acknowledged or snoozed, when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
         },
         {
           type: "callout",
@@ -158,7 +193,7 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`source`",
-              "`custom` or `tenant_default` when the monitor's own routing applies; `group_rollup` when a group rolls its alerts up, so that group's routing decides; `members` for a group that never alerts itself",
+              "`custom` or `tenant_default` when the monitor's own routing applies; `policy` when its own escalation policy does; `group_rollup` when a group rolls its alerts up, so that group's routing decides; `members` for a group that never alerts itself",
             ],
             [
               "`active_channels` / `assigned_channels`",
@@ -166,7 +201,11 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`reason`",
-              "Why an unreachable monitor is unreachable: `no_custom_channels`, `custom_channels_disabled`, `no_tenant_default_channels`, `tenant_default_channels_disabled`, or `group_rollup_unrouted`",
+              "Why an unreachable monitor is unreachable: `no_custom_channels`, `custom_channels_disabled`, `no_tenant_default_channels`, `tenant_default_channels_disabled`, `group_rollup_unrouted`, `group_rollup_paused`, or `policy_no_targets` (the escalation policy, its own or the workspace default, has no active channel and nobody who can be paged)",
+            ],
+            [
+              "`escalation_policy_id` / `escalation_policy_name` / `reachable_people`",
+              "The escalation policy that routes the monitor (its own, or the workspace default with `source` `tenant_default`), and how many of its person targets can page somebody: an enabled member, or a superadministrator, with a verified email contact, or an SMS contact while the workspace has an active SMS channel for people. A schedule counts while a pageable person is on one of its current rotations or overrides, even if off shift right now",
             ],
             [
               "`rollup_group_id` / `rollup_group_name`",
@@ -213,6 +252,22 @@ export const ALERTING_PAGE: DocPage = {
               "`dependency_suppression_grace_seconds`",
               "Defaults to 120; 0 to 86,400. How long a suppressed downstream stays quiet after its upstream recovers before paging if still down",
             ],
+            [
+              "`location_offline_alerts_enabled` / `location_offline_after_seconds`",
+              "Default true / 180 (60 to 86,400). Alert once per [offline check location](/docs/locations/#heartbeats), to the default channels",
+            ],
+            [
+              "`ack_stops_notifications`",
+              "Defaults to true, for existing workspaces too. Acknowledging an alert stops its unfired escalation tiers and its reminders; routes with `notify_after_ack` keep them. Set false to keep paging acknowledged alerts",
+            ],
+            [
+              "`default_escalation_policy_id`",
+              "Defaults to unset. An [escalation policy](#escalation) that `default`-mode monitors and monitor-less alerts follow instead of `default_channels`; send `\"\"` to clear it",
+            ],
+            [
+              "`alert_reopen_cooldown_seconds`",
+              "Defaults to 0 (off); 0 to 86,400. A monitor down again within this long of its availability alert auto-resolving [reopens that alert](/docs/alerting/#availability) as a relapse instead of opening a new one",
+            ],
           ],
         },
       ],
@@ -234,6 +289,11 @@ export const ALERTING_PAGE: DocPage = {
               "`slack`",
               "HTTPS `webhook_url` on `slack.com` or a subdomain of it",
               "Slack incoming webhook (Block Kit, with an open-the-monitor button when `APP_BASE_URL` is set)",
+            ],
+            [
+              "`slack_app`",
+              "Bot `bot_token` (stored encrypted), workspace `team_id` (`T…`), `channel_id` (`C…`), `interactive` (default on); **Add to Slack** fills them in",
+              "One [Slack app](#slack-app) card per alert with an in-Slack **Acknowledge** button; reminders, the recovery and follow-ups reply in the card's thread, and the card is rewritten as the alert is acknowledged, snoozed or resolved",
             ],
             [
               "`discord`",
@@ -263,7 +323,37 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`twilio_sms`",
               "`account_sid`, optional `api_key_sid`, `auth_token` (API key secret or account token), `from` number or Messaging Service SID, up to 10 E.164 `to` numbers",
-              "One SMS per recipient per event, the short form of the alert plus the deep link",
+              "One SMS per recipient per event, the short form of the alert plus the deep link and, on triggers and reminders, the [acknowledge link](#ack-links)",
+            ],
+            [
+              "`ntfy`",
+              "HTTPS `server_url` (defaults to `https://ntfy.sh`), `topic` (stored encrypted, since on a server without access control the name is the only protection), and optionally an `access_token` or a `username` / `password` pair",
+              "Push notification through ntfy's JSON publish endpoint; priority 5 (urgent) for an outage, 4 for a degradation, 3 for a recovery, 2 for an advisory; tapping it opens the deep link",
+            ],
+            [
+              "`gotify`",
+              "HTTPS `server_url` of your Gotify server and an application `app_token` (sent in the `X-Gotify-Key` header, never the URL)",
+              "Push message at priority 8 for an outage, 5 for a degradation, 4 for a recovery, 2 for an advisory, with the deep link in the text and as the Android click action",
+            ],
+            [
+              "`pushover`",
+              "Application `app_token` and a user or delivery-group `user_key` (both 30 characters, both stored encrypted), optional comma-separated `device` names",
+              "Push message at high priority (1, sounds through quiet hours) for an outage, normal (0) for a degradation or recovery, quiet (-1) for an advisory. Emergency priority is never used, so nothing is left retrying at Pushover after a test or a recovery",
+            ],
+            [
+              "`mattermost`",
+              "HTTPS incoming `webhook_url` (`…/hooks/<id>`) on any host",
+              "Colour-coded message attachment; Markdown in alert text is escaped and `@channel`, `@all` or `@user` inside it never notifies",
+            ],
+            [
+              "`matrix`",
+              "HTTPS client-server `homeserver_url`, a bot account's `access_token` (sent as a bearer header), and a `room_id` (`!…`, not a `#alias`) the account has already joined",
+              "HTML and plain-text `m.text` message sent with an idempotent `PUT` whose transaction ID is derived from the alert, channel, event and event time, so a retried send the homeserver already accepted is not posted twice. Mentions inside alert text never notify",
+            ],
+            [
+              "`google_chat`",
+              "HTTPS space `webhook_url` on `chat.googleapis.com` (`/v1/spaces/…`)",
+              "Card message; every event of one alert replies in the same thread, so the trigger, reminders and recovery stay together",
             ],
             [
               "`generic_webhook`",
@@ -275,23 +365,24 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
+            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not, and so does the one-click [acknowledge link](#ack-links) on triggers and reminders.",
         },
         {
           type: "table",
-          columns: ["Event", "Chat, email, SMS, webhook", "PagerDuty, Opsgenie / JSM"],
+          columns: ["Event", "Chat, push, email, SMS, webhook", "PagerDuty, Opsgenie / JSM"],
           rows: [
             ["`created`", "Message", "Trigger / create"],
-            ["`reminder`", "Message at the reminder interval", "Skipped — the provider escalates and re-notifies on its own"],
+            ["`reminder`", "Message at the reminder interval, until acknowledged or while snoozed", "Skipped — the provider escalates and re-notifies on its own"],
             ["`acknowledged`", "Not sent", "Acknowledge, once per paged channel"],
             ["`suspected_cause`", "One follow-up message per paged channel when triage names a cause ([opt-in](#ai-triage))", "Not sent: their APIs add content by re-triggering, and an advisory hint must never re-page"],
             ["`resolved`", "Message", "Resolve / close"],
+            ["`updated`", "Only [Slack app](#slack-app) cards: the card is rewritten in place whenever it shows another state than its alert (acknowledged, unacknowledged, snoozed, snooze over, resolved)", "Not sent"],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
+            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key, which is `<alert>:<channel>:<event type>`, followed by `:<n>` once the alert has [relapsed](/docs/alerting/#availability) n times, since a reopened alert sends `created` and `resolved` again under the same alert ID. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
         },
         {
           type: "list",
@@ -305,14 +396,19 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: if an operator acknowledges while a paging trigger is still waiting on a retry, the acknowledgement that went ahead is a no-op at the provider, so the worker acknowledges again right after the late trigger lands, and the incident does not keep escalating.",
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged and recorded once in the delivery history (below) and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. A retried trigger or reminder is likewise dropped once the alert is snoozed, or acknowledged on a route that stops paging on ack, and so is a suspected-cause follow-up on a snoozed alert; a dropped trigger or follow-up is released, so it goes out once the snooze ends or the alert is unacknowledged. A retried acknowledgement is dropped once the alert is unacknowledged. On a route that keeps paging after an ack, acknowledgement is ordered as before: if an operator acknowledges while a paging trigger is still waiting on a retry, the acknowledgement that went ahead is a no-op at the provider, so the worker acknowledges again right after the late trigger lands, and the incident does not keep escalating.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every delivery attempt is recorded in the delivery history, kept 90 days: the alert's Deliveries panel (open an alert from a notification link, `/alerts?alert=<id>`) lists each channel it reached, and each channel's page lists every alert it was sent; the channel list flags a channel whose newest delivery failed. A row names the event, the attempt number, who made it (the alerter, or a delivery worker with asynchronous dispatch, where the alerter's own row reads `queued`) and the outcome: `delivered`, `failed` (transient, retried — each retry is its own row), `permanent_failure` (rejected, not retried), `dropped_superseded`, shown as **Dropped (superseded)** (the alert moved on before a queued event went out: it resolved, was unacknowledged, for an acknowledgement, or reopened, for an event of an earlier paging episode — so a superseded `resolved` row can sit on an alert that is open again) or `dropped_ack` (held by an acknowledgement or snooze; it goes out once that lifts). The provider's error is stored cut to 512 characters, with every URL reduced to its host and credential-looking values masked, since channel URLs carry tokens; SMS rows add how many recipients have the message. Only attempts that reach a channel plugin are recorded: a worker that cannot load or decrypt the channel logs it instead, and test sends are not alert deliveries. [Escalation policy](#escalation) pages to people are recorded too, one row per contact, naming the person (`user_id`, `username`) and the masked address (`recipient`) with the step in `delivery_key` (`escalation:<step>:<repeat>`); an email page has no channel (`channel_id` null, through the platform mailer, `channel_type` `email`), and an SMS page names the workspace's SMS channel for people — or, when the workspace has no active one, fails as a `permanent_failure` with no channel and `channel_type` `sms`. The same history is available as `GET /alerts/{id}/deliveries` and `GET /alert-channels/{id}/deliveries`.",
         },
         {
           type: "callout",
           tone: "warning",
           title: "Channel destinations are egress-guarded",
           text:
-            "Every channel dials through the [notification egress policy](/docs/security/#ssrf-network-policy): private, loopback, link-local (including cloud metadata) and reserved addresses are refused by default, checked against the resolved IP at connect time. A webhook receiver on an internal network needs its range in `NOTIFICATION_ALLOWED_CIDRS`. Slack and Discord additionally require their own HTTPS hosts; Teams and generic webhooks accept any HTTPS host.",
+            "Every channel dials through the [notification egress policy](/docs/security/#ssrf-network-policy): private, loopback, link-local (including cloud metadata) and reserved addresses are refused by default, checked against the resolved IP at connect time. A webhook receiver on an internal network needs its range in `NOTIFICATION_ALLOWED_CIDRS`, and so does a self-hosted ntfy, Gotify, Mattermost or Matrix server there. Slack, Discord and Google Chat additionally require their own HTTPS hosts, and Telegram, Twilio and Pushover only ever call their fixed provider APIs; Teams, Mattermost, Matrix, ntfy, Gotify and generic webhooks accept any HTTPS host.",
         },
         {
           type: "callout",
@@ -335,7 +431,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
+            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host, and so is the [Acknowledge](#ack-links) button that triggers and reminders carry. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
         },
         {
           type: "table",
@@ -358,7 +454,109 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
+            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, `ack_url` and `ack_label` (the [acknowledge link](#ack-links), empty when the email carries none), and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
+        },
+      ],
+    },
+    {
+      id: "ack-links",
+      title: "Acknowledge from a notification",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every trigger and reminder carries an **Acknowledge** link, so whoever is paged can take the alert from the message itself without signing in. The link opens a confirm page in the operator UI (`/alert-action/<token>`) that shows the alert and acknowledges it when you press the button. Opening the link never acknowledges anything: mail security scanners and chat link previews fetch every URL in a message, so only the button's `POST` acts. The acknowledgement is recorded with `acknowledged_via` `magic_link` and no user, stops the paging exactly like any other acknowledgement, and appears in the audit log as `alert.acknowledge` by an anonymous `magic link` actor, with the channel the link came through.",
+        },
+        {
+          type: "table",
+          columns: ["Channel", "How the link appears"],
+          rows: [
+            ["`email`", "Primary button next to the open-the-monitor button, and an `Acknowledge: <url>` line in the plain-text part. Override templates receive it as `ack_url` and `ack_label`"],
+            ["`slack`, `teams`, `google_chat`", "Button next to the deep-link button"],
+            ["`slack_app`", "With `interactive` off only: the card's Acknowledge button opens the link, and reminders in the thread carry it. Interactive cards acknowledge in Slack instead"],
+            ["`discord`, `mattermost`", "Bold link under the summary"],
+            ["`telegram`, `matrix`", "Link above the deep link"],
+            ["`ntfy`", "A view action on the notification"],
+            ["`gotify`, `pushover`", "Last line of the message text; the text is shortened to keep the link whole"],
+            ["`twilio_sms`", "Last line of the SMS; the alert text is clipped to keep the link whole within 1,600 characters"],
+            ["`generic_webhook`", "`alert.links.acknowledge` in the body (absent when there is no link). A receiver can acknowledge programmatically with `POST /api/v1/alert-actions/<token>`"],
+            ["`pagerduty`, `opsgenie`", "None: acknowledge in the provider, or in Probara, which syncs the acknowledgement to them"],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "A link needs `APP_BASE_URL` (the confirm page's origin) and `PROBARA_SECRETS_KEY` (which signs it) on the alerter and the asynchronous delivery workers, and the same key on the API, which checks it. Without either, notifications carry no link.",
+            "Each link is valid for 72 hours from the notification that carried it; every reminder carries a fresh one. It acknowledges only, only that alert, and only while it is active: an acknowledged or resolved alert is reported as such.",
+            "Channel test sends, recoveries, acknowledgement notices and suspected-cause follow-ups carry no link, and neither does a reminder that a `notify_after_ack` route receives after the alert was acknowledged.",
+            "Deleting the channel revokes every link it delivered, and deleting the workspace revokes all of its links. See [Security](/docs/security/#action-links) for the token model and key rotation.",
+            "An [escalation policy](#escalation) page to a person carries a link scoped to the contact it went to rather than a channel: acknowledging through it is recorded as that person (`acknowledged_by_user_id`, with `acknowledged_via` `magic_link`), and removing the contact, disabling the user or removing them from the workspace revokes it.",
+          ],
+        },
+      ],
+    },
+    {
+      id: "slack-app",
+      title: "Slack app",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The `slack_app` channel posts through a Slack app you create for your installation, instead of an incoming webhook. Each alert becomes one card: the trigger posts it with an **Acknowledge** button, reminders, the recovery and [suspected-cause follow-ups](#ai-triage) reply in its thread, and the card itself is rewritten (`chat.update`) whenever the alert's state changes, whoever changed it: pressing Acknowledge in Slack, acknowledging, unacknowledging, snoozing or resolving in Probara, a snooze running out or the monitor recovering. The rewrite lands within one alerter evaluation cycle (`ALERT_EVAL_INTERVAL_SECONDS`) and shows in the delivery history as **Card updated**. A [relapse](#availability) posts a new card; the previous episode's card keeps showing its recovery. The `slack` webhook channel is unchanged and stays available.",
+        },
+        {
+          type: "code",
+          language: "yaml",
+          title: "Slack app manifest (replace probara.example.com with your PUBLIC_BASE_URL)",
+          code: `display_information:
+  name: Probara
+  description: Alert cards from Probara, acknowledged from Slack
+  background_color: "#1c1917"
+features:
+  bot_user:
+    display_name: Probara
+    always_online: true
+oauth_config:
+  redirect_urls:
+    - https://probara.example.com/api/v1/integrations/slack/callback
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.public
+      - incoming-webhook
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://probara.example.com/api/v1/integrations/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false`,
+        },
+        {
+          type: "list",
+          ordered: true,
+          items: [
+            "At [api.slack.com/apps](https://api.slack.com/apps), choose **Create New App → From a manifest**, pick a Slack workspace and paste the manifest with your `PUBLIC_BASE_URL` (the API's public HTTPS origin; Slack must reach it).",
+            "From the app's **Basic Information**, set `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` and `SLACK_SIGNING_SECRET` on the API ([configuration](/docs/configuration/#slack-app); Compose `.env`, or the Helm `slack` values block) and restart it. To install into more than one Slack workspace, also turn on public distribution under **Manage Distribution**.",
+            "In Probara, as a workspace admin: **Settings → Notifications → New channel → Slack app → Add to Slack**. Slack asks which channel to post to; the channel is created and opens in Probara. Send a test, then route monitors to it like any other channel.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Without Add to Slack, install the app from its settings page and fill the form by hand: the **Bot User OAuth Token** (`xoxb-…`), the workspace ID and the channel ID (in Slack, the channel's details). Invite the app to a private channel before using it; `chat:write.public` covers public ones. With no `SLACK_SIGNING_SECRET` (or `interactive` off on the channel) the card's button opens the signed [acknowledge link](#ack-links) instead, which needs `APP_BASE_URL` and `PROBARA_SECRETS_KEY`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Pressing **Acknowledge** acknowledges the alert exactly like any other surface (it stops paging on stop-on-ack routes and counts toward [SLA](/docs/slas/#reports) time to acknowledge), with `acknowledged_via` `slack`; the user who pressed it gets a private confirmation, or is told that the alert was already acknowledged or has resolved. A press is accepted only from the Slack workspace and channel the card was posted to, so one Slack app can serve several Probara workspaces. See [Security](/docs/security/#slack-app) for the signature and install checks.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Known gaps",
+          text:
+            "A press is not mapped to a Probara user: the alert records no acknowledging user, and the audit log names the Slack user (`slack:<name>`). The card offers Acknowledge only; resolve and snooze stay in Probara. A rewrite redraws the state, not the details: failing locations, metrics and the last error stay as the trigger showed them. Socket Mode is not supported, so the API must be reachable from Slack over HTTPS. A card deleted in Slack stops following its alert (the rewrite fails permanently), and so does one whose reference could not be saved after posting; that send is recorded as a permanent failure instead of being retried, so the channel never gets a second card.",
         },
       ],
     },
@@ -440,7 +638,12 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An HTTPS or SIP-over-TLS monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+            "An HTTPS, SIP-over-TLS or TLS-wrapped TCP monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. With `tls_check_chain: true` the measure is the earliest expiry across the certificate chain, the leaf and every intermediate certificate (never a self-signed root, whose expiry is the trust store's), so an intermediate that lapses before the leaf alerts in time. The chain is the verified one; under `tls_skip_verify`, where nothing is verified, it is the issuer path from the leaf through the certificates the server sent, ending at a self-signed certificate or an issuer it did not send, and an expired cross-sign of a root (such as a stale cross-signed root a server still sends) is left out, since clients that hold the root never use it; certificates recorded before chain capture existed fall back to the leaf. The operator UI turns it on for new monitors; monitors saved without it keep measuring the leaf. The status page and the monitor detail page show the same date the alert measures. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A [domain monitor](/docs/monitors/#domain) with `min_days_valid` opens a `domain_expiry` alert the same way: when the expiry date on its most recent lookup (within the last 48 hours) is fewer whole days away than the threshold, counted when the alerter evaluates, not when the check ran. The check stays `up` while the domain is registered, so the alert is a renewal reminder, not an outage; once the date passes, the check fails too and a regular availability alert opens beside it. Its notifications read \"Domain Expiring\" (\"Domain Expired\" in the status word once the date has passed) and \"Domain Renewed\" on resolve. The alert resolves when a later lookup shows a renewed date, or when the threshold is removed or the monitor disabled or deleted. A lookup that fails records nothing and leaves an open alert as it is. Like `tls_expiry`, it is routed like the monitor's availability alerts and stays quiet during maintenance.",
         },
         {
           type: "callout",
@@ -461,18 +664,32 @@ export const ALERTING_PAGE: DocPage = {
           rows: [
             ["`title`", "Required operator-facing title"],
             ["`description`", "Optional maintenance context"],
-            ["`starts_at`", "RFC 3339 start timestamp"],
-            ["`ends_at`", "RFC 3339 end timestamp, after the start"],
+            ["`starts_at`", "RFC 3339 start timestamp; for a repeating window, the first occurrence (its time of day and first date)"],
+            ["`ends_at`", "RFC 3339 end timestamp, after the start; for a repeating window, `ends_at - starts_at` is every occurrence's duration"],
             [
               "`monitor_ids`",
               "Selected tenant monitors; selecting a group also covers its members for muting",
+            ],
+            [
+              "`recurrence`",
+              "Optional repeat rule: `frequency` (`none`, `daily`, `weekly`, `monthly`, `cron`), `interval` (every N days/weeks/months), `weekdays` (weekly, 0 = Sunday), `month_day` (monthly, 1-31), `cron` (5-field expression), `timezone` (IANA, default UTC) and `until` (no occurrence starts after it)",
             ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Maintenance windows are classified as upcoming, active, or past. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during the active interval. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest start, past (and the unfiltered list) by most recent end, so a page cut never drops the next window.",
+            "A window is a rule; what mutes alerts and counts as planned downtime is its **occurrences**. A one-off window is a single occurrence. A repeating window runs at its first occurrence's wall-clock time in its timezone: a time a DST change skips shifts forward by the gap (02:30 on the spring-forward night runs at 03:30), a time a DST change repeats runs once at its first instance, and a monthly day past the end of a shorter month runs on that month's last day (day 31 runs on 28/29 February and 30 April). Durations are elapsed time. A rule may start at most 1,000 occurrences in any 35 days; for a cron rule that is checked as its starts per matching day times the most days it matches in any 37 consecutive days, so a rule that saves always keeps rolling. `POST /maintenance-windows/preview` (same fields, plus `count`) returns the next occurrences without saving anything; the schedule dialog shows them as you edit.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Occurrences are materialized 35 days ahead (the API on save, then the scheduler rolls the horizon forward hourly) and kept once they end, because SLA reports read them. An edit takes effect when you save it: occurrences that have ended never change, the one in progress keeps its start and takes the end the new schedule gives the present moment (so extending a running one-off window, or ending it now, is an ordinary edit; if the new schedule does not cover the present it ends at the save), and future occurrences are regenerated. Changing the monitors works the same way: a monitor you remove stays covered by every occurrence (and the part of the running one) before the save, and a monitor you add is covered from the save on, so past planned downtime never moves. Coverage through a group follows the group's current members. An edit never puts maintenance into the past. `POST /maintenance-windows/{id}/end` ends just the occurrence in progress and leaves the rule alone, so a repeating window runs again at its next occurrence (the **End now** action). Each window lists its in-progress and next occurrences (`occurrences`, up to five).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Maintenance windows are classified as active (an occurrence is in progress), upcoming (one is ahead, or the rule still repeats), or past. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during an occurrence, and only then. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end of the running occurrence, upcoming by soonest next start, past by most recent end, and the unfiltered list by `starts_at`, newest first, so a page cut never drops the next window.",
         },
         {
           type: "paragraph",
@@ -485,6 +702,13 @@ export const ALERTING_PAGE: DocPage = {
           title: "Failure can surface when maintenance ends",
           text:
             "Because checks continue, a monitor that is still down at the end of maintenance can immediately open or resume an alert. Schedule enough time for validation or extend the window before it expires.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Deleting a window deletes its history",
+          text:
+            "Deleting a maintenance window also deletes its past occurrences, so live SLA reports for those periods count that downtime as unplanned again (issued reports are frozen and keep it). To stop a repeating window, set `until` or switch it to a one-off instead.",
         },
       ],
     },
@@ -615,7 +839,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Evidence covers the alert's monitor (a group alert expands to its members), its configured upstreams, and the dependency root that suppressed it, if any. The window runs from 15 minutes before the alert triggered to 60 minutes after, capped at claim time. Window, sampling and exclusion rules are the same as for incident analysis. Each alert has one triage. It is not re-run while the alert stays open, and a reopened condition is a new alert.",
+            "Evidence covers the alert's monitor (a group alert expands to its members), its configured upstreams, and the dependency root that suppressed it, if any. The window runs from 15 minutes before the alert triggered to 60 minutes after, capped at claim time. Window, sampling and exclusion rules are the same as for incident analysis. Each alert has one triage, and it is not re-run while the alert stays open. A relapse within the [reopen cooldown](#availability) reuses the alert and its existing triage; only a condition that opens a new alert is triaged again.",
         },
         {
           type: "table",
@@ -650,11 +874,11 @@ export const ALERTING_PAGE: DocPage = {
             ["Channel not paged for the alert (unrouted, still inside its escalation delay, or suppressed from the start), no longer routed to the monitor, or inactive", "Not sent. A later escalation tier gets its own follow-up once its page goes out"],
             ["Less than 3 minutes since that channel's page", "Waits, so it reads as a follow-up"],
             ["Triage and the channel's page both more than an hour old", "Not sent"],
-            ["Alert resolved, monitor in maintenance, member of a roll-up group, or dependency-suppressed (muted exactly like a reminder)", "Not sent"],
+            ["Alert resolved or snoozed, monitor in maintenance, member of a roll-up group, or dependency-suppressed (muted exactly like a reminder)", "Not sent"],
             ["Alert acknowledged", "Sent: the hint helps whoever is working it"],
             ["Mesh-edge alert, or triage skipped (cooldown, resolved)", "Not sent: there is no ready triage"],
             ["`LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` on the alerter", "Not sent, including from triages that were already ready"],
-            ["PagerDuty or Opsgenie / JSM channel", "Not sent (chat, email, SMS and webhook channels get it)"],
+            ["PagerDuty or Opsgenie / JSM channel", "Not sent (chat, push, email, SMS and webhook channels get it)"],
           ],
         },
         {
@@ -666,6 +890,107 @@ export const ALERTING_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Editors and admins can label a ready triage from the alert's row menu (⋮): **Confirm cause** or **Correct cause…**, or **Confirm no cause** and **Name the cause…** when the model abstained. Once labelled, a **Change label…** button (tag icon) takes the menu's place. Correcting opens the same per-monitor control as incident labels. The label stores the evidence the model saw, copied server-side, is included in the [training export](/docs/administration/#ai-settings), and shares a split group with the earliest incident that links the alert. A triage that sent no decisions cannot be labelled. Labels never change the alert; a correction made before the follow-up went out cancels it. A label does replace the model's cause in [SLA report suspected causes](/docs/slas/#suspected-causes) computed afterwards (an issued report keeps the cause it froze). See [AI label endpoints](/docs/api/#ai-labels).",
+        },
+      ],
+    },
+    {
+      id: "oncall",
+      title: "On-call schedules",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The **On-call** page (sidebar, under Alerts and Incidents) answers who is on call. A schedule has a time zone and one or more rotation layers. A rotation hands off **daily** or **weekly** (on a chosen day) at a local wall-clock time in the schedule's zone, so a 09:00 handoff stays at 09:00 across daylight-saving changes and that shift is an hour shorter or longer. Its members take turns in order: the first is on call from the rotation's start to the first handoff after it, then the next, and so on. A rotation can end at a set time.",
+        },
+        {
+          type: "list",
+          items: [
+            "**Layers.** Of the rotations active at an instant, the last one in the list wins. Add a layer that starts next month to change the rotation from then on, or one with an end for a temporary arrangement; when it ends, the layer below applies again.",
+            "**Overrides** put one person on call over a window (at most 93 days), above every rotation. Of overlapping overrides the most recently created wins. Removing one lets the rotation apply again.",
+            "**Members** are users with a membership in the workspace, or superadministrators. The person picker lists the workspace's members and the superadministrators already on one of its schedules; a superadministrator editing sees every superadministrator, so workspace users never learn the installation's operator accounts from it. The page flags a person on call with no [verified contact](/docs/administration/#contacts), and one who is no longer a member: the schedule keeps their turns until it is edited. Deleting a user removes their turns and overrides.",
+            "The schedule page shows who is on call now and next, the shifts of the next 14 days and the current and upcoming overrides. The list shows who is on call on every schedule.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Calendar feed.** **Create link** gives a secret iCal URL to subscribe to from Google Calendar, Outlook or Apple Calendar: one event per shift, from two weeks back to nine weeks ahead, named after the person on call. The link is shown once; **New link** revokes the previous one and **Turn off** stops the feed. Anyone holding it sees the schedule name, usernames and shifts, nothing else. The link is absolute when `PUBLIC_BASE_URL` is set on the API; otherwise the page builds it from its own origin. A feed of a deleted workspace stops at once.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Paging whoever is on call",
+          text:
+            "A schedule pages nobody by itself. Put it in an [escalation policy](#escalation) step and the step pages whoever the schedule has on call at the moment it fires (overrides first), at their verified contacts.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Editors and admins manage schedules and overrides; viewers read them, and the person picker (`list_oncall_people`) is offered to editors and admins only. Every route is in the [API](/docs/api/#people-api) and, except the calendar feed, an [MCP](/docs/mcp/) tool (`list_oncall_schedules`, `get_oncall_now`, `preview_oncall_schedule`, `create_oncall_override`, …).",
+        },
+      ],
+    },
+    {
+      id: "escalation",
+      title: "Escalation policies",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "An escalation policy pages people as well as channels: first the engineer who owns the service, then whoever is on call, then every workspace admin, each step after a delay, until someone acknowledges. The **Escalation** page (sidebar, under On-call) builds them; a monitor uses one in its Alerting section (**Notify: Escalation policy**), and **Settings, Notifications** can make one the workspace default, which replaces the default channels for `default`-mode monitors and for alerts without a monitor.",
+        },
+        {
+          type: "definitions",
+          items: [
+            {
+              term: "Steps",
+              description:
+                "Up to 10, in order, each with a delay (counted from when the alert started paging, the same clock as [routing](#routing) delays, and never shorter than the previous step's) and up to 20 targets.",
+            },
+            {
+              term: "Person targets",
+              description:
+                "A user (a workspace member or a superadministrator), an [on-call schedule](#oncall) (whoever it has on call when the step fires), or **all workspace admins**. People are paged at every verified [contact](/docs/administration/#contacts): email through the platform mailer (`SMTP_*`), SMS through the workspace's SMS channel for people. Each person is paged once per step, even when two targets name them.",
+            },
+            {
+              term: "Channel targets",
+              description:
+                "An alert channel, paged exactly like a routing tier with the step's delay: the same once-per-event claim, reminders, acknowledgement and snooze rules, and **Keep after ack** (`notify_after_ack`). A channel can be in one step only.",
+            },
+            {
+              term: "Repeat",
+              description:
+                "`repeat_count` (0-10) more walks of the person steps after the last step, `repeat_after_seconds` (1 minute to 24 hours, default 30 minutes) after it. Channel targets do not repeat; they follow the workspace reminders.",
+            },
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "Person steps page only while the alert is **active and not snoozed**, and only when a channel route would page too (not in maintenance, not suppressed by a group roll-up or an upstream dependency). Acknowledging or snoozing stops the walk whatever the workspace's stop-on-ack setting; an unacknowledge or the end of a snooze resumes it, with unfired steps counting their delay from that moment, so nothing pages in a burst.",
+            "Each step fires once per paging episode and repeat. Several alerter replicas never page a step twice: firing claims the step in the database first. A step whose sends fail transiently is retried on the next evaluation cycle, skipping the contacts it already reached; a permanent failure (no SMS channel for people, a rejected number, no SMTP) is recorded and the walk moves on.",
+            "A schedule with nobody on call, or targets with no verified contact, page nobody; the step still counts as fired and the next one follows on time.",
+            "Everyone a policy paged during the alert's current episode is told once when it is acknowledged (except the person who acknowledged it) and once when it resolves. A [relapse](#availability) walks the steps again.",
+            "Every page carries an [acknowledge link](#ack-links) scoped to the person, and every send, notices included, is in the alert's delivery history.",
+            "Mesh-path and offline-location alerts follow the workspace default policy's channel targets only; its people are paged for monitor alerts.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Convert routes** builds a policy that pages exactly what existing routes page: a monitor's custom routes, or the workspace default channels, one step per distinct delay. Converting a monitor's routes can switch the monitor to the new policy in the same change; a converted workspace policy becomes the default once you select it in notification settings. Nothing is converted automatically. A policy assigned to a monitor or used as the workspace default cannot be deleted, and bulk alerting edits do not assign policies.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "A policy can reach nobody",
+          text:
+            "A policy with no active channel and nobody who can be paged makes its monitors unreachable (`alert_routing.reason` `policy_no_targets`); the monitor's detail page and the dashboard's unrouted count report it like any other unrouted monitor. A person counts as reachable with a verified email contact, or an SMS contact while the workspace has an active SMS channel for people; email pages also need SMTP on the alerter (and on the delivery workers with asynchronous dispatch).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Members read policies; editors and admins change them. Every route is in the [API](/docs/api/#escalation-api) and an [MCP](/docs/mcp/) tool (`list_escalation_policies`, `create_escalation_policy`, `convert_routes_to_escalation_policy`, …).",
         },
       ],
     },

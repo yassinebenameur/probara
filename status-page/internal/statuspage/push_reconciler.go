@@ -113,6 +113,9 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 		JOIN page_monitor pm ON pm.monitor_id = n.monitor_id
 		JOIN status_pages sp ON sp.id = pm.status_page_id
 		WHERE COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
+		  -- Gated pages notify nobody (see PageIDForSlug), including
+		  -- browsers that subscribed while the page was public.
+		  AND sp.visibility IN ('public', 'unlisted')
 		  -- No subscribers, no work. This also bounds the blast radius when
 		  -- an operator first enables the setting on a busy page.
 		  AND EXISTS (

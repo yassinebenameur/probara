@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/pageaccess"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
@@ -34,11 +36,16 @@ type Handlers struct {
 	// routes 404.
 	pushStore   *pushStore
 	pushLimiter *pushRateLimiter
+	// clientIPs keys pushLimiter: forwarding headers count only from
+	// TRUSTED_PROXY_CIDRS peers, so a visitor cannot spoof a fresh bucket.
+	clientIPs *clientip.Resolver
+	// access is the visibility gate (access.go).
+	access accessGate
 }
 
 // NewHandlers creates a new status page handlers
 func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Logger, hub *Hub, cache *renderCache, pushes *pushStore) *Handlers {
-	return &Handlers{
+	h := &Handlers{
 		service:     service,
 		config:      cfg,
 		logger:      log,
@@ -46,7 +53,17 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		cache:       cache,
 		pushStore:   pushes,
 		pushLimiter: newPushRateLimiter(),
+		clientIPs:   newClientIPResolver(cfg),
 	}
+	h.initAccess(service)
+	return h
+}
+
+func newClientIPResolver(cfg *config.StatusPageConfig) *clientip.Resolver {
+	if cfg == nil {
+		return clientip.NewResolver(nil)
+	}
+	return clientip.NewResolver(cfg.TrustedProxyCIDRs)
 }
 
 // HandleStatusPage handles GET /public/status/{slug} and GET /public/status/{slug}/data
@@ -57,6 +74,21 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Status page not found", http.StatusNotFound)
 		return
 	}
+
+	// The visibility gate runs before everything below -- the method guard,
+	// every sub-route and the slug-keyed render cache -- so a route added
+	// here is gated without further work. /unlock is the one exemption
+	// (access.go).
+	gateSlug, gateRest := splitStatusPath(path)
+	if gateRest == unlockSuffix {
+		h.HandleUnlock(w, r, gateSlug)
+		return
+	}
+	gated, ok := h.authorize(w, r, gateSlug, gateRest)
+	if !ok {
+		return
+	}
+	w = gated
 
 	// The push routes are POST and do their own method checks. Every other
 	// route below is read-only, so the GET guard moved down here rather than
@@ -97,6 +129,13 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Page add-ons: summary.json, badges, embed.js and the Atom feed
+	// (addons.go). Read-only GETs, dispatched here like every other
+	// sub-route so whatever gates this function gates them too.
+	if h.servePageAddon(w, r, path) {
+		return
+	}
+
 	// Extract slug (remove trailing slash if any)
 	slug := strings.TrimSuffix(path, "/")
 	if slug == "" {
@@ -104,31 +143,7 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load and render through the per-slug render cache. The rendered HTML
-	// depends only on the slug (and process-constant config): theme, kiosk and
-	// filter handling are entirely client-side, and no query parameter or
-	// header reaches the renderer — so the slug is the whole cache key.
-	//
-	// The build runs detached from this request's cancellation: with
-	// singleflight, one client disconnecting must not fail the render every
-	// concurrent waiter is collapsed onto. A timeout still bounds the load.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), statusPageBuildTimeout)
-	defer cancel()
-	html, etag, err := h.cache.Get(slug, func() (string, error) {
-		data, err := h.service.GetStatusPageBySlug(ctx, slug)
-		if err != nil {
-			return "", err
-		}
-		data.PushPublicKey = h.webPushPublicKey()
-		page, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
-		if customErr != nil {
-			h.logger.WithFields(map[string]interface{}{
-				"error": customErr.Error(),
-				"slug":  slug,
-			}).Warn("Custom status page template failed; serving built-in template")
-		}
-		return page, err
-	})
+	page, etag, err := h.cachedPage(r.Context(), slug)
 	if err != nil {
 		h.writeStatusPageError(w, slug, err, "Failed to build status page")
 		return
@@ -143,10 +158,70 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The CSP (and its per-response nonce) goes only on a full response; see
+	// pageCSP.apply for why a 304 must not carry one.
+	html := noIndexHTML(w, page.csp.apply(w.Header(), page.html))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := w.Write([]byte(html)); err != nil {
 		h.logger.WithError(err).Error("Failed to write status page response")
 	}
+}
+
+// cachedPage loads and renders slug through the per-slug render cache. The
+// rendered HTML depends only on the slug (and process-constant config):
+// theme, kiosk and filter handling are entirely client-side, and no query
+// parameter or header reaches the renderer — so the slug is the whole cache
+// key. The page and its add-ons (summary.json, badges) share one build.
+//
+// The build runs detached from this request's cancellation: with
+// singleflight, one client disconnecting must not fail the render every
+// concurrent waiter is collapsed onto. A timeout still bounds the load.
+func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage, string, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), statusPageBuildTimeout)
+	defer cancel()
+	return h.cache.GetPage(slug, func() (renderedPage, error) {
+		data, err := h.service.GetStatusPageBySlug(ctx, slug)
+		if err != nil {
+			return renderedPage{}, err
+		}
+		data.PushPublicKey = h.webPushPublicKey()
+		if h.access.store != nil {
+			// Browser notifications are for public and unlisted pages only.
+			// Visibility belongs to the page, so deciding it here keeps the
+			// per-slug cache correct for every caller (page and add-ons).
+			if acc, aerr := h.access.store.PageAccess(ctx, slug); aerr == nil && pageaccess.Gated(acc.Visibility) {
+				data.PushPublicKey = ""
+			}
+		}
+		data.CanonicalURL = h.canonicalURL(slug)
+		html, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
+		if customErr != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error": customErr.Error(),
+				"slug":  slug,
+			}).Warn("Custom status page template failed; serving built-in template")
+		}
+		csp := pageCSPFor(data, h.appBaseURL(), strings.TrimSpace(data.CustomTemplateSource) != "")
+		return renderedPage{html: html, csp: csp, summary: buildPageSummary(data, time.Now())}, err
+	})
+}
+
+// canonicalURL is the page's absolute public URL from STATUS_PAGE_BASE_URL,
+// or "" when it is unset (the head then carries no canonical link or og:url
+// rather than a guessed host).
+func (h *Handlers) canonicalURL(slug string) string {
+	if h.config == nil {
+		return ""
+	}
+	return publicPageURL(h.config.StatusPageBaseURL, slug)
+}
+
+// appBaseURL is APP_BASE_URL, the operator UI origin allowed to frame pages.
+func (h *Handlers) appBaseURL() string {
+	if h.config == nil {
+		return ""
+	}
+	return h.config.AppBaseURL
 }
 
 func (h *Handlers) apiProxyEnabled() bool {
@@ -203,6 +278,7 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 		return
 	}
 	data.PushPublicKey = h.webPushPublicKey()
+	data.CanonicalURL = h.canonicalURL(slug)
 
 	var html string
 	if hasDraft {
@@ -219,6 +295,15 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 			return
 		}
 	}
+
+	// The template editor frames this route. Without APP_BASE_URL the
+	// service cannot name the editor's origin, so any ancestor may frame the
+	// preview (it shows only data the live page already publishes).
+	csp := pageCSPFor(data, h.appBaseURL(), hasDraft || strings.TrimSpace(data.CustomTemplateSource) != "")
+	if h.appBaseURL() == "" {
+		csp.frameAncestors = []string{"*"}
+	}
+	html = csp.apply(w.Header(), html)
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex")
@@ -356,6 +441,43 @@ func (h *Handlers) StreamStatusPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// proxyStatusPageID is the page a /_sp_api call acts on, which both the
+// access gate and the injected X-Tenant-ID use. A status-pages path names its
+// page in the path, and that is the page the API reads, so the path decides:
+// the X-Status-Page-ID header only identifies the page for calls whose path
+// names none (the monitors list). ok is false for a status-pages path whose
+// first segment is not a page ID, and for a header naming a different page
+// than the path (or a path with dot segments), so the gate can never check
+// one page while the API acts on another.
+func proxyStatusPageID(r *http.Request, upstreamPath string) (uuid.UUID, bool) {
+	var headerID uuid.UUID
+	if spIDHeader := r.Header.Get("X-Status-Page-ID"); spIDHeader != "" {
+		if parsed, err := uuid.Parse(spIDHeader); err == nil {
+			headerID = parsed
+		}
+	}
+	// A dot segment would let the upstream resolve the path somewhere other
+	// than the prefix checked here.
+	for _, seg := range strings.Split(upstreamPath, "/") {
+		if seg == "." || seg == ".." {
+			return uuid.Nil, false
+		}
+	}
+	rest, named := strings.CutPrefix(upstreamPath, "/api/v1/status-pages/")
+	if !named {
+		return headerID, true
+	}
+	first, _, _ := strings.Cut(rest, "/")
+	pathID, err := uuid.Parse(first)
+	if err != nil || pathID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	if headerID != uuid.Nil && headerID != pathID {
+		return uuid.Nil, false
+	}
+	return pathID, true
+}
+
 // HandleAPIProxy proxies a small subset of API calls to the API service.
 //
 // This exists so the public status page can host an in-page "customizer" UI while the API
@@ -402,19 +524,14 @@ func (h *Handlers) HandleAPIProxy(w http.ResponseWriter, r *http.Request) {
 
 	// If the caller includes a status page id, resolve its tenant id and inject X-Tenant-ID
 	// so admin-cookie auth (which is global) can operate tenant-scoped endpoints.
-	var statusPageID uuid.UUID
-	if spIDHeader := r.Header.Get("X-Status-Page-ID"); spIDHeader != "" {
-		if parsed, err := uuid.Parse(spIDHeader); err == nil {
-			statusPageID = parsed
-		}
+	statusPageID, ok := proxyStatusPageID(r, upstreamPath)
+	if !ok {
+		http.NotFound(w, r)
+		return
 	}
-	if statusPageID == uuid.Nil && strings.HasPrefix(upstreamPath, "/api/v1/status-pages/") {
-		parts := strings.Split(strings.TrimPrefix(upstreamPath, "/api/v1/status-pages/"), "/")
-		if len(parts) > 0 {
-			if parsed, err := uuid.Parse(parts[0]); err == nil {
-				statusPageID = parsed
-			}
-		}
+
+	if !h.authorizeProxy(w, r, statusPageID) {
+		return
 	}
 
 	tenantHeader := ""

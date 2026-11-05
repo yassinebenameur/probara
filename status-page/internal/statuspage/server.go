@@ -9,10 +9,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
 
 // Server represents the status page HTTP server
@@ -43,6 +45,9 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	var pushes *pushStore
 	if cfg.WebPushConfigured() {
 		pushes = newPushStore(dbClient.DB)
+	}
+	if cfg.LegacyTrustedProxy {
+		log.Warn("STATUS_PAGE_TRUSTED_PROXY is deprecated and trusts X-Forwarded-For from any peer; set TRUSTED_PROXY_CIDRS to your proxies' ranges instead")
 	}
 	handlers := NewHandlers(service, cfg, log, hub, renderCache, pushes)
 
@@ -121,9 +126,13 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 		writeTimeout = 60 * time.Second
 	}
 
+	// nosniff, no referrer and HSTS on every response; each page's CSP and
+	// framing policy is set by its handler (csp.go).
+	handler := securityheaders.StatusPage(clientip.NewResolver(cfg.TrustedProxyCIDRs), cfg.HSTSMaxAge)(mux)
+
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  readTimeout,
 		WriteTimeout: writeTimeout,
 		IdleTimeout:  60 * time.Second,

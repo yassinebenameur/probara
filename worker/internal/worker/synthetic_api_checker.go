@@ -53,8 +53,14 @@ type syntheticAPIStepMetrics struct {
 	Extracted        map[string]string `json:"extracted,omitempty"`
 }
 
-// Check executes a synthetic API journey.
+// Check executes a synthetic API journey, then scrubs the values of its
+// secret_variables from everything the result reports.
 func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
+	result := c.check(ctx, configRaw, timeoutSeconds)
+	return newSecretRedactor(syntheticSecretVariables(configRaw)).redactResult(result)
+}
+
+func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
 	var config models.SyntheticAPIMonitorConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		errMsg := fmt.Sprintf("failed to unmarshal synthetic_api config: %v", err)
@@ -81,10 +87,7 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 		baseURL = parsed
 	}
 
-	vars := make(map[string]string, len(config.Variables))
-	for k, v := range config.Variables {
-		vars[k] = v
-	}
+	vars := mergeSyntheticVariables(config.Variables, config.SecretVariables)
 
 	start := time.Now()
 	overallStatus := "success"
@@ -149,6 +152,7 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 		}
 
 		headers := make(map[string]string, len(step.Request.Headers))
+		secretHeaderNames := secretReferencingHeaders(step.Request.Headers, config.SecretVariables)
 		for k, v := range step.Request.Headers {
 			resolved, err := interpolateTemplate(v, vars)
 			if err != nil {
@@ -232,6 +236,7 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 			if maxRedirects >= 0 && len(via) > maxRedirects {
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
+			stripCredentialsOnRedirect(req, via, secretHeaderNames)
 			return nil
 		}
 
@@ -359,6 +364,24 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 		ErrorMessage: errPtr,
 		MetricsData:  metricsData,
 	}
+}
+
+// secretReferencingHeaders names the step headers whose value references a
+// secret variable, so a redirect off the origin drops them.
+func secretReferencingHeaders(headers, secretVariables map[string]string) []string {
+	if len(secretVariables) == 0 {
+		return nil
+	}
+	var names []string
+	for name, value := range headers {
+		for _, match := range syntheticTemplateRegex.FindAllStringSubmatch(value, -1) {
+			if _, secret := secretVariables[strings.TrimSpace(match[1])]; secret {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	return names
 }
 
 func resolveSyntheticStepURL(baseURL *url.URL, raw string, vars map[string]string) (string, error) {

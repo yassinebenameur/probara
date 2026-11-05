@@ -112,6 +112,10 @@ export interface AdminUser {
   updated_at: string;
   last_login_at?: string;
   disabled_at?: string;
+  // Set while a login lockout is active (user management responses only).
+  locked_until?: string;
+  // TOTP two-factor is on (user management responses only).
+  mfa_enabled?: boolean;
 }
 
 export interface AdminUserListResponse {
@@ -219,7 +223,8 @@ export type MonitorType =
   | "tcp"
   | "mysql"
   | "websocket"
-  | "prometheus";
+  | "prometheus"
+  | "domain";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -304,13 +309,34 @@ export interface HTTPMonitorConfig {
   max_redirects?: number;
   tls_skip_verify?: boolean;
   tls_min_days_valid?: number;
+  // tls_expiry measures the chain's earliest expiry, not just the leaf's.
+  tls_check_chain?: boolean;
   tls_server_name?: string;
   tls_ca_pem?: string;
   collect_timing?: boolean;
+  // Secret request headers (values masked "***" on read) and basic auth;
+  // the password is a secret too. See shared/secrets MonitorSecretFields.
+  secret_headers?: Record<string, string>;
+  basic_auth_username?: string;
+  basic_auth_password?: string;
+  // Record a redacted excerpt of a failed check's response
+  // (metrics_data.http.failure_response); off by default.
+  capture_failure_response?: boolean;
+  // Body excerpt budget, 1-8192; absent means 2048.
+  capture_body_bytes?: number;
 }
 
 export interface PingMonitorConfig {
   host: string;
+  // Echoes per check, 1-10; absent means 1 (the form starts new monitors at 3).
+  count?: number;
+  interval_ms?: number;
+  packet_size?: number;
+  // Absent: only total loss fails.
+  max_packet_loss_pct?: number;
+  // Compared with the average round trip; warn only flags a passing check.
+  max_rtt_ms?: number;
+  warn_rtt_ms?: number;
 }
 
 export interface DNSMonitorConfig {
@@ -327,6 +353,9 @@ export interface GRPCMonitorConfig {
   port?: number;
   service?: string;
   use_tls?: boolean;
+  // Sent with the health RPC; secret_metadata values are masked "***" on read.
+  metadata?: Record<string, string>;
+  secret_metadata?: Record<string, string>;
 }
 
 export interface PrometheusMonitorConfig {
@@ -352,6 +381,12 @@ export interface TCPMonitorConfig {
   port: number;
   use_tls?: boolean;
   tls_skip_verify?: boolean;
+  // The TLS fields below require use_tls.
+  tls_min_days_valid?: number;
+  tls_server_name?: string;
+  tls_ca_pem?: string;
+  // tls_expiry measures the chain's earliest expiry, not just the leaf's.
+  tls_check_chain?: boolean;
 }
 
 export interface GroupMonitorConfig {
@@ -402,6 +437,8 @@ export interface SIPMonitorConfig {
   tls_server_name?: string;
   // Open a certificate-expiry alert when fewer days remain (transport tls only).
   tls_min_days_valid?: number;
+  // tls_expiry measures the chain's earliest expiry, not just the leaf's.
+  tls_check_chain?: boolean;
   // The test call; set if and only if method is "invite" (Go shared/models
   // sip_call.go SIPCallConfig).
   call?: SIPCallConfig;
@@ -673,6 +710,9 @@ export interface SyntheticAPIMonitorConfig {
   failure_mode?: SyntheticFailureMode;
   variables?: Record<string, string>;
   steps: SyntheticAPIStepConfig[];
+  // {{name}} references like `variables`, but secret: masked "***" on read
+  // and redacted from check results by the worker.
+  secret_variables?: Record<string, string>;
 }
 
 export type SyntheticBrowserAction =
@@ -706,6 +746,8 @@ export interface SyntheticBrowserMonitorConfig {
   variables?: Record<string, string>;
   artifacts?: SyntheticBrowserArtifacts;
   steps: SyntheticBrowserStepConfig[];
+  // See SyntheticAPIMonitorConfig.secret_variables.
+  secret_variables?: Record<string, string>;
 }
 
 export type MonitorConfig =
@@ -726,9 +768,12 @@ export type MonitorConfig =
   | RabbitMQMonitorConfig
   | MySQLMonitorConfig
   | WebSocketMonitorConfig
-  | PrometheusMonitorConfig;
+  | PrometheusMonitorConfig
+  | DomainMonitorConfig;
 
-export type NotificationMode = 'default' | 'custom';
+// 'policy' routes through the monitor's escalation policy
+// (escalation_policy_id; see lib/escalation.ts).
+export type NotificationMode = 'default' | 'custom' | 'policy';
 
 // How a group handles alerts when its members go down:
 //   'per_monitor' — each member alerts individually; the group emits no alert.
@@ -746,6 +791,9 @@ export interface ChannelAssignment {
   channel_name?: string;
   channel_type?: string;
   delay_seconds: number;
+  // Keep paging this route (tiers, reminders) while an alert is
+  // acknowledged, when the workspace stops paging on ack.
+  notify_after_ack?: boolean;
 }
 
 export interface NotificationSettings {
@@ -761,9 +809,22 @@ export interface NotificationSettings {
   // upstream dependency is down, and for the grace period after it recovers.
   dependency_suppression_enabled: boolean;
   dependency_suppression_grace_seconds: number;
+  // Acknowledging an alert stops its unfired escalation tiers and its
+  // reminders (routes with notify_after_ack excepted).
+  ack_stops_notifications: boolean;
+  // Offline check locations (S-F6): alert when a location that reported
+  // before has been silent this long (60-86400 s, default 180).
+  location_offline_alerts_enabled: boolean;
+  location_offline_after_seconds: number;
+  // Flap suppression: a monitor down again within this many seconds of its
+  // availability alert auto-resolving reopens that alert (0 = off, max 86400).
+  alert_reopen_cooldown_seconds: number;
+  // Escalation policies: when set, default-mode monitors route through this
+  // policy instead of default_channels. Send "" to clear it.
+  default_escalation_policy_id?: string | null;
 }
 
-export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry';
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'location_offline' | 'domain_expiry';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
 
@@ -780,6 +841,11 @@ export interface Location {
   // host:port other locations probe; set = participates in the mesh.
   mesh_endpoint?: string;
   monitor_count: number;
+  // S-F6: enabled, seen before, and silent for the workspace's offline
+  // threshold. Between connected and offline it is merely disconnected.
+  offline?: boolean;
+  // The open location_offline alert, if any.
+  open_alert_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -881,6 +947,10 @@ export interface MaintenanceWindow {
   monitor_ids: string[];
   monitors?: MaintenanceWindowMonitorRef[];
   status: MaintenanceWindowStatus;
+  /** The rule; frequency 'none' is a one-off (starts_at..ends_at). */
+  recurrence?: MaintenanceRecurrence;
+  /** In-progress then next occurrences, at most five (S-M5). */
+  occurrences?: MaintenanceOccurrence[];
   created_at: string;
   updated_at: string;
 }
@@ -898,6 +968,7 @@ export interface CreateMaintenanceWindowRequest {
   starts_at: string;
   ends_at: string;
   monitor_ids: string[];
+  recurrence?: MaintenanceRecurrence;
 }
 
 export interface UpdateMaintenanceWindowRequest {
@@ -906,6 +977,42 @@ export interface UpdateMaintenanceWindowRequest {
   starts_at?: string;
   ends_at?: string;
   monitor_ids?: string[];
+  /** Replaces the whole rule when sent. */
+  recurrence?: MaintenanceRecurrence;
+}
+
+export type MaintenanceFrequency = 'none' | 'daily' | 'weekly' | 'monthly' | 'cron';
+
+/** A maintenance window's repeat rule (docs/state-semantics.md S-M5). */
+export interface MaintenanceRecurrence {
+  frequency: MaintenanceFrequency;
+  /** Every N days/weeks/months. */
+  interval?: number;
+  /** Weekly days, 0 = Sunday … 6 = Saturday. */
+  weekdays?: number[];
+  /** Monthly day 1–31; clamps to the last day of shorter months. */
+  month_day?: number;
+  cron?: string;
+  /** IANA zone the wall-clock times are read in. */
+  timezone?: string;
+  until?: string;
+}
+
+export interface MaintenanceOccurrence {
+  starts_at: string;
+  ends_at: string;
+}
+
+export interface PreviewMaintenanceWindowRequest {
+  starts_at: string;
+  ends_at: string;
+  recurrence?: MaintenanceRecurrence;
+  count?: number;
+}
+
+export interface PreviewMaintenanceWindowResponse {
+  recurrence: MaintenanceRecurrence;
+  occurrences: MaintenanceOccurrence[];
 }
 
 export interface SnoozeMonitorRequest {
@@ -936,7 +1043,10 @@ export interface Monitor {
   created_at: string;
   updated_at: string;
   consecutive_failures_threshold: number;
+  recovery_threshold?: number; // Passing checks a down monitor needs before it is up (1 = single-sample)
+  consecutive_successes?: number; // Read-only; passes counted toward that while still down
   notification_mode: NotificationMode;
+  escalation_policy_id?: string; // notification_mode 'policy' only
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
@@ -965,7 +1075,7 @@ export interface AlertRouting {
    * `group_rollup`: a group rolls its alerts up, so the group's routing decides.
    * `members`: it is a group that never alerts itself; members alert individually.
    */
-  source: 'custom' | 'tenant_default' | 'group_rollup' | 'members';
+  source: 'custom' | 'tenant_default' | 'group_rollup' | 'members' | 'policy';
   active_channels: number;
   /** Includes disabled channels, which never deliver. */
   assigned_channels: number;
@@ -975,9 +1085,15 @@ export interface AlertRouting {
     | 'no_tenant_default_channels'
     | 'tenant_default_channels_disabled'
     | 'group_rollup_unrouted'
-    | 'group_rollup_paused';
+    | 'group_rollup_paused'
+    | 'policy_no_targets';
   rollup_group_id?: string;
   rollup_group_name?: string;
+  /** The escalation policy that routes it (its own, or the workspace default). */
+  escalation_policy_id?: string;
+  escalation_policy_name?: string;
+  /** Person targets of that policy that can page somebody. */
+  reachable_people?: number;
 }
 
 export interface CreateMonitorRequest {
@@ -991,7 +1107,9 @@ export interface CreateMonitorRequest {
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
+  escalation_policy_id?: string; // with notification_mode 'policy'
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
@@ -1011,7 +1129,9 @@ export interface UpdateMonitorRequest {
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
+  escalation_policy_id?: string; // with notification_mode 'policy'
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
@@ -1070,7 +1190,8 @@ export interface Alert {
   threshold_value?: number;
   root_cause_monitor_id?: string;
   root_cause_down_since?: string;
-  // Mesh-edge subject (kind === 'mesh_edge').
+  // Mesh-edge subject (kind === 'mesh_edge'); an offline location's
+  // subject is source_location_* (kind === 'location_offline').
   source_location_id?: string;
   target_location_id?: string;
   created_at: string;
@@ -1091,6 +1212,23 @@ export interface Alert {
   // has no triage row; always absent (= unknown) on live stream events, which
   // are built from core NATS, so merge those with mergeAlertUpdate.
   triage?: AlertTriage;
+  // Who acknowledged, and through which surface. Cleared on unacknowledge.
+  acknowledged_by_user_id?: string;
+  acknowledged_via?: 'ui' | 'api' | 'mcp';
+  // The last unacknowledge: tiers and reminders count from it.
+  unacknowledged_at?: string;
+  // Future: the alert is snoozed until then. Past: when the last snooze ended.
+  snoozed_until?: string;
+  snoozed_by_user_id?: string;
+  // Why this open alert is not paging right now.
+  muted_reason?: 'snoozed' | 'acknowledged';
+  // How many times the alert reopened within the workspace's reopen
+  // cooldown (each a new paging episode), and when it last did.
+  relapse_count?: number;
+  reopened_at?: string;
+  // Set by a manual resolve; empty when the alerter resolved it.
+  resolved_by_user_id?: string;
+  resolved_via?: 'ui' | 'api' | 'mcp';
 }
 
 // --- Automatic alert triage (never delays, routes or suppresses a page) ---
@@ -1138,7 +1276,7 @@ export interface AlertListResponse {
 export type AlertSortColumn = 'triggered_at' | 'status' | 'monitor' | 'duration';
 
 /** Why a bulk acknowledge/resolve left an alert unchanged. */
-export type AlertBulkFailureReason = 'not_found' | 'already_acknowledged' | 'already_resolved';
+export type AlertBulkFailureReason = 'not_found' | 'already_acknowledged' | 'already_resolved' | 'not_acknowledged';
 
 /** `POST /alerts/bulk/{acknowledge,resolve}`: per-alert results, never all-or-nothing. */
 export interface AlertBulkResult {
@@ -1148,7 +1286,9 @@ export interface AlertBulkResult {
   failed: { id: string; reason: AlertBulkFailureReason }[];
 }
 
-export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved';
+// 'updated': unacknowledge, snooze or unsnooze (no status transition the
+// alerter announces).
+export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved' | 'updated';
 
 export interface AlertStreamEvent {
   type: AlertStreamEventType;
@@ -1714,7 +1854,23 @@ export interface StatusPageSettings {
   custom_css?: string;
   custom_head_html?: string;
   custom_footer_html?: string;
+  /**
+   * Public page Content-Security-Policy mode. '' (automatic) is compatible
+   * when the page has custom CSS, custom head/footer HTML or a published
+   * custom template, strict otherwise. Strict runs only scripts carrying
+   * nonce="{{cspNonce}}".
+   */
+  csp_mode?: StatusPageCSPMode;
+  /** Origins (scheme://host[:port], "*." wildcard host) allowed to frame the page. */
+  allowed_embed_origins?: string[];
+  /**
+   * Search and link-preview text (meta description, og:description), up to
+   * 300 characters. '' clears it; the page then falls back to its description.
+   */
+  seo_description?: string;
 }
+
+export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';
 
 export interface StatusPage {
   id: string;
@@ -1731,6 +1887,10 @@ export interface StatusPage {
   settings?: StatusPageSettings;
   created_at: string;
   updated_at: string;
+  /** Who may view the page (a column, not a setting). */
+  visibility?: StatusPageVisibility;
+  /** Whether a visitor password is set; the password itself is write-only. */
+  has_password?: boolean;
 }
 
 export interface StatusPageTemplateVersion {
@@ -1750,6 +1910,8 @@ export interface StatusPageTemplateState {
   versions: StatusPageTemplateVersion[];
   preview_token?: string;
   max_size_bytes: number;
+  /** Non-fatal draft problems, e.g. scripts without nonce="{{cspNonce}}". */
+  draft_warnings?: string[];
 }
 
 export interface StatusPageLibraryTemplate {
@@ -1778,6 +1940,8 @@ export interface CreateStatusPageRequest {
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
   settings?: StatusPageSettings;
+  visibility?: StatusPageVisibility;
+  password?: string;
 }
 
 export interface UpdateStatusPageRequest {
@@ -1791,6 +1955,9 @@ export interface UpdateStatusPageRequest {
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
   settings?: StatusPageSettings;
+  visibility?: StatusPageVisibility;
+  /** Write-only: omit to keep, '' to clear, a value to replace. */
+  password?: string;
 }
 
 export interface StatusPageListResponse {
@@ -1816,7 +1983,8 @@ export interface CheckResult {
     | WebSocketMetricsEnvelope
     | SIPMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
-    | SyntheticBrowserMetricsEnvelope;
+    | SyntheticBrowserMetricsEnvelope
+    | DomainMetricsEnvelope;
   location_id?: string; // Absent = default fleet
   location_name?: string;
   created_at: string;
@@ -1920,6 +2088,18 @@ export interface HTTPMetrics {
   tls?: TLSCertInfo;
   assertions_failed?: string[];
   display_values?: HTTPDisplayValue[];
+  failure_response?: HTTPFailureResponse;
+}
+
+// A failed check's redacted response excerpt (capture_failure_response):
+// credential-like and monitor-sent header values read "[REDACTED]".
+export interface HTTPFailureResponse {
+  status_line: string;
+  content_type?: string;
+  headers?: Record<string, string>;
+  headers_truncated?: boolean;
+  body_excerpt?: string;
+  body_truncated?: boolean;
 }
 
 export interface HTTPDisplayValue {
@@ -1950,6 +2130,30 @@ export interface TCPMetrics {
   port?: number;
   use_tls?: boolean;
   tls_version?: string;
+  // The server certificate (Go shared/tlscert), when the handshake completed.
+  tls?: TLSCertInfo;
+  assertions_failed?: string[];
+}
+
+// metrics_data.ping (worker ping_checker.go pingMetrics). RTTs are absent
+// when no echo was answered.
+export interface PingMetricsEnvelope {
+  ping?: PingMetrics;
+}
+
+export interface PingMetrics {
+  host?: string;
+  ip?: string;
+  sent: number;
+  received: number;
+  loss_pct: number;
+  rtt_min_ms?: number;
+  rtt_avg_ms?: number;
+  rtt_max_ms?: number;
+  rtt_stddev_ms?: number;
+  privileged?: boolean;
+  // Set when the average round trip passed warn_rtt_ms on a passing check.
+  rtt_warn_ms?: number;
 }
 
 export interface WebSocketMetricsEnvelope {
@@ -2211,6 +2415,12 @@ export interface TLSCertInfo {
   ip_addresses?: string[];
   verified_chains?: number;
   peer_certificates?: number;
+  // Earliest expiry across the presented chain (leaf + intermediates, never
+  // a self-signed root). Readers use it only with the monitor's
+  // tls_check_chain (lib/tls-cert.ts effectiveCertExpiry, Go Info.Expiry).
+  chain_not_after?: string;
+  chain_min_days?: number;
+  chain?: { subject: string; not_after: string }[];
 }
 
 export type HTTPTLSInfo = TLSCertInfo;
@@ -2372,6 +2582,7 @@ export interface FieldMapping {
   group_members?: string;
   alert_policy_names?: string;
   consecutive_failures_threshold?: string;
+  recovery_threshold?: string;
 }
 
 /** A source record a format adapter refused to translate. Informational only. */
@@ -2436,4 +2647,214 @@ export interface McpConnection {
 
 export interface McpConnectionListResponse {
   items: McpConnection[];
+}
+
+// Account: the signed-in user's sessions (session families) and the
+// superadmin lockout/session actions on a user.
+export interface AdminSession {
+  id: string;
+  auth_method: 'password' | 'oidc';
+  created_at: string;
+  last_active_at: string;
+  expires_at: string;
+  ip?: string;
+  user_agent?: string;
+  current: boolean;
+}
+
+export interface AdminSessionListResponse {
+  items: AdminSession[];
+}
+
+export interface RevokeSessionsResponse {
+  revoked: number;
+}
+
+export interface UnlockUserResponse {
+  was_locked: boolean;
+}
+
+// Workspace management (superadmins; POST/PATCH/DELETE /v1/tenants).
+export interface CreateTenantRequest {
+  name: string;
+}
+
+export interface RenameTenantRequest {
+  name: string;
+}
+
+export interface DeleteTenantRequest {
+  // The workspace's current name, typed again.
+  confirm_name: string;
+}
+
+export interface DeleteTenantResponse {
+  id: string;
+  name: string;
+  // Monitors tombstoned by the delete; the scheduler purges the data later.
+  monitors: number;
+}
+
+// Notification delivery history (GET /v1/alerts/{id}/deliveries and
+// /v1/alert-channels/{id}/deliveries): one row per attempt to deliver an
+// alert event to a channel, kept 90 days.
+export type DeliveryOutcome =
+  | 'queued'
+  | 'delivered'
+  | 'failed'
+  | 'permanent_failure'
+  | 'dropped_superseded'
+  | 'dropped_ack';
+
+export interface NotificationDelivery {
+  id: string;
+  alert_id: string;
+  // Null for a person send without a channel (an escalation page by email).
+  channel_id: string | null;
+  // The channel's name when the attempt was made.
+  channel_name: string;
+  // The channel's plugin type; on a channel-less person send, the
+  // contact's kind ('email', or 'sms' for an SMS page with no SMS channel).
+  channel_type: AlertChannelType;
+  event_type: string;
+  delivery_key: string;
+  attempt: number;
+  // sync: sent by the alerter; async: queued for, then sent by, a worker.
+  path: 'sync' | 'async';
+  outcome: DeliveryOutcome;
+  // Sanitized (no URLs past the host, no credentials), at most 512 chars.
+  error: string | null;
+  // Fan-out channels (SMS) only.
+  recipients_total: number | null;
+  recipients_delivered: number | null;
+  alert_kind: AlertKind;
+  // Null for alerts without a monitor (mesh edges, locations).
+  monitor_name: string | null;
+  created_at: string;
+  // Person sends (escalation policies): who was paged, at which masked address.
+  user_id?: string;
+  username?: string;
+  recipient?: string;
+}
+
+export interface NotificationDeliveryListResponse {
+  items: NotificationDelivery[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+// The channel list carries each channel's newest delivery (declaration
+// merging keeps this lane's addition out of the AlertChannel block above).
+export interface AlertChannel {
+  last_delivery?: NotificationDelivery;
+}
+
+// --- Domain (registration expiry) monitors -----------------------------------
+
+// shared/models.DomainMonitorConfig. min_days_valid opens a domain_expiry
+// alert; the check itself fails only once the domain expired or is free.
+export interface DomainMonitorConfig {
+  domain: string;
+  min_days_valid?: number;
+  // RDAP base URL (https) used instead of the IANA bootstrap registry.
+  rdap_server_override?: string;
+  // Fall back to WHOIS (TCP 43) when RDAP cannot answer; absent means true.
+  whois_fallback?: boolean;
+}
+
+// metrics_data.domain (shared/domainexpiry.Info).
+export interface DomainMetrics {
+  domain: string;
+  expires_at?: string;
+  days_until_expiry?: number;
+  registered_at?: string;
+  updated_at?: string;
+  registrar?: string;
+  statuses?: string[];
+  nameservers?: string[];
+  registered: boolean;
+  source: 'rdap' | 'whois';
+  server?: string;
+  rdap_error?: string;
+  note?: string;
+}
+
+export interface DomainMetricsEnvelope {
+  domain?: DomainMetrics;
+}
+
+// Status page access (visibility, visitor password, kiosk tokens)
+export type StatusPageVisibility = 'public' | 'unlisted' | 'password' | 'private';
+
+export interface StatusPageAccessToken {
+  id: string;
+  label: string;
+  created_by?: string;
+  created_at: string;
+  revoked_at?: string;
+}
+
+/** The one response that carries the token value. */
+export interface CreatedStatusPageAccessToken extends StatusPageAccessToken {
+  token: string;
+}
+
+// User lifecycle and two-factor (/auth/* public flows, /account/* self-service,
+// /users/{id}/invite|password-reset|reset-2fa superadmin actions).
+export interface AuthCapabilities {
+  password_reset: boolean;
+  email_delivery: boolean;
+  oidc: boolean;
+  oidc_label?: string;
+}
+
+export interface MFAChallenge {
+  mfa_required: true;
+  mfa_token: string;
+  expires_in: number;
+}
+
+export interface InviteInfo {
+  username: string;
+  email?: string;
+  expires_at: string;
+}
+
+export interface EmailChangePending {
+  pending_email: string;
+  expires_at: string;
+}
+
+export interface AccountMFAStatus {
+  available: boolean;
+  eligible: boolean;
+  enabled: boolean;
+  enabled_at?: string;
+  recovery_codes_remaining: number;
+}
+
+export interface TOTPSetup {
+  secret: string;
+  otpauth_uri: string;
+}
+
+export interface RecoveryCodesResponse {
+  recovery_codes: string[];
+}
+
+// An invite or reset link a superadmin issued. Not delivered: hand over
+// `url` (or `path` on this origin) yourself.
+export interface AccountLinkResponse {
+  method: 'password' | 'sso';
+  delivered: boolean;
+  email?: string;
+  path?: string;
+  url?: string;
+  expires_at?: string;
+  reason?: string;
+}
+
+export interface ResetMFAResponse {
+  was_enabled: boolean;
 }

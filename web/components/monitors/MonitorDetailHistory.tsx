@@ -10,6 +10,8 @@ import Pill from '@/components/ui/Pill';
 import EmptyState from '@/components/ui/EmptyState';
 import TableSkeleton from '@/components/ui/TableSkeleton';
 import { bucketFailedChecks, Stat, StatStrip, UptimeTrace } from './MonitorAnalyticsOverview';
+import FailureResponse from './FailureResponse';
+import { failureResponseOf } from '@/lib/http-capture';
 
 interface MonitorDetailHistoryProps {
   /** Raw results of the last 7 days. */
@@ -142,6 +144,7 @@ export default function MonitorDetailHistory({
             {recentFailures.map(({ run, truncated }) => {
               const failure = run.latest;
               const span = describeRun(run, { truncated });
+              const capture = failureResponseOf(failure);
               return (
                 <li key={failure.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5">
                   <span
@@ -178,6 +181,7 @@ export default function MonitorDetailHistory({
                   {span.duration && (
                     <span className="ml-auto shrink-0 text-xs tabular-nums text-slate-500">{span.duration}</span>
                   )}
+                  {capture && <FailureResponse capture={capture} />}
                 </li>
               );
             })}

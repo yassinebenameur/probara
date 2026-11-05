@@ -33,7 +33,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
 - `shared/db/migrations/` — golang-migrate pairs `NNNNNN_name.{up,down}.sql`
-  (take the next free number), applied by `cmd/migrate` — from the repo root
+  (take the next free number; numbering must stay contiguous — a gap is
+  silently skipped on upgraded installs, and `TestMigrationNumbering` fails on
+  one not in `knownMigrationGaps`), applied by `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
   Compose job, Helm a post-install/upgrade hook Job
 - `cmd/` — `migrate`, `discovery-collector` (the in-cluster Kubernetes
@@ -67,6 +69,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   `testing.md` (test suites and CI jobs), `monitoring-discovery.md`
 - `helm/monitoring-platform/` — chart; `docker-compose.yml` — full local stack;
   `infra/` — dev infra config (dex for the SSO profile)
+- `docker-compose.release.yml` — override of `docker-compose.yml` for
+  installs from prebuilt GHCR images (adds the frontend, NATS auth, required
+  secrets); `scripts/install.sh` downloads both and generates `.env`
 
 ## Service boundaries
 
@@ -114,6 +119,14 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- Workspace (tenant) delete is a soft delete plus a scheduler purge
+  (`shared/tenancy`, `purger_tenants.go`): the API stamps `deleted_at` and
+  revokes access, the purger drains in batches; never `DELETE FROM tenants`
+  from the API. A new table with `tenant_id` must be classified in
+  `TestTenantPurgeCoversEveryTenantTable`, a new tenant listing or
+  public read filters `deleted_at IS NULL` (or `tenancy.IsDeleted`), and a
+  credential lookup outside the session middleware (API keys, collector
+  tokens) adds `tenancy.LiveTenantSQL` to its query.
 
 ## Single sources of truth — never duplicate these lists
 
@@ -144,6 +157,20 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   clone strips masks for every type first (`stripMaskedSecrets` in
   `web/lib/monitor-clone.ts`), and a form marks a masked value "stored" only
   in edit mode.
+  Secrets below the top level (synthetic step headers, browser `fill`
+  values) never get nested registry paths: they are `{{name}}` references to
+  a top-level `secret_variables` map, whose values the worker redacts from
+  the whole result (`worker/internal/worker/synthetic_redact.go`). On write,
+  `secrets.NormalizeSensitiveHeaders` runs after the merge and before
+  encrypt, moving credential-named http `headers` into `secret_headers`,
+  grpc `metadata` into `secret_metadata` (literal synthetic_api step headers
+  into `secret_variables`); its name rule
+  `IsSensitiveHeaderName` has a TS twin in `web/lib/monitor-form/http.ts`,
+  pinned by `shared/secrets/testdata/sensitive_header_names.json`. Skip
+  secret work for a config with no secret key via `secrets.HasSecretValues`
+  (byte-level, no decode). Secret keys match exactly while config structs
+  decode case-insensitively, so `ValidatorRegistry.Validate` refuses a
+  miscapitalized secret key for every type (`validateSecretKeySpelling`).
 - **Channel config secrets** are the plugin manifest's `secret` fields, and
   they merge differently (`secrets.MergePreserveSecrets`): absent, `""` and
   `***` all **keep** the stored value (the channel form submits every secret
@@ -151,10 +178,19 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   stored value", offered only for optional secret fields.
 - **Certificate location in `metrics_data`**: `shared/tlscert` owns the
   certificate snapshot (`Info`, built by `FromConnectionState`) and where it
-  sits (`MetricsPaths`: `http.tls`, `sip.tls`). The alerter's `tls_expiry`
+  sits (`MetricsPaths`: `http.tls`, `sip.tls`, `tcp.tls`). The alerter's `tls_expiry`
   reads through `SQLExpr`, the status page and AI evidence through
   `Extract`; `TestSQLExprMatchesExtract` pins the pair. A new TLS-capable
-  type adds its path there, never a hard-coded `#> '{x,tls}'`.
+  type adds its path there, never a hard-coded `#> '{x,tls}'`. Which expiry
+  counts (leaf, or the chain's earliest under the monitor's `tls_check_chain`)
+  is `Info.Expiry`, with SQL twins `ExpirySQL`/`CheckChainSQL`
+  (`TestExpirySQLMatchesExpiry`); web's `effectiveCertExpiry` mirrors it.
+- **Expiry alerts are one table**: `alerter/internal/alerter/expiry.go`
+  evaluates `tls_expiry` and `domain_expiry` from `expirySpecs` (threshold
+  config key, snapshot location, last_error wording). A new expiry kind is a
+  spec there plus its `openAlertDispatchablePredicate` kind line; the domain
+  snapshot's location is `shared/domainexpiry` (`SQLExpr`/`Extract`, pinned
+  by its own `TestSQLExprMatchesExtract`), never a hard-coded `#> '{domain}'`.
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
@@ -172,11 +208,31 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   fragment, never re-derive a rule. `UnreachablePredicate` is the SQL twin of
   `Classify().Reachable`; change them together
   (`TestUnreachablePredicateMatchesClassify` pins the pair).
+  Escalation policies are the third mode (`policy`, and `default` under a
+  tenant `default_escalation_policy_id`), in `alertrouting/policy.go`: their
+  channel targets are plain `TargetsSQL`/`TenantTargetsSQL` rows (claim,
+  reminders, ack gate unchanged); their person targets count toward
+  reachability through `PersonTargetReachablePredicate` /
+  `PageableUserPredicate` / `DeliverableContactPredicate`, which the alerter
+  also pages by, and `ReachCountExpr` (channels + people) is what
+  `UnreachablePredicate` and `Classify` (`ReasonPolicyNoTargets`) agree on.
   `RoutesToChannelPredicate` is `TargetsSQL`'s own union correlated per row,
   for batch queries that must drop unrouted pairs before a `LIMIT`
-  (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Escalation delays
+  (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Monitor-less alerts
+  (mesh edges, `location_offline`) route through `TenantTargetsSQL`, the
+  tenant defaults without a monitor (`TestTenantTargetsSQLMatchesDefaults`).
+  Whether a location is offline is `monitorstate.LocationOfflinePredicate`
+  (S-F6, Go twin `LocationOffline`), disconnected (the mesh hold)
+  `LocationDisconnectedPredicate`; never re-derive either from
+  `last_seen_at`. Escalation delays
   count from `DispatchEligibleSinceExpr` (the end of a cleared root cause's
-  grace period, else `triggered_at`). Known asymmetry: member suppression
+  grace period, else `triggered_at`, and never before the snooze end);
+  per route they and reminders also restart at `ResumedAt` (snooze end on
+  every route, the unack only where stop-on-ack held the route), which the
+  claim and the pre-filters both use. Ack and snooze
+  mutes are `MuteHolds` (stop-on-ack per route: `ack_stops_notifications`
+  and the 5th `TargetsSQL` column `notify_after_ack`), `SnoozedPredicate`
+  and, for the API's `muted_reason`, `MutedReasonExpr`. Known asymmetry: member suppression
   ignores the group's `enabled` flag, so a paused `group`-rollup group
   silences its whole membership — reachability reports it
   (`group_rollup_paused`), dispatch still does it. The package doc, the
@@ -191,7 +247,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   renderer uses). Plus `web/lib/types.ts` for the UI. The API's stored struct
   re-serializes only the fields it knows, so a setting added to the model but
   not to `applyPatch`/`toAPI` is accepted by the endpoint, silently dropped on
-  write, and never reaches the page — no error anywhere.
+  write, and never reaches the page — no error anywhere. `csp_mode` and
+  `allowed_embed_origins` are the latest pair through all three
+  (`TestStatusPageSettingsCSPRoundTrip` + `TestParseStatusPageSettings_CSPFields`).
 - **Monitor state semantics**: `docs/state-semantics.md` (rules `S-*`).
   Changes to state transitions, quorum aggregation, freshness/absence,
   pause/maintenance handling, or uptime accounting must update the rule
@@ -213,6 +271,18 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   rollup ranges via the scheduler's `syncDowntimeFromIntervals` projection;
   `TestDowntimeProjectionMatchesRawAnalyticsPath` pins the pair). Never
   derive downtime from check rows.
+  Maintenance enters it only as occurrences through
+  `maintenance.OccurrenceRangesSQL`, never the window rule (S-M5).
+- **Maintenance windows are rules; coverage is occurrences** (S-M5):
+  `shared/maintenance` owns `Expand` (IANA zones, DST, cron via
+  `robfig/cron/v3`) and the only writers of `maintenance_window_occurrences`
+  (`Materialize`/`Reschedule` in the API's create/update transaction,
+  `RollForward` in the scheduler's roller). Anything that asks "in
+  maintenance" uses its fragments; anything that creates a window must also
+  create its occurrence (raw SQL inserts in tests and `seed-demo` included).
+  Targets are history too: change a window's monitors only through
+  `maintenance.Retarget` (never DELETE + reinsert links), and keep the
+  roller's per-window `FOR UPDATE` — it is what serializes it with API edits.
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the
@@ -269,6 +339,27 @@ call `groupService.AddMonitorsToGroup` itself (it does — `syncGroupMembers`),
 or imported groups come back empty. Any other path that creates groups through
 `monitorService.CreateMonitor` directly inherits the same obligation.
 
+## Monitor config history
+
+- **Every monitor write records a config version** (`monitor_config_versions`,
+  `api/internal/services/monitors/versions.go`). `CreateMonitor`/
+  `UpdateMonitor` record it, so paths through the service inherit it; a path
+  that writes `monitors` or its junction tables (members, dependencies,
+  channels, locations) any other way must call `RecordVersion`, or
+  `RecordVersionTx` inside its own transaction (discovery approval does,
+  beside `CreateInTx`; so does `escalation.ConvertRoutes` with assign, source
+  `""` to follow the caller's credential). A multi-step write (create + member/dependency sync,
+  import's second pass, restore) wraps its context in `DeferVersions` and
+  `Flush`es once, or one change splits into two versions; a new non-default
+  source goes through `WithVersionSource`.
+- Snapshots are masked (`MaskMonitorConfig`) and hash-deduplicated; a new
+  monitor field that is configuration goes in `models.MonitorConfigSnapshot`,
+  `loadSnapshot` and `RestoreRequest` together (and `LiveReferences` when it
+  names another row, as `escalation_policy_id` does). Restore goes through
+  `UpdateMonitor` with the masked config, so it can never restore a secret;
+  `RestoreRequest` adds the live secret map keys the version lacks as `***`
+  so it never removes one either.
+
 ## Adding a monitor type (checklist)
 
 1. `MonitorType` constant in `api/internal/models/monitors.go`; config struct in
@@ -277,10 +368,17 @@ or imported groups come back empty. Any other path that creates groups through
    the shared struct, so put `Validate()` on it rather than duplicating rules
 2. Validator in `api/internal/validation/` + register in `registry.go`, and
    its `ConfigType()` in `config_types.go` (the struct MCP's
-   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`)
+   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`);
+   an active type also goes in `activeCheckTypes` (`validation.go`) —
+   `TestRegistryTypesArePartitionedActiveOrPassive` fails otherwise, since the
+   database no longer lists types. No
+   migration: `monitors_timeout_check` (000099) only names the passive types
+   (`shared/models/passive.go`), so a new passive type is the one case that
+   rewrites it
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
-   through `dialGuard` (SSRF policy)
+   through `dialGuard` (SSRF policy); one with no dialer (ping) resolves once
+   and vets the IP with `netguard.Policy.Allows` (`ping_checker.go`)
 4. Secret fields → `MonitorSecretFields`
 5. UI: form component in `web/components/monitors/`, wire into
    `MonitorForm.tsx` (`MONITOR_TYPE_META` + `TYPE_FORMS` dispatch), types in
@@ -292,10 +390,17 @@ or imported groups come back empty. Any other path that creates groups through
    secrets coverage) — import/export support is automatic via the registry
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
    in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
+   `TypeIcon` in `shared/statustemplate/statustemplate.go`, the target
+   extractor in `newMonitorPresenters` (`status-page/internal/statuspage/presenter.go`),
    `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
-   `badge`), and the type count + `monitorGroups` on the
-   landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
+   `badge`), `monitorTargetLabel`/`monitorTarget` in `web/lib/monitor-utils.ts`,
+   the per-type case in `buildClonedConfig` (`web/lib/monitor-clone.ts`; drop
+   secrets the clone must re-enter), `monitorGroups` in
+   `website/lib/monitor-types.ts` (the landing and docs pages derive the type
+   count from it) and the count in the README prose
+8. Import: when Uptime Kuma has the type, map it in `kumaTypeTargets` and drop it
+   from `kumaSkipReasons` (`api/internal/services/import/kuma.go`)
 
 ## Cross-service contracts
 
@@ -355,25 +460,60 @@ or imported groups come back empty. Any other path that creates groups through
   form for non-admins (`useIsTenantAdmin`), and confirms every Test and run.
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
-  check-job names above show what drift costs).
+  check-job names above show what drift costs). `docker-compose.release.yml`
+  overrides only images, ports, credentials (platform ones `${VAR:?}`;
+  optional features' never a dev default — `OIDC_CLIENT_SECRET` is `:-`
+  empty; the deployment docs list both sets) and the client-IP chain (`edge`, fixed subnet, below), and never
+  re-declares wiring: new env goes in the base file.
+  The base has no `ADMIN_JWT_SECRET` default, so every `docker compose`
+  command needs it (Make falls back to `.dev-admin-jwt-secret`, CI sets a
+  dummy). Validate with
+  `docker compose -f docker-compose.yml -f docker-compose.release.yml config -q`
+  under dummy env, and keep `scripts/install.sh` generating every `:?` secret
+  (`bash scripts/test-install.sh` checks its `.env` handling: every form
+  Compose accepts, `export KEY=` and `KEY = v` included, counts as set).
+- **Unprivileged ping** (`WORKER_PING_MODE`, default `unprivileged`) needs
+  the `net.ipv4.ping_group_range` sysctl, set in Compose (worker `sysctls:`),
+  Helm (`worker.ping.sysctl` via the `workerPodSecurityContext` helper, for
+  the default fleet and location workers) and the location deploy snippets
+  (`api/internal/services/locations/deploy.go`). Change them together.
+- **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
+  ingress/proxy) lets private locations dial `wss://` on 443. Helm
+  `nats.websocket.*` (+ Ingress, which fails the render without
+  `nats.auth.enabled`; `PUBLIC_NATS_URL` derives from its host/path via
+  `monitoring-platform.publicNatsUrl`), Compose `nats_conf`/`nats_release_conf`
+  configs. The listener has no authorization block of its own, so the auth
+  callout covers it (`TestAuthorizationCalloutCoversWebsocketClients`);
+  `shared/queue` moves a ws URL's path into `nats.ProxyPath`.
 - **`PROBARA_SECRETS_KEY`**: needed by api, scheduler (dispatch decrypt),
   worker, alerter. Compose passes it through from the shell env to all four;
   Helm renders it through `monitoring-platform.secretEnv`, guarded by
   `monitoring-platform.hasSecret` — the guard tests "literal **or** any
   existing-Secret ref", never the literal alone, or an external-secret install
   silently runs with encryption off. Rotation keys (`_V2`+) go through the
-  chart's top-level `extraEnv`.
+  chart's top-level `extraEnv`. The same keyring also signs the one-click
+  acknowledge links (`shared/actionlink`, HKDF per key version): the alerter
+  and worker mint them through `plugin.Runtime.Links`, the API verifies them
+  at the public `/api/v1/alert-actions/{token}` (`routes_actions.go`), so a
+  keyring mismatch between them breaks the links.
 - **`SMTP_*` / `APP_BASE_URL`**: needed by alerter (alert delivery), worker
   (async dispatch), and **api** — `POST /alert-channels/{id}/test` runs the
   email plugin in the API process, so alerter-only SMTP yields channels that
   deliver alerts but fail every test with `mailer not configured`. Parsed once
   in `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
   top-level `smtp:` and `appBaseURL:` values render the env into all three
-  workloads via the `smtpEnv` helper. Compose wires none of it.
+  workloads via the `smtpEnv` helper; Compose passes them through from the
+  shell/`.env` to the same three (`x-smtp-env` anchor).
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
   `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
   deep links to notifications (every channel, via `plugin.Configure`) —
-  unset omits them, never a guessed host.
+  unset omits them, never a guessed host. It also gates the signed
+  acknowledge link (`present.Message.AckURL`, created/reminder only, never
+  on `DispatchRequest.Test`), which every plugin that can carry a link
+  renders and the paging plugins leave out. SLA report schedules
+  (`api/internal/services/reportschedules`) need both on the api: every
+  report email carries an unsubscribe link, so without either a schedule
+  cannot be enabled.
 - **Notification egress**: the same three workloads read
   `NOTIFICATION_BLOCK_PRIVATE_IPS` (default **true**) /
   `NOTIFICATION_ALLOWED_CIDRS` (`loadNotificationEgressConfig`); each main
@@ -382,6 +522,12 @@ or imported groups come back empty. Any other path that creates groups through
   This policy is independent of the worker's `HTTP_BLOCK_PRIVATE_IPS`
   (default false); both use `shared/netguard`, the single SSRF range table
   and resolve-then-dial guard (the worker's `dialGuard` is an alias of it).
+- **`STATUS_PAGE_SESSION_SECRET`**: status-page only, optional — without it
+  password and private pages are unavailable (fail closed) and public ones
+  serve. Helm renders it through `monitoring-platform.secretEnv` with
+  `optional: true` (canonical key `status_page_session_secret`), so an
+  existing Secret without the key still starts the pod; Compose passes it
+  through and `scripts/install.sh` generates it.
 - **`STATUS_PAGE_VAPID_*`**: status-page only, and both key halves are
   required or visitor notifications are off (no control rendered, push routes
   404). The **public** key is a literal `value:` in the PodSpec — the one
@@ -391,6 +537,47 @@ or imported groups come back empty. Any other path that creates groups through
   `go run ./cmd/admin/gen_vapid_keys`; never generate it at startup, and
   rotating it invalidates **every** stored subscription (`statusPage.vapid`
   in `values.yaml` explains both).
+- **`SLACK_*`** (`SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`,
+  `SLACK_SIGNING_SECRET`): api only, optional, parsed once in `shared/config`
+  (`loadSlackConfig`; ID and secret come as a pair). The alerter and worker
+  never need them: slack_app channels carry their own bot token. Compose
+  passes all three through (empty defaults; `install.sh` writes
+  placeholders); Helm's top-level `slack:` block renders them via
+  `monitoring-platform.secretEnv` (canonical keys `slack_signing_secret`,
+  `slack_client_secret`), and `slack.enabled` fails the render without the
+  signing secret. The OAuth redirect and interactivity URLs hang off
+  `PUBLIC_BASE_URL` (`api/internal/api/routes_chat.go`).
+- **`TRUSTED_PROXY_CIDRS`**: api and status-page. Every client IP (audit
+  log, session IPs, rate-limit keys) comes from `shared/clientip`, which
+  believes `X-Forwarded-For`/`X-Real-IP` only from those peers; never read a
+  forwarding header or `RemoteAddr` yourself — use `clientip.FromRequest`
+  (api, behind the router's resolver middleware) or a `Resolver`. Parsed once
+  in `shared/config` (`loadTrustedProxyCIDRs`); Compose passes it through to
+  both, Helm renders top-level `trustedProxyCIDRs` via `trustedProxyEnv`.
+  MCP carries the resolved IP to its inner dispatch as the inner
+  `RemoteAddr` (`clientIPHeader`), not as a forwarding header. The deprecated
+  `STATUS_PAGE_TRUSTED_PROXY=true` trusts every peer while the list is unset.
+  The UI's `/api` proxy cannot append to the chain, so it drops
+  `X-Forwarded-For`/`X-Real-IP` (`web/lib/proxy-headers.ts`) unless
+  `API_PROXY_TRUST_FORWARDED_FOR=true`; never make it pass them by default.
+  Next.js keeps a client-sent `X-Forwarded-For`, so that flag is safe only
+  behind a proxy that overwrites it: the release Compose file sets it on a
+  frontend reachable only through its `edge` Caddy (`header_up
+  X-Forwarded-For {client_ip}`) and trusts `PROBARA_NETWORK_SUBNET` on the
+  api; never publish that frontend's port.
+- **`LOCATION_WORKER_IMAGE`** (api): the image private-location deploy
+  snippets reference. Unset defaults to the worker at the api's
+  `buildinfo.Version` (`:alpha` for unreleased builds) —
+  `locations.DefaultWorkerImage`; never `:latest`. Helm sets
+  `{image.repository}-worker:{imageTag}` (override `api.locationWorkerImage`);
+  Compose passes it through. `shared/buildinfo.Version` is stamped by
+  `-ldflags -X` from each Go Dockerfile's `VERSION` build-arg
+  (`docker-build.yml`: the metadata action's version; Compose:
+  `PROBARA_VERSION`); a new Go Dockerfile must stamp it too. Images ship
+  linux/amd64 + linux/arm64 (`platforms` in the `docker-build.yml` matrix;
+  local-ai amd64 only): Go builders run `--platform=$BUILDPLATFORM` and
+  cross-compile with `TARGETOS`/`TARGETARCH`, and runtime bases are pinned
+  (`alpine:3.24`, never `latest`).
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job, but
   never the local AI pod, which holds no platform credentials — it has
   `localAI.extraEnv`) and `<service>.extraEnv`; `worker.extraEnv` also
@@ -417,7 +604,8 @@ or imported groups come back empty. Any other path that creates groups through
   as a literal `value:` in a PodSpec and never hardcode the Secret name — the
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
-  `oidc_client_secret`, `local_ai_token`) are the contract external secret
+  `oidc_client_secret`, `local_ai_token`, `slack_signing_secret`,
+  `slack_client_secret`) are the contract external secret
   managers fill.
   Helm cannot read Secrets, so anything the chart *composes* from a
   credential (the Postgres DSN, the embedded NATS URL) needs the composed
@@ -427,7 +615,21 @@ or imported groups come back empty. Any other path that creates groups through
   `nats-statefulset.yaml`). Never move it into `nats.conf` `$VAR` expansion:
   that re-parses the value as config (numeric, boolean-ish or
   space/comma/brace passwords abort startup), and quoting the reference
-  silently disables the expansion.
+  silently disables the expansion. The release Compose file passes it the same
+  way (a `--pass` command argument), never in its `nats_release_conf`.
+- **Browser/edge security**: `shared/securityheaders` owns the Go services'
+  headers (API strict policy, status-page per-page CSP, HSTS only on HTTPS
+  via `IsHTTPS` + `TRUSTED_PROXY_CIDRS`). The API mounts it, the CORS
+  allowlist (`middleware/cors.go`, `API_ALLOWED_ORIGINS`) and the anonymous
+  rate-limit stage in `useEdgeSecurity` (`api/internal/api/routes_edge.go`).
+  `authMiddleware` is wrapped by `rateLimiter.Authenticate`, which charges
+  validated credentials per credential and only 401s to the address failure
+  bucket; never refuse before auth on an address bucket. Which routes are
+  authenticated is derived from the router (`authRouteClassifier`), so new
+  routes need no list. Never echo `Origin` in a handler.
+  `SECURITY_HSTS_MAX_AGE` / `API_RATE_LIMIT_*` / `API_ALLOWED_ORIGINS` ride
+  Compose env and the chart's top-level `security:` block
+  (`monitoring-platform.securityEnv`) together.
 
 ## MCP server
 
@@ -453,6 +655,55 @@ or imported groups come back empty. Any other path that creates groups through
   session only, outside the write gate, with their own audit events.
 - `tools/list` filtering by capability is UX; enforcement is the inner
   dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
+
+## Identity and sessions
+
+Details in `docs/auth-and-rbac.md` (Sessions, Account lifecycle, Two-factor,
+Login lockout).
+
+- **Roles are never JWT claims.** The admin access JWT carries the admin ID
+  and `sid` (its session family) only; roles and `disabled_at` are read from
+  the database per request.
+- **`admin_session_families.revoked_at` is the one authority for a
+  sign-in.** Refresh rotation stays in the family; the refresh lookup and
+  `AuthMiddleware` (`middleware/session_family.go`) both read that row, so a
+  revoke ends the refresh chain and the access JWT on the next request. End
+  sessions only through `adminauth` (`RevokeFamily`, `RevokeUserSessions`),
+  never a bare `UPDATE admin_sessions`, and give any cookie path outside the
+  middleware the same check (`readAccessSession` for `/auth/me`, `/logout`).
+- **Login lockout is DB-backed and reserved before the password compare**
+  (`adminauth/lockout.go`). Keep refusals generic (one 401, one 429) and
+  count usernames with no password account in `login_failure_streaks` with
+  the same SQL (`lockoutAssignments`) plus a dummy bcrypt, so no response
+  reveals which accounts exist, on any replica. Never add in-memory or
+  per-IP login state: it differs per replica, and behind a proxy one IP is
+  every user.
+- `/account/*` is browser-session only, outside the write gate and generic
+  audit (`api/internal/api/routes_identity.go`); identity MCP tools live in
+  `catalog_identity.go`.
+- **Account tokens** (`admin_user_tokens`, `adminauth/tokens.go`): invite
+  7 d, password_reset 1 h, email_change 24 h; SHA-256-hashed, single use
+  (one conditional `UPDATE`), a new one supersedes the user's open ones of
+  that purpose. Links put the token in the URL **fragment**
+  (`/reset-password#token=…`, `services/accountmail`) and the API takes it
+  in the body; never add a lifecycle route with a token in its path.
+  `/auth/password/forgot` always answers 202 and works in the background
+  (no enumeration by status or timing). No SMTP/`APP_BASE_URL` → the
+  superadmin routes return the link instead of mailing it.
+- **Self-service identity is local-only**: password reset/change, email
+  change and TOTP require `password_hash` set and `external_subject` NULL
+  (`adminauth.Account.Local`). Never let an IdP-linked user change the
+  email: it is what links the identity.
+- **MFA is a second login step.** `Authenticate` returns
+  `*SecondFactorRequired` as an error (fail closed) → `{mfa_required,
+  mfa_token}` (not a JWT; bound to the password hash + enrollment) →
+  `POST /auth/login/mfa`. A correct password with 2FA pending only releases
+  its own lockout reservation, never resets the streak; any new path that
+  checks a second factor must go through `CompleteSecondFactor` /
+  `VerifyCredentials` so wrong codes lock like wrong passwords.
+  `totp_last_step` is the replay guard. Superadmin `reset-2fa` and
+  `cmd/admin -reset-2fa` are the recovery paths; a password reset never
+  turns 2FA off.
 
 ## Kubernetes discovery
 
@@ -508,6 +759,16 @@ or imported groups come back empty. Any other path that creates groups through
   without leader election. The claim
   predicates in `claimNotificationTx` and the in-memory pre-filter
   `shouldSendNotification` encode the same due rules; change them together.
+  `dueEvent` (`dispatch_due.go`) is the single created/reminder due rule
+  for the open-alert loops (`dispatchOpenAlerts`, `dispatchOpenMeshAlerts`,
+  `dispatchOpenLocationOfflineAlerts`);
+  `shouldSendNotification` mirrors it minus the escalation delay
+  (`TestDueEvent` pins the pair). Alert-level holds (ack, snooze) go in its
+  `DispatchGate`, never in a loop, and the claim re-checks them under the
+  alert row lock (`claimStatusAllows`; `TestClaimStatusMatchesPreFilter`
+  pins claim, pre-filter and `dueEvent`). The ack gate never goes in
+  `openAlertDispatchablePredicate`: suspected-cause follow-ups still reach
+  acknowledged alerts (snooze, which mutes them too, does go there).
   The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
   never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
@@ -515,19 +776,41 @@ or imported groups come back empty. Any other path that creates groups through
 - **Delivery ordering rests on row locks — keep them.** The async worker
   holds the alert row `FOR SHARE` from its status check through `Send`
   (`eventSuperseded` in `worker/internal/worker/notifications/consumer.go`),
-  so a trigger never reaches a provider after its resolve, and
-  `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff.
+  resolves included, since alerts can reopen: an envelope whose
+  `Alert.RelapseCount` is behind `alerts.relapse_count` is dropped, so a
+  stale resolve never closes a relapse. So a trigger never reaches a
+  provider after its resolve, a tier or
+  reminder whose envelope carries `StopOnAck` never reaches it after an ack
+  (nor anything but an ack after a snooze, `alertrouting.MuteHolds`), and
+  `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff
+  (routes without `StopOnAck`). A muted drop (not a resolve) releases the
+  alerter's claim in the same transaction (`releaseMutedClaim`), so the
+  event fires again once the mute lifts; a resolve dropped for a reopen
+  hands its `resolved` claim back to `created`
+  (`releaseSupersededResolveClaim`), so the relapse's resolve reaches it.
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.
 - **Alert wording lives in `shared/notifications/present`**, for every
   channel. `present.Build` turns an event into one `Message` (label, summary,
   metric, facts, deep link, tone); plugins reach it via
-  `DispatchRequest.View()` and own layout only. Add a new alert kind's or
+  `DispatchRequest.View()`, which passes the delivery context (base URL,
+  channel, link signer) as `present.Options` to `BuildWith`, and own layout
+  only. Add a new alert kind's or
   event type's wording in `labelFor`/`summaryFor`/`toneFor`/`metricFor`
   there, never in a plugin or template. Email wraps it (`email/view.go`:
   `alertView` = `present.Message` + palette) so `alert.gohtml` (HTML part)
   and `renderAlertText` (plain-text part) render from one model.
+- **Alert kinds**: `alerts_kind_check` (latest rewrite 000100) and the
+  `Kind*` constants in `shared/notifications/event.go` list the same kinds;
+  a new kind rewrites the CHECK in one migration and adds its constant.
+  A monitor-less kind also opens `alerts_subject_check` (latest rewrite
+  000102) and gets its own partial unique index for its `ON CONFLICT`.
+- **Transactional mail** (invites, resets, subscriber mail, reports) goes
+  through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
+  MIME builder; `Message.Validate` is the header-injection guard. It never
+  falls back to the alert default recipients. Alert email stays on
+  `SendAlert`.
 - **Channel plugins** (`shared/notifications/plugin/builtin/<type>/`,
   registered in `builtin.go`) follow the checklist in the `plugin` package
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and
@@ -548,6 +831,75 @@ or imported groups come back empty. Any other path that creates groups through
   inherits the first send's recipients and reaches nobody. A multi-recipient
   plugin skips what it reports delivered and records each acceptance (the
   `plugin` doc; `twilio` does).
+- **Reopen within cooldown** (`alerter/internal/alerter/reopen.go`, tenant
+  `alert_reopen_cooldown_seconds`): an auto-resolved availability alert
+  reopens instead of a new one opening (`relapse_count`, `reopened_at`), as
+  a new paging episode. A route whose row says `resolved` is paged through
+  the claim case `reopened` (mirrored in `dueEvent`/`shouldSendNotification`),
+  sent as `created` with `Alert.RelapseCount > 0`; plugins never see
+  `reopened`, and its wording lives in `present/relapse.go`. From relapse 1
+  every per-episode key carries the episode (`notifications.IdempotencyKeyFor`,
+  `RecipientEventKeyFor`, `OvertakenAckKeyFor`); never build
+  `alert:channel:event` by hand. NULL `resolved_via` marks the alerter's own
+  resolves, the only ones that reopen, so any new manual resolve path sets it.
+  A reopen clears `acknowledged_at`, so SLA MTTA reads
+  `first_acknowledged_at`/`first_ack_episode_started_at`, set once by every
+  acknowledgement path through `firstAckColumns`
+  (`api/internal/services/alerts/service.go`) and never cleared.
+- **Delivery history is append-only, one row per attempt or drop**
+  (`shared/notifications/deliverylog`, table `alert_notification_deliveries`,
+  kept `deliverylog.RetentionDays` by the scheduler's retention cleanup).
+  Written from the pool, never the claim or lock transaction, like the
+  recipient ledger: the alerter wraps `sendFunc` (`recordDeliveries`,
+  `delivery_log.go`: sync outcome, or `queued`), the worker calls
+  `recordAttempt`/`recordDrop` (its `delivery_log.go`). A new send path or drop
+  in either gets one such call; errors are stored through `SanitizeError`
+  only. `event_type` is free text, `outcome`/`path` are CHECKed. Read it via
+  `GET /alerts/{id}/deliveries`, `GET /alert-channels/{id}/deliveries` and
+  the channel list's `last_delivery`.
+- **People layer.** Contact addresses (`user_contacts`, `shared/contacts`)
+  are secrets envelopes shown only to their owner. A send to one person goes
+  through a plugin with `CapabilityDirectRecipient`
+  (`DispatchRequest.Recipient`), and an async envelope carries `ContactID`,
+  never the address (the worker resolves it with `contacts.LoadVerified`).
+  `shared/oncall` is the one answer to who is on call (`OnCallAt`/`Preview`:
+  overrides win, the last active layer wins, handoffs at local wall-clock
+  time); never query rotations to work it out (`oncall.LoadAt` loads one for
+  the alerter). Escalation policies page people
+  (`alerter/internal/alerter/escalation.go`, rules in `shared/escalation`):
+  a step claim is a row in `alert_escalation_states` (alert, episode, repeat
+  cycle, step), taken under the alert's `FOR SHARE` lock and gated on
+  `status = 'active'` and not snoozed; each contact reached is a row in
+  `alert_escalation_pages` under `escalation.PageKey`
+  (`escalation:<pos>:<cycle>[:<episode>]`), which also drives the
+  ack/resolve notices to everyone paged. Repeat cycles are person targets
+  only. Person sends go through `sendPerson`: email via the email plugin
+  with no channel (the worker's `loadEnvelopeChannel` stands in for it),
+  SMS via `personal_sms_channel_id`; each records a delivery row with
+  `user_id`/`contact_id`/`contact_kind`/`recipient` (`contact_kind` types a
+  channel-less row: an SMS page with no SMS channel has none either), and its ack link is scoped to the
+  contact (`DispatchRequest.View`, checked by the alert-actions `Scope`).
+  `monitors.escalation_policy_id` is set in the same statement that enters
+  `policy` mode (a CHECK requires it; a trigger clears it on leaving).
+  The on-call person picker (`oncall.Service.People`) needs write access and
+  lists members plus superadmins already scheduled in the workspace (all of
+  them only for a superadmin caller); never list installation-wide users to
+  a workspace.
+- **Chat cards follow the alert** (`alerter/internal/alerter/card_updates.go`).
+  A plugin with `CapabilityMessageUpdate` saves the card it posted through
+  `DispatchRequest.Messages` (`shared/notifications/messagestore`, table
+  `alert_notification_messages`, pool-only like the recipient ledger, one row
+  per alert and channel and paging episode). `dispatchCardUpdates` sends the
+  `updated` event when `rendered_state` differs from
+  `messagestore.CardStateSQL` (status, plus the snooze end); the claim case
+  `updated` in `claimNotificationTx` (`cardUpdateClaimSQL`) and
+  `shouldSendNotification` encode it, `claimStatusAllows` lets it through in
+  every state, and `messagestore.RenderedState` is the Go twin
+  (`TestCardStateSQLMatchesGo`). Never add one-shot events per ack/snooze
+  transition for chat; the reconcile converges. Its delivery key is
+  round-keyed like a reminder's (`RecipientEventKey`). The worker drops a queued
+  `updated` whose state the alert left (`eventSuperseded`); `Save` is a no-op
+  on `updated` (the claim holds the row).
 
 ## Status pages
 
@@ -568,6 +920,39 @@ or imported groups come back empty. Any other path that creates groups through
   (`status_page_section_monitors`, legacy `status_page_monitors`), never
   `statusPageSlugQuery`, which resolves upward through `monitor_groups` and
   would push a member's name to a page that only lists its parent group.
+- **Inline scripts need `{{cspNonce}}`.** Pages send a per-response nonce
+  CSP (`status-page/internal/statuspage/csp.go`): the render cache holds
+  HTML with `statustemplate.NoncePlaceholder`, and only a full 200 swaps in
+  a nonce and sets the header — a 304 must not carry a CSP. Every
+  `<script>`/`<style>` in `default.gohtml` carries `nonce="{{cspNonce}}"`;
+  a new one must too, or strict pages silently drop it.
+- **The visibility gate runs before everything.** `authorize`
+  (`status-page/internal/statuspage/access.go`) is the first thing
+  `HandleStatusPage` does — before the method guard, every sub-route and the
+  slug-keyed render cache — and keys on the first path segment, so a new
+  sub-route under `/public/status/{slug}/` is gated without extra code. Add
+  its suffix to `dispatchedSuffixes` in `access_test.go`
+  (`TestAuthorize_TableCoversDispatcher` fails until you do). Only `/unlock`
+  and `sw.js` are exempt; never dispatch a page route outside
+  `HandleStatusPage` or above the gate. `shared/pageaccess` is the contract
+  with the API (visibility values, password/token hashing, session cookies);
+  sessions bind to `password_version` or a token id and nothing about them is
+  stored, so the service stays read-only.
+- **Every page sub-route dispatches from `HandleStatusPage`**, never from
+  its own mux pattern, so a gate there covers it. Read-only add-ons
+  (`summary.json`, badges, `embed.js`, `feed.atom`) go through
+  `servePageAddon` (`addons.go`, suffixes in `pageAddonSuffixes`). Summary
+  and badges read the `pageSummary` built in `cachedPage` with the page's
+  HTML, so they cannot disagree with it; badges exist only for rendered
+  components, and uptime only where `show_global_uptime` /
+  `show_monitor_uptime` show it (hidden → `null`, uptime badge 404).
+  `writeAddon` never overwrites a `Cache-Control` set before
+  dispatch (a gated page's `private, no-store` must win).
+- **Public-route throttle keys come from a bounded space** — a resolved page
+  ID, a parsed client address — never raw request text such as the slug
+  (`HandleUnlock` looks the page up first; `pushRateLimiter` in
+  `push_handlers.go` explains its bound). The `/_sp_api` proxy gates and
+  scopes the page its path names (`proxyStatusPageID`), never a header alone.
 - **`Subscriber.handleEvent` early-returns** when no SSE client is connected
   and the render cache is empty — exactly when browser notifications matter —
   so the push wake-up sits **above** that guard. Anything hooked in below it
@@ -576,7 +961,8 @@ or imported groups come back empty. Any other path that creates groups through
 ## Web UI conventions
 
 - **Selected tenant**: `lib/tenant.ts` owns storage +
-  `TENANT_CHANGED_EVENT`; `components/providers/TenantProvider.tsx` is the
+  `TENANT_CHANGED_EVENT` (and `TENANTS_CHANGED_EVENT`, fired after a
+  workspace create/rename/delete so `TenantSwitcher` reloads its list); `components/providers/TenantProvider.tsx` is the
   React-side source of truth (`useSelectedTenantId`) and its `TenantScope`
   keys the page subtree on the tenant, so every page's mount-time fetch
   re-runs on a switch. Pages must not add their own `tenant-changed`
@@ -771,6 +1157,10 @@ or imported groups come back empty. Any other path that creates groups through
   `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus, marks
   `#app-root` inert while open and restores focus on close; pass `onEscape`
   unless the modal handles Escape itself (`Dialog` does).
+- **No inline `<script>` without the CSP nonce**: `proxy.ts` mints one per
+  request (policy in `lib/csp.ts`, report-only until `WEB_CSP_ENFORCE=true`)
+  and `app/layout.tsx` passes `x-nonce` to its boot script. Static security
+  headers live in `next.config.js` `headers()`.
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
@@ -839,7 +1229,9 @@ or imported groups come back empty. Any other path that creates groups through
   start script, run `python .github/workflows/scripts/local_ai_helm_cases.py`
   and `python3 -I scripts/check-local-ai-packaging.py` (render cases, fail
   cases and Compose wiring; CI runs both in `local-ai-pr.yml`).
-- Compose: `docker compose config` validates env wiring.
+- Compose: `ADMIN_JWT_SECRET=x docker compose config -q` validates env
+  wiring; for the release override add `-f docker-compose.yml -f
+  docker-compose.release.yml` and dummy values for its `:?` variables.
 - ai-service: from the repo root with the hash-locked deps installed
   (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
   PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests
@@ -863,7 +1255,11 @@ or imported groups come back empty. Any other path that creates groups through
   `stop-all-local` / `restart-all-local`. `make start-all` / `stop-all`
   instead run the backend in Compose (`docker-compose.yml` defines every
   service). Dex (test OIDC IdP, :5556) is opt-in in either mode:
-  `docker compose --profile sso up -d dex`.
+  `docker compose --profile sso up -d dex`. The dev nats also listens for
+  websockets on :8443. Compose requires `ADMIN_JWT_SECRET`: the Make targets
+  and `start-local-services.sh` use the shell value, else `.env`'s (Make
+  only), else the gitignored per-checkout `.dev-admin-jwt-secret`; raw
+  `docker compose` commands need it exported or in `.env`.
 - AI analysis is local only and default-on: api and the DB-connected worker
   call `ai-service` at `LOCAL_AI_URL` with `LOCAL_AI_TOKEN` (`shared/config`
   `loadLocalAIConfig`); absent workspace `ai_settings` rows default enabled.
@@ -1050,6 +1446,23 @@ or imported groups come back empty. Any other path that creates groups through
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **HTTP failure capture** (`capture_failure_response`) lives in
+  `worker/internal/worker/http_failure_capture.go`: it stores a redacted
+  response excerpt in `metrics_data.http.failure_response`, budgeted by
+  JSON-encoded size (`TestHTTPFailureCaptureSizeBound` keeps a row < 16 KiB).
+  Captured text never goes into `ErrorMessage`, which notifications quote.
+  Redact the whole read body before cutting the excerpt, never a prefix
+  (`TestHTTPFailureCaptureRedactionAtBudget`).
+- **Check output Postgres refuses** (NUL, invalid UTF-8, jsonb's `\u0000`
+  and lone surrogate escapes) would fail the whole result insert, so
+  `monitorstate.insertResult` scrubs `error_message`/`metrics_data` to U+FFFD
+  (`shared/monitorstate/pgsafe.go`); keep checkers emitting clean text too.
+- **Path-borne credentials** (`/push/{token}`, `/alert-actions/{token}`,
+  `/oncall-feeds/{token}.ics`): the API's request log, panic log and HTTP
+  metrics never use `r.URL.Path` raw — logs redact by the router's patterns,
+  metrics label by route pattern (`api/internal/middleware/route_redaction.go`).
+  Redaction keys on the parameter NAME, so a credential in a path must be a
+  `{…token}`/`{…secret}` parameter, and a handler must not log or echo it.
 
 ## Commits and PRs
 

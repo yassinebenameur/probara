@@ -10,6 +10,7 @@ import (
 	_ "embed"
 	"fmt"
 	"html/template"
+	"regexp"
 	"strings"
 )
 
@@ -80,6 +81,8 @@ func TypeIcon(kind string) string {
 		return "monitor-check"
 	case "redis", "postgres", "mongodb", "rabbitmq":
 		return "database"
+	case "domain":
+		return "calendar"
 	default:
 		return "activity"
 	}
@@ -127,6 +130,22 @@ func ExpandedStripCells(rangeName string) int {
 	}
 }
 
+// NoncePlaceholder is what {{cspNonce}} renders. The status-page service
+// swaps it for a fresh per-response nonce after the (cached) render, so one
+// rendered page serves many responses, each with its own nonce matching its
+// own Content-Security-Policy header. It is plain ASCII letters and
+// underscores, so html/template emits it unchanged in every context.
+const NoncePlaceholder = "__probara_csp_nonce_c7f19e2a__"
+
+// NonceToken is the literal a page's custom head/footer HTML may contain to
+// receive the nonce (that HTML is data, not template source, so the template
+// function cannot run inside it); the renderer substitutes it too.
+const NonceToken = "{{cspNonce}}"
+
+// CSPNonce is the cspNonce template function: inline <script> and <style>
+// elements carry nonce="{{cspNonce}}" to run under a strict CSP.
+func CSPNonce() string { return NoncePlaceholder }
+
 // FuncMap is the complete set of functions available to status page
 // templates, custom or default. Adding a function here extends the customer
 // template contract; removing or renaming one breaks published templates, so
@@ -138,7 +157,28 @@ func FuncMap() template.FuncMap {
 		"join":               strings.Join,
 		"monitorStripCells":  MonitorStripCells,
 		"typeIcon":           TypeIcon,
+		"cspNonce":           CSPNonce,
 	}
+}
+
+// scriptTag matches an opening <script ...> tag.
+var scriptTag = regexp.MustCompile(`(?is)<script\b[^>]*>`)
+
+// Warnings returns non-fatal problems in a template source. Today that is
+// <script> elements without nonce="{{cspNonce}}": a page in strict CSP mode
+// runs no script without the nonce, inline or external, so such a template
+// renders but its scripts silently do nothing.
+func Warnings(source string) []string {
+	missing := 0
+	for _, tag := range scriptTag.FindAllString(source, -1) {
+		if !strings.Contains(tag, "cspNonce") {
+			missing++
+		}
+	}
+	if missing == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%d <script> element(s) lack nonce=\"{{cspNonce}}\"; pages in strict CSP mode will not run them", missing)}
 }
 
 // New parses source as a public status page template with the standard

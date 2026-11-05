@@ -1,3 +1,18 @@
+# Mail transport and notification deep links, passed through from the shell or
+# .env to every process that can send email: alerter (delivery), worker (async
+# dispatch) and api (the channel test endpoint). Unset SMTP_HOST = no email.
+x-smtp-env: &smtp-env
+  SMTP_HOST: "${SMTP_HOST:-}"
+  SMTP_PORT: "${SMTP_PORT:-}"
+  # true = implicit TLS (port 465), never STARTTLS.
+  SMTP_USE_TLS: "${SMTP_USE_TLS:-}"
+  SMTP_USERNAME: "${SMTP_USERNAME:-}"
+  SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+  SMTP_FROM: "${SMTP_FROM:-}"
+  SMTP_FROM_NAME: "${SMTP_FROM_NAME:-}"
+  # Operator-UI origin for "open the monitor" links; unset omits them.
+  APP_BASE_URL: "${APP_BASE_URL:-}"
+
 services:
   # Infrastructure services
   postgres:
@@ -5,7 +20,8 @@ services:
     container_name: probara-postgres
     environment:
       POSTGRES_USER: probara
-      POSTGRES_PASSWORD: probara
+      # Development default; docker-compose.release.yml requires a real one.
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-probara}"
       POSTGRES_DB: probara
     ports:
       - "5432:5432"
@@ -22,13 +38,20 @@ services:
   nats:
     image: nats:2.10-alpine
     container_name: probara-nats
+    # JetStream, monitoring and the websocket listener live in nats.conf
+    # (configs below); websocket has no command-line flag.
     command:
-      - "-js"
-      - "-m"
-      - "8222"
+      - "-c"
+      - "/etc/nats/nats.conf"
+    configs:
+      - source: nats_conf
+        target: /etc/nats/nats.conf
     ports:
       - "4222:4222"
       - "8222:8222"
+      # Websocket listener (plaintext): private-location workers reach it as
+      # wss:// through a TLS-terminating reverse proxy on 443.
+      - "8443:8443"
     volumes:
       - nats_data:/data
     healthcheck:
@@ -44,9 +67,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.migrations
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-migrations
     environment:
-      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:-probara}@postgres:5432/probara?sslmode=disable"
     volumes:
       - ./shared/db/migrations:/app/migrations:ro
     depends_on:
@@ -127,6 +152,11 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+      # Stamped into shared/buildinfo. A release number (e.g. 2.0.0-alpha.10)
+      # also makes the api default LOCATION_WORKER_IMAGE to the worker at that
+      # tag; unset builds report "dev" and default it to :alpha.
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-api
     environment:
       # Local AI client (api + worker only; same token as the local-ai service).
@@ -139,7 +169,7 @@ services:
       HTTP_PORT: "8080"
       METRICS_PORT: "9090"
       LOG_LEVEL: "info"
-      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:-probara}@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
       # Must match the scheduler/worker values below: "Run now" publishes
       # check jobs from the API and silently breaks if these diverge.
@@ -148,7 +178,9 @@ services:
       # Optional monitor-config encryption key; set the same value on the
       # api, scheduler, worker, and alerter services (unset = plaintext dev).
       PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:-}"
-      ADMIN_JWT_SECRET: "your-secret-key-change-in-production"
+      # Required, no default: `make` targets supply a per-checkout secret
+      # (.dev-admin-jwt-secret), scripts/install.sh writes one into .env.
+      ADMIN_JWT_SECRET: "${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET is required: export it, put it in .env, or use make / scripts/install.sh}"
       ADMIN_ACCESS_TTL_MINUTES: "15"
       ADMIN_REFRESH_TTL_DAYS: "30"
       ADMIN_COOKIE_SECURE: "false"
@@ -167,6 +199,32 @@ services:
       OIDC_SCOPES: "${OIDC_SCOPES:-openid profile email}"
       OIDC_GROUPS_CLAIM: "${OIDC_GROUPS_CLAIM:-groups}"
       AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-365}"
+      # Reverse proxies whose X-Forwarded-For / X-Real-IP are believed for
+      # audit and session IPs (comma-separated CIDRs or IPs). Empty = the TCP
+      # peer only. Set the same value on status-page.
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      # Image the private-location deploy snippets reference. Empty = the
+      # worker at this api's release version (see the build args above).
+      LOCATION_WORKER_IMAGE: "${LOCATION_WORKER_IMAGE:-}"
+      # Browser/edge security. HSTS max-age in seconds: 0 (off) for local
+      # HTTP; it is only ever sent on HTTPS requests. Set the same value on
+      # status-page. The general rate limit is per validated credential (per
+      # client IP only for auth failures and unauthenticated routes), per api
+      # replica; 0 disables it. API_ALLOWED_ORIGINS lists
+      # the browser origins allowed credentialed CORS (empty = same-origin).
+      SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
+      API_RATE_LIMIT_PER_MINUTE: "${API_RATE_LIMIT_PER_MINUTE:-600}"
+      API_RATE_LIMIT_BURST: "${API_RATE_LIMIT_BURST:-120}"
+      API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-}"
+      # Externally reachable API origin for agent installers and push URLs.
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+      # Slack app (slack_app channels; api only, all optional): the OAuth
+      # client pair turns on "Add to Slack" (needs PUBLIC_BASE_URL), the
+      # signing secret verifies Acknowledge button presses.
+      SLACK_CLIENT_ID: "${SLACK_CLIENT_ID:-}"
+      SLACK_CLIENT_SECRET: "${SLACK_CLIENT_SECRET:-}"
+      SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET:-}"
+      <<: *smtp-env
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -193,12 +251,14 @@ services:
     build:
       context: .
       dockerfile: scheduler/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-scheduler
     environment:
       HTTP_PORT: "8081"
       METRICS_PORT: "9091"
       LOG_LEVEL: "info"
-      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:-probara}@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
       CHECK_JOB_STREAM: "check-jobs"
       CHECK_JOB_SUBJECT: "check.job"
@@ -232,6 +292,8 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-worker
     environment:
       # Local AI client (api + worker only; same token as the local-ai service).
@@ -242,7 +304,7 @@ services:
       HTTP_PORT: "8083"
       METRICS_PORT: "9092"
       LOG_LEVEL: "info"
-      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:-probara}@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
       CHECK_JOB_STREAM: "check-jobs"
       CHECK_JOB_SUBJECT: "check.job"
@@ -254,6 +316,13 @@ services:
       AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       SIP_LOCALHOST_AS_HOST_GATEWAY: "true"
+      <<: *smtp-env
+      # Ping socket mode; unprivileged needs the sysctl below (Helm: worker.ping).
+      WORKER_PING_MODE: "unprivileged"
+    # Lets every group open unprivileged ICMP ("ping") sockets. Docker sets
+    # this by default since 20.10; it is explicit so older engines match Helm.
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
     ports:
       - "9092:9092"
     volumes:
@@ -302,6 +371,8 @@ services:
   #     NATS_CONSUMER_NAME: "worker"
   #     WORKER_LOCATION_ID: "<location-uuid-from-the-locations-page>"
   #     WORKER_CONCURRENCY: "10"
+  #   sysctls:
+  #     net.ipv4.ping_group_range: "0 2147483647"
   #   depends_on:
   #     nats:
   #       condition: service_healthy
@@ -313,12 +384,14 @@ services:
     build:
       context: .
       dockerfile: status-page/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-status-page
     environment:
       HTTP_PORT: "8082"
       METRICS_PORT: "9093"
       LOG_LEVEL: "info"
-      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:-probara}@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
       STATUS_PAGE_BASE_URL: "http://localhost:8082"
       STATUS_PAGE_API_BASE_URL: "http://api:8080"
@@ -339,6 +412,20 @@ services:
       STATUS_PAGE_VAPID_PUBLIC_KEY: "${STATUS_PAGE_VAPID_PUBLIC_KEY:-}"
       STATUS_PAGE_VAPID_PRIVATE_KEY: "${STATUS_PAGE_VAPID_PRIVATE_KEY:-}"
       STATUS_PAGE_VAPID_SUBJECT: "${STATUS_PAGE_VAPID_SUBJECT:-}"
+      # Signs visitor sessions on password and private pages (at least 32
+      # characters; `openssl rand -hex 32`). Unset leaves those pages
+      # unavailable while public and unlisted pages serve as usual;
+      # scripts/install.sh generates one for release installs.
+      STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:-}"
+      # Keys the push endpoints' per-IP rate limit; same value as on api.
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      # Same HSTS max-age as on api. APP_BASE_URL (the operator UI origin)
+      # joins every page's CSP frame-ancestors so the template editor can
+      # preview pages in an iframe. Empty (the default) lets any site frame
+      # the draft preview route, so a UI on any host can preview; set it to
+      # lock the preview to your UI.
+      SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
     ports:
       - "8082:8082"
       - "9093:9093"
@@ -361,12 +448,14 @@ services:
     build:
       context: .
       dockerfile: alerter/Dockerfile
+      args:
+        VERSION: "${PROBARA_VERSION:-dev}"
     container_name: probara-alerter
     environment:
       HTTP_PORT: "8084"
       METRICS_PORT: "9094"
       LOG_LEVEL: "info"
-      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:-probara}@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
       PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:-}"
       ALERT_STREAM: "ALERTS"
@@ -379,6 +468,7 @@ services:
       # switch off it stops sending suspected-cause follow-ups.
       LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
       AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
+      <<: *smtp-env
     ports:
       - "9094:9094"
     depends_on:
@@ -412,6 +502,20 @@ services:
     networks:
       - probara-network
     restart: unless-stopped
+
+configs:
+  # Development broker: no authentication. docker-compose.release.yml swaps in
+  # a config with the auth callout private locations need.
+  nats_conf:
+    content: |
+      jetstream {
+        store_dir: /data
+      }
+      http_port: 8222
+      websocket {
+        port: 8443
+        no_tls: true
+      }
 
 volumes:
   postgres_data:

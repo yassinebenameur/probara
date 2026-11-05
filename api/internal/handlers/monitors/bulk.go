@@ -51,6 +51,12 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 		errors.WriteValidationError(w, err.Error())
 		return
 	}
+	if req.NotificationMode != nil && *req.NotificationMode == "policy" {
+		// Escalation policies are assigned per monitor (or as the workspace
+		// default policy), never in bulk.
+		errors.WriteValidationError(w, "bulk alerting sets notification_mode 'default' or 'custom'; assign escalation policies per monitor")
+		return
+	}
 
 	monitorIDs := make([]uuid.UUID, 0, len(req.MonitorIDs))
 	for _, idStr := range req.MonitorIDs {

@@ -23,7 +23,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The control-plane API is rooted at `{API_ORIGIN}/api/v1`. The API serves `/healthz`, `/readyz`, and `/metrics` on `HTTP_PORT` (8080 in the bundled deployments); its declared `METRICS_PORT` does not have a separate listener. Public rendered status pages are served by the separate [status-page service](/docs/status-pages/#public-routes).",
+            "The control-plane API is rooted at `{API_ORIGIN}/api/v1`. The API serves `/healthz`, `/readyz`, and `/metrics` on `HTTP_PORT` (8080 in the bundled deployments); its declared `METRICS_PORT` does not have a separate listener. Public rendered status pages are served by the separate [status-page service](/docs/status-pages/#public-routes), together with their unauthenticated machine-readable views: [`summary.json`](/docs/status-pages/#summary-json), [SVG badges](/docs/status-pages/#badges) and the [Atom feed](/docs/status-pages/#feed).",
         },
         {
           type: "code",
@@ -92,6 +92,11 @@ export const API_PAGE: DocPage = {
               term: "Push token",
               description:
                 "Used only in `/api/v1/push/{token}`. No cookie or bearer key is required because possession of the URL token authorizes a heartbeat.",
+            },
+            {
+              term: "Alert action token",
+              description:
+                "Used only in `/api/v1/alert-actions/{token}`, the signed one-click [acknowledge link](/docs/alerting/#ack-links) a notification carries. It authorizes acknowledging one alert, for 72 hours, and nothing else.",
             },
             {
               term: "MCP access token",
@@ -301,7 +306,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Test and run have different side effects",
           text:
-            "`POST /monitors/test` is allowed for viewers/read keys because it is compute-only. `POST /monitors/{id}/run` publishes a normal job, stores the result, changes state, and can trigger alerts, so it requires write permission. For a SIP test-call monitor (`method: invite`) both place a real call, so both, like creating or changing one, need a signed-in tenant admin or superadmin; every API key gets HTTP 403.",
+            "`POST /monitors/test` is allowed for viewers/read keys because it is compute-only, but a test that names a saved monitor (`monitor_id`) of a type with [secret fields](/docs/monitors/#secrets), which includes `http`, `grpc` and the synthetic types, runs with its stored credentials and so requires write permission. `POST /monitors/{id}/run` publishes a normal job, stores the result, changes state, and can trigger alerts, so it requires write permission. For a SIP test-call monitor (`method: invite`) both place a real call, so both, like creating or changing one, need a signed-in tenant admin or superadmin; every API key gets HTTP 403.",
         },
       ],
     },
@@ -383,6 +388,27 @@ export const API_PAGE: DocPage = {
       ],
     },
     {
+      id: "monitor-history-api",
+      title: "Monitor config history",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every create and update of a monitor (from any surface, including import, MCP, bulk edits, member and dependency edits, discovery approval and restores) records a numbered [config version](/docs/monitors/#config-history): a masked snapshot of the monitor's configuration with the actor (`actor_type` `user`, `api_key` or `system`, `actor_id`, `actor_label`), the `source` (`ui`, `api`, `mcp`, `import`, `restore`, `discovery`) and the secret fields the write set or cleared (`changed_secret_fields`, names only). A write that changes nothing is not recorded. Each monitor keeps its last 100 versions; there is no backfill, so `history_starts_at` says when the monitor's history begins and `truncated` whether older versions were pruned.",
+        },
+        {
+          type: "table",
+          columns: ["Method and path", "Required role and purpose"],
+          rows: [
+            ["`GET /api/v1/monitors/{id}/versions`", "Authenticated; versions newest first, each with `changed_fields` (snapshot paths such as `config.url` that differ from the previous version)"],
+            ["`GET /api/v1/monitors/{id}/versions/{version}`", "Authenticated; one version with its `snapshot` (secrets read `***`); 404 for an unknown or pruned version"],
+            ["`GET /api/v1/monitors/{id}/versions/{version}/diff`", "Authenticated; `changes` (`path`, `before`, `after`) leading from `against` to the version. `against` is a version number, `current` (the live monitor: what a restore would change) or omitted (the previous version)"],
+            ["`POST /api/v1/monitors/{id}/versions/{version}/restore`", "Write; re-apply the version as a new version (`restored_from`). Validation, the SIP test-call gate and group member and dependency syncs apply as for `PATCH`. Secrets are never restored or removed: every secret keeps its current value, including secret map keys added after the version. Returns the `monitor` and `dropped_references` (`channel:`, `location:`, `dependency:`, `member:`, `escalation_policy:` IDs that no longer exist and were left out; a dropped policy restores `notification_mode` `default`); 400 when the version no longer validates"],
+          ],
+        },
+      ],
+    },
+    {
       id: "locations-and-mesh",
       title: "Locations, mesh, and maintenance",
       blocks: [
@@ -428,6 +454,14 @@ export const API_PAGE: DocPage = {
               "`DELETE /api/v1/maintenance-windows/{id}`",
               "Delete a maintenance window",
             ],
+            [
+              "`POST /api/v1/maintenance-windows/{id}/end`",
+              "End the occurrence in progress now; the rule (and a repeating window's later occurrences) is unchanged",
+            ],
+            [
+              "`POST /api/v1/maintenance-windows/preview`",
+              "Compute-only: the next occurrences of a schedule (`starts_at`, `ends_at`, `recurrence`, `count` up to 50); open to read-only identities",
+            ],
           ],
         },
         {
@@ -436,6 +470,13 @@ export const API_PAGE: DocPage = {
           title: "Create maintenance",
           code:
             '{\n  "title": "Database upgrade",\n  "description": "Planned primary database maintenance",\n  "starts_at": "2026-08-01T22:00:00Z",\n  "ends_at": "2026-08-01T23:30:00Z",\n  "monitor_ids": ["<monitor-id>"]\n}',
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Create a repeating window (Sundays 02:00-03:00 Paris time)",
+          code:
+            '{\n  "title": "Weekly patching",\n  "starts_at": "2026-11-08T01:00:00Z",\n  "ends_at": "2026-11-08T02:00:00Z",\n  "monitor_ids": ["<monitor-id>"],\n  "recurrence": {\n    "frequency": "weekly",\n    "weekdays": [0],\n    "timezone": "Europe/Paris"\n  }\n}',
         },
       ],
     },
@@ -462,6 +503,14 @@ export const API_PAGE: DocPage = {
               "Issue a closed period's report (`{\"period\": \"2026-09\"}`, default the last closed period); `409` when already issued",
             ],
             ["`GET /api/v1/sla-reports/{id}`", "An issued report as frozen; `format=json|csv|pdf` returns a download"],
+            ["`GET /api/v1/report-schedules`", "List emailed report schedules (`sla_id` filters); `mail_ready`/`mail_problem` say whether the API can send"],
+            ["`POST /api/v1/report-schedules`", "Create a schedule: `sla_id`, `recipients`, `formats` (`pdf`, `csv`), `auto_issue`, `enabled`; enabling needs SMTP and `APP_BASE_URL`"],
+            ["`GET /api/v1/report-schedules/{id}`", "Get a schedule with its unsubscribed recipients and last run"],
+            ["`PATCH /api/v1/report-schedules/{id}`", "Partially update a schedule; `recipients`/`formats` replace the lists"],
+            ["`DELETE /api/v1/report-schedules/{id}`", "Delete a schedule; its unsubscribe links stop working"],
+            ["`POST /api/v1/report-schedules/{id}/send`", "Email the last closed period now, without issuing it"],
+            ["`GET /api/v1/report-unsubscribe/{token}`", "Public: what an unsubscribe link is for (never acts)"],
+            ["`POST /api/v1/report-unsubscribe/{token}`", "Public: unsubscribe the link's recipient (also RFC 8058 one-click)"],
           ],
         },
         {
@@ -528,7 +577,7 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET /api/v1/alerts`",
-              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`, and `q`, a case-insensitive search of the subject: the monitor name or either location of a mesh alert, or an exact alert ID, up to 200 characters), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`, and `q`, a case-insensitive search of the subject: the monitor name or either location of a mesh alert, or an exact alert ID, up to 200 characters), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies; `muted_reason` (`snoozed` or `acknowledged`) when an acknowledgement or snooze stops the paging, with `acknowledged_by_user_id`, `acknowledged_via`, `unacknowledged_at` and `snoozed_until`; and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
             ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
@@ -542,7 +591,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/alerts/{id}/resolve`",
-              "Manually close an alert lifecycle",
+              "Manually close an alert lifecycle; records `resolved_via` (`ui`, `api` or `mcp`) and `resolved_by_user_id`, and a manually resolved alert never [reopens](/docs/alerting/#availability)",
             ],
             [
               "`POST /api/v1/alerts/bulk/acknowledge`",
@@ -557,8 +606,36 @@ export const API_PAGE: DocPage = {
               "Write; confirm or correct a ready triage as an [AI label](#ai-labels)",
             ],
             [
+              "`POST /api/v1/alerts/{id}/unacknowledge`",
+              "Write; return an acknowledged alert to `active`. Paging resumes with its clocks counted from now ([acknowledgement](/docs/alerting/#model)); 404 when the alert is not acknowledged",
+            ],
+            [
+              "`POST /api/v1/alerts/bulk/unacknowledge`",
+              "Write; unacknowledge many alerts, same body and response shape as bulk acknowledge (reason `not_found`, `not_acknowledged` or `already_resolved`), one `alert.unacknowledge` audit event per alert",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/snooze`",
+              "Write; mute an open alert's tiers, reminders and suspected-cause follow-ups, body `{\"minutes\": n}` or `{\"until\": \"RFC 3339\"}` (1 minute to 7 days; 400 outside). Replaces a running snooze; opens no maintenance window",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/unsnooze`",
+              "Write; end a running snooze now (404 when not snoozed)",
+            ],
+            [
+              "`GET /api/v1/alerts/{id}/deliveries`",
+              "The alert's [delivery history](/docs/alerting/#channels), newest first, paged (`page`, `page_size` up to 100); 404 for another workspace's alert",
+            ],
+            [
+              "`GET /api/v1/alert-actions/{token}`",
+              "Public, authorized by a signed [acknowledge link](/docs/alerting/#ack-links) token; never changes anything. Returns `state` (`pending`, `already` or `resolved` with HTTP 200; `expired` 410; `invalid` 404), a small `alert` summary (`subject`, `kind`, `status`, `triggered_at`, `acknowledged_at`) and the link's `expires_at`",
+            ],
+            [
+              "`POST /api/v1/alert-actions/{token}`",
+              "Public, same token; acknowledges the alert with `acknowledged_via` `magic_link` and no user. `state` is `acknowledged` (200), `already` or `resolved` (409), `expired` (410) or `invalid` (404). Each attempt with an authentic token records an `alert.acknowledge` audit event (actor `anonymous`, label `magic link`, `details.channel_id`)",
+            ],
+            [
               "`GET /api/v1/alert-channels`",
-              "List configured channels",
+              "List configured channels; each carries `last_delivery`, its newest delivery-history row, when it has one",
             ],
             [
               "`POST /api/v1/alert-channels`",
@@ -581,6 +658,10 @@ export const API_PAGE: DocPage = {
               "Send a real test notification",
             ],
             [
+              "`GET /api/v1/alert-channels/{id}/deliveries`",
+              "The channel's delivery history across alerts, newest first, paged like the alert's",
+            ],
+            [
               "`GET /api/v1/alert-channel-plugins`",
               "List channel plugin form manifests",
             ],
@@ -590,11 +671,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/notification-settings`",
-              "Read tenant defaults, reminders, anomaly and auto-incident settings",
+              "Read tenant defaults (each route with `delay_seconds` and `notify_after_ack`), reminders, stop-on-ack (`ack_stops_notifications`), offline-location alerts (`location_offline_alerts_enabled`, `location_offline_after_seconds`), the reopen cooldown (`alert_reopen_cooldown_seconds`, 0-86,400, 0 = off), anomaly and auto-incident settings",
             ],
             [
               "`PUT /api/v1/notification-settings`",
-              "Replace tenant notification settings",
+              "Replace tenant notification settings; `default_escalation_policy_id` sets the workspace default [escalation policy](/docs/alerting/#escalation) (`\"\"` clears it, absent keeps it)",
             ],
           ],
         },
@@ -609,6 +690,11 @@ export const API_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Alert reads (list, detail, recent alerts, and the acknowledge and resolve responses) and the `alerts[]` of `GET /incidents/{id}` include a read-only `triage` object when the alert has a triage row. The object is omitted when there is no row, and stream events never carry it. Fields that do not apply are `null`: `id`, `status` (`pending`, `ready`, `failed`, `skipped`), `hypothesis` (catalogue key) and `title`, `confidence` (`low`, `medium`, `high`) and `summary` when ready, `skip_reason` (`resolved`, `cooldown`, `not_modeled`, `disabled`) when skipped, `error_message` (a fixed string) when failed, `created_at` (claim time), `completed_at`, `labelled`, and `labelable` (ready and at least one decision was sent to the model). Only `GET /alerts/{id}` adds `label_context`, in the same shape as an incident analysis's, when the triage is labelable.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A delivery-history row has `id`, `alert_id`, `channel_id`, `channel_name` (as it was at send time), `channel_type`, `event_type` (`created`, `reminder`, `resolved`, `acknowledged`, `suspected_cause`; treat others as new event types), `delivery_key` (tells reminder rounds apart), `attempt` (1-based), `path` (`sync`: the alerter sent it; `async`: queued for a delivery worker, whose rows follow), `outcome` (`queued`, `delivered`, `failed`, `permanent_failure`, `dropped_superseded`, `dropped_ack`), `error` (at most 512 characters, URLs cut to their host and credentials masked; `null` on success), `recipients_total` and `recipients_delivered` (SMS only, else `null`), `alert_kind`, `monitor_name` (`null` for alerts without a monitor) and `created_at`. Rows are kept 90 days.",
         },
       ],
     },
@@ -896,7 +982,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Capability URLs are credentials",
           text:
-            "Redact push tokens from logs and tracing. [Agent installer](/docs/agents/#install) responses can embed a tenant API key supplied for installation and must be handled as secret output.",
+            "The API never records them itself: its request log replaces the token segment of `/push/{token}`, `/alert-actions/{token}` and every other route whose path parameter names a token or secret with that placeholder, and its `http_requests_total` / `http_request_duration_seconds` metrics are labelled by route pattern, never by path. Redact them in your own reverse proxies, access logs and tracing. [Agent installer](/docs/agents/#install) responses can embed a tenant API key supplied for installation and must be handled as secret output.",
         },
       ],
     },
@@ -967,7 +1053,19 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/tenants`",
-              "Admin session; list membership-filtered tenants or all for superadmin",
+              "Admin session; list membership-filtered tenants or all for superadmin; deleted workspaces are never listed",
+            ],
+            [
+              "`POST /api/v1/tenants`",
+              "Superadmin; create a workspace (`name`)",
+            ],
+            [
+              "`PATCH /api/v1/tenants/{id}`",
+              "Superadmin; rename a workspace (`name`)",
+            ],
+            [
+              "`DELETE /api/v1/tenants/{id}`",
+              "Superadmin; delete a workspace (`confirm_name` repeats its name); access stops at once and the data is purged in the background",
             ],
             [
               "`GET /api/v1/tenant-settings`",
@@ -1045,6 +1143,69 @@ export const API_PAGE: DocPage = {
               "`DELETE /api/v1/oidc-group-mappings/{id}`",
               "Superadmin; remove a mapping",
             ],
+          ],
+        },
+      ],
+    },
+    {
+      id: "people-api",
+      title: "Contacts and on-call endpoints",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Personal [contacts](/docs/administration/#contacts) belong to the signed-in user: the `/account/contacts` routes accept a browser session only (API keys and MCP tokens get 403), every role may use them, and they are not MCP tools. [On-call schedules](/docs/alerting/#oncall) are workspace resources: members read them, writers change them, and every route but the calendar feed is an MCP tool. [Escalation policies](#escalation-api) page whoever a schedule has on call.",
+        },
+        {
+          type: "table",
+          columns: ["Method and path", "Required role and purpose"],
+          rows: [
+            ["`GET /api/v1/account/contacts`", "Your contacts with their addresses, plus `transports` (`email`: SMTP configured; `sms`: the selected workspace has an SMS channel for people)"],
+            ["`POST /api/v1/account/contacts`", "Add an unverified contact (`kind` `email` or `sms`, `address`, optional `label`); at most 10; a duplicate is 409"],
+            ["`PATCH /api/v1/account/contacts/{id}`", "Rename (`label`); the address cannot change"],
+            ["`DELETE /api/v1/account/contacts/{id}`", "Remove a contact"],
+            ["`POST /api/v1/account/contacts/{id}/send-code`", "Send a 6-digit code (15 minutes, 5 guesses); 409 when verified or the transport is not set up, 429 with `Retry-After` within 60 seconds of the last code or past 10 codes and tests per hour, 502 when the provider refused it"],
+            ["`POST /api/v1/account/contacts/{id}/verify`", "Submit `code`; a wrong code is 400 `incorrect_code` with the attempts left, and the fifth wrong guess voids the code"],
+            ["`POST /api/v1/account/contacts/{id}/test`", "Send a test message to a verified contact (same limits as codes)"],
+            ["`GET /api/v1/people-settings`", "Authenticated; the workspace's `personal_sms_channel_id` and the channels that can fill it"],
+            ["`PUT /api/v1/people-settings`", "Tenant admin; set or clear (`null`) `personal_sms_channel_id`, a channel whose plugin can text one person (SMS via Twilio)"],
+            ["`GET /api/v1/oncall-schedules`", "Authenticated; schedules with `on_call` (the current shift or null) and `next`"],
+            ["`POST /api/v1/oncall-schedules`", "Write; create (`name`, `description`, `timezone`, `rotations[]`: `kind` `daily`/`weekly`, `handoff_time` `HH:MM`, `handoff_weekday` 0-6 for weekly, `start_at`, optional `end_at`, `member_ids` in turn order, optional `name`); at most 10 rotations of 50 members"],
+            ["`GET /api/v1/oncall-schedules/people`", "Write; the people to pick from when editing (the workspace's members, plus superadmins already on one of its schedules, or every superadmin for a superadmin caller) with their verified contact count. Any member or superadmin is accepted by ID"],
+            ["`GET /api/v1/oncall-schedules/{id}`", "Authenticated; one schedule with `on_call` and `next`"],
+            ["`PUT /api/v1/oncall-schedules/{id}`", "Write; replace fields and every rotation (overrides and the feed are kept)"],
+            ["`DELETE /api/v1/oncall-schedules/{id}`", "Write; delete with rotations, overrides and feed"],
+            ["`GET /api/v1/oncall-schedules/{id}/on-call`", "Authenticated; who is on call at `at` (RFC 3339, default now), with the shift and the next one"],
+            ["`GET /api/v1/oncall-schedules/{id}/preview`", "Authenticated; shifts over `from`–`to` (default now plus 14 days, at most 93 days), merged per person, gaps omitted"],
+            ["`GET /api/v1/oncall-schedules/{id}/overrides`", "Authenticated; overrides ending after `from` (default now) and, with `to`, starting before it"],
+            ["`POST /api/v1/oncall-schedules/{id}/overrides`", "Write; `user_id`, `starts_at`, `ends_at` (future, at most 93 days long), optional `note`"],
+            ["`DELETE /api/v1/oncall-schedules/{id}/overrides/{overrideId}`", "Write; remove an override"],
+            ["`POST /api/v1/oncall-schedules/{id}/ical-token`", "Write; turn the calendar feed on with a new link (revoking the old one); returns `token`, `path` and, with `PUBLIC_BASE_URL` set, `url`, once"],
+            ["`DELETE /api/v1/oncall-schedules/{id}/ical-token`", "Write; turn the feed off"],
+            ["`GET /api/v1/oncall-feeds/{token}.ics`", "Public, no credential but the token; `text/calendar` with the shifts from two weeks back to nine weeks ahead; 404 for an unknown or revoked token. Covered by the anonymous rate limit"],
+          ],
+        },
+      ],
+    },
+    {
+      id: "escalation-api",
+      title: "Escalation policy endpoints",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "[Escalation policies](/docs/alerting/#escalation) are workspace resources: members read them, writers change them, and every route is an MCP tool. A monitor uses one with `notification_mode` `policy` and `escalation_policy_id` on create or update (required when entering the mode; sent alone it switches a monitor already in it); `POST /monitors/bulk/alerting` refuses `policy`. The workspace default is `default_escalation_policy_id` in notification settings.",
+        },
+        {
+          type: "table",
+          columns: ["Method and path", "Required role and purpose"],
+          rows: [
+            ["`GET /api/v1/escalation-policies`", "Authenticated; `items` with `steps[]` (`delay_seconds`, `targets[]` with `kind`, the ID it needs, `label` and `reachable`), `repeat_count`, `repeat_after_seconds`, `monitor_count` and `tenant_default`"],
+            ["`POST /api/v1/escalation-policies`", "Write; create (`name` unique in the workspace, optional `description`, `repeat_count` 0-10, `repeat_after_seconds` 60-86,400 default 1,800, `steps[]`: 1-10 with non-decreasing `delay_seconds` 0-604,800 and 1-20 `targets`: `{kind: user, user_id}`, `{kind: schedule, schedule_id}`, `{kind: all_admins}`, `{kind: channel, channel_id, notify_after_ack}`); a duplicate name is 409"],
+            ["`GET /api/v1/escalation-policies/{id}`", "Authenticated; one policy"],
+            ["`PUT /api/v1/escalation-policies/{id}`", "Write; replace every field and step"],
+            ["`DELETE /api/v1/escalation-policies/{id}`", "Write; 409 while a monitor uses it or it is the workspace default"],
+            ["`POST /api/v1/escalation-policies/convert`", "Write; build a policy from a monitor's custom routes (`monitor_id`) or the workspace default routes (no `monitor_id`), one step per distinct delay; `assign` also switches the monitor to it; optional `name`"],
           ],
         },
       ],

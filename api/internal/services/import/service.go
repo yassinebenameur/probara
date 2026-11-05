@@ -22,6 +22,7 @@ import (
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // GroupMembershipService writes the monitor_groups rows that back group
@@ -286,6 +287,9 @@ func (s *Service) parsePortableExport(data []byte) ([]models.ImportRow, bool, er
 		}
 		if monitor.ConsecutiveFailuresThreshold > 0 {
 			fields["consecutive_failures_threshold"] = monitor.ConsecutiveFailuresThreshold
+		}
+		if monitor.RecoveryThreshold > 0 {
+			fields["recovery_threshold"] = monitor.RecoveryThreshold
 		}
 
 		rows = append(rows, models.ImportRow{
@@ -572,6 +576,10 @@ func (s *Service) suggestMapping(fields []string) models.FieldMapping {
 		}
 	}
 
+	if original, ok := fieldMap["recovery_threshold"]; ok {
+		mapping.RecoveryThreshold = original
+	}
+
 	return mapping
 }
 
@@ -600,6 +608,19 @@ func (s *Service) extractFailureThreshold(fields map[string]interface{}, fieldNa
 	if threshold > maxConsecutiveFailuresThreshold {
 		threshold = maxConsecutiveFailuresThreshold
 	}
+	return &threshold
+}
+
+// extractRecoveryThreshold reads the recovery confirmation count (S-T7) and
+// clamps it into the range the column accepts; nil keeps the default.
+func (s *Service) extractRecoveryThreshold(fields map[string]interface{}, fieldName string) *int {
+	if fieldName == "" {
+		return nil
+	}
+	if _, ok := fields[fieldName]; !ok {
+		return nil
+	}
+	threshold := monitorstate.ClampRecoveryThreshold(s.extractInt(fields, fieldName))
 	return &threshold
 }
 
@@ -719,6 +740,11 @@ func (s *Service) getFieldValue(fields map[string]interface{}, fieldName string)
 
 // ExecuteImport executes the import with the given rows and mapping
 func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *models.ImportExecuteRequest) (*models.ImportExecuteResponse, error) {
+	// Each imported monitor gets one version, recorded once its group
+	// members are synced in the second pass.
+	ctx, versions := monitorservice.DeferVersions(monitorservice.WithVersionSource(ctx, monitorservice.VersionSourceImport))
+	defer versions.Flush(ctx)
+
 	results := make([]models.ImportRowResult, len(req.Rows))
 	successCount := 0
 	failedCount := 0
@@ -943,6 +969,7 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, row mod
 		Enabled:                      &enabled,
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
+		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
 	}
 
 	return s.monitorService.CreateMonitor(ctx, tenantID, req)
@@ -1010,6 +1037,7 @@ func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUI
 		Enabled:                      &enabled,
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
+		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
 	}
 
 	return s.monitorService.CreateMonitor(ctx, tenantID, req)
@@ -1670,6 +1698,7 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byt
 			AlertPolicyNames:             alertNames,
 			GroupMembers:                 groupMembers,
 			ConsecutiveFailuresThreshold: monitor.ConsecutiveFailuresThreshold,
+			RecoveryThreshold:            exportedRecoveryThreshold(monitor.RecoveryThreshold),
 		})
 	}
 
@@ -1678,6 +1707,14 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byt
 		Version:  1,
 		Monitors: exported,
 	})
+}
+
+// exportedRecoveryThreshold omits the default of 1 from portable exports.
+func exportedRecoveryThreshold(n int) int {
+	if n <= monitorstate.MinRecoveryThreshold {
+		return 0
+	}
+	return n
 }
 
 func (s *Service) loadAllMonitors(ctx context.Context, tenantID uuid.UUID) ([]models.Monitor, error) {

@@ -1,5 +1,5 @@
 import type { SortState } from './sort';
-import type { AlertSortColumn, AlertStatus } from './types';
+import type { Alert, AlertSortColumn, AlertStatus } from './types';
 
 /**
  * The /alerts list's view rules, kept pure so node tests cover them: which
@@ -157,4 +157,33 @@ export function shortcutEffect(
   if (status === 'resolved') return 'already_resolved';
   if (action === 'acknowledge' && status === 'acknowledged') return 'already_acknowledged';
   return 'apply';
+}
+
+/** The snooze lengths the alert menu offers (the API takes 1 min to 7 days). */
+export const SNOOZE_PRESETS = [
+  { label: '1 hour', minutes: 60 },
+  { label: '4 hours', minutes: 240 },
+  { label: '24 hours', minutes: 1440 },
+] as const;
+
+/** Whether the alert is snoozed at `now` (a past snoozed_until is when the last snooze ended). */
+export function isSnoozed(alert: Pick<Alert, 'status' | 'snoozed_until'>, now = Date.now()): boolean {
+  return alert.status !== 'resolved' && !!alert.snoozed_until && Date.parse(alert.snoozed_until) > now;
+}
+
+/**
+ * The paging actions an alert in its current state offers (writers only):
+ * unacknowledge an acknowledged alert, snooze an open one (again to change
+ * the length), unsnooze a snoozed one. A resolved alert offers none.
+ */
+export function pagingActions(
+  alert: Pick<Alert, 'status' | 'snoozed_until'>,
+  now = Date.now()
+): { unacknowledge: boolean; snooze: boolean; unsnooze: boolean } {
+  const open = alert.status !== 'resolved';
+  return {
+    unacknowledge: alert.status === 'acknowledged',
+    snooze: open,
+    unsnooze: isSnoozed(alert, now),
+  };
 }

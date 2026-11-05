@@ -94,7 +94,8 @@ func (a *Alerter) runSuspectedCauses(ctx context.Context) error {
 //   - the channel is active and its plugin advertises
 //     plugin.CapabilityFollowUp (paging tools do not);
 //   - the alert is not muted: openAlertDispatchablePredicate, shared with
-//     reminders (maintenance, roll-up, dependency suppression).
+//     reminders (maintenance, snooze, roll-up, dependency suppression). An
+//     acknowledgement does not mute it: the follow-up helps whoever is on it.
 //
 // The send goes through fireChannel → deliverNotification, whose one-shot
 // claim on suspected_cause_sent_at makes replicas safe, and whose FOR SHARE
@@ -210,7 +211,7 @@ func (a *Alerter) dispatchSuspectedCauses(ctx context.Context) error {
 		}
 		p := &todo[i]
 		a.suspectedCauseCursor = suspectedCauseCursor{alertID: p.record.ID, channelID: p.channel.ID}
-		a.fireChannel(ctx, "suspected_cause", p.binding, &p.record, p.channel, now, 0)
+		a.fireChannel(ctx, "suspected_cause", p.binding, &p.record, p.channel, now, 0, false)
 	}
 	return nil
 }

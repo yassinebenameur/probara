@@ -8,10 +8,13 @@ How identity and authorization work as of the enterprise-auth rework
 Three credential types, resolved by `api/internal/middleware/auth.go`:
 
 - **Admin users** (`admin_users`) — humans. JWT access cookie (15 min) +
-  rotating opaque refresh session. Two platform roles:
+  rotating opaque refresh session, both bound to one sign-in (session
+  family, see [Sessions](#sessions)); password login sits behind the
+  [lockout](#login-lockout) and, when enrolled, a TOTP
+  [second factor](#two-factor). Two platform roles:
   - `superadmin` — full platform access: any tenant (via `X-Tenant-ID`),
-    user management, tenant list. All pre-rework admins were backfilled to
-    superadmin.
+    user management, tenant list, workspace create/rename/delete. All
+    pre-rework admins were backfilled to superadmin.
   - `member` — access only through `tenant_memberships` rows. A
     tenant-scoped request requires a membership in that tenant (403
     otherwise); `GET /v1/tenants` returns only the member's tenants.
@@ -49,7 +52,167 @@ Tenant roles (fixed, on `tenant_memberships.role`):
 
 Roles are resolved from the DB on every request — never stored in JWT
 claims — so downgrades and disables apply immediately (disabled users are
-rejected even with a live access token).
+rejected even with a live access token). The access JWT carries only the
+admin ID and the session family (`sid`).
+
+## Sessions
+
+Migration 000104. `admin_session_families` holds one row per sign-in
+(password or OIDC); `admin_sessions.family_id` ties every refresh token to
+its sign-in, and `RotateSession` keeps the family. The access JWT names the
+family in its `sid` claim (`shared/auth.CreateAdminSessionToken`).
+
+- **`admin_session_families.revoked_at` is the one authority** for whether a
+  sign-in is alive. The refresh lookup (`GetSessionByTokenHash`) joins it,
+  so the 60-second reuse grace of a rotated token never outlives a
+  revocation, and `AuthMiddleware` checks it on every cookie request
+  (`middleware/session_family.go`, `adminauth.SessionFamilyActive`), as do
+  `/auth/me` and `/auth/logout`. Revoking the one row therefore ends the
+  refresh chain and every access JWT of the sign-in at once, with no race
+  against a concurrent rotation.
+- Revocation paths: logout (the token's family), `/account/sessions/*`
+  (self: one, others, all), `DELETE /users/{id}/sessions` (superadmin, MCP
+  `revoke_user_sessions`), a password reset or invite redeemed (all), a
+  self-service password change (all but the current), and a superadmin setting a user's password
+  (`adminauth.RevokeUserSessions`, which also records
+  `password_changed_at` and clears the lockout). The superadmin sign-out
+  (`adminauth.RevokeUserAccess`) also cancels a pending email change.
+- An access JWT without `sid` (minted before 000104) is accepted until it
+  expires; it cannot be revoked early.
+- `/account/*` takes a signed-in browser session only (no API key, no MCP
+  token), sits outside the write gate (a viewer can end their own sessions)
+  and outside generic audit; it records `auth.session_revoke` /
+  `auth.sessions_revoke`. Routes: `api/internal/api/routes_identity.go`.
+- API keys and MCP OAuth grants are separate credentials; signing out
+  never touches them.
+
+## Account lifecycle
+
+Invites, password reset and email change (`adminauth/lifecycle.go`,
+`adminauth/tokens.go`, mail in `services/accountmail`, routes in
+`api/internal/api/routes_identity.go`).
+
+- **Local account** = `password_hash` set and `external_subject` NULL.
+  Reset, self password change, self email change and TOTP are local-only:
+  for an IdP-linked account the IdP owns the credentials and the email is
+  the link key, so changing it here is refused (409 `not_local_account`).
+- **One-time tokens** (`admin_user_tokens`, migration 000117): 256-bit,
+  stored as SHA-256, consumed by one `UPDATE … WHERE used_at IS NULL`
+  (single use under concurrency), and issuing another of the same purpose
+  supersedes the user's open ones.
+
+  | Purpose | TTL | Issued by | Redeemed by |
+  |---|---|---|---|
+  | `invite` | 7 days | `POST /users/{id}/invite` (superadmin) | `POST /auth/invite/accept` (sets the password; `/auth/invite/inspect` reads it) |
+  | `password_reset` | 1 hour | `POST /auth/password/forgot`, `POST /users/{id}/password-reset` | `POST /auth/password/reset` |
+  | `email_change` | 24 hours | `POST /account/email` (current password) | `POST /auth/email/confirm` |
+
+  Redeeming a password token sets the password, records
+  `password_changed_at`, clears the lockout (only when TOTP is off, see
+  [Two-factor](#two-factor)), retires the other open invite/reset/
+  email-change tokens and revokes every session family. A self-service
+  password change (`PATCH /account/password`) retires the same tokens and
+  keeps only the current session. TOTP survives a reset.
+- **A pending email change dies with any credential reset**: password
+  reset, password change, a superadmin setting the password, superadmin
+  sign-out everywhere and superadmin/`cmd/admin` 2FA reset all retire open
+  `email_change` tokens (`credentialResetPurposes`, `retireTokens`), and
+  `ConfirmEmailChange` also refuses a token created before
+  `password_changed_at`, so a password path that retires nothing (the
+  `cmd/admin` break-glass) still voids it. Otherwise an intruder could
+  confirm a change they started to their own mailbox after the owner
+  recovered the account, then reset the password through it.
+- **Links** are `APP_BASE_URL` + `/accept-invite`, `/reset-password` or
+  `/confirm-email` with the token in the **fragment** (`#token=…`): never
+  sent to a server, so never in proxy/access logs. Tokens reach the API in
+  request bodies; no lifecycle route has a token in its path.
+- **Anti-enumeration**: `/auth/password/forgot` answers 202 immediately in
+  every case and does the lookup and send in a bounded background pool, so
+  neither status nor timing reveals an account; it matches a username
+  exactly or an email case-insensitively, mails at most once a minute per
+  account, and is charged per address by the anonymous rate limiter. All
+  public link routes refuse with one 400 `invalid_token`.
+- **Without SMTP or `APP_BASE_URL`**: `GET /auth/capabilities` reports
+  `password_reset: false` (the login page hides "Forgot password"),
+  `/account/email` answers 503, and the superadmin invite/reset routes
+  return the link (`path`, plus `url` with `APP_BASE_URL`) for manual
+  delivery. With mail on, a delivered password link is never returned.
+- Invite method: `password` (set-password link) or `sso` (a "sign in with
+  SSO" notice, no token). Default `sso` for a linked account, or one with
+  no password while OIDC is enabled.
+- Audit: `auth.invite`, `auth.invite_accept`,
+  `auth.password_reset_request` (only when a link was issued),
+  `auth.password_reset_issue`, `auth.password_reset`,
+  `auth.password_change`, `auth.email_change_request`, `auth.email_change`.
+
+## Two-factor
+
+TOTP (`adminauth/totp.go`, stdlib RFC 6238: SHA-1, 6 digits, 30 s, ±1
+step) for local accounts; migration 000118 adds `totp_secret_enc`
+(PROBARA_SECRETS_KEY encryptor), `totp_enabled_at` (NULL = pending
+enrollment), `totp_last_step` and `admin_user_recovery_codes` (10
+SHA-256-hashed single-use codes).
+
+- **Login is two steps.** `Authenticate` returns `*SecondFactorRequired`
+  (an error, so a caller unaware of 2FA fails closed) and the handler
+  answers `{mfa_required, mfa_token}` with no cookie. The token is
+  `pmfa1~payload~mac` (HMAC key derived from `ADMIN_JWT_SECRET`, 5 min,
+  never a JWT) and binds a fingerprint of the password hash and sealed
+  secret. `POST /auth/login/mfa` completes the sign-in.
+- **Replay**: a code is accepted only for a step after `totp_last_step`,
+  advanced by a conditional `UPDATE`, so one code works once fleet-wide.
+- **Lockout**: the MFA step reserves an attempt like a password does;
+  a correct password at step one only releases its own reservation
+  (`releaseReservationQuery`), never resets the streak, so wrong codes
+  accumulate to the same lock. Self-service routes that check password +
+  code reserve once for both (`VerifyCredentials`). A password reset or
+  invite redeemed on an account with TOTP on keeps the streak and any lock
+  (`RedeemPasswordToken`): a reset needs only the mailbox and repeats every
+  minute, so clearing it would hand a mailbox holder ten fresh code guesses
+  a minute. Only a completed sign-in, a superadmin unlock or a superadmin
+  password set clears it.
+- Self-service: `/account/2fa` (status), `/setup` (password → secret and
+  `otpauth://` URI; the UI draws the QR in the browser, `web/lib/qr.ts`),
+  `/enable` (code → recovery codes, shown once), `/disable` and
+  `/recovery-codes` (password + code).
+- Recovery: superadmin `POST /users/{id}/reset-2fa` (MCP `reset_user_2fa`)
+  or `go run ./cmd/admin -reset-2fa <username>`.
+- Audit: `auth.login` (`mfa` detail on success, `factor: second` on
+  failure), `auth.mfa_enable`, `auth.mfa_disable`,
+  `auth.mfa_recovery_codes`, `auth.mfa_reset`.
+
+## Login lockout
+
+Migration 000103 (`admin_users.failed_login_count`, `last_failed_login_at`,
+`locked_until`, `password_changed_at`) and 000106 (`login_failure_streaks`);
+policy constants in `api/internal/services/adminauth/lockout.go`. All state
+is in Postgres, so it holds across API replicas and restarts.
+
+- `Authenticate` **reserves** the attempt (one `UPDATE … WHERE not locked
+  RETURNING`) before comparing the password, so concurrent guesses cannot
+  overshoot; a correct password clears the reservation. Every 10th failure
+  in a streak locks for 15 min × 2^(k−1), capped at 4 h; a streak is
+  forgotten after 24 h without failures. A locked account is refused without
+  a password comparison.
+- Anti-enumeration: wrong and unknown credentials share one 401; every
+  lockout shares one 429 + `Retry-After`. Usernames with no password account
+  (unknown, SSO-only, disabled) keep their streak in `login_failure_streaks`,
+  keyed by SHA-256 of the exact (case-sensitive) username and counted by the
+  same SQL (`lockoutAssignments`), plus a dummy bcrypt compare, so they lock
+  on the same attempt as a real account on every replica. Streaks idle past
+  24 h are pruned opportunistically on failed logins (`PruneGhostStreaks`).
+- **No per-address stage.** With `TRUSTED_PROXY_CIDRS` unset every user
+  behind the ingress or the UI proxy (or one NAT) shares a client IP, so an
+  IP block would let anyone deny sign-in to all of them. Request-volume
+  limits per client belong to the general API rate limiter.
+- Unlock: superadmin `POST /users/{id}/unlock` (MCP `unlock_user`), the
+  `cmd/admin` break-glass, a superadmin setting the password, or a
+  password reset/invite link on an account without TOTP.
+- Second-factor failures and wrong current passwords on `/account/*`
+  count on the same streak (see [Two-factor](#two-factor)).
+- Audit: `auth.login` (failure; `denied` with `reason` `locked`),
+  `auth.lockout` (the failure that locked), `auth.unlock`.
+- OIDC login is unaffected.
 
 ## Enforcement layers
 
@@ -71,8 +234,10 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   and group-member responses omit push tokens for read-only identities;
   monitor config secrets remain masked for every identity.
 - `/monitors/test` remains available to viewers for caller-supplied configs,
-  but using saved secrets (`monitor_id` with a secret-bearing monitor type)
-  requires write capability. The saved and requested monitor types must
+  but using saved secrets (`monitor_id` with a secret-bearing monitor type:
+  any type in `shared/secrets` `MonitorSecretFields`/`MonitorSecretMapFields`,
+  which includes http, grpc and the synthetic types) requires write
+  capability. The saved and requested monitor types must
   match. Test requests cannot supply ciphertext envelopes directly: use
   write-only placeholders for existing credentials.
 - `RequireTenantAdmin`: API key create/revoke, tenant settings mutation,
@@ -83,10 +248,35 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   inherits it, and `/monitors/{id}/run` and `/monitors/test` in their
   handlers (`monitorservice.RequireCallPermission`). Editors and API keys of
   any scope get 403.
-- `RequireSuperadmin`: `/users/*`.
+- `RequireSuperadmin`: `/users/*` (including `/users/{id}/unlock` and
+  `/users/{id}/sessions`), `POST /tenants`, `PATCH`/`DELETE /tenants/{id}`.
 
 Audit runs *outside* the write gate so denied attempts are recorded with
 `outcome=denied`.
+
+## Deleted workspaces
+
+Workspace delete (`DELETE /tenants/{id}`, `confirm_name` must repeat the
+name) is a soft delete (migration 000105, `shared/tenancy`). One transaction
+stamps `tenants.deleted_at`, tombstones the workspace's monitors and
+locations, revokes its API keys and MCP grants, deletes its memberships and
+SSO group mappings, and invalidates its discovery collector tokens. From then
+on `AuthMiddleware` answers 403 to any session request scoped to it,
+superadmins included (`rejectDeletedTenant`, `tenancy.IsDeleted`), every
+tenant list omits it, and the status-page service stops serving its pages.
+API key validation and the discovery collector token lookups add
+`tenancy.LiveTenantSQL` to their own query, so a key or integration that a
+request already past auth writes just after the delete commits is refused at
+read time too; the purger's next run also revokes such late credentials and
+tombstones late monitors (`deletedTenantCutoffs`).
+The scheduler purger removes the data in bounded batches and then the row
+(see `docs/architecture.md`); the API never deletes a tenant row. The
+default workspace (`tenancy.DefaultTenantID`), the
+`OIDC_JIT_DEFAULT_TENANT_ID` workspace and the last live workspace cannot be
+deleted. Names are unique among live workspaces only, so a deleted name is
+free at once. Create, rename and delete record `tenant.create`,
+`tenant.rename` and `tenant.delete` as platform-level audit events with a
+name snapshot.
 
 ## MCP
 
@@ -117,8 +307,12 @@ the MCP package decides access. Rules that keep it so:
 `audit_log` table; captured two ways: the `AuditMutations` middleware
 derives `resource.verb` actions for every mutation, and explicit events
 cover auth lifecycle (`auth.login`/`auth.logout`/`auth.oidc_login` incl.
-failures) and user/key management (those subtrees are skipped by the
-generic layer). Writes go through an async batching recorder — never
+failures, `auth.lockout`/`auth.unlock`, `auth.session_revoke`/
+`auth.sessions_revoke`, the [account lifecycle](#account-lifecycle) and
+[two-factor](#two-factor) events) and user/key management (those subtrees are skipped
+by the generic layer). Workspace management records its own success events
+(`tenant.create`/`.rename`/`.delete`, platform-level); the generic layer
+still records its refusals and failures. Writes go through an async batching recorder — never
 blocks or fails a request; drops rows quietly during the pre-migration
 deploy window.
 
@@ -224,8 +418,11 @@ exercise mappings.
 
 The helm migrations job is post-upgrade, so new binaries briefly run on
 the old schema. All auth queries feature-detect (SQLSTATE 42P01/42703 →
-legacy behavior: everyone superadmin, keys full-access) and the audit
-writer drops rows — the API never crash-loops pre-migration. For
+legacy behavior: everyone superadmin, keys full-access, no lockout, no
+session families, no 2FA; account links answer 503) and the audit writer drops rows — the API never
+crash-loops pre-migration. In the other direction, an old binary inserting
+`admin_sessions` without `family_id` after 000104 gets a family from the
+`admin_sessions_default_family` trigger. For
 zero-surprise rollouts run the migration job manually first (see
 `docs/correctness-notes.md` "Deploy ordering").
 

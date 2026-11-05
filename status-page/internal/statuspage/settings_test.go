@@ -70,3 +70,35 @@ func TestParseStatusPageSettings_PushNotificationsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The API writes csp_mode and allowed_embed_origins under exactly these keys
+// (api/internal/services/statuspages, TestStatusPageSettingsCSPRoundTrip);
+// this is the read half of that three-mirror round trip.
+func TestParseStatusPageSettings_CSPFields(t *testing.T) {
+	settings := parseStatusPageSettings([]byte(`{"csp_mode":"compatible","allowed_embed_origins":["https://intranet.example.com","https://*.corp.example"]}`))
+	if settings.CSPMode != "compatible" {
+		t.Fatalf("CSPMode = %q, want compatible", settings.CSPMode)
+	}
+	if len(settings.AllowedEmbedOrigins) != 2 || settings.AllowedEmbedOrigins[1] != "https://*.corp.example" {
+		t.Fatalf("AllowedEmbedOrigins = %v", settings.AllowedEmbedOrigins)
+	}
+
+	defaults := parseStatusPageSettings([]byte(`{"show_footer":false}`))
+	if defaults.CSPMode != "" || defaults.AllowedEmbedOrigins != nil {
+		t.Fatalf("absent CSP settings must read as automatic with no embed origins: %+v", defaults)
+	}
+	if got := parseStatusPageSettings([]byte(`{"csp_mode":"nonsense"}`)).CSPMode; got != "" {
+		t.Fatalf("unknown csp_mode = %q, want automatic", got)
+	}
+}
+
+// Read half of the seo_description three-mirror round trip (write half:
+// api/internal/services/statuspages TestStatusPageSettingsSEODescriptionRoundTrip).
+func TestParseStatusPageSettings_SEODescription(t *testing.T) {
+	if got := parseStatusPageSettings([]byte(`{"seo_description":"  Acme status  "}`)).SEODescription; got != "Acme status" {
+		t.Fatalf("SEODescription = %q, want %q", got, "Acme status")
+	}
+	if got := parseStatusPageSettings([]byte(`{"show_footer":false}`)).SEODescription; got != "" {
+		t.Fatalf("absent seo_description = %q, want empty", got)
+	}
+}

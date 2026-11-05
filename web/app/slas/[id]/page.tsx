@@ -25,13 +25,15 @@ import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { SlaFormModal } from '@/components/slas/SlaFormModal';
 import { SlaReportView } from '@/components/slas/SlaReportView';
+import { SlaSchedules } from '@/components/slas/SlaSchedules';
 import { SlaStatusPill, TONE_TEXT, saveDownload } from '@/components/slas/SlaVisuals';
 
-const TAB_IDS = ['report', 'issued'] as const;
+const TAB_IDS = ['report', 'issued', 'schedules'] as const;
 type TabId = (typeof TAB_IDS)[number];
 const TABS: readonly { id: TabId; label: string }[] = [
   { id: 'report', label: 'Report' },
   { id: 'issued', label: 'Issued reports' },
+  { id: 'schedules', label: 'Schedules' },
 ];
 
 const FORMATS: { format: SlaExportFormat; label: string; icon: React.ReactNode }[] = [
@@ -281,6 +283,8 @@ export default function SlaDetailPage() {
             reportLoading && <div className="glass p-8 text-center text-sm text-slate-500">Building report…</div>
           )}
         </div>
+      ) : tab === 'schedules' ? (
+        <SlaSchedules sla={sla} />
       ) : issued.length === 0 ? (
         <EmptyState
           icon={<Stamp strokeWidth={1.5} />}

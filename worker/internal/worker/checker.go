@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	probing "github.com/prometheus-community/pro-bing"
 	"github.com/tidwall/gjson"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/netguard"
@@ -100,6 +99,9 @@ type httpMetrics struct {
 	// DisplayValues are the config's display_fields resolved against the
 	// response body; the monitors list shows them from the latest result.
 	DisplayValues []httpDisplayValue `json:"display_values,omitempty"`
+	// FailureResponse is the redacted response excerpt of a failed check
+	// (capture_failure_response; http_failure_capture.go).
+	FailureResponse *httpFailureResponse `json:"failure_response,omitempty"`
 }
 
 type httpDisplayValue struct {
@@ -155,6 +157,10 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	}
 
 	var redirectsFollowed int
+	secretHeaderNames := make([]string, 0, len(config.SecretHeaders))
+	for name := range config.SecretHeaders {
+		secretHeaderNames = append(secretHeaderNames, name)
+	}
 	client := &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -165,6 +171,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
 			redirectsFollowed = len(via)
+			stripCredentialsOnRedirect(req, via, secretHeaderNames)
 			return nil
 		},
 	}
@@ -264,9 +271,16 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		}
 	}
 
-	// Set headers
+	// Set headers. Secret headers go last so they win over a same-named
+	// plain one (validation refuses that pairing; this is belt and braces).
 	for k, v := range config.Headers {
 		req.Header.Set(k, v)
+	}
+	for k, v := range config.SecretHeaders {
+		req.Header.Set(k, v)
+	}
+	if config.BasicAuthUsername != "" {
+		req.SetBasicAuth(config.BasicAuthUsername, config.BasicAuthPassword)
 	}
 
 	var traceTimings httpTimingInfo
@@ -332,6 +346,17 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	// Read response body with size limit
 	limitedReader := io.LimitReader(resp.Body, int64(c.maxBodySizeBytes))
 	bodyBytes, err := io.ReadAll(limitedReader)
+	// captureOnly is the metrics of an error that ends the check after the
+	// response arrived: nothing, unless the monitor captures failures.
+	captureOnly := func() json.RawMessage {
+		if !config.CaptureEnabled() {
+			return nil
+		}
+		raw, _ := json.Marshal(httpMetricsEnvelope{HTTP: &httpMetrics{
+			FailureResponse: captureFailureResponse(resp, bodyBytes, len(bodyBytes) >= c.maxBodySizeBytes, &config),
+		}})
+		return raw
+	}
 	if err != nil {
 		errMsg := fmt.Sprintf("body_read: %v", err)
 		httpStatus := resp.StatusCode
@@ -340,6 +365,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 			HTTPStatus:   &httpStatus,
 			ErrorMessage: &errMsg,
 			LatencyMs:    &latencyMs,
+			MetricsData:  captureOnly(),
 		}
 	}
 
@@ -405,6 +431,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 				LatencyMs:            &latencyMs,
 				ErrorMessage:         &errMsg,
 				MatchedBodySubstring: matchedBodySubstring,
+				MetricsData:          captureOnly(),
 			}
 		}
 		assertionsFailed = append(assertionsFailed, failed...)
@@ -424,6 +451,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 					LatencyMs:            &latencyMs,
 					ErrorMessage:         &errMsg,
 					MatchedBodySubstring: matchedBodySubstring,
+					MetricsData:          captureOnly(),
 				}
 			}
 			assertionsFailed = append(assertionsFailed, failed...)
@@ -451,6 +479,9 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	metrics.Assertions = assertionsFailed
 
 	if len(assertionsFailed) > 0 {
+		if config.CaptureEnabled() {
+			metrics.FailureResponse = captureFailureResponse(resp, bodyBytes, len(bodyBytes) >= c.maxBodySizeBytes, &config)
+		}
 		metricsJSON, _ := json.Marshal(httpMetricsEnvelope{HTTP: metrics})
 		errMsg := strings.Join(assertionsFailed, "; ")
 		return CheckResult{
@@ -833,74 +864,6 @@ func parseFloat(s string) (float64, error) {
 
 func parseBool(s string) (bool, error) {
 	return strconv.ParseBool(strings.TrimSpace(strings.ToLower(s)))
-}
-
-// PingChecker implements Checker for ping monitors
-type PingChecker struct{}
-
-// NewPingChecker creates a new ping checker
-func NewPingChecker() *PingChecker {
-	return &PingChecker{}
-}
-
-// Check performs a ping check
-func (c *PingChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
-	var config models.PingMonitorConfig
-	if err := json.Unmarshal(configRaw, &config); err != nil {
-		errMsg := fmt.Sprintf("failed to unmarshal ping config: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Create pinger
-	pinger, err := probing.NewPinger(config.Host)
-	if err != nil {
-		errMsg := fmt.Sprintf("failed to create pinger: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Set unprivileged mode (uses UDP instead of raw ICMP)
-	pinger.SetPrivileged(false)
-
-	// Set timeout
-	pinger.Timeout = time.Duration(timeoutSeconds) * time.Second
-
-	// Set count to 1 ping
-	pinger.Count = 1
-
-	// Run ping
-	err = pinger.Run()
-	if err != nil {
-		errMsg := fmt.Sprintf("ping failed: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	stats := pinger.Statistics()
-
-	// Check if we received any packets
-	if stats.PacketsRecv == 0 {
-		errMsg := "no response received"
-		return CheckResult{
-			Status:       "failure",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Success - convert RTT to milliseconds
-	latencyMs := stats.AvgRtt.Milliseconds()
-
-	return CheckResult{
-		Status:    "success",
-		LatencyMs: &latencyMs,
-	}
 }
 
 // AgentChecker implements Checker for agent monitors

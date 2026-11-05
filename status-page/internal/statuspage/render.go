@@ -78,6 +78,16 @@ type statusPageRenderView struct {
 	Monitors           []statusPageMonitorView
 	Incidents          []statusPageIncidentView
 	MaintenanceWindows []statusPageMaintenanceView
+	// Added with the response-time chart and the SEO/feed head tags
+	// (render_polish.go). ShowLatencyCharts is the page setting;
+	// MetaDescription is seo_description, else the description, else a
+	// generic line; CanonicalURL is "" when the public origin is unknown;
+	// FeedURL is the Atom feed (absolute when CanonicalURL is set).
+	ShowLatencyCharts bool
+	MetaDescription   string
+	CanonicalURL      string
+	FeedURL           string
+	OGImageURL        string
 }
 
 const (
@@ -104,6 +114,9 @@ type statusPageMaintenanceView struct {
 	IsActive               bool
 	TimeRangeText          string
 	AffectedComponentsText string
+	// RepeatText is set for a repeating window: "Repeats" plus the next
+	// starts when any fall within the look-ahead.
+	RepeatText string
 }
 
 type statusPageSectionView struct {
@@ -159,6 +172,16 @@ type statusPageMonitorView struct {
 	ExpandedHistory30dJSON string
 	ExpandedHistory90dJSON string
 	History1yJSON          string
+	// Response-time series per visitor range (render_polish.go): a JSON
+	// array of mean latencies in ms, oldest first, one per fixed time cell,
+	// null where the cell had no successful timed check. HasLatency reports
+	// that at least one range has a value.
+	HasLatency     bool
+	Latency1hJSON  string
+	Latency24hJSON string
+	Latency7dJSON  string
+	Latency30dJSON string
+	Latency90dJSON string
 }
 
 // The template function contract (typeIcon, strip cell counts, join) lives in
@@ -290,8 +313,8 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		MonitorStripCells: monitorUptimeStripCells,
 		MonitorCount:      len(data.Monitors),
 		CustomCSS:         template.CSS(strings.TrimSpace(data.CustomCSS)),
-		CustomHeadHTML:    template.HTML(strings.TrimSpace(data.CustomHeadHTML)),
-		CustomFooterHTML:  template.HTML(strings.TrimSpace(data.CustomFooterHTML)),
+		CustomHeadHTML:    template.HTML(withNoncePlaceholder(data.CustomHeadHTML)),
+		CustomFooterHTML:  template.HTML(withNoncePlaceholder(data.CustomFooterHTML)),
 	}
 
 	if view.FooterText == "" {
@@ -318,6 +341,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 
 		for _, monitor := range section.Monitors {
 			renderMonitor := buildStatusPageMonitorView(monitor)
+			applyMonitorLatency(&renderMonitor, monitor, time.Now())
 			renderSection.Monitors = append(renderSection.Monitors, renderMonitor)
 			view.Monitors = append(view.Monitors, renderMonitor)
 			renderSection.MonitorCount++
@@ -405,6 +429,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	sort.Slice(view.Incidents, func(i, j int) bool {
 		return incidentStateRank(view.Incidents[i].State) < incidentStateRank(view.Incidents[j].State)
 	})
+	applyPageMeta(&view, data)
 
 	return view
 }
@@ -513,7 +538,24 @@ func buildStatusPageMaintenanceView(window StatusPageMaintenanceWindow) statusPa
 		IsActive:               window.IsActive,
 		TimeRangeText:          timeRangeText,
 		AffectedComponentsText: affectedComponentsText,
+		RepeatText:             maintenanceRepeatText(window),
 	}
+}
+
+// maintenanceRepeatText labels a repeating window and lists its next starts
+// (UTC, like the time range above it).
+func maintenanceRepeatText(window StatusPageMaintenanceWindow) string {
+	if !window.Repeating {
+		return ""
+	}
+	if len(window.NextStartsAt) == 0 {
+		return "Repeats"
+	}
+	next := make([]string, 0, len(window.NextStartsAt))
+	for _, t := range window.NextStartsAt {
+		next = append(next, t.UTC().Format("Jan 2, 15:04"))
+	}
+	return "Repeats · next: " + strings.Join(next, ", ") + " UTC"
 }
 
 func incidentStateRank(state string) int {
@@ -798,6 +840,8 @@ func typeLabel(kind string) string {
 		return "WebSocket"
 	case "prometheus":
 		return "Prometheus"
+	case "domain":
+		return "Domain"
 	default:
 		return strings.ToUpper(kind)
 	}
@@ -818,6 +862,8 @@ func typeBadge(kind string) string {
 		return "WS"
 	case "prometheus":
 		return "PROM"
+	case "domain":
+		return "DOM"
 	case "synthetic_api":
 		return "API"
 	case "synthetic_browser":
@@ -956,4 +1002,12 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// withNoncePlaceholder trims tenant-authored head/footer HTML and turns its
+// literal {{cspNonce}} tokens into the nonce placeholder. That HTML is data,
+// not template source, so the template function cannot expand inside it;
+// the placeholder is then swapped per response like the template's own.
+func withNoncePlaceholder(raw string) string {
+	return strings.ReplaceAll(strings.TrimSpace(raw), statustemplate.NonceToken, statustemplate.NoncePlaceholder)
 }

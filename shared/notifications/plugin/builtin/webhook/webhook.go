@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
@@ -119,7 +120,7 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 		return plugin.Permanent(errors.New("generic_webhook channel missing url"))
 	}
 
-	body, err := json.Marshal(req.Event)
+	body, err := json.Marshal(payload(req))
 	if err != nil {
 		return plugin.Permanent(fmt.Errorf("marshal alert event: %w", err))
 	}
@@ -138,12 +139,46 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	}
 	// Protocol headers are set last so a custom header cannot spoof them.
 	headers[eventTypeHeader] = req.Type()
-	headers[idempotencyHdr] = fmt.Sprintf("%s:%s:%s", req.Event.Alert.ID, req.Channel.ID, req.Type())
+	headers[idempotencyHdr] = notifications.IdempotencyKeyFor(req.Event.Alert.ID, req.Channel.ID, req.Type(), req.Event.Alert.RelapseCount)
 	if secret := req.Channel.String("hmac_secret"); secret != "" {
 		headers[signatureHeader] = signaturePrefix + computeSignature(secret, body)
 	}
 
 	return plugin.Post(ctx, p.httpClient, target, "application/json", body, headers, "webhook")
+}
+
+// deliveredEvent is the body of a delivery that carries action links: the
+// raw AlertEvent with alert.links added. The outer Alert field shadows the
+// embedded one, so every other event field is marshalled as before.
+type deliveredEvent struct {
+	notifications.AlertEvent
+	Alert alertWithLinks `json:"alert"`
+}
+
+type alertWithLinks struct {
+	notifications.AlertDetails
+	Links alertLinks `json:"links"`
+}
+
+// alertLinks are the delivery's signed action links. acknowledge opens the
+// operator UI's confirm page; a receiver acting on it programmatically POSTs
+// to /api/v1/alert-actions/<token> instead.
+type alertLinks struct {
+	Acknowledge string `json:"acknowledge,omitempty"`
+}
+
+// payload is the webhook body: the raw AlertEvent, plus alert.links when this
+// delivery carries an acknowledge link (created and reminder pages, never
+// test sends).
+func payload(req plugin.DispatchRequest) any {
+	ack := req.View().AckURL
+	if ack == "" {
+		return req.Event
+	}
+	return deliveredEvent{
+		AlertEvent: req.Event,
+		Alert:      alertWithLinks{AlertDetails: req.Event.Alert, Links: alertLinks{Acknowledge: ack}},
+	}
 }
 
 func computeSignature(secret string, body []byte) string {

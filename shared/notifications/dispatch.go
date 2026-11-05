@@ -1,6 +1,9 @@
 package notifications
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // DispatchEnvelope is the wire format for async notification dispatch.
 //
@@ -41,6 +44,22 @@ type DispatchEnvelope struct {
 	// published before the field existed falls back to RecipientKey's
 	// derivation, which is stable across redeliveries of one message.
 	DeliveryKey string `json:"delivery_key,omitempty"`
+
+	// StopOnAck tells the delivery worker that an acknowledgement silences
+	// this created/reminder on its route (the tenant stops paging on ack and
+	// the route is not notify_after_ack): if the alert is acknowledged by
+	// the time the message is delivered — it may wait on a retry backoff —
+	// the worker drops it under the alert row lock. Envelopes without it keep
+	// the older behaviour (deliver, then re-acknowledge an overtaken trigger).
+	StopOnAck bool `json:"stop_on_ack,omitempty"`
+
+	// ContactID, when set, sends this event to one user's verified contact
+	// (user_contacts) through the channel instead of the channel's
+	// configured recipients; the plugin must advertise
+	// plugin.CapabilityDirectRecipient. The envelope never carries the
+	// address: the worker resolves it (contacts.LoadVerified) and drops the
+	// message when the contact is gone or no longer verified.
+	ContactID string `json:"contact_id,omitempty"`
 }
 
 // RecipientKey returns the ledger key for this envelope's event.
@@ -48,7 +67,7 @@ func (e DispatchEnvelope) RecipientKey() string {
 	if e.DeliveryKey != "" {
 		return e.DeliveryKey
 	}
-	return RecipientEventKey(e.EventType, e.Event.Timestamp)
+	return RecipientEventKeyFor(e.EventType, e.Event.Timestamp, e.Event.Alert.RelapseCount)
 }
 
 // RecipientEventKey names one event of one (alert, channel) pair in the
@@ -62,9 +81,13 @@ func (e DispatchEnvelope) RecipientKey() string {
 // The key names one send, not one event type: a deliberate second send of an
 // event needs a key of its own (see OvertakenAckKey), or a plugin skips every
 // recipient the first send already reached and the re-send goes nowhere.
+//
+// The "updated" event (a chat card rewritten to the alert's current state)
+// repeats too, and is keyed by its round the same way: the card's previous
+// write, which the updated claim replaces.
 func RecipientEventKey(eventType string, round time.Time) string {
-	if eventType == "reminder" && !round.IsZero() {
-		return "reminder:" + round.UTC().Format(time.RFC3339Nano)
+	if (eventType == "reminder" || eventType == "updated") && !round.IsZero() {
+		return eventType + ":" + round.UTC().Format(time.RFC3339Nano)
 	}
 	return eventType
 }
@@ -81,5 +104,45 @@ const OvertakenAckKey = "acknowledged:after-trigger"
 // x-idempotency-key NATS header and webhook plugins forward as
 // X-Probara-Idempotency-Key, so receivers can dedupe retried deliveries.
 func (e DispatchEnvelope) IdempotencyKey() string {
-	return e.AlertID + ":" + e.ChannelID + ":" + e.EventType
+	return IdempotencyKeyFor(e.AlertID, e.ChannelID, e.EventType, e.Event.Alert.RelapseCount)
+}
+
+// IdempotencyKeyFor is the receiver-facing idempotency key of one event of
+// one (alert, channel) pair: "<alert>:<channel>:<event>", plus ":<relapse>"
+// once the alert has relapsed. A reopened alert sends created, acknowledged
+// and resolved again under the same alert ID, and a receiver deduping on the
+// bare key would drop every page of the new episode; episode 0 keeps the
+// original format. The webhook plugin and the async envelope both use it.
+func IdempotencyKeyFor(alertID, channelID, eventType string, relapseCount int) string {
+	key := alertID + ":" + channelID + ":" + eventType
+	if relapseCount > 0 {
+		key += ":" + strconv.Itoa(relapseCount)
+	}
+	return key
+}
+
+// RecipientEventKeyFor is RecipientEventKey for an alert in paging episode
+// relapseCount (AlertDetails.RelapseCount). A reopened alert sends its
+// one-per-episode events (created, acknowledged, resolved, and the reopen
+// itself, which the alerter claims as "reopened") again, so from the first
+// relapse on they carry the episode, e.g. "reopened:1" or "resolved:2":
+// under the bare type a fan-out plugin would skip every recipient the
+// previous episode's send reached, and the new page would reach nobody.
+// Reminder rounds are already unique by their round timestamp.
+func RecipientEventKeyFor(eventType string, round time.Time, relapseCount int) string {
+	key := RecipientEventKey(eventType, round)
+	if relapseCount > 0 && key == eventType {
+		key += ":" + strconv.Itoa(relapseCount)
+	}
+	return key
+}
+
+// OvertakenAckKeyFor is OvertakenAckKey in paging episode relapseCount: a
+// relapse's trigger can be overtaken by its acknowledgement too, and that
+// re-send must not inherit the previous episode's progress.
+func OvertakenAckKeyFor(relapseCount int) string {
+	if relapseCount > 0 {
+		return OvertakenAckKey + ":" + strconv.Itoa(relapseCount)
+	}
+	return OvertakenAckKey
 }

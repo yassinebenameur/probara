@@ -11,11 +11,11 @@ website (`website/`) are separate applications.
 | Component | Responsibilities | Data access |
 |---|---|---|
 | `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV), notification configuration, templates, locations, push and OTLP ingestion, Kubernetes discovery inventory and coverage; the MCP endpoint and its OAuth authorization server (tools re-dispatched through the REST router) | PostgreSQL and NATS |
-| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
+| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging (monitors and deleted workspaces), roll repeating maintenance windows' occurrences forward | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
-| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
-| `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
+| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS and domain expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
+| `status-page/` | Render public pages, incidents, uptime, templates and live updates, plus each page's read-only add-ons (`summary.json`, SVG badges, `embed.js`, Atom feed); enforce page visibility (password sessions, kiosk tokens); manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
 | `ai-service/` | Local CPU inference (Python, FastAPI) for incident analysis, automatic alert triage and dependency suggestions: authenticated `/v1/decisions` returning probabilities over the closed choices in `shared/ai/catalogue.json`; bundled fine-tuned Laya head, offline | None: no PostgreSQL, NATS or egress. Called only by the API and the database-connected worker |
 | `cmd/discovery-collector` | Namespaced read-only Kubernetes inventory collection; complete snapshot uploads | Kubernetes API reads; HTTPS to Probara only |
 | `web/` | Authenticated operator UI and `/api` proxy, including cookies and SSE streams; the MCP OAuth consent screen and the root `/.well-known/` discovery proxy | Go API |
@@ -98,7 +98,10 @@ alike. Run-now publishes without one: it is a deliberate manual trigger.
 Private-location workers use location-scoped broker credentials and encrypted
 monitor configurations. The platform validates location result provenance
 before persistence. These workers do not receive the database connection or
-the platform encryption key. See [worker authentication](location-worker-auth.md).
+the platform encryption key. They dial the broker over `tls://` on 4222 or
+`wss://` on 443 (the broker's websocket listener, port 8443 behind an HTTPS
+ingress or proxy); both listeners share the same auth callout. See
+[worker authentication](location-worker-auth.md).
 
 ## Alert lifecycle and delivery
 
@@ -107,6 +110,73 @@ one open alert per monitor and kind, enforced by a partial unique index.
 Routing comes from monitor overrides or workspace defaults; maintenance,
 group rollup, and dependency suppression determine which channels may fire.
 Escalation delays and reminders are tracked per alert/channel.
+
+Acknowledgement and snooze are per-alert mutes (`shared/alertrouting`:
+`MuteHolds`, `SnoozedPredicate`, `ResumedAt`). An acknowledged
+alert stops its unfired tiers and reminders when the tenant's
+`ack_stops_notifications` is on, except on routes marked `notify_after_ack`;
+a snoozed alert sends no tier, reminder or suspected-cause follow-up. The
+gate lives in `dueEvent` and in the claim, which re-reads it under the alert
+row lock, and the async envelope carries `stop_on_ack` so the delivery
+worker drops a tier or reminder that a later ack holds, releasing the
+alerter's claim so it fires again after the unack. A snooze end restarts the
+tier and reminder clocks on every route; an unacknowledge restarts them only
+on the routes the ack held.
+
+Within the tenant's `alert_reopen_cooldown_seconds` (default 0, off) of an
+auto-resolve, a monitor that goes down again reopens its latest availability
+alert (`relapse_count`+1, `reopened_at`; `alerter/internal/alerter/reopen.go`)
+instead of opening a new one; manual resolves (`resolved_via`) never reopen. A
+reopen is a new paging episode: it clears ack/unack/snooze, tiers count from
+`reopened_at` (`DispatchEligibleSinceExpr`), and a route that heard the
+previous resolve is paged through the `reopened` claim, sent as `created`
+with `relapse_count > 0`. The episode keys idempotency and the recipient
+ledger, and the delivery worker locks the alert row for resolves too, so a
+resolve published before a reopen is dropped rather than delivered after it;
+the worker then hands that route's `resolved` claim back to `created`, so the
+route counts as still paged and hears the relapse's resolve.
+
+Triggers and reminders carry a signed acknowledge link (`shared/actionlink`,
+keyed off `PROBARA_SECRETS_KEY`) to the operator UI's confirm page, which
+POSTs to the API's public `/api/v1/alert-actions/{token}`; the API
+acknowledges through the alerts service as a `magic_link` actor, so the
+alerter sees an ordinary acknowledgement. Nothing about the link is stored.
+
+Two-way chat channels (plugins with `CapabilityMessageUpdate`, the Slack
+app) save the card they post per alert in `alert_notification_messages`
+(migration 000114, `shared/notifications/messagestore`) with the state it
+shows. Each lifecycle tick the alerter's card reconcile
+(`alerter/internal/alerter/card_updates.go`) sends `updated` to every card
+whose state differs from its alert's (status, snooze end), claimed on that
+row under the alert lock, so acknowledgements, unacknowledgements, snoozes
+and resolves from any surface rewrite the card; reminders and the resolve
+go as thread replies. The Slack app's Acknowledge button posts to the API's
+public `/api/v1/integrations/slack/interactions`, verified with
+`SLACK_SIGNING_SECRET`, which acknowledges through the alerts service as a
+`slack` actor; "Add to Slack" (`/api/v1/integrations/slack/install` and its
+public callback) creates the channel. All `SLACK_*` settings are api-only.
+
+An async envelope may carry `contact_id` instead of relying on the channel's
+own recipients: the delivery worker reads and decrypts that verified
+`user_contacts` address and hands it to a plugin advertising
+`CapabilityDirectRecipient`, so a person's address never rides on NATS. The
+alerter's escalation loop publishes them for escalation-policy pages and
+notices: an SMS contact through the workspace's personal SMS channel, an
+email contact with no `channel_id` at all (`channel_type` `email`, the
+platform mailer), which the worker sends without loading a channel. Those
+envelopes set `stop_on_ack`, so an ack or snooze since publish drops the page
+(its step claim is not handed back).
+
+Monitor-less alerts route to the tenant defaults (or the channel targets of
+the tenant's default escalation policy) through
+`alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
+S-F6 in [state semantics](state-semantics.md),
+`monitorstate.LocationOfflinePredicate`), one alert per check location that
+reported within 7 days and has been silent past the tenant threshold (none
+open while the whole fleet is silent). From the moment a location misses its
+1-minute connected window its mesh edges stay open but do not dispatch. The
+alerter exports `locations_offline` and `open_alerts{kind}` gauges; the
+scheduler exports `check_jobs_pending`, the check-job stream backlog.
 
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.
@@ -128,6 +198,16 @@ by one (SMS) records each accepted recipient in
 claim, so a retry on any replica or worker reaches only the rest; the
 dispatch envelope's `delivery_key` names the event (and reminder round) those
 rows belong to.
+Every attempt is also appended to
+`alert_notification_deliveries` (migration 000110,
+`shared/notifications/deliverylog`) from the pool: the alerter writes its
+synchronous outcome or `queued`, the worker each attempt, permanent failure,
+and two drop kinds decided under the alert lock, `dropped_superseded`
+(resolved, unacknowledged or reopened since publish) and `dropped_ack`.
+Every other worker drop (poison or unsupported envelope, channel deleted,
+deactivated or retyped, channel config that fails to decode) never reaches a
+plugin and is only logged. The API reads it per alert and per
+channel; the scheduler's retention cleanup prunes it after 90 days.
 
 ## Storage and maintenance
 
@@ -141,6 +221,29 @@ works in bounded batches; expired data remaining after a run keeps cleanup
 eligible for subsequent passes. Backlog gauges expose affected tenant counts
 and the oldest expired timestamp without scanning every expired row.
 
+The scheduler purger (`scheduler/internal/scheduler/purger.go`) owns hard
+deletes of soft-deleted data, under one session advisory lock and a per-run
+row budget. Its monitor phase drains tombstoned monitors' child rows in
+batches, then the monitor rows. Its tenant phase (`purger_tenants.go`) owns
+workspace deletion: the API only soft-deletes a workspace (`deleted_at`, its
+monitors tombstoned, its credentials revoked; `shared/tenancy`), each run
+first re-applies those tombstones and revocations to rows a racing request
+wrote after the delete (`deletedTenantCutoffs`), and once a
+deleted workspace has no monitor rows left the purger drains its other
+unbounded tables (monitor-less alerts, mesh probe results, incidents, push
+subscriptions, discovery inventory, which has no tenant FK, SLA reports, AI
+labels) and only then deletes the tenant row, leaving the cascade small
+configuration tables. `audit_log` rows outlive the workspace (audit
+retention prunes them).
+
+Maintenance windows are rules; what covers monitors is their materialized
+occurrences (`maintenance_window_occurrences`, S-M5). The API writes them in
+the window's create/update transaction, and the scheduler's hourly roller
+(`maintenance_occurrences.go`, one session advisory lock) extends repeating
+windows to the 35-day horizon, each under the window's row lock so it
+serializes with API edits. Ended occurrences, and the target links they
+covered (`maintenance_window_past_targets`), are kept as SLA history.
+
 Analytics choose raw, rollup, or interval-based calculations according to
 window coverage and the existing state semantics. Raw analytics stream
 results into accumulators; exact median/P95 calculations retain latency
@@ -151,9 +254,18 @@ Interval availability has one implementation, `IntegrateTimeline` in
 `shared/analytics/timeline.go`: the monitor headline and SLA reports both
 reduce its per-state seconds, so a one-monitor SLA and that monitor's
 headline agree. SLA reports are computed on request by the API from
-`monitor_state_intervals`, `maintenance_windows` and `alerts`; issuing one
+`monitor_state_intervals`, maintenance occurrences and `alerts`; issuing one
 freezes the report document in `sla_reports` (see
 [state semantics](state-semantics.md) S-U6/S-U7).
+
+Report schedules (`sla_report_schedules`) email a closed period's report: a
+runner in every API replica (`api/internal/services/reportschedules`) claims
+due rows `FOR UPDATE SKIP LOCKED` and commits the claimed period before
+mailing (at most once per period), issues the period through the SLA
+service, and sends one message per recipient through the platform mailer
+with a public unsubscribe link (`/api/v1/report-unsubscribe/{token}`).
+Changing an SLA's period or timezone re-plans its enabled schedules
+(`slas.ReportRunAt`).
 
 ## Shared code and security boundaries
 

@@ -24,6 +24,7 @@ import { formatDateTime } from '@/lib/format';
 import { saveStoredApiKey, removeStoredApiKey } from '@/lib/api-keys';
 import DashboardGroupsSection from '@/components/settings/DashboardGroupsSection';
 import { NotificationsPanel } from '@/components/settings/NotificationsPanel';
+import { PeopleSmsPanel } from '@/components/settings/PeopleSmsPanel';
 import { AISettingsPanel } from '@/components/settings/AISettingsPanel';
 import { MCPPanel } from '@/components/settings/MCPPanel';
 import { SETTINGS_COLUMNS, SETTINGS_COLUMNS_WIDE } from '@/components/settings/layout';
@@ -307,6 +308,8 @@ export default function SettingsPage() {
       {tab === 'channels' && !userLoading && <NotificationsPanel readOnly={!canWrite} />}
 
       {tab === 'channels' && <AlertChannelList />}
+
+      {tab === 'channels' && !userLoading && <PeopleSmsPanel readOnly={!isTenantAdmin} />}
 
       {tab === 'ai' && !userLoading && <AISettingsPanel readOnly={!canWrite} />}
 

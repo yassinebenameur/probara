@@ -5,14 +5,18 @@ import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import Image from 'next/image';
 import { AlertTriangle, Eraser, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react';
-import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope, SIPMonitorConfig } from '@/lib/types';
+import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope, SIPMonitorConfig, PingMonitorConfig, DomainMonitorConfig } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings, getSlas, runMonitorNow, toggleMonitorEnabled } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
+import { latestPingMetrics, pingFacts } from '@/lib/ping-metrics';
+import { domainFacts, latestDomainMetrics } from '@/lib/domain-metrics';
+import { effectiveCertExpiry } from '@/lib/tls-cert';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import { AlertRoutingNotice } from '@/components/monitors/AlertRoutingBadge';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
+import MonitorConfigHistory from '@/components/monitors/MonitorConfigHistory';
 import { GroupMembersCard } from '@/components/monitors/GroupMembersCard';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
 import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
@@ -43,9 +47,9 @@ import { isSipCall } from '@/lib/sip-config';
 import { strictestTarget, type Sla } from '@/lib/sla';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 import { formatBytes } from '@/lib/metrics';
-import { latestSIPMetrics, sipFacts, sipMediaOutdatedWorkersHint } from '@/lib/sip-metrics';
+import { certificateExpiryLabel, latestSIPMetrics, sipFacts, sipMediaOutdatedWorkersHint } from '@/lib/sip-metrics';
 
-const TAB_IDS = ['overview', 'history', 'settings', 'json'] as const;
+const TAB_IDS = ['overview', 'history', 'settings', 'versions', 'json'] as const;
 
 const isDatabaseMonitorType = (t: string): boolean =>
   t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq' || t === 'mysql';
@@ -189,6 +193,28 @@ function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
       }
     }
   }
+  if (monitor.type === 'ping') {
+    const ping = latestPingMetrics(results);
+    const cfg = monitor.config as PingMonitorConfig | undefined;
+    for (const fact of ping ? pingFacts(ping, cfg?.max_packet_loss_pct) : []) {
+      rows.push(
+        <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
+          {fact.value}
+        </DetailRow>
+      );
+    }
+  }
+  if (monitor.type === 'domain') {
+    const domain = latestDomainMetrics(results);
+    const cfg = monitor.config as DomainMonitorConfig | undefined;
+    for (const fact of domain ? domainFacts(domain, cfg?.min_days_valid) : []) {
+      rows.push(
+        <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
+          {fact.value}
+        </DetailRow>
+      );
+    }
+  }
   if (monitor.type === 'tcp') {
     const cfg = monitor.config as TCPMonitorConfig | undefined;
     const latest = results.find((r) => {
@@ -198,12 +224,22 @@ function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
     const tcpMetrics = latest ? (latest.metrics_data as TCPMetricsEnvelope).tcp : null;
     if (cfg?.use_tls) {
       rows.push(<DetailRow key="tls" label="TLS">{tcpMetrics?.tls_version || 'Enabled'}</DetailRow>);
+      const expiry = tcpMetrics?.tls ? certificateExpiryLabel(tcpMetrics.tls, cfg.tls_check_chain) : '';
+      if (expiry && tcpMetrics?.tls) {
+        const days = effectiveCertExpiry(tcpMetrics.tls, cfg.tls_check_chain).days ?? 0;
+        const warn = days < 0 || (cfg.tls_min_days_valid !== undefined && days < cfg.tls_min_days_valid);
+        rows.push(
+          <DetailRow key="certificate" label="Certificate" tone={warn ? 'warning' : undefined}>
+            {expiry}
+          </DetailRow>
+        );
+      }
     }
   }
   if (monitor.type === 'sip') {
     const sip = latestSIPMetrics(results);
     const config = monitor.config as SIPMonitorConfig;
-    for (const fact of sip ? sipFacts(sip, config.tls_min_days_valid, config.call?.media) : []) {
+    for (const fact of sip ? sipFacts(sip, config.tls_min_days_valid, config.call?.media, config.tls_check_chain) : []) {
       rows.push(
         <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
           {fact.copyable ? (
@@ -832,6 +868,7 @@ export default function EditMonitorPage() {
     { id: 'overview', label: 'Overview' },
     { id: 'history', label: 'History' },
     { id: 'settings', label: 'Settings' },
+    { id: 'versions', label: 'Config history' },
     { id: 'json', label: 'JSON' },
   ] as const;
   const selectedWindowMs =
@@ -1111,6 +1148,9 @@ export default function EditMonitorPage() {
           onCancel={() => router.push('/monitors')}
           loading={saving}
         />
+      )}
+      {activeTab === 'versions' && (
+        <MonitorConfigHistory monitor={monitor} onRestored={setMonitor} />
       )}
       {activeTab === 'json' && (
         <MonitorDetailJson monitor={monitor} analytics={analytics} />

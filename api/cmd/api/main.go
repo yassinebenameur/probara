@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/api/internal/api"
+	"github.com/yassinebenameur/probara/shared/actionlink"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -51,14 +52,23 @@ func main() {
 	}
 	log.Info("Database migrations completed")
 
-	// Process-level plugin runtime: deep-link origin and the egress (SSRF)
-	// policy every notification channel dials through.
+	// Signer for the one-click acknowledge links in notifications
+	// (shared/actionlink), keyed off PROBARA_SECRETS_KEY. Nil without a key,
+	// which renders no links; its methods are nil-safe.
+	linkSigner, linkErr := actionlink.FromEnv()
+	if linkErr != nil {
+		log.WithError(linkErr).Warn("Acknowledge links disabled: invalid PROBARA_SECRETS_KEY")
+	}
+
+	// Process-level plugin runtime: deep-link origin, the egress (SSRF)
+	// policy every notification channel dials through, and the link signer.
 	plugin.Configure(plugin.Runtime{
 		AppBaseURL: cfg.AppBaseURL,
 		Egress: netguard.Policy{
 			BlockPrivate: cfg.NotificationBlockPrivateIPs,
 			AllowedCIDRs: cfg.NotificationAllowedCIDRs,
 		},
+		Links: linkSigner,
 	})
 
 	// Wire the SMTP backend into the email plugin. The API never dispatches

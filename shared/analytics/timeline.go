@@ -8,11 +8,12 @@ package analytics
 //
 //   available      up / suspect / degraded (S-U3; degraded moves to down
 //                  when DegradedCountsAsDown is set — the per-SLA knob)
-//   unplanned down down time outside every maintenance window reaching the
-//                  monitor (directly or via one of its groups)
-//   planned down   down time inside such a window (S-M3). Windows are
-//                  unioned before intersecting, so overlapping windows (or a
-//                  window reaching a monitor twice) count once.
+//   unplanned down down time outside every maintenance occurrence reaching
+//                  the monitor (directly or via one of its groups), read
+//                  through maintenance.OccurrenceRangesSQL (S-M5)
+//   planned down   down time inside such an occurrence (S-M3). Occurrences
+//                  are unioned before intersecting, so overlapping windows
+//                  (or a window reaching a monitor twice) count once.
 //   paused         unknown intervals opened by a pause (S-P3)
 //   unknown        every other unknown interval (S-F2)
 //   untracked      bucket time no interval covers: before the monitor's
@@ -29,6 +30,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+
+	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
 // TimeRange is a half-open [Start, End) span.
@@ -233,16 +236,9 @@ func (r *Repository) IntegrateTimeline(ctx context.Context, tenantID uuid.UUID, 
 		),
 		maint AS (
 			SELECT g.idx, g.monitor_id,
-				range_agg(tstzrange(GREATEST(mw.starts_at, g.bs), LEAST(mw.ends_at, g.be))) AS mr
+				range_agg(tstzrange(GREATEST(mo.starts_at, g.bs), LEAST(mo.ends_at, g.be))) AS mr
 			FROM grid g
-			JOIN maintenance_windows mw
-				ON mw.tenant_id = $4 AND mw.starts_at < g.be AND mw.ends_at > g.bs
-			WHERE EXISTS (
-				SELECT 1 FROM maintenance_window_monitors mwm
-				WHERE mwm.maintenance_window_id = mw.id
-				  AND (mwm.monitor_id = g.monitor_id OR mwm.monitor_id IN (
-					SELECT mg.group_id FROM monitor_groups mg WHERE mg.monitor_id = g.monitor_id))
-			)
+			CROSS JOIN LATERAL ` + maintenance.OccurrenceRangesSQL("$4", "g.monitor_id", "g.bs", "g.be") + ` mo
 			GROUP BY g.idx, g.monitor_id
 		),
 		split AS (
@@ -372,16 +368,9 @@ func (r *Repository) Outages(ctx context.Context, tenantID uuid.UUID, monitorIDs
 		),
 		maint AS (
 			SELECT d.monitor_id,
-				range_agg(tstzrange(GREATEST(mw.starts_at, $2), LEAST(mw.ends_at, $3))) AS mr
+				range_agg(tstzrange(GREATEST(mo.starts_at, $2), LEAST(mo.ends_at, $3))) AS mr
 			FROM downs d
-			JOIN maintenance_windows mw
-				ON mw.tenant_id = $4 AND mw.starts_at < $3 AND mw.ends_at > $2
-			WHERE EXISTS (
-				SELECT 1 FROM maintenance_window_monitors mwm
-				WHERE mwm.maintenance_window_id = mw.id
-				  AND (mwm.monitor_id = d.monitor_id OR mwm.monitor_id IN (
-					SELECT mg.group_id FROM monitor_groups mg WHERE mg.monitor_id = d.monitor_id))
-			)
+			CROSS JOIN LATERAL `+maintenance.OccurrenceRangesSQL("$4", "d.monitor_id", "$2", "$3")+` mo
 			GROUP BY d.monitor_id
 		),
 		spans AS (

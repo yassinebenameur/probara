@@ -190,6 +190,12 @@ func (s *Service) Approve(ctx context.Context, tenant, service uuid.UUID, req Ap
 			return uuid.Nil, false, err
 		}
 	}
+	// The monitor is created through the repository, not the monitors
+	// service, so its first config version is recorded here, in the same
+	// transaction, after its locations and channels exist.
+	if err = monitors.RecordVersionTx(ctx, tx, tenant, m.ID, monitors.VersionSourceDiscovery); err != nil {
+		return uuid.Nil, false, err
+	}
 	// Remove soft-deleted bindings, keeping all actual monitor history untouched.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM discovery_monitor_links l USING monitors m WHERE l.monitor_id=m.id AND m.deleted_at IS NOT NULL AND l.service_id=$1 AND l.suggestion_key=$2`, service, req.Key); err != nil {
 		return uuid.Nil, false, err

@@ -21,7 +21,7 @@ import {
   syntheticBrowserGuidedDraftFromForm,
   validateMonitorForm,
 } from '@/lib/monitor-form/inline';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame } from 'lucide-react';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame, CalendarClock } from 'lucide-react';
 import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
 import { AlertingSection } from './AlertingSection';
 import GroupForm from './GroupForm';
@@ -32,9 +32,11 @@ import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
 import PrometheusForm from './PrometheusForm';
 import WebsocketForm from './WebsocketForm';
+import DomainForm from './DomainForm';
 import DatabaseForm from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow, sectionsWithErrors } from './HttpMonitorForm';
 import DnsEditor from './DnsEditor';
+import PingEditor from './PingEditor';
 import SyntheticApiEditor from './SyntheticApiEditor';
 import SyntheticBrowserEditor, { useSyntheticBrowserSetup } from './SyntheticBrowserEditor';
 import { SyntheticLiveTestPanel, useSyntheticEditorMode } from './synthetic-kit';
@@ -78,6 +80,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   typeMeta('grpc', { description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' }),
   typeMeta('tcp', { description: 'Connect to a host and port', icon: PlugZap, category: 'Network', namePlaceholder: 'Postgres port reachability' }),
   typeMeta('sip', { description: 'OPTIONS, REGISTER, test calls', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' }),
+  typeMeta('domain', { description: 'Registration expiry via RDAP', icon: CalendarClock, category: 'Network', namePlaceholder: 'example.com registration' }),
   typeMeta('postgres', { description: 'Connect, auth and query', icon: Database, category: 'Databases & brokers', namePlaceholder: 'Postgres production' }),
   typeMeta('mysql', { description: 'Connect, auth and query', icon: Cylinder, category: 'Databases & brokers', namePlaceholder: 'MySQL production' }),
   typeMeta('redis', { description: 'Connect and PING latency', icon: Zap, category: 'Databases & brokers', namePlaceholder: 'Redis cache' }),
@@ -106,6 +109,7 @@ const TYPE_FORMS: Partial<Record<MonitorType, ComponentType<MonitorFormProps>>> 
   prometheus: PrometheusForm,
   tcp: TcpForm,
   websocket: WebsocketForm,
+  domain: DomainForm,
 };
 
 const isDatabaseType = (type: MonitorType): type is DatabaseMonitorType => type in DB_TYPE_META;
@@ -114,9 +118,10 @@ const isDatabaseType = (type: MonitorType): type is DatabaseMonitorType => type 
 // timeout is checked against the interval, the URL against the TLS options,
 // the TLS expiry check against the URL scheme.
 const MONITOR_FORM_RELATED_FIELDS: Record<string, string[]> = {
-  timeout_seconds: ['interval_seconds'],
+  timeout_seconds: ['interval_seconds', 'ping_count', 'ping_interval_ms'],
   url: ['tls_skip_verify', 'tls_ca_pem', 'tls_server_name'],
   tls_min_days_valid: ['url'],
+  ping_warn_rtt_ms: ['ping_max_rtt_ms'],
 };
 
 export default function MonitorForm({
@@ -282,7 +287,12 @@ export default function MonitorForm({
         return [<PlanTarget key="t">{formData.method} {host}</PlanTarget>, `expects ${formData.status_rules.trim() || '2xx'}`];
       }
       case 'ping':
-        return formData.host.trim() ? [<PlanTarget key="t">ping {formData.host.trim()}</PlanTarget>] : null;
+        return formData.host.trim()
+          ? [
+              <PlanTarget key="t">ping {formData.host.trim()}</PlanTarget>,
+              `${formData.ping_count.trim() || '1'} × echo`,
+            ]
+          : null;
       case 'dns':
         return formData.host.trim()
           ? [<PlanTarget key="t">{formData.dns_record_type} {formData.host.trim()}</PlanTarget>]
@@ -348,6 +358,8 @@ export default function MonitorForm({
         />
       )}
 
+      {monitorType === 'ping' && <PingEditor data={formData} onChange={patchForm} errors={errors} />}
+
       {monitorType === 'dns' && <DnsEditor data={formData} onChange={patchForm} />}
 
       {monitorType === 'synthetic_api' && (
@@ -408,8 +420,12 @@ export default function MonitorForm({
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
           onThresholdChange={(n) => patchForm({ consecutive_failures_threshold: n })}
+          recoveryThreshold={formData.recovery_threshold}
+          onRecoveryThresholdChange={(n) => patchForm({ recovery_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => patchForm({ notification_mode: m })}
+          escalationPolicyId={formData.escalation_policy_id}
+          onEscalationPolicyChange={(id) => patchForm({ escalation_policy_id: id })}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => patchForm({ dependency_suppression: d })}

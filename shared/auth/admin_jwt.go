@@ -7,14 +7,26 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// AdminClaims represents JWT claims for admin sessions.
+// AdminClaims represents JWT claims for admin sessions. Identity only:
+// roles are never claims (they are resolved from the database per request).
 type AdminClaims struct {
 	AdminID string `json:"admin_id"`
+	// SessionID is the session family (admin_session_families.id) the token
+	// was issued for. The auth middleware rejects the token once that family
+	// is revoked. Empty on tokens minted before session families existed.
+	SessionID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
-// CreateAdminToken creates a signed JWT for an admin user.
+// CreateAdminToken creates a signed JWT for an admin user with no session
+// family. Prefer CreateAdminSessionToken, which can be revoked early.
 func CreateAdminToken(adminID, secret string, ttl time.Duration) (string, error) {
+	return CreateAdminSessionToken(adminID, "", secret, ttl)
+}
+
+// CreateAdminSessionToken creates a signed JWT for an admin user, bound to a
+// session family via the sid claim (empty sessionID omits the claim).
+func CreateAdminSessionToken(adminID, sessionID, secret string, ttl time.Duration) (string, error) {
 	if adminID == "" {
 		return "", fmt.Errorf("admin ID cannot be empty")
 	}
@@ -24,7 +36,8 @@ func CreateAdminToken(adminID, secret string, ttl time.Duration) (string, error)
 
 	now := time.Now()
 	claims := AdminClaims{
-		AdminID: adminID,
+		AdminID:   adminID,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   adminID,
 			IssuedAt:  jwt.NewNumericDate(now),

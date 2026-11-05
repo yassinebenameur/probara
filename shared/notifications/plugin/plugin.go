@@ -55,6 +55,14 @@ type DispatchRequest struct {
 	// each one the provider accepts. Nil means untracked (test sends):
 	// deliver to everyone.
 	Recipients RecipientLedger
+	// Recipient, when set, sends to this one person instead of the
+	// channel's configured recipients. Only plugins advertising
+	// CapabilityDirectRecipient receive it (see recipient.go).
+	Recipient *Recipient
+	// Messages is the card this alert already has on this channel, for
+	// plugins advertising CapabilityMessageUpdate (see message.go). Nil
+	// means untracked (test sends): post without saving.
+	Messages MessageStore
 }
 
 // RecipientLedger remembers which recipients of one event a provider has
@@ -70,8 +78,9 @@ type RecipientLedger interface {
 
 // Type returns the event type being delivered: "created", "reminder",
 // "resolved", "acknowledged" (only to plugins advertising
-// CapabilityAcknowledge) or "suspected_cause" (only to plugins advertising
-// CapabilityFollowUp).
+// CapabilityAcknowledge), "suspected_cause" (only to plugins advertising
+// CapabilityFollowUp) or "updated" (only to plugins advertising
+// CapabilityMessageUpdate).
 func (r DispatchRequest) Type() string {
 	if r.EventType != "" {
 		return r.EventType
@@ -86,5 +95,18 @@ func (r DispatchRequest) Type() string {
 // plugin renders, with deep links built from the configured AppBaseURL.
 // Plugins own layout only; alert phrasing lives in package present.
 func (r DispatchRequest) View() present.Message {
-	return present.Build(r.Event, r.Type(), CurrentRuntime().AppBaseURL)
+	rt := CurrentRuntime()
+	opts := present.Options{AppBaseURL: rt.AppBaseURL, ChannelID: r.Channel.ID}
+	if r.Recipient != nil && r.Recipient.ContactID != "" {
+		// A person send (escalation policy page): the acknowledge link is
+		// scoped to the contact it was delivered to, so it names who acted
+		// and dies with the contact. See recipient.go.
+		opts.ChannelID = r.Recipient.ContactID
+	}
+	if !r.Test {
+		// A test send's synthetic alert does not exist, so it never
+		// carries an action link.
+		opts.Links = rt.Links
+	}
+	return present.BuildWith(r.Event, r.Type(), opts)
 }

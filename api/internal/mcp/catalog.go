@@ -27,6 +27,16 @@ func catalog() []spec {
 		statusPageTools(),
 		workspaceTools(),
 		platformTools(),
+		pagingTools(),
+		identityTools(),
+		workspaceAdminTools(),
+		maintenanceRecurrenceTools(),
+		deliveryTools(),
+		peopleTools(),
+		escalationTools(),
+		statusPageAccessTools(),
+		reportScheduleTools(),
+		historyTools(),
 	} {
 		all = append(all, group...)
 	}

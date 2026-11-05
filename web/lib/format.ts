@@ -92,6 +92,46 @@ export function timezoneLabel(tz: TimestampZone = 'local', at: Date = new Date()
   return `UTC${sign}${Math.floor(abs / 60)}${minutes ? `:${pad2(minutes)}` : ''}`;
 }
 
+/**
+ * Wall-clock parts of an instant in an IANA zone (maintenance schedules are
+ * read in their own zone, not the browser's).
+ */
+export function zonedParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    weekday: 'short',
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour: Number(get('hour')) % 24,
+    minute: Number(get('minute')),
+    second: Number(get('second')),
+    weekday: get('weekday'),
+  };
+}
+
+/**
+ * formatDateTime in a named zone, led by the weekday: `Sun 8 Nov, 02:00`
+ * (`Sun 8 Nov 2027, 02:00` outside the current year).
+ */
+export function formatDateTimeInZone(value: DateInput, timeZone: string, fallback = '—', now: Date = new Date()): string {
+  const date = toDate(value);
+  if (!date) return value ? String(value) : fallback;
+  const p = zonedParts(date, timeZone);
+  const year = p.year === zonedParts(now, timeZone).year ? '' : ` ${p.year}`;
+  return `${p.weekday} ${p.day} ${MONTHS[p.month - 1]}${year}, ${pad2(p.hour)}:${pad2(p.minute)}`;
+}
+
 /** Full timestamp with seconds and zone, for `title=` tooltips. */
 export function formatDateTimeFull(value?: DateInput, fallback = '—'): string {
   const date = toDate(value);

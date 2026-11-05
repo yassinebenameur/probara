@@ -19,6 +19,8 @@ import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
 import SectionList from './SectionList';
 import PagePreview from './PagePreview';
+import PageAccessFields from './PageAccessFields';
+import { pageAccessError, pageAccessPayload } from '@/lib/status-page-access';
 import {
   DEFAULT_PRIMARY,
   DEFAULT_SECONDARY,
@@ -38,6 +40,8 @@ interface StatusPageFormProps {
 }
 
 const MONITOR_PAGE_SIZE = 100;
+// models.MaxSEODescriptionLength on the API.
+const SEO_DESCRIPTION_MAX = 300;
 const SLUG_RE = /^[a-z0-9-]+$/;
 
 function slugify(value: string): string {
@@ -60,6 +64,11 @@ function snapshot(state: FormState): string {
       secondary_color: state.basics.secondary_color.trim(),
     },
     enablePushNotifications: state.enablePushNotifications,
+    visibility: state.visibility,
+    password: state.password !== '',
+    clearPassword: state.clearPassword,
+    showLatencyCharts: state.showLatencyCharts,
+    seoDescription: state.seoDescription.trim(),
     sections: state.sections.map((section) => ({
       title: section.title.trim(),
       monitors: section.monitors.map((m) => ({
@@ -241,10 +250,14 @@ export default function StatusPageForm({
         nextErrors[`section-${section.id}`] = `Section ${index + 1} needs a title`;
       }
     });
+    const accessError = pageAccessError(state, statusPage?.has_password === true);
+    if (accessError) {
+      nextErrors.access = accessError;
+    }
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
-      if (nextErrors.slug || nextErrors.title) {
+      if (nextErrors.slug || nextErrors.title || nextErrors.access) {
         const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         formRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
       }
@@ -290,7 +303,13 @@ export default function StatusPageForm({
       monitor_ids: orderedMonitorIds,
       monitor_display_names: monitorDisplayNames,
       sections: normalizedSections,
-      settings: { enable_push_notifications: state.enablePushNotifications },
+      settings: {
+        enable_push_notifications: state.enablePushNotifications,
+        show_latency_charts: state.showLatencyCharts,
+        // '' clears a stored value, so the page falls back to its description.
+        seo_description: state.seoDescription.trim(),
+      },
+      ...pageAccessPayload(state),
     };
 
     await onSubmit(requestData);
@@ -398,7 +417,28 @@ export default function StatusPageForm({
             />
           </div>
 
-          <div className="glass-well p-4">
+          <FormField label="Search description">
+            <textarea
+              value={state.seoDescription}
+              onChange={(event) => dispatch({ type: 'set_seo_description', value: event.target.value })}
+              placeholder="Shown by search engines and link previews. Leave empty to use the description."
+              rows={2}
+              maxLength={SEO_DESCRIPTION_MAX}
+              className="input min-h-[72px] resize-none"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              {state.seoDescription.length}/{SEO_DESCRIPTION_MAX} characters
+            </p>
+          </FormField>
+
+          <div className="glass-well space-y-3 p-4">
+            <Checkbox
+              checked={state.showLatencyCharts}
+              onChange={(checked) => dispatch({ type: 'set_latency_charts', value: checked })}
+              className="!py-0"
+              label={<span className="font-medium text-white">Response-time charts</span>}
+              description="Draw each component's response time in its expanded panel, for the range the visitor picks."
+            />
             <Checkbox
               checked={state.enablePushNotifications}
               onChange={(checked) => dispatch({ type: 'set_push_notifications', value: checked })}
@@ -407,6 +447,17 @@ export default function StatusPageForm({
               description="Let visitors opt in to a browser notification when a component here goes down, and when it recovers. Requires a VAPID keypair on the status-page service; without one the control is not shown."
             />
           </div>
+
+          <PageAccessFields
+            visibility={state.visibility}
+            hasStoredPassword={statusPage?.has_password === true}
+            password={state.password}
+            clearPassword={state.clearPassword}
+            error={errors.access}
+            onVisibilityChange={(value) => dispatch({ type: 'set_visibility', value })}
+            onPasswordChange={(value) => dispatch({ type: 'set_password', value })}
+            onClearPasswordChange={(value) => dispatch({ type: 'set_clear_password', value })}
+          />
         </div>
       </section>
 

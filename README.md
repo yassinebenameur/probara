@@ -49,13 +49,14 @@ SLA reports come in the same install.
 
 ### Checks
 
-Probara has 18 monitor types. **Web:** HTTP (status, body, header and JSON
+Probara has 19 monitor types. **Web:** HTTP (status, body, header and JSON
 assertions, phase timings, TLS-expiry alerts), multi-step API journeys,
 headless-browser journeys, WebSocket and gRPC health. **Network:** ping, DNS,
-TCP and SIP. **Data:** Redis, PostgreSQL, MySQL, MongoDB and a message broker
-(RabbitMQ). **Other:** host agent (OpenTelemetry), Prometheus query
-thresholds, push heartbeats and groups. Checks run every 10 seconds to every
-24 hours (SIP test calls at most once a minute).
+TCP, SIP and domain registration expiry (RDAP, WHOIS). **Data:** Redis,
+PostgreSQL, MySQL, MongoDB and a message broker (RabbitMQ). **Other:** host
+agent (OpenTelemetry), Prometheus query thresholds, push heartbeats and
+groups. Checks run every 10 seconds to every 24 hours (SIP test calls at most
+once a minute, domain lookups at most once an hour).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/monitors-dark.webp">
@@ -97,9 +98,10 @@ probe network: each vantage point is a worker you run.
 
 ### Alerting and dependencies
 
-There are nine built-in channels: email, Slack, Discord, Microsoft Teams,
-Telegram, SMS via Twilio, webhooks (optionally HMAC-signed), PagerDuty and
-Opsgenie / Jira Service Management. Acks made in Probara are sent on to
+There are fifteen built-in channels: email, Slack, Discord, Microsoft Teams,
+Mattermost, Google Chat, Matrix, Telegram, ntfy, Gotify, Pushover, SMS via
+Twilio, webhooks (optionally HMAC-signed), PagerDuty and Opsgenie / Jira
+Service Management. Acks made in Probara are sent on to
 PagerDuty and Opsgenie. Alerts can escalate in tiers, send reminders and stay
 quiet during maintenance windows. Latency anomaly detection compares response
 times with learned baselines. Every monitor shows whether its alerts reach
@@ -234,7 +236,24 @@ masked and must be re-entered).
 
 ## Quick start
 
-### Try it locally
+### Install from release images
+
+On a single host with Docker Compose 2.24.4 or newer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/dev/scripts/install.sh \
+  | bash -s -- --dir probara
+```
+
+It downloads the Compose files of the newest release, generates every secret
+into `probara/.env` (never overwriting one already there), and starts the
+stack: UI on <http://localhost:3000>, status pages on port 8082. Images are
+linux/amd64 and linux/arm64; local AI is amd64 only and stays off on arm64
+hosts. Re-run it with `--version X` to upgrade. Details, HTTPS and private
+locations over 443:
+[release Compose](https://probara-uptime.com/docs/deployment/#release-compose).
+
+### Try it locally from source
 
 You need Docker with Compose v2, `make`, Node.js 20.9 or newer, and free
 ports 3000, 4222, 5432 and 8080–8084.
@@ -259,9 +278,10 @@ first visit, the login page asks you to create the first administrator.
 Status pages are served at `http://localhost:8082/public/status/<slug>`.
 `make stop-all` stops everything.
 
-These Compose defaults are for a laptop: a development JWT secret and AI
-token, secret encryption off, no SMTP and no `PUBLIC_BASE_URL` (agent
-installers and location workers need it). Before you expose an install, read
+These Compose defaults are for a laptop: a generated per-checkout JWT secret
+(`.dev-admin-jwt-secret`), a development AI token and database password,
+secret encryption off, unauthenticated NATS, no SMTP and no `PUBLIC_BASE_URL`
+(agent installers and location workers need it). Before you expose an install, read
 the [production checklist](https://probara-uptime.com/docs/deployment/#production-checklist).
 
 ### Kubernetes
@@ -276,10 +296,12 @@ kubectl -n probara port-forward svc/probara-frontend 3000:3000
 
 `--devel` installs the newest 2.0 prerelease; without it, Helm picks the 1.0
 chart. Pin `--version 2.0.0-alpha.N` for repeatable installs. The images are
-linux/amd64 only, and the bundled Postgres and NATS need a default
-StorageClass. Add `--set localAI.enabled=false` to skip the AI pod. If you
+published for linux/amd64 and linux/arm64, except local AI, which is
+linux/amd64 only: on arm64 nodes add `--set localAI.enabled=false`. The
+bundled Postgres and NATS need a default StorageClass. If you
 pull images yourself, use `:alpha` or an exact version: `:latest` is still
-1.0, including in the location-worker snippet the UI generates.
+1.0. The location-worker snippet the UI generates already pins the worker to
+the platform's own version.
 
 ## Going further
 

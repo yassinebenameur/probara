@@ -1,6 +1,7 @@
 import { formatDate, formatJitter, formatLatency, formatLossPct, formatMOS, pluralize } from './format';
 import type { TimedSnapshot } from './metric-snapshots';
 import { lossTone, mosTone, thresholdTone } from './status-tones';
+import { effectiveCertExpiry } from './tls-cert';
 import type {
   CheckResult,
   SIPCallMetrics,
@@ -49,14 +50,17 @@ export function sipResponseLabel(m: SIPMetrics): string {
 /**
  * `expires in 12 days (Nov 1, 2026)`; empty without an expiry. Days come
  * from the worker's snapshot (whole days, truncated), the same number the
- * status page shows.
+ * status page shows. checkChain (the monitor's tls_check_chain) reports the
+ * chain's earliest expiry, as tls_expiry measures it.
  */
-export function certificateExpiryLabel(tls: TLSCertInfo): string {
-  const days = tls.days_until_expiry;
+export function certificateExpiryLabel(tls: TLSCertInfo, checkChain = false): string {
+  const { days, notAfter, chain } = effectiveCertExpiry(tls, checkChain);
   if (days === undefined) return '';
-  const when = tls.not_after ? ` (${formatDate(tls.not_after)})` : '';
-  if (days < 0) return `expired ${pluralize(-days, 'day')} ago${when}`;
-  return `expires in ${pluralize(days, 'day')}${when}`;
+  const when = notAfter ? ` (${formatDate(notAfter)})` : '';
+  // Name the chain only when it, not the leaf, sets the date.
+  const what = chain && notAfter !== tls.not_after ? 'chain ' : '';
+  if (days < 0) return `${what}expired ${pluralize(-days, 'day')} ago${when}`;
+  return `${what}expires in ${pluralize(days, 'day')}${when}`;
 }
 
 /**
@@ -65,7 +69,7 @@ export function certificateExpiryLabel(tls: TLSCertInfo): string {
  * the tls_expiry alert the alerter opens for it. media is the monitor's
  * call.media, whose thresholds tone the call-quality rows.
  */
-export function sipFacts(m: SIPMetrics, minDaysValid?: number, media?: SIPMediaConfig): SIPFact[] {
+export function sipFacts(m: SIPMetrics, minDaysValid?: number, media?: SIPMediaConfig, checkChain = false): SIPFact[] {
   const facts: SIPFact[] = [];
   if (m.server) facts.push({ key: 'server', label: 'Answered by', value: m.server });
   const address = sipAddressLabel(m);
@@ -89,9 +93,9 @@ export function sipFacts(m: SIPMetrics, minDaysValid?: number, media?: SIPMediaC
       value: m.tls?.version ? `${transport} · ${m.tls.version}` : transport,
     });
   }
-  const expiry = m.tls ? certificateExpiryLabel(m.tls) : '';
+  const expiry = m.tls ? certificateExpiryLabel(m.tls, checkChain) : '';
   if (expiry) {
-    const days = m.tls?.days_until_expiry ?? 0;
+    const days = (m.tls && effectiveCertExpiry(m.tls, checkChain).days) ?? 0;
     const warn = days < 0 || (minDaysValid !== undefined && days < minDaysValid);
     facts.push({ key: 'certificate', label: 'Certificate', value: expiry, tone: warn ? 'warning' : undefined });
   }

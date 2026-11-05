@@ -2,7 +2,7 @@
 // value means the same thing on every page. Text formatting lives in
 // lib/format.ts. Tone names match the Pill primitive's (components/ui/Pill.tsx).
 
-import type { AlertStatus, IncidentSeverity, IncidentState, MetricRule } from './types';
+import type { AlertStatus, DeliveryOutcome, IncidentSeverity, IncidentState, MetricRule } from './types';
 import type { MonitorDisplayStatus } from './monitor-utils';
 
 export type StatusTone = 'success' | 'danger' | 'warning' | 'info' | 'neutral';
@@ -354,6 +354,57 @@ export const AI_CONFIDENCE_TONE: Record<AIConfidence, StatusTone> = {
 
 export function aiConfidenceTone(confidence: AIConfidence | string | null | undefined): StatusTone {
   return AI_CONFIDENCE_TONE[confidence as AIConfidence] ?? 'neutral';
+}
+
+// ── Notification deliveries ──────────────────────────────────────────────
+
+export const DELIVERY_OUTCOME_LABEL: Record<DeliveryOutcome, string> = {
+  queued: 'Queued',
+  delivered: 'Delivered',
+  failed: 'Failed, retrying',
+  permanent_failure: 'Rejected',
+  dropped_superseded: 'Dropped (superseded)',
+  dropped_ack: 'Held (ack/snooze)',
+};
+
+/** Red for a rejection, amber for a retried failure; drops are neutral. */
+export function deliveryOutcomeTone(outcome: DeliveryOutcome | string | null | undefined): StatusTone {
+  switch (outcome) {
+    case 'delivered':
+      return 'success';
+    case 'failed':
+      return 'warning';
+    case 'permanent_failure':
+      return 'danger';
+    case 'queued':
+      return 'info';
+    default:
+      return 'neutral';
+  }
+}
+
+export function deliveryOutcomeLabel(outcome: DeliveryOutcome | string | null | undefined): string {
+  return DELIVERY_OUTCOME_LABEL[outcome as DeliveryOutcome] ?? (outcome || 'Unknown');
+}
+
+// A superseded drop is not always a resolve: an acknowledgement is dropped
+// after an unack, and anything from an earlier paging episode (a recovery
+// included) once the alert reopens — so the label stays neutral and the hint
+// names every case.
+const DELIVERY_OUTCOME_HINT: Partial<Record<DeliveryOutcome, string>> = {
+  dropped_superseded:
+    'Not sent: the alert changed before the queued event went out — it resolved, was unacknowledged (for an acknowledgement), or reopened (for an event of an earlier episode).',
+  dropped_ack: 'Not sent yet: held by an acknowledgement or snooze; it goes out once that lifts.',
+};
+
+/** Explains an outcome whose label alone can mislead (the drops), else undefined. */
+export function deliveryOutcomeHint(outcome: DeliveryOutcome | string | null | undefined): string | undefined {
+  return DELIVERY_OUTCOME_HINT[outcome as DeliveryOutcome];
+}
+
+/** Whether a channel's last delivery failed (the channel list's error badge). */
+export function deliveryFailed(outcome: DeliveryOutcome | string | null | undefined): boolean {
+  return outcome === 'failed' || outcome === 'permanent_failure';
 }
 
 // ── Tone → classes ───────────────────────────────────────────────────────

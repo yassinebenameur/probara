@@ -113,7 +113,9 @@ func (i *Ingest) persistMeshResult(ctx context.Context, m models.CheckResultMess
 		return outcome{duplicate: true}, nil
 	}
 
-	transition := monitorstate.Apply(snap, monitorstate.IsFailureStatus(m.Status), i.config.MeshFailureThreshold)
+	// Mesh edges recover on a single pass: recovery confirmation (S-T7) is a
+	// per-monitor setting, and edges have no counter column to carry it.
+	transition := monitorstate.Apply(snap, monitorstate.IsFailureStatus(m.Status), i.config.MeshFailureThreshold, 1)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE location_mesh_state
 		SET current_state = $1,

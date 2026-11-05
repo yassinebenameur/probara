@@ -17,8 +17,11 @@ func insertMaintenanceWindow(ctx context.Context, t *testing.T, db *shareddb.Cli
 	t.Helper()
 	windowID := uuid.New()
 	mustExec(ctx, t, db, `
-		INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at)
-		VALUES ($1, $2, 'test window', $3, $4)
+		WITH w AS (
+			INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at)
+			VALUES ($1, $2, 'test window', $3, $4)
+			RETURNING id, tenant_id, starts_at, ends_at)
+		INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT * FROM w
 	`, windowID, tenantID, startsAt, endsAt)
 	for _, monitorID := range monitorIDs {
 		mustExec(ctx, t, db, `
@@ -32,7 +35,7 @@ func insertMaintenanceWindow(ctx context.Context, t *testing.T, db *shareddb.Cli
 func expireMaintenanceWindow(ctx context.Context, t *testing.T, db *shareddb.Client, windowID uuid.UUID) {
 	t.Helper()
 	mustExec(ctx, t, db, `
-		UPDATE maintenance_windows SET ends_at = NOW() - INTERVAL '1 second' WHERE id = $1
+		UPDATE maintenance_window_occurrences SET ends_at = NOW() - INTERVAL '1 second' WHERE window_id = $1
 	`, windowID)
 }
 
@@ -171,5 +174,48 @@ func TestLifecycleMaintenanceRecoveryResolvesOpenAlert(t *testing.T) {
 	}
 	if got := countAlerterAlertsByStatus(ctx, t, dbClient, monitorID, "active"); got != 0 {
 		t.Fatalf("active alerts after recovery = %d, want 0", got)
+	}
+}
+
+// Coverage is the occurrence, never the rule (S-M5): a repeating window whose
+// rule spans the present mutes nothing between occurrences, and mutes during
+// one.
+func TestLifecycleMaintenanceMutesOnlyDuringOccurrence(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mw-occ")
+	muted := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "muted")
+	between := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "between")
+
+	addRepeating := func(monitorID uuid.UUID, occStart, occEnd time.Time) {
+		windowID := uuid.New()
+		// The template span covers the present; only the occurrence counts.
+		mustExec(ctx, t, dbClient, `
+			INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at, recurrence)
+			VALUES ($1, $2, 'nightly', NOW() - INTERVAL '1 hour', NOW() + INTERVAL '1 hour', 'daily')
+		`, windowID, tenantID)
+		mustExec(ctx, t, dbClient, `
+			INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id) VALUES ($1, $2)
+		`, windowID, monitorID)
+		mustExec(ctx, t, dbClient, `
+			INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) VALUES ($1, $2, $3, $4)
+		`, windowID, tenantID, occStart, occEnd)
+	}
+	now := time.Now().UTC()
+	addRepeating(muted, now.Add(-time.Minute), now.Add(time.Hour))
+	addRepeating(between, now.Add(23*time.Hour), now.Add(25*time.Hour))
+
+	a := newIntegrationAlerter(dbClient)
+	setStateForTest(ctx, t, dbClient, muted, "down", now)
+	setStateForTest(ctx, t, dbClient, between, "down", now)
+	if err := a.runLifecycle(ctx); err != nil {
+		t.Fatalf("runLifecycle error = %v", err)
+	}
+	if got := countAlerterAlertsByStatus(ctx, t, dbClient, muted, "active"); got != 0 {
+		t.Fatalf("alerts during an occurrence = %d, want 0", got)
+	}
+	if got := countAlerterAlertsByStatus(ctx, t, dbClient, between, "active"); got != 1 {
+		t.Fatalf("alerts between occurrences = %d, want 1 (the rule itself covers nothing)", got)
 	}
 }

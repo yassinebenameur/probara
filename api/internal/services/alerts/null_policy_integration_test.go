@@ -58,14 +58,14 @@ func TestAlertsWithoutPolicyAreVisible(t *testing.T) {
 	})
 
 	t.Run("AcknowledgeAlert succeeds and returns NULL-policy alert", func(t *testing.T) {
-		got, err := svc.AcknowledgeAlert(ctx, tenantID, alertID)
+		got, err := svc.AcknowledgeAlert(ctx, tenantID, alertID, alertsvc.Actor{Via: alertsvc.ViaAPI})
 		require.NoError(t, err, "AcknowledgeAlert must not fail for NULL-policy alert")
 		require.Equal(t, alertID, got.ID)
 		require.Equal(t, models.AlertStatusAcknowledged, got.Status)
 	})
 
 	t.Run("ResolveAlert succeeds and returns NULL-policy alert", func(t *testing.T) {
-		got, err := svc.ResolveAlert(ctx, tenantID, alertID)
+		got, err := svc.ResolveAlert(ctx, tenantID, alertID, alertsvc.Actor{Via: alertsvc.ViaAPI})
 		require.NoError(t, err, "ResolveAlert must not fail for NULL-policy alert")
 		require.Equal(t, alertID, got.ID)
 		require.Equal(t, models.AlertStatusResolved, got.Status)

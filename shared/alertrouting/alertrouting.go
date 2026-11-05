@@ -9,6 +9,9 @@
 //
 //   - notification_mode = 'custom'  → the monitor's own monitor_channels rows.
 //   - notification_mode = 'default' → the tenant's tenant_default_channels.
+//   - notification_mode = 'policy' (or 'default' under a tenant default
+//     policy) → the escalation policy's channel targets, plus person targets
+//     the alerter pages itself; see policy.go.
 //   - Only channels with alert_channels.is_active deliver; dispatch skips the
 //     rest, so an assignment to a disabled channel routes nowhere.
 //   - A member of a group whose member_alert_rollup = 'group' never dispatches
@@ -27,9 +30,21 @@
 // the alert's suppression_reason, so what pages and what the UI calls
 // suppressed cannot disagree. Classify does not model it: routing reachability
 // is static configuration, dependency suppression follows live upstream state.
+//
+// Acknowledgement and snooze are per-alert mutes too, and likewise outside
+// Classify. A snoozed alert (SnoozedPredicate) sends no escalation tier,
+// reminder or suspected-cause follow-up until snoozed_until. An acknowledged
+// alert stops its tiers and reminders when the tenant's
+// ack_stops_notifications is on (AckStopsExpr), except on routes marked
+// notify_after_ack (the 5th TargetsSQL column); suspected-cause follow-ups
+// still reach acked alerts. The API's muted_reason is MutedReasonExpr.
 package alertrouting
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // Routing source values reported by Classify.
 const (
@@ -83,6 +98,12 @@ type Status struct {
 	RollupGroupID *uuid.UUID `json:"rollup_group_id,omitempty"`
 	// RollupGroupName is that group's display name.
 	RollupGroupName string `json:"rollup_group_name,omitempty"`
+	// Escalation policies (policy.go): the policy that routes the monitor
+	// (its own, or the tenant default), and how many of its person targets
+	// can page somebody.
+	EscalationPolicyID   *uuid.UUID `json:"escalation_policy_id,omitempty"`
+	EscalationPolicyName string     `json:"escalation_policy_name,omitempty"`
+	ReachablePeople      int        `json:"reachable_people,omitempty"`
 }
 
 // Counts is the raw per-monitor tally a query produces, before it is turned
@@ -104,6 +125,14 @@ type Counts struct {
 	RollupActive    int
 	RollupAssigned  int
 	RollupEnabled   bool
+	// Escalation policies (policy.go): PolicyID/PolicyName is the policy
+	// that routes the monitor (EffectivePolicyExpr), nil when none does;
+	// OwnPeople / RollupPeople count the reachable person targets of the
+	// monitor's / the roll-up group's policy (PeopleCountExpr).
+	PolicyID     *uuid.UUID
+	PolicyName   string
+	OwnPeople    int
+	RollupPeople int
 }
 
 // Classify turns raw counts into the reachability an operator sees. It is the
@@ -120,7 +149,8 @@ func Classify(c Counts) Status {
 			AssignedChannels: c.RollupAssigned,
 			RollupGroupID:    c.RollupGroupID,
 			RollupGroupName:  c.RollupGroupName,
-			Reachable:        c.RollupEnabled && c.RollupActive > 0,
+			Reachable:        c.RollupEnabled && c.RollupActive+c.RollupPeople > 0,
+			ReachablePeople:  c.RollupPeople,
 		}
 		if !st.Reachable {
 			st.Reason = ReasonGroupRollupUnrouted
@@ -132,6 +162,11 @@ func Classify(c Counts) Status {
 		}
 		return st
 	}
+	// --- escalation policies (policy.go) ---
+	if c.policyRouted() {
+		return classifyPolicy(c)
+	}
+	// --- end escalation policies ---
 
 	st := Status{
 		ActiveChannels:   c.OwnActive,
@@ -160,8 +195,9 @@ func Classify(c Counts) Status {
 
 // TargetsSQL returns the set of routed channel assignments for the monitors in
 // the `$1` tenant and `$2` monitor-ID array, as
-// `(monitor_id, channel_id, delay_seconds, pos)` ordered by escalation
-// position. It is the alerter's delivery routing and the API's reachability
+// `(monitor_id, channel_id, delay_seconds, pos, notify_after_ack)` ordered by
+// escalation position. notify_after_ack is the route's opt-out from
+// stop-on-ack (see AckStopsExpr); routing itself ignores it. It is the alerter's delivery routing and the API's reachability
 // input, expressed once.
 //
 // Rows are emitted for disabled channels too — dispatch filters on
@@ -169,6 +205,22 @@ func Classify(c Counts) Status {
 // and check it (as ChannelCountExpr with activeOnly does).
 func TargetsSQL() string {
 	return targetsSQL("$1", func(col string) string { return col + " = ANY($2)" })
+}
+
+// TenantTargetsSQL returns the `$1` tenant's default routes as
+// `(channel_id, delay_seconds, pos, notify_after_ack)`: the routing a
+// default-mode monitor inherits through TargetsSQL, without a monitor. Alerts
+// that have no monitor (mesh edges, offline locations) route through it, so
+// they follow the same tenant defaults a default-mode monitor does. Like
+// TargetsSQL it ignores is_active; callers join alert_channels and order by
+// pos.
+func TenantTargetsSQL() string {
+	return `
+		SELECT tdc.channel_id, tdc.delay_seconds, tdc.position AS pos, tdc.notify_after_ack
+		FROM tenant_default_channels tdc
+		WHERE tdc.tenant_id = $1
+		  AND ` + tenantDefaultPolicyExpr("tdc.tenant_id") + ` IS NULL -- escalation policies (policy.go)
+		UNION ALL` + tenantPolicyRoutesSQL()
 }
 
 // RoutesToChannelPredicate returns a SQL boolean that is TRUE when the monitor
@@ -188,15 +240,17 @@ func RoutesToChannelPredicate(monAlias, channelIDExpr string) string {
 // with a caller's correlated alias.
 func targetsSQL(tenantExpr string, monitorMatch func(col string) string) string {
 	return `
-		SELECT mc.monitor_id, mc.channel_id, mc.delay_seconds, 0 AS pos
+		SELECT mc.monitor_id, mc.channel_id, mc.delay_seconds, 0 AS pos, mc.notify_after_ack
 		FROM monitor_channels mc
 		JOIN monitors rtm ON rtm.id = mc.monitor_id
 		WHERE ` + monitorMatch("mc.monitor_id") + ` AND rtm.notification_mode = 'custom'
 		UNION ALL
-		SELECT rtm.id, tdc.channel_id, tdc.delay_seconds, tdc.position
+		SELECT rtm.id, tdc.channel_id, tdc.delay_seconds, tdc.position, tdc.notify_after_ack
 		FROM tenant_default_channels tdc
 		JOIN monitors rtm ON rtm.tenant_id = tdc.tenant_id
-		WHERE tdc.tenant_id = ` + tenantExpr + ` AND ` + monitorMatch("rtm.id") + ` AND rtm.notification_mode = 'default'`
+		WHERE tdc.tenant_id = ` + tenantExpr + ` AND ` + monitorMatch("rtm.id") + ` AND rtm.notification_mode = 'default'
+		  AND ` + tenantDefaultPolicyExpr("tdc.tenant_id") + ` IS NULL -- escalation policies (policy.go)
+		UNION ALL` + policyRoutesSQL(tenantExpr, monitorMatch)
 }
 
 // ChannelCountExpr returns a SQL scalar subquery counting the channels routed
@@ -221,6 +275,8 @@ func ChannelCountExpr(monAlias string, activeOnly bool) string {
 			JOIN alert_channels ac ON ac.id = tdc.channel_id` + activePredicate + `
 			WHERE tdc.tenant_id = ` + monAlias + `.tenant_id
 			  AND ` + monAlias + `.notification_mode = 'default'
+			  AND ` + tenantDefaultPolicyExpr(monAlias+".tenant_id") + ` IS NULL -- escalation policies (policy.go)
+			UNION ALL` + policyChannelCountSQL(monAlias, activePredicate) + `
 		) routed)`
 }
 
@@ -247,7 +303,7 @@ func RollupGroupExpr(monitorIDExpr string) string {
 		WHERE mg.monitor_id = ` + monitorIDExpr + `
 		  AND g.deleted_at IS NULL
 		  AND g.member_alert_rollup = 'group'
-		ORDER BY (g.enabled AND ` + ChannelCountExpr("g", true) + ` > 0) DESC, g.id
+		ORDER BY (g.enabled AND ` + ReachCountExpr("g") + ` > 0) DESC, g.id
 		LIMIT 1)`
 }
 
@@ -308,10 +364,90 @@ func SuppressedByDependencyPredicate(alertAlias, monAlias, tenantAlias string) s
 // never had a root cause this is its triggered_at; for one whose root cause
 // cleared it is the end of the grace period, so escalation-tier delays for a
 // late-paging downstream are measured from when it became unexplained rather
-// than firing every tier at once.
+// than firing every tier at once. The end of a snooze restarts the clock the
+// same way for every route (snoozed_until; GREATEST ignores NULLs), so unfired
+// tiers count from it instead of all firing at once. An unacknowledge
+// restarts it only on the routes the ack actually held (ResumedAt), which is
+// per route and so applied by the caller. A reopen (reopened_at, the alert
+// relapsed within the tenant's reopen cooldown) starts a new paging episode,
+// so the tiers count from it as they did from triggered_at.
 func DispatchEligibleSinceExpr(alertAlias, tenantAlias string) string {
 	return `GREATEST(` + alertAlias + `.triggered_at,
-		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at))`
+		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at),
+		` + alertAlias + `.snoozed_until,
+		` + alertAlias + `.reopened_at)`
+}
+
+// ResumedAt is when paging on one route resumed after a mute: the end of the
+// alert's snooze (snoozedUntil, every route), or its last unacknowledge
+// (unacknowledgedAt) on a route the ack held, i.e. stopOnAck (the tenant's
+// ack_stops_notifications on and the route not notify_after_ack). A route the
+// ack never held keeps its clocks through an ack and unack. Zero arguments
+// mean NULL; the result is zero when the route never resumed. Escalation
+// tiers and reminders on that route count from it, so lifting a mute never
+// releases a burst of overdue pages. The alerter's claim and its pre-filters
+// both derive their resume point here.
+func ResumedAt(snoozedUntil, unacknowledgedAt time.Time, stopOnAck bool) time.Time {
+	resumed := snoozedUntil
+	if stopOnAck && unacknowledgedAt.After(resumed) {
+		resumed = unacknowledgedAt
+	}
+	return resumed
+}
+
+// SnoozedPredicate returns a SQL boolean that is TRUE while the alert aliased
+// by alertAlias is snoozed. A snoozed alert sends no escalation tier, reminder
+// or suspected-cause follow-up; resolve and acknowledge notifications still
+// flow. Never NULL.
+func SnoozedPredicate(alertAlias string) string {
+	return `COALESCE(` + alertAlias + `.snoozed_until > NOW(), FALSE)`
+}
+
+// AckStopsExpr returns a SQL boolean that is TRUE when acknowledging an alert
+// of the tenant aliased by tenantAlias stops its escalation tiers and
+// reminders (on every route not marked notify_after_ack).
+func AckStopsExpr(tenantAlias string) string {
+	return tenantAlias + `.ack_stops_notifications`
+}
+
+// MuteHolds is the one ack/snooze rule for whether an event may go out: a
+// snooze holds escalation tiers ("created", and "reopened", the alerter's
+// claim name for a relapse's page), reminders and suspected-cause
+// follow-ups; an acknowledgement holds tiers and reminders on a stopOnAck
+// route (AckStopsExpr on, route not notify_after_ack). Suspected-cause
+// follow-ups still reach acknowledged alerts, and acknowledged / resolved
+// notifications are never held. The alerter's claim and pre-filters and the
+// delivery worker's late re-check all call it.
+func MuteHolds(eventType string, acknowledged, snoozed, stopOnAck bool) bool {
+	switch eventType {
+	case "created", "reopened", "reminder":
+		return snoozed || (acknowledged && stopOnAck)
+	case "suspected_cause":
+		return snoozed
+	default:
+		return false
+	}
+}
+
+// Muted reasons the API reports in an alert's muted_reason.
+const (
+	// MutedReasonSnoozed: the alert is snoozed (SnoozedPredicate).
+	MutedReasonSnoozed = "snoozed"
+	// MutedReasonAcknowledged: the alert is acknowledged and the tenant stops
+	// paging on ack, so only notify_after_ack routes still hear about it.
+	MutedReasonAcknowledged = "acknowledged"
+)
+
+// MutedReasonExpr returns a SQL text expression naming why the open alert
+// aliased by alertAlias (tenant aliased by tenantAlias) is not paging — one of
+// the MutedReason* values — or NULL. It is built from the predicates the
+// alerter dispatches on, so the API cannot report a mute the alerter ignores.
+func MutedReasonExpr(alertAlias, tenantAlias string) string {
+	return `CASE
+		WHEN ` + alertAlias + `.status NOT IN ('active', 'acknowledged') THEN NULL
+		WHEN ` + SnoozedPredicate(alertAlias) + ` THEN '` + MutedReasonSnoozed + `'
+		WHEN ` + alertAlias + `.status = 'acknowledged' AND COALESCE(` + AckStopsExpr(tenantAlias) + `, TRUE) THEN '` + MutedReasonAcknowledged + `'
+	END`
 }
 
 // ImpactedMonitorsSubquery returns a SQL scalar subquery yielding a JSON array
@@ -344,8 +480,8 @@ func UnreachablePredicate(monAlias string) string {
 	rollup := RollupGroupExpr(monAlias + ".id")
 	return `(NOT ` + SelfSilentGroupPredicate(monAlias) + ` AND CASE
 		WHEN ` + rollup + ` IS NOT NULL THEN NOT (
-			SELECT rg.enabled AND ` + ChannelCountExpr("rg", true) + ` > 0
+			SELECT rg.enabled AND ` + ReachCountExpr("rg") + ` > 0
 			FROM monitors rg WHERE rg.id = ` + rollup + `)
-		ELSE ` + ChannelCountExpr(monAlias, true) + ` = 0
+		ELSE ` + ReachCountExpr(monAlias) + ` = 0
 	END)`
 }

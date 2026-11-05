@@ -98,6 +98,8 @@ import type {
   MaintenanceWindowStatus,
   CreateMaintenanceWindowRequest,
   UpdateMaintenanceWindowRequest,
+  PreviewMaintenanceWindowRequest,
+  PreviewMaintenanceWindowResponse,
   SnoozeMonitorRequest,
   Location,
   LocationListResponse,
@@ -111,7 +113,18 @@ import type {
   MetricQueryRequest,
   MetricQueryResponse,
   McpConnectionListResponse,
+  AdminSessionListResponse,
+  RevokeSessionsResponse,
+  UnlockUserResponse,
 } from './types';
+import type {
+  CreateTenantRequest,
+  DeleteTenantRequest,
+  DeleteTenantResponse,
+  RenameTenantRequest,
+  Tenant,
+} from './types';
+import type { NotificationDeliveryListResponse } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
@@ -241,8 +254,11 @@ async function apiRequest<T>(
     tenantSelectionValidated = false;
   }
 
+  // /v1/tenants is platform-level: sending the selection would get a list or
+  // workspace change refused (403) whenever the selected workspace was just
+  // deleted, which is exactly when the switcher must reload the list.
   const tenantId = getSelectedTenantId();
-  if (tenantId) {
+  if (tenantId && !isTenantsPath) {
     headers['X-Tenant-ID'] = tenantId;
   }
 
@@ -404,6 +420,17 @@ export async function updateMaintenanceWindow(
   data: UpdateMaintenanceWindowRequest
 ): Promise<MaintenanceWindow> {
   return apiRequest<MaintenanceWindow>('PATCH', `/v1/maintenance-windows/${id}`, data);
+}
+
+export async function previewMaintenanceWindow(
+  data: PreviewMaintenanceWindowRequest
+): Promise<PreviewMaintenanceWindowResponse> {
+  return apiRequest<PreviewMaintenanceWindowResponse>('POST', '/v1/maintenance-windows/preview', data);
+}
+
+/** Ends the occurrence in progress now; a repeating window keeps its rule. */
+export async function endMaintenanceOccurrence(id: string): Promise<MaintenanceWindow> {
+  return apiRequest<MaintenanceWindow>('POST', `/v1/maintenance-windows/${id}/end`);
 }
 
 export async function deleteMaintenanceWindow(id: string): Promise<void> {
@@ -634,6 +661,24 @@ export async function bulkAcknowledgeAlerts(ids: string[]): Promise<AlertBulkRes
 
 export async function bulkResolveAlerts(ids: string[]): Promise<AlertBulkResult> {
   return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/resolve', { ids });
+}
+
+// Paging: unacknowledge resumes paging (clocks restart from now); a snooze
+// mutes tiers, reminders and follow-ups until a time (1 min to 7 days).
+export async function unacknowledgeAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/unacknowledge`);
+}
+
+export async function bulkUnacknowledgeAlerts(ids: string[]): Promise<AlertBulkResult> {
+  return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/unacknowledge', { ids });
+}
+
+export async function snoozeAlert(id: string, minutes: number): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/snooze`, { minutes });
+}
+
+export async function unsnoozeAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/unsnooze`);
 }
 
 // Alert Channel API functions
@@ -1510,4 +1555,319 @@ export function linkDiscoveryMonitor(id: string, monitor_id: string, key?: strin
 }
 export function unlinkDiscoveryMonitor(id: string, monitor: string) {
   return apiRequest<void>('DELETE', `/v1/discovery/services/${id}/links/${monitor}`);
+}
+
+// Account sessions (signed-in browser session only) and the superadmin
+// lockout/session actions on a user.
+export async function getMySessions(): Promise<AdminSessionListResponse> {
+  return apiRequest<AdminSessionListResponse>('GET', '/v1/account/sessions');
+}
+
+export async function revokeMySession(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/account/sessions/${id}`);
+}
+
+export async function revokeMyOtherSessions(): Promise<RevokeSessionsResponse> {
+  return apiRequest<RevokeSessionsResponse>('POST', '/v1/account/sessions/revoke-others');
+}
+
+export async function revokeAllMySessions(): Promise<RevokeSessionsResponse> {
+  return apiRequest<RevokeSessionsResponse>('POST', '/v1/account/sessions/revoke-all');
+}
+
+export async function unlockUser(id: string): Promise<UnlockUserResponse> {
+  return apiRequest<UnlockUserResponse>('POST', `/v1/users/${id}/unlock`);
+}
+
+export async function revokeUserSessions(id: string): Promise<RevokeSessionsResponse> {
+  return apiRequest<RevokeSessionsResponse>('DELETE', `/v1/users/${id}/sessions`);
+}
+
+// Workspace management (superadmins). Deleting is a soft delete: access stops
+// at once and the scheduler purges the data in the background.
+export function createTenant(data: CreateTenantRequest): Promise<Tenant> {
+  return apiRequest<Tenant>('POST', '/v1/tenants', data);
+}
+export function renameTenant(id: string, data: RenameTenantRequest): Promise<Tenant> {
+  return apiRequest<Tenant>('PATCH', `/v1/tenants/${id}`, data);
+}
+export function deleteTenant(id: string, data: DeleteTenantRequest): Promise<DeleteTenantResponse> {
+  return apiRequest<DeleteTenantResponse>('DELETE', `/v1/tenants/${id}`, data);
+}
+
+// Notification delivery history, newest first (page_size at most 100).
+function deliveriesPath(base: string, params?: { page?: number; page_size?: number }): string {
+  const query = new URLSearchParams();
+  if (params?.page) query.append('page', String(params.page));
+  if (params?.page_size) query.append('page_size', String(params.page_size));
+  const qs = query.toString();
+  return `${base}/deliveries${qs ? `?${qs}` : ''}`;
+}
+export function getAlertDeliveries(
+  alertId: string,
+  params?: { page?: number; page_size?: number }
+): Promise<NotificationDeliveryListResponse> {
+  return apiRequest<NotificationDeliveryListResponse>('GET', deliveriesPath(`/v1/alerts/${alertId}`, params));
+}
+export function getAlertChannelDeliveries(
+  channelId: string,
+  params?: { page?: number; page_size?: number }
+): Promise<NotificationDeliveryListResponse> {
+  return apiRequest<NotificationDeliveryListResponse>('GET', deliveriesPath(`/v1/alert-channels/${channelId}`, params));
+}
+
+// Personal contacts (signed-in browser session only) and the workspace's
+// personal SMS channel. Types live in lib/contacts.ts.
+export function getMyContacts() {
+  return apiRequest<import('./contacts').ContactListResponse>('GET', '/v1/account/contacts');
+}
+export function createMyContact(data: import('./contacts').CreateContactRequest) {
+  return apiRequest<import('./contacts').UserContact>('POST', '/v1/account/contacts', data);
+}
+export function updateMyContact(id: string, data: { label: string }) {
+  return apiRequest<import('./contacts').UserContact>('PATCH', `/v1/account/contacts/${id}`, data);
+}
+export function deleteMyContact(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/account/contacts/${id}`);
+}
+export function sendContactCode(id: string) {
+  return apiRequest<import('./contacts').UserContact>('POST', `/v1/account/contacts/${id}/send-code`);
+}
+export function verifyContact(id: string, code: string) {
+  return apiRequest<import('./contacts').UserContact>('POST', `/v1/account/contacts/${id}/verify`, { code });
+}
+export function testContact(id: string) {
+  return apiRequest<{ sent: boolean }>('POST', `/v1/account/contacts/${id}/test`);
+}
+export function getPeopleSettings() {
+  return apiRequest<import('./contacts').PeopleSettings>('GET', '/v1/people-settings');
+}
+export function updatePeopleSettings(data: { personal_sms_channel_id: string | null }) {
+  return apiRequest<import('./contacts').PeopleSettings>('PUT', '/v1/people-settings', data);
+}
+
+// On-call schedules (informational until escalation policies). Types live in
+// lib/oncall.ts.
+export async function getOnCallSchedules() {
+  const res = await apiRequest<{ items: import('./oncall').OnCallSchedule[] }>('GET', '/v1/oncall-schedules');
+  return res.items || [];
+}
+export async function getOnCallPeople() {
+  const res = await apiRequest<{ items: import('./oncall').OnCallPerson[] }>('GET', '/v1/oncall-schedules/people');
+  return res.items || [];
+}
+export function getOnCallSchedule(id: string) {
+  return apiRequest<import('./oncall').OnCallSchedule>('GET', `/v1/oncall-schedules/${id}`);
+}
+export function createOnCallSchedule(data: import('./oncall').ScheduleInput) {
+  return apiRequest<import('./oncall').OnCallSchedule>('POST', '/v1/oncall-schedules', data);
+}
+export function updateOnCallSchedule(id: string, data: import('./oncall').ScheduleInput) {
+  return apiRequest<import('./oncall').OnCallSchedule>('PUT', `/v1/oncall-schedules/${id}`, data);
+}
+export function deleteOnCallSchedule(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oncall-schedules/${id}`);
+}
+export function previewOnCallSchedule(id: string, from: string, to: string) {
+  const q = new URLSearchParams({ from, to });
+  return apiRequest<import('./oncall').PreviewResponse>('GET', `/v1/oncall-schedules/${id}/preview?${q}`);
+}
+export async function getOnCallOverrides(id: string) {
+  const res = await apiRequest<{ items: import('./oncall').OnCallOverride[] }>('GET', `/v1/oncall-schedules/${id}/overrides`);
+  return res.items || [];
+}
+export function createOnCallOverride(id: string, data: import('./oncall').CreateOverrideRequest) {
+  return apiRequest<import('./oncall').OnCallOverride>('POST', `/v1/oncall-schedules/${id}/overrides`, data);
+}
+export function deleteOnCallOverride(id: string, overrideId: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oncall-schedules/${id}/overrides/${overrideId}`);
+}
+export function createOnCallFeedLink(id: string) {
+  return apiRequest<import('./oncall').ICalToken>('POST', `/v1/oncall-schedules/${id}/ical-token`);
+}
+export function disableOnCallFeed(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oncall-schedules/${id}/ical-token`);
+}
+
+// Escalation policies (people layer; types in lib/escalation.ts). The
+// workspace default policy is a notification setting.
+export async function getEscalationPolicies() {
+  const res = await apiRequest<{ items: import('./escalation').EscalationPolicy[] }>('GET', '/v1/escalation-policies');
+  return res.items ?? [];
+}
+export function getEscalationPolicy(id: string) {
+  return apiRequest<import('./escalation').EscalationPolicy>('GET', `/v1/escalation-policies/${id}`);
+}
+export function createEscalationPolicy(data: import('./escalation').EscalationPolicyInput) {
+  return apiRequest<import('./escalation').EscalationPolicy>('POST', '/v1/escalation-policies', data);
+}
+export function updateEscalationPolicy(id: string, data: import('./escalation').EscalationPolicyInput) {
+  return apiRequest<import('./escalation').EscalationPolicy>('PUT', `/v1/escalation-policies/${id}`, data);
+}
+export function deleteEscalationPolicy(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/escalation-policies/${id}`);
+}
+export function convertRoutesToEscalationPolicy(data: import('./escalation').ConvertRoutesRequest) {
+  return apiRequest<import('./escalation').EscalationPolicy>('POST', '/v1/escalation-policies/convert', data);
+}
+
+// Status page kiosk tokens
+export async function getStatusPageAccessTokens(id: string): Promise<import('./types').StatusPageAccessToken[]> {
+  const res = await apiRequest<{ items: import('./types').StatusPageAccessToken[] }>('GET', `/v1/status-pages/${id}/access-tokens`);
+  return res.items || [];
+}
+export function createStatusPageAccessToken(id: string, label: string) {
+  return apiRequest<import('./types').CreatedStatusPageAccessToken>('POST', `/v1/status-pages/${id}/access-tokens`, { label });
+}
+export function revokeStatusPageAccessToken(id: string, accessId: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/status-pages/${id}/access-tokens/${accessId}`);
+}
+
+// SLA report schedules (lib/sla.ts holds the types)
+export function getSlaReportSchedules(slaId: string) {
+  return apiRequest<import('./sla').SlaReportScheduleList>('GET', `/v1/report-schedules?sla_id=${encodeURIComponent(slaId)}`);
+}
+export function createSlaReportSchedule(slaId: string, data: import('./sla').SlaReportScheduleInput) {
+  return apiRequest<import('./sla').SlaReportSchedule>('POST', '/v1/report-schedules', { sla_id: slaId, ...data });
+}
+export function updateSlaReportSchedule(id: string, data: Partial<import('./sla').SlaReportScheduleInput>) {
+  return apiRequest<import('./sla').SlaReportSchedule>('PATCH', `/v1/report-schedules/${id}`, data);
+}
+export function deleteSlaReportSchedule(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/report-schedules/${id}`);
+}
+export function sendSlaReportSchedule(id: string) {
+  return apiRequest<import('./sla').SlaScheduleSendOutcome>('POST', `/v1/report-schedules/${id}/send`);
+}
+
+// User lifecycle. The /auth/* flows are public (no session, no 401 redirect);
+// /account/* is the signed-in user's own account; the /users/{id} actions
+// are superadmin-only.
+type AuthCapabilities = import('./types').AuthCapabilities;
+type InviteInfo = import('./types').InviteInfo;
+type EmailChangePending = import('./types').EmailChangePending;
+type AccountMFAStatus = import('./types').AccountMFAStatus;
+type TOTPSetup = import('./types').TOTPSetup;
+type RecoveryCodesResponse = import('./types').RecoveryCodesResponse;
+type AccountLinkResponse = import('./types').AccountLinkResponse;
+type ResetMFAResponse = import('./types').ResetMFAResponse;
+
+async function publicRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const response = await fetch(getApiUrl(path), {
+    method,
+    credentials: 'include',
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await response.json() : null;
+  if (!response.ok) {
+    const error: ApiError & { status?: number } = {
+      error: data?.error || 'unknown_error',
+      message: data?.message || `Request failed (${response.status})`,
+      status: response.status,
+    };
+    throw error;
+  }
+  return (data ?? {}) as T;
+}
+
+export async function getAuthCapabilities(): Promise<AuthCapabilities> {
+  try {
+    return await publicRequest<AuthCapabilities>('GET', '/v1/auth/capabilities');
+  } catch {
+    return { password_reset: false, email_delivery: false, oidc: false };
+  }
+}
+
+export function loginWithMFA(mfaToken: string, code: string): Promise<{ user: AdminUser }> {
+  return publicRequest('POST', '/v1/auth/login/mfa', { mfa_token: mfaToken, code });
+}
+
+export function requestPasswordReset(login: string): Promise<void> {
+  return publicRequest<void>('POST', '/v1/auth/password/forgot', { login });
+}
+
+export function resetPassword(token: string, password: string): Promise<void> {
+  return publicRequest<void>('POST', '/v1/auth/password/reset', { token, password });
+}
+
+export function inspectInvite(token: string): Promise<InviteInfo> {
+  return publicRequest<InviteInfo>('POST', '/v1/auth/invite/inspect', { token });
+}
+
+export function acceptInvite(token: string, password: string): Promise<void> {
+  return publicRequest<void>('POST', '/v1/auth/invite/accept', { token, password });
+}
+
+export function confirmEmailChange(token: string): Promise<{ email: string }> {
+  return publicRequest('POST', '/v1/auth/email/confirm', { token });
+}
+
+export function changeMyPassword(currentPassword: string, newPassword: string): Promise<RevokeSessionsResponse> {
+  return apiRequest<RevokeSessionsResponse>('PATCH', '/v1/account/password', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+}
+
+export function requestMyEmailChange(newEmail: string, currentPassword: string): Promise<EmailChangePending> {
+  return apiRequest<EmailChangePending>('POST', '/v1/account/email', {
+    new_email: newEmail,
+    current_password: currentPassword,
+  });
+}
+
+export function getMyMFA(): Promise<AccountMFAStatus> {
+  return apiRequest<AccountMFAStatus>('GET', '/v1/account/2fa');
+}
+
+export function setupMyTOTP(currentPassword: string): Promise<TOTPSetup> {
+  return apiRequest<TOTPSetup>('POST', '/v1/account/2fa/setup', { current_password: currentPassword });
+}
+
+export function enableMyTOTP(code: string): Promise<RecoveryCodesResponse> {
+  return apiRequest<RecoveryCodesResponse>('POST', '/v1/account/2fa/enable', { code });
+}
+
+export function disableMyTOTP(currentPassword: string, code: string): Promise<void> {
+  return apiRequest<void>('POST', '/v1/account/2fa/disable', { current_password: currentPassword, code });
+}
+
+export function regenerateMyRecoveryCodes(currentPassword: string, code: string): Promise<RecoveryCodesResponse> {
+  return apiRequest<RecoveryCodesResponse>('POST', '/v1/account/2fa/recovery-codes', {
+    current_password: currentPassword,
+    code,
+  });
+}
+
+export function sendUserInvite(id: string, method?: 'password' | 'sso'): Promise<AccountLinkResponse> {
+  return apiRequest<AccountLinkResponse>('POST', `/v1/users/${id}/invite`, method ? { method } : {});
+}
+
+export function sendUserPasswordReset(id: string): Promise<AccountLinkResponse> {
+  return apiRequest<AccountLinkResponse>('POST', `/v1/users/${id}/password-reset`);
+}
+
+export function resetUserMFA(id: string): Promise<ResetMFAResponse> {
+  return apiRequest<ResetMFAResponse>('POST', `/v1/users/${id}/reset-2fa`);
+}
+
+// Monitor config version history (lib/monitor-versions.ts).
+export async function getMonitorVersions(id: string) {
+  return apiRequest<import('./monitor-versions').MonitorVersionListResponse>('GET', `/v1/monitors/${id}/versions`);
+}
+export function getMonitorVersion(id: string, version: number) {
+  return apiRequest<import('./monitor-versions').MonitorVersion>('GET', `/v1/monitors/${id}/versions/${version}`);
+}
+/** Changes from `against` (a version, 'current', or the previous version when omitted) to `version`. */
+export function diffMonitorVersion(id: string, version: number, against?: number | 'current') {
+  const q = against === undefined ? '' : `?against=${encodeURIComponent(String(against))}`;
+  return apiRequest<import('./monitor-versions').MonitorVersionDiff>('GET', `/v1/monitors/${id}/versions/${version}/diff${q}`);
+}
+export function restoreMonitorVersion(id: string, version: number) {
+  return apiRequest<import('./monitor-versions').RestoreMonitorVersionResponse<Monitor>>(
+    'POST',
+    `/v1/monitors/${id}/versions/${version}/restore`,
+  );
 }

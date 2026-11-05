@@ -49,7 +49,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token stays valid for a 60-second reuse window so concurrent refreshes from parallel requests or multiple tabs do not end the session. Disabled users are checked against database state on authenticated requests.",
+            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token stays valid for a 60-second reuse window so concurrent refreshes from parallel requests or multiple tabs do not end the session. Disabled users are checked against database state on authenticated requests, and so is the sign-in itself: signing a session out ends its access token on the next request. See [sessions](#sessions).",
         },
       ],
     },
@@ -146,11 +146,98 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "A user with email and no password can be provisioned as SSO-only. Superadministrator-only user routes create, list, update, and delete accounts. Safeguards prevent deleting the current user or leaving the installation without an administrator.",
         },
         {
+          type: "paragraph",
+          text:
+            "Ten failed password logins in a row [lock an account](/docs/security/#login-lockout-sessions) for 15 minutes, doubling on repeat up to 4 hours. The user page shows an active lock with an **Unlock** action (`POST /api/v1/users/{id}/unlock`), and **Sign out everywhere** ends all of the user's browser sessions at once (`DELETE /api/v1/users/{id}/sessions`). Setting a user's password does both: it clears the lock and signs them out everywhere.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The **Access** panel on the user page sends [invites and resets](/docs/security/#account-recovery). With SMTP and `APP_BASE_URL` configured they are emailed; otherwise, or when the account has no email, the response carries the link for you to hand over.",
+        },
+        {
+          type: "table",
+          columns: ["Superadmin route", "Effect"],
+          rows: [
+            ["`POST /api/v1/users/{id}/invite`", "Invite (MCP `send_user_invite`). `method: password` sends a one-time link to set a password (7 days; replaces any existing password); `method: sso` tells the user to sign in with SSO. Default: `sso` for an account linked to the IdP, or one with no password while SSO is enabled, else `password`"],
+            ["`POST /api/v1/users/{id}/password-reset`", "One-time reset link for a local password account (1 hour; MCP `send_password_reset`)"],
+            ["`POST /api/v1/users/{id}/reset-2fa`", "Turn off a user's [two-factor](/docs/security/#two-factor) after a lost device (MCP `reset_user_2fa`); `go run ./cmd/admin -reset-2fa <username>` is the database-side equivalent"],
+          ],
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Membership patches replace the list",
           text:
             "When updating memberships, send the complete intended set. Treating the field as an incremental add operation can accidentally remove tenant access.",
+        },
+      ],
+    },
+    {
+      id: "sessions",
+      title: "Your sessions",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The **Account** page (sidebar, signed-in users only) shows your profile and every browser signed in as you: device, address, sign-in method, when it signed in and when it was last active. Sign out one session, every other session, or everywhere, this browser included. A signed-out session loses access on its next request. Every role can manage its own sessions, viewers included.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Local password accounts also change their password (other sessions are signed out), their email (confirmed through a link sent to the new address; needs SMTP and `APP_BASE_URL`) and [two-factor authentication](/docs/security/#two-factor) there. Accounts that sign in through SSO manage those at their identity provider.",
+        },
+        {
+          type: "table",
+          columns: ["Route", "Effect"],
+          rows: [
+            ["`GET /api/v1/account/sessions`", "Your active sessions; `current` marks the one making the request"],
+            ["`DELETE /api/v1/account/sessions/{id}`", "Sign one session out (your own only; the current one also clears its cookies)"],
+            ["`POST /api/v1/account/sessions/revoke-others`", "Sign out every session except the current one"],
+            ["`POST /api/v1/account/sessions/revoke-all`", "Sign out everywhere, including the current session"],
+            ["`PATCH /api/v1/account/password`", "Change your password (`current_password`, `new_password`); signs out your other sessions"],
+            ["`POST /api/v1/account/email`", "Send a confirmation link to `new_email` (with `current_password`); the address changes when it is opened"],
+            ["`GET /api/v1/account/2fa`", "Your two-factor state (`eligible` is false for SSO accounts)"],
+            ["`POST /api/v1/account/2fa/setup`, `/enable`, `/disable`, `/recovery-codes`", "Enroll (password, then a code; returns recovery codes once), turn off, or replace recovery codes (password and a code)"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "These routes accept a signed-in browser session only: API keys and MCP tokens are refused, and they are not MCP tools. Each action records its own audit event (`auth.session_revoke`, `auth.sessions_revoke`, `auth.password_change`, `auth.email_change_request`, `auth.mfa_*`). A browser signed in before session tracking (migration 000104) is listed, but is only recognised as the current session after its next token refresh, a few minutes at most.",
+        },
+      ],
+    },
+    {
+      id: "contacts",
+      title: "Your contacts",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The **Contacts** panel on the **Account** page holds the addresses where Probara can reach you directly: email addresses and mobile numbers (international format, `+` and the country code). A contact counts only once verified: adding one sends a 6-digit code to the address, and you enter it on the page. Every role manages its own contacts, viewers included; nobody else, superadministrators included, sees or changes them. [On-call schedules](/docs/alerting/#oncall) show how many verified contacts each member has.",
+        },
+        {
+          type: "list",
+          items: [
+            "Email codes go through the installation's mailer (`SMTP_*` on the API, see [SMTP](/docs/configuration/#alerter-and-smtp)); without it, email contacts can be added but not verified.",
+            "SMS codes go through the selected workspace's **SMS for people** channel (Settings › Notifications), a Twilio SMS channel a workspace admin designates. Only the one recipient is texted; the channel's own recipient list is not used. Without one, SMS contacts cannot be verified in that workspace.",
+            "A code lives 15 minutes and allows 5 guesses; the fifth wrong guess voids it. A new code needs 60 seconds since the last, and one user sends at most 10 codes and test messages per hour, so a member cannot run up a workspace's SMS bill. A message the provider refused uses none of that budget.",
+            "Addresses are encrypted at rest with `PROBARA_SECRETS_KEY`, like channel secrets, and only their owner sees them. Codes are stored as hashes. The address of a contact cannot be edited: remove it and add the new one, which needs its own code.",
+            "**Send a test message** checks a verified contact end to end.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Escalation policies page these contacts",
+          text:
+            "An [escalation policy](/docs/alerting/#escalation) step that targets you, an on-call schedule you are on, or the workspace admins pages every verified contact you have: email through the platform mailer, SMS through the workspace's SMS channel for people. Each page carries an acknowledge link that acknowledges as you, and removing a contact revokes the links it received.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The routes (`/api/v1/account/contacts`, see [Contacts and on-call endpoints](/docs/api/#people-api)) accept a signed-in browser session only and are not MCP tools. Changes are recorded in the audit log as `account.*` actions; the address is never in the record. No admin tool re-encrypts contact addresses yet: when [rotating keys](/docs/security/#encryption-at-rest), keep a retired key version configured while contacts sealed with it remain, or have their owners re-add them.",
         },
       ],
     },
@@ -166,7 +253,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Public tenant create/update/delete management is not exposed through the normal product API.",
+            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Superadministrators create, rename, and delete workspaces; see [Manage workspaces](#workspaces).",
         },
         {
           type: "callout",
@@ -174,6 +261,32 @@ export const ADMINISTRATION_PAGE: DocPage = {
           title: "Never reuse a cross-tenant cache key",
           text:
             "External integrations should include tenant identity in caches, queues, and idempotency keys even when resource UUIDs appear globally unique.",
+        },
+      ],
+    },
+    {
+      id: "workspaces",
+      title: "Manage workspaces",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Superadministrators create, rename, and delete workspaces (tenants) on the **Workspaces** page, reached from the sidebar or the workspace switcher, through `POST /api/v1/tenants`, `PATCH /api/v1/tenants/{id}` and `DELETE /api/v1/tenants/{id}`, or with the MCP tools `create_tenant`, `rename_tenant`, and `delete_tenant`. Members cannot create workspaces. A name is 1–100 characters, trimmed, and unique among live workspaces. A new workspace starts empty with default settings; superadministrators act in it at once, and members join it through their user's memberships.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Deleting a workspace requires typing its name again (`confirm_name` in the API). The workspace disappears at once: it leaves every workspace list, every request scoped to it is refused with 403 (superadministrators included), its API keys and MCP connections are revoked, its memberships and SSO group mappings are removed, its monitors stop running, its private locations and Kubernetes collectors are refused, and its status pages return 404. Its name is free for a new workspace immediately.",
+        },
+        {
+          type: "list",
+          items: [
+            "The data is removed in the background by the scheduler purger, in bounded batches paced by the `MONITOR_PURGE_*` settings: monitors and their history first, then the rest of the workspace. A large workspace can take several purge runs. A deleted workspace cannot be restored.",
+            "Open availability alerts of its monitors resolve as they do for any deleted monitor, so its channels can send one resolve notice each before they are purged.",
+            "Status page slugs stay taken until the purge removes the pages.",
+            "Audit log entries of the workspace are kept until `AUDIT_RETENTION_DAYS` prunes them. Create, rename, and delete are recorded as platform events (`tenant.create`, `tenant.rename`, `tenant.delete`, with the name at that moment), which superadministrators see from any workspace's audit log.",
+            "The default workspace, the workspace named by `OIDC_JIT_DEFAULT_TENANT_ID`, and the last remaining workspace cannot be deleted (409).",
+          ],
         },
       ],
     },
@@ -453,14 +566,14 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "warning",
           title: "Three behavior changes to expect",
           text:
-            "Monitors using Uptime Kuma's \"upside down\" mode are skipped, because inverted up/down cannot be expressed and importing one would alert backwards. Push monitors receive a new token, so every heartbeat sender must be repointed at the new URL before the monitor is enabled. Database monitors are imported disabled: their password is deliberately not carried over, and the per-monitor notes name what to re-enter.",
+            "Monitors using Uptime Kuma's \"upside down\" mode are skipped, because inverted up/down cannot be expressed and importing one would alert backwards. Push monitors receive a new token, so every heartbeat sender must be repointed at the new URL before the monitor is enabled. Database monitors are imported disabled: their password is deliberately not carried over, and the per-monitor notes name what to re-enter. HTTP basic auth carries over into `basic_auth_username`/`basic_auth_password`, and credential-named request headers into `secret_headers`, both encrypted when the monitor is created; an `Authorization` header that Uptime Kuma replaced with the monitor's basic auth is dropped, as Kuma itself never sent it. The preview and the import request carry those values in clear between your browser and the API, as the uploaded file already did.",
         },
         {
           type: "callout",
           tone: "info",
-          title: "Notifications and credentials are never migrated",
+          title: "Notifications and most credentials are not migrated",
           text:
-            "Uptime Kuma notifier configuration holds credentials, so `notificationIDList` is ignored and each affected monitor carries a note naming the notifiers it referenced — attach alert channels after import. HTTP basic, OAuth2, NTLM, and client-certificate auth are dropped rather than folded into request headers, which are stored unencrypted, and credential-bearing headers are stripped. Monitor descriptions, retry intervals, resend intervals, and custom ICMP packet sizes have no equivalent and are reported as dropped.",
+            "Uptime Kuma notifier configuration holds credentials, so `notificationIDList` is ignored and each affected monitor carries a note naming the notifiers it referenced — attach alert channels after import. HTTP OAuth2, NTLM, and client-certificate auth have no equivalent and are dropped; only basic auth and request headers carry over, into the encrypted fields above. Monitor descriptions, retry intervals, resend intervals, and custom ICMP packet sizes have no equivalent and are reported as dropped.",
         },
       ],
     },
@@ -471,7 +584,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, retry thresholds, and group membership names. Compatibility data can include legacy alert-policy names, but policy management is retired. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
+            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, retry thresholds, recovery confirmation (`recovery_threshold`, written only when above the default of 1), and group membership names. Compatibility data can include legacy alert-policy names, but policy management is retired. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
         },
         {
           type: "callout",

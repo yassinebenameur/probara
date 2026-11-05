@@ -170,8 +170,11 @@ func render(m present.Message) string {
 		facts = append(facts, fmt.Sprintf("<b>%s:</b> %s\n", clip(f.Label, 64), clip(f.Value, 512)))
 	}
 	var tail string
+	if m.AckURL != "" {
+		tail = fmt.Sprintf("\n<a href=\"%s\">%s</a>", html.EscapeString(m.AckURL), clip(m.AckLabel, 64))
+	}
 	if m.ActionURL != "" {
-		tail = fmt.Sprintf("\n<a href=\"%s\">%s</a>", html.EscapeString(m.ActionURL), clip(m.ActionLabel, 64))
+		tail += fmt.Sprintf("\n<a href=\"%s\">%s</a>", html.EscapeString(m.ActionURL), clip(m.ActionLabel, 64))
 	}
 
 	compose := func(facts []string, errBlock string) string {

@@ -56,7 +56,10 @@ func TestDowntimeProjectionMatchesRawAnalyticsPath(t *testing.T) {
 	insertStateInterval(ctx, t, dbClient, tenantID, maintMon, "up", *at(-4 * time.Hour), nil)
 	windowID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at) VALUES ($1, $2, 'planned', $3, $4)
+		WITH w AS (
+			INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at) VALUES ($1, $2, 'planned', $3, $4)
+			RETURNING id, tenant_id, starts_at, ends_at)
+		INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT * FROM w
 	`, windowID, tenantID, *at(-6 * time.Hour), *at(-3 * time.Hour)); err != nil {
 		t.Fatalf("insert maintenance window: %v", err)
 	}

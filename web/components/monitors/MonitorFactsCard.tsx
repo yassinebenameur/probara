@@ -85,6 +85,9 @@ function routingSummary(monitor: Monitor): { text: ReactNode; warning: boolean }
   if (!routing.reachable) return { text: 'Nobody', warning: monitor.enabled };
   switch (routing.source) {
     case 'tenant_default':
+      if (routing.escalation_policy_id) {
+        return { text: `Workspace default policy ${routing.escalation_policy_name ?? ''}`.trim(), warning: false };
+      }
       return { text: `Workspace default, ${pluralize(routing.active_channels, 'channel')}`, warning: false };
     case 'custom':
       return { text: `Custom, ${pluralize(routing.active_channels, 'channel')}`, warning: false };
@@ -101,6 +104,15 @@ function routingSummary(monitor: Monitor): { text: ReactNode; warning: boolean }
       };
     case 'members':
       return { text: "Each member's own routing", warning: false };
+    case 'policy':
+      return {
+        text: (
+          <Link href="/escalation-policies" className={LINK_CLASS}>
+            Policy {routing.escalation_policy_name ?? ''}
+          </Link>
+        ),
+        warning: false,
+      };
     default:
       return null;
   }
@@ -140,6 +152,13 @@ export default function MonitorFactsCard({
               {pluralize(monitor.consecutive_failures_threshold, 'failed check')}
             </DetailRow>
           )
+        )}
+        {!isGroup && (monitor.recovery_threshold ?? 1) > 1 && (
+          <DetailRow label="Recovers after">
+            {pluralize(monitor.recovery_threshold ?? 1, 'passing check')}
+            {monitor.current_state === 'down' && (monitor.consecutive_successes ?? 0) > 0 &&
+              ` (${monitor.consecutive_successes} so far)`}
+          </DetailRow>
         )}
         {routing && (
           <DetailRow label="Notifies" tone={routing.warning ? 'warning' : 'default'}>

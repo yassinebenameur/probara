@@ -41,7 +41,6 @@ const (
 	// UserEmailDomain marks the seeded users (users are platform-scoped, so
 	// they do not cascade with the tenant).
 	UserEmailDomain = "northwind.example"
-	AdminUserID     = "29b9d6ff-acd2-4500-a46a-75c83bd07998"
 )
 
 type options struct {

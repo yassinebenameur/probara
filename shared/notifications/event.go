@@ -86,7 +86,46 @@ type AlertDetails struct {
 	// alert's own value (active or acknowledged): receivers branch on the
 	// event type, never on status.
 	SuspectedCause *SuspectedCause `json:"suspected_cause,omitempty"`
+
+	// Offline-location annotation: populated when Kind == "location_offline".
+	// The subject is the location in SourceLocationID/SourceLocationName
+	// (MonitorID is the zero UUID). LocationLastSeenAt is its last worker
+	// heartbeat; LocationMonitorCount how many live monitors run from it.
+	LocationLastSeenAt   *time.Time `json:"location_last_seen_at,omitempty"`
+	LocationMonitorCount int        `json:"location_monitor_count,omitempty"`
+
+	// ResolveReason says why a resolved alert closed when that is not its
+	// condition clearing (ResolveReason* values; empty otherwise).
+	ResolveReason string `json:"resolve_reason,omitempty"`
+
+	// RelapseCount is how many times this alert was reopened within the
+	// tenant's reopen cooldown (alerts.relapse_count; 0 for an alert that
+	// never relapsed). Every reopen is a new paging episode: its page goes
+	// out as a "created" event with RelapseCount > 0, so plugins need no new
+	// event type, and the episode keys idempotency and the delivery ledger
+	// (IdempotencyKeyFor, RecipientEventKeyFor). ReopenedAt is the last
+	// reopen.
+	RelapseCount int        `json:"relapse_count,omitempty"`
+	ReopenedAt   *time.Time `json:"reopened_at,omitempty"`
+
+	// SnoozedUntil is set only on the "updated" event (a chat card
+	// rewritten to the alert's current state) while the alert is snoozed:
+	// the card then says until when.
+	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
 }
+
+// Resolve reasons of a location_offline alert (alerts.resolve_reason).
+const (
+	// ResolveReasonRecovered: the location reports again.
+	ResolveReasonRecovered = "recovered"
+	// ResolveReasonLocationDisabled: the location was disabled.
+	ResolveReasonLocationDisabled = "location_disabled"
+	// ResolveReasonLocationDeleted: the location was deleted.
+	ResolveReasonLocationDeleted = "location_deleted"
+	// ResolveReasonAlertsDisabled: the tenant turned offline-location
+	// alerts off; the location may still be offline.
+	ResolveReasonAlertsDisabled = "alerts_disabled"
+)
 
 // SuspectedCause is a triage's named cause as a follow-up carries it.
 type SuspectedCause struct {
@@ -127,14 +166,19 @@ func (d AlertDetails) ImpactedMonitorNames() []string {
 	return names
 }
 
-// KindAvailability, KindLatencyAnomaly, KindHostMetric, KindMeshEdge and
-// KindTLSExpiry are the alert kinds.
+// The alert kinds. This block mirrors the alerts_kind_check SQL constraint
+// (latest rewrite: migration 000100); change them together. KindSLOBurn and
+// KindCheckWarning are reserved there ahead of the features that open them.
 const (
-	KindAvailability   = "availability"
-	KindLatencyAnomaly = "latency_anomaly"
-	KindHostMetric     = "host_metric"
-	KindMeshEdge       = "mesh_edge"
-	KindTLSExpiry      = "tls_expiry"
+	KindAvailability    = "availability"
+	KindLatencyAnomaly  = "latency_anomaly"
+	KindHostMetric      = "host_metric"
+	KindMeshEdge        = "mesh_edge"
+	KindTLSExpiry       = "tls_expiry"
+	KindDomainExpiry    = "domain_expiry"
+	KindSLOBurn         = "slo_burn"
+	KindLocationOffline = "location_offline"
+	KindCheckWarning    = "check_warning"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.
@@ -152,9 +196,21 @@ func (d AlertDetails) IsMeshEdge() bool {
 	return d.Kind == KindMeshEdge
 }
 
+// IsLocationOffline reports whether this alert is a check location that
+// stopped reporting.
+func (d AlertDetails) IsLocationOffline() bool {
+	return d.Kind == KindLocationOffline
+}
+
 // IsTLSExpiry reports whether this alert is a TLS-certificate-expiry warning.
 func (d AlertDetails) IsTLSExpiry() bool {
 	return d.Kind == KindTLSExpiry
+}
+
+// IsDomainExpiry reports whether this alert is a domain-registration
+// expiry warning.
+func (d AlertDetails) IsDomainExpiry() bool {
+	return d.Kind == KindDomainExpiry
 }
 
 // TLSExpiryLabel returns a header label for a tls_expiry alert, for use in

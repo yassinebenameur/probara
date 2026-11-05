@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/netguard"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 // Runtime is the process-level context every plugin shares. Each binary that
@@ -27,6 +28,11 @@ type Runtime struct {
 	// Egress is the outbound-connection policy applied to every plugin HTTP
 	// request. Channel URLs are tenant-supplied, so this is the SSRF boundary.
 	Egress netguard.Policy
+
+	// Links signs the one-click action links (acknowledge) in notifications:
+	// an *actionlink.Signer over PROBARA_SECRETS_KEY. Nil, or no AppBaseURL,
+	// renders none.
+	Links present.LinkSigner
 }
 
 // runtime defaults to blocking private addresses: a binary that forgets
@@ -140,9 +146,25 @@ func PostJSON(ctx context.Context, client *http.Client, target string, body any,
 	return Post(ctx, client, target, "application/json", payload, headers, service)
 }
 
+// PutJSON is PostJSON with the PUT method, for providers whose send endpoint
+// is an idempotent PUT keyed by a client-chosen ID in the URL (Matrix's
+// transaction IDs), so a retry the provider already accepted is not posted
+// twice.
+func PutJSON(ctx context.Context, client *http.Client, target string, body any, headers map[string]string, service string) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return Permanent(fmt.Errorf("marshal %s payload: %w", service, err))
+	}
+	return send(ctx, client, http.MethodPut, target, "application/json", payload, headers, service)
+}
+
 // Post sends a pre-encoded body. See PostJSON.
 func Post(ctx context.Context, client *http.Client, target, contentType string, body []byte, headers map[string]string, service string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	return send(ctx, client, http.MethodPost, target, contentType, body, headers, service)
+}
+
+func send(ctx context.Context, client *http.Client, method, target, contentType string, body []byte, headers map[string]string, service string) error {
+	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
 	if err != nil {
 		return Permanent(fmt.Errorf("build %s request: %w", service, err))
 	}
@@ -163,9 +185,9 @@ func Post(ctx context.Context, client *http.Client, target, contentType string, 
 		if errors.Is(err, netguard.ErrBlocked) {
 			// The egress policy refused the destination; retrying resolves
 			// to the same address.
-			return Permanent(fmt.Errorf("post %s: %w", service, err))
+			return Permanent(fmt.Errorf("%s %s: %w", strings.ToLower(method), service, err))
 		}
-		return fmt.Errorf("post %s: %w", service, err)
+		return fmt.Errorf("%s %s: %w", strings.ToLower(method), service, err)
 	}
 	defer resp.Body.Close()
 	return CheckResponse(resp, service)

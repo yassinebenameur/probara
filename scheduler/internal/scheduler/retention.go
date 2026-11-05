@@ -71,6 +71,9 @@ func (s *Scheduler) oldestExpiredRetentionRow(ctx context.Context, store string,
 				ORDER BY ts LIMIT 1
 			) sample ON TRUE
 			WHERE s.tenant_id = $1`
+	case "alert_notification_deliveries":
+		query = `SELECT created_at FROM alert_notification_deliveries
+			WHERE tenant_id = $1 AND created_at < $2 ORDER BY created_at LIMIT 1`
 	default:
 		return time.Time{}, fmt.Errorf("unknown retention store %q", store)
 	}

@@ -68,6 +68,7 @@ const TARGET_FIELDS = [
   { key: 'group_members', label: 'Group Members', required: false },
   { key: 'alert_policy_names', label: 'Alert Policy Names', required: false },
   { key: 'consecutive_failures_threshold', label: 'Retries before down', required: false },
+  { key: 'recovery_threshold', label: 'Passes before up', required: false },
 ];
 
 type WizardStep = 'upload' | 'mapping' | 'review' | 'importing' | 'results';
@@ -92,6 +93,7 @@ const SUPPORTED_TYPES = [
   { value: 'rabbitmq', description: 'AMQP connect + auth checks' },
   { value: 'websocket', description: 'WebSocket connect + message checks' },
   { value: 'prometheus', description: 'PromQL query + numeric threshold checks' },
+  { value: 'domain', description: 'Domain registration expiry (RDAP, WHOIS)' },
 ];
 
 // Step indicator component

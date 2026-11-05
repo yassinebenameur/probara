@@ -155,6 +155,20 @@ NATS connection URL
 {{- .Values.nats.externalUrl }}
 {{- end }}
 {{- end }}{{/*
+Broker URL baked into private-location deploy snippets (PUBLIC_NATS_URL):
+api.publicNatsURL, else wss://<host><path> of the NATS websocket ingress,
+else empty (deploy snippets disabled).
+*/}}
+{{- define "monitoring-platform.publicNatsUrl" -}}
+{{- if .Values.api.publicNatsURL }}
+{{- .Values.api.publicNatsURL }}
+{{- else if and .Values.nats.enabled .Values.nats.websocket.enabled .Values.nats.websocket.ingress.enabled }}
+{{- $path := trimSuffix "/" (.Values.nats.websocket.ingress.path | default "/") }}
+{{- printf "wss://%s%s" .Values.nats.websocket.ingress.host $path }}
+{{- end }}
+{{- end }}
+
+{{/*
 PostgreSQL host
 */}}
 {{- define "monitoring-platform.postgresHost" -}}
@@ -295,4 +309,87 @@ the fail cases for an underivable token live in secret.yaml.
 {{- else -}}
 {{- sha256sum (printf "probara/local-ai-token/v1:%s" .Values.secrets.adminJwtSecret) -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+TRUSTED_PROXY_CIDRS for the workloads that resolve client addresses (api,
+status-page) from the top-level trustedProxyCIDRs list. Emits nothing when
+the list is empty, which is the code default (no proxy trusted).
+*/}}
+{{- define "monitoring-platform.trustedProxyEnv" -}}
+{{- with .Values.trustedProxyCIDRs }}
+- name: TRUSTED_PROXY_CIDRS
+  value: {{ join "," . | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
+Worker pod securityContext: podSecurityContext plus, when worker.ping.sysctl
+is on, the net.ipv4.ping_group_range sysctl that unprivileged ICMP sockets
+need (WORKER_PING_MODE=unprivileged, the default). Shared by the default
+worker fleet and every location worker. A ping_group_range entry already in
+podSecurityContext.sysctls wins.
+*/}}
+{{- define "monitoring-platform.workerPodSecurityContext" -}}
+{{- $psc := deepCopy (default dict .Values.podSecurityContext) -}}
+{{- if and .Values.worker.ping .Values.worker.ping.sysctl -}}
+{{- $sysctls := list -}}
+{{- $present := false -}}
+{{- range ($psc.sysctls | default list) -}}
+{{- $sysctls = append $sysctls . -}}
+{{- if eq .name "net.ipv4.ping_group_range" }}{{ $present = true }}{{ end -}}
+{{- end -}}
+{{- if not $present -}}
+{{- $sysctls = append $sysctls (dict "name" "net.ipv4.ping_group_range" "value" "0 2147483647") -}}
+{{- end -}}
+{{- $_ := set $psc "sysctls" $sysctls -}}
+{{- end -}}
+{{- toYaml $psc -}}
+{{- end -}}
+
+{{/*
+Effective SECURITY_HSTS_MAX_AGE: security.hstsMaxAge when set, else one year
+when the chart's ingress terminates TLS, else 0 (off).
+*/}}
+{{- define "monitoring-platform.hstsMaxAge" -}}
+{{- if ne (toString .Values.security.hstsMaxAge) "" -}}
+{{- .Values.security.hstsMaxAge | int64 -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.tls -}}
+31536000
+{{- else -}}
+0
+{{- end -}}
+{{- end }}
+
+{{/*
+Browser/edge security env for one workload (.component: api, status-page or
+frontend), from the top-level security block. HSTS reaches all three; the
+rate limit and CORS allowlist only the api; the CSP enforce switch only the
+frontend; APP_BASE_URL reaches status-page because every page's CSP
+frame-ancestors admits the operator UI (template editor preview).
+*/}}
+{{- define "monitoring-platform.securityEnv" -}}
+{{- $v := .ctx.Values -}}
+- name: SECURITY_HSTS_MAX_AGE
+  value: {{ include "monitoring-platform.hstsMaxAge" .ctx | quote }}
+{{- if eq .component "api" }}
+- name: API_RATE_LIMIT_PER_MINUTE
+  value: {{ $v.security.apiRateLimitPerMinute | int64 | quote }}
+- name: API_RATE_LIMIT_BURST
+  value: {{ $v.security.apiRateLimitBurst | int64 | quote }}
+{{- with $v.security.apiAllowedOrigins }}
+- name: API_ALLOWED_ORIGINS
+  value: {{ join "," . | quote }}
+{{- end }}
+{{- end }}
+{{- if eq .component "status-page" }}
+{{- with $v.appBaseURL }}
+- name: APP_BASE_URL
+  value: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- if eq .component "frontend" }}
+- name: WEB_CSP_ENFORCE
+  value: {{ $v.security.webCspEnforce | quote }}
+{{- end }}
 {{- end }}

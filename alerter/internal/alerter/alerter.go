@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -36,6 +37,10 @@ type Alerter struct {
 	recoveryBudget       time.Duration
 	suspectedCauseBudget time.Duration
 
+	// Fleet gauges (updateFleetGauges); nil without a metrics registry.
+	locationsOffline *prometheus.GaugeVec
+	openAlerts       *prometheus.GaugeVec
+
 	// sendFunc dispatches one channel notification. It defaults to
 	// sendChannelNotification and is swapped in tests so the lifecycle can be
 	// exercised without hitting real channel plugins.
@@ -58,6 +63,13 @@ func NewAlerter(cfg *config.AlerterConfig, log *logger.Logger, metricsRegistry *
 		stop:      make(chan struct{}),
 	}
 	a.sendFunc = a.sendChannelNotification
+	a.sendFunc = a.recordDeliveries(a.sendFunc)
+	if metricsRegistry != nil {
+		a.locationsOffline = metricsRegistry.NewGauge("locations_offline",
+			"Check locations offline under their tenant's threshold (rule S-F6), alerting or not", []string{})
+		a.openAlerts = metricsRegistry.NewGauge("open_alerts",
+			"Open (active or acknowledged) alerts by kind", []string{"kind"})
+	}
 	return a
 }
 

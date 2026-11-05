@@ -23,6 +23,28 @@ if [[ -z "${PROBARA_SECRETS_KEY:-}" ]]; then
 fi
 export PROBARA_SECRETS_KEY
 
+# Dev JWT signing secret, per checkout (gitignored .dev-admin-jwt-secret, the
+# file the Makefile also falls back to), so no shared placeholder ever signs
+# sessions. An exported ADMIN_JWT_SECRET wins.
+JWT_SECRET_FILE="$ROOT_DIR/.dev-admin-jwt-secret"
+if [[ -z "${ADMIN_JWT_SECRET:-}" ]]; then
+  if [[ ! -s "$JWT_SECRET_FILE" ]]; then
+    (umask 077; openssl rand -hex 32 > "$JWT_SECRET_FILE")
+  fi
+  ADMIN_JWT_SECRET="$(cat "$JWT_SECRET_FILE")"
+fi
+export ADMIN_JWT_SECRET
+
+# Dev status page session key, per checkout (gitignored), so password and
+# private status pages work locally. An exported value wins.
+SESSION_SECRET_FILE="$ROOT_DIR/.dev-status-page-session-secret"
+if [[ -z "${STATUS_PAGE_SESSION_SECRET:-}" ]]; then
+  if [[ ! -s "$SESSION_SECRET_FILE" ]]; then
+    (umask 077; openssl rand -hex 32 > "$SESSION_SECRET_FILE")
+  fi
+  STATUS_PAGE_SESSION_SECRET="$(cat "$SESSION_SECRET_FILE")"
+fi
+
 mkdir -p "$ARTIFACTS_DIR"
 mkdir -p "$BIN_DIR"
 : > "$STARTUP_LOG"
@@ -201,7 +223,7 @@ start_local_ai() {
 }
 
 start_service api ./api/cmd/api 8080 9090 \
-  ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-your-secret-key-change-in-production}" \
+  ADMIN_JWT_SECRET="$ADMIN_JWT_SECRET" \
   ADMIN_ACCESS_TTL_MINUTES="${ADMIN_ACCESS_TTL_MINUTES:-15}" \
   ADMIN_REFRESH_TTL_DAYS="${ADMIN_REFRESH_TTL_DAYS:-30}" \
   ADMIN_COOKIE_SECURE="${ADMIN_COOKIE_SECURE:-false}"
@@ -236,7 +258,8 @@ start_service status-page ./status-page/cmd/status-page 8082 9093 \
   STATUS_PAGE_API_BASE_URL="${STATUS_PAGE_API_BASE_URL:-http://localhost:8080}" \
   STATUS_PAGE_VAPID_PUBLIC_KEY="${STATUS_PAGE_VAPID_PUBLIC_KEY:-}" \
   STATUS_PAGE_VAPID_PRIVATE_KEY="${STATUS_PAGE_VAPID_PRIVATE_KEY:-}" \
-  STATUS_PAGE_VAPID_SUBJECT="${STATUS_PAGE_VAPID_SUBJECT:-mailto:dev@localhost}"
+  STATUS_PAGE_VAPID_SUBJECT="${STATUS_PAGE_VAPID_SUBJECT:-mailto:dev@localhost}" \
+  STATUS_PAGE_SESSION_SECRET="$STATUS_PAGE_SESSION_SECRET"
 
 start_service alerter ./alerter/cmd/alerter 8084 9094 \
   ALERT_STREAM="${ALERT_STREAM:-ALERTS}" \

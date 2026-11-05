@@ -69,11 +69,13 @@ import (
 	oidcmappingsservice "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
+	reportscheduleservice "github.com/yassinebenameur/probara/api/internal/services/reportschedules"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -100,6 +102,7 @@ type Server struct {
 	locationAuthConn   *nats.Conn
 	locationAuthErr    error
 	mcpErr             error
+	reportRunner       *reportscheduleservice.Runner
 }
 
 type monitorStatusNotifier struct {
@@ -127,9 +130,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	r.Use(apimiddleware.RecoveryMiddleware(log))
 	r.Use(apimiddleware.LoggingMiddleware(log))
 	r.Use(apimiddleware.MetricsMiddleware(cfg.ServiceName))
-	r.Use(middleware.RealIP)
+	// Client address for audit and session IPs: forwarding headers count only
+	// from TRUSTED_PROXY_CIDRS peers (chi's RealIP believed them from anyone).
+	r.Use(clientip.NewResolver(cfg.TrustedProxyCIDRs).Middleware)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
+	// Edge security (routes_edge.go): headers, CORS allowlist, anonymous rate limit.
+	rateLimiter := useEdgeSecurity(r, cfg, log)
 
 	// Health and metrics endpoints (no auth required)
 	healthHandlers := NewHandlers(cfg, log, metricsRegistry, dbClient)
@@ -158,6 +165,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	locationSvc := locationservice.NewService(dbClient)
 	locationSvc.ConfigureEncryption(secretsEncryptor)
+	locationSvc.ConfigureWorkerImage(cfg.LocationWorkerImage)
 	var locationAuthorizer *locationnatsauthservice.Service
 	var locationAuthErr error
 	if cfg.NATSLocationAuthIssuerSeed != "" {
@@ -198,6 +206,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	auditRecorder := auditservice.NewRecorder(dbClient, log)
 	auditPruner := auditservice.NewPruner(dbClient, log, cfg.AuditRetentionDays)
 	auditSvc := auditservice.NewService(dbClient)
+	reports := newReportDeps(dbClient, cfg, auditRecorder, log) // scheduled SLA reports (routes_reports.go)
 
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
 	r.Route("/api/v1/push", func(r chi.Router) {
@@ -208,6 +217,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
 	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret)
+	authMiddleware = rateLimiter.Authenticate(authMiddleware) // per-credential rate limit (routes_edge.go)
 	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL)
 	mcpHandler := mcpserver.NewHandler(log, oauthHandlers.ResourceMetadataURL)
 	r.Group(func(r chi.Router) {
@@ -263,7 +273,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		authService := adminauthservice.NewService(dbClient, cfg.AdminBcryptCost)
 		oidcService := oidcauthservice.NewService(cfg.OIDC, dbClient, log)
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
+		configureIdentity(authHandlers, authService, secretsEncryptor, cfg, log) // routes_identity.go
 		r.Route("/auth", func(r chi.Router) {
+			identityAuthRoutes(r, authHandlers) // routes_identity.go
 			r.Post("/login", authHandlers.Login)
 			r.Post("/refresh", authHandlers.Refresh)
 			r.Post("/logout", authHandlers.Logout)
@@ -276,6 +288,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		})
 		r.Get("/users/bootstrap/status", adminUsersHandlers.BootstrapStatus)
 		r.Post("/users/bootstrap/first", adminUsersHandlers.BootstrapFirstUser)
+		identityAccountRoutes(r, authMiddleware, authHandlers)
+		alertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_actions.go)
+		people := newPeopleDeps(dbClient, secretsEncryptor, cfg, auditRecorder, log)
+		peopleOpenRoutes(r, authMiddleware, people) // routes_people.go
+		// Slack app install and interactions (routes_chat.go).
+		slackRoutes(r, authMiddleware, dbClient, secretsEncryptor, alertHub, auditRecorder, cfg, log)
+		reportUnsubscribeRoutes(r, reports) // routes_reports.go
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -396,6 +415,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", maintenanceHandlers.GetMaintenanceWindow)
 				r.Patch("/{id}", maintenanceHandlers.UpdateMaintenanceWindow)
 				r.Delete("/{id}", maintenanceHandlers.DeleteMaintenanceWindow)
+				registerMaintenanceRecurrenceRoutes(r, maintenanceHandlers)
 			})
 
 			r.Route("/monitors", func(r chi.Router) {
@@ -447,6 +467,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
 				// Snooze: quick single-monitor maintenance window
 				r.Post("/{id}/snooze", maintenanceHandlers.SnoozeMonitor)
+				registerHistoryRoutes(r, monitorHandlers, monitorService, log) // routes_history.go
 			})
 
 			// Legacy custom-agent push — retired 2026-11-18, superseded by
@@ -485,6 +506,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				// A corrected label also stops the alert's pending
 				// suspected-cause follow-ups.
 				r.Post("/{id}/triage/label", aiLabelHdlrs.LabelAlertTriage)
+				registerPagingAlertRoutes(r, alertHandlers.WithPaging(alertSvc))
+				registerDeliveryAlertRoutes(r, dbClient, log)
 			})
 
 			// Incidents
@@ -537,6 +560,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Patch("/{id}", alertChannelHandlers.UpdateAlertChannel)
 				r.Delete("/{id}", alertChannelHandlers.DeleteAlertChannel)
 				r.Post("/{id}/test", alertChannelHandlers.TestAlertChannel)
+				registerDeliveryChannelRoutes(r, dbClient, log)
 			})
 
 			// Alert channel plugin catalog (manifests driving the UI form).
@@ -576,6 +600,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", statusPageHandlers.GetStatusPage)
 				r.Patch("/{id}", statusPageHandlers.UpdateStatusPage)
 				r.Delete("/{id}", statusPageHandlers.DeleteStatusPage)
+				registerStatusPageAccessRoutes(r, statusPageHandlers) // routes_pages_privacy.go
 
 				// Custom UI template lifecycle: export default, draft, publish,
 				// revert, reset. Sources are validated against the shared
@@ -610,7 +635,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			})
 			r.Route("/tenants", func(r chi.Router) {
 				r.Get("/", tenantHandlers.ListTenants)
+				registerWorkspaceRoutes(r, tenantSvc, cfg, auditRecorder, log)
 			})
+			peopleRoutes(r, people) // routes_people.go
+			// Escalation policies: routes_escalation.go.
+			escalationRoutes(r, dbClient, log)
+			// SLA report schedules (routes_reports.go)
+			reportScheduleRoutes(r, reports)
 
 			// Audit log (tenant admins and superadmins)
 			auditHandlers := audithandlers.NewHandlers(auditSvc, log)
@@ -628,6 +659,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", adminUsersHandlers.GetUser)
 				r.Patch("/{id}", adminUsersHandlers.UpdateUser)
 				r.Delete("/{id}", adminUsersHandlers.DeleteUser)
+				identityUserRoutes(r, authHandlers)
 			})
 
 			// OIDC group→role mappings (superadmin only)
@@ -668,6 +700,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
 		mcpErr:             mcpErr,
+		reportRunner:       reports.runner,
 	}
 }
 
@@ -711,6 +744,9 @@ func (s *Server) Start() error {
 	if s.auditPruner != nil {
 		s.auditPruner.Start()
 	}
+	if s.reportRunner != nil {
+		s.reportRunner.Start()
+	}
 
 	return s.http.ListenAndServe()
 }
@@ -734,6 +770,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.auditPruner != nil {
 		s.auditPruner.Stop()
+	}
+	if s.reportRunner != nil {
+		s.reportRunner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

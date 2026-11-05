@@ -41,8 +41,8 @@ func TestStatusPage_SIPCallMediaDoesNotLeak(t *testing.T) {
 	mock.ExpectQuery("(?s)JOIN monitors mon.*LEFT JOIN LATERAL").
 		WithArgs(sqlmock.AnyArg(), tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"monitor_id", "current_state", "status", "http_status", "latency_ms", "created_at", "metrics_data", "in_maintenance",
-		}).AddRow(monitorID, "up", "success", 200, 140, time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC), []byte(sipMediaMetrics), false))
+			"monitor_id", "current_state", "status", "http_status", "latency_ms", "created_at", "metrics_data", "in_maintenance", "tls_check_chain",
+		}).AddRow(monitorID, "up", "success", 200, 140, time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC), []byte(sipMediaMetrics), false, false))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
 	statuses, err := svc.batchCurrentStatus(context.Background(), []uuid.UUID{monitorID}, tenantID)

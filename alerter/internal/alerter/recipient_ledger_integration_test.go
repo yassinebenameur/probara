@@ -115,7 +115,7 @@ func TestDispatchRetryAfterPartialFanoutSkipsDeliveredRecipients(t *testing.T) {
 	replicas := make([]*Alerter, 2)
 	for i := range replicas {
 		a := newIntegrationAlerter(dbClient)
-		a.sendFunc = a.sendChannelNotification
+		a.sendFunc = a.recordDeliveries(a.sendChannelNotification)
 		replicas[i] = a
 	}
 	flaky := fanoutRecipients[1]
@@ -176,4 +176,19 @@ func TestDispatchRetryAfterPartialFanoutSkipsDeliveredRecipients(t *testing.T) {
 	}
 	fanoutStub.assertTexts(t, "resolved", 1)
 	fanoutStub.assertTexts(t, "created", 1)
+
+	// The delivery history counts the fan-out: the partial attempt reached
+	// two of three, the retry completed it.
+	rows := deliveryRows(ctx, t, dbClient, alertID)
+	var created []deliveryRow
+	for _, r := range rows {
+		if r.eventType == "created" {
+			created = append(created, r)
+		}
+	}
+	if len(created) != 2 ||
+		created[0].outcome != "failed" || created[0].total != 3 || created[0].delivered != 2 ||
+		created[1].outcome != "delivered" || created[1].total != 3 || created[1].delivered != 3 {
+		t.Fatalf("created delivery rows = %+v, want failed 2/3 then delivered 3/3", created)
+	}
 }

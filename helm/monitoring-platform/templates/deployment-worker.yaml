@@ -26,7 +26,7 @@ spec:
       serviceAccountName: {{ include "monitoring-platform.serviceAccountName" . }}
       {{- end }}
       securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- include "monitoring-platform.workerPodSecurityContext" . | nindent 8 }}
       {{- if or .Values.postgresql.enabled .Values.nats.enabled }}
       initContainers:
         {{- if .Values.postgresql.enabled }}
@@ -77,6 +77,8 @@ spec:
           value: "{{ .Values.worker.metricsPort }}"
         - name: LOG_LEVEL
           value: "{{ .Values.worker.logLevel }}"
+        - name: WORKER_PING_MODE
+          value: {{ .Values.worker.ping.mode | default "unprivileged" | quote }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 8 }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_URL" "key" "nats_url" "secret" .Values.nats.existingSecret "secretKey" .Values.nats.existingSecretKey) | nindent 8 }}
         - name: CHECK_JOB_STREAM

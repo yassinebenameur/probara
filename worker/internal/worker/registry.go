@@ -67,7 +67,7 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	// Register default checkers
 	registry.Register("prometheus", NewPrometheusChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("http", NewHTTPChecker(maxBodySizeBytes, blockPrivateIPs, allowedCIDRs))
-	registry.Register("ping", NewPingChecker())
+	registry.Register("ping", NewPingChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("dns", NewDNSChecker())
 	registry.Register("grpc", NewGRPCChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("sip", NewSIPChecker(blockPrivateIPs, allowedCIDRs))
@@ -80,6 +80,7 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	registry.Register("tcp", NewTCPChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("mysql", NewMySQLChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("websocket", NewWebSocketChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("domain", NewDomainChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register(models.MonitorTypeMeshProbe, NewMeshChecker(blockPrivateIPs, allowedCIDRs))
 
 	return registry

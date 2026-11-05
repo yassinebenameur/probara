@@ -105,9 +105,10 @@ type slackText struct {
 }
 
 type slackButton struct {
-	Type string    `json:"type"`
-	Text slackText `json:"text"`
-	URL  string    `json:"url"`
+	Type  string    `json:"type"`
+	Text  slackText `json:"text"`
+	URL   string    `json:"url"`
+	Style string    `json:"style,omitempty"`
 }
 
 // Slack caps a section at 10 fields, a header at 150 characters and a
@@ -145,15 +146,27 @@ func buildBlockKit(m present.Message) slackPayload {
 			Text: &slackText{Type: "mrkdwn", Text: "*Last error*\n```" + escapeTruncate(m.LastError, maxLastError) + "```"},
 		})
 	}
-	if m.ActionURL != "" {
-		blocks = append(blocks, slackBlock{
-			Type: "actions",
-			Elements: []any{slackButton{
-				Type: "button",
-				Text: slackText{Type: "plain_text", Text: m.ActionLabel},
-				URL:  m.ActionURL,
-			}},
+	var buttons []any
+	if m.AckURL != "" {
+		// Opens the acknowledge confirm page; acknowledging in place would
+		// need a Slack app with interactivity, which an incoming webhook
+		// is not.
+		buttons = append(buttons, slackButton{
+			Type:  "button",
+			Text:  slackText{Type: "plain_text", Text: m.AckLabel},
+			URL:   m.AckURL,
+			Style: "primary",
 		})
+	}
+	if m.ActionURL != "" {
+		buttons = append(buttons, slackButton{
+			Type: "button",
+			Text: slackText{Type: "plain_text", Text: m.ActionLabel},
+			URL:  m.ActionURL,
+		})
+	}
+	if len(buttons) > 0 {
+		blocks = append(blocks, slackBlock{Type: "actions", Elements: buttons})
 	}
 	blocks = append(blocks, slackBlock{
 		Type:     "context",

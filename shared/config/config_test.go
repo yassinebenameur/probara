@@ -333,3 +333,154 @@ func TestLoadWorkerConfig_SIPCall(t *testing.T) {
 		t.Fatalf("invalid pattern accepted: %v", err)
 	}
 }
+
+func TestLoadAPIConfig_TrustedProxiesAndWorkerImage(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("LOCATION_WORKER_IMAGE", "")
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 || cfg.LocationWorkerImage != "" {
+		t.Fatalf("defaults: trusted=%v image=%q", cfg.TrustedProxyCIDRs, cfg.LocationWorkerImage)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.168.1.7")
+	t.Setenv("LOCATION_WORKER_IMAGE", " registry.example/probara-worker:2.0.0 ")
+	cfg, err = LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[1].String() != "192.168.1.7/32" {
+		t.Fatalf("trusted = %v", cfg.TrustedProxyCIDRs)
+	}
+	if cfg.LocationWorkerImage != "registry.example/probara-worker:2.0.0" {
+		t.Fatalf("image = %q", cfg.LocationWorkerImage)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8,proxy.internal")
+	if _, err := LoadAPIConfig(); err == nil || !strings.Contains(err.Error(), "TRUSTED_PROXY_CIDRS") {
+		t.Fatalf("expected a TRUSTED_PROXY_CIDRS error, got %v", err)
+	}
+}
+
+func TestLoadStatusPageConfig_TrustedProxies(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8082")
+	t.Setenv("METRICS_PORT", "9093")
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("STATUS_PAGE_TRUSTED_PROXY", "")
+	cfg, err := LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 || cfg.LegacyTrustedProxy {
+		t.Fatalf("default should trust nothing: %v %v", cfg.TrustedProxyCIDRs, cfg.LegacyTrustedProxy)
+	}
+
+	// The deprecated flag keeps its old trust-everyone meaning while the
+	// new variable is unset.
+	t.Setenv("STATUS_PAGE_TRUSTED_PROXY", "true")
+	cfg, err = LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.LegacyTrustedProxy || len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("legacy flag: %v %v", cfg.TrustedProxyCIDRs, cfg.LegacyTrustedProxy)
+	}
+
+	// TRUSTED_PROXY_CIDRS wins over the legacy flag.
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
+	cfg, err = LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LegacyTrustedProxy || len(cfg.TrustedProxyCIDRs) != 1 || cfg.TrustedProxyCIDRs[0].String() != "10.0.0.0/8" {
+		t.Fatalf("explicit list: %v %v", cfg.TrustedProxyCIDRs, cfg.LegacyTrustedProxy)
+	}
+}
+
+func TestLoadAPIConfig_EdgeSecurity(t *testing.T) {
+	setRequiredAPIEnv(t)
+	for _, k := range []string{"SECURITY_HSTS_MAX_AGE", "API_RATE_LIMIT_PER_MINUTE", "API_RATE_LIMIT_BURST", "API_ALLOWED_ORIGINS"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HSTSMaxAge != 0 || cfg.RateLimitPerMinute != 600 || cfg.RateLimitBurst != 120 || len(cfg.AllowedOrigins) != 0 {
+		t.Fatalf("defaults: hsts=%d rate=%d burst=%d origins=%v", cfg.HSTSMaxAge, cfg.RateLimitPerMinute, cfg.RateLimitBurst, cfg.AllowedOrigins)
+	}
+
+	t.Setenv("SECURITY_HSTS_MAX_AGE", "31536000")
+	t.Setenv("API_RATE_LIMIT_PER_MINUTE", "0")
+	t.Setenv("API_RATE_LIMIT_BURST", "10")
+	t.Setenv("API_ALLOWED_ORIGINS", "https://Ops.Example.com/, http://localhost:3000")
+	cfg, err = LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HSTSMaxAge != 31536000 || cfg.RateLimitPerMinute != 0 || cfg.RateLimitBurst != 10 {
+		t.Fatalf("explicit: hsts=%d rate=%d burst=%d", cfg.HSTSMaxAge, cfg.RateLimitPerMinute, cfg.RateLimitBurst)
+	}
+	if strings.Join(cfg.AllowedOrigins, ",") != "https://ops.example.com,http://localhost:3000" {
+		t.Fatalf("origins = %v", cfg.AllowedOrigins)
+	}
+
+	for key, bad := range map[string]string{
+		"SECURITY_HSTS_MAX_AGE":     "-1",
+		"API_RATE_LIMIT_PER_MINUTE": "lots",
+		"API_ALLOWED_ORIGINS":       "*",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, bad)
+			if _, err := LoadAPIConfig(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("expected a %s error, got %v", key, err)
+			}
+		})
+	}
+}
+
+func TestLoadStatusPageConfig_EdgeSecurity(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8082")
+	t.Setenv("METRICS_PORT", "9093")
+	t.Setenv("SECURITY_HSTS_MAX_AGE", "600")
+	t.Setenv("APP_BASE_URL", "https://ops.example.com/")
+	cfg, err := LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HSTSMaxAge != 600 || cfg.AppBaseURL != "https://ops.example.com" {
+		t.Fatalf("hsts=%d app=%q", cfg.HSTSMaxAge, cfg.AppBaseURL)
+	}
+}
+
+// The Slack app is optional; its OAuth credentials come as a pair, and the
+// signing secret alone (interactivity on manually created channels) is valid.
+func TestLoadAPIConfig_Slack(t *testing.T) {
+	setRequiredAPIEnv(t)
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatalf("unset: %v", err)
+	}
+	if cfg.Slack.InstallEnabled() || cfg.Slack.SigningSecret != "" {
+		t.Fatalf("unset Slack config = %+v", cfg.Slack)
+	}
+
+	t.Setenv("SLACK_SIGNING_SECRET", " sig ")
+	if cfg, err = LoadAPIConfig(); err != nil || cfg.Slack.SigningSecret != "sig" || cfg.Slack.InstallEnabled() {
+		t.Fatalf("signing secret only: cfg=%+v err=%v", cfg.Slack, err)
+	}
+
+	t.Setenv("SLACK_CLIENT_ID", "123.456")
+	if _, err := LoadAPIConfig(); err == nil {
+		t.Fatal("client ID without its secret must be refused")
+	}
+	t.Setenv("SLACK_CLIENT_SECRET", "s3cret")
+	cfg, err = LoadAPIConfig()
+	if err != nil || !cfg.Slack.InstallEnabled() || cfg.Slack.ClientID != "123.456" {
+		t.Fatalf("full config: cfg=%+v err=%v", cfg.Slack, err)
+	}
+}

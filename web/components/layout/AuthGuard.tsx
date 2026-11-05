@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { hasApiKey } from '@/lib/auth';
+import { isBareRoute } from '@/lib/account-links';
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -14,7 +15,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     let isMounted = true;
 
     // Don't protect auth pages
-    if (pathname === '/connect' || pathname === '/login' || pathname === '/oauth/consent') {
+    if (isBareRoute(pathname)) {
       setChecked(true);
       setAuthed(true);
       return;

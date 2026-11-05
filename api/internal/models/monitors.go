@@ -31,6 +31,7 @@ const (
 	MonitorTypeTCP              MonitorType = "tcp"
 	MonitorTypeMySQL            MonitorType = "mysql"
 	MonitorTypeWebSocket        MonitorType = "websocket"
+	MonitorTypeDomain           MonitorType = "domain"
 )
 
 // MonitorChannelAssignment is one channel in a monitor's custom routing list.
@@ -39,6 +40,9 @@ type MonitorChannelAssignment struct {
 	DelaySeconds int    `json:"delay_seconds"`
 	ChannelName  string `json:"channel_name,omitempty"`
 	ChannelType  string `json:"channel_type,omitempty"`
+	// NotifyAfterAck keeps this route paging while an alert is acknowledged
+	// (when the workspace stops paging on ack).
+	NotifyAfterAck bool `json:"notify_after_ack"`
 }
 
 // Monitor represents a monitor in the system
@@ -61,6 +65,7 @@ type Monitor struct {
 	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
 	NotificationMode             string                     `json:"notification_mode"`
+	EscalationPolicyID           *uuid.UUID                 `json:"escalation_policy_id,omitempty"`
 	MemberAlertRollup            string                     `json:"member_alert_rollup"`    // 'per_monitor' | 'group'; only meaningful for group monitors
 	DependencySuppression        string                     `json:"dependency_suppression"` // 'inherit' | 'on' | 'off': page when an upstream dependency is down? 'inherit' follows the workspace setting
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
@@ -68,6 +73,13 @@ type Monitor struct {
 	LocationQuorum               int                        `json:"location_quorum"`        // Down when >= this many locations are down
 	Locations                    []MonitorLocationStatus    `json:"locations,omitempty"`    // Per-location breakdown (GetMonitor only)
 	CurrentState                 string                     `json:"current_state"`
+	// RecoveryThreshold is how many consecutive passing checks a down
+	// monitor needs before it is up again (S-T7, 1-10, default 1).
+	RecoveryThreshold int `json:"recovery_threshold"`
+	// ConsecutiveSuccesses counts passes toward that confirmation while the
+	// monitor is still down; 0 otherwise. Read-only. For multi-location
+	// monitors it is the furthest-along location's count.
+	ConsecutiveSuccesses int `json:"consecutive_successes"`
 	// AlertRouting is the effective notification reachability of this
 	// monitor: nil when not resolved, otherwise says whether an alert here
 	// would notify anyone and why not. Read-only, computed per request.
@@ -92,12 +104,14 @@ type CreateMonitorRequest struct {
 	Tags                         []string                   `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
+	EscalationPolicyID           *string                    `json:"escalation_policy_id,omitempty"` // required with notification_mode 'policy'
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 []string                   `json:"depends_on_ids,omitempty"`
 	LocationIDs                  []string                   `json:"location_ids,omitempty"`
 	LocationQuorum               *int                       `json:"location_quorum,omitempty"`
+	RecoveryThreshold            *int                       `json:"recovery_threshold,omitempty"`
 }
 
 // UpdateMonitorRequest represents a request to update a monitor
@@ -113,12 +127,14 @@ type UpdateMonitorRequest struct {
 	Tags                         *[]string                  `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
+	EscalationPolicyID           *string                    `json:"escalation_policy_id,omitempty"` // with notification_mode 'policy' (or a monitor already in it)
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 *[]string                  `json:"depends_on_ids,omitempty"` // nil = unchanged, empty = clear
 	LocationIDs                  *[]string                  `json:"location_ids,omitempty"`   // nil = unchanged, empty = default fleet
 	LocationQuorum               *int                       `json:"location_quorum,omitempty"`
+	RecoveryThreshold            *int                       `json:"recovery_threshold,omitempty"`
 }
 
 // MonitorListResponse represents a paginated list of monitors

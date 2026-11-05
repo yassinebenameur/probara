@@ -439,6 +439,9 @@ func sessionUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 func PublicCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// The router-wide allowlist (middleware.CORS) may already have
+		// marked the response credentialed; a wildcard must never be.
+		w.Header().Del("Access-Control-Allow-Credentials")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate, Mcp-Session-Id")

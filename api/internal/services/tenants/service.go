@@ -18,6 +18,8 @@ import (
 // Service handles tenant operations.
 type Service struct {
 	db *db.Client
+	// protected are workspaces that can never be deleted (WithProtectedTenants).
+	protected map[uuid.UUID]struct{}
 }
 
 // NewService creates a new tenant service.
@@ -41,10 +43,11 @@ func (s *Service) ListTenants(ctx context.Context) ([]models.Tenant, error) {
 		SELECT t.id, t.name, t.data_retention_days, t.dashboard_group_tags, m.role, t.created_at, t.updated_at
 		FROM tenants t
 		JOIN tenant_memberships m ON m.tenant_id = t.id AND m.admin_user_id = $1
+		%s
 		ORDER BY t.name ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, adminID)
+	rows, err := s.queryLiveTenants(ctx, query, adminID)
 	if err != nil {
 		if isMissingSchema(err) {
 			// Pre-migration there are no memberships and every admin is a
@@ -80,12 +83,13 @@ func (s *Service) ListTenants(ctx context.Context) ([]models.Tenant, error) {
 
 func (s *Service) listAllTenants(ctx context.Context) ([]models.Tenant, error) {
 	query := `
-		SELECT id, name, data_retention_days, dashboard_group_tags, created_at, updated_at
-		FROM tenants
-		ORDER BY name ASC
+		SELECT t.id, t.name, t.data_retention_days, t.dashboard_group_tags, t.created_at, t.updated_at
+		FROM tenants t
+		%s
+		ORDER BY t.name ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.queryLiveTenants(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tenants: %w", err)
 	}
@@ -112,6 +116,24 @@ func (s *Service) listAllTenants(ctx context.Context) ([]models.Tenant, error) {
 	}
 
 	return tenants, nil
+}
+
+// queryLiveTenants runs a tenant list query (alias t) whose %s is where its
+// WHERE clause goes, filling it with the live-tenant filter: soft-deleted
+// workspaces are never listed. Before the soft-delete migration has run there
+// is no deleted_at column and nothing is deleted, so it retries unfiltered.
+func (s *Service) queryLiveTenants(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(query, "WHERE t.deleted_at IS NULL"), args...)
+	if err != nil && isMissingColumn(err) {
+		return s.db.QueryContext(ctx, fmt.Sprintf(query, ""), args...)
+	}
+	return rows, err
+}
+
+// isMissingColumn reports Postgres undefined_column.
+func isMissingColumn(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "42703"
 }
 
 // isMissingSchema reports Postgres undefined_table/undefined_column — this

@@ -31,7 +31,26 @@ type StatusPageSettings struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+	// CSPMode is the public page's Content-Security-Policy mode: "strict",
+	// "compatible", "off", or "" for automatic (compatible when the page has
+	// custom CSS, custom head/footer HTML or a published custom template,
+	// else strict).
+	// See shared/securityheaders.
+	CSPMode *string `json:"csp_mode,omitempty"`
+	// AllowedEmbedOrigins are the origins (scheme://host[:port], "*." host
+	// wildcard allowed) that may frame the page, on top of the page's own
+	// origin and the operator UI. Absent keeps the stored list; [] clears it.
+	AllowedEmbedOrigins []string `json:"allowed_embed_origins,omitempty"`
+	// SEODescription is the page's search/link-preview text (meta
+	// description, og:description, twitter:description), up to
+	// MaxSEODescriptionLength characters. "" clears it, and the page then
+	// falls back to its description.
+	SEODescription *string `json:"seo_description,omitempty"`
 }
+
+// MaxSEODescriptionLength bounds seo_description; search engines show about
+// 160 characters, link previews a little more.
+const MaxSEODescriptionLength = 300
 
 // StatusPageTemplateVersion summarizes one stored custom-template row.
 type StatusPageTemplateVersion struct {
@@ -56,6 +75,9 @@ type StatusPageTemplateState struct {
 	// deployment configures STATUS_PAGE_PREVIEW_SECRET; empty otherwise.
 	PreviewToken string `json:"preview_token,omitempty"`
 	MaxSizeBytes int    `json:"max_size_bytes"`
+	// DraftWarnings are non-fatal problems in the draft source, e.g. scripts
+	// without nonce="{{cspNonce}}" (statustemplate.Warnings).
+	DraftWarnings []string `json:"draft_warnings,omitempty"`
 }
 
 // SaveStatusPageTemplateDraftRequest carries a draft template source.
@@ -131,6 +153,12 @@ type StatusPage struct {
 	Settings       *StatusPageSettings `json:"settings,omitempty"`
 	CreatedAt      time.Time           `json:"created_at"`
 	UpdatedAt      time.Time           `json:"updated_at"`
+	// Visibility is who may view the page: public, unlisted, password or
+	// private (shared/pageaccess). A column, not a setting.
+	Visibility string `json:"visibility"`
+	// HasPassword reports whether a visitor password is set; the password
+	// itself is write-only.
+	HasPassword bool `json:"has_password"`
 }
 
 // CreateStatusPageRequest represents a request to create a status page
@@ -145,6 +173,10 @@ type CreateStatusPageRequest struct {
 	MonitorDisplayNames map[string]string   `json:"monitor_display_names,omitempty"`
 	Sections            []StatusPageSection `json:"sections,omitempty"`
 	Settings            *StatusPageSettings `json:"settings,omitempty"`
+	// Visibility defaults to public.
+	Visibility *string `json:"visibility,omitempty"`
+	// Password is the visitor password (required for password visibility).
+	Password *string `json:"password,omitempty"`
 }
 
 // UpdateStatusPageRequest represents a request to update a status page
@@ -159,6 +191,12 @@ type UpdateStatusPageRequest struct {
 	MonitorDisplayNames *map[string]string   `json:"monitor_display_names,omitempty"`
 	Sections            *[]StatusPageSection `json:"sections,omitempty"`
 	Settings            *StatusPageSettings  `json:"settings,omitempty"`
+	// Visibility: absent keeps the stored value.
+	Visibility *string `json:"visibility,omitempty"`
+	// Password is write-only: absent keeps the stored password, "" clears it,
+	// anything else replaces it. Setting or clearing it signs every visitor
+	// session out.
+	Password *string `json:"password,omitempty"`
 }
 
 // StatusPageListResponse represents a paginated list of status pages
@@ -167,4 +205,30 @@ type StatusPageListResponse struct {
 	Page     int          `json:"page"`
 	PageSize int          `json:"page_size"`
 	Total    int          `json:"total"`
+}
+
+// StatusPageAccessToken is a kiosk token for a password or private page. The
+// token itself is shown once, at creation; only its hash is stored.
+type StatusPageAccessToken struct {
+	ID        uuid.UUID  `json:"id"`
+	Label     string     `json:"label"`
+	CreatedBy *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+// CreateStatusPageAccessTokenRequest names a new kiosk token.
+type CreateStatusPageAccessTokenRequest struct {
+	Label string `json:"label"`
+}
+
+// CreatedStatusPageAccessToken is the one response that carries the token.
+type CreatedStatusPageAccessToken struct {
+	StatusPageAccessToken
+	Token string `json:"token"`
+}
+
+// StatusPageAccessTokenListResponse lists a page's kiosk tokens, newest first.
+type StatusPageAccessTokenListResponse struct {
+	Items []StatusPageAccessToken `json:"items"`
 }

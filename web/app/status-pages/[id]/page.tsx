@@ -6,6 +6,7 @@ import { ArrowUpRight, Paintbrush } from 'lucide-react';
 import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
+import KioskTokensPanel from '@/components/status-pages/KioskTokensPanel';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
@@ -125,6 +126,8 @@ export default function EditStatusPagePage() {
         onSubmit={handleSubmit}
         loading={saving}
       />
+
+      <KioskTokensPanel statusPage={statusPage} />
     </Page>
   );
 }

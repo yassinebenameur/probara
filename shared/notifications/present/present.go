@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/notifications"
@@ -97,6 +98,12 @@ type Message struct {
 
 	ActionURL   string
 	ActionLabel string
+	// AckURL is the signed one-click acknowledge link (the operator UI's
+	// /alert-action/<token> confirm page) and AckLabel its caption. Set only
+	// on created and reminder events for an alert still active, when a link
+	// signer, the app origin and the channel are all known; see ackFor.
+	AckURL   string
+	AckLabel string
 
 	AlertID   string
 	TenantID  string
@@ -105,15 +112,48 @@ type Message struct {
 	Resolved  bool
 }
 
+// LinkSigner mints the signed token behind a one-click action link (for
+// example "acknowledge this alert") for one alert as delivered on one channel.
+// Options.Links may be nil, and a nil signer means no action links.
+// shared/actionlink implements it; BuildWith renders its token as AckURL.
+type LinkSigner interface {
+	// ActionToken returns an opaque, URL-safe token authorizing action on
+	// alertID in tenantID, as delivered on channelID, or an error when no
+	// token can be minted (no key configured).
+	ActionToken(action, tenantID, alertID, channelID string) (string, error)
+}
+
+// Options is the delivery context a Message is built for, beyond the event
+// itself.
+type Options struct {
+	// AppBaseURL is the public operator-UI origin; empty omits every link.
+	AppBaseURL string
+	// Links signs action links; nil omits them.
+	Links LinkSigner
+	// ChannelID is the channel this Message is delivered on, which action
+	// links are scoped to. Empty for channel-less renders (previews).
+	ChannelID string
+}
+
 // Build resolves an event into a Message. eventType overrides event.Type when
 // set (dispatch requests carry both). appBaseURL is the public operator-UI
-// origin; empty omits the deep link.
+// origin; empty omits the deep link. It is BuildWith with only AppBaseURL set.
 func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message {
+	return BuildWith(event, eventType, Options{AppBaseURL: appBaseURL})
+}
+
+// BuildWith resolves an event into a Message for the delivery context opts.
+// eventType overrides event.Type when set (dispatch requests carry both).
+func BuildWith(event notifications.AlertEvent, eventType string, opts Options) Message {
+	appBaseURL := opts.AppBaseURL
 	if eventType == "" {
 		eventType = event.Type
 	}
 	if eventType == "" {
 		eventType = EventCreated
+	}
+	if eventType == EventUpdated {
+		return buildCard(event, opts) // card.go
 	}
 	alert := event.Alert
 	resolved := eventType == EventResolved || alert.Status == "resolved"
@@ -176,6 +216,7 @@ func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message
 
 	m.Rows = detailRows(alert, elapsed)
 	m.ActionURL, m.ActionLabel = actionFor(alert, appBaseURL)
+	m.AckURL, m.AckLabel = ackFor(event, eventType, resolved, opts)
 	return m
 }
 
@@ -219,7 +260,7 @@ func suspectedCauseRows(alert notifications.AlertDetails, elapsed string) []Row 
 // followedUpPage names the page a follow-up refers to: the kind-aware
 // headline the page itself carried, e.g. "CPU Usage High".
 func followedUpPage(alert notifications.AlertDetails) string {
-	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() {
+	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() || alert.IsDomainExpiry() {
 		return labelFor(alert, EventCreated)
 	}
 	return "Down alert"
@@ -289,22 +330,9 @@ func (m Message) MetricLine() string {
 }
 
 // Short renders a compact plain-text form for length-limited channels (SMS,
-// push): title, summary, and the deep link when configured.
-func (m Message) Short() string {
-	var b strings.Builder
-	b.WriteString(m.StatusWord)
-	b.WriteString(" · ")
-	b.WriteString(m.Title)
-	if m.Summary != "" {
-		b.WriteString("\n")
-		b.WriteString(m.Summary)
-	}
-	if m.ActionURL != "" {
-		b.WriteString("\n")
-		b.WriteString(m.ActionURL)
-	}
-	return b.String()
-}
+// push): title, summary, the deep link and the acknowledge link when
+// configured. ShortWithin bounds it.
+func (m Message) Short() string { return m.ShortWithin(0) }
 
 // Facts returns the label/value pairs chat layouts show as fields: the
 // metric, the detail rows, root cause, failing locations and blast radius, in
@@ -341,8 +369,19 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 			return ToneUp, "BACK TO NORMAL"
 		case alert.IsTLSExpiry():
 			return ToneUp, "CERTIFICATE RENEWED"
+		case alert.IsDomainExpiry():
+			return ToneUp, "DOMAIN RENEWED"
+		case alert.IsLocationOffline():
+			if locationClosedWithoutRecovery(alert) {
+				// Nothing came back: the alert just stopped applying.
+				return ToneInfo, "CLOSED"
+			}
+			return ToneUp, "BACK ONLINE"
 		}
 		return ToneUp, "RECOVERED"
+	}
+	if tone, word, ok := relapseTone(alert, eventType, resolved); ok {
+		return tone, word
 	}
 	if eventType == EventAcknowledged {
 		return ToneInfo, "ACKNOWLEDGED"
@@ -360,11 +399,21 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		return ToneWarn, "THRESHOLD BREACHED"
 	case alert.IsTLSExpiry():
 		return ToneWarn, "EXPIRING SOON"
+	case alert.IsDomainExpiry():
+		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+			return ToneDown, "DOMAIN EXPIRED"
+		}
+		return ToneWarn, "EXPIRING SOON"
 	case alert.IsMeshEdge():
 		if eventType == EventReminder {
 			return ToneDown, "PATH STILL DOWN"
 		}
 		return ToneDown, "PATH DOWN"
+	case alert.IsLocationOffline():
+		if eventType == EventReminder {
+			return ToneDown, "STILL OFFLINE"
+		}
+		return ToneDown, "OFFLINE"
 	}
 	if eventType == EventReminder {
 		return ToneDown, "STILL DOWN"
@@ -379,6 +428,9 @@ func Label(event notifications.AlertEvent) string {
 }
 
 func labelFor(alert notifications.AlertDetails, eventType string) string {
+	if label, ok := relapseLabel(alert, eventType); ok {
+		return label
+	}
 	if eventType == EventAcknowledged {
 		return "Alert Acknowledged"
 	}
@@ -398,6 +450,15 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 		return alert.HostMetricLabel(eventType)
 	case alert.IsTLSExpiry():
 		return alert.TLSExpiryLabel(eventType)
+	case alert.IsDomainExpiry():
+		switch eventType {
+		case EventResolved:
+			return "Domain Renewed"
+		case EventReminder:
+			return "Domain Still Expiring"
+		default:
+			return "Domain Expiring"
+		}
 	case alert.IsMeshEdge():
 		switch eventType {
 		case EventResolved:
@@ -406,6 +467,18 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 			return "Mesh Path Still Down"
 		default:
 			return "Mesh Path Down"
+		}
+	case alert.IsLocationOffline():
+		switch eventType {
+		case EventResolved:
+			if locationClosedWithoutRecovery(alert) {
+				return "Location Alert Closed"
+			}
+			return "Location Back Online"
+		case EventReminder:
+			return "Location Still Offline"
+		default:
+			return "Location Offline"
 		}
 	}
 	switch eventType {
@@ -419,6 +492,9 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 }
 
 func summaryFor(alert notifications.AlertDetails, eventType string, resolved bool, outage string) string {
+	if summary, ok := relapseSummary(alert, eventType, resolved); ok {
+		return summary
+	}
 	if eventType == EventAcknowledged && !resolved {
 		if outage != "" {
 			return fmt.Sprintf("Someone is on it — acknowledged %s after it opened.", outage)
@@ -484,6 +560,22 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		}
 		return "The TLS certificate is approaching expiry."
 
+	case alert.IsDomainExpiry():
+		if resolved {
+			return "The domain registration has been renewed."
+		}
+		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+			return fmt.Sprintf("The domain registration expired %s ago. Renew it before the registry releases the name.", dayValue(-*alert.MetricValue))
+		}
+		if alert.MetricValue != nil {
+			s := fmt.Sprintf("The domain registration expires in %s", dayValue(*alert.MetricValue))
+			if alert.ThresholdValue != nil {
+				s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
+			}
+			return s + "."
+		}
+		return "The domain registration is approaching expiry."
+
 	case alert.IsMeshEdge():
 		path := meshPath(alert)
 		if resolved {
@@ -496,6 +588,35 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 			return fmt.Sprintf("Probes %s are still failing, %s after the first failure.", path, outage)
 		}
 		return fmt.Sprintf("Probes %s are failing.", path)
+
+	case alert.IsLocationOffline():
+		name := locationName(alert)
+		if resolved {
+			switch alert.ResolveReason {
+			case notifications.ResolveReasonLocationDisabled:
+				return fmt.Sprintf("Location %s was disabled, so it is no longer expected to report.", name)
+			case notifications.ResolveReasonLocationDeleted:
+				return fmt.Sprintf("Location %s was deleted.", name)
+			case notifications.ResolveReasonAlertsDisabled:
+				return fmt.Sprintf("Offline-location alerts were turned off for this workspace; %s may still be offline.", name)
+			}
+			if outage != "" {
+				return fmt.Sprintf("Location %s is reporting again after %s offline.", name, outage)
+			}
+			return fmt.Sprintf("Location %s is reporting again.", name)
+		}
+		s := fmt.Sprintf("Location %s has stopped reporting", name)
+		if alert.LocationLastSeenAt != nil {
+			s += " (last heartbeat " + HumanTime(*alert.LocationLastSeenAt) + ")"
+		}
+		s += "."
+		switch n := alert.LocationMonitorCount; {
+		case n == 1:
+			s += " 1 monitor runs from it and goes stale without fresh checks."
+		case n > 1:
+			s += fmt.Sprintf(" %d monitors run from it and go stale without fresh checks.", n)
+		}
+		return s
 	}
 
 	// Availability.
@@ -557,6 +678,23 @@ func metricFor(alert notifications.AlertDetails, resolved bool) *Metric {
 			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
 		}
 		return p
+	case alert.IsDomainExpiry():
+		if alert.MetricValue == nil {
+			return nil
+		}
+		p := &Metric{Label: "Registration left", Value: dayValue(*alert.MetricValue)}
+		if *alert.MetricValue < 0 {
+			p = &Metric{Label: "Registration expired", Value: dayValue(-*alert.MetricValue) + " ago"}
+		}
+		if alert.ThresholdValue != nil {
+			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
+		}
+		return p
+	case alert.IsLocationOffline():
+		if resolved || alert.LocationMonitorCount <= 0 {
+			return nil
+		}
+		return &Metric{Label: "Monitors affected", Value: fmt.Sprintf("%d", alert.LocationMonitorCount), Note: "run from this location"}
 	}
 	return nil
 }
@@ -567,6 +705,12 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 	if alert.IsMeshEdge() {
 		if path := meshPath(alert); path != "" {
 			rows = append(rows, Row{Label: "Path", Value: strings.TrimPrefix(path, "from ")})
+		}
+	}
+	if alert.IsLocationOffline() {
+		rows = append(rows, Row{Label: "Location", Value: locationName(alert)})
+		if alert.LocationLastSeenAt != nil {
+			rows = append(rows, Row{Label: "Last heartbeat", Value: HumanTime(*alert.LocationLastSeenAt)})
 		}
 	}
 	if name := strings.TrimSpace(alert.PolicyName); name != "" {
@@ -588,6 +732,7 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 	if alert.FailureCount > 0 {
 		rows = append(rows, Row{Label: "Failed checks", Value: fmt.Sprintf("%d", alert.FailureCount)})
 	}
+	rows = append(rows, relapseRows(alert)...)
 	return rows
 }
 
@@ -610,6 +755,9 @@ func actionFor(alert notifications.AlertDetails, appBaseURL string) (string, str
 	}
 	if alert.IsMeshEdge() {
 		return base + "/mesh", "Open the mesh matrix"
+	}
+	if alert.IsLocationOffline() {
+		return base + "/locations", "Open locations"
 	}
 	if id := strings.TrimSpace(alert.MonitorID); id != "" && id != emptyUUID {
 		return base + "/monitors/" + id, "Open the monitor"
@@ -761,9 +909,111 @@ func meshPath(alert notifications.AlertDetails) string {
 	return "between locations"
 }
 
+// locationClosedWithoutRecovery reports whether a resolved location_offline
+// alert closed for a reason other than the location reporting again.
+func locationClosedWithoutRecovery(alert notifications.AlertDetails) bool {
+	switch alert.ResolveReason {
+	case notifications.ResolveReasonLocationDisabled, notifications.ResolveReasonLocationDeleted,
+		notifications.ResolveReasonAlertsDisabled:
+		return true
+	}
+	return false
+}
+
+// locationName is an offline-location alert's subject.
+func locationName(alert notifications.AlertDetails) string {
+	if alert.SourceLocationName != nil {
+		if name := strings.TrimSpace(*alert.SourceLocationName); name != "" {
+			return name
+		}
+	}
+	if name := strings.TrimSpace(strings.TrimPrefix(alert.MonitorName, "location: ")); name != "" {
+		return name
+	}
+	return "unknown"
+}
+
 func capitalize(s string) string {
 	if s == "" {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// --- signed action links ----------------------------------------------------
+
+// ActionAcknowledge is the action an acknowledge link's token authorizes
+// (LinkSigner.ActionToken); actionlink.ActionAcknowledge mirrors it.
+const ActionAcknowledge = "ack"
+
+// AckPath is the operator-UI route an acknowledge link opens: a confirm page
+// that acknowledges on a button press (POST), never on load, because mail
+// scanners and chat unfurlers prefetch links.
+const AckPath = "/alert-action/"
+
+// ackFor mints the signed acknowledge link. Only a page that asks for action
+// carries one: created and reminder events of an alert that is still active.
+// It needs the operator-UI origin, a signer (callers leave Options.Links nil
+// for test sends) and the delivering channel; any of them missing, or a
+// signer that cannot mint, renders no link rather than a broken one.
+func ackFor(event notifications.AlertEvent, eventType string, resolved bool, opts Options) (string, string) {
+	if eventType != EventCreated && eventType != EventReminder {
+		return "", ""
+	}
+	if resolved || event.Alert.Status == "acknowledged" || opts.Links == nil {
+		return "", ""
+	}
+	base := strings.TrimRight(strings.TrimSpace(opts.AppBaseURL), "/")
+	if base == "" || strings.TrimSpace(opts.ChannelID) == "" {
+		return "", ""
+	}
+	token, err := opts.Links.ActionToken(ActionAcknowledge, event.TenantID, event.Alert.ID, opts.ChannelID)
+	if err != nil || token == "" {
+		return "", ""
+	}
+	return base + AckPath + url.PathEscape(token), "Acknowledge"
+}
+
+// ShortWithin is Short bounded to limit runes (0 means unbounded) for an SMS
+// or push body. The links are kept whole, since a cut URL is useless: the
+// title and summary are clipped to make room, and only when the links alone
+// would not fit is the deep link dropped, then the acknowledge link.
+func (m Message) ShortWithin(limit int) string {
+	head := m.StatusWord + " · " + m.Title
+	if m.Summary != "" {
+		head += "\n" + m.Summary
+	}
+	var links []string
+	if m.ActionURL != "" {
+		links = append(links, m.ActionURL)
+	}
+	if m.AckURL != "" {
+		links = append(links, m.AckLabel+": "+m.AckURL)
+	}
+	for {
+		tail := ""
+		for _, l := range links {
+			tail += "\n" + l
+		}
+		if limit <= 0 {
+			return head + tail
+		}
+		room := limit - utf8.RuneCountInString(tail)
+		if room >= 16 || len(links) == 0 {
+			return clipRunes(head, room) + tail
+		}
+		links = links[1:]
+	}
+}
+
+// clipRunes bounds s to n runes, marking a cut with an ellipsis.
+func clipRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }

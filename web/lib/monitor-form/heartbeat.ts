@@ -8,7 +8,7 @@ import {
   NotificationMode,
   PushMonitorConfig,
 } from '../types';
-import { buildHeartbeatMonitorRequest } from './common';
+import { buildHeartbeatMonitorRequest, initialEscalationPolicy } from './common';
 
 // PushForm's and AgentForm's state and requests: monitors fed by the
 // monitored side (heartbeats, collector exports) rather than checked on a
@@ -31,7 +31,9 @@ export function initialPushFormState(monitor?: Monitor, initialData?: CreateMoni
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
+    recovery_threshold: monitor?.recovery_threshold ?? 1,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    ...initialEscalationPolicy(monitor),
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
     depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
@@ -82,7 +84,9 @@ export function initialAgentFormState(monitor?: Monitor, initialData?: CreateMon
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
+    recovery_threshold: monitor?.recovery_threshold ?? 1,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    ...initialEscalationPolicy(monitor),
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
     depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),

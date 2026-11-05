@@ -120,7 +120,7 @@ func TestNewAlertView_TonesByKind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			event := sampleEvent()
 			tc.mutate(&event)
-			v := newAlertView(event, "")
+			v := newAlertView(event, Templates{}, "")
 			if v.Tone.Label != tc.wantLabel {
 				t.Errorf("tone label = %q, want %q", v.Tone.Label, tc.wantLabel)
 			}
@@ -136,7 +136,7 @@ func TestNewAlertView_DurationUsesEventClockNotWallClock(t *testing.T) {
 	event.Type = "reminder"
 	event.Alert.TriggeredAt = event.Timestamp.Add(-95 * time.Minute)
 
-	v := newAlertView(event, "")
+	v := newAlertView(event, Templates{}, "")
 	if !strings.Contains(v.Summary, "1h 35m") {
 		t.Errorf("summary should report elapsed time from the event timestamp: %q", v.Summary)
 	}
@@ -153,7 +153,7 @@ func TestNewAlertView_MeshEdgeLinksToMeshMatrix(t *testing.T) {
 	event.Alert.SourceLocationName = &src
 	event.Alert.TargetLocationName = &dst
 
-	v := newAlertView(event, "https://probara.example.com")
+	v := newAlertView(event, Templates{}, "https://probara.example.com")
 	if v.ActionURL != "https://probara.example.com/mesh" {
 		t.Errorf("action URL = %q", v.ActionURL)
 	}
@@ -189,7 +189,7 @@ func TestRenderAlertText_MirrorsHTMLContent(t *testing.T) {
 	event.Alert.MetricValue = &value
 	event.Alert.ThresholdValue = &threshold
 
-	v := newAlertView(event, "https://probara.example.com")
+	v := newAlertView(event, Templates{}, "https://probara.example.com")
 	text := renderAlertText(v)
 	for _, want := range []string{"THRESHOLD BREACHED", "API health", "97.5%", "threshold 85%", "https://probara.example.com/monitors/"} {
 		if !strings.Contains(text, want) {

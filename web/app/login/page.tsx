@@ -6,7 +6,7 @@ import Button from "@/components/ui/Button";
 import BrandMark from "@/components/ui/BrandMark";
 import Callout from "@/components/ui/Callout";
 import { clearApiKey } from "@/lib/auth";
-import { getOidcStatus } from "@/lib/api";
+import { getAuthCapabilities, getOidcStatus, loginWithMFA, requestPasswordReset } from "@/lib/api";
 import type { OidcStatus } from "@/lib/types";
 
 type BootstrapStatusResponse = {
@@ -17,7 +17,10 @@ type ApiErrorResponse = {
   message?: string;
 };
 
-type AuthMode = "loading" | "login" | "bootstrap";
+// "mfa": the password was right and the account has two-factor on; "forgot"
+// and "forgot-sent": the password-reset request (only when the server can
+// mail, per /auth/capabilities).
+type AuthMode = "loading" | "login" | "bootstrap" | "mfa" | "forgot" | "forgot-sent";
 
 const SSO_ERROR_MESSAGES: Record<string, string> = {
   not_provisioned:
@@ -57,6 +60,10 @@ function LoginPageInner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [oidc, setOidc] = useState<OidcStatus>({ enabled: false });
+  const [canReset, setCanReset] = useState(false);
+  const [mfaToken, setMfaToken] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [forgotLogin, setForgotLogin] = useState("");
   const nextPath = safeNextPath(searchParams.get("next"));
 
   useEffect(() => {
@@ -70,6 +77,9 @@ function LoginPageInner() {
     let ignore = false;
     getOidcStatus().then((status) => {
       if (!ignore) setOidc(status);
+    });
+    getAuthCapabilities().then((caps) => {
+      if (!ignore) setCanReset(caps.password_reset);
     });
     return () => {
       ignore = true;
@@ -141,8 +151,24 @@ function LoginPageInner() {
         return "Invalid username or password";
       }
 
+      // One answer for a locked account and a locked unknown username alike
+      // (the API never says which).
+      if (response.status === 429) {
+        return "Too many failed sign-in attempts. Try again later.";
+      }
+
       if (!response.ok) {
         return await readErrorMessage(response, "Login failed");
+      }
+
+      // Two-factor on: no session yet, ask for the code.
+      const data = (await response.json().catch(() => ({}))) as { mfa_required?: boolean; mfa_token?: string };
+      if (data.mfa_required && data.mfa_token) {
+        setMfaToken(data.mfa_token);
+        setMfaCode("");
+        setPassword("");
+        setAuthMode("mfa");
+        return null;
       }
 
       // Ensure we don't fall back to API-key mode after admin login
@@ -169,8 +195,57 @@ function LoginPageInner() {
     const loginError = await loginWithCredentials(username.trim(), password);
     if (loginError) {
       setError(loginError);
+    }
+    setLoading(false);
+  };
+
+  const handleMfaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mfaCode.trim()) {
+      setError("Enter the code from your authenticator app");
+      return;
+    }
+    setError("");
+    setLoading(true);
+    try {
+      await loginWithMFA(mfaToken, mfaCode.trim());
+      clearApiKey();
+      router.push(nextPath);
+    } catch (err: any) {
+      if (err?.error === "mfa_token_invalid") {
+        setAuthMode("login");
+        setError("The sign-in attempt expired. Enter your password again.");
+      } else if (err?.status === 429) {
+        setError("Too many failed sign-in attempts. Try again later.");
+      } else {
+        setError("Invalid code");
+      }
       setLoading(false);
     }
+  };
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotLogin.trim()) {
+      setError("Enter your username or email address");
+      return;
+    }
+    setError("");
+    setLoading(true);
+    try {
+      await requestPasswordReset(forgotLogin.trim());
+      setAuthMode("forgot-sent");
+    } catch (err: any) {
+      setError(err?.status === 429 ? "Too many requests. Try again in a minute." : err?.message || "Request failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const backToLogin = () => {
+    setError("");
+    setMfaToken("");
+    setAuthMode("login");
   };
 
   const handleBootstrapSubmit = async (e: React.FormEvent) => {
@@ -237,7 +312,25 @@ function LoginPageInner() {
         </div>
 
         <div className="mb-8 text-center">
-          {authMode === "bootstrap" ? (
+          {authMode === "mfa" ? (
+            <>
+              <h1 className="text-2xl font-semibold tracking-tight text-white">
+                Two-factor authentication
+              </h1>
+              <p className="mt-2 text-sm text-slate-400">
+                Enter the 6-digit code from your authenticator app, or a recovery code
+              </p>
+            </>
+          ) : authMode === "forgot" || authMode === "forgot-sent" ? (
+            <>
+              <h1 className="text-2xl font-semibold tracking-tight text-white">
+                Reset your password
+              </h1>
+              <p className="mt-2 text-sm text-slate-400">
+                We email a reset link to the address on your account
+              </p>
+            </>
+          ) : authMode === "bootstrap" ? (
             <>
               <h1 className="text-2xl font-semibold tracking-tight text-white">
                 Create first admin
@@ -262,6 +355,69 @@ function LoginPageInner() {
           <div className="py-8 text-center text-sm text-slate-400">
             Checking admin setup...
           </div>
+        ) : authMode === "mfa" ? (
+          <form noValidate onSubmit={handleMfaSubmit} className="space-y-5">
+            <div>
+              <label htmlFor="mfa-code" className="mb-1.5 block text-ui font-medium text-slate-300">
+                Authentication code
+              </label>
+              <input
+                id="mfa-code"
+                name="mfa-code"
+                type="text"
+                inputMode="text"
+                autoComplete="one-time-code"
+                autoFocus
+                className="input"
+                placeholder="123456"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+            {error && <Callout tone="danger">{error}</Callout>}
+            <Button type="submit" variant="accent" size="sm" loading={loading} disabled={loading} className="!h-10 w-full justify-center !text-sm">
+              {loading ? "Verifying…" : "Verify and continue"}
+            </Button>
+            <button type="button" onClick={backToLogin} className="block w-full text-center text-xs text-slate-400 hover:text-slate-200">
+              Back to sign in
+            </button>
+          </form>
+        ) : authMode === "forgot-sent" ? (
+          <div className="space-y-5">
+            <Callout tone="success">
+              If an account with an email address matches, a reset link is on its way. It expires in one hour.
+            </Callout>
+            <button type="button" onClick={backToLogin} className="block w-full text-center text-xs text-slate-400 hover:text-slate-200">
+              Back to sign in
+            </button>
+          </div>
+        ) : authMode === "forgot" ? (
+          <form noValidate onSubmit={handleForgotSubmit} className="space-y-5">
+            <div>
+              <label htmlFor="forgot-login" className="mb-1.5 block text-ui font-medium text-slate-300">
+                Username or email
+              </label>
+              <input
+                id="forgot-login"
+                name="forgot-login"
+                type="text"
+                autoComplete="username"
+                autoFocus
+                className="input"
+                value={forgotLogin}
+                onChange={(e) => setForgotLogin(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+            {error && <Callout tone="danger">{error}</Callout>}
+            <Button type="submit" variant="accent" size="sm" loading={loading} disabled={loading} className="!h-10 w-full justify-center !text-sm">
+              Send reset link
+            </Button>
+            <button type="button" onClick={backToLogin} className="block w-full text-center text-xs text-slate-400 hover:text-slate-200">
+              Back to sign in
+            </button>
+          </form>
         ) : (
           <form
             onSubmit={
@@ -312,6 +468,22 @@ function LoginPageInner() {
                 disabled={loading}
               />
             </div>
+
+            {authMode === "login" && canReset && (
+              <div className="-mt-3 text-right">
+                <button
+                  type="button"
+                  className="text-xs text-slate-400 hover:text-slate-200"
+                  onClick={() => {
+                    setError("");
+                    setForgotLogin(username.trim());
+                    setAuthMode("forgot");
+                  }}
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
 
             {authMode === "bootstrap" && (
               <div>

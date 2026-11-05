@@ -3,7 +3,10 @@ package config
 import (
 	"fmt"
 	"github.com/yassinebenameur/probara/shared/ai"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -130,6 +133,18 @@ func loadNotificationEgressConfig() (NotificationEgressConfig, error) {
 	return cfg, nil
 }
 
+// loadTrustedProxyCIDRs reads TRUSTED_PROXY_CIDRS: comma-separated CIDRs or
+// bare IPs of the reverse proxies whose X-Forwarded-For / X-Real-IP the
+// service believes (shared/clientip). Sole parser for it. Empty (the default)
+// means no proxy is trusted and the client address is the TCP peer.
+func loadTrustedProxyCIDRs() ([]netip.Prefix, error) {
+	trusted, err := clientip.ParseTrustedProxies(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid TRUSTED_PROXY_CIDRS: %w", err)
+	}
+	return trusted, nil
+}
+
 // APIConfig contains configuration for the API service
 type APIConfig struct {
 	BaseConfig
@@ -183,6 +198,27 @@ type APIConfig struct {
 	// minute (excess gets 429 + Retry-After, which the collector retries).
 	OTLPMaxSeriesPerMonitor int
 	OTLPMonitorRatePerMin   int
+	// TrustedProxyCIDRs is TRUSTED_PROXY_CIDRS: the proxies whose forwarding
+	// headers resolve the client address (audit log, session IPs).
+	TrustedProxyCIDRs []netip.Prefix
+	// LocationWorkerImage is LOCATION_WORKER_IMAGE, the image private-location
+	// deploy snippets reference. Empty means the locations service default
+	// (the worker image at this build's release version).
+	LocationWorkerImage string
+	// HSTSMaxAge is SECURITY_HSTS_MAX_AGE (see loadHSTSMaxAge).
+	HSTSMaxAge int
+	// RateLimitPerMinute and RateLimitBurst are API_RATE_LIMIT_PER_MINUTE
+	// (default 600; 0 disables the limiter) and API_RATE_LIMIT_BURST
+	// (default 120): the general per-credential token bucket, per replica.
+	RateLimitPerMinute int
+	RateLimitBurst     int
+	// AllowedOrigins is API_ALLOWED_ORIGINS: the browser origins allowed to
+	// make credentialed cross-origin calls. Empty (the default) answers no
+	// cross-origin request; the operator UI reaches the API same-origin
+	// through its /api proxy.
+	AllowedOrigins []string
+	// Slack is the two-way Slack app (SLACK_*, loadSlackConfig).
+	Slack SlackConfig
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -250,6 +286,9 @@ type WorkerConfig struct {
 	HTTPBlockPrivateIPs   bool
 	HTTPAllowedCIDRs      []*net.IPNet
 	SyntheticArtifactsDir string
+	// PingMode is the ping checker's socket mode (WORKER_PING_MODE:
+	// unprivileged, the default, privileged or auto; PingMode* constants).
+	PingMode string
 
 	// SIPCallEnabled lets this worker place SIP test calls (INVITE monitors:
 	// real, possibly billed, calls). SIP_CALL_ENABLED; defaults to true on
@@ -345,6 +384,25 @@ type StatusPageConfig struct {
 	// VAPIDSubject is the JWT "sub" claim: a mailto: or https: contact the push
 	// service can reach. Some push services reject a missing or malformed one.
 	VAPIDSubject string
+
+	// TrustedProxyCIDRs is TRUSTED_PROXY_CIDRS (see loadTrustedProxyCIDRs);
+	// it keys the push endpoints' per-IP rate limit.
+	TrustedProxyCIDRs []netip.Prefix
+	// LegacyTrustedProxy reports that the deprecated
+	// STATUS_PAGE_TRUSTED_PROXY=true stood in for an unset
+	// TRUSTED_PROXY_CIDRS, so TrustedProxyCIDRs trusts every peer (its old
+	// leftmost-X-Forwarded-For behavior). The service logs a warning.
+	LegacyTrustedProxy bool
+	// HSTSMaxAge is SECURITY_HSTS_MAX_AGE (see loadHSTSMaxAge).
+	HSTSMaxAge int
+	// AppBaseURL is APP_BASE_URL, the operator UI origin. Status pages allow
+	// it in frame-ancestors so the template editor can preview them.
+	AppBaseURL string
+	// SessionSecret is STATUS_PAGE_SESSION_SECRET, the key for visitor
+	// session cookies on password and private pages (shared/pageaccess).
+	// Optional: without it those pages are unavailable (fail closed), while
+	// public and unlisted pages serve as usual.
+	SessionSecret string
 }
 
 // LoadBaseConfig loads base configuration from environment variables
@@ -596,7 +654,68 @@ func LoadAPIConfig() (*APIConfig, error) {
 	}
 	cfg.NotificationEgressConfig = egressCfg
 
+	if cfg.TrustedProxyCIDRs, err = loadTrustedProxyCIDRs(); err != nil {
+		return nil, err
+	}
+	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
+
+	if cfg.HSTSMaxAge, err = loadHSTSMaxAge(); err != nil {
+		return nil, err
+	}
+	if cfg.RateLimitPerMinute, err = envNonNegativeInt("API_RATE_LIMIT_PER_MINUTE", 600); err != nil {
+		return nil, err
+	}
+	if cfg.RateLimitBurst, err = envNonNegativeInt("API_RATE_LIMIT_BURST", 120); err != nil {
+		return nil, err
+	}
+	if cfg.AllowedOrigins, err = loadAllowedOrigins(); err != nil {
+		return nil, err
+	}
+	if cfg.Slack, err = loadSlackConfig(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// loadHSTSMaxAge reads SECURITY_HSTS_MAX_AGE, the Strict-Transport-Security
+// max-age in seconds for api, status-page (and the web UI, which reads it
+// itself). 0, the default, sends no HSTS; when positive the header still
+// goes out only on HTTPS requests (shared/securityheaders).
+func loadHSTSMaxAge() (int, error) {
+	return envNonNegativeInt("SECURITY_HSTS_MAX_AGE", 0)
+}
+
+// loadAllowedOrigins reads API_ALLOWED_ORIGINS: comma-separated exact
+// origins (scheme://host[:port]), normalized to lowercase without a trailing
+// slash. "*" is refused: CORS with credentials cannot mean "any origin".
+func loadAllowedOrigins() ([]string, error) {
+	var out []string
+	for _, part := range strings.Split(os.Getenv("API_ALLOWED_ORIGINS"), ",") {
+		part = strings.TrimRight(strings.TrimSpace(part), "/")
+		if part == "" {
+			continue
+		}
+		u, err := url.Parse(part)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.User != nil {
+			return nil, fmt.Errorf("invalid API_ALLOWED_ORIGINS entry %q: want scheme://host[:port]", part)
+		}
+		out = append(out, strings.ToLower(u.Scheme+"://"+u.Host))
+	}
+	return out, nil
+}
+
+// envNonNegativeInt reads an integer >= 0 from key, def when unset.
+func envNonNegativeInt(key string, def int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return n, nil
 }
 
 // OIDCConfig is the platform-level OIDC SSO configuration.
@@ -1046,6 +1165,13 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	}
 	cfg.SyntheticArtifactsDir = artifactsDir
 
+	// WORKER_PING_MODE
+	pingMode, err := loadWorkerPingMode()
+	if err != nil {
+		return nil, err
+	}
+	cfg.PingMode = pingMode
+
 	// NOTIFICATIONS_ENABLED — opt-in for the notifications consumer goroutine.
 	enabledStr := strings.TrimSpace(os.Getenv("NOTIFICATIONS_ENABLED"))
 	if enabledStr != "" {
@@ -1286,6 +1412,29 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 	cfg.VAPIDPrivateKey = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_PRIVATE_KEY"))
 	cfg.VAPIDSubject = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_SUBJECT"))
 
+	if cfg.TrustedProxyCIDRs, err = loadTrustedProxyCIDRs(); err != nil {
+		return nil, err
+	}
+	// STATUS_PAGE_TRUSTED_PROXY=true predates TRUSTED_PROXY_CIDRS and
+	// believed X-Forwarded-For from any peer. Honored only while the new
+	// variable is unset, so an upgrade keeps per-visitor rate limiting.
+	if len(cfg.TrustedProxyCIDRs) == 0 && strings.EqualFold(strings.TrimSpace(os.Getenv("STATUS_PAGE_TRUSTED_PROXY")), "true") {
+		cfg.TrustedProxyCIDRs = clientip.TrustAll()
+		cfg.LegacyTrustedProxy = true
+	}
+
+	if cfg.HSTSMaxAge, err = loadHSTSMaxAge(); err != nil {
+		return nil, err
+	}
+	cfg.AppBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/")
+
+	// A secret too short to sign with is refused at startup rather than
+	// leaving gated pages silently unavailable.
+	cfg.SessionSecret = strings.TrimSpace(os.Getenv("STATUS_PAGE_SESSION_SECRET"))
+	if cfg.SessionSecret != "" && len(cfg.SessionSecret) < 32 {
+		return nil, fmt.Errorf("STATUS_PAGE_SESSION_SECRET must be at least 32 characters")
+	}
+
 	return cfg, nil
 }
 
@@ -1348,4 +1497,40 @@ func parseSIPCallAllowedDestinations(raw string) ([]*regexp.Regexp, error) {
 		patterns = append(patterns, re)
 	}
 	return patterns, nil
+}
+
+// SlackConfig is the platform's Slack app (the slack_app channel type): one
+// app per install, which self-hosters create from the manifest in the docs.
+// The api is its only reader: the OAuth install and the interactions
+// endpoint run there, while channel sends use each channel's own bot token.
+type SlackConfig struct {
+	// ClientID and ClientSecret are SLACK_CLIENT_ID / SLACK_CLIENT_SECRET,
+	// the OAuth credentials behind "Add to Slack". Both or neither.
+	ClientID     string
+	ClientSecret string
+	// SigningSecret is SLACK_SIGNING_SECRET, which verifies the button
+	// presses Slack posts to /api/v1/integrations/slack/interactions.
+	// Empty turns interactivity off: cards carry the signed acknowledge
+	// link instead of an in-Slack button.
+	SigningSecret string
+}
+
+// InstallEnabled reports whether the OAuth install flow is configured.
+func (c SlackConfig) InstallEnabled() bool {
+	return c.ClientID != "" && c.ClientSecret != ""
+}
+
+// loadSlackConfig reads SLACK_CLIENT_ID, SLACK_CLIENT_SECRET and
+// SLACK_SIGNING_SECRET. All are optional; a client ID without its secret (or
+// the reverse) is a configuration error rather than a half-working install.
+func loadSlackConfig() (SlackConfig, error) {
+	cfg := SlackConfig{
+		ClientID:      strings.TrimSpace(os.Getenv("SLACK_CLIENT_ID")),
+		ClientSecret:  strings.TrimSpace(os.Getenv("SLACK_CLIENT_SECRET")),
+		SigningSecret: strings.TrimSpace(os.Getenv("SLACK_SIGNING_SECRET")),
+	}
+	if (cfg.ClientID == "") != (cfg.ClientSecret == "") {
+		return SlackConfig{}, fmt.Errorf("SLACK_CLIENT_ID and SLACK_CLIENT_SECRET must be set together")
+	}
+	return cfg, nil
 }

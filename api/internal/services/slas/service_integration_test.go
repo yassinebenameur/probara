@@ -60,8 +60,9 @@ func TestSLAService(t *testing.T) {
 	interval(ctx, t, dbClient, tenantID, b, "down", downStart, at(downStart.Add(time.Hour)))
 	interval(ctx, t, dbClient, tenantID, b, "up", downStart.Add(time.Hour), at(nov1))
 	_, err = dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, acknowledged_at, resolved_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, 'availability', 'resolved', $4, $5, $6, 3, NOW(), NOW())
+		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, acknowledged_at, resolved_at, failure_count, created_at, updated_at,
+			first_acknowledged_at, first_ack_episode_started_at)
+		VALUES ($1, $2, $3, 'availability', 'resolved', $4, $5, $6, 3, NOW(), NOW(), $5, $4)
 	`, uuid.New(), tenantID, b, downStart.Add(5*time.Minute), downStart.Add(15*time.Minute), downStart.Add(time.Hour))
 	require.NoError(t, err)
 
@@ -115,6 +116,16 @@ func TestSLAService(t *testing.T) {
 		require.InDelta(t, 3600, *r.Response.MTTRSeconds, 1e-6)
 		require.Equal(t, 1, r.Response.AlertCount)
 		require.InDelta(t, 600, *r.Response.MTTASeconds, 1e-6)
+		// S-U8: burn rate = (1 - A) / (1 - target); burn-down against the
+		// full period's budget, its last day consuming the headline's.
+		require.NotNil(t, r.Budget.BurnRate)
+		require.InDelta(t, (1-719.0/720)/0.001, *r.Budget.BurnRate, 1e-6)
+		require.Nil(t, r.Budget.ProjectedExhaustionAt, "a closed period projects nothing")
+		require.Len(t, r.BurnDown, 30)
+		require.InDelta(t, 0, r.BurnDown[8].ConsumedSeconds, 1e-6)
+		require.InDelta(t, 3600, r.BurnDown[9].ConsumedSeconds, 1e-6)
+		require.InDelta(t, r.Budget.ConsumedSeconds, r.BurnDown[29].ConsumedSeconds, 1e-6)
+		require.InDelta(t, (2592-3600)/2592.0*100, *r.BurnDown[29].RemainingPct, 1e-6)
 
 		var csvBuf, pdfBuf bytes.Buffer
 		require.NoError(t, WriteCSV(&csvBuf, r))
@@ -376,6 +387,46 @@ func TestSLAService(t *testing.T) {
 		for _, bucket := range r.SuspectedCauses.Buckets {
 			require.Zero(t, bucket.CorrectedOutageCount, bucket.Key)
 		}
+	})
+
+	t.Run("changing the period or timezone re-plans report schedules", func(t *testing.T) {
+		quarterly, err := svc.Create(ctx, tenantID, &models.CreateSLARequest{Name: "Replan", TargetPct: 99.9,
+			Period: "quarterly", MonitorIDs: []string{a.String()}})
+		require.NoError(t, err)
+		q4Run := time.Date(2027, 1, 1, 1, 0, 0, 0, time.UTC)
+		schedule := func(enabled bool) uuid.UUID {
+			id := uuid.New()
+			_, err := dbClient.ExecContext(ctx, `
+				INSERT INTO sla_report_schedules (id, tenant_id, sla_id, recipients, enabled, next_run_at, unsubscribe_key)
+				VALUES ($1, $2, $3, ARRAY['ops@example.com'], $4, $5, '\x00')
+			`, id, tenantID, quarterly.ID, enabled, q4Run)
+			require.NoError(t, err)
+			return id
+		}
+		enabled, disabled := schedule(true), schedule(false)
+		nextRun := func(id uuid.UUID) time.Time {
+			var next time.Time
+			require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT next_run_at FROM sla_report_schedules WHERE id = $1`, id).Scan(&next))
+			return next.UTC()
+		}
+
+		name := "Replan renamed"
+		_, err = svc.Update(ctx, tenantID, quarterly.ID, &models.UpdateSLARequest{Name: &name})
+		require.NoError(t, err)
+		require.Equal(t, q4Run, nextRun(enabled), "other edits leave the schedule alone")
+
+		monthly := "monthly"
+		_, err = svc.Update(ctx, tenantID, quarterly.ID, &models.UpdateSLARequest{Period: &monthly})
+		require.NoError(t, err)
+		require.Equal(t, time.Date(2026, 11, 1, 1, 0, 0, 0, time.UTC), nextRun(enabled),
+			"October goes out at its own close, not with the old quarter's")
+		require.Equal(t, q4Run, nextRun(disabled), "re-enabling plans a disabled schedule")
+
+		paris := "Europe/Paris"
+		_, err = svc.Update(ctx, tenantID, quarterly.ID, &models.UpdateSLARequest{Timezone: &paris})
+		require.NoError(t, err)
+		require.Equal(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), nextRun(enabled), "Paris's October closes at 23:00 UTC")
+		require.NoError(t, svc.Delete(ctx, tenantID, quarterly.ID))
 	})
 
 	require.NoError(t, svc.Delete(ctx, tenantID, serial.ID))

@@ -35,7 +35,7 @@ export const OPERATIONS_PAGE: DocPage = {
             [
               'Scheduler',
               'PostgreSQL and NATS',
-              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors, enforces retention, and schedules mesh probes.',
+              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors and workspaces, enforces retention, and schedules mesh probes.',
             ],
             [
               'Worker',
@@ -226,6 +226,16 @@ make healthcheck`,
               'Any sustained nonzero rate.',
             ],
             [
+              'Check-job backlog',
+              '`probara_scheduler_check_jobs_pending`, sampled from the check-job stream after every schedule tick',
+              'Sustained growth: jobs wait for a worker that is not consuming. Offline private locations alert their workspace (`location_offline`); a default fleet with no worker at all shows up only here.',
+            ],
+            [
+              'Alerter fleet',
+              '`probara_alerter_locations_offline`, `probara_alerter_open_alerts{kind=…}`',
+              'Offline locations above zero (counted whether or not their workspace alerts on them); a jump in open alerts of one kind.',
+            ],
+            [
               'Result ingest',
               '`results_ingested_total`, `result_ingest_errors_total`, `result_ingest_duplicates_total`, `mesh_results_ingested_total`',
               'Publish success without ingest growth, ingest errors, or unexpectedly high duplicates.',
@@ -238,7 +248,7 @@ make healthcheck`,
             [
               'Monitor purge',
               '`monitor_purge_runs_total`, `monitor_purge_rows_total`, `monitor_purge_monitors_total`, `monitor_purge_errors_total`, `monitor_purge_run_duration_seconds`',
-              'Growing errors or deleted monitors never becoming fully purged.',
+              'Growing errors, or deleted monitors or workspaces never becoming fully purged (`monitor_purge_rows_total` counts both phases).',
             ],
             [
               'Worker execution',
@@ -266,6 +276,19 @@ make healthcheck`,
               '`ready` at 0, growth in `rejected_total` (429 saturation) or `failed_total`, `admitted` pinned at queue capacity + 1, and `wedged` at 1 (the executing batch, `inflight_seconds` old, has passed `LOCAL_AI_MAX_INFERENCE_SECONDS`). Divide `inference_seconds_sum` by `completed_total` for mean batch time.',
             ],
           ],
+        },
+        {
+          type: 'code',
+          language: 'yaml',
+          title: 'Alert on a check-job backlog (Prometheus rule)',
+          code: `groups:
+  - name: probara
+    rules:
+      - alert: ProbaraCheckJobsBacklog
+        expr: min_over_time(probara_scheduler_check_jobs_pending[10m]) > 100
+        for: 5m
+        annotations:
+          summary: Check jobs are queuing with no worker consuming them`,
         },
         {
           type: 'code',
@@ -348,7 +371,7 @@ go run ./cmd/admin`,
         {
           type: 'paragraph',
           text:
-            'The command always leaves a platform superadministrator behind, with no tenant memberships (a superadministrator reaches every tenant), matching the first-user form. Unlike that form it also works on a populated install: run against an existing username, it resets the password, re-enables a disabled account and promotes it to superadministrator, which makes it the break-glass recovery path for an operator with database access.',
+            'The command always leaves a platform superadministrator behind, with no tenant memberships (a superadministrator reaches every tenant), matching the first-user form. Unlike that form it also works on a populated install: run against an existing username, it resets the password, re-enables a disabled account, clears a [login lockout](/docs/security/#login-lockout-sessions) and promotes it to superadministrator, which makes it the break-glass recovery path for an operator with database access. It does not touch [two-factor](/docs/security/#two-factor): `go run ./cmd/admin -reset-2fa <username>` (needs only `POSTGRES_URL`) turns it off for a user who lost their authenticator and recovery codes.',
         },
         {
           type: 'callout',
@@ -424,6 +447,11 @@ make db-restore`,
                 'Each `alert_triage` row lives as long as its alert: it is deleted with the alert (monitor purge or history deletion) or with its workspace, and is not pruned by time or by `data_retention_days`. Labels on a triage outlive it, like other AI labels.',
             },
             {
+              term: 'Notification delivery history',
+              description:
+                'Each attempt to deliver an alert notification ([delivery history](/docs/alerting/#channels)) is kept 90 days for every workspace, whatever its `data_retention_days`, and pruned by the daily retention cleanup in the same bounded batches as other stores (store `alert_notification_deliveries` in `retention_cleanup_backlogged_tenants` and `retention_cleanup_oldest_expired_timestamp_seconds`). Rows also go with their alert, channel or workspace.',
+            },
+            {
               term: 'AI training labels',
               description:
                 'Operator labels on AI analyses, alert triages and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',
@@ -436,7 +464,7 @@ make db-restore`,
             {
               term: 'Monitor purge',
               description:
-                'Soft-deleted monitors are later purged with dependent rows in bounded batches.',
+                'Soft-deleted monitors are later purged with dependent rows in bounded batches. A deleted workspace is purged by the same job once its monitors are gone: its remaining alerts, mesh probe results, incidents, push subscriptions, discovery inventory, SLA reports, and AI labels in batches, then the workspace itself.',
             },
             {
               term: 'Rollups',
@@ -594,8 +622,8 @@ helm lint ./helm/monitoring-platform \\
             ],
             [
               'Compose command fails before containers start',
-              'Required `${ADMIN_JWT_SECRET:?…}` or `${PUBLIC_BASE_URL:?…}` interpolation is missing',
-              'Populate `.env` before any Compose-backed Make target.',
+              'A required `${VAR:?…}` interpolation is missing: `ADMIN_JWT_SECRET` in `docker-compose.yml`, or any credential of the release override',
+              'Export it or put it in `.env` (the Make targets fall back to `.dev-admin-jwt-secret`); for a release install, re-run `scripts/install.sh`, which fills only missing values.',
             ],
             [
               'PostgreSQL authentication fails after old local experiments',

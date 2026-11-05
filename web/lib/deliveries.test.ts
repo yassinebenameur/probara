@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  deliveryAlertSubject, deliveryEventLabel, deliveryPathLabel, deliveryRecipients, deliveryStepLabel, deliveryTarget,
+} from './deliveries';
+import { alertFocusHref } from './alert-links';
+import { deliveryFailed, deliveryOutcomeHint, deliveryOutcomeLabel, deliveryOutcomeTone } from './status-tones';
+
+test('deliveryEventLabel names known events and humanizes new ones', () => {
+  assert.equal(deliveryEventLabel('created'), 'Triggered');
+  assert.equal(deliveryEventLabel('suspected_cause'), 'Suspected cause');
+  assert.equal(deliveryEventLabel('reopened'), 'Reopened');
+  assert.equal(deliveryEventLabel('updated'), 'Card updated');
+});
+
+test('deliveryRecipients only describes fan-out deliveries', () => {
+  assert.equal(deliveryRecipients({ recipients_total: null, recipients_delivered: null }), null);
+  assert.equal(deliveryRecipients({ recipients_total: 3, recipients_delivered: 2 }), '2 of 3 recipients');
+  assert.equal(deliveryRecipients({ recipients_total: 1, recipients_delivered: 1 }), '1 of 1 recipient');
+});
+
+test('delivery outcomes: only failures raise the channel badge', () => {
+  assert.equal(deliveryFailed('failed'), true);
+  assert.equal(deliveryFailed('permanent_failure'), true);
+  assert.equal(deliveryFailed('dropped_ack'), false);
+  assert.equal(deliveryFailed(undefined), false);
+  assert.equal(deliveryOutcomeTone('permanent_failure'), 'danger');
+  assert.equal(deliveryOutcomeTone('failed'), 'warning');
+  assert.equal(deliveryOutcomeTone('dropped_superseded'), 'neutral');
+  assert.equal(deliveryOutcomeLabel('mystery'), 'mystery');
+  assert.equal(deliveryPathLabel('async'), 'Worker');
+});
+
+test('a superseded drop reads neutrally and its hint names every cause', () => {
+  assert.equal(deliveryOutcomeLabel('dropped_superseded'), 'Dropped (superseded)');
+  const hint = deliveryOutcomeHint('dropped_superseded') ?? '';
+  for (const cause of ['resolved', 'unacknowledged', 'reopened']) assert.ok(hint.includes(cause), cause);
+  assert.equal(deliveryOutcomeHint('delivered'), undefined);
+});
+
+test('alertFocusHref links the focused alert view', () => {
+  assert.equal(alertFocusHref('abc'), '/alerts?alert=abc');
+});
+
+test('deliveryAlertSubject prefers the monitor', () => {
+  assert.equal(deliveryAlertSubject({ monitor_name: 'API', alert_kind: 'availability' }), 'API');
+  assert.equal(deliveryAlertSubject({ monitor_name: null, alert_kind: 'mesh_edge' }), 'mesh edge alert');
+});
+
+test('person sends name who was paged and the escalation step', () => {
+  const person = { channel_name: 'Email', channel_id: null, channel_type: 'email', username: 'alice', recipient: 'a***@example.com' };
+  assert.deepEqual(deliveryTarget(person), { title: 'alice · a***@example.com', via: 'Email' });
+  assert.deepEqual(deliveryTarget({ ...person, channel_id: 'c1', channel_name: 'Twilio', channel_type: 'twilio' }).via, 'via Twilio');
+  // An SMS page that found no SMS channel is channel-less too, typed by its contact.
+  assert.deepEqual(
+    deliveryTarget({ channel_name: 'SMS', channel_id: null, channel_type: 'sms', username: 'carol', recipient: '+33•••78' }),
+    { title: 'carol · +33•••78', via: 'SMS' }
+  );
+  assert.deepEqual(deliveryTarget({ channel_name: 'Ops', channel_id: 'c1', channel_type: 'slack' }), { title: 'Ops', via: null });
+  assert.equal(deliveryStepLabel('escalation:1:0'), 'Step 2');
+  assert.equal(deliveryStepLabel('escalation:0:2:1'), 'Step 1, repeat 2');
+  assert.equal(deliveryStepLabel('created'), null);
+});

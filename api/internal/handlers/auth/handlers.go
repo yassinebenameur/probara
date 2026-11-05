@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,10 +16,12 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/accountmail"
 	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	"github.com/yassinebenameur/probara/shared/auth"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -35,11 +39,16 @@ type Handlers struct {
 	logger  *logger.Logger
 	audit   *audit.Recorder
 	oidc    *oidcauth.Service
+	// mail sends account mail (WithAccountMail); nil: links are handed to
+	// superadmins instead.
+	mail *accountmail.Mailer
+	// forgotSlots bounds background password-reset work (lifecycle.go).
+	forgotSlots chan struct{}
 }
 
 // NewHandlers creates a new auth handler.
 func NewHandlers(service *adminauth.Service, cfg *config.APIConfig, log *logger.Logger, auditRecorder *audit.Recorder) *Handlers {
-	return &Handlers{service: service, cfg: cfg, logger: log, audit: auditRecorder}
+	return &Handlers{service: service, cfg: cfg, logger: log, audit: auditRecorder, forgotSlots: make(chan struct{}, forgotWorkers)}
 }
 
 // recordAuthEvent emits an explicit auth-lifecycle audit event. The auth
@@ -73,10 +82,19 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// No per-address stage: with TRUSTED_PROXY_CIDRS unset (the default)
+	// every user behind the ingress or the UI proxy shares one address, and
+	// blocking it would deny sign-in to all of them. Limits are per
+	// username, in the database (adminauth lockout).
 	user, err := h.service.Authenticate(r.Context(), req.Username, req.Password)
+	var secondFactor *adminauth.SecondFactorRequired
+	if stderrors.As(err, &secondFactor) {
+		// Password right, 2FA on: no session until POST /auth/login/mfa.
+		h.answerSecondFactor(w, secondFactor)
+		return
+	}
 	if err != nil {
-		h.recordAuthEvent(r, "auth.login", audit.OutcomeFailure, req.Username, nil)
-		errors.WriteUnauthorizedError(w, "invalid username or password")
+		h.handleLoginFailure(w, r, req.Username, err)
 		return
 	}
 	h.recordAuthEvent(r, "auth.login", audit.OutcomeSuccess, user.Username, &user.ID)
@@ -85,7 +103,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		h.logger.WithError(err).Warn("Failed to update admin last login")
 	}
 
-	if err := h.issueSession(w, r, user.ID); err != nil {
+	if err := h.issueSession(w, r, user.ID, adminauth.AuthMethodPassword); err != nil {
 		h.logger.WithError(err).Error("Failed to issue admin session")
 		errors.WriteInternalError(w, "failed to create session")
 		return
@@ -104,7 +122,7 @@ func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	oldHash := hashToken(refreshToken)
-	adminID, err := h.service.GetSessionByTokenHash(r.Context(), oldHash)
+	adminID, familyID, err := h.service.GetSessionByTokenHash(r.Context(), oldHash)
 	if err != nil {
 		errors.WriteUnauthorizedError(w, "invalid refresh token")
 		return
@@ -118,13 +136,13 @@ func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
-	if err := h.service.RotateSession(r.Context(), oldHash, newHash, adminID, time.Now().Add(refreshTTL), clientIP(r), r.UserAgent()); err != nil {
+	if err := h.service.RotateSession(r.Context(), oldHash, newHash, adminID, familyID, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent()); err != nil {
 		h.logger.WithError(err).Error("Failed to rotate refresh token")
 		errors.WriteInternalError(w, "failed to refresh session")
 		return
 	}
 
-	if err := h.setAccessCookie(w, adminID); err != nil {
+	if err := h.setAccessCookie(w, adminID, familyID); err != nil {
 		h.logger.WithError(err).Error("Failed to issue access token")
 		errors.WriteInternalError(w, "failed to refresh session")
 		return
@@ -147,12 +165,23 @@ func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 
 // Logout handles POST /api/v1/auth/logout
 func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
+	// Read the access session first: revoking the family below makes it
+	// unreadable.
+	adminID, familyID, accessErr := h.readAccessSession(r)
+
 	refreshToken, err := h.readRefreshToken(r)
 	if err == nil && refreshToken != "" {
-		_ = h.service.RevokeSession(r.Context(), hashToken(refreshToken))
+		if err := h.service.RevokeSession(r.Context(), hashToken(refreshToken)); err != nil {
+			h.logger.WithError(err).Warn("Failed to revoke session on logout")
+		}
+	} else if accessErr == nil && familyID != uuid.Nil {
+		// No refresh cookie: end the sign-in the access token belongs to.
+		if _, err := h.service.RevokeFamily(r.Context(), adminID, familyID, adminauth.RevokeReasonLogout); err != nil {
+			h.logger.WithError(err).Warn("Failed to revoke session on logout")
+		}
 	}
 
-	if adminID, err := h.readAdminIDFromAccessCookie(r); err == nil {
+	if accessErr == nil {
 		h.recordAuthEvent(r, "auth.logout", audit.OutcomeSuccess, "", &adminID)
 	}
 
@@ -162,7 +191,7 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 
 // Me handles GET /api/v1/auth/me
 func (h *Handlers) Me(w http.ResponseWriter, r *http.Request) {
-	adminID, err := h.readAdminIDFromAccessCookie(r)
+	adminID, _, err := h.readAccessSession(r)
 	if err != nil {
 		errors.WriteUnauthorizedError(w, "invalid session")
 		return
@@ -218,18 +247,20 @@ func (h *Handlers) AuthContext(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID) error {
+// issueSession starts a new sign-in (session family) and sets its cookies.
+func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID, authMethod string) error {
 	refreshToken, refreshHash, err := generateRefreshToken()
 	if err != nil {
 		return err
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
-	if err := h.service.CreateSession(r.Context(), adminID, refreshHash, time.Now().Add(refreshTTL), clientIP(r), r.UserAgent()); err != nil {
+	familyID, err := h.service.CreateSession(r.Context(), adminID, refreshHash, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent(), authMethod)
+	if err != nil {
 		return err
 	}
 
-	if err := h.setAccessCookie(w, adminID); err != nil {
+	if err := h.setAccessCookie(w, adminID, familyID); err != nil {
 		return err
 	}
 
@@ -237,9 +268,13 @@ func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID 
 	return nil
 }
 
-func (h *Handlers) setAccessCookie(w http.ResponseWriter, adminID uuid.UUID) error {
+func (h *Handlers) setAccessCookie(w http.ResponseWriter, adminID, familyID uuid.UUID) error {
 	accessTTL := time.Duration(h.cfg.AdminAccessTTLMinutes) * time.Minute
-	token, err := auth.CreateAdminToken(adminID.String(), h.cfg.AdminJWTSecret, accessTTL)
+	sid := ""
+	if familyID != uuid.Nil {
+		sid = familyID.String()
+	}
+	token, err := auth.CreateAdminSessionToken(adminID.String(), sid, h.cfg.AdminJWTSecret, accessTTL)
 	if err != nil {
 		return err
 	}
@@ -304,16 +339,105 @@ func (h *Handlers) readRefreshToken(r *http.Request) (string, error) {
 	return cookie.Value, nil
 }
 
-func (h *Handlers) readAdminIDFromAccessCookie(r *http.Request) (uuid.UUID, error) {
+// readAccessSession validates the access cookie for the routes outside the
+// auth middleware (/auth/me, /auth/logout), including the session-family
+// check the middleware applies, so a revoked sign-in reads as signed out
+// here too. familyID is uuid.Nil for a token without a sid claim.
+func (h *Handlers) readAccessSession(r *http.Request) (adminID, familyID uuid.UUID, err error) {
 	cookie, err := r.Cookie(accessCookieName)
 	if err != nil {
-		return uuid.UUID{}, err
+		return uuid.Nil, uuid.Nil, err
 	}
 	claims, err := auth.ParseAdminToken(cookie.Value, h.cfg.AdminJWTSecret)
 	if err != nil || claims.AdminID == "" {
-		return uuid.UUID{}, fmt.Errorf("invalid token")
+		return uuid.Nil, uuid.Nil, fmt.Errorf("invalid token")
 	}
-	return uuid.Parse(claims.AdminID)
+	adminID, err = uuid.Parse(claims.AdminID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("invalid token")
+	}
+	if claims.SessionID == "" {
+		return adminID, uuid.Nil, nil
+	}
+	familyID, err = uuid.Parse(claims.SessionID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("invalid token")
+	}
+	active, err := adminauth.SessionFamilyActive(r.Context(), h.service.DB(), adminID, familyID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	if !active {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("session revoked")
+	}
+	return adminID, familyID, nil
+}
+
+// handleLoginFailure answers a refused login. Wrong and unknown credentials
+// share one 401; every lockout, real account or unknown name, shares one
+// 429. The audit record carries the detail the response withholds.
+func (h *Handlers) handleLoginFailure(w http.ResponseWriter, r *http.Request, username string, err error) {
+	var failure *adminauth.LoginFailure
+	if !stderrors.As(err, &failure) {
+		h.logger.WithError(err).Error("Admin login failed")
+		errors.WriteInternalError(w, "failed to sign in")
+		return
+	}
+	if failure.Locked {
+		h.recordLoginRefusal(r, username, failure.UserID, "locked")
+		writeLoginThrottled(w, failure.RetryAfter)
+		return
+	}
+
+	h.recordAuthEvent(r, "auth.login", audit.OutcomeFailure, username, nil)
+	if failure.LockedNow && failure.UserID != nil {
+		h.recordLockout(r, username, *failure.UserID, failure)
+	}
+	errors.WriteUnauthorizedError(w, "invalid username or password")
+}
+
+// recordLoginRefusal audits a login refused before the password was checked.
+func (h *Handlers) recordLoginRefusal(r *http.Request, username string, userID *uuid.UUID, reason string) {
+	if h.audit == nil {
+		return
+	}
+	event := audit.FromRequest(r)
+	event.Action = "auth.login"
+	event.Outcome = audit.OutcomeDenied
+	event.ActorLabel = username
+	if userID != nil {
+		event.ResourceType = "user"
+		event.ResourceID = userID.String()
+	}
+	event.MergeDetails(map[string]any{"reason": reason})
+	h.audit.Record(event)
+}
+
+// recordLockout audits the failure that locked an account.
+func (h *Handlers) recordLockout(r *http.Request, username string, userID uuid.UUID, failure *adminauth.LoginFailure) {
+	if h.audit == nil {
+		return
+	}
+	event := audit.FromRequest(r)
+	event.Action = "auth.lockout"
+	event.Outcome = audit.OutcomeSuccess
+	event.ActorLabel = username
+	event.ResourceType = "user"
+	event.ResourceID = userID.String()
+	event.MergeDetails(map[string]any{
+		"failed_attempts": failure.FailedAttempts,
+		"locked_seconds":  int(failure.RetryAfter.Round(time.Second).Seconds()),
+	})
+	h.audit.Record(event)
+}
+
+// writeLoginThrottled is the one 429 for every lockout, so it never tells a
+// locked account from a locked unknown username.
+func writeLoginThrottled(w http.ResponseWriter, retryAfter time.Duration) {
+	if retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int((retryAfter+time.Second-1)/time.Second)))
+	}
+	errors.WriteError(w, http.StatusTooManyRequests, "too_many_requests", "too many failed sign-in attempts; try again later")
 }
 
 func generateRefreshToken() (string, string, error) {
@@ -328,12 +452,4 @@ func generateRefreshToken() (string, string, error) {
 func hashToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])
-}
-
-func clientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	return r.RemoteAddr
 }

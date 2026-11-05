@@ -15,7 +15,9 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
+	"github.com/yassinebenameur/probara/shared/logger"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -27,6 +29,10 @@ type Service struct {
 	groupResolver  GroupResolver
 	statusNotifier StatusNotifier
 	encryptor      secrets.Encryptor
+	// versions records config history (versions.go); nil on repositories
+	// that are not Postgres-backed.
+	versions   *VersionStore
+	versionLog *logger.Logger
 }
 
 type GroupResolver interface {
@@ -39,10 +45,28 @@ type StatusNotifier interface {
 
 // NewService creates a new monitor service
 func NewService(database Repository) *Service {
-	return &Service{
+	svc := &Service{
 		repo:      database,
 		encryptor: secrets.NoOpEncryptor{},
 	}
+	// Version history rides on the same database as the monitors, so every
+	// Postgres-backed service records it without extra wiring.
+	if pg, ok := database.(*PostgresRepository); ok {
+		svc.versions = NewVersionStore(pg.db)
+	}
+	return svc
+}
+
+// ConfigureVersionLog sets the logger that reports failed version writes.
+func (s *Service) ConfigureVersionLog(log *logger.Logger) {
+	s.versionLog = log
+}
+
+func (s *Service) versionLogger() *logger.Logger {
+	if s.versionLog == nil {
+		s.versionLog = logger.New("api", "info")
+	}
+	return s.versionLog
 }
 
 // ConfigureEncryption wires the encryptor used for secret config fields.
@@ -60,8 +84,11 @@ func (s *Service) ConfigureHistoryDependencies(groupResolver GroupResolver, stat
 }
 
 // prepareConfigForWrite merges write-only secret placeholders ("***"/empty =
-// keep the stored value; pass nil existing on create) and encrypts secret
-// fields. Configs for types without secret fields pass through unchanged.
+// keep the stored value; pass nil existing on create), moves credential-named
+// headers into the secret maps (secrets.NormalizeSensitiveHeaders — after the
+// merge, so an absent secret map is restored before a moved header edits it)
+// and encrypts secret fields. Configs for types without secret fields pass
+// through unchanged.
 func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming, existing json.RawMessage) (json.RawMessage, error) {
 	if !secrets.HasMonitorSecrets(string(monitorType)) {
 		return incoming, nil
@@ -69,6 +96,13 @@ func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming
 	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), incoming, existing)
 	if err != nil {
 		return nil, fmt.Errorf("merge config secrets: %w", err)
+	}
+	merged, _, err = secrets.NormalizeSensitiveHeaders(string(monitorType), merged)
+	if err != nil {
+		return nil, fmt.Errorf("normalize sensitive headers: %w", err)
+	}
+	if err := validation.ValidateMergedSecretPairs(monitorType, merged); err != nil {
+		return nil, fmt.Errorf("%w: %v (a stored secret was kept because the request omitted it; send \"\" to clear it, or leave it out of a submitted secret map)", ErrSecretConflict, err)
 	}
 	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
 	if err != nil {
@@ -90,6 +124,11 @@ func (s *Service) maskSecrets(monitor *models.Monitor) {
 }
 
 var ErrMonitorTypeMismatch = errors.New("test type must match the saved monitor type")
+
+// ErrSecretConflict reports a config that is only invalid once the
+// write-only merge restored a stored secret the request left out. Handlers
+// map it to 400.
+var ErrSecretConflict = errors.New("config conflicts with stored secrets")
 
 // ErrCallMonitorForbidden refuses a SIP test-call (INVITE) monitor to anyone
 // but a tenant admin's session. Each check of such a monitor places a real,
@@ -208,6 +247,11 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	if req.NotificationMode != nil {
 		notificationMode = *req.NotificationMode
 	}
+	// Escalation policies (escalation.go): verified now, assigned after insert.
+	escalationPolicyID, err := s.prepareEscalationCreate(ctx, tenantID, req, &notificationMode)
+	if err != nil {
+		return nil, err
+	}
 	memberAlertRollup := "per_monitor" // DB default
 	if req.MemberAlertRollup != nil {
 		memberAlertRollup = *req.MemberAlertRollup
@@ -215,6 +259,10 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	dependencySuppression := "inherit" // DB default
 	if req.DependencySuppression != nil {
 		dependencySuppression = *req.DependencySuppression
+	}
+	recoveryThreshold := monitorstate.MinRecoveryThreshold // DB default: single-sample recovery
+	if req.RecoveryThreshold != nil {
+		recoveryThreshold = *req.RecoveryThreshold
 	}
 
 	locationIDs, err := parseLocationIDs(req.LocationIDs)
@@ -245,9 +293,13 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		MemberAlertRollup:            memberAlertRollup,
 		DependencySuppression:        dependencySuppression,
 		LocationQuorum:               locationQuorum,
+		RecoveryThreshold:            recoveryThreshold,
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
+		return nil, err
+	}
+	if err := s.applyEscalationCreate(ctx, monitor, escalationPolicyID); err != nil {
 		return nil, err
 	}
 
@@ -281,6 +333,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
 	}
 
+	s.recordVersion(ctx, tenantID, monitorID, SecretFieldChanges("", nil, req.Type, config))
 	s.maskSecrets(monitor)
 	return monitor, nil
 }
@@ -326,6 +379,7 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 			monitor.AlertRouting = &status
 		}
 	}
+	s.attachEscalationPolicies(ctx, []*models.Monitor{monitor})
 
 	// Attach the private-location selection + per-location breakdown
 	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
@@ -397,6 +451,11 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 		}
 	}
 
+	listed := make([]*models.Monitor, len(monitors))
+	for i := range monitors {
+		listed[i] = &monitors[i]
+	}
+	s.attachEscalationPolicies(ctx, listed)
 	for i := range monitors {
 		s.maskSecrets(&monitors[i])
 	}
@@ -440,11 +499,13 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		effectiveType = *req.Type
 	}
 
+	var secretChanges []string
 	if len(req.Config) > 0 {
 		config, err := s.prepareConfigForWrite(effectiveType, req.Config, existing.Config)
 		if err != nil {
 			return nil, err
 		}
+		secretChanges = SecretFieldChanges(existing.Type, existing.Config, effectiveType, config)
 		setParts = append(setParts, fmt.Sprintf("config = $%d", argIndex))
 		args = append(args, config)
 		argIndex++
@@ -539,11 +600,29 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	// A new recovery threshold applies from the next result (S-T7): passes
+	// already counted are kept, so lowering it below the count confirms the
+	// recovery on the next pass.
+	if req.RecoveryThreshold != nil {
+		setParts = append(setParts, fmt.Sprintf("recovery_threshold = $%d", argIndex))
+		args = append(args, *req.RecoveryThreshold)
+		argIndex++
+	}
+
 	if req.NotificationMode != nil {
 		setParts = append(setParts, fmt.Sprintf("notification_mode = $%d", argIndex))
 		args = append(args, *req.NotificationMode)
 		argIndex++
 	}
+	// Escalation policies (escalation.go): entering 'policy' mode sets the
+	// policy in the same UPDATE.
+	escalationParts, escalationArgs, err := s.escalationUpdateParts(ctx, tenantID, existing, req, argIndex)
+	if err != nil {
+		return nil, err
+	}
+	setParts = append(setParts, escalationParts...)
+	args = append(args, escalationArgs...)
+	argIndex += len(escalationArgs)
 
 	if req.MemberAlertRollup != nil {
 		setParts = append(setParts, fmt.Sprintf("member_alert_rollup = $%d", argIndex))
@@ -704,7 +783,9 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 			}
 		}
 	}
+	s.attachEscalationPolicies(ctx, []*models.Monitor{monitor})
 
+	s.recordVersion(ctx, tenantID, monitorID, secretChanges)
 	return monitor, nil
 }
 

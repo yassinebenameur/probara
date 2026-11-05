@@ -62,7 +62,7 @@ func (h *Handlers) bulkAction(
 	w http.ResponseWriter,
 	r *http.Request,
 	verb string,
-	apply func(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) (*alertservice.BulkResult, error),
+	apply func(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID, actor alertservice.Actor) (*alertservice.BulkResult, error),
 	broadcast func(tenantID uuid.UUID, alert *models.AlertWithDetails),
 ) {
 	tenantID, err := middleware.GetTenantID(r.Context())
@@ -99,7 +99,7 @@ func (h *Handlers) bulkAction(
 		ids[i] = id
 	}
 
-	result, err := apply(r.Context(), tenantUUID, ids)
+	result, err := apply(r.Context(), tenantUUID, ids, alertservice.ActorFromContext(r.Context()))
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),

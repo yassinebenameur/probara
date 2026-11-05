@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
 // defaultRecoveryRetryBudget bounds one recovery retry sweep. Earlier,
@@ -41,7 +43,7 @@ func (a *Alerter) dispatchPendingRecoveries(ctx context.Context) error {
 				al.baseline_latency_ms, al.observed_latency_ms, al.anomaly_score,
 				al.metric_name, al.metric_value, al.threshold_value, al.failing_locations,
 				al.source_location_id, al.target_location_id,
-				COALESCE(sl.name, 'unknown'), COALESCE(tl.name, 'unknown')
+				COALESCE(sl.name, 'unknown'), COALESCE(tl.name, 'unknown'), COALESCE(al.resolve_reason, '')
 			FROM alerts al
 			LEFT JOIN monitors m ON m.id = al.monitor_id
 			LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
@@ -76,7 +78,7 @@ func (a *Alerter) dispatchPendingRecoveries(ctx context.Context) error {
 			&r.Kind, &r.TriggeredAt, &r.ResolvedAt, &r.FailureCount, &lastError,
 			&rcID, &rcDownSince, &rcName, &baseline, &observed, &score,
 			&metricName, &metricValue, &thresholdValue, &locations,
-			&sourceID, &targetID, &sourceName, &targetName); err != nil {
+			&sourceID, &targetID, &sourceName, &targetName, &r.ResolveReason); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan pending recovery: %w", err)
 		}
@@ -95,6 +97,10 @@ func (a *Alerter) dispatchPendingRecoveries(ctx context.Context) error {
 			r.SourceLocationID, r.TargetLocationID = &sourceID.UUID, &targetID.UUID
 			r.SourceLocationName, r.TargetLocationName = &sourceName, &targetName
 			p.binding.MonitorName = fmt.Sprintf("mesh: %s → %s", sourceName, targetName)
+		} else if sourceID.Valid && r.Kind == notifications.KindLocationOffline {
+			loc := offlineLocation{tenantID: r.TenantID, locationID: sourceID.UUID, name: sourceName}
+			r.SourceLocationID, r.SourceLocationName = &loc.locationID, &loc.name
+			p.binding.MonitorName = loc.label()
 		}
 		batch = append(batch, p)
 	}

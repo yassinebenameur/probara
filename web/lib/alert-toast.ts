@@ -22,6 +22,7 @@ export function alertSubject(alert: Alert): string {
   if (alert.source_location_name && alert.target_location_name) {
     return `${alert.source_location_name} → ${alert.target_location_name}`;
   }
+  if (alert.kind === 'location_offline') return alert.source_location_name ? `Location ${alert.source_location_name}` : 'A location';
   return alert.policy_name || (alert.kind === 'mesh_edge' ? 'A mesh path' : 'A monitor');
 }
 
@@ -45,8 +46,15 @@ export function alertCondition(alert: Alert): string {
       return alert.metric_value != null
         ? `certificate expires in ${Math.max(0, Math.round(alert.metric_value))}d`
         : 'certificate is about to expire';
+    case 'domain_expiry':
+      if (alert.metric_value != null && alert.metric_value < 0) return 'domain registration has expired';
+      return alert.metric_value != null
+        ? `domain expires in ${Math.round(alert.metric_value)}d`
+        : 'domain registration is about to expire';
     case 'mesh_edge':
       return 'path is down';
+    case 'location_offline':
+      return 'stopped reporting';
     case 'availability':
     default:
       return 'is down';
@@ -61,6 +69,8 @@ const RESOLVED_NOUN: Record<Alert['kind'], string> = {
   host_metric: 'host metric alert',
   tls_expiry: 'certificate alert',
   mesh_edge: 'path alert',
+  location_offline: 'location offline alert',
+  domain_expiry: 'domain expiry alert',
 };
 
 function isDependencySuppressed(alert: Alert): boolean {
@@ -69,7 +79,8 @@ function isDependencySuppressed(alert: Alert): boolean {
 
 /**
  * The toast for one stream event, or null when the event deserves none
- * (acknowledgements: someone already acted on it).
+ * (acknowledgements, unacknowledgements and snoozes: someone already acted
+ * on it).
  */
 export function alertToast(type: AlertStreamEventType, alert: Alert): AlertToastContent | null {
   const subject = alertSubject(alert);
@@ -86,9 +97,11 @@ export function alertToast(type: AlertStreamEventType, alert: Alert): AlertToast
     }
     // Same split as alertCondition: a missing kind falls to its "is down"
     // wording, so it must take the down tone too.
-    const severe = !alert.kind || alert.kind === 'availability' || alert.kind === 'mesh_edge';
+    const severe =
+      !alert.kind || alert.kind === 'availability' || alert.kind === 'mesh_edge' || alert.kind === 'location_offline';
     return {
-      title: 'Alert triggered',
+      // A reopened alert (relapse) arrives as "created" with a relapse count.
+      title: (alert.relapse_count ?? 0) > 0 ? 'Down again' : 'Alert triggered',
       message: `${subject} ${alertCondition(alert)}`,
       type: severe ? 'error' : 'warning',
       group: 'alert-created',

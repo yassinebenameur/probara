@@ -81,27 +81,38 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # platforms: every Go and web image ships linux/amd64 and
+          # linux/arm64 (the Go builders cross-compile, see the Dockerfiles);
+          # local-ai stays amd64 only, so arm64 installs turn it off
+          # (LOCAL_AI_DISABLED=true / localAI.enabled=false).
           - image_suffix: api
             dockerfile: ./api/Dockerfile
             context: .
+            platforms: linux/amd64,linux/arm64
           - image_suffix: scheduler
             dockerfile: ./scheduler/Dockerfile
             context: .
+            platforms: linux/amd64,linux/arm64
           - image_suffix: discovery-collector
             dockerfile: ./cmd/discovery-collector/Dockerfile
             context: .
+            platforms: linux/amd64,linux/arm64
           - image_suffix: worker
             dockerfile: ./worker/Dockerfile
             context: .
+            platforms: linux/amd64,linux/arm64
           - image_suffix: alerter
             dockerfile: ./alerter/Dockerfile
             context: .
+            platforms: linux/amd64,linux/arm64
           - image_suffix: status-page
             dockerfile: ./status-page/Dockerfile
             context: .
+            platforms: linux/amd64,linux/arm64
           - image_suffix: frontend
             dockerfile: ./web/Dockerfile
             context: ./web
+            platforms: linux/amd64,linux/arm64
           # Carries the model weights (air-gapped at runtime), so it is the
           # only entry that pulls Git LFS and the only large image: mode=min
           # keeps its GHA cache to the final image's layers.
@@ -109,9 +120,11 @@ jobs:
             dockerfile: ./ai-service/Dockerfile
             context: .
             cache_mode: min
+            platforms: linux/amd64
           - image_suffix: migrations
             dockerfile: ./Dockerfile.migrations
             context: .
+            platforms: linux/amd64,linux/arm64
 
     steps:
     - name: Checkout code
@@ -142,6 +155,11 @@ jobs:
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         df -h /
+
+    # The runtime stages (apk add) of the arm64 images run under emulation.
+    - name: Set up QEMU
+      if: env.BUILD_IMAGE == 'true' && contains(matrix.platforms, 'arm64')
+      uses: docker/setup-qemu-action@v3
 
     - name: Set up Docker Buildx
       if: env.BUILD_IMAGE == 'true'
@@ -176,6 +194,7 @@ jobs:
       with:
         context: ${{ matrix.context }}
         file: ${{ matrix.dockerfile }}
+        platforms: ${{ matrix.platforms }}
         push: ${{ startsWith(github.ref, 'refs/tags/v') }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
@@ -183,8 +202,13 @@ jobs:
         # overwrite the others' cache manifest.
         cache-from: type=gha,scope=${{ matrix.image_suffix }}
         cache-to: type=gha,scope=${{ matrix.image_suffix }},mode=${{ matrix.cache_mode || 'max' }}
+        # VERSION is stamped into shared/buildinfo by every Go Dockerfile (the
+        # release version on tags, the branch name otherwise); the api derives
+        # its default LOCATION_WORKER_IMAGE tag from it. Dockerfiles that do
+        # not declare the arg ignore it.
         build-args: |
           BUILDKIT_INLINE_CACHE=1
+          VERSION=${{ steps.meta.outputs.version }}
           ${{ matrix.image_suffix == 'local-ai' && format('LAYA_GIT_URL={0}', env.LAYA_GIT_URL) || '' }}
           ${{ matrix.image_suffix == 'local-ai' && format('HF_ENDPOINT={0}', env.HF_ENDPOINT) || '' }}
 

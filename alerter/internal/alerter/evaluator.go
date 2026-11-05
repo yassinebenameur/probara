@@ -13,8 +13,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/messagestore"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -63,6 +66,23 @@ type alertRecord struct {
 	TargetLocationName *string
 	// SuspectedCause is set only for the "suspected_cause" follow-up.
 	SuspectedCause *notifications.SuspectedCause
+	// Offline-location subject (Kind == "location_offline"): the location
+	// rides in SourceLocationID/Name; MonitorID is the zero UUID.
+	LocationLastSeenAt   *time.Time
+	LocationMonitorCount int
+	// ResolveReason is alerts.resolve_reason (notifications.ResolveReason*).
+	ResolveReason string
+	// RelapseCount / ReopenedAt are alerts.relapse_count / reopened_at: the
+	// paging episode. deliverNotification re-reads them under the alert row
+	// lock, so a send always carries the episode it was claimed in.
+	RelapseCount int
+	ReopenedAt   *time.Time
+	// SnoozedUntil and CardEvent are set only for the "updated" event (a
+	// chat card rewritten to the alert's current state, card_updates.go):
+	// the snooze end while snoozed, and the event the card was first
+	// rendered from.
+	SnoozedUntil *time.Time
+	CardEvent    *notifications.AlertEvent
 }
 
 type alertChannel struct {
@@ -78,6 +98,9 @@ type notificationState struct {
 	LastEventType        string
 	AcknowledgedSentAt   *time.Time
 	SuspectedCauseSentAt *time.Time
+	// Card is the alert's chat card on this channel, when the reconcile
+	// loaded it (card_updates.go); nil otherwise.
+	Card *cardState
 }
 
 type groupMember struct {
@@ -743,9 +766,17 @@ func (a *Alerter) createAlert(ctx context.Context, binding policyBinding, failur
 var errAlertAlreadyResolved = errors.New("alert already resolved")
 
 func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time) (time.Time, error) {
+	return a.resolveAlertWithReason(ctx, alertID, now, "")
+}
+
+// resolveAlertWithReason is resolveAlert recording why the alert closed
+// (alerts.resolve_reason; "" leaves it NULL).
+func (a *Alerter) resolveAlertWithReason(ctx context.Context, alertID uuid.UUID, now time.Time, reason string) (time.Time, error) {
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1
+		SET status = 'resolved', resolved_at = $1, updated_at = $1,
+			snoozed_until = LEAST(snoozed_until, $1),
+			resolve_reason = NULLIF($3, '')
 		WHERE id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING resolved_at
 	`
@@ -759,7 +790,7 @@ func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.
 	}()
 
 	var resolvedAt time.Time
-	if err := tx.QueryRowContext(ctx, query, now, alertID).Scan(&resolvedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, query, now, alertID, reason).Scan(&resolvedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return time.Time{}, errAlertAlreadyResolved
 		}
@@ -1107,17 +1138,30 @@ func (a *Alerter) dispatchNotifications(
 		return
 	}
 
+	// The ack/snooze gate applies to alerts on retired policies too. Policy
+	// channels carry no per-route notify_after_ack, so the tenant's
+	// ack_stops_notifications alone decides stop-on-ack.
+	var gate DispatchGate
+	if eventType == "created" || eventType == "reminder" {
+		var err error
+		if gate, err = a.loadDispatchGate(ctx, alert.ID); err != nil {
+			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": alert.ID}).Warn("Failed to load alert dispatch gate")
+			return
+		}
+	}
+	stopOnAck := gate.AckStops
+
 	for _, channel := range channels {
 		if !channel.IsActive {
 			continue
 		}
 
 		state := getNotificationState(states, alert.ID, channel.ID)
-		if !shouldSendNotification(eventType, state, now, reminderInterval) {
+		if !shouldSendNotification(eventType, state, now, reminderInterval, gate, stopOnAck) {
 			continue
 		}
 
-		sent, err := a.deliverNotification(ctx, eventType, binding, alert, groupInfo, channel, now, reminderInterval)
+		sent, err := a.deliverNotification(ctx, eventType, binding, alert, groupInfo, channel, now, reminderInterval, stopOnAck)
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{
 				"alert_id":   alert.ID,
@@ -1140,23 +1184,52 @@ func (a *Alerter) dispatchNotifications(
 	}
 }
 
+// loadDispatchGate reads one alert's ack/snooze gate (with its tenant's
+// ack_stops_notifications), for paths that do not select it with the alert.
+func (a *Alerter) loadDispatchGate(ctx context.Context, alertID uuid.UUID) (DispatchGate, error) {
+	var gate DispatchGate
+	var status string
+	var snoozedUntil, unacknowledgedAt sql.NullTime
+	err := a.db.QueryRowContext(ctx, `
+		SELECT al.status, `+alertrouting.AckStopsExpr("te")+`, `+alertrouting.SnoozedPredicate("al")+`,
+			al.snoozed_until, al.unacknowledged_at
+		FROM alerts al JOIN tenants te ON te.id = al.tenant_id
+		WHERE al.id = $1`, alertID).Scan(&status, &gate.AckStops, &gate.Snoozed, &snoozedUntil, &unacknowledgedAt)
+	if err != nil {
+		return DispatchGate{}, fmt.Errorf("load dispatch gate: %w", err)
+	}
+	gate.Acknowledged = status == "acknowledged"
+	gate.SnoozedUntil, gate.UnacknowledgedAt = snoozedUntil.Time, unacknowledgedAt.Time
+	return gate, nil
+}
+
 // shouldSendNotification is the in-memory pre-filter mirroring the claim
-// predicates in claimNotificationTx. Keep the two in step.
-func shouldSendNotification(eventType string, state *notificationState, now time.Time, reminderInterval time.Duration) bool {
+// predicates in claimNotificationTx and the ack/snooze gate in
+// claimStatusAllows. Its created/reminder cases are dueEvent's rule
+// (dispatch_due.go) minus the escalation delay, which the legacy path does
+// not apply. stopOnAck is the route's DispatchGate.stopOnAck. Keep all of
+// them in step.
+func shouldSendNotification(eventType string, state *notificationState, now time.Time, reminderInterval time.Duration, gate DispatchGate, stopOnAck bool) bool {
+	if gateHolds(eventType, gate.Acknowledged, gate.Snoozed, stopOnAck) {
+		return false
+	}
 	switch eventType {
 	case "created":
 		return state == nil
+	case "reopened":
+		return state != nil && state.LastEventType == "resolved"
 	case "resolved":
 		return state == nil || state.LastEventType != "resolved"
 	case "reminder":
-		if state == nil || state.LastEventType == "resolved" || reminderInterval <= 0 {
-			return false
-		}
-		return now.Sub(state.LastSentAt) >= reminderInterval
+		return reminderDue(state, now, reminderInterval, gate.resumedAt(stopOnAck))
 	case "acknowledged":
 		return state != nil && state.LastEventType != "resolved" && state.AcknowledgedSentAt == nil
 	case "suspected_cause":
 		return state != nil && state.LastEventType != "resolved" && state.SuspectedCauseSentAt == nil
+	case "updated":
+		// The card shows another state than the alert's (the updated
+		// claim's IS DISTINCT FROM, card_updates.go).
+		return state != nil && state.Card != nil && state.Card.stale()
 	default:
 		return false
 	}
@@ -1186,7 +1259,10 @@ func (a *Alerter) sendChannelNotification(
 		}
 	}
 	event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
-	deliveryKey := recipientKey(ctx, eventType, now)
+	if eventType == present.EventUpdated {
+		event = cardUpdateEvent(binding, alert, now) // card_updates.go
+	}
+	deliveryKey := recipientKey(ctx, eventType, now, alert.RelapseCount)
 
 	if a.config.AsyncDispatch && a.nats != nil {
 		envelope := notifications.DispatchEnvelope{
@@ -1197,11 +1273,13 @@ func (a *Alerter) sendChannelNotification(
 			EventType:   eventType,
 			Event:       event,
 			DeliveryKey: deliveryKey,
+			StopOnAck:   stopOnAckFrom(ctx),
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
 		messageID := envelope.IdempotencyKey()
-		if eventType == "reminder" {
-			// Distinct reminder rounds must not be coalesced by JetStream.
+		if eventType == "reminder" || eventType == present.EventUpdated {
+			// Distinct reminder rounds (and card rewrites) must not be
+			// coalesced by JetStream.
 			messageID += ":" + now.UTC().Format(time.RFC3339Nano)
 		}
 		headers := map[string][]string{
@@ -1223,10 +1301,12 @@ func (a *Alerter) sendChannelNotification(
 	}
 
 	var recipients plugin.RecipientLedger
+	var messages plugin.MessageStore
 	if a.db != nil {
 		// The pool, not deliverNotification's claim transaction: a failed
 		// send rolls that back, and the progress must survive it.
 		recipients = recipientledger.For(a.db, alert.ID, channel.ID, deliveryKey)
+		messages = messagestore.For(a.db, alert.ID, channel.ID, eventType, event)
 	}
 	return p.Send(ctx, plugin.DispatchRequest{
 		Channel: plugin.ChannelRef{
@@ -1238,6 +1318,7 @@ func (a *Alerter) sendChannelNotification(
 		EventType:  eventType,
 		Attempt:    1,
 		Recipients: recipients,
+		Messages:   messages,
 	})
 }
 
@@ -1321,6 +1402,11 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			TargetLocationID:     uuidStr(alert.TargetLocationID),
 			TargetLocationName:   alert.TargetLocationName,
 			SuspectedCause:       alert.SuspectedCause,
+			LocationLastSeenAt:   alert.LocationLastSeenAt,
+			LocationMonitorCount: alert.LocationMonitorCount,
+			ResolveReason:        alert.ResolveReason,
+			RelapseCount:         alert.RelapseCount,
+			ReopenedAt:           alert.ReopenedAt,
 		},
 	}
 }

@@ -2,19 +2,47 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
 func main() {
+	reset2FA := flag.String("reset-2fa", "", "turn off two-factor authentication for this username (lost authenticator) and exit")
+	flag.Parse()
+
 	postgresURL := os.Getenv("POSTGRES_URL")
 	if postgresURL == "" {
 		fmt.Fprintln(os.Stderr, "POSTGRES_URL is required")
 		os.Exit(1)
+	}
+
+	if *reset2FA != "" {
+		client, err := db.NewClient(postgresURL)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to connect to database:", err)
+			os.Exit(1)
+		}
+		defer client.Close()
+		wasEnabled, err := resetTwoFactor(context.Background(), client, *reset2FA)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to reset two-factor authentication:", err)
+			os.Exit(1)
+		}
+		if wasEnabled {
+			fmt.Printf("Two-factor authentication turned off for %s; they sign in with their password and can enroll again\n", *reset2FA)
+		} else {
+			fmt.Printf("%s had no two-factor authentication enabled; any pending enrollment was cleared\n", *reset2FA)
+		}
+		return
 	}
 
 	username := os.Getenv("ADMIN_USERNAME")
@@ -56,7 +84,8 @@ func main() {
 }
 
 // upsertSuperadmin creates the user, or resets an existing one's password and
-// re-enables it, and in both cases makes it a platform superadmin.
+// re-enables it, and in both cases makes it a platform superadmin. It also
+// clears any login lockout on the account.
 //
 // The role must be explicit: admin_users.platform_role defaults to 'member'
 // (migration 000073), and a member with no tenant_memberships can do nothing,
@@ -76,5 +105,74 @@ func upsertSuperadmin(ctx context.Context, client *db.Client, username, password
 		              updated_at = NOW(),
 		              disabled_at = NULL
 	`, username, passwordHash, auth.PlatformRoleSuperadmin)
+	if err != nil {
+		return err
+	}
+	return clearLockout(ctx, client, username)
+}
+
+// clearLockout lifts a login lockout and records the password change, so the
+// break-glass account can sign in at once. Before migration 000103 there is
+// no lockout state, which is not an error.
+func clearLockout(ctx context.Context, client *db.Client, username string) error {
+	_, err := client.ExecContext(ctx, `
+		UPDATE admin_users
+		SET failed_login_count = 0, last_failed_login_at = NULL, locked_until = NULL,
+		    password_changed_at = NOW()
+		WHERE username = $1
+	`, username)
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && (pqErr.Code == "42P01" || pqErr.Code == "42703") {
+		return nil
+	}
 	return err
+}
+
+// errUnknownUser: -reset-2fa named no account.
+var errUnknownUser = errors.New("no such user")
+
+// resetTwoFactor is the break-glass twin of POST /users/{id}/reset-2fa
+// (adminauth.ResetMFA): it drops the TOTP secret, enrollment and recovery
+// codes of one user and cancels a pending email change. Before migration
+// 000118 there is nothing to reset.
+func resetTwoFactor(ctx context.Context, client *db.Client, username string) (bool, error) {
+	tx, err := client.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var wasEnabled bool
+	err = tx.QueryRowContext(ctx, `
+		WITH prior AS (
+			SELECT id, totp_enabled_at IS NOT NULL AS was FROM admin_users WHERE username = $1 FOR UPDATE
+		)
+		UPDATE admin_users u
+		SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = NULL, updated_at = NOW()
+		FROM prior WHERE u.id = prior.id
+		RETURNING prior.was
+	`, username).Scan(&wasEnabled)
+	var pqErr *pq.Error
+	switch {
+	case errors.As(err, &pqErr) && (pqErr.Code == "42P01" || pqErr.Code == "42703"):
+		return false, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, errUnknownUser
+	case err != nil:
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM admin_user_recovery_codes
+		WHERE admin_user_id = (SELECT id FROM admin_users WHERE username = $1)
+	`, username); err != nil {
+		return false, err
+	}
+	// 000118 is in place, so 000117's admin_user_tokens is too.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE admin_user_tokens SET used_at = NOW()
+		WHERE admin_user_id = (SELECT id FROM admin_users WHERE username = $1)
+		  AND purpose = 'email_change' AND used_at IS NULL
+	`, username); err != nil {
+		return false, err
+	}
+	return wasEnabled, tx.Commit()
 }

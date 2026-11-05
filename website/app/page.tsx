@@ -2,92 +2,35 @@ import Link from 'next/link';
 import {
   Activity,
   ArrowRight,
-  Boxes,
-  Braces,
-  Cable,
-  CircleDot,
   CloudCog,
   Database,
   FileHeart,
   GitBranch,
   Globe2,
   KeyRound,
-  Leaf,
   LockKeyhole,
   MapPin,
-  MessageSquare,
-  MonitorSmartphone,
-  Network,
   Radar,
-  Radio,
-  Search,
-  Send,
   Server,
   ShieldCheck,
   Siren,
   Sparkles,
   TerminalSquare,
-  Webhook,
-  Workflow,
-  Zap,
 } from 'lucide-react';
 import { FlightRecorder } from '@/components/FlightRecorder';
 import { SiteFooter } from '@/components/SiteFooter';
 import { SiteHeader } from '@/components/SiteHeader';
+import { MONITOR_TYPE_COUNT, monitorGroups } from '@/lib/monitor-types';
 
 const dataPlate = [
   ['Type', 'Self-hosted blackbox monitor'],
-  ['Protocols', '18 monitor types'],
+  ['Protocols', `${MONITOR_TYPE_COUNT} monitor types`],
   ['Transport', 'NATS JetStream'],
   ['State', 'PostgreSQL'],
   ['Deploy', 'Docker Compose · Helm'],
   ['License', 'AGPL-3.0 open source'],
 ];
 
-const monitorGroups = [
-  {
-    label: 'Web & API',
-    icon: Globe2,
-    monitors: [
-      { name: 'HTTP', icon: Globe2 },
-      { name: 'WebSocket', icon: Cable },
-      { name: 'Synthetic API', icon: Braces },
-      { name: 'Synthetic Browser', icon: MonitorSmartphone },
-    ],
-  },
-  {
-    label: 'Network',
-    icon: Network,
-    monitors: [
-      { name: 'Ping', icon: Radio },
-      { name: 'DNS', icon: Search },
-      { name: 'gRPC', icon: Network },
-      { name: 'TCP', icon: CircleDot },
-      { name: 'SIP', icon: Send },
-    ],
-  },
-  {
-    label: 'Databases & brokers',
-    icon: Database,
-    monitors: [
-      { name: 'PostgreSQL', icon: Database },
-      { name: 'MySQL', icon: Database },
-      { name: 'Redis', icon: Zap },
-      { name: 'MongoDB', icon: Leaf },
-      { name: 'RabbitMQ', icon: MessageSquare },
-    ],
-  },
-  {
-    label: 'Infrastructure & organization',
-    icon: Boxes,
-    monitors: [
-      { name: 'Host agent', icon: Server },
-      { name: 'Push heartbeat', icon: Webhook },
-      { name: 'Prometheus query', icon: Activity },
-      { name: 'Group roll-up', icon: Workflow },
-    ],
-  },
-];
 
 const workflow = [
   {
@@ -226,8 +169,9 @@ export default function HomePage() {
                 <p>
                   Tune consecutive-failure and latency-anomaly sensitivity, route per
                   monitor or by workspace defaults, and mute named maintenance or quick
-                  snoozes. Deliver through email, Slack, Discord, Teams, PagerDuty,
-                  Opsgenie, Telegram, SMS, or signed HTTPS webhooks—with delays,
+                  snoozes. Deliver through email, Slack, Discord, Teams, Mattermost,
+                  Google Chat, Matrix, PagerDuty, Opsgenie, Telegram, ntfy, Gotify,
+                  Pushover, SMS, or signed HTTPS webhooks—with delays,
                   reminders, acknowledgement sync, and optional incidents.
                 </p>
                 <div className="feature-card__visual alert-stack" aria-hidden="true">
@@ -353,7 +297,7 @@ export default function HomePage() {
         <section className="monitor-section" id="monitoring">
           <div className="section-shell monitor-layout">
             <div className="monitor-layout__sticky">
-              <span className="section-kicker">18 monitor types</span>
+              <span className="section-kicker">{MONITOR_TYPE_COUNT} monitor types</span>
               <h2 className="section-heading">
                 Check the protocol, <em>not a proxy for it.</em>
               </h2>

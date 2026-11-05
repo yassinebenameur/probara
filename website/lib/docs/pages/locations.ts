@@ -49,6 +49,10 @@ export const LOCATIONS_PAGE: DocPage = {
             ],
             ["`last_seen_at`", "Most recent accepted worker heartbeat"],
             [
+              "`offline` / `open_alert_id`",
+              "Whether the location is [offline](#heartbeats) (seen before, silent past the workspace threshold), and its open `location_offline` alert",
+            ],
+            [
               "`mesh_endpoint`",
               "Optional host-and-port endpoint other locations probe for mesh health",
             ],
@@ -77,7 +81,12 @@ export const LOCATIONS_PAGE: DocPage = {
           language: "yaml",
           title: "Shape of generated worker environment",
           code:
-            "image: ghcr.io/yassinebenameur/probara-worker:latest\nenvironment:\n  NATS_URL: tls://nats.example.com:4222\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
+            "image: ghcr.io/yassinebenameur/probara-worker:<platform version>\nenvironment:\n  # NATS over WebSocket (wss://): this host needs only outbound HTTPS to the broker.\n  NATS_URL: wss://<location-uuid>:<generated-secret>@nats.example.com\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The snippet pins the worker to the platform's own release (the API's version tag), so a new location speaks the same queue contract as the scheduler that feeds it. An API built without a release version, such as a local build, references `:alpha` instead. Set `LOCATION_WORKER_IMAGE` on the API (Helm: `api.locationWorkerImage`) to point remote sites at a mirror or a different tag. After a platform upgrade, upgrade existing location workers to the same tag.",
         },
         {
           type: "callout",
@@ -85,6 +94,11 @@ export const LOCATIONS_PAGE: DocPage = {
           title: "A public NATS URL is required",
           text:
             "Generated deployment information requires `PUBLIC_NATS_URL` to use `tls://` or `wss://`, without embedded user information. It must be reachable from the location network and terminate with the [NATS authentication callout](/docs/security/#private-locations-nats) enabled for location credentials.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Prefer `wss://` when the location's network allows only outbound HTTPS. The broker's websocket listener (port `8443`, plaintext inside the platform) sits behind an HTTPS ingress or reverse proxy on 443, and location workers authenticate through the same callout as on 4222. A URL path is honored, so the listener can share the app's host (`wss://probara.example.com/nats`) or use its own (`wss://nats.example.com`). On Helm, `nats.websocket.enabled` and `nats.websocket.ingress.*` create the listener and its Ingress and derive `PUBLIC_NATS_URL` from the ingress host; the [release Compose stack](/docs/deployment/#release-compose) publishes the listener on `127.0.0.1:8443` for your TLS proxy. Each snippet carries a one-line comment saying which egress it needs.",
         },
         {
           type: "paragraph",
@@ -111,7 +125,7 @@ export const LOCATIONS_PAGE: DocPage = {
           type: "list",
           items: [
             "Store the location credential in a Kubernetes Secret or equivalent secret store, not in a committed values file.",
-            "Use TLS or WSS for the [public NATS endpoint](/docs/configuration/#public-urls-and-private-location-auth) as required by deployment-info generation.",
+            "Use TLS or WSS for the [public NATS endpoint](/docs/configuration/#public-urls-and-private-location-auth) as required by deployment-info generation. With WSS, TLS terminates at your ingress or proxy, so the hop from it to the broker is plaintext inside your network.",
             "Limit broker network exposure and use the generated credential only for its intended location.",
             "Replace a compromised location rather than treating the display slug as a rotatable secret.",
           ],
@@ -199,6 +213,11 @@ export const LOCATIONS_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Location workers publish lightweight core-NATS heartbeats approximately every 15 seconds with jitter. The API derives `connected` from the latest accepted heartbeat and treats a location as disconnected after about one minute without one.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A location that stays silent longer is **offline**: it is enabled, has reported at least once, and has sent no heartbeat for the workspace's `location_offline_after_seconds` (default 180, 60 to 86,400). Offline opens one `location_offline` [alert](/docs/alerting/#model) for the location, routed to the workspace's default channels, and resolves it when the location reports again or is disabled or deleted; the closing notification says which. A location that never connected is never offline: nothing was lost. Only locations seen within the last 7 days alert, so upgrading never pages for long-abandoned ones. While no location of the installation has reported within the threshold (and there are at least two), no offline alert opens: that pattern is a broker or scheduler fault rather than dead sites, and it is logged by the alerter instead. The alert says how many monitors run from the location, since they go stale without fresh checks; offline never changes a monitor's own state. As soon as a location misses its heartbeat window (about one minute, well before it counts as offline), mesh paths to or from it stay open but send nothing, so a dead site pages once instead of once per path. Turn the alert off, or change the threshold, under Settings → Notifications (`location_offline_alerts_enabled`). The API reports `offline` and `open_alert_id` on each location.",
         },
         {
           type: "callout",

@@ -81,12 +81,14 @@ func (r *PostgresRepository) CreateInTx(ctx context.Context, tx *sql.Tx, monitor
 			id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, $16, $17, $18, $19, $20)
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum,
+			recovery_threshold
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, $16, $17, $18, $19, $20, $21)
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state,
+			recovery_threshold, consecutive_successes
 	`
 
 	var tags []string
@@ -97,12 +99,14 @@ func (r *PostgresRepository) CreateInTx(ctx context.Context, tx *sql.Tx, monitor
 		monitor.Enabled, pq.Array(monitor.Tags), monitor.AgentID, monitor.PushToken, monitor.NextRunAt,
 		monitor.CreatedAt, monitor.UpdatedAt,
 		monitor.ConsecutiveFailuresThreshold, monitor.NotificationMode, monitor.MemberAlertRollup, monitor.DependencySuppression, monitor.LocationQuorum,
+		monitorstate.ClampRecoveryThreshold(monitor.RecoveryThreshold),
 	).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
+		&monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses,
 	)
 
 	if err != nil {
@@ -130,6 +134,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
 			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state,
+			recovery_threshold, consecutive_successes,
 			` + maintenance.InMaintenancePredicate("monitors") + ` AS in_maintenance,
 			` + maintenance.MaintenanceUntilExpr("monitors") + ` AS maintenance_until
 		FROM monitors
@@ -145,6 +150,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
+		&monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses,
 		&monitor.InMaintenance, &monitor.MaintenanceUntil,
 	)
 
@@ -198,6 +204,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
 			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state,
+			recovery_threshold, consecutive_successes,
 			%s AS in_maintenance,
 			%s AS maintenance_until
 		FROM monitors
@@ -225,6 +232,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			&monitor.AlertPolicyID, &monitor.Enabled,
 			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
+			&monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses,
 			&monitor.InMaintenance, &monitor.MaintenanceUntil,
 		)
 		if err != nil {
@@ -273,7 +281,8 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state,
+			recovery_threshold, consecutive_successes
 	`, setClause, whereArgIndex, whereArgIndex+1)
 
 	var tags []string
@@ -284,6 +293,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
+		&monitor.RecoveryThreshold, &monitor.ConsecutiveSuccesses,
 	)
 
 	if err != nil {
@@ -594,10 +604,10 @@ func (r *PostgresRepository) ReplaceMonitorChannels(ctx context.Context, tenantI
 			return fmt.Errorf("invalid channel_id %q: %w", c.ChannelID, err)
 		}
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO monitor_channels (monitor_id, channel_id, delay_seconds)
-			SELECT $1, $2, $3
+			INSERT INTO monitor_channels (monitor_id, channel_id, delay_seconds, notify_after_ack)
+			SELECT $1, $2, $3, $5
 			WHERE EXISTS (SELECT 1 FROM alert_channels WHERE id = $2 AND tenant_id = $4)
-		`, monitorID, channelID, c.DelaySeconds, tenantID)
+		`, monitorID, channelID, c.DelaySeconds, tenantID, c.NotifyAfterAck)
 		if err != nil {
 			return fmt.Errorf("failed to insert monitor channel: %w", err)
 		}
@@ -633,7 +643,7 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 	}
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT mc.monitor_id, mc.channel_id, ac.name, ac.type, mc.delay_seconds
+		SELECT mc.monitor_id, mc.channel_id, ac.name, ac.type, mc.delay_seconds, mc.notify_after_ack
 		FROM monitor_channels mc
 		JOIN alert_channels ac ON ac.id = mc.channel_id
 		WHERE mc.monitor_id = ANY($1)
@@ -650,14 +660,16 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 		var channelName string
 		var channelType string
 		var delaySeconds int
-		if err := rows.Scan(&monitorID, &channelID, &channelName, &channelType, &delaySeconds); err != nil {
+		var notifyAfterAck bool
+		if err := rows.Scan(&monitorID, &channelID, &channelName, &channelType, &delaySeconds, &notifyAfterAck); err != nil {
 			return nil, fmt.Errorf("failed to scan monitor channel: %w", err)
 		}
 		result[monitorID] = append(result[monitorID], models.MonitorChannelAssignment{
-			ChannelID:    channelID.String(),
-			DelaySeconds: delaySeconds,
-			ChannelName:  channelName,
-			ChannelType:  channelType,
+			ChannelID:      channelID.String(),
+			DelaySeconds:   delaySeconds,
+			ChannelName:    channelName,
+			ChannelType:    channelType,
+			NotifyAfterAck: notifyAfterAck,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -685,9 +697,12 @@ func (r *PostgresRepository) GetAlertRoutingForMonitors(ctx context.Context, mon
 			`+alertrouting.SelfSilentGroupPredicate("m")+` AS self_silent,
 			g.id, g.name, COALESCE(g.enabled, FALSE) AS rollup_enabled,
 			COALESCE(`+alertrouting.ChannelCountExpr("g", true)+`, 0) AS rollup_active,
-			COALESCE(`+alertrouting.ChannelCountExpr("g", false)+`, 0) AS rollup_assigned
+			COALESCE(`+alertrouting.ChannelCountExpr("g", false)+`, 0) AS rollup_assigned,
+			ep.id, COALESCE(ep.name, ''), `+alertrouting.PeopleCountExpr("m")+` AS own_people,
+			COALESCE(`+alertrouting.PeopleCountExpr("g")+`, 0) AS rollup_people
 		FROM monitors m
 		LEFT JOIN monitors g ON g.id = `+alertrouting.RollupGroupExpr("m.id")+`
+		LEFT JOIN escalation_policies ep ON ep.id = `+alertrouting.EffectivePolicyExpr("m")+`
 		WHERE m.id = ANY($1)
 	`, pq.Array(monitorIDs))
 	if err != nil {
@@ -698,18 +713,23 @@ func (r *PostgresRepository) GetAlertRoutingForMonitors(ctx context.Context, mon
 	for rows.Next() {
 		var monitorID uuid.UUID
 		var counts alertrouting.Counts
-		var groupID uuid.NullUUID
+		var groupID, policyID uuid.NullUUID
 		var groupName sql.NullString
 		if err := rows.Scan(&monitorID, &counts.NotificationMode,
 			&counts.OwnActive, &counts.OwnAssigned, &counts.SelfSilentGroup,
 			&groupID, &groupName, &counts.RollupEnabled,
-			&counts.RollupActive, &counts.RollupAssigned); err != nil {
+			&counts.RollupActive, &counts.RollupAssigned,
+			&policyID, &counts.PolicyName, &counts.OwnPeople, &counts.RollupPeople); err != nil {
 			return nil, fmt.Errorf("failed to scan alert routing: %w", err)
 		}
 		if groupID.Valid {
 			id := groupID.UUID
 			counts.RollupGroupID = &id
 			counts.RollupGroupName = groupName.String
+		}
+		if policyID.Valid {
+			id := policyID.UUID
+			counts.PolicyID = &id
 		}
 		result[monitorID] = alertrouting.Classify(counts)
 	}
@@ -790,7 +810,7 @@ func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitor
 	if len(locationIDs) == 0 {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE monitors
-			SET current_state = 'unknown', consecutive_failures = 0, updated_at = NOW()
+			SET current_state = 'unknown', consecutive_failures = 0, consecutive_successes = 0, updated_at = NOW()
 			WHERE id = $1 AND tenant_id = $2
 		`, monitorID, tenantID); err != nil {
 			return fmt.Errorf("failed to reset monitor state: %w", err)
@@ -840,6 +860,7 @@ func (r *PostgresRepository) SetEnabled(ctx context.Context, tenantID, monitorID
 		SET enabled = $2,
 			current_state = 'unknown',
 			consecutive_failures = 0,
+			consecutive_successes = 0,
 			last_state_change_at = NOW(),
 			updated_at = NOW()
 		WHERE id = $1

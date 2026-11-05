@@ -6,7 +6,7 @@ import {
   CreateMonitorRequest,
   UpdateMonitorRequest,
 } from '@/lib/types';
-import { buildTcpRequest, initialTcpFormState } from '@/lib/monitor-form/network';
+import { buildTcpRequest, initialTcpFormState, parseTcpMinDays } from '@/lib/monitor-form/network';
 import FormField from '@/components/ui/FormField';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
@@ -46,6 +46,9 @@ export default function TcpForm({
     if (!formData.name.trim()) newErrors.name = 'Name is required';
     if (!formData.host.trim()) newErrors.host = 'Host is required';
     if (formData.port < 1 || formData.port > 65535) newErrors.port = 'Port must be between 1 and 65535';
+    if (formData.use_tls && formData.tls_min_days_valid.trim() && parseTcpMinDays(formData.tls_min_days_valid) === null) {
+      newErrors.tls_min_days_valid = 'Must be a whole number of days, 0 or more';
+    }
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
@@ -120,13 +123,79 @@ export default function TcpForm({
         />
 
         {formData.use_tls && (
-          <ToggleRow
-            title="Skip certificate verification"
-            description="Accept self-signed or mismatched certificates"
-            checked={formData.tls_skip_verify}
-            onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
-            tone="warning"
-          />
+          <>
+            <ToggleRow
+              title="Skip certificate verification"
+              description="Accept self-signed or mismatched certificates"
+              checked={formData.tls_skip_verify}
+              onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
+              tone="warning"
+            />
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <FormField label="Certificate valid for at least" error={errors.tls_min_days_valid}>
+                {(control) => (
+                  <>
+                    <span className="flex items-center gap-2">
+                      <input
+                        {...control}
+                        type="number"
+                        value={formData.tls_min_days_valid}
+                        onChange={(e) => setFormData({ ...formData, tls_min_days_valid: e.target.value })}
+                        placeholder="14"
+                        min={0}
+                        className="input !w-28 tabular-nums"
+                      />
+                      <span className="text-xs text-slate-500">days</span>
+                    </span>
+                    {!errors.tls_min_days_valid && (
+                      <FieldHint>Open a certificate-expiry alert when fewer days remain; the check itself still passes</FieldHint>
+                    )}
+                  </>
+                )}
+              </FormField>
+              <FormField label="TLS server name (SNI)">
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="text"
+                      value={formData.tls_server_name}
+                      onChange={(e) => setFormData({ ...formData, tls_server_name: e.target.value })}
+                      placeholder="mail.example.com"
+                      className="input font-mono"
+                    />
+                    <FieldHint>Overrides the name used for SNI and verification. Defaults to the host.</FieldHint>
+                  </>
+                )}
+              </FormField>
+            </div>
+
+            {formData.tls_min_days_valid.trim() !== '' && (
+              <ToggleRow
+                title="Include the certificate chain"
+                description="Alert on the earliest expiry among the server and intermediate certificates, not just the server's"
+                checked={formData.tls_check_chain}
+                onChange={(v) => setFormData({ ...formData, tls_check_chain: v })}
+              />
+            )}
+
+            <FormField label="Custom CA bundle (PEM)">
+              {(control) => (
+                <>
+                  <textarea
+                    {...control}
+                    rows={4}
+                    value={formData.tls_ca_pem}
+                    onChange={(e) => setFormData({ ...formData, tls_ca_pem: e.target.value })}
+                    placeholder={'-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----'}
+                    className="input min-h-[80px] font-mono"
+                  />
+                  <FieldHint>Trusted root CAs for this monitor, added to the system ones</FieldHint>
+                </>
+              )}
+            </FormField>
+          </>
         )}
       </FormPanel>
 
@@ -163,8 +232,12 @@ export default function TcpForm({
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
           onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
+          recoveryThreshold={formData.recovery_threshold}
+          onRecoveryThresholdChange={(n) => setFormData((prev) => ({ ...prev, recovery_threshold: n }))}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
+          escalationPolicyId={formData.escalation_policy_id}
+          onEscalationPolicyChange={(id) => setFormData((prev) => ({ ...prev, escalation_policy_id: id }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}

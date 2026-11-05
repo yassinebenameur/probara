@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
 
 const (
@@ -155,6 +158,7 @@ var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeTCP:              true,
 	models.MonitorTypeMySQL:            true,
 	models.MonitorTypeWebSocket:        true,
+	models.MonitorTypeDomain:           true,
 }
 
 // IsActiveCheckType reports whether the monitor type is actively scheduled by
@@ -212,7 +216,13 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
+	if err := ValidateEscalationPolicyField(req.NotificationMode, req.EscalationPolicyID, true); err != nil {
+		return err
+	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
+		return err
+	}
+	if err := ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
 		return err
 	}
 
@@ -298,7 +308,13 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
+	if err := ValidateEscalationPolicyField(req.NotificationMode, req.EscalationPolicyID, false); err != nil {
+		return err
+	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
+		return err
+	}
+	if err := ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
 		return err
 	}
 
@@ -398,14 +414,28 @@ func ValidateDependencySuppression(value *string) error {
 	return fmt.Errorf("dependency_suppression must be 'inherit', 'on' or 'off'")
 }
 
+// ValidateRecoveryThreshold validates a monitor's recovery_threshold: the
+// consecutive passing checks a down monitor needs before it is up (S-T7,
+// docs/state-semantics.md), bounded like the column CHECK.
+func ValidateRecoveryThreshold(value *int) error {
+	if value == nil {
+		return nil
+	}
+	if *value < monitorstate.MinRecoveryThreshold || *value > monitorstate.MaxRecoveryThreshold {
+		return fmt.Errorf("recovery_threshold must be between %d and %d",
+			monitorstate.MinRecoveryThreshold, monitorstate.MaxRecoveryThreshold)
+	}
+	return nil
+}
+
 // ValidateMonitorNotificationFields validates the notification-routing fields that can be set
 // on both CreateMonitorRequest and UpdateMonitorRequest (spec §7.4).
 func ValidateMonitorNotificationFields(threshold *int, mode *string, rollup *string, channels []models.MonitorChannelAssignment) error {
 	if threshold != nil && (*threshold < 1 || *threshold > 10) {
 		return fmt.Errorf("consecutive_failures_threshold must be between 1 and 10")
 	}
-	if mode != nil && *mode != "default" && *mode != "custom" {
-		return fmt.Errorf("notification_mode must be 'default' or 'custom'")
+	if mode != nil && *mode != "default" && *mode != "custom" && *mode != "policy" {
+		return fmt.Errorf("notification_mode must be 'default', 'custom' or 'policy'")
 	}
 	if rollup != nil && *rollup != "per_monitor" && *rollup != "group" {
 		return fmt.Errorf("member_alert_rollup must be 'per_monitor' or 'group'")
@@ -485,6 +515,10 @@ func ValidateStatusPage(req *models.CreateStatusPageRequest) error {
 		return err
 	}
 
+	if err := validateStatusPageAccess(req.Visibility, req.Password); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -520,6 +554,10 @@ func ValidateStatusPageUpdate(req *models.UpdateStatusPageRequest) error {
 		}
 	}
 
+	if err := validateStatusPageAccess(req.Visibility, req.Password); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -552,6 +590,22 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 	}
 	if settings.CustomFooterHTML != nil && len(*settings.CustomFooterHTML) > 64*1024 {
 		return fmt.Errorf("custom_footer_html must be 64KB or less")
+	}
+	if settings.CSPMode != nil {
+		if _, ok := securityheaders.ParseCSPMode(*settings.CSPMode); !ok {
+			return fmt.Errorf("csp_mode must be strict, compatible, off, or empty for automatic")
+		}
+	}
+	if len(settings.AllowedEmbedOrigins) > securityheaders.MaxEmbedOrigins {
+		return fmt.Errorf("allowed_embed_origins accepts at most %d origins", securityheaders.MaxEmbedOrigins)
+	}
+	for _, origin := range settings.AllowedEmbedOrigins {
+		if _, err := securityheaders.NormalizeOrigin(origin); err != nil {
+			return fmt.Errorf("allowed_embed_origins: %v", err)
+		}
+	}
+	if settings.SEODescription != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEODescription)) > models.MaxSEODescriptionLength {
+		return fmt.Errorf("seo_description must be %d characters or less", models.MaxSEODescriptionLength)
 	}
 	return nil
 }

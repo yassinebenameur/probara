@@ -12,8 +12,10 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 var (
@@ -27,7 +29,7 @@ var (
 )
 
 const (
-	defaultTenantID   = "00000000-0000-0000-0000-000000000001"
+	defaultTenantID   = tenancy.DefaultTenantID
 	defaultTenantName = "Default"
 )
 
@@ -42,6 +44,8 @@ type repository interface {
 	IsLastActiveSuperadmin(ctx context.Context, userID uuid.UUID) (bool, error)
 	DeleteUser(ctx context.Context, userID uuid.UUID) error
 	AttachMemberships(ctx context.Context, users []models.AdminUser) error
+	AttachLockouts(ctx context.Context, users []models.AdminUser) error
+	AttachMFA(ctx context.Context, users []models.AdminUser) error
 }
 
 type sqlRepository struct {
@@ -82,6 +86,12 @@ func (s *Service) ListUsers(ctx context.Context, page, pageSize int) (*models.Ad
 	if err := s.repo.AttachMemberships(ctx, items); err != nil {
 		return nil, fmt.Errorf("failed to load memberships: %w", err)
 	}
+	if err := s.repo.AttachLockouts(ctx, items); err != nil {
+		return nil, fmt.Errorf("failed to load lockouts: %w", err)
+	}
+	if err := s.repo.AttachMFA(ctx, items); err != nil {
+		return nil, fmt.Errorf("failed to load two-factor state: %w", err)
+	}
 
 	return &models.AdminUserListResponse{
 		Items:    items,
@@ -104,6 +114,12 @@ func (s *Service) GetUser(ctx context.Context, userID uuid.UUID) (*models.AdminU
 	users := []models.AdminUser{*user}
 	if err := s.repo.AttachMemberships(ctx, users); err != nil {
 		return nil, fmt.Errorf("failed to load memberships: %w", err)
+	}
+	if err := s.repo.AttachLockouts(ctx, users); err != nil {
+		return nil, fmt.Errorf("failed to load lockouts: %w", err)
+	}
+	if err := s.repo.AttachMFA(ctx, users); err != nil {
+		return nil, fmt.Errorf("failed to load two-factor state: %w", err)
 	}
 	return &users[0], nil
 }
@@ -479,13 +495,106 @@ func insertMembershipsTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID, memb
 	return nil
 }
 
+// RevokeSessionsByAdminID runs after a superadmin sets a user's password: it
+// ends every session (families too, so access tokens die at once), retires
+// open invite, reset and email-change links, records password_changed_at
+// and clears any login lockout, since the old password being guessed no
+// longer exists.
 func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error {
+	if _, err := adminauth.RevokeUserSessions(ctx, r.db, adminID, uuid.Nil, adminauth.RevokeReasonPasswordChange); err != nil {
+		return err
+	}
+	if err := adminauth.RetireCredentialTokens(ctx, r.db, adminID); err != nil {
+		return err
+	}
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE admin_sessions
-		SET revoked_at = NOW(), last_used_at = NOW()
-		WHERE admin_user_id = $1 AND revoked_at IS NULL
+		UPDATE admin_users
+		SET password_changed_at = NOW(), failed_login_count = 0, last_failed_login_at = NULL, locked_until = NULL
+		WHERE id = $1
 	`, adminID)
+	if isMissingSchema(err) {
+		return nil
+	}
 	return err
+}
+
+// AttachLockouts fills LockedUntil for users under an active login lockout.
+// Before migration 000103 nobody is locked.
+func (r *sqlRepository) AttachLockouts(ctx context.Context, users []models.AdminUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(users))
+	index := make(map[uuid.UUID]int, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+		index[u.ID] = i
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, locked_until
+		FROM admin_users
+		WHERE id = ANY($1) AND locked_until > NOW()
+	`, pq.Array(ids))
+	if isMissingSchema(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var until time.Time
+		if err := rows.Scan(&id, &until); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			lockedUntil := until
+			users[i].LockedUntil = &lockedUntil
+		}
+	}
+	return rows.Err()
+}
+
+// AttachMFA fills MFAEnabled for users with TOTP enabled. Before migration
+// 000118 nobody has it.
+func (r *sqlRepository) AttachMFA(ctx context.Context, users []models.AdminUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(users))
+	index := make(map[uuid.UUID]int, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+		index[u.ID] = i
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id FROM admin_users WHERE id = ANY($1) AND totp_enabled_at IS NOT NULL
+	`, pq.Array(ids))
+	if isMissingSchema(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			users[i].MFAEnabled = true
+		}
+	}
+	return rows.Err()
+}
+
+// isMissingSchema reports Postgres undefined_table/undefined_column: this
+// binary running ahead of the migrations job.
+func isMissingSchema(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && (pqErr.Code == "42P01" || pqErr.Code == "42703")
 }
 
 func (r *sqlRepository) CountActiveAdmins(ctx context.Context) (int, error) {

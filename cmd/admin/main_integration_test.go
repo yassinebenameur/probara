@@ -64,3 +64,87 @@ func TestUpsertSuperadmin_ExistingUserIsResetPromotedAndReenabled(t *testing.T) 
 		t.Fatalf("got role=%q hash=%q disabled=%v, want superadmin/new-hash/enabled", role, hash, disabled)
 	}
 }
+
+func TestUpsertSuperadmin_ClearsLoginLockout(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_users (username, password_hash, platform_role, failed_login_count, last_failed_login_at, locked_until)
+		VALUES ('locked', 'old-hash', 'superadmin', 10, NOW(), NOW() + INTERVAL '15 minutes')
+	`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	if err := upsertSuperadmin(ctx, client, "locked", "new-hash"); err != nil {
+		t.Fatalf("upsertSuperadmin() error = %v", err)
+	}
+
+	var failures int
+	var locked, passwordChanged bool
+	if err := client.QueryRowContext(ctx, `
+		SELECT failed_login_count, locked_until IS NOT NULL, password_changed_at IS NOT NULL
+		FROM admin_users WHERE username = 'locked'
+	`).Scan(&failures, &locked, &passwordChanged); err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if failures != 0 || locked || !passwordChanged {
+		t.Fatalf("got failures=%d locked=%v password_changed=%v, want 0/false/true", failures, locked, passwordChanged)
+	}
+}
+
+func TestResetTwoFactorClearsEnrollment(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+
+	var id string
+	if err := client.QueryRowContext(ctx, `
+		INSERT INTO admin_users (username, password_hash, platform_role, totp_secret_enc, totp_enabled_at, totp_last_step)
+		VALUES ('ops', 'hash', 'member', 'sealed', NOW(), 42) RETURNING id
+	`).Scan(&id); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := client.ExecContext(ctx, `INSERT INTO admin_user_recovery_codes (admin_user_id, code_hash) VALUES ($1, 'h1'), ($1, 'h2')`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_user_tokens (admin_user_id, purpose, token_hash, new_email, expires_at)
+		VALUES ($1, 'email_change', 'th', 'new@example.com', NOW() + INTERVAL '1 day')
+	`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	was, err := resetTwoFactor(ctx, client, "ops")
+	if err != nil || !was {
+		t.Fatalf("resetTwoFactor = %v, %v; want true", was, err)
+	}
+	var secretSet, enabled bool
+	var codes int
+	if err := client.QueryRowContext(ctx, `
+		SELECT totp_secret_enc IS NOT NULL, totp_enabled_at IS NOT NULL,
+		       (SELECT COUNT(*) FROM admin_user_recovery_codes WHERE admin_user_id = u.id)
+		FROM admin_users u WHERE username = 'ops'
+	`).Scan(&secretSet, &enabled, &codes); err != nil {
+		t.Fatal(err)
+	}
+	if secretSet || enabled || codes != 0 {
+		t.Fatalf("after reset: secret=%v enabled=%v codes=%d", secretSet, enabled, codes)
+	}
+	var openChanges int
+	if err := client.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM admin_user_tokens WHERE admin_user_id = $1 AND used_at IS NULL
+	`, id).Scan(&openChanges); err != nil {
+		t.Fatal(err)
+	}
+	if openChanges != 0 {
+		t.Fatalf("pending email change survived the 2FA reset")
+	}
+	if was, err := resetTwoFactor(ctx, client, "ops"); err != nil || was {
+		t.Fatalf("second reset = %v, %v; want false", was, err)
+	}
+	if _, err := resetTwoFactor(ctx, client, "nobody"); err == nil {
+		t.Fatal("unknown username accepted")
+	}
+}
