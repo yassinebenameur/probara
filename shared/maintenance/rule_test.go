@@ -257,3 +257,42 @@ func TestNext(t *testing.T) {
 		t.Fatalf("one-off beyond the horizon: %v", occ)
 	}
 }
+
+// A rule Normalize accepts expands from any instant: the density cap counts
+// starts in [from, to), the quantity checkDensity bounds, so long durations
+// and month-boundary crons never fail later rolls or edits.
+func TestDensity_AcceptedRuleExpandsFromAnyInstant(t *testing.T) {
+	start := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	accepted := []Rule{
+		{StartsAt: start, Duration: 8 * 24 * time.Hour, Frequency: FrequencyCron, Cron: "0 * * * *"},
+		{StartsAt: start, Duration: MaxRecurringDuration, Frequency: FrequencyCron, Cron: "0 * * * *"},
+		{StartsAt: start, Duration: time.Minute, Frequency: FrequencyCron, Cron: "*/5 * 1-3 * *", Timezone: "Europe/Paris"},
+		{StartsAt: start, Duration: time.Minute, Frequency: FrequencyCron, Cron: "*/10 * 1,2 * *"},
+		{StartsAt: start, Duration: time.Minute, Frequency: FrequencyCron, Cron: "0,30 0-13 * * 1-5"},
+		{StartsAt: start, Duration: 90 * 24 * time.Hour, Frequency: FrequencyDaily},
+	}
+	for _, r := range accepted {
+		n, err := r.Normalize()
+		if err != nil {
+			// Rejection is always safe; acceptance is what must hold up.
+			continue
+		}
+		for from := start; from.Before(start.AddDate(1, 0, 0)); from = from.Add(13*time.Hour + 7*time.Minute) {
+			if _, err := Expand(n, from, from.Add(Horizon)); err != nil {
+				t.Fatalf("%q (%v) accepted but Expand from %v fails: %v", n.Cron, n.Duration, from, err)
+			}
+		}
+	}
+	// The two review cases: the long-duration hourly cron is accepted (and
+	// so must expand, checked above); the 1st-3rd five-minutely cron starts
+	// 6 x 288 times in some 35-day spans and is rejected.
+	if _, err := accepted[0].Normalize(); err != nil {
+		t.Fatalf("hourly cron with an 8-day duration must be allowed: %v", err)
+	}
+	if _, err := accepted[2].Normalize(); !errors.Is(err, ErrTooManyOccurrences) {
+		t.Fatalf("*/5 on days 1-3 of every month: want ErrTooManyOccurrences, got %v", err)
+	}
+	if _, err := accepted[3].Normalize(); err != nil {
+		t.Fatalf("*/10 on days 1-2 (4 x 144 per 37 days) must be allowed: %v", err)
+	}
+}

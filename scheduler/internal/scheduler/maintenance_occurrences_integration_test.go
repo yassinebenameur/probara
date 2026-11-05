@@ -127,3 +127,98 @@ func TestMaintenanceRollerExtendsRepeatingWindows(t *testing.T) {
 		t.Fatalf("deleted workspace rolled %d occurrences", len(got))
 	}
 }
+
+// A roll that races an API edit waits for the edit's row lock and then rolls
+// the edited rule: it never inserts occurrences of the rule the edit
+// replaced.
+func TestMaintenanceRollerSerializesWithEdits(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := setupRollupTestDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "maint-roll-race")
+	now := time.Now().UTC()
+	old, err := maintenance.Rule{
+		StartsAt: now.Truncate(24 * time.Hour).Add(-48*time.Hour + 2*time.Hour), Duration: 30 * time.Minute,
+		Frequency: maintenance.FrequencyDaily,
+	}.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	windowID := insertRuleWindow(ctx, t, dbClient, tenantID, old)
+	s := newTestScheduler(dbClient)
+	if err := s.rollMaintenanceOccurrences(ctx); err != nil {
+		t.Fatalf("roll: %v", err)
+	}
+	// Leave the horizon's tail for the racing roll to fill.
+	if _, err := dbClient.ExecContext(ctx, `
+		DELETE FROM maintenance_window_occurrences WHERE window_id = $1 AND starts_at > $2`,
+		windowID, now.Add(20*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The API edit (Update): the rule moves from 02:00 to 05:00 UTC.
+	edited := old
+	edited.StartsAt = old.StartsAt.Add(3 * time.Hour)
+	tx, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE maintenance_windows SET starts_at = $2, ends_at = $3, updated_at = NOW() WHERE id = $1`,
+		windowID, edited.StartsAt, edited.StartsAt.Add(edited.Duration)); err != nil {
+		t.Fatal(err)
+	}
+	var editAt time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT NOW()`).Scan(&editAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := maintenance.Reschedule(ctx, tx, tenantID, windowID, edited, editAt); err != nil {
+		t.Fatal(err)
+	}
+
+	rolled := make(chan error, 1)
+	go func() { rolled <- s.rollMaintenanceOccurrences(ctx) }()
+	// Commit once the roll is waiting on the row lock (or has finished,
+	// which is the bug this test guards against).
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_locks WHERE NOT granted`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 || len(rolled) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-rolled; err != nil {
+		t.Fatalf("racing roll: %v", err)
+	}
+
+	rows, err := dbClient.QueryContext(ctx, `
+		SELECT starts_at FROM maintenance_window_occurrences WHERE window_id = $1 AND starts_at > $2 ORDER BY starts_at`,
+		windowID, editAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var ts time.Time
+		if err := rows.Scan(&ts); err != nil {
+			t.Fatal(err)
+		}
+		n++
+		if h := ts.UTC().Hour(); h != 5 {
+			t.Fatalf("occurrence at %v after the edit: only the edited 05:00 rule may run", ts.UTC())
+		}
+	}
+	if n < 34 {
+		t.Fatalf("edited rule has %d future occurrences, want the full horizon", n)
+	}
+}

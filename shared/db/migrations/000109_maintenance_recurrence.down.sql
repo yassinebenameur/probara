@@ -1,3 +1,7 @@
+DROP TABLE IF EXISTS maintenance_window_past_targets;
+
+ALTER TABLE maintenance_window_monitors DROP COLUMN IF EXISTS linked_at;
+
 DROP TABLE IF EXISTS maintenance_window_occurrences;
 
 ALTER TABLE maintenance_windows

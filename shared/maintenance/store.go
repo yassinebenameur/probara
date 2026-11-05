@@ -15,11 +15,18 @@ package maintenance
 //   - RollForward: the scheduler's pass extends every live repeating rule to
 //     the horizon, adding only occurrences that start after the last one
 //     materialized, so a rescheduled window is never re-expanded into its
-//     own past.
+//     own past. It works under the window's row lock, the one every API edit
+//     holds, so it never rolls a rule an edit has just replaced.
+//
+// Targets follow the same edit rule (Retarget): a link covers occurrences
+// only from maintenance_window_monitors.linked_at on, and a removed link
+// moves to maintenance_window_past_targets with the span it was in force,
+// so what an ended occurrence covered never changes either.
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -200,70 +207,140 @@ func EndInProgress(ctx context.Context, q DB, tenantID, windowID uuid.UUID, now 
 	return n > 0, nil
 }
 
+// TxDB is a DB that can also begin transactions (*sql.DB, *db.Client).
+type TxDB interface {
+	DB
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+// liveRepeatingSQL selects the windows the roller extends, over alias mw
+// with the roll instant as $1.
+const liveRepeatingSQL = `mw.recurrence <> 'none'
+		  AND (mw.recurrence_until IS NULL OR mw.recurrence_until > $1)`
+
 // RollForward extends every live repeating window's occurrences to now +
 // Horizon and returns how many it added. The scheduler runs it under an
 // advisory lock; it is idempotent, so an overlapping run only wastes work.
-func RollForward(ctx context.Context, q DB, now time.Time) (int, error) {
+//
+// Each window rolls in its own transaction that first locks the window row
+// (FOR UPDATE), the lock every API edit holds while it rewrites the rule and
+// its occurrences (Update's UPDATE, EndOccurrence's FOR UPDATE, Delete).
+// The rule and the last materialized start are read only after the lock is
+// granted, so a roll never inserts occurrences of a rule an edit has just
+// replaced. A rule that does not expand is skipped, never stalling the other
+// windows, and reported in the returned error.
+func RollForward(ctx context.Context, q TxDB, now time.Time) (int, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT mw.id, mw.tenant_id, `+RuleColumnsFor("mw")+`,
-			(SELECT MAX(o.starts_at) FROM maintenance_window_occurrences o WHERE o.window_id = mw.id)
-		FROM maintenance_windows mw
-		WHERE mw.recurrence <> 'none'
-		  AND (mw.recurrence_until IS NULL OR mw.recurrence_until > $1)
+		SELECT mw.id FROM maintenance_windows mw
+		WHERE `+liveRepeatingSQL+`
 		  AND `+tenancy.LiveTenantSQL("mw.tenant_id")+`
 		ORDER BY mw.id`, now)
 	if err != nil {
 		return 0, fmt.Errorf("list repeating maintenance windows: %w", err)
 	}
-	type pending struct {
-		tenantID, windowID uuid.UUID
-		occ                []Occurrence
-	}
-	var work []pending
+	var ids []uuid.UUID
 	for rows.Next() {
-		var p pending
-		var last sql.NullTime
-		r, err := ScanRule(func(dest ...interface{}) error {
-			return rows.Scan(append(append([]interface{}{&p.windowID, &p.tenantID}, dest...), &last)...)
-		})
-		if err != nil {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, fmt.Errorf("scan maintenance rule: %w", err)
+			return 0, fmt.Errorf("scan maintenance window: %w", err)
 		}
-		occ, err := Expand(r, now, now.Add(Horizon))
-		if err != nil {
-			// A stored rule that no longer expands (it was valid when saved)
-			// must not stall every other window.
-			continue
-		}
-		for _, o := range occ {
-			if last.Valid && !o.Start.After(last.Time) {
-				continue
-			}
-			if o.Start.Before(now) {
-				// Missed while nothing rolled: covered from now, never before.
-				o.Start = now
-			}
-			p.occ = append(p.occ, o)
-		}
-		if len(p.occ) > 0 {
-			work = append(work, p)
-		}
+		ids = append(ids, id)
 	}
 	if err := rows.Close(); err != nil {
 		return 0, err
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterate maintenance rules: %w", err)
+		return 0, fmt.Errorf("iterate maintenance windows: %w", err)
 	}
 	added := 0
-	for _, p := range work {
-		if err := insertOccurrences(ctx, q, p.tenantID, p.windowID, p.occ); err != nil {
+	var skipped []error
+	for _, id := range ids {
+		n, err := rollWindow(ctx, q, id, now)
+		var expandErr *rollExpandError
+		if errors.As(err, &expandErr) {
+			skipped = append(skipped, err)
+			continue
+		}
+		if err != nil {
 			return added, err
 		}
-		added += len(p.occ)
+		added += n
 	}
-	return added, nil
+	return added, errors.Join(skipped...)
+}
+
+// rollExpandError is a stored rule that no longer expands.
+type rollExpandError struct {
+	windowID uuid.UUID
+	err      error
+}
+
+func (e *rollExpandError) Error() string {
+	return fmt.Sprintf("maintenance window %s skipped: %v", e.windowID, e.err)
+}
+
+func (e *rollExpandError) Unwrap() error { return e.err }
+
+// rollWindow extends one window under its row lock (see RollForward).
+func rollWindow(ctx context.Context, q TxDB, windowID uuid.UUID, now time.Time) (int, error) {
+	tx, err := q.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin maintenance roll: %w", err)
+	}
+	defer tx.Rollback()
+
+	var tenantID uuid.UUID
+	err = tx.QueryRowContext(ctx, `SELECT tenant_id FROM maintenance_windows WHERE id = $1 FOR UPDATE`, windowID).Scan(&tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil // deleted since it was listed
+	}
+	if err != nil {
+		return 0, fmt.Errorf("lock maintenance window: %w", err)
+	}
+	// A separate statement: under READ COMMITTED it takes a snapshot after
+	// the lock was granted, so it sees a concurrent edit's rule and
+	// occurrences (a subquery of the locking statement would not).
+	var last sql.NullTime
+	r, err := ScanRule(func(dest ...interface{}) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT `+RuleColumnsFor("mw")+`,
+				(SELECT MAX(o.starts_at) FROM maintenance_window_occurrences o WHERE o.window_id = mw.id)
+			FROM maintenance_windows mw
+			WHERE mw.id = $2 AND `+liveRepeatingSQL+`
+			  AND `+tenancy.LiveTenantSQL("mw.tenant_id"), now, windowID).Scan(append(dest, &last)...)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil // an edit made it a one-off or ended the series
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read maintenance rule: %w", err)
+	}
+	occ, err := Expand(r, now, now.Add(Horizon))
+	if err != nil {
+		return 0, &rollExpandError{windowID: windowID, err: err}
+	}
+	var add []Occurrence
+	for _, o := range occ {
+		if last.Valid && !o.Start.After(last.Time) {
+			continue
+		}
+		if o.Start.Before(now) {
+			// Missed while nothing rolled: covered from now, never before.
+			o.Start = now
+		}
+		add = append(add, o)
+	}
+	if len(add) == 0 {
+		return 0, nil
+	}
+	if err := insertOccurrences(ctx, tx, tenantID, windowID, add); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit maintenance roll: %w", err)
+	}
+	return len(add), nil
 }
 
 func insertOccurrences(ctx context.Context, q DB, tenantID, windowID uuid.UUID, occ []Occurrence) error {
@@ -287,6 +364,48 @@ func insertOccurrences(ctx context.Context, q DB, tenantID, windowID uuid.UUID, 
 		windowID, tenantID, pq.Array(starts), pq.Array(ends))
 	if err != nil {
 		return fmt.Errorf("insert maintenance occurrences: %w", err)
+	}
+	return nil
+}
+
+// Retarget replaces a window's monitor targets as of now, the way Reschedule
+// replaces its schedule: a monitor that stays keeps its link; a new one is
+// covered from now on; a removed one keeps covering, through
+// maintenance_window_past_targets, every occurrence (or part of one) before
+// now. Run it in the transaction that updates the window, with now from
+// that transaction's clock; ids must already be validated for the tenant.
+func Retarget(ctx context.Context, q DB, windowID uuid.UUID, ids []uuid.UUID, now time.Time) error {
+	keep := make([]string, len(ids))
+	for i, id := range ids {
+		keep[i] = id.String()
+	}
+	// Only a link that covered some occurrence time leaves history behind.
+	if _, err := q.ExecContext(ctx, `
+		INSERT INTO maintenance_window_past_targets (maintenance_window_id, monitor_id, linked_at, unlinked_at)
+		SELECT l.maintenance_window_id, l.monitor_id, l.linked_at, $3
+		FROM maintenance_window_monitors l
+		WHERE l.maintenance_window_id = $1
+		  AND NOT (l.monitor_id = ANY($2::uuid[]))
+		  AND l.linked_at < $3
+		  AND EXISTS (
+		      SELECT 1 FROM maintenance_window_occurrences o
+		      WHERE o.window_id = l.maintenance_window_id
+		        AND o.starts_at < $3 AND o.ends_at > l.linked_at)
+		ON CONFLICT DO NOTHING`, windowID, pq.Array(keep), now); err != nil {
+		return fmt.Errorf("keep removed maintenance targets: %w", err)
+	}
+	if _, err := q.ExecContext(ctx, `
+		DELETE FROM maintenance_window_monitors
+		WHERE maintenance_window_id = $1 AND NOT (monitor_id = ANY($2::uuid[]))`,
+		windowID, pq.Array(keep)); err != nil {
+		return fmt.Errorf("remove maintenance targets: %w", err)
+	}
+	if _, err := q.ExecContext(ctx, `
+		INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id, linked_at)
+		SELECT $1, m, $3 FROM unnest($2::uuid[]) AS m
+		ON CONFLICT (maintenance_window_id, monitor_id) DO NOTHING`,
+		windowID, pq.Array(keep), now); err != nil {
+		return fmt.Errorf("add maintenance targets: %w", err)
 	}
 	return nil
 }

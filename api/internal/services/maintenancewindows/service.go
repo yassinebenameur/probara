@@ -113,6 +113,16 @@ func checkHasFuture(r maintenance.Rule, now time.Time) error {
 	return nil
 }
 
+// ruleError maps a rule that does not expand to a 400. Normalize already
+// enforces the density Expand checks (maintenance.checkDensity), so this is
+// a guard, never the expected path.
+func ruleError(err error) error {
+	if errors.Is(err, maintenance.ErrTooManyOccurrences) {
+		return &InvalidError{Msg: err.Error()}
+	}
+	return err
+}
+
 func txNow(ctx context.Context, tx *sql.Tx) (time.Time, error) {
 	var now time.Time
 	if err := tx.QueryRowContext(ctx, `SELECT NOW()`).Scan(&now); err != nil {
@@ -172,7 +182,7 @@ func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.Cr
 		return nil, err
 	}
 	if err := maintenance.Materialize(ctx, tx, tenantID, windowID, rule, now); err != nil {
-		return nil, err
+		return nil, ruleError(err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit transaction: %w", err)
@@ -243,11 +253,13 @@ func (s *Service) List(ctx context.Context, tenantID uuid.UUID, status string, m
 	}, nil
 }
 
-// Update partially updates a window; when MonitorIDs is present the target set
-// is replaced atomically. A changed schedule (times or recurrence) is applied
-// to the occurrences as of now: ended ones are history and never change, the
-// one in progress keeps its start, future ones are regenerated
-// (maintenance.Reschedule).
+// Update partially updates a window. Both a changed target set and a changed
+// schedule (times or recurrence) apply as of now, under the window's row
+// lock (which the horizon roller also takes): ended occurrences are history
+// and keep what they covered, the one in progress keeps its start, future
+// ones are regenerated (maintenance.Reschedule); a removed monitor stays
+// covered by everything before the edit, an added one is covered from it on
+// (maintenance.Retarget).
 func (s *Service) Update(ctx context.Context, tenantID, windowID uuid.UUID, req *models.UpdateMaintenanceWindowRequest) (*models.MaintenanceWindow, error) {
 	existing, err := s.Get(ctx, tenantID, windowID)
 	if err != nil {
@@ -316,25 +328,21 @@ func (s *Service) Update(ctx context.Context, tenantID, windowID uuid.UUID, req 
 		return nil, ErrNotFound
 	}
 
+	now, err := txNow(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	if req.MonitorIDs != nil {
 		if err := validateMonitorIDsTx(ctx, tx, tenantID, monitorIDs); err != nil {
 			return nil, err
 		}
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM maintenance_window_monitors WHERE maintenance_window_id = $1`, windowID); err != nil {
-			return nil, fmt.Errorf("failed to clear window monitors: %w", err)
-		}
-		if err := insertMonitorLinksTx(ctx, tx, windowID, monitorIDs); err != nil {
+		if err := maintenance.Retarget(ctx, tx, windowID, monitorIDs, now); err != nil {
 			return nil, err
 		}
 	}
 	if rescheduled {
-		now, err := txNow(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
 		if err := maintenance.Reschedule(ctx, tx, tenantID, windowID, rule, now); err != nil {
-			return nil, err
+			return nil, ruleError(err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

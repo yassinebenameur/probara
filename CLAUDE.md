@@ -272,6 +272,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `RollForward` in the scheduler's roller). Anything that asks "in
   maintenance" uses its fragments; anything that creates a window must also
   create its occurrence (raw SQL inserts in tests and `seed-demo` included).
+  Targets are history too: change a window's monitors only through
+  `maintenance.Retarget` (never DELETE + reinsert links), and keep the
+  roller's per-window `FOR UPDATE` — it is what serializes it with API edits.
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the

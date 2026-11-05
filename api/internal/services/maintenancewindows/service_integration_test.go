@@ -13,6 +13,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	maintenancewindows "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -378,4 +379,116 @@ func TestMaintenanceWindowEndOccurrenceKeepsRule(t *testing.T) {
 	occ := windowOccurrences(ctx, t, dbClient, w.ID)
 	require.True(t, occ[0].start.Equal(now.Add(-10*time.Minute)))
 	require.WithinDuration(t, time.Now(), occ[0].end, 5*time.Second, "the running occurrence ended now, its past kept")
+}
+
+func coveredSpans(ctx context.Context, t *testing.T, dbClient interface {
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+}, tenantID, monitorID uuid.UUID, from, to time.Time) []occRow {
+	t.Helper()
+	rows, err := dbClient.QueryContext(ctx, `
+		SELECT c.starts_at, c.ends_at FROM `+maintenance.OccurrenceRangesSQL("$1", "$2", "$3", "$4")+` c
+		ORDER BY c.starts_at`, tenantID, monitorID, from, to)
+	require.NoError(t, err)
+	defer rows.Close()
+	var out []occRow
+	for rows.Next() {
+		var o occRow
+		require.NoError(t, rows.Scan(&o.start, &o.end))
+		o.start, o.end = o.start.UTC(), o.end.UTC()
+		out = append(out, o)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+// S-M5: a target edit takes effect when saved, like a schedule edit. A
+// removed monitor keeps the coverage of every occurrence before the edit
+// (SLA history), an added one is covered only from the edit on.
+func TestMaintenanceWindowTargetEditKeepsHistory(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mw-targets")
+	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "a")
+	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "b")
+	monitorC := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "c")
+	svc := maintenancewindows.NewService(dbClient)
+	now := time.Now().UTC().Truncate(time.Second)
+	start := now.Add(-48*time.Hour - 30*time.Minute)
+	running := now.Add(-30 * time.Minute)
+
+	w, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "nightly", StartsAt: start, EndsAt: start.Add(time.Hour),
+		MonitorIDs: []string{monitorA.String(), monitorB.String()},
+		Recurrence: &models.MaintenanceRecurrence{Frequency: "daily"},
+	})
+	require.NoError(t, err)
+	// An occurrence that ended before the edit.
+	_, err = dbClient.ExecContext(ctx, `
+		INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) VALUES ($1, $2, $3, $4)`,
+		w.ID, tenantID, start, start.Add(time.Hour))
+	require.NoError(t, err)
+
+	ids := []string{monitorA.String(), monitorC.String()}
+	got, err := svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{MonitorIDs: &ids})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []uuid.UUID{monitorA, monitorC}, got.MonitorIDs)
+	var edit time.Time
+	require.NoError(t, dbClient.QueryRowContext(ctx, `
+		SELECT linked_at FROM maintenance_window_monitors WHERE maintenance_window_id = $1 AND monitor_id = $2`,
+		w.ID, monitorC).Scan(&edit))
+	edit = edit.UTC()
+
+	from, to := start.Add(-time.Hour), now.Add(36*time.Hour)
+	a := coveredSpans(ctx, t, dbClient, tenantID, monitorA, from, to)
+	require.GreaterOrEqual(t, len(a), 3)
+	require.Equal(t, occRow{start, start.Add(time.Hour)}, a[0], "a kept monitor keeps everything")
+	require.Equal(t, occRow{running, running.Add(time.Hour)}, a[1])
+
+	b := coveredSpans(ctx, t, dbClient, tenantID, monitorB, from, to)
+	require.Equal(t, []occRow{
+		{start, start.Add(time.Hour)}, // ended occurrence: still planned downtime for B
+		{running, edit},               // the running one up to the edit
+	}, b, "a removed monitor keeps its coverage before the edit and nothing after")
+
+	c := coveredSpans(ctx, t, dbClient, tenantID, monitorC, from, to)
+	require.GreaterOrEqual(t, len(c), 2)
+	require.Equal(t, occRow{edit, running.Add(time.Hour)}, c[0], "an added monitor is covered from the edit, never before")
+	require.Equal(t, len(a)-1, len(c))
+
+	// The in-progress predicates agree: B is out of maintenance now, C in.
+	inMaint := func(monitorID uuid.UUID, at string) bool {
+		var in bool
+		require.NoError(t, dbClient.QueryRowContext(ctx, `
+			SELECT `+maintenance.InMaintenanceAtPredicate("m", at)+` FROM monitors m WHERE m.id = $1`,
+			monitorID).Scan(&in))
+		return in
+	}
+	require.False(t, inMaint(monitorB, "NOW()"))
+	require.True(t, inMaint(monitorC, "NOW()"))
+	require.True(t, inMaint(monitorB, "'"+start.Add(time.Minute).Format(time.RFC3339)+"'::timestamptz"))
+	require.False(t, inMaint(monitorC, "'"+start.Add(time.Minute).Format(time.RFC3339)+"'::timestamptz"))
+
+	// A title-only edit leaves the links (and their linked_at) alone.
+	title := "renamed"
+	_, err = svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{Title: &title})
+	require.NoError(t, err)
+	require.Equal(t, c, coveredSpans(ctx, t, dbClient, tenantID, monitorC, from, to))
+
+	// Removing a monitor from a window that has not covered it yet leaves
+	// no history behind.
+	future, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "later", StartsAt: now.Add(24 * time.Hour), EndsAt: now.Add(25 * time.Hour),
+		MonitorIDs: []string{monitorA.String(), monitorB.String()},
+	})
+	require.NoError(t, err)
+	onlyA := []string{monitorA.String()}
+	_, err = svc.Update(ctx, tenantID, future.ID, &models.UpdateMaintenanceWindowRequest{MonitorIDs: &onlyA})
+	require.NoError(t, err)
+	var past int
+	require.NoError(t, dbClient.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM maintenance_window_past_targets WHERE maintenance_window_id = $1`, future.ID).Scan(&past))
+	require.Zero(t, past)
+	require.Empty(t, coveredSpans(ctx, t, dbClient, tenantID, monitorB, edit, to), "nothing covers b after its removal")
 }
