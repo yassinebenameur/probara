@@ -353,13 +353,15 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 
 // AcknowledgeAlert marks an alert as acknowledged by actor, recording who
 // and through which surface. With the tenant's ack_stops_notifications on,
-// the alerter then stops its escalation tiers and reminders.
+// the alerter then stops its escalation tiers and reminders. The first
+// acknowledgement also sets the SLA report's MTTA pair (firstAckColumns).
 func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error) {
 	now := time.Now()
 	query := `
 		UPDATE alerts
 		SET status = 'acknowledged', acknowledged_at = $1, updated_at = $1,
-			acknowledged_by_user_id = $4, acknowledged_via = $5
+			acknowledged_by_user_id = $4, acknowledged_via = $5,
+			` + firstAckColumns("alerts", "$1") + `
 		WHERE id = $2 AND tenant_id = $3 AND status = 'active'
 		RETURNING id
 	`
@@ -374,6 +376,18 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 	}
 
 	return s.getAlert(ctx, tenantID, alertID)
+}
+
+// firstAckColumns is the SET fragment every acknowledgement carries. A
+// reopen and an unacknowledge clear acknowledged_at, so SLA reports measure
+// MTTA from first_acknowledged_at instead: the alert's first acknowledgement,
+// against the start of the paging episode it acknowledged (triggered_at, or
+// reopened_at for a relapse), so a relapse never stretches it across the
+// recovered gap. Both are set once and never cleared. alias is the UPDATE's
+// alerts alias and at the acknowledgement time's parameter.
+func firstAckColumns(alias, at string) string {
+	return `first_acknowledged_at = COALESCE(` + alias + `.first_acknowledged_at, ` + at + `),
+			first_ack_episode_started_at = COALESCE(` + alias + `.first_ack_episode_started_at, ` + alias + `.reopened_at, ` + alias + `.triggered_at)`
 }
 
 // ResolveAlert marks an alert as resolved, ending any snooze at the resolve

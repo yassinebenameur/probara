@@ -60,8 +60,9 @@ func TestSLAService(t *testing.T) {
 	interval(ctx, t, dbClient, tenantID, b, "down", downStart, at(downStart.Add(time.Hour)))
 	interval(ctx, t, dbClient, tenantID, b, "up", downStart.Add(time.Hour), at(nov1))
 	_, err = dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, acknowledged_at, resolved_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, 'availability', 'resolved', $4, $5, $6, 3, NOW(), NOW())
+		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, acknowledged_at, resolved_at, failure_count, created_at, updated_at,
+			first_acknowledged_at, first_ack_episode_started_at)
+		VALUES ($1, $2, $3, 'availability', 'resolved', $4, $5, $6, 3, NOW(), NOW(), $5, $4)
 	`, uuid.New(), tenantID, b, downStart.Add(5*time.Minute), downStart.Add(15*time.Minute), downStart.Add(time.Hour))
 	require.NoError(t, err)
 

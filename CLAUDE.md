@@ -711,7 +711,9 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff
   (routes without `StopOnAck`). A muted drop (not a resolve) releases the
   alerter's claim in the same transaction (`releaseMutedClaim`), so the
-  event fires again once the mute lifts.
+  event fires again once the mute lifts; a resolve dropped for a reopen
+  hands its `resolved` claim back to `created`
+  (`releaseSupersededResolveClaim`), so the relapse's resolve reaches it.
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.
@@ -766,6 +768,10 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   `RecipientEventKeyFor`, `OvertakenAckKeyFor`); never build
   `alert:channel:event` by hand. NULL `resolved_via` marks the alerter's own
   resolves, the only ones that reopen, so any new manual resolve path sets it.
+  A reopen clears `acknowledged_at`, so SLA MTTA reads
+  `first_acknowledged_at`/`first_ack_episode_started_at`, set once by every
+  acknowledgement path through `firstAckColumns`
+  (`api/internal/services/alerts/service.go`) and never cleared.
 - **Delivery history is append-only, one row per attempt or drop**
   (`shared/notifications/deliverylog`, table `alert_notification_deliveries`,
   kept `deliverylog.RetentionDays` by the scheduler's retention cleanup).

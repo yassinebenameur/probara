@@ -26,7 +26,10 @@ import (
 // alert: its escalation tiers count from reopened_at
 // (alertrouting.DispatchEligibleSinceExpr), a route that heard the previous
 // resolve is paged again through the "reopened" claim, and the page goes out
-// as a "created" event with Alert.RelapseCount > 0.
+// as a "created" event with Alert.RelapseCount > 0. It leaves
+// first_acknowledged_at / first_ack_episode_started_at alone: SLA reports
+// measure MTTA from the alert's first acknowledgement, which a relapse must
+// neither erase nor stretch across the recovered gap.
 //
 // Only the alerter's own resolves reopen: a manual resolve (resolved_via set
 // by the API) never does, nor does any alert but the monitor's latest

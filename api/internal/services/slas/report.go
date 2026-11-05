@@ -273,11 +273,18 @@ func outageRow(o sharedanalytics.Outage, name string) models.SLAReportOutage {
 
 // alertResponse fills MTTA from availability alerts triggered in the window,
 // including group roll-up alerts on the SLA's explicit group monitors.
+//
+// A relapse (an alert reopened within the reopen cooldown) is the same
+// alert: it counts once, in the period of its first trigger. MTTA reads the
+// first acknowledgement (first_acknowledged_at), never acknowledged_at, which
+// a reopen or an unacknowledge clears, and measures it from the start of the
+// episode it acknowledged, so a relapse neither erases an earlier ack nor
+// stretches one across the recovered gap.
 func (s *Service) alertResponse(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, window sharedanalytics.TimeRange, out *models.SLAReportResponse) error {
 	var mtta sql.NullFloat64
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*), COUNT(acknowledged_at),
-			AVG(EXTRACT(EPOCH FROM acknowledged_at - triggered_at)) FILTER (WHERE acknowledged_at IS NOT NULL)
+		SELECT COUNT(*), COUNT(first_acknowledged_at),
+			AVG(EXTRACT(EPOCH FROM first_acknowledged_at - first_ack_episode_started_at)) FILTER (WHERE first_acknowledged_at IS NOT NULL)
 		FROM alerts
 		WHERE tenant_id = $1 AND kind = 'availability' AND monitor_id = ANY($2)
 		  AND triggered_at >= $3 AND triggered_at < $4

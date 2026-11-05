@@ -86,7 +86,14 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 			} else {
 				q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.alertStatus, false, tc.rowRelapse))
 			}
-			mock.ExpectRollback()
+			if tc.eventType == "resolved" && !tc.wantSend {
+				// A resolve dropped for a reopen hands its claim back
+				// (releaseSupersededResolveClaim; a no-op without the
+				// claim's timestamp) and commits.
+				mock.ExpectCommit()
+			} else {
+				mock.ExpectRollback()
+			}
 
 			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
 			raw, _ := json.Marshal(notifications.DispatchEnvelope{
