@@ -45,7 +45,8 @@ type Info struct {
 	VerifiedChains   int      `json:"verified_chains,omitempty"`
 	PeerCertificates int      `json:"peer_certificates,omitempty"`
 	// ChainNotAfter is the earliest NotAfter across the chain (chainOf): the
-	// leaf plus every intermediate, never a self-signed root. It equals
+	// leaf plus every intermediate on its path, never a self-signed root or
+	// an expired cross-sign of a root. It equals
 	// NotAfter when the leaf expires first.
 	ChainNotAfter string `json:"chain_not_after,omitempty"`
 	// ChainMinDays is days_until_expiry for ChainNotAfter.
@@ -123,7 +124,7 @@ func FromConnectionState(cs tls.ConnectionState, serverName string, now time.Tim
 	for _, ip := range leaf.IPAddresses {
 		info.IPAddresses = append(info.IPAddresses, ip.String())
 	}
-	chain := chainOf(cs)
+	chain := chainOf(cs, now)
 	earliest := chain[0]
 	for _, c := range chain {
 		info.Chain = append(info.Chain, ChainCert{Subject: c.Subject.String(), NotAfter: c.NotAfter.UTC().Format(time.RFC3339)})
@@ -137,24 +138,91 @@ func FromConnectionState(cs tls.ConnectionState, serverName string, now time.Tim
 	return info
 }
 
-// chainOf is the chain whose expiry matters: the first verified chain, else
-// (InsecureSkipVerify, nothing verified) what the server presented. Either
-// way it keeps the leaf and drops self-signed certificates after it: a
-// trust anchor's expiry is the trust store's business, and a server that
-// sends its root gains nothing from it. A self-signed leaf stays.
-func chainOf(cs tls.ConnectionState) []*x509.Certificate {
-	certs := cs.PeerCertificates
+// chainOf is the chain whose expiry matters, leaf first.
+//
+// With a verified chain it is the first one, minus self-signed certificates
+// after the leaf: a trust anchor's expiry is the trust store's business.
+//
+// Without one (InsecureSkipVerify) the presented list is not trusted to be
+// a path: servers send stale or extra certificates. So it walks issuer to
+// issuer from the leaf (issuer name matches subject and the signature
+// checks), and stops at a self-signed certificate, at an issuer the server
+// did not present, and before an expired certificate that cross-signs a
+// root (isExpiredRootCrossSign), e.g. ISRG Root X1 signed by the expired
+// DST Root CA X3, which real clients skip because they hold the root.
+// A self-signed leaf stays.
+func chainOf(cs tls.ConnectionState, now time.Time) []*x509.Certificate {
 	if len(cs.VerifiedChains) > 0 && len(cs.VerifiedChains[0]) > 0 {
-		certs = cs.VerifiedChains[0]
-	}
-	out := []*x509.Certificate{certs[0]}
-	for _, c := range certs[1:] {
-		if isSelfSigned(c) {
-			continue
+		certs := cs.VerifiedChains[0]
+		out := []*x509.Certificate{certs[0]}
+		for _, c := range certs[1:] {
+			if !isSelfSigned(c) {
+				out = append(out, c)
+			}
 		}
-		out = append(out, c)
+		return out
+	}
+
+	presented := cs.PeerCertificates
+	out := []*x509.Certificate{presented[0]}
+	used := map[int]bool{0: true}
+	current := presented[0]
+	for !isSelfSigned(current) {
+		next := -1
+		for i, c := range presented {
+			if used[i] || !bytes.Equal(c.RawSubject, current.RawIssuer) || current.CheckSignatureFrom(c) != nil {
+				continue
+			}
+			next = i
+			break
+		}
+		if next < 0 {
+			break // issuer not presented
+		}
+		issuer := presented[next]
+		if isSelfSigned(issuer) || isExpiredRootCrossSign(issuer, current, presented, now) {
+			break
+		}
+		used[next] = true
+		out = append(out, issuer)
+		current = issuer
 	}
 	return out
+}
+
+// trustedRoots is the root store isExpiredRootCrossSign consults; a test
+// seam (production: the system store).
+var trustedRoots = func() *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil
+	}
+	return pool
+}
+
+// isExpiredRootCrossSign reports whether issuer (the certificate that
+// signed child) is an expired cross-sign of a root: expired at now, and its
+// subject is also a root, either self-signed among the presented
+// certificates or a trusted root that child verifies against directly.
+func isExpiredRootCrossSign(issuer, child *x509.Certificate, presented []*x509.Certificate, now time.Time) bool {
+	if !now.After(issuer.NotAfter) {
+		return false
+	}
+	for _, c := range presented {
+		if c != issuer && bytes.Equal(c.RawSubject, issuer.RawSubject) && isSelfSigned(c) {
+			return true
+		}
+	}
+	roots := trustedRoots()
+	if roots == nil {
+		return false
+	}
+	_, err := child.Verify(x509.VerifyOptions{
+		Roots:       roots,
+		CurrentTime: now,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	})
+	return err == nil
 }
 
 func isSelfSigned(c *x509.Certificate) bool {

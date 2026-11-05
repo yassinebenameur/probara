@@ -327,3 +327,80 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 	rb, _ := json.Marshal(vb)
 	return string(ra) == string(rb)
 }
+
+// crossSign issues a certificate with subject's name and key, signed by
+// signer: a root cross-signed by an older root.
+func crossSign(t *testing.T, subject, signer *testCA, notAfter time.Time) *x509.Certificate {
+	t.Helper()
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               subject.cert.Subject,
+		NotBefore:             time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              notAfter,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer.cert, &subject.key.PublicKey, signer.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+// Without a verified chain (tls_skip_verify) the chain is the issuer path
+// from the leaf, not every presented certificate: a stale cross-signed root
+// the server still sends (ISRG Root X1 by the expired DST Root CA X3) must
+// not drive chain_min_days negative, and neither may an unrelated extra.
+func TestFromConnectionStateUnverifiedChainWalksIssuerPath(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	oldRoot := newCert(t, "Old Root", now.Add(-20*day), nil, true)
+	root := newCert(t, "Test Root X1", now.Add(3000*day), nil, true)
+	expiredCross := crossSign(t, root, oldRoot, now.Add(-16*day))
+	validCross := crossSign(t, root, oldRoot, now.Add(25*day))
+	inter := newCert(t, "Test R3", now.Add(60*day), root, true)
+	leaf := newCert(t, "svc.example.com", now.Add(80*day), inter, false)
+	stray := newCert(t, "Unrelated CA", now.Add(-5*day), nil, true)
+	strayInter := newCert(t, "Stray Intermediate", now.Add(-3*day), stray, true)
+
+	trusted := x509.NewCertPool()
+	trusted.AddCert(root.cert)
+	noRoots := func() *x509.CertPool { return x509.NewCertPool() }
+	withRoot := func() *x509.CertPool { return trusted }
+	defer func(orig func() *x509.CertPool) { trustedRoots = orig }(trustedRoots)
+
+	tests := []struct {
+		name      string
+		presented []*x509.Certificate
+		roots     func() *x509.CertPool
+		wantChain []string
+		wantDays  int
+	}{
+		{"expired cross-sign of a trusted root is skipped", []*x509.Certificate{leaf.cert, inter.cert, expiredCross}, withRoot, []string{"CN=svc.example.com", "CN=Test R3"}, 60},
+		{"expired cross-sign of a presented root is skipped", []*x509.Certificate{leaf.cert, inter.cert, expiredCross, root.cert}, noRoots, []string{"CN=svc.example.com", "CN=Test R3"}, 60},
+		{"unrelated presented certificates are ignored", []*x509.Certificate{leaf.cert, strayInter.cert, inter.cert, stray.cert}, noRoots, []string{"CN=svc.example.com", "CN=Test R3"}, 60},
+		{"an unexpired cross-sign is on the path", []*x509.Certificate{leaf.cert, inter.cert, validCross}, withRoot, []string{"CN=svc.example.com", "CN=Test R3", "CN=Test Root X1"}, 25},
+		{"the walk stops at an issuer not presented", []*x509.Certificate{leaf.cert}, noRoots, []string{"CN=svc.example.com"}, 80},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trustedRoots = tt.roots
+			info := FromConnectionState(tls.ConnectionState{PeerCertificates: tt.presented}, "svc.example.com", now)
+			var got []string
+			for _, c := range info.Chain {
+				got = append(got, c.Subject)
+			}
+			if strings.Join(got, "|") != strings.Join(tt.wantChain, "|") {
+				t.Fatalf("chain = %v, want %v", got, tt.wantChain)
+			}
+			if info.ChainMinDays == nil || *info.ChainMinDays != tt.wantDays {
+				t.Fatalf("chain_min_days = %v, want %d", info.ChainMinDays, tt.wantDays)
+			}
+		})
+	}
+}

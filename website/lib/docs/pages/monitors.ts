@@ -239,7 +239,7 @@ export const MONITORS_PAGE: DocPage = {
             ],
             [
               "`tls_check_chain`",
-              "With `tls_min_days_valid`, measure the earliest expiry across the presented chain (leaf and intermediates, never a self-signed root) instead of the leaf alone. The form turns it on for new monitors; absent means the leaf only",
+              "With `tls_min_days_valid`, measure the earliest expiry across the certificate chain (leaf and intermediates on its issuer path, never a self-signed root or an expired cross-sign of a root) instead of the leaf alone. The form turns it on for new monitors; absent means the leaf only",
             ],
             [
               "`tls_server_name`",
