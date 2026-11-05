@@ -116,6 +116,12 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- Workspace (tenant) delete is a soft delete plus a scheduler purge
+  (`shared/tenancy`, `purger_tenants.go`): the API stamps `deleted_at` and
+  revokes access, the purger drains in batches; never `DELETE FROM tenants`
+  from the API. A new table with `tenant_id` must be classified in
+  `TestTenantPurgeCoversEveryTenantTable`, and a new tenant listing or
+  public read filters `deleted_at IS NULL` (or `tenancy.IsDeleted`).
 
 ## Single sources of truth — never duplicate these lists
 

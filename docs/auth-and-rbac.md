@@ -10,8 +10,8 @@ Three credential types, resolved by `api/internal/middleware/auth.go`:
 - **Admin users** (`admin_users`) — humans. JWT access cookie (15 min) +
   rotating opaque refresh session. Two platform roles:
   - `superadmin` — full platform access: any tenant (via `X-Tenant-ID`),
-    user management, tenant list. All pre-rework admins were backfilled to
-    superadmin.
+    user management, tenant list, workspace create/rename/delete. All
+    pre-rework admins were backfilled to superadmin.
   - `member` — access only through `tenant_memberships` rows. A
     tenant-scoped request requires a membership in that tenant (403
     otherwise); `GET /v1/tenants` returns only the member's tenants.
@@ -83,10 +83,30 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   inherits it, and `/monitors/{id}/run` and `/monitors/test` in their
   handlers (`monitorservice.RequireCallPermission`). Editors and API keys of
   any scope get 403.
-- `RequireSuperadmin`: `/users/*`.
+- `RequireSuperadmin`: `/users/*`, `POST /tenants`, `PATCH`/`DELETE
+  /tenants/{id}`.
 
 Audit runs *outside* the write gate so denied attempts are recorded with
 `outcome=denied`.
+
+## Deleted workspaces
+
+Workspace delete (`DELETE /tenants/{id}`, `confirm_name` must repeat the
+name) is a soft delete (migration 000105, `shared/tenancy`). One transaction
+stamps `tenants.deleted_at`, tombstones the workspace's monitors and
+locations, revokes its API keys and MCP grants, deletes its memberships and
+SSO group mappings, and invalidates its discovery collector tokens. From then
+on `AuthMiddleware` answers 403 to any session request scoped to it,
+superadmins included (`rejectDeletedTenant`, `tenancy.IsDeleted`), every
+tenant list omits it, and the status-page service stops serving its pages.
+The scheduler purger removes the data in bounded batches and then the row
+(see `docs/architecture.md`); the API never deletes a tenant row. The
+default workspace (`tenancy.DefaultTenantID`), the
+`OIDC_JIT_DEFAULT_TENANT_ID` workspace and the last live workspace cannot be
+deleted. Names are unique among live workspaces only, so a deleted name is
+free at once. Create, rename and delete record `tenant.create`,
+`tenant.rename` and `tenant.delete` as platform-level audit events with a
+name snapshot.
 
 ## MCP
 
@@ -118,7 +138,9 @@ the MCP package decides access. Rules that keep it so:
 derives `resource.verb` actions for every mutation, and explicit events
 cover auth lifecycle (`auth.login`/`auth.logout`/`auth.oidc_login` incl.
 failures) and user/key management (those subtrees are skipped by the
-generic layer). Writes go through an async batching recorder — never
+generic layer). Workspace management records its own success events
+(`tenant.create`/`.rename`/`.delete`, platform-level); the generic layer
+still records its refusals and failures. Writes go through an async batching recorder — never
 blocks or fails a request; drops rows quietly during the pre-migration
 deploy window.
 

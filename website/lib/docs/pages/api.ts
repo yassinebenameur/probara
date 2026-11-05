@@ -967,7 +967,19 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/tenants`",
-              "Admin session; list membership-filtered tenants or all for superadmin",
+              "Admin session; list membership-filtered tenants or all for superadmin; deleted workspaces are never listed",
+            ],
+            [
+              "`POST /api/v1/tenants`",
+              "Superadmin; create a workspace (`name`)",
+            ],
+            [
+              "`PATCH /api/v1/tenants/{id}`",
+              "Superadmin; rename a workspace (`name`)",
+            ],
+            [
+              "`DELETE /api/v1/tenants/{id}`",
+              "Superadmin; delete a workspace (`confirm_name` repeats its name); access stops at once and the data is purged in the background",
             ],
             [
               "`GET /api/v1/tenant-settings`",

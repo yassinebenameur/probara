@@ -119,6 +119,9 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 		}
 		tenantUUID = parsed
 	}
+	if rejectDeletedTenant(w, r, dbClient, log, tenantUUID) {
+		return
+	}
 
 	var platformRole string
 	var disabledAt *time.Time

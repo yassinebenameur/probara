@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // pushStore is the status-page service's ONLY write path to Postgres.
@@ -110,17 +112,23 @@ func (s *pushStore) DeleteSubscription(ctx context.Context, id uuid.UUID) error 
 // subscribe handler cannot act on a stale or half-read page.
 func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, bool, error) {
 	const query = `
-		SELECT id, COALESCE(settings->>'enable_push_notifications', 'false') = 'true'
+		SELECT id, tenant_id, COALESCE(settings->>'enable_push_notifications', 'false') = 'true'
 		FROM status_pages
 		WHERE slug = $1
 	`
-	var id uuid.UUID
+	var id, tenantID uuid.UUID
 	var enabled bool
-	switch err := s.db.QueryRowContext(ctx, query, slug).Scan(&id, &enabled); {
+	switch err := s.db.QueryRowContext(ctx, query, slug).Scan(&id, &tenantID, &enabled); {
 	case err == sql.ErrNoRows:
 		return uuid.UUID{}, false, nil
 	case err != nil:
 		return uuid.UUID{}, false, fmt.Errorf("resolve status page for push: %w", err)
+	}
+	// A deleted workspace's page is gone for subscribers too.
+	if deleted, err := tenancy.IsDeleted(ctx, s.db, tenantID); err != nil {
+		return uuid.UUID{}, false, err
+	} else if deleted {
+		return uuid.UUID{}, false, nil
 	}
 	return id, enabled, nil
 }
