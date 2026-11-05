@@ -480,7 +480,10 @@ or imported groups come back empty. Any other path that creates groups through
   unset omits them, never a guessed host. It also gates the signed
   acknowledge link (`present.Message.AckURL`, created/reminder only, never
   on `DispatchRequest.Test`), which every plugin that can carry a link
-  renders and the paging plugins leave out.
+  renders and the paging plugins leave out. SLA report schedules
+  (`api/internal/services/reportschedules`) need both on the api: every
+  report email carries an unsubscribe link, so without either a schedule
+  cannot be enabled.
 - **Notification egress**: the same three workloads read
   `NOTIFICATION_BLOCK_PRIVATE_IPS` (default **true**) /
   `NOTIFICATION_ALLOWED_CIDRS` (`loadNotificationEgressConfig`); each main

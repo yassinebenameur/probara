@@ -238,6 +238,12 @@ headline agree. SLA reports are computed on request by the API from
 freezes the report document in `sla_reports` (see
 [state semantics](state-semantics.md) S-U6/S-U7).
 
+Report schedules (`sla_report_schedules`) email a closed period's report: a
+runner in every API replica (`api/internal/services/reportschedules`) claims
+due rows `FOR UPDATE SKIP LOCKED`, issues the period through the SLA
+service, and sends one message per recipient through the platform mailer
+with a public unsubscribe link (`/api/v1/report-unsubscribe/{token}`).
+
 ## Shared code and security boundaries
 
 - `shared/monitorstate`, `shared/analytics`, and `shared/alertrouting` hold

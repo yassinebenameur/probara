@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-pdf/fpdf"
@@ -593,4 +594,42 @@ func fitText(pdf *fpdf.Fpdf, s string, width float64) string {
 		s = s[:len(s)-1]
 	}
 	return s + "..."
+}
+
+// Verdict is the report's headline verdict: "Met", "Breached" or "No data".
+func Verdict(r *models.SLAReport) string {
+	switch {
+	case r.Summary.Met == nil:
+		return "No data"
+	case *r.Summary.Met:
+		return "Met"
+	default:
+		return "Breached"
+	}
+}
+
+// PeriodLabel is the report period as local dates, "1 Sep 2026 - 30 Sep
+// 2026 (Europe/Paris)", the last day inclusive like the PDF header.
+func PeriodLabel(r *models.SLAReport) string {
+	loc := reportLocation(r)
+	return fmt.Sprintf("%s - %s (%s)", r.Period.Start.In(loc).Format("2 Jan 2006"),
+		r.Period.End.Add(-time.Second).In(loc).Format("2 Jan 2006"), r.Definition.Timezone)
+}
+
+// SummaryText is the report's headline as plain-text lines, worded like the
+// PDF: the body of a scheduled report email.
+func SummaryText(r *models.SLAReport) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Availability: %s (target %s%%) - %s\n", humanPct(r.Summary.AvailabilityPct),
+		strconv.FormatFloat(r.Definition.TargetPct, 'f', -1, 64), Verdict(r))
+	fmt.Fprintf(&b, "Coverage: %s%%\n", strconv.FormatFloat(r.Summary.CoveragePct, 'f', 1, 64))
+	fmt.Fprintf(&b, "Error budget: %s consumed of %s allowed, %s remaining\n", humanDuration(r.Budget.ConsumedSeconds),
+		humanDuration(r.Budget.AllowedSeconds), budgetRemaining(r.Budget))
+	if r.Budget.BurnRate != nil {
+		fmt.Fprintf(&b, "Burn rate: %s (1x = on budget)\n", burnRate(r.Budget.BurnRate))
+	}
+	fmt.Fprintf(&b, "Outages: %d, mean time to recover %s\n", r.Response.OutageCount, optHuman(r.Response.MTTRSeconds))
+	fmt.Fprintf(&b, "Availability alerts: %d (%d acknowledged), mean time to acknowledge %s\n",
+		r.Response.AlertCount, r.Response.AcknowledgedCount, optHuman(r.Response.MTTASeconds))
+	return b.String()
 }

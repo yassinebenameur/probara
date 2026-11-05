@@ -4,10 +4,10 @@ export const SLAS_PAGE: DocPage = {
   slug: "slas",
   group: "Use Probara",
   title: "SLA reporting",
-  description: "Define availability targets for sets of monitors, track error budgets per calendar period, and export or freeze reports.",
+  description: "Define availability targets for sets of monitors, track error budgets per calendar period, export or freeze reports, and email them on a schedule.",
   eyebrow: "Availability objectives",
-  readingTime: "8 min read",
-  keywords: ["SLA", "SLO", "error budget", "burn rate", "burn-down", "availability report", "uptime report", "MTTR", "MTTA", "PDF", "CSV", "suspected cause", "root cause"],
+  readingTime: "10 min read",
+  keywords: ["SLA", "SLO", "error budget", "burn rate", "burn-down", "availability report", "uptime report", "MTTR", "MTTA", "PDF", "CSV", "scheduled report", "email report", "suspected cause", "root cause"],
   sections: [
     {
       id: "define",
@@ -139,7 +139,39 @@ export const SLAS_PAGE: DocPage = {
           type: "callout",
           tone: "warning",
           title: "Limits in this release",
-          text: "Reports are not emailed or scheduled; issue and download them from the UI or API. Availability alerts count toward MTTA only when they are on a member monitor or on a group monitor listed explicitly on the SLA. The PDF uses built-in fonts, so characters outside Western European scripts may not render.",
+          text: "Availability alerts count toward MTTA only when they are on a member monitor or on a group monitor listed explicitly on the SLA. The PDF uses built-in fonts, so characters outside Western European scripts may not render.",
+        },
+      ],
+    },
+    {
+      id: "schedules",
+      title: "Scheduled reports",
+      intro:
+        "A report schedule emails an SLA's report to a list of recipients each time a period closes, issued first so every recipient gets the same frozen document.",
+      blocks: [
+        {
+          type: "paragraph",
+          text: "Open an SLA's Schedules tab as an editor or admin and add a schedule: recipients (any email addresses, inside the workspace or not, up to 50), the attachments (PDF, CSV or both) and whether to issue the period before sending it (on by default). An SLA can have up to 10 schedules. The first report a new schedule sends is the running period's; re-enabling a paused schedule likewise starts from the running period instead of sending the periods it missed.",
+        },
+        {
+          type: "list",
+          items: [
+            "About an hour after each period closes in the SLA's timezone (the wait lets late check results land), the API issues the closed period, exactly as Issue report does, and records the schedule as its issuer (Report schedule). When the period was already issued, that copy is sent. With issuing off, the issued copy is sent when there is one, else the live report of the closed period, and the email says it is not frozen.",
+            "Every recipient gets their own message (no recipient sees the others): the headline (availability against target, coverage, error budget and burn rate, outages, MTTR, alerts and MTTA), the attachments, a link to the SLA in Probara for workspace members, and an unsubscribe link.",
+            "Each closed period goes out once. The runner runs in every API replica, every 5 minutes, and claims due schedules with a database row lock that the other replicas skip, so more replicas never mean duplicate emails. A failed delivery is not retried: the schedule shows how many recipients it reached and the sanitized error, and Send now resends.",
+            "Send now emails the last closed period immediately, without issuing it (the issued copy when there is one, else the live report), and leaves the next scheduled run alone. Use it to check the setup.",
+            "Sends, failures and unsubscribes are recorded in the audit log (report-schedule.send, report-schedule.unsubscribe).",
+          ],
+        },
+        {
+          type: "paragraph",
+          text: "The unsubscribe link opens a confirmation page in the operator UI that works signed out; mail clients that support one-click unsubscribe (the List-Unsubscribe and List-Unsubscribe-Post headers) use it directly. An unsubscribed address stays in the recipient list, marked unsubscribed, and gets nothing more from that schedule; there is no re-subscribe, so to mail it again delete the schedule and create a new one. Deleting a schedule invalidates every unsubscribe link it sent.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Needs SMTP and APP_BASE_URL on the API",
+          text: "Report emails go through the platform mailer (SMTP_HOST, SMTP_FROM and the other SMTP_* settings) and link to APP_BASE_URL for unsubscribing, both read by the API. Without either, a schedule can be created disabled but not enabled, and the Schedules tab says which setting is missing. If the mailer disappears later, enabled schedules still issue their periods and record that nothing was sent. See [Configuration](/docs/configuration/).",
         },
       ],
     },
@@ -156,6 +188,10 @@ export const SLAS_PAGE: DocPage = {
             ["GET /api/v1/slas/{id}/report", "Live report: period=2026-09 | 2026-Q3 | 2026-W39, or from=YYYY-MM-DD&to=YYYY-MM-DD, or neither for the running period. Add format=json|csv|pdf for a download."],
             ["GET/POST /api/v1/slas/{id}/reports", "List issued reports / issue one ({\"period\": \"2026-09\"}; empty body means the last closed period). 409 if already issued."],
             ["GET /api/v1/sla-reports/{id}[?format=]", "An issued report exactly as frozen."],
+            ["GET /api/v1/report-schedules[?sla_id=]", "Report schedules, with `mail_ready` (and `mail_problem`) saying whether the API can send."],
+            ["POST /api/v1/report-schedules, GET/PATCH/DELETE /api/v1/report-schedules/{id}", "Manage schedules: `sla_id`, `recipients`, `formats` (`pdf`, `csv`), `auto_issue`, `enabled`. PATCH is partial; lists replace."],
+            ["POST /api/v1/report-schedules/{id}/send", "Email the last closed period now, without issuing it."],
+            ["GET/POST /api/v1/report-unsubscribe/{token}", "Public: describe or follow a recipient's unsubscribe link (POST also serves one-click unsubscribe)."],
           ],
         },
         {

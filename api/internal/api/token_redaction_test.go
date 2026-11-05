@@ -34,7 +34,7 @@ func TestRealRouterRedactsPathTokens(t *testing.T) {
 	h := NewServer(cfg, log, metrics.NewRegistry("api-test"), &db.Client{DB: sqlDB}).http.Handler
 
 	const secret = "AQEsecretTOKENvalue_x-9"
-	for _, path := range []string{"/api/v1/alert-actions/", "/api/v1/push/"} {
+	for _, path := range []string{"/api/v1/alert-actions/", "/api/v1/push/", "/api/v1/report-unsubscribe/"} {
 		buf.Reset()
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, path+secret, nil))

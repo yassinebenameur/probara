@@ -69,6 +69,7 @@ import (
 	oidcmappingsservice "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
+	reportscheduleservice "github.com/yassinebenameur/probara/api/internal/services/reportschedules"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
@@ -101,6 +102,7 @@ type Server struct {
 	locationAuthConn   *nats.Conn
 	locationAuthErr    error
 	mcpErr             error
+	reportRunner       *reportscheduleservice.Runner
 }
 
 type monitorStatusNotifier struct {
@@ -204,6 +206,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	auditRecorder := auditservice.NewRecorder(dbClient, log)
 	auditPruner := auditservice.NewPruner(dbClient, log, cfg.AuditRetentionDays)
 	auditSvc := auditservice.NewService(dbClient)
+	reports := newReportDeps(dbClient, cfg, auditRecorder, log) // scheduled SLA reports (routes_reports.go)
 
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
 	r.Route("/api/v1/push", func(r chi.Router) {
@@ -287,6 +290,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		alertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_actions.go)
 		people := newPeopleDeps(dbClient, secretsEncryptor, cfg, auditRecorder, log)
 		peopleOpenRoutes(r, authMiddleware, people) // routes_people.go
+		reportUnsubscribeRoutes(r, reports)         // routes_reports.go
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -628,6 +632,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				registerWorkspaceRoutes(r, tenantSvc, cfg, auditRecorder, log)
 			})
 			peopleRoutes(r, people) // routes_people.go
+			// SLA report schedules (routes_reports.go)
+			reportScheduleRoutes(r, reports)
 
 			// Audit log (tenant admins and superadmins)
 			auditHandlers := audithandlers.NewHandlers(auditSvc, log)
@@ -686,6 +692,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
 		mcpErr:             mcpErr,
+		reportRunner:       reports.runner,
 	}
 }
 
@@ -729,6 +736,9 @@ func (s *Server) Start() error {
 	if s.auditPruner != nil {
 		s.auditPruner.Start()
 	}
+	if s.reportRunner != nil {
+		s.reportRunner.Start()
+	}
 
 	return s.http.ListenAndServe()
 }
@@ -752,6 +762,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.auditPruner != nil {
 		s.auditPruner.Stop()
+	}
+	if s.reportRunner != nil {
+		s.reportRunner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

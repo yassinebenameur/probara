@@ -723,7 +723,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
+            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The API also emails [scheduled SLA reports](/docs/slas/#schedules); without SMTP on the API a report schedule cannot be enabled. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
         },
         {
           type: 'table',
@@ -747,7 +747,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel, and (with `PROBARA_SECRETS_KEY`) the one-click [acknowledge link](/docs/alerting/#ack-links) to triggers and reminders; both are omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one).',
+              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel, and (with `PROBARA_SECRETS_KEY`) the one-click [acknowledge link](/docs/alerting/#ack-links) to triggers and reminders; both are omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one). [Scheduled SLA reports](/docs/slas/#schedules) need it on the API for their unsubscribe links.',
             ],
           ],
         },
