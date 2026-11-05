@@ -53,14 +53,14 @@ type workerDeliveryRow struct {
 
 // Every attempt the worker makes, and every event it drops, leaves a row:
 // a transient failure then the redelivery that succeeds, a permanent
-// failure, an event superseded by the resolve, and one held by the ack.
+// failure, an event dropped as superseded (here by the resolve), and one
+// held by the ack.
 func TestHandle_RecordsDeliveryOutcomes(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "delivery-log")
-	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	channelID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
@@ -68,8 +68,11 @@ func TestHandle_RecordsDeliveryOutcomes(t *testing.T) {
 	`, channelID, tenantID, deliveryStubType); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
+	// One monitor per alert: a monitor holds at most one open alert per kind
+	// (idx_alerts_one_open_per_monitor_kind).
 	newAlert := func(status string) uuid.UUID {
 		id := uuid.New()
+		monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API "+status+" "+id.String()[:8])
 		if _, err := dbClient.ExecContext(ctx, `
 			INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
 				triggered_at, failure_count, created_at, updated_at)
