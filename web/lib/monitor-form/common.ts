@@ -16,6 +16,8 @@ import {
 /** The alerting fields of a form's state. */
 export interface AlertingFormFields {
   consecutive_failures_threshold: number;
+  /** Passing checks a down monitor needs before it is up (S-T7), 1-10. */
+  recovery_threshold: number;
   notification_mode: NotificationMode;
   dependency_suppression: DependencySuppression;
   notification_channels: ChannelAssignment[];
@@ -71,6 +73,7 @@ export function initialScheduledFormFields(monitor?: Monitor, initialData?: Crea
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
+    recovery_threshold: monitor?.recovery_threshold ?? 1,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? ([] as ChannelAssignment[]),
@@ -101,6 +104,7 @@ export function buildScheduledMonitorRequest(
   };
 
   requestData.consecutive_failures_threshold = form.consecutive_failures_threshold;
+  requestData.recovery_threshold = form.recovery_threshold;
   requestData.notification_mode = form.notification_mode;
   requestData.dependency_suppression = form.dependency_suppression;
   requestData.notification_channels = form.notification_mode === 'custom' ? form.notification_channels : [];
@@ -133,6 +137,7 @@ export function buildHeartbeatMonitorRequest(
   };
 
   requestData.consecutive_failures_threshold = form.consecutive_failures_threshold;
+  requestData.recovery_threshold = form.recovery_threshold;
   requestData.notification_mode = form.notification_mode;
   requestData.dependency_suppression = form.dependency_suppression;
   requestData.notification_channels = form.notification_mode === 'custom' ? form.notification_channels : [];

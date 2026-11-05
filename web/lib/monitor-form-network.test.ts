@@ -79,6 +79,7 @@ test('grpc: create from a filled form', () => {
     timeout_seconds: 5,
     enabled: true,
     consecutive_failures_threshold: 2,
+    recovery_threshold: 1,
     notification_mode: 'custom',
     dependency_suppression: 'inherit',
     notification_channels: [{ channel_id: 'ch-2', delay_seconds: 60 }],

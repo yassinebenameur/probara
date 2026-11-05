@@ -985,6 +985,8 @@ export interface Monitor {
   created_at: string;
   updated_at: string;
   consecutive_failures_threshold: number;
+  recovery_threshold?: number; // Passing checks a down monitor needs before it is up (1 = single-sample)
+  consecutive_successes?: number; // Read-only; passes counted toward that while still down
   notification_mode: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
@@ -1040,6 +1042,7 @@ export interface CreateMonitorRequest {
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
@@ -1060,6 +1063,7 @@ export interface UpdateMonitorRequest {
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
@@ -2477,6 +2481,7 @@ export interface FieldMapping {
   group_members?: string;
   alert_policy_names?: string;
   consecutive_failures_threshold?: string;
+  recovery_threshold?: string;
 }
 
 /** A source record a format adapter refused to translate. Informational only. */

@@ -81,6 +81,10 @@ interface AlertingSectionProps {
   intervalSeconds: number;
   threshold: number;
   onThresholdChange: (n: number) => void;
+  // Passing checks a down monitor needs before it is up (S-T7). Omit to
+  // hide the control (the server keeps the stored value).
+  recoveryThreshold?: number;
+  onRecoveryThresholdChange?: (n: number) => void;
   mode: NotificationMode;
   onModeChange: (m: NotificationMode) => void;
   customChannels: ChannelAssignment[];
@@ -112,8 +116,14 @@ function detectionHint(threshold: number, intervalSeconds: number): string {
   return `Rechecks every ${recheck}s once a failure is seen, so an outage alerts within ${approx}.`;
 }
 
+function recoveryHint(recoveryThreshold: number): string {
+  if (recoveryThreshold <= 1) return 'Recovers, and resolves its alert, on the first passing check.';
+  return `Stays down until ${recoveryThreshold} checks in a row pass, so a flapping target does not resolve and re-open its alert. Time spent confirming counts as downtime.`;
+}
+
 export function AlertingSection({
   isGroup, intervalSeconds, threshold, onThresholdChange,
+  recoveryThreshold, onRecoveryThresholdChange,
   mode, onModeChange, customChannels, onCustomChannelsChange,
   rollup, onRollupChange,
   dependencySuppression, onDependencySuppressionChange, hasDependencies,
@@ -240,6 +250,28 @@ export function AlertingSection({
               {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
                 <option key={n} value={n}>
                   {n} failed check{n === 1 ? '' : 's'}
+                </option>
+              ))}
+            </select>
+          )}
+        />
+      )}
+
+      {!isGroup && recoveryThreshold !== undefined && onRecoveryThresholdChange && (
+        <FormRow
+          title="Mark up after"
+          description={recoveryHint(recoveryThreshold)}
+          control={({ titleId, descriptionId }) => (
+            <select
+              aria-labelledby={titleId}
+              aria-describedby={descriptionId}
+              className="input input-sm !w-44"
+              value={recoveryThreshold}
+              onChange={(e) => onRecoveryThresholdChange(Number(e.target.value))}
+            >
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>
+                  {n} passing check{n === 1 ? '' : 's'}
                 </option>
               ))}
             </select>

@@ -196,6 +196,7 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     interval_seconds: sourceIntervalSeconds,
     timeout_seconds: sourceTimeoutSeconds,
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
+    recovery_threshold: monitor?.recovery_threshold ?? 1,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: (monitor?.notification_channels ?? []) as ChannelAssignment[],
