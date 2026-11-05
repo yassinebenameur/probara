@@ -60,8 +60,11 @@ func (s *Service) ConfigureHistoryDependencies(groupResolver GroupResolver, stat
 }
 
 // prepareConfigForWrite merges write-only secret placeholders ("***"/empty =
-// keep the stored value; pass nil existing on create) and encrypts secret
-// fields. Configs for types without secret fields pass through unchanged.
+// keep the stored value; pass nil existing on create), moves credential-named
+// headers into the secret maps (secrets.NormalizeSensitiveHeaders — after the
+// merge, so an absent secret map is restored before a moved header edits it)
+// and encrypts secret fields. Configs for types without secret fields pass
+// through unchanged.
 func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming, existing json.RawMessage) (json.RawMessage, error) {
 	if !secrets.HasMonitorSecrets(string(monitorType)) {
 		return incoming, nil
@@ -69,6 +72,10 @@ func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming
 	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), incoming, existing)
 	if err != nil {
 		return nil, fmt.Errorf("merge config secrets: %w", err)
+	}
+	merged, _, err = secrets.NormalizeSensitiveHeaders(string(monitorType), merged)
+	if err != nil {
+		return nil, fmt.Errorf("normalize sensitive headers: %w", err)
 	}
 	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
 	if err != nil {
