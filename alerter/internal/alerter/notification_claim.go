@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
@@ -28,6 +29,12 @@ import (
 // releases the claim, so a transient channel error still retries on the next
 // cycle exactly as it did before; a plugin.Permanent error keeps the claim.
 //
+// stopOnAck says whether an acknowledgement silences created/reminder on
+// this route (DispatchGate.stopOnAck); it is re-checked against the alert row
+// under the lock, together with the snooze, so an ack or snooze that commits
+// before the claim always wins (claimStatusAllows). Pass false for events the
+// ack never holds (resolved, acknowledged, suspected_cause).
+//
 // It returns true only when this call actually sent.
 func (a *Alerter) deliverNotification(
 	ctx context.Context,
@@ -38,6 +45,7 @@ func (a *Alerter) deliverNotification(
 	channel alertChannel,
 	now time.Time,
 	reminderInterval time.Duration,
+	stopOnAck bool,
 ) (bool, error) {
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -57,22 +65,26 @@ func (a *Alerter) deliverNotification(
 	// An exclusive lock would also conflict with the share lock the async
 	// worker holds through its provider call, stalling this loop (and every
 	// other channel of the alert) on webhook latency.
+	//
+	// The same lock serializes with acknowledge, unacknowledge and snooze
+	// (each an UPDATE of this row), so the ack/snooze gate read here is the
+	// committed truth for the whole send.
 	var status string
-	var resolvedAt *time.Time
-	if err := tx.QueryRowContext(ctx, `SELECT status, resolved_at FROM alerts WHERE id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt); err != nil {
+	var resolvedAt, resumedAt *time.Time
+	var snoozed bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, resolved_at, `+alertrouting.SnoozedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
+		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed, &resumedAt); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
 	}
-	if (eventType == "resolved") != (status == "resolved") {
-		return false, nil
-	}
-	if eventType == "acknowledged" && status != "acknowledged" {
+	if !claimStatusAllows(eventType, status, snoozed, stopOnAck) {
 		return false, nil
 	}
 	if eventType == "resolved" {
 		alert.ResolvedAt = resolvedAt
 	}
 
-	claimed, round, err := claimNotificationTx(ctx, tx, alert.ID, channel.ID, eventType, now, reminderInterval)
+	claimed, round, err := claimNotificationTx(ctx, tx, alert.ID, channel.ID, eventType, now, reminderInterval, resumedAt)
 	if err != nil {
 		return false, err
 	}
@@ -83,6 +95,9 @@ func (a *Alerter) deliverNotification(
 	// A rolled-back claim is retried by whichever replica claims next; the
 	// key lets that retry skip the recipients this attempt already reached.
 	ctx = withRecipientKey(ctx, notifications.RecipientEventKey(eventType, round))
+	// The async path re-checks the ack gate in the delivery worker, which
+	// may send long after this claim (JetStream backoff).
+	ctx = withStopOnAck(ctx, stopOnAck)
 	if err := a.sendFunc(ctx, channel, eventType, binding, alert, groupInfo, now); err != nil {
 		if plugin.IsPermanent(err) {
 			// The provider rejected the channel itself (revoked key, deleted
@@ -101,6 +116,22 @@ func (a *Alerter) deliverNotification(
 	return true, nil
 }
 
+// claimStatusAllows is the alert-row half of the claim: whether eventType may
+// go out given the alert's locked status and snooze. Resolves go only to a
+// resolved alert and everything else only to an open one; an acknowledgement
+// only while acknowledged; and gateHolds applies the ack/snooze mutes.
+// shouldSendNotification's gate check and dueEvent mirror it
+// (TestClaimStatusMatchesPreFilter).
+func claimStatusAllows(eventType, status string, snoozed, stopOnAck bool) bool {
+	if (eventType == "resolved") != (status == "resolved") {
+		return false
+	}
+	if eventType == "acknowledged" && status != "acknowledged" {
+		return false
+	}
+	return !gateHolds(eventType, status == "acknowledged", snoozed, stopOnAck)
+}
+
 // claimNotificationTx reserves the right to send eventType for one
 // (alert, channel) pair, inside tx. It encodes the due rules that used to live
 // in Go (`state == nil`, `last_event_type != resolved`, reminder interval
@@ -109,7 +140,8 @@ func (a *Alerter) deliverNotification(
 //
 //   - created:  insert wins; any existing row means someone already fired.
 //   - reminder: update wins only when the row is not resolved and
-//     last_sent_at is at least reminderInterval old.
+//     last_sent_at — and resumedAt, the alert's last unacknowledge or snooze
+//     end (nil if never) — is at least reminderInterval old.
 //   - resolved: insert or update wins unless the row already says resolved.
 //   - acknowledged: update wins once (acknowledged_sent_at IS NULL) on an
 //     existing, unresolved row; it leaves last_event_type alone so reminders
@@ -124,7 +156,7 @@ func (a *Alerter) deliverNotification(
 // identity in the per-recipient ledger (notifications.RecipientEventKey). A
 // transient failure rolls the claim back, so the retry finds the same value;
 // the next round finds the time this one committed.
-func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uuid.UUID, eventType string, now time.Time, reminderInterval time.Duration) (bool, time.Time, error) {
+func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uuid.UUID, eventType string, now time.Time, reminderInterval time.Duration, resumedAt *time.Time) (bool, time.Time, error) {
 	var query string
 	args := []interface{}{alertID, channelID, now}
 	switch eventType {
@@ -150,8 +182,9 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			  AND prev.alert_id = s.alert_id AND prev.channel_id = s.channel_id
 			  AND s.last_event_type <> 'resolved'
 			  AND s.last_sent_at <= $3::timestamptz - ($4::double precision * INTERVAL '1 second')
+			  AND ($5::timestamptz IS NULL OR $5::timestamptz <= $3::timestamptz - ($4::double precision * INTERVAL '1 second'))
 			RETURNING s.alert_id, prev.last_sent_at`
-		args = append(args, reminderInterval.Seconds())
+		args = append(args, reminderInterval.Seconds(), resumedAt)
 	case "resolved":
 		query = `
 			INSERT INTO alert_notification_states (
@@ -199,6 +232,21 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 		return false, time.Time{}, fmt.Errorf("claim %s notification: %w", eventType, err)
 	}
 	return true, round, nil
+}
+
+type stopOnAckCtx struct{}
+
+// withStopOnAck hands sendChannelNotification the route's stop-on-ack flag
+// for the async envelope, without widening sendFunc.
+func withStopOnAck(ctx context.Context, stopOnAck bool) context.Context {
+	return context.WithValue(ctx, stopOnAckCtx{}, stopOnAck)
+}
+
+// stopOnAckFrom returns the flag deliverNotification attached (false when the
+// send bypassed the claim).
+func stopOnAckFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(stopOnAckCtx{}).(bool)
+	return v
 }
 
 type recipientKeyCtx struct{}

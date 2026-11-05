@@ -11,7 +11,7 @@ import (
 
 // SSEEvent represents an event to be sent to SSE clients
 type SSEEvent struct {
-	Type string `json:"type"` // "alert_created", "alert_acknowledged", "alert_resolved"
+	Type string `json:"type"` // "alert_created", "alert_acknowledged", "alert_resolved", "alert_updated"
 	Data string `json:"data"` // JSON-encoded alert data
 }
 
@@ -104,6 +104,12 @@ func (h *Hub) BroadcastAlertAcknowledged(tenantID uuid.UUID, alert *models.Alert
 // BroadcastAlertResolved broadcasts an alert resolution event
 func (h *Hub) BroadcastAlertResolved(tenantID uuid.UUID, alert *models.AlertWithDetails) {
 	h.Broadcast(tenantID, "alert_resolved", alert)
+}
+
+// BroadcastAlertUpdated broadcasts a change that is not a status transition
+// the alerter announces: unacknowledge, snooze, unsnooze.
+func (h *Hub) BroadcastAlertUpdated(tenantID uuid.UUID, alert *models.AlertWithDetails) {
+	h.Broadcast(tenantID, "alert_updated", alert)
 }
 
 // ClientCount returns the number of connected clients for a tenant

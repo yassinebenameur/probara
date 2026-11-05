@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
 // defaultRecoveryRetryBudget bounds one recovery retry sweep. Earlier,
@@ -95,6 +97,10 @@ func (a *Alerter) dispatchPendingRecoveries(ctx context.Context) error {
 			r.SourceLocationID, r.TargetLocationID = &sourceID.UUID, &targetID.UUID
 			r.SourceLocationName, r.TargetLocationName = &sourceName, &targetName
 			p.binding.MonitorName = fmt.Sprintf("mesh: %s → %s", sourceName, targetName)
+		} else if sourceID.Valid && r.Kind == notifications.KindLocationOffline {
+			loc := offlineLocation{tenantID: r.TenantID, locationID: sourceID.UUID, name: sourceName}
+			r.SourceLocationID, r.SourceLocationName = &loc.locationID, &loc.name
+			p.binding.MonitorName = loc.label()
 		}
 		batch = append(batch, p)
 	}

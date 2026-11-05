@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CircleCheck, UserCheck, X } from 'lucide-react';
-import { bulkAcknowledgeAlerts, bulkResolveAlerts } from '@/lib/api';
+import { CircleCheck, Undo2, UserCheck, X } from 'lucide-react';
+import { bulkAcknowledgeAlerts, bulkResolveAlerts, bulkUnacknowledgeAlerts } from '@/lib/api';
 import { bulkOutcome, bulkTargets, type BulkAction } from '@/lib/alert-bulk';
 import type { Alert, AlertBulkResult } from '@/lib/types';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
@@ -26,7 +26,7 @@ interface AlertBulkBarProps {
 
 /**
  * The alerts list's bulk triage bar: "N selected · Acknowledge · Resolve ·
- * Clear", floating over the page while a selection exists (so the list never
+ * (Unacknowledge) · Clear", floating over the page while a selection exists (so the list never
  * shifts), like the monitors list's. Portaled: a fixed bar inside a .glass
  * would be offset and clipped. Writers only; each action sends just the
  * selected alerts it can move and reports the rest (POST /alerts/bulk/*).
@@ -48,7 +48,12 @@ export default function AlertBulkBar({ selected, onApplied, onClear }: AlertBulk
     // The stream echoes each change; marking them keeps those echoes silent.
     ids.forEach((id) => stream?.markLocalAction(id));
     try {
-      const result = action === 'acknowledge' ? await bulkAcknowledgeAlerts(ids) : await bulkResolveAlerts(ids);
+      const result =
+        action === 'acknowledge'
+          ? await bulkAcknowledgeAlerts(ids)
+          : action === 'unacknowledge'
+            ? await bulkUnacknowledgeAlerts(ids)
+            : await bulkResolveAlerts(ids);
       onApplied(result);
       onClear();
       const outcome = bulkOutcome(action, result);
@@ -101,6 +106,19 @@ export default function AlertBulkBar({ selected, onApplied, onClear }: AlertBulk
         >
           Resolve{count(targets.resolve.length)}
         </Button>
+        {targets.unacknowledge.length > 0 && (
+          <Button
+            variant="ghost"
+            size="xs"
+            icon={<Undo2 strokeWidth={1.75} />}
+            onClick={() => void run('unacknowledge')}
+            disabled={busy !== null}
+            loading={busy === 'unacknowledge'}
+            title="Return to active: paging resumes, its clocks counted from now"
+          >
+            Unacknowledge{count(targets.unacknowledge.length)}
+          </Button>
+        )}
 
         <div className="h-4 w-px bg-divider max-sm:hidden" />
 

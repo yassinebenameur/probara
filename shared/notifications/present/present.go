@@ -371,6 +371,8 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 			return ToneUp, "BACK TO NORMAL"
 		case alert.IsTLSExpiry():
 			return ToneUp, "CERTIFICATE RENEWED"
+		case alert.IsLocationOffline():
+			return ToneUp, "BACK ONLINE"
 		}
 		return ToneUp, "RECOVERED"
 	}
@@ -395,6 +397,11 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 			return ToneDown, "PATH STILL DOWN"
 		}
 		return ToneDown, "PATH DOWN"
+	case alert.IsLocationOffline():
+		if eventType == EventReminder {
+			return ToneDown, "STILL OFFLINE"
+		}
+		return ToneDown, "OFFLINE"
 	}
 	if eventType == EventReminder {
 		return ToneDown, "STILL DOWN"
@@ -436,6 +443,15 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 			return "Mesh Path Still Down"
 		default:
 			return "Mesh Path Down"
+		}
+	case alert.IsLocationOffline():
+		switch eventType {
+		case EventResolved:
+			return "Location Back Online"
+		case EventReminder:
+			return "Location Still Offline"
+		default:
+			return "Location Offline"
 		}
 	}
 	switch eventType {
@@ -526,6 +542,27 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 			return fmt.Sprintf("Probes %s are still failing, %s after the first failure.", path, outage)
 		}
 		return fmt.Sprintf("Probes %s are failing.", path)
+
+	case alert.IsLocationOffline():
+		name := locationName(alert)
+		if resolved {
+			if outage != "" {
+				return fmt.Sprintf("Location %s is reporting again after %s offline.", name, outage)
+			}
+			return fmt.Sprintf("Location %s is reporting again.", name)
+		}
+		s := fmt.Sprintf("Location %s has stopped reporting", name)
+		if alert.LocationLastSeenAt != nil {
+			s += " (last heartbeat " + HumanTime(*alert.LocationLastSeenAt) + ")"
+		}
+		s += "."
+		switch n := alert.LocationMonitorCount; {
+		case n == 1:
+			s += " 1 monitor runs from it and goes stale without fresh checks."
+		case n > 1:
+			s += fmt.Sprintf(" %d monitors run from it and go stale without fresh checks.", n)
+		}
+		return s
 	}
 
 	// Availability.
@@ -587,6 +624,11 @@ func metricFor(alert notifications.AlertDetails, resolved bool) *Metric {
 			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
 		}
 		return p
+	case alert.IsLocationOffline():
+		if resolved || alert.LocationMonitorCount <= 0 {
+			return nil
+		}
+		return &Metric{Label: "Monitors affected", Value: fmt.Sprintf("%d", alert.LocationMonitorCount), Note: "run from this location"}
 	}
 	return nil
 }
@@ -597,6 +639,12 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 	if alert.IsMeshEdge() {
 		if path := meshPath(alert); path != "" {
 			rows = append(rows, Row{Label: "Path", Value: strings.TrimPrefix(path, "from ")})
+		}
+	}
+	if alert.IsLocationOffline() {
+		rows = append(rows, Row{Label: "Location", Value: locationName(alert)})
+		if alert.LocationLastSeenAt != nil {
+			rows = append(rows, Row{Label: "Last heartbeat", Value: HumanTime(*alert.LocationLastSeenAt)})
 		}
 	}
 	if name := strings.TrimSpace(alert.PolicyName); name != "" {
@@ -640,6 +688,9 @@ func actionFor(alert notifications.AlertDetails, appBaseURL string) (string, str
 	}
 	if alert.IsMeshEdge() {
 		return base + "/mesh", "Open the mesh matrix"
+	}
+	if alert.IsLocationOffline() {
+		return base + "/locations", "Open locations"
 	}
 	if id := strings.TrimSpace(alert.MonitorID); id != "" && id != emptyUUID {
 		return base + "/monitors/" + id, "Open the monitor"
@@ -789,6 +840,19 @@ func meshPath(alert notifications.AlertDetails) string {
 		return "on " + name
 	}
 	return "between locations"
+}
+
+// locationName is an offline-location alert's subject.
+func locationName(alert notifications.AlertDetails) string {
+	if alert.SourceLocationName != nil {
+		if name := strings.TrimSpace(*alert.SourceLocationName); name != "" {
+			return name
+		}
+	}
+	if name := strings.TrimSpace(strings.TrimPrefix(alert.MonitorName, "location: ")); name != "" {
+		return name
+	}
+	return "unknown"
 }
 
 func capitalize(s string) string {

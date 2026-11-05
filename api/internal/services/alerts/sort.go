@@ -32,9 +32,9 @@ var alertSortColumns = map[string]string{
 	SortTriggeredAt: "a.triggered_at",
 	// Lifecycle order: active, acknowledged, resolved.
 	SortStatus: "CASE a.status WHEN 'active' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END",
-	// The alert's subject as the list shows it: the monitor, or a mesh
-	// edge's "source → target".
-	SortMonitor: "lower(COALESCE(m.name, sl.name || ' → ' || tl.name))",
+	// The alert's subject as the list shows it: the monitor, a mesh
+	// edge's "source → target", or an offline location's name (no target).
+	SortMonitor: "lower(COALESCE(m.name, sl.name || ' → ' || tl.name, sl.name))",
 	// An open alert's duration runs to now.
 	SortDuration: "(COALESCE(a.resolved_at, NOW()) - a.triggered_at)",
 }

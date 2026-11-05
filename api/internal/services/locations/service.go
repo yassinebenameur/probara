@@ -33,11 +33,6 @@ var ErrNotFound = errors.New("location not found")
 // disabled, deleted location from a wrong credential.
 var ErrInvalidWorkerCredential = errors.New("invalid location worker credential")
 
-// connectedWindow is how fresh last_seen_at must be for a location to count
-// as connected. Workers heartbeat every ~15s, so a minute tolerates a few
-// missed beats without flapping.
-const connectedWindow = time.Minute
-
 // Service handles location business logic.
 type Service struct {
 	db        *db.Client
@@ -60,12 +55,18 @@ func (s *Service) ConfigureEncryption(encryptor secrets.Encryptor) {
 	}
 }
 
-const locationColumns = `
+var locationColumns = `
 	l.id, l.tenant_id, l.name, l.slug, l.description, l.enabled,
 	l.last_seen_at, l.mesh_endpoint, l.created_at, l.updated_at,
 	(SELECT COUNT(*) FROM monitor_locations ml
 	 JOIN monitors m ON m.id = ml.monitor_id AND m.deleted_at IS NULL
-	 WHERE ml.location_id = l.id) AS monitor_count`
+	 WHERE ml.location_id = l.id) AS monitor_count,
+	COALESCE((SELECT ` + monitorstate.LocationOfflinePredicate("l", "lt") + `
+	 FROM tenants lt WHERE lt.id = l.tenant_id), FALSE) AS offline,
+	(SELECT al.id FROM alerts al
+	 WHERE al.kind = 'location_offline' AND al.status IN ('active', 'acknowledged')
+	   AND al.source_location_id = l.id
+	 LIMIT 1) AS open_alert_id`
 
 // Create registers a new location.
 func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.CreateLocationRequest) (*models.Location, error) {
@@ -460,6 +461,7 @@ func scanLocation(row rowScanner) (*models.Location, error) {
 	if err := row.Scan(
 		&l.ID, &l.TenantID, &l.Name, &l.Slug, &l.Description, &l.Enabled,
 		&l.LastSeenAt, &l.MeshEndpoint, &l.CreatedAt, &l.UpdatedAt, &l.MonitorCount,
+		&l.Offline, &l.OpenAlertID,
 	); err != nil {
 		return nil, err
 	}
@@ -468,9 +470,9 @@ func scanLocation(row rowScanner) (*models.Location, error) {
 }
 
 // IsConnected reports whether a heartbeat timestamp is fresh enough to show
-// the location as connected.
+// the location as connected (monitorstate.LocationConnectedWindow, S-F6).
 func IsConnected(lastSeenAt *time.Time) bool {
-	return lastSeenAt != nil && time.Since(*lastSeenAt) < connectedWindow
+	return monitorstate.LocationConnected(lastSeenAt, time.Now())
 }
 
 // normalizeMeshEndpoint validates a host:port mesh endpoint. Nil or empty

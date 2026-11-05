@@ -5,7 +5,9 @@ import {
   ALERT_SORT_PAGED_DEFAULT,
   alertSortFallback,
   effectiveAlertSort,
+  isSnoozed,
   newAlertLeads,
+  pagingActions,
   pruneSelection,
   rowShortcut,
   shortcutEffect,
@@ -99,4 +101,25 @@ test('shortcutEffect applies only to an alert the action can still move', () => 
   assert.equal(shortcutEffect('resolve', 'active'), 'apply');
   assert.equal(shortcutEffect('resolve', 'acknowledged'), 'apply');
   assert.equal(shortcutEffect('resolve', 'resolved'), 'already_resolved');
+});
+
+test('paging actions follow the alert state: unack only when acknowledged, snooze while open', () => {
+  const now = Date.parse('2026-11-05T12:00:00Z');
+  const future = '2026-11-05T13:00:00Z';
+  const past = '2026-11-05T11:00:00Z';
+  assert.deepEqual(pagingActions({ status: 'active' }, now), { unacknowledge: false, snooze: true, unsnooze: false });
+  assert.deepEqual(pagingActions({ status: 'acknowledged' }, now), { unacknowledge: true, snooze: true, unsnooze: false });
+  assert.deepEqual(pagingActions({ status: 'active', snoozed_until: future }, now), {
+    unacknowledge: false,
+    snooze: true,
+    unsnooze: true,
+  });
+  // A past snoozed_until is a snooze that already ended.
+  assert.equal(isSnoozed({ status: 'active', snoozed_until: past }, now), false);
+  // Resolved alerts offer nothing, even with a stale future snooze.
+  assert.deepEqual(pagingActions({ status: 'resolved', snoozed_until: future }, now), {
+    unacknowledge: false,
+    snooze: false,
+    unsnooze: false,
+  });
 });

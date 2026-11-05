@@ -41,6 +41,14 @@ type DispatchEnvelope struct {
 	// published before the field existed falls back to RecipientKey's
 	// derivation, which is stable across redeliveries of one message.
 	DeliveryKey string `json:"delivery_key,omitempty"`
+
+	// StopOnAck tells the delivery worker that an acknowledgement silences
+	// this created/reminder on its route (the tenant stops paging on ack and
+	// the route is not notify_after_ack): if the alert is acknowledged by
+	// the time the message is delivered — it may wait on a retry backoff —
+	// the worker drops it under the alert row lock. Envelopes without it keep
+	// the older behaviour (deliver, then re-acknowledge an overtaken trigger).
+	StopOnAck bool `json:"stop_on_ack,omitempty"`
 }
 
 // RecipientKey returns the ledger key for this envelope's event.

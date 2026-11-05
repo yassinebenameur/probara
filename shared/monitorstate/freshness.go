@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -87,4 +88,54 @@ func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID
 		return LocationCounts{}, 0, fmt.Errorf("aggregate location states: %w", err)
 	}
 	return counts, maxFailures, nil
+}
+
+// Location liveness (S-F6, docs/state-semantics.md). Location workers
+// heartbeat every ~15s into locations.last_seen_at (platform receipt time,
+// the scheduler's heartbeat consumer). Two windows read it:
+//
+//   - connected (UI badge): seen within LocationConnectedWindow, which
+//     tolerates a few missed beats without flapping;
+//   - offline (the location_offline alert): enabled, seen at least once,
+//     and silent for the tenant's location_offline_after_seconds (default
+//     DefaultLocationOfflineAfterSeconds, floor MinLocationOfflineAfterSeconds).
+//
+// A never-seen location is neither connected nor offline: it was never
+// deployed, so there is nothing to have lost. Offline is a fleet signal,
+// never a monitor-state input — monitors keep following S-A10 and S-F2.
+const (
+	LocationConnectedWindow            = time.Minute
+	DefaultLocationOfflineAfterSeconds = 180
+	MinLocationOfflineAfterSeconds     = 60
+)
+
+// LocationConnected reports whether a heartbeat at lastSeenAt still shows the
+// location as connected at now.
+func LocationConnected(lastSeenAt *time.Time, now time.Time) bool {
+	return lastSeenAt != nil && now.Sub(*lastSeenAt) < LocationConnectedWindow
+}
+
+// LocationOffline is the Go twin of LocationOfflinePredicate: an enabled,
+// live location, seen at least once, silent for at least offlineAfterSeconds
+// (clamped to the floor) at now.
+func LocationOffline(enabled, deleted bool, lastSeenAt *time.Time, offlineAfterSeconds int, now time.Time) bool {
+	if !enabled || deleted || lastSeenAt == nil {
+		return false
+	}
+	if offlineAfterSeconds < MinLocationOfflineAfterSeconds {
+		offlineAfterSeconds = MinLocationOfflineAfterSeconds
+	}
+	return now.Sub(*lastSeenAt) >= time.Duration(offlineAfterSeconds)*time.Second
+}
+
+// LocationOfflinePredicate returns a SQL boolean that is TRUE when the
+// location aliased by locAlias is offline under the threshold of the tenant
+// aliased by tenantAlias (S-F6). It is the alerter's open/resolve rule for
+// location_offline alerts and the API's `offline` flag; LocationOffline is
+// its Go twin (TestLocationOfflinePredicateMatchesGo pins the pair).
+func LocationOfflinePredicate(locAlias, tenantAlias string) string {
+	return fmt.Sprintf(`(%[1]s.enabled AND %[1]s.deleted_at IS NULL
+		AND %[1]s.last_seen_at IS NOT NULL
+		AND %[1]s.last_seen_at <= NOW() - make_interval(secs => GREATEST(%[2]s.location_offline_after_seconds, %[3]d)))`,
+		locAlias, tenantAlias, MinLocationOfflineAfterSeconds)
 }

@@ -143,6 +143,7 @@ export function AlertStreamProvider({ children }: { children: ReactNode }) {
     onAlertCreated: (alert) => emitEvent('created', alert),
     onAlertAcknowledged: (alert) => emitEvent('acknowledged', alert),
     onAlertResolved: (alert) => emitEvent('resolved', alert),
+    onAlertUpdated: (alert) => emitEvent('updated', alert),
   });
 
   useEffect(() => {

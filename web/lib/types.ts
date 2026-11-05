@@ -746,6 +746,9 @@ export interface ChannelAssignment {
   channel_name?: string;
   channel_type?: string;
   delay_seconds: number;
+  // Keep paging this route (tiers, reminders) while an alert is
+  // acknowledged, when the workspace stops paging on ack.
+  notify_after_ack?: boolean;
 }
 
 export interface NotificationSettings {
@@ -761,9 +764,16 @@ export interface NotificationSettings {
   // upstream dependency is down, and for the grace period after it recovers.
   dependency_suppression_enabled: boolean;
   dependency_suppression_grace_seconds: number;
+  // Acknowledging an alert stops its unfired escalation tiers and its
+  // reminders (routes with notify_after_ack excepted).
+  ack_stops_notifications: boolean;
+  // Offline check locations (S-F6): alert when a location that reported
+  // before has been silent this long (60-86400 s, default 180).
+  location_offline_alerts_enabled: boolean;
+  location_offline_after_seconds: number;
 }
 
-export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry';
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'location_offline';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
 
@@ -780,6 +790,11 @@ export interface Location {
   // host:port other locations probe; set = participates in the mesh.
   mesh_endpoint?: string;
   monitor_count: number;
+  // S-F6: enabled, seen before, and silent for the workspace's offline
+  // threshold. Between connected and offline it is merely disconnected.
+  offline?: boolean;
+  // The open location_offline alert, if any.
+  open_alert_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -1070,7 +1085,8 @@ export interface Alert {
   threshold_value?: number;
   root_cause_monitor_id?: string;
   root_cause_down_since?: string;
-  // Mesh-edge subject (kind === 'mesh_edge').
+  // Mesh-edge subject (kind === 'mesh_edge'); an offline location's
+  // subject is source_location_* (kind === 'location_offline').
   source_location_id?: string;
   target_location_id?: string;
   created_at: string;
@@ -1091,6 +1107,16 @@ export interface Alert {
   // has no triage row; always absent (= unknown) on live stream events, which
   // are built from core NATS, so merge those with mergeAlertUpdate.
   triage?: AlertTriage;
+  // Who acknowledged, and through which surface. Cleared on unacknowledge.
+  acknowledged_by_user_id?: string;
+  acknowledged_via?: 'ui' | 'api' | 'mcp';
+  // The last unacknowledge: tiers and reminders count from it.
+  unacknowledged_at?: string;
+  // Future: the alert is snoozed until then. Past: when the last snooze ended.
+  snoozed_until?: string;
+  snoozed_by_user_id?: string;
+  // Why this open alert is not paging right now.
+  muted_reason?: 'snoozed' | 'acknowledged';
 }
 
 // --- Automatic alert triage (never delays, routes or suppresses a page) ---
@@ -1138,7 +1164,7 @@ export interface AlertListResponse {
 export type AlertSortColumn = 'triggered_at' | 'status' | 'monitor' | 'duration';
 
 /** Why a bulk acknowledge/resolve left an alert unchanged. */
-export type AlertBulkFailureReason = 'not_found' | 'already_acknowledged' | 'already_resolved';
+export type AlertBulkFailureReason = 'not_found' | 'already_acknowledged' | 'already_resolved' | 'not_acknowledged';
 
 /** `POST /alerts/bulk/{acknowledge,resolve}`: per-alert results, never all-or-nothing. */
 export interface AlertBulkResult {
@@ -1148,7 +1174,9 @@ export interface AlertBulkResult {
   failed: { id: string; reason: AlertBulkFailureReason }[];
 }
 
-export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved';
+// 'updated': unacknowledge, snooze or unsnooze (no status transition the
+// alerter announces).
+export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved' | 'updated';
 
 export interface AlertStreamEvent {
   type: AlertStreamEventType;

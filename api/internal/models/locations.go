@@ -22,9 +22,16 @@ type Location struct {
 	// other locations probe this address's /mesh/echo. Empty = not in mesh.
 	MeshEndpoint *string `json:"mesh_endpoint,omitempty"`
 	// MonitorCount is how many live monitors currently target this location.
-	MonitorCount int       `json:"monitor_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	MonitorCount int `json:"monitor_count"`
+	// Offline is the S-F6 rule (shared/monitorstate.LocationOfflinePredicate):
+	// enabled, seen at least once, and silent for the workspace's
+	// location_offline_after_seconds. Between Connected and Offline a
+	// location is merely disconnected.
+	Offline bool `json:"offline"`
+	// OpenAlertID is the open location_offline alert, if any.
+	OpenAlertID *uuid.UUID `json:"open_alert_id,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // CreateLocationRequest creates a location.

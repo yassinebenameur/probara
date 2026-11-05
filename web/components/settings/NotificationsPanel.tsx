@@ -21,6 +21,22 @@ const REMINDER_OPTIONS = [
   { label: 'Every 4 hours', value: 14400 },
 ];
 
+// How long a check location may stay silent before it alerts (S-F6; the
+// API takes 60-86400 s). A stored value outside the presets keeps an
+// option of its own, as the delay select does.
+const LOCATION_OFFLINE_OPTIONS = [
+  { label: 'After 1 min', value: 60 },
+  { label: 'After 3 min', value: 180 },
+  { label: 'After 5 min', value: 300 },
+  { label: 'After 15 min', value: 900 },
+  { label: 'After 1 hour', value: 3600 },
+];
+
+function locationOfflineOptions(current: number): { label: string; value: number }[] {
+  if (LOCATION_OFFLINE_OPTIONS.some((o) => o.value === current)) return LOCATION_OFFLINE_OPTIONS;
+  return [...LOCATION_OFFLINE_OPTIONS, { label: `After ${current} s`, value: current }].sort((a, b) => a.value - b.value);
+}
+
 // Latency anomaly presets — users pick a level, not a raw number. Each
 // sensitivity level bundles the statistical sigma + the minimum increase.
 // Segment labels spell their unit out ("2 min", "7 days"), as the delay and
@@ -187,15 +203,19 @@ interface Snapshot {
   sustainedIdx: number;
   dependencySuppression: boolean;
   dependencyGraceIdx: number;
+  ackStopsNotifications: boolean;
+  locationOfflineEnabled: boolean;
+  locationOfflineAfter: number;
 }
 
-// Dirty check: channel assignments compare by channel and delay only, in any
-// order, so unchecking and re-checking a channel is no change.
+// Dirty check: channel assignments compare by channel, delay and the
+// keep-after-ack flag only, in any order, so unchecking and re-checking a
+// channel is no change.
 function comparable(s: Snapshot): string {
   return JSON.stringify({
     ...s,
     defaultChannels: s.defaultChannels
-      .map((a) => [a.channel_id, a.delay_seconds])
+      .map((a) => [a.channel_id, a.delay_seconds, !!a.notify_after_ack])
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
   });
 }
@@ -243,6 +263,9 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
   const [sustainedIdx, setSustainedIdx] = useState(1);
   const [dependencySuppression, setDependencySuppression] = useState(false);
   const [dependencyGraceIdx, setDependencyGraceIdx] = useState(1);
+  const [ackStopsNotifications, setAckStopsNotifications] = useState(true);
+  const [locationOfflineEnabled, setLocationOfflineEnabled] = useState(true);
+  const [locationOfflineAfter, setLocationOfflineAfter] = useState(180);
   // What the server holds; the save bar only appears when the form differs.
   const [saved, setSaved] = useState<Snapshot | null>(null);
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
@@ -258,6 +281,9 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     sustainedIdx,
     dependencySuppression,
     dependencyGraceIdx,
+    ackStopsNotifications,
+    locationOfflineEnabled,
+    locationOfflineAfter,
   };
   const dirty = saved !== null && comparable(current) !== comparable(saved);
 
@@ -308,6 +334,9 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     setSustainedIdx(s.sustainedIdx);
     setDependencySuppression(s.dependencySuppression);
     setDependencyGraceIdx(s.dependencyGraceIdx);
+    setAckStopsNotifications(s.ackStopsNotifications);
+    setLocationOfflineEnabled(s.locationOfflineEnabled);
+    setLocationOfflineAfter(s.locationOfflineAfter);
   };
 
   const loadSettings = async () => {
@@ -325,6 +354,9 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         sustainedIdx: nearestIndex(SUSTAINED_LEVELS, (l) => l.seconds, s.latency_anomaly_min_breach_seconds ?? 120),
         dependencySuppression: s.dependency_suppression_enabled ?? false,
         dependencyGraceIdx: nearestIndex(DEPENDENCY_GRACE_LEVELS, (l) => l.seconds, s.dependency_suppression_grace_seconds ?? 120),
+        ackStopsNotifications: s.ack_stops_notifications ?? true,
+        locationOfflineEnabled: s.location_offline_alerts_enabled ?? true,
+        locationOfflineAfter: s.location_offline_after_seconds ?? 180,
       };
       apply(loaded);
       setSaved(loaded);
@@ -354,6 +386,9 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         latency_anomaly_min_delta_pct: sens.deltaPct,
         dependency_suppression_enabled: dependencySuppression,
         dependency_suppression_grace_seconds: DEPENDENCY_GRACE_LEVELS[dependencyGraceIdx].seconds,
+        ack_stops_notifications: ackStopsNotifications,
+        location_offline_alerts_enabled: locationOfflineEnabled,
+        location_offline_after_seconds: locationOfflineAfter,
       });
       markFocusReturn();
       setSaved(current);
@@ -398,7 +433,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         <SettingRow
           title="Default channels"
           titleId="default-channels-label"
-          description="Every monitor notifies these channels unless it has a custom list. A delay holds a channel back until the alert has lasted that long."
+          description="Every monitor notifies these channels unless it has a custom list. A delay holds a channel back until the alert has lasted that long; Keep after ack keeps a channel paging while the alert is acknowledged."
         >
           <div className="mt-3">
             <ChannelPicker
@@ -444,6 +479,60 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
             </select>
           )}
         />
+
+        <SettingRow
+          inline
+          title="Acknowledging stops paging"
+          description="An acknowledged alert sends no further escalation tier or reminder until it is unacknowledged, except on channels marked Keep after ack. Paging tools still receive the acknowledgement."
+          control={() => (
+            <Switch
+              checked={ackStopsNotifications}
+              onChange={setAckStopsNotifications}
+              label="Acknowledging stops paging"
+              disabled={readOnly}
+            />
+          )}
+        />
+
+        <SettingRow
+          inline
+          title="Alert when a location goes offline"
+          description="A check location that reported before and stops sending heartbeats opens one alert to the default channels; its mesh paths stay quiet meanwhile."
+          control={() => (
+            <Switch
+              checked={locationOfflineEnabled}
+              onChange={setLocationOfflineEnabled}
+              label="Alert when a location goes offline"
+              disabled={readOnly}
+            />
+          )}
+        >
+          <ParameterGroup label="Offline location parameters">
+            <SettingRow
+              size="sm"
+              stacked={stacked}
+              muted={readOnly || !locationOfflineEnabled}
+              title="Offline"
+              description="How long a location may stay silent before it alerts."
+              control={({ titleId, descriptionId }) => (
+                <select
+                  value={locationOfflineAfter}
+                  onChange={(e) => setLocationOfflineAfter(Number(e.target.value))}
+                  disabled={readOnly || !locationOfflineEnabled}
+                  aria-labelledby={titleId}
+                  aria-describedby={descriptionId}
+                  className={SELECT_CLASS}
+                >
+                  {locationOfflineOptions(locationOfflineAfter).map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            />
+          </ParameterGroup>
+        </SettingRow>
       </div>
     </Panel>
   );

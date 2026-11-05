@@ -150,3 +150,64 @@ func insertTestChannel(ctx context.Context, t *testing.T, dbClient *shareddb.Cli
 	}
 	return id
 }
+
+// Stop-on-ack is on by default and round-trips, as does a route's
+// notify_after_ack opt-out.
+func TestAckStopsNotificationsSettings(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "ns-ack")
+	channelID := insertTestChannel(ctx, t, dbClient, tenantID, "status-room")
+	svc := NewService(dbClient)
+
+	settings, err := svc.Get(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !settings.AckStopsNotifications {
+		t.Fatal("ack_stops_notifications must default to true")
+	}
+	settings, err = svc.Update(ctx, tenantID, UpdateRequest{
+		AckStopsNotifications: boolPtr(false),
+		DefaultChannels:       []ChannelAssignment{{ChannelID: channelID, NotifyAfterAck: true}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if settings.AckStopsNotifications || len(settings.DefaultChannels) != 1 || !settings.DefaultChannels[0].NotifyAfterAck {
+		t.Fatalf("unexpected settings: %+v", settings)
+	}
+}
+
+// Offline-location alerts are on at 180s by default, round-trip, and the
+// threshold keeps its 60s floor.
+func TestLocationOfflineSettings(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "ns-offline")
+	svc := NewService(dbClient)
+	settings, err := svc.Get(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !settings.LocationOfflineAlertsEnabled || settings.LocationOfflineAfterSeconds != 180 {
+		t.Fatalf("defaults = %v / %d, want true / 180", settings.LocationOfflineAlertsEnabled, settings.LocationOfflineAfterSeconds)
+	}
+	settings, err = svc.Update(ctx, tenantID, UpdateRequest{
+		LocationOfflineAlertsEnabled: boolPtr(false),
+		LocationOfflineAfterSeconds:  intPtr(600),
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if settings.LocationOfflineAlertsEnabled || settings.LocationOfflineAfterSeconds != 600 || !settings.AckStopsNotifications {
+		t.Fatalf("unexpected settings: %+v", settings)
+	}
+	if _, err := svc.Update(ctx, tenantID, UpdateRequest{LocationOfflineAfterSeconds: intPtr(30)}); err == nil {
+		t.Fatal("a threshold under 60s must be refused")
+	}
+}

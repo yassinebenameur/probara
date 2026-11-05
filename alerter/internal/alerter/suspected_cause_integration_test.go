@@ -412,7 +412,7 @@ func TestSuspectedCauseResolveRace(t *testing.T) {
 	record := alertRecord{ID: c.alertID, TenantID: c.tenantID, MonitorID: c.monitorID, Status: "active"}
 	channel := alertChannel{ID: c.channelID, Type: followUpStubType, IsActive: true}
 	sent, err := a.deliverNotification(ctx, "suspected_cause", policyBinding{MonitorID: c.monitorID, TenantID: c.tenantID},
-		&record, nil, channel, time.Now(), 0)
+		&record, nil, channel, time.Now(), 0, false)
 	if err != nil || sent || sends != 0 {
 		t.Fatalf("resolved alert: sent=%v err=%v sends=%d", sent, err, sends)
 	}
@@ -467,7 +467,7 @@ func TestClaimSuspectedCause(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback() }()
-		ok, _, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0)
+		ok, _, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

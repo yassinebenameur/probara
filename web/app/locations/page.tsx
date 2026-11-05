@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { MapPin, Plus, Rocket, Pencil, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
@@ -77,16 +78,38 @@ function ConnectionStatus({ location, onDeploy }: { location: Location; onDeploy
       </span>
     );
   }
+  // An open location_offline alert (S-F6) links from here, so the row says
+  // whether anyone was paged about it.
+  const alertLink = location.open_alert_id ? (
+    <Link
+      href={`/alerts?alert=${location.open_alert_id}`}
+      className="mt-0.5 pl-4 text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+    >
+      Offline alert open
+    </Link>
+  ) : null;
   if (location.monitor_count > 0) {
     return (
       <span className="inline-flex flex-col">
         <span className="inline-flex items-center gap-2 whitespace-nowrap text-ui text-rose-300">
           <StatusDot className="bg-rose-500" />
-          Disconnected
+          {location.offline ? 'Offline' : 'Disconnected'}
         </span>
         <span className="mt-0.5 pl-4 text-xs text-slate-400">
           {pluralize(location.monitor_count, 'monitor')} stranded
         </span>
+        {alertLink}
+      </span>
+    );
+  }
+  if (alertLink) {
+    return (
+      <span className="inline-flex flex-col">
+        <span className="inline-flex items-center gap-2 whitespace-nowrap text-ui text-slate-400">
+          <StatusDot className="bg-slate-500" />
+          Offline
+        </span>
+        {alertLink}
       </span>
     );
   }

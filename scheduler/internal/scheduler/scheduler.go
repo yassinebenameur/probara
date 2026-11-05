@@ -115,6 +115,11 @@ type Scheduler struct {
 	meshEdgesScheduled *prometheus.CounterVec
 	meshPublishErrors  *prometheus.CounterVec
 
+	// checkJobsPending reports the check-job stream's backlog
+	// (check_jobs_pending.go); checkJobStream is set once Start ensured it.
+	checkJobsPending *prometheus.GaugeVec
+	checkJobStream   checkJobStreamInfo
+
 	// publish sends one job to the queue with its headers. It defaults to
 	// the NATS-backed implementation and exists as a seam so tests can
 	// capture published jobs without a broker.
@@ -228,6 +233,7 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Unix timestamp of the latest processed check result cursor",
 		[]string{},
 	)
+	s.checkJobsPending = newCheckJobsPendingGauge(metricsRegistry)
 	s.publish = func(ctx context.Context, subject string, job *models.Job, headers map[string][]string) error {
 		return s.queue.PublishJSON(ctx, subject, job, headers)
 	}
@@ -277,10 +283,11 @@ func (s *Scheduler) Start() error {
 	// in flight during rollout) plus the per-location hierarchy
 	// (<base>.default and <base>.loc.<id>).
 	subjects := []string{s.config.CheckJobSubject, s.config.CheckJobSubject + ".>"}
-	_, err := s.queue.EnsureWorkQueueStream(ctx, s.config.CheckJobStream, subjects, checkJobStreamMaxAge)
+	checkJobStream, err := s.queue.EnsureWorkQueueStream(ctx, s.config.CheckJobStream, subjects, checkJobStreamMaxAge)
 	if err != nil {
 		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
 	}
+	s.checkJobStream = checkJobStream
 
 	// Work-queue streams forbid a filterless consumer coexisting with the
 	// filtered per-location consumers workers now create, so drop legacy
@@ -328,6 +335,7 @@ func (s *Scheduler) Start() error {
 			return s.ctx.Err()
 		case <-ticker.C:
 			s.scheduleBatch(s.ctx)
+			s.updateCheckJobsPending(s.ctx)
 		case <-retentionTicker.C:
 			s.triggerRetentionCleanup()
 		case <-rollupTicker.C:

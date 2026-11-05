@@ -12,6 +12,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	svc "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // Handlers handles notification settings HTTP requests.
@@ -80,6 +81,13 @@ func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteValidationError(w, fmt.Sprintf("default_channels[%d].delay_seconds must be >= 0", i))
 			return
 		}
+	}
+
+	if v := req.LocationOfflineAfterSeconds; v != nil &&
+		(*v < monitorstate.MinLocationOfflineAfterSeconds || *v > svc.MaxLocationOfflineAfterSeconds) {
+		apierrors.WriteValidationError(w, fmt.Sprintf("location_offline_after_seconds must be between %d and %d",
+			monitorstate.MinLocationOfflineAfterSeconds, svc.MaxLocationOfflineAfterSeconds))
+		return
 	}
 
 	settings, err := h.service.Update(r.Context(), tenantUUID, req)

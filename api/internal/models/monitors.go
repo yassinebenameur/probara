@@ -39,6 +39,9 @@ type MonitorChannelAssignment struct {
 	DelaySeconds int    `json:"delay_seconds"`
 	ChannelName  string `json:"channel_name,omitempty"`
 	ChannelType  string `json:"channel_type,omitempty"`
+	// NotifyAfterAck keeps this route paging while an alert is acknowledged
+	// (when the workspace stops paging on ack).
+	NotifyAfterAck bool `json:"notify_after_ack"`
 }
 
 // Monitor represents a monitor in the system

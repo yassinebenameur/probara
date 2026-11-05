@@ -52,6 +52,11 @@ export const ALERTING_PAGE: DocPage = {
               "An HTTPS or SIP-over-TLS monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
               "A renewed certificate is observed, or the threshold is removed",
             ],
+            [
+              "`location_offline`",
+              "A check location that reported before sends no heartbeat for the workspace's `location_offline_after_seconds` ([details](/docs/locations/#heartbeats)); routed to the default channels, and its mesh paths go quiet meanwhile",
+              "The location reports again, is disabled or deleted, or the workspace turns these alerts off",
+            ],
           ],
         },
         {
@@ -68,10 +73,20 @@ export const ALERTING_PAGE: DocPage = {
         },
         {
           type: "callout",
-          tone: "warning",
-          title: "Acknowledgement does not silence reminders",
+          tone: "info",
+          title: "Acknowledging stops the paging",
           text:
-            "Acknowledging records operator ownership but leaves the condition open. Reminder notifications to chat, email, SMS and webhook channels continue at the configured interval until resolution or until reminders are disabled. Paging channels (PagerDuty, Opsgenie / JSM) are the exception: they receive the acknowledgement itself and never receive reminders, because the provider runs its own escalation.",
+            "Acknowledging records who owns the alert (`acknowledged_by_user_id`, and `acknowledged_via`: `ui`, `api` or `mcp`) and leaves the condition open. By default it also stops the paging: escalation tiers that have not fired yet never fire, and reminders stop, until the alert resolves or is unacknowledged. Paging channels (PagerDuty, Opsgenie / JSM) also receive the acknowledgement itself, once, so the provider stops its own escalation. A route marked **keep notifying after ack** (`notify_after_ack`, on a tenant default route or a monitor's custom route) keeps its tiers and reminders, for example a status-room channel. Turning off the workspace setting `ack_stops_notifications` restores the older behaviour, where reminders continued after an acknowledgement. Suspected-cause follow-ups still reach acknowledged alerts. With asynchronous dispatch, a tier or reminder already queued when the acknowledgement lands is dropped by the delivery worker.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Unacknowledge** (`POST /alerts/{id}/unacknowledge`, or in bulk) returns an alert to `active` and resumes paging. Its clocks restart from the unacknowledge: an unfired tier fires its delay later and the next reminder comes one reminder interval later, so nothing fires all at once. A later acknowledgement reaches paging channels again. Known limitation: a PagerDuty or Opsgenie alert that was acknowledged stays acknowledged at the provider, because their event APIs cannot un-acknowledge.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Snooze** (`POST /alerts/{id}/snooze` with `minutes` or `until`, 1 minute to 7 days; `POST /alerts/{id}/unsnooze` ends it) mutes one open alert: no escalation tier, reminder or suspected-cause follow-up goes out on any route, `notify_after_ack` routes included, until the snooze ends. Its clocks then restart, as after an unacknowledge. A snooze is independent of acknowledgement, a resolve ends it, and it never creates a maintenance window, so SLA planned downtime is untouched (snoozing the *monitor* does open one). Acknowledgements and resolves of a snoozed alert still notify. Alerts report why they are quiet in `muted_reason`: `snoozed`, or `acknowledged` when the workspace stops paging on ack.",
         },
         {
           type: "paragraph",
@@ -91,7 +106,7 @@ export const ALERTING_PAGE: DocPage = {
             "A check failure first passes through the monitor's consecutive-failure confirmation and, when locations are selected, its [location failure quorum](/docs/locations/#assignment). A check's `error` and `failure` are both failing evidence, including a check's own assertions: a SIP test call failing a [call-quality](/docs/monitors/#network-protocols) threshold (`max_loss_pct`, `min_mos`, …) is a failure like any other, while its `warn_*` thresholds only add warnings to the check and never alert.",
             "The alerter opens an availability alert only when effective state is `down`, the monitor is enabled, and maintenance/rollup rules do not mute it.",
             "The initial notification is sent through eligible routes after each route's configured delay.",
-            "While the condition remains down, reminders are sent at the tenant reminder interval.",
+            "While the condition remains down, reminders are sent at the tenant reminder interval, until the alert is acknowledged (unless the workspace keeps paging after an acknowledgement) or while it is snoozed.",
             "When the monitor is fully `up`, the alert resolves and resolution notifications go only to channels that previously received that alert.",
           ],
         },
@@ -117,7 +132,7 @@ export const ALERTING_PAGE: DocPage = {
             {
               term: "Tenant default routes",
               description:
-                "An ordered list of active alert channels, each with `channel_id`, display metadata, and a non-negative `delay_seconds`.",
+                "An ordered list of active alert channels, each with `channel_id`, display metadata, a non-negative `delay_seconds`, and `notify_after_ack` (keep paging this route while the alert is acknowledged).",
             },
             {
               term: "Monitor `default` mode",
@@ -134,7 +149,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
+            "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open, and not acknowledged or snoozed, when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
         },
         {
           type: "callout",
@@ -213,6 +228,14 @@ export const ALERTING_PAGE: DocPage = {
               "`dependency_suppression_grace_seconds`",
               "Defaults to 120; 0 to 86,400. How long a suppressed downstream stays quiet after its upstream recovers before paging if still down",
             ],
+            [
+              "`location_offline_alerts_enabled` / `location_offline_after_seconds`",
+              "Default true / 180 (60 to 86,400). Alert once per [offline check location](/docs/locations/#heartbeats), to the default channels",
+            ],
+            [
+              "`ack_stops_notifications`",
+              "Defaults to true, for existing workspaces too. Acknowledging an alert stops its unfired escalation tiers and its reminders; routes with `notify_after_ack` keep them. Set false to keep paging acknowledged alerts",
+            ],
           ],
         },
       ],
@@ -282,7 +305,7 @@ export const ALERTING_PAGE: DocPage = {
           columns: ["Event", "Chat, email, SMS, webhook", "PagerDuty, Opsgenie / JSM"],
           rows: [
             ["`created`", "Message", "Trigger / create"],
-            ["`reminder`", "Message at the reminder interval", "Skipped — the provider escalates and re-notifies on its own"],
+            ["`reminder`", "Message at the reminder interval, until acknowledged or while snoozed", "Skipped — the provider escalates and re-notifies on its own"],
             ["`acknowledged`", "Not sent", "Acknowledge, once per paged channel"],
             ["`suspected_cause`", "One follow-up message per paged channel when triage names a cause ([opt-in](#ai-triage))", "Not sent: their APIs add content by re-triggering, and an advisory hint must never re-page"],
             ["`resolved`", "Message", "Resolve / close"],
@@ -305,7 +328,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: if an operator acknowledges while a paging trigger is still waiting on a retry, the acknowledgement that went ahead is a no-op at the provider, so the worker acknowledges again right after the late trigger lands, and the incident does not keep escalating.",
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. A retried trigger or reminder is likewise dropped once the alert is snoozed, or acknowledged on a route that stops paging on ack, and a retried acknowledgement is dropped once the alert is unacknowledged. On a route that keeps paging after an ack, acknowledgement is ordered as before: if an operator acknowledges while a paging trigger is still waiting on a retry, the acknowledgement that went ahead is a no-op at the provider, so the worker acknowledges again right after the late trigger lands, and the incident does not keep escalating.",
         },
         {
           type: "callout",
@@ -650,7 +673,7 @@ export const ALERTING_PAGE: DocPage = {
             ["Channel not paged for the alert (unrouted, still inside its escalation delay, or suppressed from the start), no longer routed to the monitor, or inactive", "Not sent. A later escalation tier gets its own follow-up once its page goes out"],
             ["Less than 3 minutes since that channel's page", "Waits, so it reads as a follow-up"],
             ["Triage and the channel's page both more than an hour old", "Not sent"],
-            ["Alert resolved, monitor in maintenance, member of a roll-up group, or dependency-suppressed (muted exactly like a reminder)", "Not sent"],
+            ["Alert resolved or snoozed, monitor in maintenance, member of a roll-up group, or dependency-suppressed (muted exactly like a reminder)", "Not sent"],
             ["Alert acknowledged", "Sent: the hint helps whoever is working it"],
             ["Mesh-edge alert, or triage skipped (cooldown, resolved)", "Not sent: there is no ready triage"],
             ["`LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` on the alerter", "Not sent, including from triages that were already ready"],

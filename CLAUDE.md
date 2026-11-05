@@ -177,10 +177,17 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `RoutesToChannelPredicate` is `TargetsSQL`'s own union correlated per row,
   for batch queries that must drop unrouted pairs before a `LIMIT`
   (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Monitor-less alerts
-  (mesh edges) route through `TenantTargetsSQL`, the tenant defaults without
-  a monitor (`TestTenantTargetsSQLMatchesDefaults`). Escalation delays
+  (mesh edges, `location_offline`) route through `TenantTargetsSQL`, the
+  tenant defaults without a monitor (`TestTenantTargetsSQLMatchesDefaults`).
+  Whether a location is offline is `monitorstate.LocationOfflinePredicate`
+  (S-F6, Go twin `LocationOffline`); never re-derive it from
+  `last_seen_at`. Escalation delays
   count from `DispatchEligibleSinceExpr` (the end of a cleared root cause's
-  grace period, else `triggered_at`). Known asymmetry: member suppression
+  grace period, else `triggered_at`, and never before
+  `DispatchResumedAtExpr`, the last unack or snooze end). Ack and snooze
+  mutes are `MuteHolds` (stop-on-ack per route: `ack_stops_notifications`
+  and the 5th `TargetsSQL` column `notify_after_ack`), `SnoozedPredicate`
+  and, for the API's `muted_reason`, `MutedReasonExpr`. Known asymmetry: member suppression
   ignores the group's `enabled` flag, so a paused `group`-rollup group
   silences its whole membership — reachability reports it
   (`group_rollup_paused`), dispatch still does it. The package doc, the
@@ -548,10 +555,15 @@ or imported groups come back empty. Any other path that creates groups through
   predicates in `claimNotificationTx` and the in-memory pre-filter
   `shouldSendNotification` encode the same due rules; change them together.
   `dueEvent` (`dispatch_due.go`) is the single created/reminder due rule
-  for the open-alert loops (`dispatchOpenAlerts`, `dispatchOpenMeshAlerts`);
+  for the open-alert loops (`dispatchOpenAlerts`, `dispatchOpenMeshAlerts`,
+  `dispatchOpenLocationOfflineAlerts`);
   `shouldSendNotification` mirrors it minus the escalation delay
   (`TestDueEvent` pins the pair). Alert-level holds (ack, snooze) go in its
-  `DispatchGate`, never in a loop.
+  `DispatchGate`, never in a loop, and the claim re-checks them under the
+  alert row lock (`claimStatusAllows`; `TestClaimStatusMatchesPreFilter`
+  pins claim, pre-filter and `dueEvent`). The ack gate never goes in
+  `openAlertDispatchablePredicate`: suspected-cause follow-ups still reach
+  acknowledged alerts (snooze, which mutes them too, does go there).
   The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
   never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
@@ -559,8 +571,11 @@ or imported groups come back empty. Any other path that creates groups through
 - **Delivery ordering rests on row locks — keep them.** The async worker
   holds the alert row `FOR SHARE` from its status check through `Send`
   (`eventSuperseded` in `worker/internal/worker/notifications/consumer.go`),
-  so a trigger never reaches a provider after its resolve, and
-  `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff.
+  so a trigger never reaches a provider after its resolve, a tier or
+  reminder whose envelope carries `StopOnAck` never reaches it after an ack
+  (nor anything but an ack after a snooze, `alertrouting.MuteHolds`), and
+  `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff
+  (routes without `StopOnAck`).
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.
@@ -577,6 +592,8 @@ or imported groups come back empty. Any other path that creates groups through
 - **Alert kinds**: `alerts_kind_check` (latest rewrite 000100) and the
   `Kind*` constants in `shared/notifications/event.go` list the same kinds;
   a new kind rewrites the CHECK in one migration and adds its constant.
+  A monitor-less kind also opens `alerts_subject_check` (latest rewrite
+  000102) and gets its own partial unique index for its `ON CONFLICT`.
 - **Transactional mail** (invites, resets, subscriber mail, reports) goes
   through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
   MIME builder; `Message.Validate` is the header-injection guard. It never

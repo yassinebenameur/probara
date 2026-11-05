@@ -27,6 +27,14 @@
 // the alert's suppression_reason, so what pages and what the UI calls
 // suppressed cannot disagree. Classify does not model it: routing reachability
 // is static configuration, dependency suppression follows live upstream state.
+//
+// Acknowledgement and snooze are per-alert mutes too, and likewise outside
+// Classify. A snoozed alert (SnoozedPredicate) sends no escalation tier,
+// reminder or suspected-cause follow-up until snoozed_until. An acknowledged
+// alert stops its tiers and reminders when the tenant's
+// ack_stops_notifications is on (AckStopsExpr), except on routes marked
+// notify_after_ack (the 5th TargetsSQL column); suspected-cause follow-ups
+// still reach acked alerts. The API's muted_reason is MutedReasonExpr.
 package alertrouting
 
 import "github.com/google/uuid"
@@ -160,8 +168,9 @@ func Classify(c Counts) Status {
 
 // TargetsSQL returns the set of routed channel assignments for the monitors in
 // the `$1` tenant and `$2` monitor-ID array, as
-// `(monitor_id, channel_id, delay_seconds, pos)` ordered by escalation
-// position. It is the alerter's delivery routing and the API's reachability
+// `(monitor_id, channel_id, delay_seconds, pos, notify_after_ack)` ordered by
+// escalation position. notify_after_ack is the route's opt-out from
+// stop-on-ack (see AckStopsExpr); routing itself ignores it. It is the alerter's delivery routing and the API's reachability
 // input, expressed once.
 //
 // Rows are emitted for disabled channels too — dispatch filters on
@@ -172,14 +181,15 @@ func TargetsSQL() string {
 }
 
 // TenantTargetsSQL returns the `$1` tenant's default routes as
-// `(channel_id, delay_seconds, pos)`: the routing a default-mode monitor
-// inherits through TargetsSQL, without a monitor. Alerts that have no monitor
-// (mesh edges) route through it, so they follow the same tenant defaults a
-// default-mode monitor does. Like TargetsSQL it ignores is_active; callers
-// join alert_channels and order by pos.
+// `(channel_id, delay_seconds, pos, notify_after_ack)`: the routing a
+// default-mode monitor inherits through TargetsSQL, without a monitor. Alerts
+// that have no monitor (mesh edges, offline locations) route through it, so
+// they follow the same tenant defaults a default-mode monitor does. Like
+// TargetsSQL it ignores is_active; callers join alert_channels and order by
+// pos.
 func TenantTargetsSQL() string {
 	return `
-		SELECT tdc.channel_id, tdc.delay_seconds, tdc.position AS pos
+		SELECT tdc.channel_id, tdc.delay_seconds, tdc.position AS pos, tdc.notify_after_ack
 		FROM tenant_default_channels tdc
 		WHERE tdc.tenant_id = $1`
 }
@@ -201,12 +211,12 @@ func RoutesToChannelPredicate(monAlias, channelIDExpr string) string {
 // with a caller's correlated alias.
 func targetsSQL(tenantExpr string, monitorMatch func(col string) string) string {
 	return `
-		SELECT mc.monitor_id, mc.channel_id, mc.delay_seconds, 0 AS pos
+		SELECT mc.monitor_id, mc.channel_id, mc.delay_seconds, 0 AS pos, mc.notify_after_ack
 		FROM monitor_channels mc
 		JOIN monitors rtm ON rtm.id = mc.monitor_id
 		WHERE ` + monitorMatch("mc.monitor_id") + ` AND rtm.notification_mode = 'custom'
 		UNION ALL
-		SELECT rtm.id, tdc.channel_id, tdc.delay_seconds, tdc.position
+		SELECT rtm.id, tdc.channel_id, tdc.delay_seconds, tdc.position, tdc.notify_after_ack
 		FROM tenant_default_channels tdc
 		JOIN monitors rtm ON rtm.tenant_id = tdc.tenant_id
 		WHERE tdc.tenant_id = ` + tenantExpr + ` AND ` + monitorMatch("rtm.id") + ` AND rtm.notification_mode = 'default'`
@@ -321,10 +331,77 @@ func SuppressedByDependencyPredicate(alertAlias, monAlias, tenantAlias string) s
 // never had a root cause this is its triggered_at; for one whose root cause
 // cleared it is the end of the grace period, so escalation-tier delays for a
 // late-paging downstream are measured from when it became unexplained rather
-// than firing every tier at once.
+// than firing every tier at once. An unacknowledge or the end of a snooze
+// restarts the clock the same way (DispatchResumedAtExpr): unfired tiers count
+// from the resume instead of all firing at once.
 func DispatchEligibleSinceExpr(alertAlias, tenantAlias string) string {
 	return `GREATEST(` + alertAlias + `.triggered_at,
-		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at))`
+		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at),
+		` + DispatchResumedAtExpr(alertAlias) + `)`
+}
+
+// DispatchResumedAtExpr returns a SQL timestamp: when the alert aliased by
+// alertAlias last resumed paging after a mute — its unacknowledge or the end
+// of its snooze, whichever is later — or NULL when it never was muted that
+// way. Escalation tiers (DispatchEligibleSinceExpr) and reminders (the
+// alerter's reminder claim) both count from it, so lifting a mute never
+// releases a burst of overdue pages. GREATEST ignores NULLs.
+func DispatchResumedAtExpr(alertAlias string) string {
+	return `GREATEST(` + alertAlias + `.unacknowledged_at, ` + alertAlias + `.snoozed_until)`
+}
+
+// SnoozedPredicate returns a SQL boolean that is TRUE while the alert aliased
+// by alertAlias is snoozed. A snoozed alert sends no escalation tier, reminder
+// or suspected-cause follow-up; resolve and acknowledge notifications still
+// flow. Never NULL.
+func SnoozedPredicate(alertAlias string) string {
+	return `COALESCE(` + alertAlias + `.snoozed_until > NOW(), FALSE)`
+}
+
+// AckStopsExpr returns a SQL boolean that is TRUE when acknowledging an alert
+// of the tenant aliased by tenantAlias stops its escalation tiers and
+// reminders (on every route not marked notify_after_ack).
+func AckStopsExpr(tenantAlias string) string {
+	return tenantAlias + `.ack_stops_notifications`
+}
+
+// MuteHolds is the one ack/snooze rule for whether an event may go out: a
+// snooze holds escalation tiers ("created"), reminders and suspected-cause
+// follow-ups; an acknowledgement holds tiers and reminders on a stopOnAck
+// route (AckStopsExpr on, route not notify_after_ack). Suspected-cause
+// follow-ups still reach acknowledged alerts, and acknowledged / resolved
+// notifications are never held. The alerter's claim and pre-filters and the
+// delivery worker's late re-check all call it.
+func MuteHolds(eventType string, acknowledged, snoozed, stopOnAck bool) bool {
+	switch eventType {
+	case "created", "reminder":
+		return snoozed || (acknowledged && stopOnAck)
+	case "suspected_cause":
+		return snoozed
+	default:
+		return false
+	}
+}
+
+// Muted reasons the API reports in an alert's muted_reason.
+const (
+	// MutedReasonSnoozed: the alert is snoozed (SnoozedPredicate).
+	MutedReasonSnoozed = "snoozed"
+	// MutedReasonAcknowledged: the alert is acknowledged and the tenant stops
+	// paging on ack, so only notify_after_ack routes still hear about it.
+	MutedReasonAcknowledged = "acknowledged"
+)
+
+// MutedReasonExpr returns a SQL text expression naming why the open alert
+// aliased by alertAlias (tenant aliased by tenantAlias) is not paging — one of
+// the MutedReason* values — or NULL. It is built from the predicates the
+// alerter dispatches on, so the API cannot report a mute the alerter ignores.
+func MutedReasonExpr(alertAlias, tenantAlias string) string {
+	return `CASE
+		WHEN ` + alertAlias + `.status NOT IN ('active', 'acknowledged') THEN NULL
+		WHEN ` + SnoozedPredicate(alertAlias) + ` THEN '` + MutedReasonSnoozed + `'
+		WHEN ` + alertAlias + `.status = 'acknowledged' AND COALESCE(` + AckStopsExpr(tenantAlias) + `, TRUE) THEN '` + MutedReasonAcknowledged + `'
+	END`
 }
 
 // ImpactedMonitorsSubquery returns a SQL scalar subquery yielding a JSON array

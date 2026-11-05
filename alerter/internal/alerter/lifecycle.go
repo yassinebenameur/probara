@@ -49,6 +49,12 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateTLSExpiry(ctx); err != nil {
 		a.logger.WithError(err).Error("TLS expiry evaluation failed")
 	}
+	// Before the mesh: its dispatch skips edges whose endpoint is offline,
+	// which the location's own alert speaks for. A failure here must not
+	// block mesh or availability dispatch.
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		a.logger.WithError(err).Error("Location offline evaluation failed")
+	}
 	if err := a.evaluateMeshEdges(ctx); err != nil {
 		return err
 	}
@@ -74,6 +80,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 // decides whether an open alert may notify right now: dispatchOpenAlerts
 // (escalation tiers, reminders) and dispatchSuspectedCauses share it, so an
 // advisory follow-up is muted exactly when a reminder would be.
+//
+// Acknowledgement deliberately does NOT belong here: an acked alert still
+// gets its suspected-cause follow-up, so the ack gate lives in dueEvent and
+// the claim (DispatchGate), per channel route. Snooze mutes both, so it does.
 func openAlertDispatchablePredicate() string {
 	return `al.status IN ('active', 'acknowledged')
 		  AND m.deleted_at IS NULL
@@ -86,6 +96,8 @@ func openAlertDispatchablePredicate() string {
 			OR al.kind = 'tls_expiry'
 		  )
 		  AND NOT ` + maintenance.InMaintenancePredicate("m") + `
+		  -- A snoozed alert sends nothing until snoozed_until.
+		  AND NOT ` + alertrouting.SnoozedPredicate("al") + `
 		  -- A 'per_monitor' group does not dispatch its own alert (if one is still
 		  -- open from before the mode was changed, stay quiet on it).
 		  AND NOT ` + alertrouting.SelfSilentGroupPredicate("m") + `
@@ -503,6 +515,9 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 type channelTarget struct {
 	channel alertChannel
 	delay   time.Duration
+	// notifyAfterAck opts this route out of stop-on-ack: it keeps receiving
+	// tiers and reminders while the alert is acknowledged.
+	notifyAfterAck bool
 }
 
 // resolveChannelTargets returns the effective routing for a monitor —
@@ -511,7 +526,7 @@ type channelTarget struct {
 // reachability warning cannot disagree.
 func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID uuid.UUID) ([]channelTarget, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, x.delay_seconds
+		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, x.delay_seconds, x.notify_after_ack
 		FROM (`+alertrouting.TargetsSQL()+`) x
 		JOIN alert_channels ac ON ac.id = x.channel_id
 		ORDER BY x.pos, ac.id
@@ -526,7 +541,7 @@ func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID
 		var t channelTarget
 		var configBytes []byte
 		var delaySeconds int
-		if err := rows.Scan(&t.channel.ID, &t.channel.Name, &t.channel.Type, &configBytes, &t.channel.IsActive, &delaySeconds); err != nil {
+		if err := rows.Scan(&t.channel.ID, &t.channel.Name, &t.channel.Type, &configBytes, &t.channel.IsActive, &delaySeconds, &t.notifyAfterAck); err != nil {
 			return nil, fmt.Errorf("scan channel target: %w", err)
 		}
 		t.channel.Config = json.RawMessage(configBytes)
@@ -553,7 +568,8 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			al.metric_name, al.metric_value, al.threshold_value, al.failing_locations,
 			te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
-			CASE WHEN al.kind = 'availability' THEN `+alertrouting.ImpactedMonitorsSubquery("al.monitor_id")+` END
+			CASE WHEN al.kind = 'availability' THEN `+alertrouting.ImpactedMonitorsSubquery("al.monitor_id")+` END,
+			al.status, `+alertrouting.AckStopsExpr("te")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		JOIN tenants te ON te.id = al.tenant_id
@@ -570,10 +586,13 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		monitorName     string
 		reminderSeconds int
 		eligibleSince   time.Time
+		gate            DispatchGate
 	}
 	var open []openAlert
 	for rows.Next() {
 		var oa openAlert
+		var status string
+		var resumedAt sql.NullTime
 		var lastError sql.NullString
 		var rcID uuid.NullUUID
 		var rcDownSince sql.NullTime
@@ -587,9 +606,11 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			&rcID, &rcDownSince, &rcName,
 			&baseline, &observed, &score,
 			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds,
-			&oa.eligibleSince, &impacted); err != nil {
+			&oa.eligibleSince, &impacted, &status, &oa.gate.AckStops, &resumedAt); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
+		oa.gate.Acknowledged = status == "acknowledged"
+		oa.gate.ResumedAt = resumedAt.Time
 		if lastError.Valid {
 			oa.record.LastError = &lastError.String
 		}
@@ -626,8 +647,8 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 
 		for _, target := range targets {
 			state := getNotificationState(states, oa.record.ID, target.channel.ID)
-			if eventType, ok := dueEvent(now, state, target, alertAge, reminderInterval, DispatchGate{}); ok {
-				a.fireChannel(ctx, eventType, binding, &oa.record, target.channel, now, reminderInterval)
+			if eventType, ok := dueEvent(now, state, target, alertAge, reminderInterval, oa.gate); ok {
+				a.fireChannel(ctx, eventType, binding, &oa.record, target.channel, now, reminderInterval, oa.gate.stopOnAck(target))
 			}
 		}
 	}
@@ -701,7 +722,7 @@ func (a *Alerter) dispatchAcknowledgements(ctx context.Context) error {
 	now := time.Now()
 	for i := range todo {
 		p := &todo[i]
-		a.fireChannel(ctx, "acknowledged", p.binding, &p.record, p.channel, now, 0)
+		a.fireChannel(ctx, "acknowledged", p.binding, &p.record, p.channel, now, 0, false)
 	}
 	return nil
 }
@@ -709,11 +730,13 @@ func (a *Alerter) dispatchAcknowledgements(ctx context.Context) error {
 // fireChannel sends one event through the atomic claim in deliverNotification.
 // The in-memory state the caller read is only a pre-filter: the claim is what
 // decides, so a sibling replica racing on the same alert silently loses here.
-func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, channel alertChannel, now time.Time, reminderInterval time.Duration) {
+// stopOnAck is the route's DispatchGate.stopOnAck (false for events an ack
+// never holds).
+func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, channel alertChannel, now time.Time, reminderInterval time.Duration, stopOnAck bool) {
 	fields := map[string]interface{}{
 		"alert_id": alert.ID, "channel_id": channel.ID, "event_type": eventType,
 	}
-	sent, err := a.deliverNotification(ctx, eventType, binding, alert, nil, channel, now, reminderInterval)
+	sent, err := a.deliverNotification(ctx, eventType, binding, alert, nil, channel, now, reminderInterval, stopOnAck)
 	if err != nil {
 		a.logger.WithError(err).WithFields(fields).Warn("Failed to send alert notification")
 		return
@@ -757,7 +780,7 @@ func (a *Alerter) notifyFiredChannels(ctx context.Context, eventType string, bin
 		if fc.lastEventType == "resolved" || !fc.channel.IsActive {
 			continue
 		}
-		a.fireChannel(ctx, eventType, binding, alert, fc.channel, now, 0)
+		a.fireChannel(ctx, eventType, binding, alert, fc.channel, now, 0, false)
 	}
 }
 

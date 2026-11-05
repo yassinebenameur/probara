@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	shareddb "github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // ErrChannelNotFound is returned by Update when a requested channel_id does
@@ -22,6 +23,9 @@ type ChannelAssignment struct {
 	ChannelName  string    `json:"channel_name,omitempty"`
 	ChannelType  string    `json:"channel_type,omitempty"`
 	DelaySeconds int       `json:"delay_seconds"`
+	// NotifyAfterAck keeps this route paging (tiers and reminders) while an
+	// alert is acknowledged, when the workspace otherwise stops on ack.
+	NotifyAfterAck bool `json:"notify_after_ack"`
 }
 
 // Settings is the full workspace notification settings returned to the caller.
@@ -45,7 +49,21 @@ type Settings struct {
 	// still down.
 	DependencySuppressionEnabled      bool `json:"dependency_suppression_enabled"`
 	DependencySuppressionGraceSeconds int  `json:"dependency_suppression_grace_seconds"`
+
+	// Paging. AckStopsNotifications: acknowledging an alert stops its
+	// unfired escalation tiers and reminders (routes marked
+	// notify_after_ack excepted).
+	AckStopsNotifications bool `json:"ack_stops_notifications"`
+
+	// Offline locations (rule S-F6): alert when a check location that
+	// reported before has been silent for LocationOfflineAfterSeconds.
+	LocationOfflineAlertsEnabled bool `json:"location_offline_alerts_enabled"`
+	LocationOfflineAfterSeconds  int  `json:"location_offline_after_seconds"`
 }
+
+// MaxLocationOfflineAfterSeconds bounds the offline threshold at one day; the
+// floor is monitorstate.MinLocationOfflineAfterSeconds.
+const MaxLocationOfflineAfterSeconds = 86400
 
 // MaxDependencySuppressionGraceSeconds bounds the grace period at one day: a
 // longer hold would mean a genuinely broken downstream is never announced.
@@ -65,6 +83,11 @@ type UpdateRequest struct {
 
 	DependencySuppressionEnabled      *bool `json:"dependency_suppression_enabled,omitempty"`
 	DependencySuppressionGraceSeconds *int  `json:"dependency_suppression_grace_seconds,omitempty"`
+
+	AckStopsNotifications *bool `json:"ack_stops_notifications,omitempty"`
+
+	LocationOfflineAlertsEnabled *bool `json:"location_offline_alerts_enabled,omitempty"`
+	LocationOfflineAfterSeconds  *int  `json:"location_offline_after_seconds,omitempty"`
 }
 
 // Service provides workspace notification settings CRUD.
@@ -88,9 +111,16 @@ func (s *Service) Get(ctx context.Context, tenantID uuid.UUID) (*Settings, error
 		&settings.DependencySuppressionEnabled, &settings.DependencySuppressionGraceSeconds); err != nil {
 		return nil, fmt.Errorf("load tenant alert settings: %w", err)
 	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT ack_stops_notifications, location_offline_alerts_enabled, location_offline_after_seconds
+		FROM tenants WHERE id = $1
+	`, tenantID).Scan(&settings.AckStopsNotifications,
+		&settings.LocationOfflineAlertsEnabled, &settings.LocationOfflineAfterSeconds); err != nil {
+		return nil, fmt.Errorf("load tenant paging settings: %w", err)
+	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT tdc.channel_id, ac.name, ac.type, tdc.delay_seconds
+		SELECT tdc.channel_id, ac.name, ac.type, tdc.delay_seconds, tdc.notify_after_ack
 		FROM tenant_default_channels tdc
 		JOIN alert_channels ac ON ac.id = tdc.channel_id
 		WHERE tdc.tenant_id = $1
@@ -103,7 +133,7 @@ func (s *Service) Get(ctx context.Context, tenantID uuid.UUID) (*Settings, error
 	settings.DefaultChannels = []ChannelAssignment{}
 	for rows.Next() {
 		var a ChannelAssignment
-		if err := rows.Scan(&a.ChannelID, &a.ChannelName, &a.ChannelType, &a.DelaySeconds); err != nil {
+		if err := rows.Scan(&a.ChannelID, &a.ChannelName, &a.ChannelType, &a.DelaySeconds, &a.NotifyAfterAck); err != nil {
 			return nil, fmt.Errorf("scan default channel: %w", err)
 		}
 		settings.DefaultChannels = append(settings.DefaultChannels, a)
@@ -131,10 +161,10 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 				return nil, fmt.Errorf("delay_seconds must be >= 0")
 			}
 			result, err := tx.ExecContext(ctx, `
-				INSERT INTO tenant_default_channels (tenant_id, channel_id, delay_seconds, position)
-				SELECT $1, $2, $3, $4
+				INSERT INTO tenant_default_channels (tenant_id, channel_id, delay_seconds, position, notify_after_ack)
+				SELECT $1, $2, $3, $4, $5
 				WHERE EXISTS (SELECT 1 FROM alert_channels WHERE id = $2 AND tenant_id = $1)
-			`, tenantID, a.ChannelID, a.DelaySeconds, i)
+			`, tenantID, a.ChannelID, a.DelaySeconds, i, a.NotifyAfterAck)
 			if err != nil {
 				return nil, fmt.Errorf("insert default channel: %w", err)
 			}
@@ -187,6 +217,23 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 			req.LatencyAnomalyMinBreachSeconds, req.LatencyAnomalyMinDeltaPct, tenantID,
 			req.DependencySuppressionEnabled, req.DependencySuppressionGraceSeconds); err != nil {
 			return nil, fmt.Errorf("update tenant alert settings: %w", err)
+		}
+	}
+	if req.LocationOfflineAfterSeconds != nil &&
+		(*req.LocationOfflineAfterSeconds < monitorstate.MinLocationOfflineAfterSeconds || *req.LocationOfflineAfterSeconds > MaxLocationOfflineAfterSeconds) {
+		return nil, fmt.Errorf("location_offline_after_seconds must be between %d and %d",
+			monitorstate.MinLocationOfflineAfterSeconds, MaxLocationOfflineAfterSeconds)
+	}
+	if req.AckStopsNotifications != nil || req.LocationOfflineAlertsEnabled != nil || req.LocationOfflineAfterSeconds != nil {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tenants SET
+				ack_stops_notifications = COALESCE($2, ack_stops_notifications),
+				location_offline_alerts_enabled = COALESCE($3, location_offline_alerts_enabled),
+				location_offline_after_seconds = COALESCE($4, location_offline_after_seconds),
+				updated_at = NOW()
+			WHERE id = $1
+		`, tenantID, req.AckStopsNotifications, req.LocationOfflineAlertsEnabled, req.LocationOfflineAfterSeconds); err != nil {
+			return nil, fmt.Errorf("update tenant paging settings: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

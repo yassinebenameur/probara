@@ -48,6 +48,8 @@ var alertDetailSelect = `
 		CASE WHEN ` + alertSuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonDependency + `' END,
 		CASE WHEN a.status IN ('active', 'acknowledged') AND a.kind = 'availability'
 			THEN json_array_length(` + alertrouting.ImpactedMonitorsSubquery("a.monitor_id") + `) ELSE 0 END,
+		a.acknowledged_by_user_id, a.acknowledged_via, a.unacknowledged_at,
+		a.snoozed_until, a.snoozed_by_user_id, ` + alertrouting.MutedReasonExpr("a", "te") + `,
 		` + triageview.Columns + `
 	FROM alerts a
 	LEFT JOIN monitors m ON a.monitor_id = m.id
@@ -110,6 +112,8 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		&alert.SourceLocationID, &alert.TargetLocationID, &alert.SourceLocationName, &alert.TargetLocationName,
 		&alert.SuppressionReason, &alert.ImpactedCount,
+		&alert.AcknowledgedByUserID, &alert.AcknowledgedVia, &alert.UnacknowledgedAt,
+		&alert.SnoozedUntil, &alert.SnoozedByUserID, &alert.MutedReason,
 	}, triage.Dest()...)...)
 	if err != nil {
 		return nil, err
@@ -345,19 +349,21 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	return alerts, nil
 }
 
-// AcknowledgeAlert marks an alert as acknowledged. actor is accepted but not
-// persisted yet.
+// AcknowledgeAlert marks an alert as acknowledged by actor, recording who
+// and through which surface. With the tenant's ack_stops_notifications on,
+// the alerter then stops its escalation tiers and reminders.
 func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error) {
 	now := time.Now()
 	query := `
 		UPDATE alerts
-		SET status = 'acknowledged', acknowledged_at = $1, updated_at = $1
+		SET status = 'acknowledged', acknowledged_at = $1, updated_at = $1,
+			acknowledged_by_user_id = $4, acknowledged_via = $5
 		WHERE id = $2 AND tenant_id = $3 AND status = 'active'
 		RETURNING id
 	`
 
 	var id uuid.UUID
-	err := s.db.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
+	err := s.db.QueryRowContext(ctx, query, now, alertID, tenantID, actor.UserID, nullableVia(actor)).Scan(&id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("alert not found or not active")
@@ -368,13 +374,14 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 	return s.getAlert(ctx, tenantID, alertID)
 }
 
-// ResolveAlert marks an alert as resolved. actor is accepted but not
-// persisted yet.
+// ResolveAlert marks an alert as resolved, ending any snooze at the resolve
+// time. actor is accepted but not persisted yet.
 func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error) {
 	now := time.Now()
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1
+		SET status = 'resolved', resolved_at = $1, updated_at = $1,
+			snoozed_until = LEAST(snoozed_until, $1)
 		WHERE id = $2 AND tenant_id = $3 AND status IN ('active', 'acknowledged')
 		RETURNING id
 	`
