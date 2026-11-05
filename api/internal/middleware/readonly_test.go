@@ -143,6 +143,7 @@ func TestPostReadAllowlistDrift(t *testing.T) {
 		"/api/v1/monitors/dependency-suggestions",
 		"/api/v1/alert-channels/{id}/test",
 		"/api/v1/monitors/{id}/metrics/query",
+		"/api/v1/maintenance-windows/preview",
 	}
 
 	for _, route := range postRoutes {

@@ -37,7 +37,7 @@ export const SLAS_PAGE: DocPage = {
       blocks: [
         {
           type: "paragraph",
-          text: "Every number comes from the monitors' state history (the timeline behind the monitor detail headline), never from counting check results. For each monitor, time in the period falls into exactly one class. Available: up, suspect, or degraded unless the SLA counts it as down. Unplanned down: down outside every maintenance window that covers the monitor, directly or through one of its groups. Planned down: down inside such a window. Paused. Unknown: no fresh evidence. Untracked: no state history yet. A monitor is down for whatever failed its checks, its own assertions included: a SIP test call failing a call-quality threshold counts as downtime like one that was not answered, and its warnings never do.",
+          text: "Every number comes from the monitors' state history (the timeline behind the monitor detail headline), never from counting check results. For each monitor, time in the period falls into exactly one class. Available: up, suspect, or degraded unless the SLA counts it as down. Unplanned down: down outside every maintenance occurrence that covers the monitor, directly or through one of its groups (a repeating window counts only while one of its occurrences runs). Planned down: down inside such an occurrence. Paused. Unknown: no fresh evidence. Untracked: no state history yet. A monitor is down for whatever failed its checks, its own assertions included: a SIP test call failing a call-quality threshold counts as downtime like one that was not answered, and its warnings never do.",
         },
         {
           type: "paragraph",
@@ -129,7 +129,7 @@ export const SLAS_PAGE: DocPage = {
       blocks: [
         {
           type: "paragraph",
-          text: "A live report of a past period is recomputed on every view, so it changes when someone edits or deletes a maintenance window, wipes a monitor's history, or changes the SLA itself, and as triages complete and operators label or relabel alerts (which moves outages between suspected-cause buckets). Issue a report to freeze a closed period. Probara stores the complete report, including the SLA settings and resolved monitor list at that moment, and every later download of it renders from that snapshot. That includes each suspected cause's bucket and title, whatever the catalogue later calls the key; outages still pending when it was issued stay pending. Only closed calendar periods can be issued, once each. Deleting the SLA deletes its issued reports; purging a monitor does not.",
+          text: "A live report of a past period is recomputed on every view, so it changes when someone deletes a maintenance window (editing one never changes occurrences that have already ended), wipes a monitor's history, or changes the SLA itself, and as triages complete and operators label or relabel alerts (which moves outages between suspected-cause buckets). Issue a report to freeze a closed period. Probara stores the complete report, including the SLA settings and resolved monitor list at that moment, and every later download of it renders from that snapshot. That includes each suspected cause's bucket and title, whatever the catalogue later calls the key; outages still pending when it was issued stay pending. Only closed calendar periods can be issued, once each. Deleting the SLA deletes its issued reports; purging a monitor does not.",
         },
         {
           type: "callout",

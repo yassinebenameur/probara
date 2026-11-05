@@ -159,6 +159,43 @@ func (h *Handlers) DeleteMaintenanceWindow(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// PreviewMaintenanceWindow handles POST /api/v1/maintenance-windows/preview:
+// a rule's next occurrences, computed without saving anything.
+func (h *Handlers) PreviewMaintenanceWindow(w http.ResponseWriter, r *http.Request) {
+	var req models.PreviewMaintenanceWindowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+		return
+	}
+	preview, err := h.service.Preview(r.Context(), &req)
+	if err != nil {
+		h.writeServiceError(w, r, err, "preview maintenance window")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(preview)
+}
+
+// EndMaintenanceOccurrence handles POST /api/v1/maintenance-windows/{id}/end:
+// the occurrence in progress ends now; the rule keeps repeating.
+func (h *Handlers) EndMaintenanceOccurrence(w http.ResponseWriter, r *http.Request) {
+	tenantUUID, ok := h.tenant(w, r)
+	if !ok {
+		return
+	}
+	windowID, ok := h.windowID(w, r)
+	if !ok {
+		return
+	}
+	window, err := h.service.EndOccurrence(r.Context(), tenantUUID, windowID)
+	if err != nil {
+		h.writeServiceError(w, r, err, "end maintenance occurrence")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(window)
+}
+
 // SnoozeMonitor handles POST /api/v1/monitors/{id}/snooze
 func (h *Handlers) SnoozeMonitor(w http.ResponseWriter, r *http.Request) {
 	tenantUUID, ok := h.tenant(w, r)
@@ -237,15 +274,9 @@ func (h *Handlers) writeServiceError(w http.ResponseWriter, r *http.Request, err
 		apierrors.WriteNotFoundError(w, "maintenance window not found")
 		return
 	}
-	switch err.Error() {
-	case "title is required",
-		"ends_at must be after starts_at",
-		"ends_at must be in the future",
-		"at least one monitor is required",
-		"one or more monitors not found",
-		"monitor not found",
-		"snooze end time must be in the future":
-		apierrors.WriteValidationError(w, err.Error())
+	var invalid *maintenancewindowservice.InvalidError
+	if errors.As(err, &invalid) {
+		apierrors.WriteValidationError(w, invalid.Msg)
 		return
 	}
 	h.logger.WithFields(map[string]interface{}{

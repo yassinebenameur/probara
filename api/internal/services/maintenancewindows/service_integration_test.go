@@ -4,6 +4,7 @@ package maintenancewindows_test
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -189,8 +190,11 @@ func TestMaintenanceWindowListOrderPerStatus(t *testing.T) {
 		t.Helper()
 		id := uuid.New()
 		_, err := dbClient.ExecContext(ctx, `
-			INSERT INTO maintenance_windows (id, tenant_id, title, description, starts_at, ends_at)
-			VALUES ($1, $2, $3, '', $4, $5)`, id, tenantID, title, start, end)
+			WITH w AS (
+				INSERT INTO maintenance_windows (id, tenant_id, title, description, starts_at, ends_at)
+				VALUES ($1, $2, $3, '', $4, $5)
+				RETURNING id, tenant_id, starts_at, ends_at)
+			INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT * FROM w`, id, tenantID, title, start, end)
 		require.NoError(t, err)
 		_, err = dbClient.ExecContext(ctx, `
 			INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id) VALUES ($1, $2)`, id, monitorID)
@@ -224,4 +228,154 @@ func TestMaintenanceWindowListOrderPerStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, first.Total)
 	require.Equal(t, "upcoming-soon", first.Items[0].Title)
+}
+
+type occRow struct{ start, end time.Time }
+
+func windowOccurrences(ctx context.Context, t *testing.T, dbClient interface {
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+}, windowID uuid.UUID) []occRow {
+	t.Helper()
+	rows, err := dbClient.QueryContext(ctx, `
+		SELECT starts_at, ends_at FROM maintenance_window_occurrences WHERE window_id = $1 ORDER BY starts_at`, windowID)
+	require.NoError(t, err)
+	defer rows.Close()
+	var out []occRow
+	for rows.Next() {
+		var o occRow
+		require.NoError(t, rows.Scan(&o.start, &o.end))
+		out = append(out, o)
+	}
+	return out
+}
+
+// S-M5: a repeating window materializes its occurrences on create; an edit
+// takes effect at the moment it is saved — ended occurrences never change,
+// the one in progress keeps its start, future ones are regenerated.
+func TestMaintenanceWindowRecurrenceEditKeepsHistory(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mw-recur")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api")
+	svc := maintenancewindows.NewService(dbClient)
+	now := time.Now().UTC().Truncate(time.Second)
+	start := now.Add(-48*time.Hour - 30*time.Minute)
+
+	_, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "x", StartsAt: start, EndsAt: start.Add(time.Hour), MonitorIDs: []string{monitorID.String()},
+		Recurrence: &models.MaintenanceRecurrence{Frequency: "cron", Cron: "61 * * * *"},
+	})
+	var invalid *maintenancewindows.InvalidError
+	require.ErrorAs(t, err, &invalid)
+	until := now.Add(-time.Hour)
+	_, err = svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "x", StartsAt: start, EndsAt: start.Add(time.Hour), MonitorIDs: []string{monitorID.String()},
+		Recurrence: &models.MaintenanceRecurrence{Frequency: "daily", Until: &until},
+	})
+	require.ErrorContains(t, err, "no occurrence after now")
+
+	w, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "nightly", StartsAt: start, EndsAt: start.Add(time.Hour), MonitorIDs: []string{monitorID.String()},
+		Recurrence: &models.MaintenanceRecurrence{Frequency: "daily"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.MaintenanceWindowStatusActive, w.Status)
+	require.Equal(t, "daily", w.Recurrence.Frequency)
+	require.Equal(t, 1, w.Recurrence.Interval)
+	require.Equal(t, "UTC", w.Recurrence.Timezone)
+	require.Len(t, w.Occurrences, 5)
+	require.True(t, w.Occurrences[0].StartsAt.Equal(now.Add(-30*time.Minute)), "first listed occurrence is the one in progress")
+
+	occ := windowOccurrences(ctx, t, dbClient, w.ID)
+	require.Len(t, occ, 36, "the one in progress plus one per day of the 35-day horizon")
+	require.True(t, occ[0].start.Equal(now.Add(-30*time.Minute)))
+
+	// History the window accumulated before today.
+	_, err = dbClient.ExecContext(ctx, `
+		INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) VALUES ($1, $2, $3, $4)`,
+		w.ID, tenantID, start, start.Add(time.Hour))
+	require.NoError(t, err)
+
+	// Longer occurrences: the running one is extended, the future ones
+	// regenerated, the ended one untouched.
+	longer := start.Add(2 * time.Hour)
+	_, err = svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{EndsAt: &longer})
+	require.NoError(t, err)
+	occ = windowOccurrences(ctx, t, dbClient, w.ID)
+	require.Len(t, occ, 37)
+	require.True(t, occ[0].start.Equal(start) && occ[0].end.Equal(start.Add(time.Hour)), "ended occurrence is history")
+	require.True(t, occ[1].start.Equal(now.Add(-30*time.Minute)) && occ[1].end.Equal(now.Add(90*time.Minute)),
+		"occurrence in progress keeps its start and takes the new end, got %v-%v", occ[1].start, occ[1].end)
+	for _, o := range occ[2:] {
+		require.Equal(t, 2*time.Hour, o.end.Sub(o.start))
+	}
+
+	// A rule that no longer covers the present ends the running occurrence
+	// at the edit instead of rewriting it.
+	shorter := start.Add(10 * time.Minute)
+	got, err := svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{EndsAt: &shorter})
+	require.NoError(t, err)
+	require.Equal(t, models.MaintenanceWindowStatusUpcoming, got.Status)
+	occ = windowOccurrences(ctx, t, dbClient, w.ID)
+	require.True(t, occ[0].end.Equal(start.Add(time.Hour)), "history untouched")
+	require.True(t, occ[1].start.Equal(now.Add(-30*time.Minute)))
+	require.False(t, occ[1].end.After(time.Now()), "running occurrence ends at the edit")
+	require.True(t, occ[1].end.After(now.Add(-time.Minute)))
+	require.Equal(t, 10*time.Minute, occ[2].end.Sub(occ[2].start))
+
+	// Ending the occurrence in progress keeps the rule: nothing runs now, the
+	// next one is still ahead.
+	_, err = svc.EndOccurrence(ctx, tenantID, w.ID)
+	require.ErrorAs(t, err, &invalid, "nothing is in progress after the shortening edit")
+	_, err = svc.EndOccurrence(ctx, uuid.New(), w.ID)
+	require.ErrorIs(t, err, maintenancewindows.ErrNotFound)
+
+	// A title-only edit leaves the occurrences alone.
+	title := "renamed"
+	_, err = svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{Title: &title})
+	require.NoError(t, err)
+	require.Equal(t, occ, windowOccurrences(ctx, t, dbClient, w.ID))
+
+	// Turning it into a one-off keeps history and drops future occurrences.
+	oneOffStart := now.Add(3 * time.Hour)
+	oneOffEnd := now.Add(4 * time.Hour)
+	_, err = svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{
+		StartsAt: &oneOffStart, EndsAt: &oneOffEnd, Recurrence: &models.MaintenanceRecurrence{Frequency: "none"},
+	})
+	require.NoError(t, err)
+	final := windowOccurrences(ctx, t, dbClient, w.ID)
+	require.Len(t, final, 3)
+	require.True(t, final[0].start.Equal(start))
+	require.True(t, final[2].start.Equal(oneOffStart) && final[2].end.Equal(oneOffEnd))
+}
+
+func TestMaintenanceWindowEndOccurrenceKeepsRule(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mw-end")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api")
+	svc := maintenancewindows.NewService(dbClient)
+	now := time.Now().UTC().Truncate(time.Second)
+	start := now.Add(-24*time.Hour - 10*time.Minute)
+
+	w, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "nightly", StartsAt: start, EndsAt: start.Add(time.Hour), MonitorIDs: []string{monitorID.String()},
+		Recurrence: &models.MaintenanceRecurrence{Frequency: "daily"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.MaintenanceWindowStatusActive, w.Status)
+
+	ended, err := svc.EndOccurrence(ctx, tenantID, w.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.MaintenanceWindowStatusUpcoming, ended.Status)
+	require.Equal(t, "daily", ended.Recurrence.Frequency)
+	require.True(t, ended.StartsAt.Equal(start), "the rule is unchanged")
+	require.True(t, ended.Occurrences[0].StartsAt.Equal(now.Add(24*time.Hour-10*time.Minute)), "next occurrence is tomorrow's")
+	occ := windowOccurrences(ctx, t, dbClient, w.ID)
+	require.True(t, occ[0].start.Equal(now.Add(-10*time.Minute)))
+	require.False(t, occ[0].end.After(time.Now()), "the running occurrence ended now, its past kept")
 }

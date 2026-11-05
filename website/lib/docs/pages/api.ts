@@ -428,6 +428,14 @@ export const API_PAGE: DocPage = {
               "`DELETE /api/v1/maintenance-windows/{id}`",
               "Delete a maintenance window",
             ],
+            [
+              "`POST /api/v1/maintenance-windows/{id}/end`",
+              "End the occurrence in progress now; the rule (and a repeating window's later occurrences) is unchanged",
+            ],
+            [
+              "`POST /api/v1/maintenance-windows/preview`",
+              "Compute-only: the next occurrences of a schedule (`starts_at`, `ends_at`, `recurrence`, `count` up to 50); open to read-only identities",
+            ],
           ],
         },
         {
@@ -436,6 +444,13 @@ export const API_PAGE: DocPage = {
           title: "Create maintenance",
           code:
             '{\n  "title": "Database upgrade",\n  "description": "Planned primary database maintenance",\n  "starts_at": "2026-08-01T22:00:00Z",\n  "ends_at": "2026-08-01T23:30:00Z",\n  "monitor_ids": ["<monitor-id>"]\n}',
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Create a repeating window (Sundays 02:00-03:00 Paris time)",
+          code:
+            '{\n  "title": "Weekly patching",\n  "starts_at": "2026-11-08T01:00:00Z",\n  "ends_at": "2026-11-08T02:00:00Z",\n  "monitor_ids": ["<monitor-id>"],\n  "recurrence": {\n    "frequency": "weekly",\n    "weekdays": [0],\n    "timezone": "Europe/Paris"\n  }\n}',
         },
       ],
     },
