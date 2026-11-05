@@ -1257,6 +1257,8 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   response excerpt in `metrics_data.http.failure_response`, budgeted by
   JSON-encoded size (`TestHTTPFailureCaptureSizeBound` keeps a row < 16 KiB).
   Captured text never goes into `ErrorMessage`, which notifications quote.
+  Redact the whole read body before cutting the excerpt, never a prefix
+  (`TestHTTPFailureCaptureRedactionAtBudget`).
 - **Check output Postgres refuses** (NUL, invalid UTF-8, jsonb's `\u0000`
   and lone surrogate escapes) would fail the whole result insert, so
   `monitorstate.insertResult` scrubs `error_message`/`metrics_data` to U+FFFD
