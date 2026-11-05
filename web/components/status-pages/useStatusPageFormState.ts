@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useReducer } from 'react';
-import type { Monitor, StatusPage } from '@/lib/types';
+import type { Monitor, StatusPage, StatusPageVisibility } from '@/lib/types';
 
 export interface EditableMonitor {
   monitor_id: string;
@@ -34,6 +34,12 @@ export interface FormState {
    * VAPID keypair.
    */
   enablePushNotifications: boolean;
+  /** Who may view the page; a column on the page, not a setting. */
+  visibility: StatusPageVisibility;
+  /** New visitor password; '' keeps the stored one. Never prefilled. */
+  password: string;
+  /** Submit password: '' to remove the stored password. */
+  clearPassword: boolean;
 }
 
 export const DEFAULT_PRIMARY = '#ff8a5c';
@@ -99,6 +105,9 @@ export function initialState(statusPage?: StatusPage): FormState {
     basics: basicsFromStatusPage(statusPage),
     sections: sectionsFromStatusPage(statusPage),
     enablePushNotifications: statusPage?.settings?.enable_push_notifications === true,
+    visibility: statusPage?.visibility ?? 'public',
+    password: '',
+    clearPassword: false,
   };
 }
 
@@ -128,7 +137,10 @@ export type Action =
   | { type: 'move_monitor'; monitorId: string; targetSectionId: string; targetIndex?: number }
   | { type: 'reorder_monitor'; sectionId: string; monitorId: string; direction: 'up' | 'down' }
   | { type: 'set_display_name'; sectionId: string; monitorId: string; value: string }
-  | { type: 'set_push_notifications'; value: boolean };
+  | { type: 'set_push_notifications'; value: boolean }
+  | { type: 'set_visibility'; value: StatusPageVisibility }
+  | { type: 'set_password'; value: string }
+  | { type: 'set_clear_password'; value: boolean };
 
 export function reducer(state: FormState, action: Action): FormState {
   switch (action.type) {
@@ -140,6 +152,16 @@ export function reducer(state: FormState, action: Action): FormState {
 
     case 'set_push_notifications':
       return { ...state, enablePushNotifications: action.value };
+
+    case 'set_visibility':
+      return { ...state, visibility: action.value };
+
+    case 'set_password':
+      // Typing a new password supersedes a pending removal.
+      return { ...state, password: action.value, clearPassword: action.value ? false : state.clearPassword };
+
+    case 'set_clear_password':
+      return { ...state, clearPassword: action.value, password: action.value ? '' : state.password };
 
     case 'add_section': {
       const section = makeSection(action.title || 'New section', action.id);
