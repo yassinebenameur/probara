@@ -473,9 +473,12 @@ or imported groups come back empty. Any other path that creates groups through
   headers (API strict policy, status-page per-page CSP, HSTS only on HTTPS
   via `IsHTTPS` + `TRUSTED_PROXY_CIDRS`). The API mounts it, the CORS
   allowlist (`middleware/cors.go`, `API_ALLOWED_ORIGINS`) and the anonymous
-  rate-limit stage in `useEdgeSecurity` (`api/internal/api/routes_edge.go`);
-  `rateLimiter.Identified` must stay directly after `authMiddleware`, since
-  it keys on the verified credential. Never echo `Origin` in a handler.
+  rate-limit stage in `useEdgeSecurity` (`api/internal/api/routes_edge.go`).
+  `authMiddleware` is wrapped by `rateLimiter.Authenticate`, which charges
+  validated credentials per credential and only 401s to the address failure
+  bucket; never refuse before auth on an address bucket. Which routes are
+  authenticated is derived from the router (`authRouteClassifier`), so new
+  routes need no list. Never echo `Origin` in a handler.
   `SECURITY_HSTS_MAX_AGE` / `API_RATE_LIMIT_*` / `API_ALLOWED_ORIGINS` ride
   Compose env and the chart's top-level `security:` block
   (`monitoring-platform.securityEnv`) together.
