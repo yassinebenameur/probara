@@ -640,7 +640,7 @@ func TestRoutesToChannelPredicateMatchesTargetsSQL(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		tenant := testutil.InsertTenant(ctx, t, db, "")
 		d1 := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
-		insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		d2 := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
 		def := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "default")
 		custom := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "custom")
 		emptyCustom := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "custom-empty")
@@ -648,7 +648,16 @@ func TestRoutesToChannelPredicateMatchesTargetsSQL(t *testing.T) {
 		mustExec(ctx, t, db, `INSERT INTO monitor_channels (monitor_id, channel_id) VALUES ($1, $2)`, custom, d1)
 		// A custom assignment on a default-mode monitor is ignored.
 		mustExec(ctx, t, db, `INSERT INTO monitor_channels (monitor_id, channel_id) VALUES ($1, $2)`, def, d1)
-		for _, m := range []uuid.UUID{def, custom, emptyCustom} {
+		// Escalation policies: a policy-mode monitor routes to its policy's
+		// channel targets; in the second workspace a default policy also
+		// replaces the tenant default channels for default-mode monitors.
+		policy := insertEscalationPolicy(ctx, t, db, tenant, 0, 1800, policyStep{delay: 120, targets: []policyTarget{{kind: "channel", id: d2}}})
+		policyMonitor := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "policy")
+		mustExec(ctx, t, db, `UPDATE monitors SET notification_mode = 'policy', escalation_policy_id = $2 WHERE id = $1`, policyMonitor, policy)
+		if i == 1 {
+			mustExec(ctx, t, db, `UPDATE tenants SET default_escalation_policy_id = $2 WHERE id = $1`, tenant, policy)
+		}
+		for _, m := range []uuid.UUID{def, custom, emptyCustom, policyMonitor} {
 			monitors = append(monitors, m)
 			tenants[m] = tenant
 		}
