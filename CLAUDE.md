@@ -257,6 +257,15 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   rollup ranges via the scheduler's `syncDowntimeFromIntervals` projection;
   `TestDowntimeProjectionMatchesRawAnalyticsPath` pins the pair). Never
   derive downtime from check rows.
+  Maintenance enters it only as occurrences through
+  `maintenance.OccurrenceRangesSQL`, never the window rule (S-M5).
+- **Maintenance windows are rules; coverage is occurrences** (S-M5):
+  `shared/maintenance` owns `Expand` (IANA zones, DST, cron via
+  `robfig/cron/v3`) and the only writers of `maintenance_window_occurrences`
+  (`Materialize`/`Reschedule` in the API's create/update transaction,
+  `RollForward` in the scheduler's roller). Anything that asks "in
+  maintenance" uses its fragments; anything that creates a window must also
+  create its occurrence (raw SQL inserts in tests and `seed-demo` included).
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the

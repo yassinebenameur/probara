@@ -15,6 +15,7 @@ import (
 	testcontainers "github.com/testcontainers/testcontainers-go"
 
 	shareddb "github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -32,8 +33,11 @@ func insertMaintenance(ctx context.Context, t *testing.T, db *shareddb.Client, t
 	t.Helper()
 	id := uuid.New()
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at)
-		VALUES ($1, $2, 'planned work', $3, $4)
+		WITH w AS (
+			INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at)
+			VALUES ($1, $2, 'planned work', $3, $4)
+			RETURNING id, tenant_id, starts_at, ends_at)
+		INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT * FROM w
 	`, id, tenantID, start, end); err != nil {
 		t.Fatalf("insert maintenance window: %v", err)
 	}
@@ -197,5 +201,72 @@ func TestIntegrateTimeline_DegradedKnobAndLateTimeline(t *testing.T) {
 	}
 	if len(outages) != 2 || !outages[0].StartedBefore || !outages[0].Ongoing {
 		t.Fatalf("outages = %+v, want one clipped ongoing span plus its composite", outages)
+	}
+}
+
+// A repeating window counts through its occurrences, never its rule: the
+// rule row's own span (the template) covers nothing by itself (S-M5).
+func TestIntegrateTimeline_RecurringWindowOccurrences(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	repo := NewRepository(dbClient)
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "timeline-recurring")
+	c := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "c")
+
+	t0 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	at := func(min int) time.Time { return t0.Add(time.Duration(min) * time.Minute) }
+	insertInterval(ctx, t, dbClient, tenantID, c, "down", at(0), ptrTime(at(60)))
+
+	rule, err := maintenance.Rule{
+		StartsAt: at(0), Duration: 10 * time.Minute,
+		Frequency: maintenance.FrequencyCron, Cron: "10,40 10 * * *",
+	}.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	occ, err := maintenance.Expand(rule, at(0), at(60))
+	if err != nil || len(occ) != 2 {
+		t.Fatalf("expand: %v %v", occ, err)
+	}
+	windowID := uuid.New()
+	args := append([]interface{}{windowID, tenantID, rule.StartsAt, rule.StartsAt.Add(rule.Duration)}, maintenance.RuleArgs(rule)...)
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at,
+			recurrence, interval_n, by_weekday, by_monthday, cron_expr, timezone, recurrence_until)
+		VALUES ($1, $2, 'nightly', $3, $4, $5, $6, $7, $8, $9, $10, $11)`, args...); err != nil {
+		t.Fatalf("insert window: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id) VALUES ($1, $2)`, windowID, c); err != nil {
+		t.Fatalf("attach window: %v", err)
+	}
+	for _, o := range occ {
+		if _, err := dbClient.ExecContext(ctx, `
+			INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) VALUES ($1, $2, $3, $4)`,
+			windowID, tenantID, o.Start, o.End); err != nil {
+			t.Fatalf("insert occurrence: %v", err)
+		}
+	}
+
+	res, err := repo.IntegrateTimeline(ctx, tenantID, []uuid.UUID{c}, []TimeRange{{Start: at(0), End: at(60)}}, TimelineOpts{})
+	if err != nil {
+		t.Fatalf("IntegrateTimeline: %v", err)
+	}
+	sc := res.PerMonitor[c][0]
+	assertClose(t, sc.PlannedDown, 20*60) // 10-20 and 40-50; the template 0-10 is not an occurrence
+	assertClose(t, sc.UnplannedDown, 40*60)
+
+	outages, err := repo.Outages(ctx, tenantID, []uuid.UUID{c}, TimeRange{Start: at(0), End: at(60)}, TimelineOpts{})
+	if err != nil {
+		t.Fatalf("Outages: %v", err)
+	}
+	for _, o := range outages {
+		if o.MonitorID != nil {
+			assertClose(t, o.PlannedSeconds, 20*60)
+		}
 	}
 }
