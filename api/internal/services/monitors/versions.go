@@ -475,10 +475,12 @@ func normalizeSnapshot(snapshot *models.MonitorConfigSnapshot) {
 }
 
 // RecordVersionTx records a version inside the caller's transaction, for
-// paths that create monitors through the repository instead of the service
-// (discovery approval, beside CreateInTx). The source is set explicitly;
-// the actor comes from ctx. Unlike the service path it returns its error, so
-// the caller's transaction rolls back with it.
+// paths that create or change monitors through the repository or plain SQL
+// instead of the service (discovery approval, beside CreateInTx; converting
+// routes to an escalation policy with assign). The source is set explicitly,
+// or "" to follow ctx like the service path (WithVersionSource, else the
+// credential); the actor comes from ctx. Unlike the service path it returns
+// its error, so the caller's transaction rolls back with it.
 func RecordVersionTx(ctx context.Context, tx *sql.Tx, tenantID, monitorID uuid.UUID, source string) error {
 	_, err := recordVersionTx(ctx, tx, tenantID, monitorID, versionMetaFromContext(WithVersionSource(ctx, source), nil))
 	return err

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	svc "github.com/yassinebenameur/probara/api/internal/services/escalation"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	shared "github.com/yassinebenameur/probara/shared/escalation"
 	"github.com/yassinebenameur/probara/shared/testutil"
@@ -134,7 +135,9 @@ func TestConvertRoutesToPolicy(t *testing.T) {
 	exec(ctx, t, db, `INSERT INTO monitor_channels (monitor_id, channel_id, delay_seconds, notify_after_ack) VALUES
 		($1, $2, 0, FALSE), ($1, $3, 0, TRUE), ($1, $4, 900, FALSE)`, monitorID, first, second, late)
 
-	p, err := s.ConvertRoutes(ctx, tenantID, svc.ConvertRequest{MonitorID: idPtr(monitorID), Assign: true})
+	editor := member(ctx, t, db, tenantID, "converter", false)
+	sessionCtx := ctxpkg.WithAdminID(ctx, editor.String())
+	p, err := s.ConvertRoutes(sessionCtx, tenantID, svc.ConvertRequest{MonitorID: idPtr(monitorID), Assign: true})
 	require.NoError(t, err)
 	require.Equal(t, "Checkout routes", p.Name)
 	require.Len(t, p.Steps, 2, "routes sharing a delay become one step")
@@ -147,6 +150,22 @@ func TestConvertRoutesToPolicy(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT notification_mode, escalation_policy_id FROM monitors WHERE id = $1`, monitorID).Scan(&mode, &ref))
 	require.Equal(t, "policy", mode)
 	require.Equal(t, p.ID, ref)
+
+	// Assigning the policy is a routing change: it records a config version
+	// under the caller's session, so the next unrelated edit's diff does not
+	// pick it up under someone else's name.
+	var versions int
+	var source, actorType, snapMode string
+	var actorID uuid.UUID
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT COUNT(*) OVER (), source, actor_type, actor_id, snapshot->>'notification_mode'
+		FROM monitor_config_versions WHERE monitor_id = $1 ORDER BY version DESC LIMIT 1`, monitorID).
+		Scan(&versions, &source, &actorType, &actorID, &snapMode))
+	require.Equal(t, 1, versions)
+	require.Equal(t, "ui", source)
+	require.Equal(t, "user", actorType)
+	require.Equal(t, editor, actorID)
+	require.Equal(t, "policy", snapMode)
 
 	_, err = s.ConvertRoutes(ctx, tenantID, svc.ConvertRequest{MonitorID: idPtr(monitorID)})
 	var invalid svc.Invalid
