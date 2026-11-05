@@ -9,12 +9,13 @@ import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import AuthGuard from './AuthGuard';
 import { useFleetHealth } from './useFleetHealth';
+import { isBareRoute } from '@/lib/account-links';
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   // Don't show layout on auth pages
-  if (pathname === '/connect' || pathname === '/login' || pathname === '/oauth/consent' || pathname.startsWith('/alert-action/') || pathname.startsWith('/report-unsubscribe/')) {
+  if (isBareRoute(pathname)) {
     return <>{children}</>;
   }
 

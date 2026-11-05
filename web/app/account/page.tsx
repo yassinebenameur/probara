@@ -20,6 +20,7 @@ import { formatDateTime, formatRelativeTime, pluralize } from '@/lib/format';
 import { describeUserAgent, sessionMethodLabel } from '@/lib/sessions';
 import type { AdminSession } from '@/lib/types';
 import ContactsPanel from '@/components/account/ContactsPanel';
+import AccountSecurity from '@/components/account/AccountSecurity';
 
 type Pending =
   | { kind: 'one'; session: AdminSession }
@@ -114,7 +115,7 @@ export default function AccountPage() {
 
   return (
     <Page width="form">
-      <PageHeader title="Account" subtitle="Your profile, the contacts you can be reached at and the browsers signed in as you." />
+      <PageHeader title="Account" subtitle="Your profile, how you sign in, the contacts you can be reached at and the browsers signed in as you." />
 
       <Panel title="Profile">
         {userLoading ? (
@@ -146,6 +147,8 @@ export default function AccountPage() {
           <p className="text-sm text-slate-500">Profile unavailable.</p>
         )}
       </Panel>
+
+      {user && <AccountSecurity user={user} onSessionsChanged={load} />}
 
       <ContactsPanel />
 

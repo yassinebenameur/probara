@@ -55,6 +55,9 @@ type LoginFailure struct {
 	UserID *uuid.UUID
 	// FailedAttempts is the account's failure streak after this attempt.
 	FailedAttempts int
+	// SecondFactor: the password was right and the second-factor code
+	// was not (VerifyCredentials).
+	SecondFactor bool
 }
 
 func (f *LoginFailure) Error() string {

@@ -114,6 +114,8 @@ export interface AdminUser {
   disabled_at?: string;
   // Set while a login lockout is active (user management responses only).
   locked_until?: string;
+  // TOTP two-factor is on (user management responses only).
+  mfa_enabled?: boolean;
 }
 
 export interface AdminUserListResponse {
@@ -2794,4 +2796,63 @@ export interface StatusPageAccessToken {
 /** The one response that carries the token value. */
 export interface CreatedStatusPageAccessToken extends StatusPageAccessToken {
   token: string;
+}
+
+// User lifecycle and two-factor (/auth/* public flows, /account/* self-service,
+// /users/{id}/invite|password-reset|reset-2fa superadmin actions).
+export interface AuthCapabilities {
+  password_reset: boolean;
+  email_delivery: boolean;
+  oidc: boolean;
+  oidc_label?: string;
+}
+
+export interface MFAChallenge {
+  mfa_required: true;
+  mfa_token: string;
+  expires_in: number;
+}
+
+export interface InviteInfo {
+  username: string;
+  email?: string;
+  expires_at: string;
+}
+
+export interface EmailChangePending {
+  pending_email: string;
+  expires_at: string;
+}
+
+export interface AccountMFAStatus {
+  available: boolean;
+  eligible: boolean;
+  enabled: boolean;
+  enabled_at?: string;
+  recovery_codes_remaining: number;
+}
+
+export interface TOTPSetup {
+  secret: string;
+  otpauth_uri: string;
+}
+
+export interface RecoveryCodesResponse {
+  recovery_codes: string[];
+}
+
+// An invite or reset link a superadmin issued. Not delivered: hand over
+// `url` (or `path` on this origin) yourself.
+export interface AccountLinkResponse {
+  method: 'password' | 'sso';
+  delivered: boolean;
+  email?: string;
+  path?: string;
+  url?: string;
+  expires_at?: string;
+  reason?: string;
+}
+
+export interface ResetMFAResponse {
+  was_enabled: boolean;
 }

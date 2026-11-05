@@ -21,6 +21,8 @@ type AdminUser struct {
 	// LockedUntil is set while a login lockout is active (user management
 	// responses only).
 	LockedUntil *time.Time `json:"locked_until,omitempty"`
+	// MFAEnabled: TOTP two-factor is on (user management responses only).
+	MFAEnabled bool `json:"mfa_enabled,omitempty"`
 }
 
 // TenantMembership represents a user's role within one tenant.

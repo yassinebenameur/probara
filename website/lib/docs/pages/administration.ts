@@ -151,6 +151,20 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "Ten failed password logins in a row [lock an account](/docs/security/#login-lockout-sessions) for 15 minutes, doubling on repeat up to 4 hours. The user page shows an active lock with an **Unlock** action (`POST /api/v1/users/{id}/unlock`), and **Sign out everywhere** ends all of the user's browser sessions at once (`DELETE /api/v1/users/{id}/sessions`). Setting a user's password does both: it clears the lock and signs them out everywhere.",
         },
         {
+          type: "paragraph",
+          text:
+            "The **Access** panel on the user page sends [invites and resets](/docs/security/#account-recovery). With SMTP and `APP_BASE_URL` configured they are emailed; otherwise, or when the account has no email, the response carries the link for you to hand over.",
+        },
+        {
+          type: "table",
+          columns: ["Superadmin route", "Effect"],
+          rows: [
+            ["`POST /api/v1/users/{id}/invite`", "Invite (MCP `send_user_invite`). `method: password` sends a one-time link to set a password (7 days; replaces any existing password); `method: sso` tells the user to sign in with SSO. Default: `sso` for an account linked to the IdP, or one with no password while SSO is enabled, else `password`"],
+            ["`POST /api/v1/users/{id}/password-reset`", "One-time reset link for a local password account (1 hour; MCP `send_password_reset`)"],
+            ["`POST /api/v1/users/{id}/reset-2fa`", "Turn off a user's [two-factor](/docs/security/#two-factor) after a lost device (MCP `reset_user_2fa`); `go run ./cmd/admin -reset-2fa <username>` is the database-side equivalent"],
+          ],
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Membership patches replace the list",
@@ -169,6 +183,11 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "The **Account** page (sidebar, signed-in users only) shows your profile and every browser signed in as you: device, address, sign-in method, when it signed in and when it was last active. Sign out one session, every other session, or everywhere, this browser included. A signed-out session loses access on its next request. Every role can manage its own sessions, viewers included.",
         },
         {
+          type: "paragraph",
+          text:
+            "Local password accounts also change their password (other sessions are signed out), their email (confirmed through a link sent to the new address; needs SMTP and `APP_BASE_URL`) and [two-factor authentication](/docs/security/#two-factor) there. Accounts that sign in through SSO manage those at their identity provider.",
+        },
+        {
           type: "table",
           columns: ["Route", "Effect"],
           rows: [
@@ -176,12 +195,16 @@ export const ADMINISTRATION_PAGE: DocPage = {
             ["`DELETE /api/v1/account/sessions/{id}`", "Sign one session out (your own only; the current one also clears its cookies)"],
             ["`POST /api/v1/account/sessions/revoke-others`", "Sign out every session except the current one"],
             ["`POST /api/v1/account/sessions/revoke-all`", "Sign out everywhere, including the current session"],
+            ["`PATCH /api/v1/account/password`", "Change your password (`current_password`, `new_password`); signs out your other sessions"],
+            ["`POST /api/v1/account/email`", "Send a confirmation link to `new_email` (with `current_password`); the address changes when it is opened"],
+            ["`GET /api/v1/account/2fa`", "Your two-factor state (`eligible` is false for SSO accounts)"],
+            ["`POST /api/v1/account/2fa/setup`, `/enable`, `/disable`, `/recovery-codes`", "Enroll (password, then a code; returns recovery codes once), turn off, or replace recovery codes (password and a code)"],
           ],
         },
         {
           type: "paragraph",
           text:
-            "These routes accept a signed-in browser session only: API keys and MCP tokens are refused, and they are not MCP tools. Each action records `auth.session_revoke` or `auth.sessions_revoke` in the audit log. A browser signed in before session tracking (migration 000104) is listed, but is only recognised as the current session after its next token refresh, a few minutes at most.",
+            "These routes accept a signed-in browser session only: API keys and MCP tokens are refused, and they are not MCP tools. Each action records its own audit event (`auth.session_revoke`, `auth.sessions_revoke`, `auth.password_change`, `auth.email_change_request`, `auth.mfa_*`). A browser signed in before session tracking (migration 000104) is listed, but is only recognised as the current session after its next token refresh, a few minutes at most.",
         },
       ],
     },

@@ -16,6 +16,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/accountmail"
 	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/oidcauth"
@@ -38,11 +39,16 @@ type Handlers struct {
 	logger  *logger.Logger
 	audit   *audit.Recorder
 	oidc    *oidcauth.Service
+	// mail sends account mail (WithAccountMail); nil: links are handed to
+	// superadmins instead.
+	mail *accountmail.Mailer
+	// forgotSlots bounds background password-reset work (lifecycle.go).
+	forgotSlots chan struct{}
 }
 
 // NewHandlers creates a new auth handler.
 func NewHandlers(service *adminauth.Service, cfg *config.APIConfig, log *logger.Logger, auditRecorder *audit.Recorder) *Handlers {
-	return &Handlers{service: service, cfg: cfg, logger: log, audit: auditRecorder}
+	return &Handlers{service: service, cfg: cfg, logger: log, audit: auditRecorder, forgotSlots: make(chan struct{}, forgotWorkers)}
 }
 
 // recordAuthEvent emits an explicit auth-lifecycle audit event. The auth
@@ -81,6 +87,12 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	// blocking it would deny sign-in to all of them. Limits are per
 	// username, in the database (adminauth lockout).
 	user, err := h.service.Authenticate(r.Context(), req.Username, req.Password)
+	var secondFactor *adminauth.SecondFactorRequired
+	if stderrors.As(err, &secondFactor) {
+		// Password right, 2FA on: no session until POST /auth/login/mfa.
+		h.answerSecondFactor(w, secondFactor)
+		return
+	}
 	if err != nil {
 		h.handleLoginFailure(w, r, req.Username, err)
 		return

@@ -273,7 +273,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		authService := adminauthservice.NewService(dbClient, cfg.AdminBcryptCost)
 		oidcService := oidcauthservice.NewService(cfg.OIDC, dbClient, log)
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
+		configureIdentity(authHandlers, authService, secretsEncryptor, cfg, log) // routes_identity.go
 		r.Route("/auth", func(r chi.Router) {
+			identityAuthRoutes(r, authHandlers) // routes_identity.go
 			r.Post("/login", authHandlers.Login)
 			r.Post("/refresh", authHandlers.Refresh)
 			r.Post("/logout", authHandlers.Logout)
