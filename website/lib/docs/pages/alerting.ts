@@ -736,7 +736,7 @@ export const ALERTING_PAGE: DocPage = {
           items: [
             "**Layers.** Of the rotations active at an instant, the last one in the list wins. Add a layer that starts next month to change the rotation from then on, or one with an end for a temporary arrangement; when it ends, the layer below applies again.",
             "**Overrides** put one person on call over a window (at most 93 days), above every rotation. Of overlapping overrides the most recently created wins. Removing one lets the rotation apply again.",
-            "**Members** are users with a membership in the workspace, or superadministrators. The page flags a person on call with no [verified contact](/docs/administration/#contacts), and one who is no longer a member: the schedule keeps their turns until it is edited. Deleting a user removes their turns and overrides.",
+            "**Members** are users with a membership in the workspace, or superadministrators. The person picker lists the workspace's members and the superadministrators already on one of its schedules; a superadministrator editing sees every superadministrator, so workspace users never learn the installation's operator accounts from it. The page flags a person on call with no [verified contact](/docs/administration/#contacts), and one who is no longer a member: the schedule keeps their turns until it is edited. Deleting a user removes their turns and overrides.",
             "The schedule page shows who is on call now and next, the shifts of the next 14 days and the current and upcoming overrides. The list shows who is on call on every schedule.",
           ],
         },
@@ -755,7 +755,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Editors and admins manage schedules and overrides; viewers read them. Every route is in the [API](/docs/api/#people-api) and, except the calendar feed, an [MCP](/docs/mcp/) tool (`list_oncall_schedules`, `get_oncall_now`, `preview_oncall_schedule`, `create_oncall_override`, …).",
+            "Editors and admins manage schedules and overrides; viewers read them, and the person picker (`list_oncall_people`) is offered to editors and admins only. Every route is in the [API](/docs/api/#people-api) and, except the calendar feed, an [MCP](/docs/mcp/) tool (`list_oncall_schedules`, `get_oncall_now`, `preview_oncall_schedule`, `create_oncall_override`, …).",
         },
       ],
     },

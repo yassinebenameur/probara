@@ -66,9 +66,10 @@ func oncallTools() []spec {
 		{
 			Name:  "list_oncall_people",
 			Title: "List people for on-call",
-			Description: "List the users who can be put on call in this workspace (members and superadmins), with " +
-				"their count of verified contacts.",
-			Method: http.MethodGet, Route: "/oncall-schedules/people",
+			Description: "List the users to pick from when putting someone on call in this workspace: its members, " +
+				"plus superadmins already on one of its schedules (every superadmin when you are one), with their " +
+				"count of verified contacts. Requires write access.",
+			Method: http.MethodGet, Route: "/oncall-schedules/people", NeedsWrite: true,
 		},
 		{
 			Name:        "get_oncall_schedule",

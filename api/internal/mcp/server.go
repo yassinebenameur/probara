@@ -70,7 +70,8 @@ type spec struct {
 	// Destructive marks deletes and other irreversible changes.
 	Destructive bool
 	// NeedsWrite marks GETs whose handler demands write access because they
-	// reveal a secret (push token, worker credential). Hidden from read-only
+	// reveal a secret (push token, worker credential) or the workspace's user
+	// list (the on-call picker). Hidden from read-only
 	// sessions like a mutation; still read-only in effect.
 	NeedsWrite bool
 	// Platform marks routes that do not act in a tenant (users, OIDC

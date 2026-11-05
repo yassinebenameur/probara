@@ -20,6 +20,7 @@ func TestPeopleRoutes(t *testing.T) {
 	f := newMCPFixture(t)
 	f.createUser("lead", "member", []models.MembershipInput{{TenantID: f.tenantA, Role: "admin"}})
 	f.createUser("watcher", "member", []models.MembershipInput{{TenantID: f.tenantA, Role: "viewer"}})
+	f.createUser("operator", "superadmin", nil)
 	lead, watcher := f.signIn("lead"), f.signIn("watcher")
 	q := "?tenant_id=" + f.tenantA.String()
 
@@ -72,17 +73,36 @@ func TestPeopleRoutes(t *testing.T) {
 		t.Fatalf("admin people settings write: %d %s", status, body)
 	}
 
-	// Schedules: viewers read, writers write.
+	// Schedules: viewers read, writers write. The people picker is for
+	// editing only, and lists members, not the installation's superadmins.
 	var people struct {
 		Items []struct {
 			ID       string `json:"id"`
 			Username string `json:"username"`
+			Role     string `json:"role"`
 		} `json:"items"`
 	}
-	watcher.expect(http.MethodGet, "/api/v1/oncall-schedules/people"+q, http.StatusOK, &people)
+	if status, _ := watcher.do(http.MethodGet, "/api/v1/oncall-schedules/people"+q, nil); status != http.StatusForbidden {
+		t.Fatalf("viewer people: %d", status)
+	}
+	readKey := f.apiKey(f.tenantA, "read")
+	req, _ = http.NewRequest(http.MethodGet, f.http.URL+"/api/v1/oncall-schedules/people", nil)
+	req.Header.Set("Authorization", "Bearer "+readKey)
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("read key people: %d", res.StatusCode)
+	}
+	lead.expect(http.MethodGet, "/api/v1/oncall-schedules/people"+q, http.StatusOK, &people)
 	ids := map[string]string{}
 	for _, p := range people.Items {
 		ids[p.Username] = p.ID
+		if p.Role == "superadmin" {
+			t.Fatalf("tenant admin sees superadmin %q", p.Username)
+		}
 	}
 	if ids["lead"] == "" || ids["watcher"] == "" {
 		t.Fatalf("people = %+v", people.Items)

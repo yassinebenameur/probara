@@ -735,6 +735,10 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   `shared/oncall` is the one answer to who is on call (`OnCallAt`/`Preview`:
   overrides win, the last active layer wins, handoffs at local wall-clock
   time); never query rotations to work it out. Schedules page nobody yet.
+  The on-call person picker (`oncall.Service.People`) needs write access and
+  lists members plus superadmins already scheduled in the workspace (all of
+  them only for a superadmin caller); never list installation-wide users to
+  a workspace.
 
 ## Status pages
 

@@ -221,8 +221,27 @@ func refFor(refs map[uuid.UUID]UserRef, id uuid.UUID) UserRef {
 	return UserRef{ID: id, Username: "(deleted user)"}
 }
 
-// People lists who can be put on call in the workspace.
-func (s *Service) People(ctx context.Context, tenantID uuid.UUID) ([]Person, error) {
+// scheduledInTenantSQL holds for a user already on one of tenant $1's
+// rotations or overrides; schedule reads show those usernames to every role.
+const scheduledInTenantSQL = `(EXISTS (
+		SELECT 1 FROM oncall_rotation_members rm
+		JOIN oncall_rotations r ON r.id = rm.rotation_id
+		JOIN oncall_schedules sc ON sc.id = r.schedule_id
+		WHERE sc.tenant_id = $1 AND rm.user_id = u.id
+	) OR EXISTS (
+		SELECT 1 FROM oncall_overrides o
+		JOIN oncall_schedules sc ON sc.id = o.schedule_id
+		WHERE sc.tenant_id = $1 AND o.user_id = u.id
+	))`
+
+// People lists the picker for putting someone on call in the workspace: its
+// enabled members, plus the superadmins already on one of its schedules.
+// allSuperadmins (the caller is a superadmin, who can list users anyway)
+// adds every enabled superadmin. The narrowing is deliberate: superadmins
+// belong to no workspace, and a known username is enough to lock an account
+// out, so a workspace must not learn the installation's operators from here.
+// Writes still accept any eligible user by ID (requireEligible).
+func (s *Service) People(ctx context.Context, tenantID uuid.UUID, allSuperadmins bool) ([]Person, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.id, u.username,
 			CASE WHEN u.platform_role = 'superadmin' THEN 'superadmin' ELSE m.role END,
@@ -230,8 +249,9 @@ func (s *Service) People(ctx context.Context, tenantID uuid.UUID) ([]Person, err
 		FROM admin_users u
 		LEFT JOIN tenant_memberships m ON m.admin_user_id = u.id AND m.tenant_id = $1
 		WHERE `+eligibleSQL+`
+			AND (m.admin_user_id IS NOT NULL OR $2 OR `+scheduledInTenantSQL+`)
 		ORDER BY lower(u.username)
-	`, tenantID)
+	`, tenantID, allSuperadmins)
 	if err != nil {
 		return nil, fmt.Errorf("list people: %w", err)
 	}
