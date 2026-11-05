@@ -275,12 +275,11 @@ func (h *Handlers) HandleUnlock(w http.ResponseWriter, r *http.Request, slug str
 		http.Error(gw, "Forbidden", http.StatusForbidden)
 		return
 	}
-	if !h.access.unlockByClient.allow(h.clientIPs.Resolve(r)+"|"+slug) || !h.access.unlockByPage.allow(slug) {
-		gw.Header().Set("Retry-After", "60")
-		http.Error(gw, "Too many attempts; try again in a minute", http.StatusTooManyRequests)
-		return
-	}
 
+	// Resolve the page before throttling: the buckets key on its ID, never
+	// on the slug, which is raw request text (a random slug per request would
+	// otherwise mint a fresh bucket each time, escaping the limit and growing
+	// the maps). The lookup is the one authorize does on every route.
 	acc, err := h.access.store.PageAccess(r.Context(), slug)
 	if err != nil {
 		h.writeStatusPageError(gw, slug, err, "Failed to load status page access")
@@ -296,6 +295,12 @@ func (h *Handlers) HandleUnlock(w http.ResponseWriter, r *http.Request, slug str
 	}
 	if h.access.sessions == nil {
 		http.Error(gw, "This status page is temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	pageKey := acc.ID.String()
+	if !h.access.unlockByClient.allow(h.clientIPs.Resolve(r)+"|"+pageKey) || !h.access.unlockByPage.allow(pageKey) {
+		gw.Header().Set("Retry-After", "60")
+		http.Error(gw, "Too many attempts; try again in a minute", http.StatusTooManyRequests)
 		return
 	}
 

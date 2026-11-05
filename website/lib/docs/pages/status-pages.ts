@@ -310,6 +310,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "`GET /public/status/{slug}/summary.json` is a stable, documented view of what the page shows, for scripts, dashboards and the [widget](#embed-widget). It is built with the page from the same data and cached with it, so it never disagrees with the rendered page, and it carries `Access-Control-Allow-Origin: *` (without credentials) so any site can read it. Fields are only ever added; a removed or redefined field bumps `version`.",
         },
         {
+          type: "paragraph",
+          text:
+            "`summary.json`, the badges, the widget and the feed follow the page's [visibility](#visibility) like every other route under it: on a password or private page they need the visitor's session, and a private page answers 404 without one. A cross-site read or a README image carries no session (the cookie is `SameSite=Lax`), so cross-site badges, `summary.json` reads and the widget work only for public and unlisted pages.",
+        },
+        {
           type: "table",
           columns: ["Field", "Meaning"],
           rows: [
@@ -347,7 +352,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "`/public/status/{slug}/badge.svg` is a flat SVG badge for the page, and `/public/status/{slug}/monitors/{id}/badge.svg` one for a single component, labelled with its public name. Only components the page renders have a badge; any other monitor ID returns 404, so badges never reveal a monitor the page does not show. Embed them as ordinary images, for example `![status](https://status.example.com/public/status/acme/badge.svg)` in a README.",
+            "`/public/status/{slug}/badge.svg` is a flat SVG badge for the page, and `/public/status/{slug}/monitors/{id}/badge.svg` one for a single component, labelled with its public name. Only components the page renders have a badge; any other monitor ID returns 404, so badges never reveal a monitor the page does not show. Embed them as ordinary images, for example `![status](https://status.example.com/public/status/acme/badge.svg)` in a README. A password or private page's badges need a session, so they do not render in a README or on another site (see [summary JSON](#summary-json)).",
         },
         {
           type: "table",
@@ -373,7 +378,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Add the page's current status to another site with one script tag. The widget renders where the tag sits (or into `data-target`), inside a shadow root so neither page's CSS reaches the other, reads `summary.json` next to its own URL and refreshes every 60 seconds. Everything from the summary is inserted as text, never as HTML.",
+            "Add the page's current status to another site with one script tag. The widget renders where the tag sits (or into `data-target`), inside a shadow root so neither page's CSS reaches the other, reads `summary.json` next to its own URL and refreshes every 60 seconds. Everything from the summary is inserted as text, never as HTML. It works only for public and unlisted pages: on another site it gets no session for a password or private page (see [summary JSON](#summary-json)).",
         },
         {
           type: "code",
@@ -404,7 +409,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "`/public/status/{slug}/feed.atom` is an Atom feed of the page's published incidents and its maintenance windows; the page footer links it and the page head advertises it. Each incident entry carries its state, summary, affected components, resolution time and its five newest public updates, and is updated whenever the incident or one of those updates changes. Maintenance entries cover windows in progress or starting within 14 days, like the page. Unpublished incidents and incidents published only to other pages never appear.",
+            "`/public/status/{slug}/feed.atom` is an Atom feed of the page's published incidents and its maintenance windows; the page footer links it and the page head advertises it. Each incident entry carries its state, summary, affected components, resolution time and its five newest public updates, and is updated whenever the incident or one of those updates changes. Maintenance entries cover windows in progress or starting within 14 days, like the page. Unpublished incidents and incidents published only to other pages never appear. On a password or private page the feed needs the visitor's session, which feed readers do not carry.",
         },
         {
           type: "paragraph",
@@ -435,7 +440,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Entering the password sets a session cookie for that page, valid 30 days. Changing or clearing the password signs every visitor out. Unlock attempts are limited to 5 a minute per client per page and 60 a minute per page. Responses for password and private pages send `Cache-Control: private, no-store`, so neither the browser nor a shared cache keeps them.",
+            "Entering the password sets a session cookie for that page, valid 30 days. Changing or clearing the password signs every visitor out. Unlock attempts are limited to 5 a minute per client per page and 60 a minute per page; a slug that names no password page is answered before any attempt is counted. Responses for password and private pages send `Cache-Control: private, no-store`, so neither the browser nor a shared cache keeps them.",
         },
       ],
     },
@@ -465,7 +470,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Browser notifications are offered on public and unlisted pages only. A page that becomes password or private stops notifying, including browsers that subscribed before.",
             "The session cookie is `SameSite=Lax`, so a password or private page framed by another site gets no session. Open kiosk displays on the page itself.",
             "The draft preview of a gated page opens with a valid preview token only when `STATUS_PAGE_PREVIEW_SECRET` is set; otherwise the editor's session on the page is needed.",
-            "The in-page customizer proxy (`/_sp_api/`) refuses calls naming a password or private page unless the caller holds a session for it.",
+            "The in-page customizer proxy (`/_sp_api/`) refuses calls naming a password or private page unless the caller holds a session for it. A call to `/api/v1/status-pages/{id}/…` is checked against the page in its path; an `X-Status-Page-ID` header naming a different page is refused.",
           ],
         },
       ],
@@ -482,7 +487,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Two things must both be true for the control to appear: the page sets `enable_push_notifications`, and the deployment configures `STATUS_PAGE_VAPID_PUBLIC_KEY` and `STATUS_PAGE_VAPID_PRIVATE_KEY`. Either alone renders nothing, because either alone would produce a button that cannot work.",
+            "Three things must all be true for the control to appear: the page's [visibility](#visibility) is `public` or `unlisted`, the page sets `enable_push_notifications`, and the deployment configures `STATUS_PAGE_VAPID_PUBLIC_KEY` and `STATUS_PAGE_VAPID_PRIVATE_KEY`. A password or private page never offers it, and the setting or the keys alone render nothing, because either alone would produce a button that cannot work.",
         },
         {
           type: "table",
