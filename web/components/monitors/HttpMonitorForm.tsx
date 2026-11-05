@@ -18,12 +18,17 @@ import {
   HTTPJSONAssertionOp,
 } from '@/lib/types';
 import { HeaderKV, isSensitiveHeaderName } from '@/lib/monitor-form/http';
+import type { BasicAuthPasswordState } from '@/lib/monitor-form/inline';
+import SecretRowsEditor from './SecretRowsEditor';
 
 export interface HttpFormData {
   url: string;
   method: string;
   status_rules: string;
   request_headers: HeaderKV[];
+  basic_auth_username: string;
+  basic_auth_password: string;
+  basic_auth_password_state: BasicAuthPasswordState;
   body: string;
   body_assertions: HTTPBodyAssertion[];
   response_header_assertions: HTTPHeaderAssertion[];
@@ -50,6 +55,7 @@ type SectionId = (typeof SECTION_IDS)[keyof typeof SECTION_IDS];
 // open the rows holding errors and mark them while collapsed.
 const FIELD_SECTION: Record<string, SectionId> = {
   request_headers: SECTION_IDS.request,
+  basic_auth: SECTION_IDS.request,
   status_rules: SECTION_IDS.validation,
   max_latency_ms: SECTION_IDS.validation,
   max_redirects: SECTION_IDS.tls,
@@ -152,82 +158,67 @@ function HeadersEditor({
 }) {
   return (
     <FormField label="Request headers" error={error}>
-      <div className="space-y-2">
-        {headers.map((h, idx) => {
-          const sensitive = isSensitiveHeaderName(h.key);
-          const showToggle = sensitive && h.value.trim().length > 0;
-          return (
-            <div
-              key={idx}
-              className="grid gap-2 items-center"
-              style={{ gridTemplateColumns: showToggle ? '1fr 2fr auto auto' : '1fr 2fr auto' }}
+      <SecretRowsEditor
+        rows={headers}
+        onChange={onChange}
+        toggleable
+        forceSecret={isSensitiveHeaderName}
+        itemNoun="header"
+        namePlaceholder="Header name"
+        valuePlaceholder="Value"
+        keepOneRow
+      />
+      <p className="mt-2 text-xs text-slate-500">
+        Locked headers are stored encrypted and never shown again; Authorization, Cookie and API-key headers always are.
+      </p>
+    </FormField>
+  );
+}
+
+function BasicAuthFields({
+  data,
+  onChange,
+  error,
+}: {
+  data: HttpFormData;
+  onChange: (patch: Partial<HttpFormData>) => void;
+  error?: string;
+}) {
+  const stored = data.basic_auth_password_state === 'stored' && Boolean(data.basic_auth_username.trim());
+  return (
+    <FormField label="Basic auth" error={error}>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <input
+          className="input font-mono"
+          placeholder="Username"
+          aria-label="Basic auth username"
+          autoComplete="off"
+          value={data.basic_auth_username}
+          onChange={(e) => onChange({ basic_auth_username: e.target.value })}
+        />
+        <div className="flex items-center gap-2">
+          <input
+            className="input min-w-0 flex-1 font-mono"
+            type="password"
+            autoComplete="new-password"
+            placeholder={stored ? 'Stored password (leave blank to keep)' : 'Password'}
+            aria-label="Basic auth password"
+            value={data.basic_auth_password}
+            onChange={(e) => onChange({ basic_auth_password: e.target.value })}
+          />
+          {stored && (
+            <Button
+              type="button"
+              variant="subtle"
+              size="xs"
+              onClick={() => onChange({ basic_auth_password: '', basic_auth_password_state: 'cleared' })}
             >
-              <input
-                className="input"
-                placeholder="Header name"
-                aria-label={`Header ${idx + 1} name`}
-                value={h.key}
-                onChange={(e) => {
-                  const next = [...headers];
-                  next[idx] = { ...next[idx], key: e.target.value };
-                  onChange(next);
-                }}
-              />
-              <input
-                className="input"
-                placeholder="Value"
-                aria-label={`Header ${idx + 1} value`}
-                type={sensitive && !h.reveal ? 'password' : 'text'}
-                value={h.value}
-                onChange={(e) => {
-                  const next = [...headers];
-                  next[idx] = { ...next[idx], value: e.target.value };
-                  onChange(next);
-                }}
-              />
-              {showToggle && (
-                <Button
-                  type="button"
-                  variant="subtle"
-                  size="sm"
-                  onClick={() => {
-                    const next = [...headers];
-                    next[idx] = { ...next[idx], reveal: !next[idx].reveal };
-                    onChange(next);
-                  }}
-                >
-                  {h.reveal ? 'Hide' : 'Show'}
-                </Button>
-              )}
-              <IconButton
-                label="Remove header"
-                icon={<X strokeWidth={1.75} />}
-                onClick={() => {
-                  const next = [...headers];
-                  if (next.length === 1) {
-                    next[0] = { key: '', value: '', reveal: false };
-                  } else {
-                    next.splice(idx, 1);
-                  }
-                  onChange(next);
-                }}
-              />
-            </div>
-          );
-        })}
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-3">
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
-          onClick={() => onChange([...headers, { key: '', value: '', reveal: false }])}
-        >
-          Add header
-        </Button>
-        <p className="text-xs text-slate-500">Authorization / API key headers are masked by default.</p>
-      </div>
+      <Hint>Optional. Sent as an Authorization: Basic header; the password is stored encrypted and never shown again.</Hint>
     </FormField>
   );
 }
@@ -242,8 +233,11 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
 
   const requestSummary = [
     activeHeaderCount > 0 ? `${activeHeaderCount} header${activeHeaderCount > 1 ? 's' : ''}` : 'No headers',
+    data.basic_auth_username.trim() ? 'basic auth' : '',
     data.body.trim() ? 'with body' : 'no body',
-  ].join(', ');
+  ]
+    .filter(Boolean)
+    .join(', ');
 
   const validationSummary = [
     data.status_rules.trim() ? `Expects ${data.status_rules.trim()}` : 'Expects 2xx',
@@ -289,6 +283,8 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
               error={errors.request_headers}
             />
 
+            <BasicAuthFields data={data} onChange={onChange} error={errors.basic_auth} />
+
             <FormField label="Request body">
               {(control) => (
                 <>
@@ -311,7 +307,13 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
             {data.url.trim() && (
               <div>
                 <p className="mb-1.5 text-ui font-medium text-slate-300">As cURL</p>
-                <CurlPreview method={data.method} url={data.url} headers={data.request_headers} body={data.body} />
+                <CurlPreview
+                  method={data.method}
+                  url={data.url}
+                  headers={data.request_headers}
+                  basicAuthUser={data.basic_auth_username}
+                  body={data.body}
+                />
               </div>
             )}
           </CollapsibleSection>

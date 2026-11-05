@@ -712,7 +712,10 @@ func (s *Scheduler) createCheckJob(monitor Monitor, locationID string) (*models.
 		if credential == "" {
 			return nil, fmt.Errorf("missing worker credential for location %s", locationID)
 		}
-		if secrets.HasMonitorSecrets(monitor.Type) {
+		// Byte-level fast path: a config with no secret key (most http
+		// monitors) is dispatched as-is, with no decrypt, key derivation
+		// or re-encrypt.
+		if secrets.HasSecretValues(monitor.Type, configJSON) {
 			plaintext, err := secrets.DecryptMonitorConfig(s.secretsEncryptor, monitor.Type, configJSON)
 			if err != nil {
 				return nil, fmt.Errorf("decrypt monitor config for location %s: %w", locationID, err)

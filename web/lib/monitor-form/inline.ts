@@ -8,6 +8,7 @@ import {
   HTTPHeaderAssertion,
   HTTPJSONAssertion,
   HTTPMonitorConfig,
+  MASKED_SECRET,
   Monitor,
   MonitorType,
   NotificationMode,
@@ -20,7 +21,14 @@ import {
   SyntheticBrowserStepConfig,
 } from '../types';
 import { buildScheduledMonitorRequest } from './common';
-import { buildStatusRulesFromHTTPConfig, mapHeadersToRows, parseDNSExpectedAnswers, parseStatusRules } from './http';
+import {
+  buildStatusRulesFromHTTPConfig,
+  isSensitiveHeaderName,
+  mapHeadersToRows,
+  parseDNSExpectedAnswers,
+  parseStatusRules,
+} from './http';
+import { SecretKV, secretRowsError, secretRowsFromMap, splitSecretRows } from './secret-map';
 import {
   SyntheticBrowserGuidedDraft,
   SyntheticBrowserGuidedTemplate,
@@ -67,6 +75,9 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
   const sourceIntervalSeconds = monitor?.interval_seconds || initialData?.interval_seconds || 60;
   const sourceTimeoutSeconds = monitor?.timeout_seconds || initialData?.timeout_seconds || defaultTimeoutFor(sourceType);
   const sourceEnabled = monitor?.enabled ?? initialData?.enabled ?? true;
+  // Stored secrets (masked "***" on read) exist only behind an edit; a clone
+  // or import has none to keep.
+  const isEditMode = Boolean(monitor);
 
   const initialHTTPConfig: HTTPMonitorConfig | undefined =
     sourceType === 'http' ? (sourceConfig as HTTPMonitorConfig) : undefined;
@@ -92,15 +103,36 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
       initialSyntheticBrowserConfig?.variables?.username ||
       initialSyntheticBrowserConfig?.variables?.email ||
       '',
+    // The password is a secret variable; a legacy config kept it in plain
+    // `variables`, which loads as typed and is saved back as a secret.
     password: initialSyntheticBrowserConfig?.variables?.password || '',
+    password_stored: false,
   };
+  const storedBrowserPassword = initialSyntheticBrowserConfig?.secret_variables?.password;
+  if (storedBrowserPassword !== undefined) {
+    initialSyntheticBrowserGuided.password = storedBrowserPassword === MASKED_SECRET ? '' : storedBrowserPassword;
+    initialSyntheticBrowserGuided.password_stored = storedBrowserPassword === MASKED_SECRET && isEditMode;
+  }
+  const storedKeys = (values?: Record<string, string>) => isEditMode && Object.keys(values || {}).length > 0;
 
   return {
     name: sourceName,
     url: initialHTTPConfig?.url || '',
     method: initialHTTPConfig?.method || 'GET',
     status_rules: buildStatusRulesFromHTTPConfig(initialHTTPConfig),
-    request_headers: mapHeadersToRows(initialHTTPConfig?.headers),
+    request_headers: mapHeadersToRows(initialHTTPConfig?.headers, initialHTTPConfig?.secret_headers, isEditMode),
+    // The stored secret map must be submitted (even empty) to edit it: an
+    // absent map keeps every stored header server-side.
+    http_secret_headers_stored: storedKeys(initialHTTPConfig?.secret_headers),
+    basic_auth_username: initialHTTPConfig?.basic_auth_username || '',
+    // Typed password; the stored one stays masked and is tracked by state.
+    basic_auth_password:
+      initialHTTPConfig?.basic_auth_password && initialHTTPConfig.basic_auth_password !== MASKED_SECRET
+        ? initialHTTPConfig.basic_auth_password
+        : '',
+    basic_auth_password_state: (initialHTTPConfig?.basic_auth_password === MASKED_SECRET && isEditMode
+      ? 'stored'
+      : 'none') as BasicAuthPasswordState,
     body: initialHTTPConfig?.body || '',
     body_assertions: (() => {
       if (!initialHTTPConfig) return [] as HTTPBodyAssertion[];
@@ -134,11 +166,15 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     synthetic_api_base_url: initialSyntheticAPIConfig?.base_url || '',
     synthetic_api_failure_mode: initialSyntheticAPIConfig?.failure_mode || 'fail_fast',
     synthetic_api_variables: mapVariablesToRows(initialSyntheticAPIConfig?.variables),
+    synthetic_api_secret_variables: secretRowsFromMap(initialSyntheticAPIConfig?.secret_variables, isEditMode) as SecretKV[],
+    synthetic_api_secret_variables_stored: storedKeys(initialSyntheticAPIConfig?.secret_variables),
     synthetic_api_steps: mapSyntheticAPIStepsToDraft(initialSyntheticAPIConfig?.steps),
     synthetic_browser_start_url: initialSyntheticBrowserConfig?.start_url || '',
     synthetic_browser_device: initialSyntheticBrowserConfig?.device || 'Desktop Chrome',
     synthetic_browser_failure_mode: initialSyntheticBrowserConfig?.failure_mode || 'fail_fast',
     synthetic_browser_variables: mapVariablesToRows(initialSyntheticBrowserConfig?.variables),
+    synthetic_browser_secret_variables: secretRowsFromMap(initialSyntheticBrowserConfig?.secret_variables, isEditMode) as SecretKV[],
+    synthetic_browser_secret_variables_stored: storedKeys(initialSyntheticBrowserConfig?.secret_variables),
     synthetic_browser_steps: mapSyntheticBrowserStepsToDraft(initialSyntheticBrowserConfig?.steps),
     synthetic_browser_screenshot_on_failure: initialSyntheticBrowserConfig?.artifacts?.screenshot_on_failure ?? true,
     synthetic_browser_trace_on_failure: initialSyntheticBrowserConfig?.artifacts?.trace_on_failure ?? false,
@@ -152,6 +188,7 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     synthetic_browser_guided_expected_url: initialSyntheticBrowserGuided.expected_url,
     synthetic_browser_guided_username: initialSyntheticBrowserGuided.username,
     synthetic_browser_guided_password: initialSyntheticBrowserGuided.password,
+    synthetic_browser_guided_password_stored: initialSyntheticBrowserGuided.password_stored,
     interval_seconds: sourceIntervalSeconds,
     timeout_seconds: sourceTimeoutSeconds,
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
@@ -168,9 +205,40 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
 
 export type MonitorFormState = ReturnType<typeof initialMonitorFormState>;
 
+/**
+ * The basic-auth password behind the form: `stored` keeps the saved one
+ * (submits "***"), `cleared` removes it (submits ""), `none` has nothing
+ * saved. A typed password replaces either.
+ */
+export type BasicAuthPasswordState = 'none' | 'stored' | 'cleared';
+
+/** The `basic_auth_password` a submit carries, or undefined to omit it. */
+export function basicAuthPasswordToSubmit(form: MonitorFormState): string | undefined {
+  const username = form.basic_auth_username.trim();
+  if (username && form.basic_auth_password) return form.basic_auth_password;
+  if (username && form.basic_auth_password_state === 'stored') return MASKED_SECRET;
+  // Cleared, or the username was removed over a stored password: "" clears.
+  if (form.basic_auth_password_state !== 'none') return '';
+  return undefined;
+}
+
+/** An error when a name is both a plain and a secret variable. */
+function bothMapsError(plain: { key: string }[], secret: SecretKV[]): string | undefined {
+  const names = new Set(plain.map((row) => row.key.trim()).filter(Boolean));
+  const dup = secret.map((row) => row.key.trim()).find((key) => key && names.has(key));
+  return dup ? `"${dup}" is both a variable and a secret variable` : undefined;
+}
+
+/** The secret variables map a synthetic submit carries, or undefined to omit it. */
+function secretVariablesToSubmit(rows: SecretKV[], stored: boolean): Record<string, string> | undefined {
+  const { secret } = splitSecretRows(rows.map((row) => ({ ...row, secret: true })));
+  return Object.keys(secret).length > 0 || stored ? secret : undefined;
+}
+
 /** A loaded synthetic API config that the Basic editor would hide parts of. */
 export const hasAdvancedSyntheticAPIConfig = (config: SyntheticAPIMonitorConfig): boolean =>
   Object.keys(config.variables || {}).length > 0 ||
+  Object.keys(config.secret_variables || {}).length > 0 ||
   (config.steps || []).some((step) =>
     Object.keys(step.request?.headers || {}).length > 0 ||
     Boolean(step.request?.timeout_seconds) ||
@@ -182,6 +250,7 @@ export const hasAdvancedSyntheticAPIConfig = (config: SyntheticAPIMonitorConfig)
 /** A loaded synthetic browser config that the Basic editor would hide parts of. */
 export const hasAdvancedSyntheticBrowserConfig = (config: SyntheticBrowserMonitorConfig): boolean =>
   Object.keys(config.variables || {}).length > 0 ||
+  Object.keys(config.secret_variables || {}).length > 0 ||
   Boolean(config.device) ||
   (config.steps || []).some((step) => Boolean(step.timeout_seconds));
 
@@ -197,6 +266,7 @@ export const syntheticBrowserGuidedDraftFromForm = (form: MonitorFormState): Syn
   expected_url: form.synthetic_browser_guided_expected_url,
   username: form.synthetic_browser_guided_username,
   password: form.synthetic_browser_guided_password,
+  password_stored: form.synthetic_browser_guided_password_stored,
 });
 
 /** Leaving guided for expert: the guided journey becomes the expert fields. */
@@ -208,6 +278,7 @@ export const syntheticBrowserGuidedToExpertFields = (form: MonitorFormState): Pa
     synthetic_browser_failure_mode: 'fail_fast',
     synthetic_browser_steps: next.steps,
     synthetic_browser_variables: mapVariablesToRows(next.variables),
+    synthetic_browser_secret_variables: secretRowsFromMap(next.secretVariables, form.synthetic_browser_guided_password_stored),
     synthetic_browser_screenshot_on_failure: true,
     synthetic_browser_trace_on_failure: false,
     synthetic_browser_har_on_failure: false,
@@ -221,6 +292,7 @@ export const syntheticAPITemplateFields = (template: 'health_auth' | 'single_hea
       synthetic_api_base_url: 'https://api.example.com',
       synthetic_api_failure_mode: 'fail_fast',
       synthetic_api_variables: [{ key: '', value: '' }],
+      synthetic_api_secret_variables: [],
       synthetic_api_steps: [
         {
           ...defaultSyntheticAPIStep(1),
@@ -237,10 +309,8 @@ export const syntheticAPITemplateFields = (template: 'health_auth' | 'single_hea
   return {
     synthetic_api_base_url: 'https://api.example.com',
     synthetic_api_failure_mode: 'fail_fast',
-    synthetic_api_variables: [
-      { key: 'email', value: 'monitor@example.com' },
-      { key: 'password', value: 'change-me' },
-    ],
+    synthetic_api_variables: [{ key: 'email', value: 'monitor@example.com' }],
+    synthetic_api_secret_variables: [{ key: 'password', value: 'change-me', secret: true }],
     synthetic_api_steps: [
       {
         ...defaultSyntheticAPIStep(1),
@@ -285,6 +355,7 @@ export const syntheticBrowserTemplateFields = (template: 'login_flow' | 'homepag
       synthetic_browser_device: 'Desktop Chrome',
       synthetic_browser_failure_mode: 'fail_fast',
       synthetic_browser_variables: [{ key: '', value: '' }],
+      synthetic_browser_secret_variables: [],
       synthetic_browser_steps: [
         { ...defaultSyntheticBrowserStep(1), id: 'open', action: 'goto', url: 'https://app.example.com' },
         { ...defaultSyntheticBrowserStep(2), id: 'hero_visible', action: 'assert_visible', selector: 'main' },
@@ -300,10 +371,8 @@ export const syntheticBrowserTemplateFields = (template: 'login_flow' | 'homepag
     synthetic_browser_start_url: 'https://app.example.com/login',
     synthetic_browser_device: 'Desktop Chrome',
     synthetic_browser_failure_mode: 'fail_fast',
-    synthetic_browser_variables: [
-      { key: 'email', value: 'monitor@example.com' },
-      { key: 'password', value: 'change-me' },
-    ],
+    synthetic_browser_variables: [{ key: 'email', value: 'monitor@example.com' }],
+    synthetic_browser_secret_variables: [{ key: 'password', value: 'change-me', secret: true }],
     synthetic_browser_steps: [
       { ...defaultSyntheticBrowserStep(1), id: 'open_login', action: 'goto', url: 'https://app.example.com/login' },
       { ...defaultSyntheticBrowserStep(2), id: 'fill_email', action: 'fill', selector: '[name=email]', value: '{{email}}' },
@@ -401,12 +470,19 @@ export function validateMonitorForm(
       newErrors.url = 'TLS settings require an https:// URL';
     }
 
-    const headerRows = (form.request_headers || []).filter(h => h.key.trim() || h.value.trim());
-    for (const row of headerRows) {
-      if (!row.key.trim() || !row.value.trim()) {
-        newErrors.request_headers = 'Headers must have both a name and a value';
-        break;
-      }
+    const headerError = secretRowsError(form.request_headers || [], 'Headers', isSensitiveHeaderName);
+    if (headerError) newErrors.request_headers = headerError;
+
+    const basicAuthUser = form.basic_auth_username.trim();
+    if (form.basic_auth_password && !basicAuthUser) {
+      newErrors.basic_auth = 'Basic auth needs a username';
+    } else if (/[\r\n:]/.test(form.basic_auth_username) || /[\r\n]/.test(form.basic_auth_password)) {
+      newErrors.basic_auth = 'Basic auth cannot contain line breaks, or a colon in the username';
+    } else if (
+      basicAuthUser &&
+      (form.request_headers || []).some((h) => h.key.trim().toLowerCase() === 'authorization')
+    ) {
+      newErrors.basic_auth = 'Use basic auth or an Authorization header, not both';
     }
     if ((form.display_fields || []).some(f => f.label?.trim() && !f.path.trim())) {
       newErrors.display_fields = 'Each display value needs a path';
@@ -430,6 +506,10 @@ export function validateMonitorForm(
         break;
       }
     }
+    const apiSecretError =
+      secretRowsError(form.synthetic_api_secret_variables || [], 'Secret variables', () => true) ??
+      bothMapsError(form.synthetic_api_variables || [], form.synthetic_api_secret_variables || []);
+    if (apiSecretError) newErrors.synthetic_api_secret_variables = apiSecretError;
 
     const steps = form.synthetic_api_steps || [];
     if (steps.length === 0) {
@@ -609,6 +689,10 @@ export function validateMonitorForm(
           break;
         }
       }
+      const browserSecretError =
+        secretRowsError(form.synthetic_browser_secret_variables || [], 'Secret variables', () => true) ??
+        bothMapsError(form.synthetic_browser_variables || [], form.synthetic_browser_secret_variables || []);
+      if (browserSecretError) newErrors.synthetic_browser_secret_variables = browserSecretError;
 
       const steps = form.synthetic_browser_steps || [];
       if (steps.length === 0) {
@@ -678,13 +762,19 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
       method: form.method,
     };
 
-    const headers: Record<string, string> = {};
-    for (const row of (form.request_headers || []).filter(h => h.key.trim() && h.value.trim())) {
-      headers[row.key.trim()] = row.value;
-    }
+    // Credential-named rows always go secret: the API would move them there
+    // on write anyway (shared/secrets NormalizeSensitiveHeaders).
+    const { plain: headers, secret: secretHeaders } = splitSecretRows(form.request_headers || [], isSensitiveHeaderName);
     if (Object.keys(headers).length > 0) {
       httpConfig.headers = headers;
     }
+    if (Object.keys(secretHeaders).length > 0 || form.http_secret_headers_stored) {
+      httpConfig.secret_headers = secretHeaders;
+    }
+    const basicAuthUser = form.basic_auth_username.trim();
+    if (basicAuthUser) httpConfig.basic_auth_username = basicAuthUser;
+    const basicAuthPassword = basicAuthPasswordToSubmit(form);
+    if (basicAuthPassword !== undefined) httpConfig.basic_auth_password = basicAuthPassword;
 
     if (parsed.codes.length > 0) httpConfig.expected_statuses = parsed.codes;
     if (parsed.ranges.length > 0) httpConfig.expected_status_ranges = parsed.ranges;
@@ -862,6 +952,11 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
     if (Object.keys(variables).length > 0) {
       syntheticAPIConfig.variables = variables;
     }
+    const apiSecretVariables = secretVariablesToSubmit(
+      form.synthetic_api_secret_variables || [],
+      form.synthetic_api_secret_variables_stored
+    );
+    if (apiSecretVariables) syntheticAPIConfig.secret_variables = apiSecretVariables;
     config = syntheticAPIConfig;
   } else {
     if (guidedMode) {
@@ -892,6 +987,9 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
       };
       if (Object.keys(guided.variables).length > 0) {
         syntheticBrowserConfig.variables = guided.variables;
+      }
+      if (Object.keys(guided.secretVariables).length > 0 || form.synthetic_browser_secret_variables_stored) {
+        syntheticBrowserConfig.secret_variables = guided.secretVariables;
       }
       config = syntheticBrowserConfig;
     } else {
@@ -933,6 +1031,11 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
       if (Object.keys(variables).length > 0) {
         syntheticBrowserConfig.variables = variables;
       }
+      const browserSecretVariables = secretVariablesToSubmit(
+        form.synthetic_browser_secret_variables || [],
+        form.synthetic_browser_secret_variables_stored
+      );
+      if (browserSecretVariables) syntheticBrowserConfig.secret_variables = browserSecretVariables;
       config = syntheticBrowserConfig;
     }
   }

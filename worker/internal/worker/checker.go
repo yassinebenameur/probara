@@ -264,9 +264,16 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		}
 	}
 
-	// Set headers
+	// Set headers. Secret headers go last so they win over a same-named
+	// plain one (validation refuses that pairing; this is belt and braces).
 	for k, v := range config.Headers {
 		req.Header.Set(k, v)
+	}
+	for k, v := range config.SecretHeaders {
+		req.Header.Set(k, v)
+	}
+	if config.BasicAuthUsername != "" {
+		req.SetBasicAuth(config.BasicAuthUsername, config.BasicAuthPassword)
 	}
 
 	var traceTimings httpTimingInfo

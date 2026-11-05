@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -25,6 +26,8 @@ var MonitorSecretFields = map[string][]string{
 	// in config as well as monitors.push_token. Protect that copy on exports
 	// and all config reads too; the dedicated push-info endpoint owns access.
 	"push": {"push_token"},
+	// http basic auth: the username is plain config, the password secret.
+	"http": {"basic_auth_password"},
 }
 
 // MonitorSecretMapFields maps monitor types to config objects whose values are
@@ -32,13 +35,61 @@ var MonitorSecretFields = map[string][]string{
 // credentials are not limited to Authorization: Cookie and arbitrary custom
 // headers routinely carry bearer tokens too. Map keys remain visible so a
 // client can edit the write-only values individually.
+//
+// Secrets nested deeper than a top-level key (a synthetic step's header, a
+// browser step's fill value) are never registered as nested paths: they are
+// written as {{name}} references to a top-level `secret_variables` map, which
+// the worker resolves and then redacts from everything a check reports.
+// http and grpc keep a plain map beside the secret one (`headers` /
+// `secret_headers`, `metadata` / `secret_metadata`), and
+// NormalizeSensitiveHeaders moves credential-named http headers (and literal
+// credential headers of synthetic_api steps) into the secret side on write.
 var MonitorSecretMapFields = map[string][]string{
-	"websocket": {"headers"},
+	"websocket":         {"headers"},
+	"http":              {"secret_headers"},
+	"grpc":              {"secret_metadata"},
+	"synthetic_api":     {"secret_variables"},
+	"synthetic_browser": {"secret_variables"},
 }
 
 // HasMonitorSecrets reports whether a monitor type carries secret config fields.
 func HasMonitorSecrets(monitorType string) bool {
 	return len(MonitorSecretFields[monitorType]) > 0 || len(MonitorSecretMapFields[monitorType]) > 0
+}
+
+// HasSecretValues reports whether raw may hold a value in one of its type's
+// secret fields. It is a byte-level pre-check, no JSON decode: false is
+// definitive (no secret key appears anywhere in the document), true only
+// means "decode and look". Every transform below short-circuits on it, so a
+// config without secrets — most http monitors — costs one scan instead of a
+// decode/re-encode on each dispatch, check and read.
+func HasSecretValues(monitorType string, raw json.RawMessage) bool {
+	if len(raw) == 0 || !HasMonitorSecrets(monitorType) {
+		return false
+	}
+	// A key can only hide from a literal match behind a \u escape; such a
+	// document takes the slow path rather than skip encryption.
+	if bytes.Contains(raw, []byte(`\u`)) {
+		return true
+	}
+	for _, field := range MonitorSecretFields[monitorType] {
+		if containsJSONKey(raw, field) {
+			return true
+		}
+	}
+	for _, field := range MonitorSecretMapFields[monitorType] {
+		if containsJSONKey(raw, field) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsJSONKey reports whether `"key"` occurs in raw. Registry field names
+// are plain snake_case, so their JSON encoding is the literal name; an
+// occurrence inside a string value is a harmless false positive.
+func containsJSONKey(raw []byte, key string) bool {
+	return bytes.Contains(raw, []byte(`"`+key+`"`))
 }
 
 // EncryptMonitorConfig encrypts the secret fields of a monitor config. Values
@@ -115,6 +166,11 @@ func MergeMonitorConfigSecrets(monitorType string, incoming, existing json.RawMe
 	fields := MonitorSecretFields[monitorType]
 	mapFields := MonitorSecretMapFields[monitorType]
 	if (len(fields) == 0 && len(mapFields) == 0) || len(incoming) == 0 {
+		return incoming, nil
+	}
+	// No secret key on either side: nothing to keep, clear or resolve, so
+	// the config passes through byte for byte.
+	if !HasSecretValues(monitorType, incoming) && !HasSecretValues(monitorType, existing) {
 		return incoming, nil
 	}
 
@@ -196,7 +252,7 @@ func MergeMonitorConfigSecrets(monitorType string, incoming, existing json.RawMe
 func transformMonitorSecrets(monitorType string, raw json.RawMessage, fn func(field, value string) (string, error)) (json.RawMessage, error) {
 	fields := MonitorSecretFields[monitorType]
 	mapFields := MonitorSecretMapFields[monitorType]
-	if (len(fields) == 0 && len(mapFields) == 0) || len(raw) == 0 {
+	if (len(fields) == 0 && len(mapFields) == 0) || !HasSecretValues(monitorType, raw) {
 		return raw, nil
 	}
 

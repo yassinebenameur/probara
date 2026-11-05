@@ -293,6 +293,11 @@ export const SECURITY_PAGE: DocPage = {
               'Ciphertext left in the legacy `ai_settings` provider columns by pre-local-AI releases, kept only so a rollback still works (migration 000092). Keep the key version that encrypted it until a rollback to a pre-local-AI release is ruled out; then clear the column (`UPDATE ai_settings SET api_key_encrypted = \'\'`) instead of rotating it.',
             ],
             [
+              'Monitor request credentials',
+              'API (encrypt, mask), scheduler (location re-encryption), worker',
+              'Stored per monitor: database passwords, connection strings and client keys, SIP and Prometheus credentials, HTTP `basic_auth_password` and `secret_headers`, gRPC `secret_metadata`, synthetic `secret_variables`, and WebSocket headers ([coverage](/docs/monitors/#secrets)). Rotating one is an ordinary monitor edit; plaintext HTTP `headers` are not secret, and credential-named ones are moved to `secret_headers` on save.',
+            ],
+            [
               'PostgreSQL URL and credentials',
               'Platform services',
               'Database role currently spans tenant data; rotate as a platform credential.',
@@ -331,7 +336,12 @@ export POSTGRES_URL='postgres://...'
 
 # Preview and then re-encrypt monitor secret fields with the highest key version.
 go run ./cmd/admin/reencrypt_monitor_configs -dry-run
-go run ./cmd/admin/reencrypt_monitor_configs`,
+go run ./cmd/admin/reencrypt_monitor_configs
+
+# Once, after upgrading: move credential headers saved in plaintext HTTP
+# headers and literal synthetic API step headers into encrypted secrets.
+go run ./cmd/admin/migrate_sensitive_headers          # dry run
+go run ./cmd/admin/migrate_sensitive_headers -apply`,
         },
         {
           type: 'code',

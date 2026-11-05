@@ -193,7 +193,7 @@ func (s *Service) ProtectMonitorConfigForWorker(ctx context.Context, tenantID, l
 }
 
 func (s *Service) protectMonitorConfigForCredential(credential, monitorType string, config []byte) ([]byte, error) {
-	if !secrets.HasMonitorSecrets(monitorType) {
+	if !secrets.HasSecretValues(monitorType, config) {
 		return config, nil
 	}
 	plaintext, err := secrets.DecryptMonitorConfig(s.encryptor, monitorType, config)

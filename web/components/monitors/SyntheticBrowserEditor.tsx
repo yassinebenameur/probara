@@ -25,7 +25,15 @@ import {
   syntheticBrowserActionMeta,
 } from '@/lib/monitor-form/synthetic';
 import { FIELD_LABEL, FormInput, FormSelect, TILE_SELECTED, ToggleRow, FormPanel } from './form-kit';
-import { SyntheticModeHeader, SyntheticTemplatesWell, SyntheticVariablesField, swapped, withItem, withoutItem } from './synthetic-kit';
+import {
+  SyntheticModeHeader,
+  SyntheticSecretVariablesField,
+  SyntheticTemplatesWell,
+  SyntheticVariablesField,
+  swapped,
+  withItem,
+  withoutItem,
+} from './synthetic-kit';
 
 const BROWSER_SETUP_TABS = [
   { id: 'guided', label: 'Guided' },
@@ -76,6 +84,7 @@ const clearBrowserErrors = (prev: Record<string, string>) => ({
   synthetic_browser_steps: '',
   synthetic_browser_start_url: '',
   synthetic_browser_variables: '',
+  synthetic_browser_secret_variables: '',
 });
 
 /**
@@ -294,8 +303,12 @@ function GuidedSetup({
                   type="password"
                   value={form.synthetic_browser_guided_password}
                   onChange={(v) => patch({ synthetic_browser_guided_password: v })}
-                  placeholder="********"
-                  hint="If empty, fill step for password is skipped."
+                  placeholder={form.synthetic_browser_guided_password_stored ? 'Stored password (leave blank to keep)' : '********'}
+                  hint={
+                    form.synthetic_browser_guided_password_stored
+                      ? 'Stored encrypted. Type a new one to replace it.'
+                      : 'Stored encrypted and redacted from results. If empty, fill step for password is skipped.'
+                  }
                 />
               </div>
             </>
@@ -313,7 +326,9 @@ function GuidedSetup({
             <p className="text-ui text-slate-400">Review generated journey before creating the monitor.</p>
             <p className="flex flex-wrap gap-x-3 text-xs tabular-nums text-slate-500">
               <span>{preview.steps.length} steps</span>
-              <span>{Object.keys(preview.variables).length} variables</span>
+              <span>
+                {Object.keys(preview.variables).length + Object.keys(preview.secretVariables).length} variables
+              </span>
               <span>Screenshot on failure</span>
             </p>
           </div>
@@ -388,7 +403,10 @@ function ExpertSetup({
         onModeChange={onModeChange}
         facts={[
           `${steps.length} steps`,
-          `${(form.synthetic_browser_variables || []).filter((v) => v.key.trim()).length} variables`,
+          `${
+            (form.synthetic_browser_variables || []).filter((v) => v.key.trim()).length +
+            (form.synthetic_browser_secret_variables || []).filter((v) => v.key.trim()).length
+          } variables`,
           form.synthetic_browser_screenshot_on_failure ? 'Screenshot on failure' : 'No screenshot',
         ]}
         description="Basic is optimized for common user journeys. Advanced unlocks device/variables/step timeout tuning."
@@ -469,6 +487,14 @@ function ExpertSetup({
           onChange={(rows) => patch({ synthetic_browser_variables: rows })}
           error={errors.synthetic_browser_variables}
           hint={<>Use <code>{'{{variable_name}}'}</code> inside selectors and values.</>}
+        />
+      )}
+
+      {mode === 'advanced' && (
+        <SyntheticSecretVariablesField
+          rows={form.synthetic_browser_secret_variables}
+          onChange={(rows) => patch({ synthetic_browser_secret_variables: rows })}
+          error={errors.synthetic_browser_secret_variables}
         />
       )}
 

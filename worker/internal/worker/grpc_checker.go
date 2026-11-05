@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/yassinebenameur/probara/shared/models"
 )
@@ -109,7 +110,7 @@ func (c *GRPCChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	defer conn.Close()
 
 	client := healthpb.NewHealthClient(conn)
-	resp, err := client.Check(checkCtx, &healthpb.HealthCheckRequest{Service: service})
+	resp, err := client.Check(grpcOutgoingMetadata(checkCtx, config), &healthpb.HealthCheckRequest{Service: service})
 	latencyMs = time.Since(startTime).Milliseconds()
 	if err != nil {
 		errMsg := fmt.Sprintf("%s: %v", grpcErrorReason(err), err)
@@ -145,6 +146,22 @@ func (c *GRPCChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		LatencyMs:   &latencyMs,
 		MetricsData: metricsJSON,
 	}
+}
+
+// grpcOutgoingMetadata attaches the configured metadata to the health RPC.
+// Secret metadata is applied after the plain map, so it wins a same-named key
+// (validation refuses that pairing). Keys are lowercased, as gRPC requires.
+func grpcOutgoingMetadata(ctx context.Context, config models.GRPCMonitorConfig) context.Context {
+	if len(config.Metadata) == 0 && len(config.SecretMetadata) == 0 {
+		return ctx
+	}
+	md := metadata.MD{}
+	for _, values := range []map[string]string{config.Metadata, config.SecretMetadata} {
+		for key, value := range values {
+			md.Set(strings.ToLower(strings.TrimSpace(key)), value)
+		}
+	}
+	return metadata.NewOutgoingContext(ctx, md)
 }
 
 func grpcErrorReason(err error) string {
