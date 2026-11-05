@@ -414,13 +414,16 @@ or imported groups come back empty. Any other path that creates groups through
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs). `docker-compose.release.yml`
-  overrides only images, ports and credentials (every one `${VAR:?}`, no
-  defaults) and never re-declares wiring: new env goes in the base file.
+  overrides only images, ports, credentials (every one `${VAR:?}`, no
+  defaults) and the client-IP chain (`edge`, fixed subnet, below), and never
+  re-declares wiring: new env goes in the base file.
   The base has no `ADMIN_JWT_SECRET` default, so every `docker compose`
   command needs it (Make falls back to `.dev-admin-jwt-secret`, CI sets a
   dummy). Validate with
   `docker compose -f docker-compose.yml -f docker-compose.release.yml config -q`
-  under dummy env, and keep `scripts/install.sh` generating every `:?` secret.
+  under dummy env, and keep `scripts/install.sh` generating every `:?` secret
+  (`bash scripts/test-install.sh` checks its `.env` handling: every form
+  Compose accepts, `export KEY=` and `KEY = v` included, counts as set).
 - **Unprivileged ping** (`WORKER_PING_MODE`, default `unprivileged`) needs
   the `net.ipv4.ping_group_range` sysctl, set in Compose (worker `sysctls:`),
   Helm (`worker.ping.sysctl` via the `workerPodSecurityContext` helper, for
@@ -483,6 +486,11 @@ or imported groups come back empty. Any other path that creates groups through
   The UI's `/api` proxy cannot append to the chain, so it drops
   `X-Forwarded-For`/`X-Real-IP` (`web/lib/proxy-headers.ts`) unless
   `API_PROXY_TRUST_FORWARDED_FOR=true`; never make it pass them by default.
+  Next.js keeps a client-sent `X-Forwarded-For`, so that flag is safe only
+  behind a proxy that overwrites it: the release Compose file sets it on a
+  frontend reachable only through its `edge` Caddy (`header_up
+  X-Forwarded-For {client_ip}`) and trusts `PROBARA_NETWORK_SUBNET` on the
+  api; never publish that frontend's port.
 - **`LOCATION_WORKER_IMAGE`** (api): the image private-location deploy
   snippets reference. Unset defaults to the worker at the api's
   `buildinfo.Version` (`:alpha` for unreleased builds) —

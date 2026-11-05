@@ -1095,7 +1095,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],
             ['Status cache, proxy, preview, timeout, update subject', 'Preview only; most defaults', 'Not wired'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
-            ['Trusted proxies (`TRUSTED_PROXY_CIDRS`)', 'Passed through from the shell to API and status-page', 'Top-level `trustedProxyCIDRs` rendered into API and status-page'],
+            ['Trusted proxies (`TRUSTED_PROXY_CIDRS`)', 'Passed through from the shell to API and status-page; the release override sets the API\'s to the Compose network behind its `edge` proxy', 'Top-level `trustedProxyCIDRs` rendered into API and status-page'],
             ['Security headers, API rate limit, CORS allowlist', '`SECURITY_HSTS_MAX_AGE` (default `0`) and the `API_*` limits passed through from the shell to the API (HSTS also to status-page)', 'Top-level `security` block rendered into API, status-page and frontend'],
             ['Arbitrary extra environment', 'Requires editing Compose', 'No `extraEnv`; requires chart template change'],
           ],
