@@ -151,8 +151,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   a top-level `secret_variables` map, whose values the worker redacts from
   the whole result (`worker/internal/worker/synthetic_redact.go`). On write,
   `secrets.NormalizeSensitiveHeaders` runs after the merge and before
-  encrypt, moving credential-named http `headers` into `secret_headers`
-  (literal synthetic_api step ones into `secret_variables`); its name rule
+  encrypt, moving credential-named http `headers` into `secret_headers`,
+  grpc `metadata` into `secret_metadata` (literal synthetic_api step headers
+  into `secret_variables`); its name rule
   `IsSensitiveHeaderName` has a TS twin in `web/lib/monitor-form/http.ts`,
   pinned by `shared/secrets/testdata/sensitive_header_names.json`. Skip
   secret work for a config with no secret key via `secrets.HasSecretValues`

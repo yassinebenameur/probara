@@ -258,3 +258,28 @@ func lookupPath(cfg map[string]any, path string) any {
 	}
 	return cfg[path]
 }
+
+func TestNormalizeSensitiveHeaders_GRPCMetadata(t *testing.T) {
+	in := json.RawMessage(`{"host":"g.test","metadata":{"x-tenant":"t1","authorization":"Bearer g","X-Api-Key":"k"},"secret_metadata":{"Authorization":"enc-old"}}`)
+	out, changed, err := NormalizeSensitiveHeaders("grpc", in)
+	if err != nil || !changed {
+		t.Fatalf("NormalizeSensitiveHeaders: changed=%v err=%v", changed, err)
+	}
+	var cfg struct {
+		Metadata       map[string]string `json:"metadata"`
+		SecretMetadata map[string]string `json:"secret_metadata"`
+	}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(cfg.Metadata) != 1 || cfg.Metadata["x-tenant"] != "t1" {
+		t.Fatalf("metadata = %v, want only x-tenant", cfg.Metadata)
+	}
+	if len(cfg.SecretMetadata) != 2 || cfg.SecretMetadata["authorization"] != "Bearer g" || cfg.SecretMetadata["X-Api-Key"] != "k" {
+		t.Fatalf("secret_metadata = %v, want the moved keys replacing their case-insensitive twin", cfg.SecretMetadata)
+	}
+	again, changed, _ := NormalizeSensitiveHeaders("grpc", out)
+	if changed || string(again) != string(out) {
+		t.Fatalf("second pass changed the config: %s", again)
+	}
+}

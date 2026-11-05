@@ -292,7 +292,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "gRPC",
               description:
-                "Set `host`, optional `port`, optional `service`, and `use_tls`. Probara calls the standard `grpc.health.v1.Health/Check` method and succeeds only for `SERVING`. The default port is 443 with TLS and 80 without it. `metadata` is sent with the call as request metadata, and so is `secret_metadata`, whose values are [secret](#secrets) (put an `authorization` token there). Keys use letters, digits, `-`, `_` and `.`, are sent lowercased, may not start with `grpc-`, and may not appear in both maps.",
+                "Set `host`, optional `port`, optional `service`, and `use_tls`. Probara calls the standard `grpc.health.v1.Health/Check` method and succeeds only for `SERVING`. The default port is 443 with TLS and 80 without it. `metadata` is sent with the call as request metadata, and so is `secret_metadata`, whose values are [secret](#secrets). A credential-named `metadata` key (the same names as HTTP headers, such as `authorization`) is moved to `secret_metadata` on save. Keys use letters, digits, `-`, `_` and `.`, are sent lowercased, may not start with `grpc-`, and may not appear in both maps.",
             },
             {
               term: "TCP",
@@ -368,7 +368,7 @@ export const MONITORS_PAGE: DocPage = {
           tone: "warning",
           title: "Header values are secret material",
           text:
-            "WebSocket header values are encrypted when a secrets key is configured and returned as `***` through the API. Header names remain visible. HTTP and gRPC monitors split the two: `headers` and `metadata` stay plaintext, `secret_headers` and `secret_metadata` are protected the same way, and credential-named HTTP headers are moved to the secret side on save.",
+            "WebSocket header values are encrypted when a secrets key is configured and returned as `***` through the API. Header names remain visible. HTTP and gRPC monitors split the two: `headers` and `metadata` stay plaintext, `secret_headers` and `secret_metadata` are protected the same way, and credential-named HTTP headers and gRPC metadata keys are moved to the secret side on save.",
         },
       ],
     },
@@ -673,7 +673,7 @@ export const MONITORS_PAGE: DocPage = {
             "Submit an empty string to clear a protected field. That is the only spelling that removes a stored secret.",
             "Protected field names are exact. A config key that matches one in another case, such as `Password` or `Secret_Headers`, is refused with a 400 rather than stored unprotected.",
             "Secret maps (WebSocket `headers`, HTTP `secret_headers`, gRPC `secret_metadata`, synthetic `secret_variables`) keep their names visible while their values are masked. Submitting the map edits it key by key, so a key left out of a submitted object is removed and `{}` removes them all; omitting the whole object keeps the stored map.",
-            "Secrets nested inside steps are never protected in place: a synthetic step refers to a `secret_variables` entry with `{{name}}` instead. On save, credential-named HTTP `headers` move to `secret_headers` and literal credential-named synthetic API step headers move to generated secret variables, for API, MCP and import writes alike. `go run ./cmd/admin/migrate_sensitive_headers` (dry run; add `-apply` to write) does the same to monitors saved before, encrypting with the current key.",
+            "Secrets nested inside steps are never protected in place: a synthetic step refers to a `secret_variables` entry with `{{name}}` instead. On save, credential-named HTTP `headers` move to `secret_headers`, credential-named gRPC `metadata` to `secret_metadata`, and literal credential-named synthetic API step headers move to generated secret variables, for API, MCP and import writes alike. `go run ./cmd/admin/migrate_sensitive_headers` (dry run; add `-apply` to write) does the same to monitors saved before, encrypting with the current key.",
             "On create there is no stored value, so `***` is dropped exactly like an omitted field and the monitor is created without that secret. Cloning a monitor in the operator UI therefore never copies its secrets: the clone keeps secret header, metadata and variable names with blank values and leaves passwords, tokens, connection strings and client keys empty, to be entered again.",
           ],
         },

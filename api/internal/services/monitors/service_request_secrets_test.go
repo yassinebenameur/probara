@@ -118,3 +118,32 @@ func TestHTTPRequestSecretsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestGRPCCredentialMetadataIsEncryptedOnWrite: a REST/MCP/import client that
+// puts a token in plain grpc metadata still gets it encrypted and masked.
+func TestGRPCCredentialMetadataIsEncryptedOnWrite(t *testing.T) {
+	enc := testEncryptor(t)
+	repo := &copyingRepo{MockRepository: NewMockRepository()}
+	svc := NewService(repo)
+	svc.ConfigureEncryption(enc)
+
+	created, err := svc.CreateMonitor(context.Background(), uuid.New(), &models.CreateMonitorRequest{
+		Name: "grpc", Type: models.MonitorTypeGRPC,
+		Config:          json.RawMessage(`{"host":"g.test","metadata":{"x-tenant":"t1","authorization":"Bearer g"}}`),
+		IntervalSeconds: 60, TimeoutSeconds: 10,
+	})
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	stored := decodeConfig(t, repo.createdConfig)
+	if md, _ := stored["metadata"].(map[string]any); len(md) != 1 || md["x-tenant"] != "t1" {
+		t.Fatalf("stored metadata = %v, want only x-tenant", stored["metadata"])
+	}
+	ct, _ := stored["secret_metadata"].(map[string]any)["authorization"].(string)
+	if plain, err := enc.Decrypt(ct); !secrets.LooksLikeEnvelope(ct) || err != nil || plain != "Bearer g" {
+		t.Fatalf("secret_metadata.authorization stored as %q (plain %q, err %v)", ct, plain, err)
+	}
+	if read := decodeConfig(t, created.Config)["secret_metadata"].(map[string]any); read["authorization"] != secrets.MaskedSecret {
+		t.Fatalf("read secret_metadata = %v, want masked", read)
+	}
+}
