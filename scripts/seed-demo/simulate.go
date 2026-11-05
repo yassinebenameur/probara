@@ -520,7 +520,9 @@ func simulate(in simInput) *simResult {
 			fail := profileFail || w != nil
 			row := mkRow(t.Add(jitter), -1, fail, "")
 			record(row)
-			tr := monitorstate.Apply(monitorstate.Snapshot{State: res.state, ConsecutiveFailures: res.cf}, fail, s.Threshold)
+			// Seeded monitors keep the default recovery_threshold of 1
+			// (S-T7), so consecutive successes never leave 0 here.
+			tr := monitorstate.Apply(monitorstate.Snapshot{State: res.state, ConsecutiveFailures: res.cf}, fail, s.Threshold, 1)
 			newState, cf = tr.To, tr.ConsecutiveFailures
 			res.lastAt = row.t
 			if fail {
@@ -578,7 +580,7 @@ func simulate(in simInput) *simResult {
 				row.metrics = failureMetrics(s, in.env, row.errMsg)
 			}
 			record(row)
-			tr := monitorstate.Apply(locStates[li], fail, s.Threshold)
+			tr := monitorstate.Apply(locStates[li], fail, s.Threshold, 1)
 			if tr.To != locStates[li].State {
 				res.locs[li].since = at
 			}

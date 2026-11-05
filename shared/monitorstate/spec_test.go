@@ -33,14 +33,21 @@ type specStep struct {
 // counts query), and unreported locations contribute to Selected only.
 func runLocationScenario(t *testing.T, selected []string, quorum, threshold int, steps []specStep) {
 	t.Helper()
+	runLocationScenarioWithRecovery(t, selected, quorum, threshold, 1, steps)
+}
+
+// runLocationScenarioWithRecovery is runLocationScenario with a recovery
+// threshold (S-T7) applied per location stream, as persistAtLocation does.
+func runLocationScenarioWithRecovery(t *testing.T, selected []string, quorum, threshold, recovery int, steps []specStep) {
+	t.Helper()
 	perLoc := map[string]Snapshot{}
 	for i, step := range steps {
 		snap, reported := perLoc[step.loc]
 		if !reported {
 			snap = Snapshot{State: StateUnknown}
 		}
-		tr := Apply(snap, step.failure, threshold)
-		perLoc[step.loc] = Snapshot{State: tr.To, ConsecutiveFailures: tr.ConsecutiveFailures}
+		tr := Apply(snap, step.failure, threshold, recovery)
+		perLoc[step.loc] = snapshotOf(tr)
 
 		c := LocationCounts{Selected: len(selected)}
 		for _, l := range selected {
@@ -113,12 +120,62 @@ func TestSpecScenario_LocationlessConfirmation(t *testing.T) {
 	}
 	snap := Snapshot{State: StateUnknown}
 	for i, step := range steps {
-		got := Apply(snap, step.failure, 2)
+		got := Apply(snap, step.failure, 2, 1)
 		if got != step.want {
 			t.Fatalf("step %d: Apply() = %+v, want %+v [rules %s]", i, got, step.want, step.rules)
 		}
-		snap = Snapshot{State: got.To, ConsecutiveFailures: got.ConsecutiveFailures}
+		snap = snapshotOf(got)
 	}
+}
+
+// snapshotOf is the snapshot a writer persists after a transition.
+func snapshotOf(tr Transition) Snapshot {
+	return Snapshot{State: tr.To, ConsecutiveFailures: tr.ConsecutiveFailures, ConsecutiveSuccesses: tr.ConsecutiveSuccesses}
+}
+
+// S-T7 golden arc, location-less, recovery threshold 3: passes from down
+// count toward confirmation while the stream stays down, a failure resets
+// the count, and the outage closes only at confirmation (S-T6).
+func TestSpecScenario_RecoveryConfirmation(t *testing.T) {
+	steps := []struct {
+		failure bool
+		want    Transition
+		rules   string
+	}{
+		{true, Transition{From: StateUnknown, To: StateSuspect, ConsecutiveFailures: 1, Changed: true}, "S-T2"},
+		{true, Transition{From: StateSuspect, To: StateDown, ConsecutiveFailures: 2, Changed: true, OpenedOutage: true}, "S-T2, S-T6"},
+		{false, Transition{From: StateDown, To: StateDown, ConsecutiveSuccesses: 1}, "S-T7 (pass 1 of 3, still down)"},
+		{false, Transition{From: StateDown, To: StateDown, ConsecutiveSuccesses: 2}, "S-T7 (pass 2 of 3, still down)"},
+		{true, Transition{From: StateDown, To: StateDown, ConsecutiveFailures: 1}, "S-T3, S-T7 (failure resets passes)"},
+		{false, Transition{From: StateDown, To: StateDown, ConsecutiveSuccesses: 1}, "S-T7 (count restarts)"},
+		{false, Transition{From: StateDown, To: StateDown, ConsecutiveSuccesses: 2}, "S-T7"},
+		{false, Transition{From: StateDown, To: StateUp, Changed: true, ClosedOutage: true}, "S-T4, S-T6, S-T7 (confirmed)"},
+		{true, Transition{From: StateUp, To: StateSuspect, ConsecutiveFailures: 1, Changed: true}, "S-T2"},
+		{false, Transition{From: StateSuspect, To: StateUp, Changed: true}, "S-T1, S-T7 (only leaving down is confirmed)"},
+	}
+	snap := Snapshot{State: StateUnknown}
+	for i, step := range steps {
+		got := Apply(snap, step.failure, 2, 3)
+		if got != step.want {
+			t.Fatalf("step %d: Apply() = %+v, want %+v [rules %s]", i, got, step.want, step.rules)
+		}
+		snap = snapshotOf(got)
+	}
+}
+
+// S-T7 per location under quorum: a location confirming its recovery still
+// counts as down, so the monitor stays down until enough locations confirm.
+func TestSpecScenario_QuorumRecoveryConfirmation(t *testing.T) {
+	runLocationScenarioWithRecovery(t, []string{"a", "b", "c"}, 2, 1, 2, []specStep{
+		{loc: "a", failure: true, want: StateDegraded, rules: "S-A2, S-T2"},
+		{loc: "b", failure: true, want: StateDown, rules: "S-A1"},
+		{loc: "a", failure: false, want: StateDown, rules: "S-T7 (a: pass 1 of 2, still down), S-A1"},
+		{loc: "b", failure: false, want: StateDown, rules: "S-T7 (b: pass 1 of 2), S-A1"},
+		{loc: "a", failure: false, want: StateDegraded, rules: "S-T7 (a confirmed), S-A2"},
+		{loc: "b", failure: true, want: StateDegraded, rules: "S-T7 (b: failure resets), S-A2"},
+		{loc: "b", failure: false, want: StateDegraded, rules: "S-T7 (b: pass 1 of 2)"},
+		{loc: "b", failure: false, want: StateUp, rules: "S-T7 (b confirmed), S-A4"},
+	})
 }
 
 // S-A7: a single-location monitor behaves identically to a location-less one
@@ -127,14 +184,15 @@ func TestSpecScenario_SingleLocationParity(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	for seq := 0; seq < 100; seq++ {
 		threshold := 1 + rng.Intn(3)
+		recovery := 1 + rng.Intn(3)
 		global := Snapshot{State: StateUnknown}
 		loc := Snapshot{State: StateUnknown}
 		for i := 0; i < 20; i++ {
 			failure := rng.Intn(2) == 0
-			gt := Apply(global, failure, threshold)
-			global = Snapshot{State: gt.To, ConsecutiveFailures: gt.ConsecutiveFailures}
-			lt := Apply(loc, failure, threshold)
-			loc = Snapshot{State: lt.To, ConsecutiveFailures: lt.ConsecutiveFailures}
+			gt := Apply(global, failure, threshold, recovery)
+			global = snapshotOf(gt)
+			lt := Apply(loc, failure, threshold, recovery)
+			loc = snapshotOf(lt)
 
 			c := LocationCounts{Selected: 1}
 			switch loc.State {
@@ -152,19 +210,27 @@ func TestSpecScenario_SingleLocationParity(t *testing.T) {
 	}
 }
 
-// S-T1..S-T6 invariants over the whole input space of Apply.
+// S-T1..S-T7 invariants over the whole input space of Apply.
 func TestSpecProperty_ApplyInvariants(t *testing.T) {
 	states := []State{StateUnknown, StateUp, StateSuspect, StateDown, StateDegraded}
 	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < 2000; i++ {
+	for i := 0; i < 4000; i++ {
 		cur := Snapshot{State: states[rng.Intn(len(states))], ConsecutiveFailures: rng.Intn(11)}
+		if cur.State == StateDown {
+			cur.ConsecutiveSuccesses = rng.Intn(6)
+		}
 		failure := rng.Intn(2) == 0
 		threshold := rng.Intn(7) - 1 // includes 0 and -1 (clamp to 1)
 		eff := threshold
 		if eff < 1 {
 			eff = 1
 		}
-		got := Apply(cur, failure, threshold)
+		recovery := rng.Intn(7) - 1 // includes 0 and -1 (clamp to 1)
+		effR := recovery
+		if effR < 1 {
+			effR = 1
+		}
+		got := Apply(cur, failure, threshold, recovery)
 
 		if got.To != StateUp && got.To != StateSuspect && got.To != StateDown {
 			t.Fatalf("Apply(%+v, %v, %d).To = %s: machine output outside {up,suspect,down} [S-T5]", cur, failure, threshold, got.To)
@@ -175,11 +241,34 @@ func TestSpecProperty_ApplyInvariants(t *testing.T) {
 		if got.OpenedOutage != (got.To == StateDown && got.From != StateDown) {
 			t.Fatalf("OpenedOutage=%v for %s→%s [S-T6]", got.OpenedOutage, got.From, got.To)
 		}
-		if got.ClosedOutage != (got.From == StateDown && !failure) {
-			t.Fatalf("ClosedOutage=%v for %s failure=%v [S-T6]", got.ClosedOutage, got.From, failure)
+		if got.ClosedOutage != (got.From == StateDown && got.To == StateUp) {
+			t.Fatalf("ClosedOutage=%v for %s→%s [S-T6]", got.ClosedOutage, got.From, got.To)
 		}
-		if !failure && (got.To != StateUp || got.ConsecutiveFailures != 0) {
-			t.Fatalf("pass ⇒ up/0, got %s/%d [S-T1]", got.To, got.ConsecutiveFailures)
+		if !failure && got.ConsecutiveFailures != 0 {
+			t.Fatalf("pass ⇒ CF 0, got %d [S-T1]", got.ConsecutiveFailures)
+		}
+		if !failure && cur.State != StateDown && (got.To != StateUp || got.ConsecutiveSuccesses != 0) {
+			t.Fatalf("pass from %s ⇒ up/CS 0, got %s/%d [S-T1, S-T7]", cur.State, got.To, got.ConsecutiveSuccesses)
+		}
+		if !failure && cur.State == StateDown {
+			if confirmed := cur.ConsecutiveSuccesses+1 >= effR; confirmed {
+				if got.To != StateUp || got.ConsecutiveSuccesses != 0 {
+					t.Fatalf("confirming pass (CS %d+1 >= R %d) ⇒ up/CS 0, got %s/%d [S-T4, S-T7]",
+						cur.ConsecutiveSuccesses, effR, got.To, got.ConsecutiveSuccesses)
+				}
+			} else if got.To != StateDown || got.ConsecutiveSuccesses != cur.ConsecutiveSuccesses+1 || got.Changed {
+				t.Fatalf("unconfirmed pass (CS %d+1 < R %d) ⇒ down/CS+1 unchanged, got %+v [S-T7]",
+					cur.ConsecutiveSuccesses, effR, got)
+			}
+		}
+		if got.To != StateDown && got.ConsecutiveSuccesses != 0 {
+			t.Fatalf("CS=%d on a %s stream: CS > 0 only while down [S-T7]", got.ConsecutiveSuccesses, got.To)
+		}
+		if failure && got.ConsecutiveSuccesses != 0 {
+			t.Fatalf("fail ⇒ CS 0, got %d [S-T7]", got.ConsecutiveSuccesses)
+		}
+		if effR == 1 && got.ConsecutiveSuccesses != 0 {
+			t.Fatalf("R=1 ⇒ single-sample recovery, got CS %d [S-T7]", got.ConsecutiveSuccesses)
 		}
 		if failure {
 			if got.ConsecutiveFailures != cur.ConsecutiveFailures+1 {
@@ -195,36 +284,81 @@ func TestSpecProperty_ApplyInvariants(t *testing.T) {
 	}
 }
 
-// The stream-level shape of S-T1/S-T2/S-T3: after any result sequence from
-// up, consecutive failures equal the trailing failure run, and the state is
-// determined by that run against the threshold.
+// The stream-level shape of S-T1/S-T2/S-T3/S-T7: after any result sequence
+// from up, consecutive failures equal the trailing failure run, and the state
+// follows from the trailing runs: a failure run reaching the threshold is
+// down; otherwise, a stream that was down when its trailing pass run began
+// stays down until that run reaches the recovery threshold, with CS equal to
+// the run; anything else is up, or suspect under a short failure run.
 func TestSpecProperty_TrailingFailureRun(t *testing.T) {
 	rng := rand.New(rand.NewSource(99))
-	for i := 0; i < 500; i++ {
+	for i := 0; i < 1000; i++ {
 		threshold := 1 + rng.Intn(4)
+		recovery := 1 + rng.Intn(4)
 		snap := Snapshot{State: StateUp}
-		run := 0
-		for j, n := 0, 1+rng.Intn(30); j < n; j++ {
+		failRun, passRun := 0, 0
+		// Whether the stream was down when its trailing pass/failure run began.
+		downAtPassRunStart, downAtFailRunStart := false, false
+		for j, n := 0, 1+rng.Intn(40); j < n; j++ {
 			failure := rng.Intn(2) == 0
-			tr := Apply(snap, failure, threshold)
-			snap = Snapshot{State: tr.To, ConsecutiveFailures: tr.ConsecutiveFailures}
+			if !failure && passRun == 0 {
+				downAtPassRunStart = snap.State == StateDown
+			}
+			if failure && failRun == 0 {
+				downAtFailRunStart = snap.State == StateDown
+			}
+			tr := Apply(snap, failure, threshold, recovery)
+			snap = snapshotOf(tr)
 			if failure {
-				run++
+				failRun++
+				passRun = 0
 			} else {
-				run = 0
+				failRun = 0
+				passRun++
 			}
 		}
-		if snap.ConsecutiveFailures != run {
-			t.Fatalf("CF=%d, trailing run=%d [S-T1, S-T2]", snap.ConsecutiveFailures, run)
+		if snap.ConsecutiveFailures != failRun {
+			t.Fatalf("CF=%d, trailing failure run=%d [S-T1, S-T2]", snap.ConsecutiveFailures, failRun)
 		}
-		want := StateUp
-		if run >= threshold {
+		want, wantCS := StateUp, 0
+		switch {
+		case failRun >= threshold:
 			want = StateDown
-		} else if run > 0 {
+		case failRun > 0:
+			// A short failure run is suspect, unless it began on a down
+			// stream: down stays down (S-T3).
 			want = StateSuspect
+			if downAtFailRunStart {
+				want = StateDown
+			}
+		case downAtPassRunStart && passRun < recovery:
+			want, wantCS = StateDown, passRun
 		}
-		if snap.State != want {
-			t.Fatalf("state=%s, want %s (run=%d threshold=%d) [S-T2, S-T3]", snap.State, want, run, threshold)
+		if snap.State != want || snap.ConsecutiveSuccesses != wantCS {
+			t.Fatalf("state=%s CS=%d, want %s CS=%d (failRun=%d passRun=%d threshold=%d recovery=%d) [S-T2, S-T3, S-T7]",
+				snap.State, snap.ConsecutiveSuccesses, want, wantCS, failRun, passRun, threshold, recovery)
+		}
+	}
+}
+
+// S-T7 with the default recovery threshold of 1 is exactly the pre-S-T7
+// machine: every pass is up at once and no success is ever counted, so
+// existing monitors behave as before.
+func TestSpecProperty_RecoveryThresholdOneIsSingleSample(t *testing.T) {
+	rng := rand.New(rand.NewSource(1337))
+	for i := 0; i < 500; i++ {
+		threshold := 1 + rng.Intn(4)
+		snap := Snapshot{State: StateUnknown}
+		for j := 0; j < 30; j++ {
+			failure := rng.Intn(2) == 0
+			tr := Apply(snap, failure, threshold, 1)
+			if !failure && (tr.To != StateUp || tr.ClosedOutage != (snap.State == StateDown)) {
+				t.Fatalf("R=1 pass from %s ⇒ %+v, want up at once [S-T4, S-T7]", snap.State, tr)
+			}
+			if tr.ConsecutiveSuccesses != 0 {
+				t.Fatalf("R=1 counted a success: %+v [S-T7]", tr)
+			}
+			snap = snapshotOf(tr)
 		}
 	}
 }

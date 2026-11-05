@@ -55,26 +55,37 @@ type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
 }
 
+// LocationStreaks are the monitor-level streak counters of a multi-location
+// monitor, each the max over its fresh locations: MaxFailures drives display
+// and the suspect fast recheck (S-A9), MaxSuccesses the furthest-along
+// unconfirmed recovery (S-T7) for display and the recovery fast recheck. They
+// never feed the spatial rule itself.
+type LocationStreaks struct {
+	MaxFailures  int
+	MaxSuccesses int
+}
+
 // LoadFreshLocationCounts assembles the spatial-rule input for one monitor:
 // per-location states over the currently selected, live locations, counting
 // only locations with FRESH evidence (S-A10) — a silent location's last
 // state must not keep voting. Selected still counts every live selected
 // location whether or not it is fresh, so quorum clamping is unaffected.
-// Also returns the max consecutive failures across fresh locations.
+// Also returns the streak counters across fresh locations.
 //
 // This is the single source of the aggregation input, shared by the results
 // ingest (on every location result) and the absence watchdog (when results
 // stop arriving) — the two must never disagree.
-func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID, freshnessSeconds int) (LocationCounts, int, error) {
+func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID, freshnessSeconds int) (LocationCounts, LocationStreaks, error) {
 	var counts LocationCounts
-	var maxFailures int
+	var streaks LocationStreaks
 	err := q.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE mls.current_state = 'down'),
 			COUNT(*) FILTER (WHERE mls.current_state = 'suspect'),
 			COUNT(*) FILTER (WHERE mls.current_state = 'up'),
 			COUNT(ml.location_id),
-			COALESCE(MAX(mls.consecutive_failures), 0)
+			COALESCE(MAX(mls.consecutive_failures), 0),
+			COALESCE(MAX(mls.consecutive_successes), 0)
 		FROM monitor_locations ml
 		JOIN locations l ON l.id = ml.location_id
 			AND l.deleted_at IS NULL
@@ -83,11 +94,12 @@ func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID
 			ON mls.monitor_id = ml.monitor_id AND mls.location_id = ml.location_id
 			AND mls.last_check_at >= NOW() - make_interval(secs => $2)
 		WHERE ml.monitor_id = $1
-	`, monitorID, freshnessSeconds).Scan(&counts.Down, &counts.Suspect, &counts.Up, &counts.Selected, &maxFailures)
+	`, monitorID, freshnessSeconds).Scan(&counts.Down, &counts.Suspect, &counts.Up, &counts.Selected,
+		&streaks.MaxFailures, &streaks.MaxSuccesses)
 	if err != nil {
-		return LocationCounts{}, 0, fmt.Errorf("aggregate location states: %w", err)
+		return LocationCounts{}, LocationStreaks{}, fmt.Errorf("aggregate location states: %w", err)
 	}
-	return counts, maxFailures, nil
+	return counts, streaks, nil
 }
 
 // Location liveness (S-F6, docs/state-semantics.md). Location workers

@@ -57,11 +57,13 @@ stateDiagram-v2
     suspect --> suspect : fail, CF < N
     suspect --> down : fail, CF >= N
     down --> down : fail
-    down --> up : pass
+    down --> down : pass, CS < R
+    down --> up : pass, CS >= R
 ```
 
 N = `consecutive_failures_threshold` (clamped ≥ 1, default 2); CF = consecutive
-failures counting this result. Outage bookkeeping rides the `down` boundary
+failures counting this result. R = `recovery_threshold` (1–10, default 1); CS =
+consecutive passes counting this result while the stream is down (S-T7). Outage bookkeeping rides the `down` boundary
 (S-T6); the machine never emits `unknown` or `degraded` (S-T5). Pending S-F2
 adds the absence edge: from any state, a stream with no fresh evidence for
 `interval × 3` returns to `unknown`, and the first fresh result re-enters
@@ -114,16 +116,17 @@ flowchart LR
 
 ## S-T — Temporal machine (per evidence stream)
 
-`Apply(current, resultIsFailure, threshold)`, pure, `state.go`.
+`Apply(current, resultIsFailure, threshold, recoveryThreshold)`, pure, `state.go`.
 
 | ID | Rule | Status |
 |----|------|--------|
-| S-T1 | Passing evidence ⇒ `up`, consecutive failures reset to 0. Recovery is single-sample (a recovery-confirmation knob is a possible future extension, out of scope here). | ✅ `TestApply`, `TestSpecProperty_ApplyInvariants` |
+| S-T1 | Passing evidence resets consecutive failures to 0 and ⇒ `up`, except from `down`, where it counts toward recovery confirmation (S-T7). | ✅ `TestApply`, `TestSpecProperty_ApplyInvariants` |
 | S-T2 | Failing evidence increments consecutive failures. At `>= threshold` (clamped to ≥ 1) ⇒ `down`; below ⇒ `suspect`. | ✅ same |
 | S-T3 | From `down`, failing evidence stays `down` — no re-confirmation window. | ✅ same |
-| S-T4 | From `down`, passing evidence ⇒ `up` immediately. | ✅ same |
+| S-T4 | From `down`, passing evidence ⇒ `up` once it confirms the recovery (S-T7); with the default `recovery_threshold` of 1, immediately. | ✅ same, plus `TestSpecProperty_RecoveryThresholdOneIsSingleSample` |
 | S-T5 | The temporal machine never outputs `unknown` or `degraded`. `unknown` comes only from absence (S-F) or resets; `degraded` only from the spatial rule (S-A). | ✅ `TestSpecProperty_ApplyInvariants` |
 | S-T6 | An outage opens exactly when a stream enters `down` and closes exactly when it leaves `down` via passing evidence (`OpenedOutage` / `ClosedOutage`). | ✅ `TestApply`, `TestSpecScenario_LocationlessConfirmation` |
+| S-T7 | **Recovery confirmation.** With `recovery_threshold` R (`monitors.recovery_threshold`, 1–10, default 1), passing evidence on a `down` stream increments consecutive successes (CS) and the stream stays `down` until CS ≥ R, then ⇒ `up` with CS 0 (the outage closes only then, S-T6). Failing evidence resets CS to 0 (and stays `down`, S-T3). From `unknown`/`suspect`/`up` passing evidence is `up` at once: R applies only to leaving `down`; CS is 0 on every stream not mid-recovery. Unconfirmed recovery time is `down` for alerting, the timeline and availability — no new state. Every evidence stream confirms on its own (`monitor_location_state.consecutive_successes`); the monitor-level `consecutive_successes` of a multi-location monitor is the max over fresh locations (display and cadence only, like S-A9). Resets to `unknown` (watchdog S-F2, pause S-P2, location changes) clear CS. A changed R applies from the next result. While `down` with CS > 0 the scheduler fast-rechecks like `suspect`, with the S-A9 side-effect exemption. Mesh edges recover single-sample. | ✅ `TestApplyRecoveryConfirmation`, `TestSpecScenario_RecoveryConfirmation`, `TestSpecScenario_QuorumRecoveryConfirmation`, `TestSpecProperty_ApplyInvariants`, `TestSpecProperty_TrailingFailureRun`; ingest `TestIngestRecoveryConfirmation`, `TestQuorumRecoveryConfirmation`; `TestWatchdogClearsRecoveryCount`; cadence `TestNextCheckDelay_RecoveryConfirmation` |
 
 ## S-A — Spatial rule (multi-location aggregation)
 

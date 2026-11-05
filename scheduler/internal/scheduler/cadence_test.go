@@ -37,3 +37,35 @@ func TestNextCheckDelay(t *testing.T) {
 		})
 	}
 }
+
+// S-T7: a down monitor confirming a recovery (passes counted, not yet
+// enough) fast-rechecks like suspect, with the same S-A9 side-effect
+// exemption; a down monitor with no pass yet keeps its interval.
+func TestNextCheckDelay_RecoveryConfirmation(t *testing.T) {
+	const sipCall = `{"host":"trunk.example.com","method":"invite","call":{"number":"100"}}`
+	tests := []struct {
+		name      string
+		typ       string
+		config    string
+		state     string
+		successes int
+		interval  int
+		want      time.Duration
+	}{
+		{"down_no_pass_uses_interval", "http", "", "down", 0, 60, 60 * time.Second},
+		{"down_confirming_fast_rechecks", "http", "", "down", 1, 60, 20 * time.Second},
+		{"down_confirming_never_slower_than_interval", "http", "", "down", 2, 10, 10 * time.Second},
+		{"up_with_stale_count_uses_interval", "http", "", "up", 1, 60, 60 * time.Second},
+		{"down_confirming_sip_call_keeps_interval", "sip", sipCall, "down", 1, 60, 60 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := Monitor{Type: tc.typ, Config: []byte(tc.config), CurrentState: tc.state,
+				IntervalSeconds: tc.interval, ConsecutiveSuccesses: tc.successes}
+			if got := nextCheckDelay(m); got != tc.want {
+				t.Fatalf("nextCheckDelay(%s %s cs=%d, %d) = %v, want %v [S-T7, S-A9]",
+					tc.typ, tc.state, tc.successes, tc.interval, got, tc.want)
+			}
+		})
+	}
+}

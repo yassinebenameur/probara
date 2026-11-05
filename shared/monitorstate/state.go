@@ -20,32 +20,74 @@ const (
 type Snapshot struct {
 	State               State
 	ConsecutiveFailures int
+	// ConsecutiveSuccesses counts passing results seen while the stream is
+	// still down, waiting for recovery confirmation (S-T7). It is 0 on every
+	// stream that is not mid-recovery.
+	ConsecutiveSuccesses int
+}
+
+// Recovery-confirmation bounds (S-T7): the monitors.recovery_threshold
+// CHECK constraint (migration 000108) and the API validator use the same.
+const (
+	MinRecoveryThreshold = 1
+	MaxRecoveryThreshold = 10
+)
+
+// ClampRecoveryThreshold clamps a recovery threshold into
+// [MinRecoveryThreshold, MaxRecoveryThreshold].
+func ClampRecoveryThreshold(n int) int {
+	if n < MinRecoveryThreshold {
+		return MinRecoveryThreshold
+	}
+	if n > MaxRecoveryThreshold {
+		return MaxRecoveryThreshold
+	}
+	return n
 }
 
 // Transition is the outcome of applying one check result.
 type Transition struct {
-	From                State
-	To                  State
-	ConsecutiveFailures int
-	Changed             bool // state value changed
-	OpenedOutage        bool // entered down
-	ClosedOutage        bool // left down via success
-	Duplicate           bool // result was already recorded; no state applied
+	From                 State
+	To                   State
+	ConsecutiveFailures  int
+	ConsecutiveSuccesses int  // passes toward confirming a recovery (S-T7)
+	Changed              bool // state value changed
+	OpenedOutage         bool // entered down
+	ClosedOutage         bool // left down via success
+	Duplicate            bool // result was already recorded; no state applied
 	// HistoryOnly: the result was recorded as history but deliberately did
 	// not run the machine — late evidence (S-O2) or a location-less result
 	// for a location-bound monitor (S-E5).
 	HistoryOnly bool
 }
 
-// Apply advances the state machine with one check result.
-func Apply(current Snapshot, resultIsFailure bool, threshold int) Transition {
+// Apply advances the state machine with one check result. threshold is the
+// failures needed to enter down (S-T2), recoveryThreshold the consecutive
+// passes needed to leave it (S-T7); both clamp to at least 1, and a
+// recoveryThreshold of 1 is single-sample recovery.
+//
+// A pass always resets consecutive failures. From down it counts toward
+// confirmation and the stream stays down until the count reaches
+// recoveryThreshold; from any other state it is up at once — confirmation
+// applies only to leaving down. A failure resets the pass count.
+func Apply(current Snapshot, resultIsFailure bool, threshold, recoveryThreshold int) Transition {
 	if threshold < 1 {
 		threshold = 1
 	}
+	if recoveryThreshold < 1 {
+		recoveryThreshold = 1
+	}
 	t := Transition{From: current.State}
 	if !resultIsFailure {
-		t.To = StateUp
 		t.ConsecutiveFailures = 0
+		if current.State == StateDown {
+			if successes := current.ConsecutiveSuccesses + 1; successes < recoveryThreshold {
+				t.To = StateDown
+				t.ConsecutiveSuccesses = successes
+				return t
+			}
+		}
+		t.To = StateUp
 		t.Changed = current.State != StateUp
 		t.ClosedOutage = current.State == StateDown
 		return t
