@@ -116,3 +116,7 @@ export const mapHeadersToRows = (
   const rows = [...plainRowsFromMap(headers), ...secretRowsFromMap(secretHeaders, isEditMode)];
   return rows.length > 0 ? rows : defaultHeaderRows();
 };
+
+/** Failure-response capture budget (shared/models HTTPCaptureDefaultBodyBytes / HTTPCaptureMaxBodyBytes). */
+export const HTTP_CAPTURE_DEFAULT_BODY_BYTES = 2048;
+export const HTTP_CAPTURE_MAX_BODY_BYTES = 8192;

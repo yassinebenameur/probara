@@ -70,6 +70,34 @@ type HTTPMonitorConfig struct {
 	SecretHeaders     map[string]string `json:"secret_headers,omitempty"`
 	BasicAuthUsername string            `json:"basic_auth_username,omitempty"`
 	BasicAuthPassword string            `json:"basic_auth_password,omitempty"`
+	// CaptureFailureResponse records a redacted excerpt of the response a
+	// failed check got (metrics_data.http.failure_response); off by
+	// default. CaptureBodyBytes caps its body excerpt (absent = 2048,
+	// HTTPCaptureDefaultBodyBytes; at most HTTPCaptureMaxBodyBytes).
+	CaptureFailureResponse *bool `json:"capture_failure_response,omitempty"`
+	CaptureBodyBytes       *int  `json:"capture_body_bytes,omitempty"`
+}
+
+// Failure-response capture bounds (HTTPMonitorConfig.CaptureBodyBytes).
+const (
+	HTTPCaptureDefaultBodyBytes = 2048
+	HTTPCaptureMaxBodyBytes     = 8192
+)
+
+// CaptureEnabled reports whether a failed check records its response.
+func (c HTTPMonitorConfig) CaptureEnabled() bool {
+	return c.CaptureFailureResponse != nil && *c.CaptureFailureResponse
+}
+
+// CaptureBodyLimit is the body excerpt budget of a failure capture.
+func (c HTTPMonitorConfig) CaptureBodyLimit() int {
+	if c.CaptureBodyBytes == nil || *c.CaptureBodyBytes <= 0 {
+		return HTTPCaptureDefaultBodyBytes
+	}
+	if *c.CaptureBodyBytes > HTTPCaptureMaxBodyBytes {
+		return HTTPCaptureMaxBodyBytes
+	}
+	return *c.CaptureBodyBytes
 }
 
 // DNSMonitorConfig represents configuration for DNS monitors

@@ -99,6 +99,9 @@ type httpMetrics struct {
 	// DisplayValues are the config's display_fields resolved against the
 	// response body; the monitors list shows them from the latest result.
 	DisplayValues []httpDisplayValue `json:"display_values,omitempty"`
+	// FailureResponse is the redacted response excerpt of a failed check
+	// (capture_failure_response; http_failure_capture.go).
+	FailureResponse *httpFailureResponse `json:"failure_response,omitempty"`
 }
 
 type httpDisplayValue struct {
@@ -343,6 +346,17 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	// Read response body with size limit
 	limitedReader := io.LimitReader(resp.Body, int64(c.maxBodySizeBytes))
 	bodyBytes, err := io.ReadAll(limitedReader)
+	// captureOnly is the metrics of an error that ends the check after the
+	// response arrived: nothing, unless the monitor captures failures.
+	captureOnly := func() json.RawMessage {
+		if !config.CaptureEnabled() {
+			return nil
+		}
+		raw, _ := json.Marshal(httpMetricsEnvelope{HTTP: &httpMetrics{
+			FailureResponse: captureFailureResponse(resp, bodyBytes, len(bodyBytes) >= c.maxBodySizeBytes, &config),
+		}})
+		return raw
+	}
 	if err != nil {
 		errMsg := fmt.Sprintf("body_read: %v", err)
 		httpStatus := resp.StatusCode
@@ -351,6 +365,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 			HTTPStatus:   &httpStatus,
 			ErrorMessage: &errMsg,
 			LatencyMs:    &latencyMs,
+			MetricsData:  captureOnly(),
 		}
 	}
 
@@ -416,6 +431,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 				LatencyMs:            &latencyMs,
 				ErrorMessage:         &errMsg,
 				MatchedBodySubstring: matchedBodySubstring,
+				MetricsData:          captureOnly(),
 			}
 		}
 		assertionsFailed = append(assertionsFailed, failed...)
@@ -435,6 +451,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 					LatencyMs:            &latencyMs,
 					ErrorMessage:         &errMsg,
 					MatchedBodySubstring: matchedBodySubstring,
+					MetricsData:          captureOnly(),
 				}
 			}
 			assertionsFailed = append(assertionsFailed, failed...)
@@ -462,6 +479,9 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	metrics.Assertions = assertionsFailed
 
 	if len(assertionsFailed) > 0 {
+		if config.CaptureEnabled() {
+			metrics.FailureResponse = captureFailureResponse(resp, bodyBytes, len(bodyBytes) >= c.maxBodySizeBytes, &config)
+		}
 		metricsJSON, _ := json.Marshal(httpMetricsEnvelope{HTTP: metrics})
 		errMsg := strings.Join(assertionsFailed, "; ")
 		return CheckResult{

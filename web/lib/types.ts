@@ -317,6 +317,11 @@ export interface HTTPMonitorConfig {
   secret_headers?: Record<string, string>;
   basic_auth_username?: string;
   basic_auth_password?: string;
+  // Record a redacted excerpt of a failed check's response
+  // (metrics_data.http.failure_response); off by default.
+  capture_failure_response?: boolean;
+  // Body excerpt budget, 1-8192; absent means 2048.
+  capture_body_bytes?: number;
 }
 
 export interface PingMonitorConfig {
@@ -1998,6 +2003,18 @@ export interface HTTPMetrics {
   tls?: TLSCertInfo;
   assertions_failed?: string[];
   display_values?: HTTPDisplayValue[];
+  failure_response?: HTTPFailureResponse;
+}
+
+// A failed check's redacted response excerpt (capture_failure_response):
+// credential-like and monitor-sent header values read "[REDACTED]".
+export interface HTTPFailureResponse {
+  status_line: string;
+  content_type?: string;
+  headers?: Record<string, string>;
+  headers_truncated?: boolean;
+  body_excerpt?: string;
+  body_truncated?: boolean;
 }
 
 export interface HTTPDisplayValue {

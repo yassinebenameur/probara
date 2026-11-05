@@ -59,6 +59,10 @@ func (v *HTTPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		return err
 	}
 
+	if err := validateHTTPCapture(config); err != nil {
+		return err
+	}
+
 	if config.ExpectedStatus != nil && (*config.ExpectedStatus < 100 || *config.ExpectedStatus > 599) {
 		return fmt.Errorf("expected_status must be between 100 and 599")
 	}
