@@ -3,8 +3,10 @@
 // A schedule belongs to one SLA and names recipients (anyone, inside the
 // workspace or not), the attached formats and whether the closed period is
 // issued (frozen through slas.IssueReport) before it is sent. The API's
-// Runner claims due schedules with FOR UPDATE SKIP LOCKED, so every API
-// replica can run it and each closed period goes out once.
+// Runner claims due schedules with FOR UPDATE SKIP LOCKED and commits the
+// claimed period before mailing anyone, so every API replica can run it and
+// each closed period goes out at most once: a run cut short (shutdown,
+// timeout, crash) is never sent again automatically; Send now resends.
 //
 // Every message goes to one recipient (mail.Message has no Bcc) and carries a
 // per-recipient unsubscribe link, in the body and as List-Unsubscribe with
@@ -44,7 +46,7 @@ const (
 	// IssueGrace is how long after a period closes the runner waits before
 	// issuing and sending it, so late check results (queue lag, a
 	// confirmation recheck) land in the frozen report.
-	IssueGrace = time.Hour
+	IssueGrace = slas.ReportIssueGrace
 )
 
 // Formats a schedule can attach.
@@ -450,17 +452,10 @@ func normalizeFormats(raw []string) ([]string, error) {
 }
 
 // nextRun is when the running period's report is due: its close plus
-// IssueGrace (S-U7 periods in the SLA's timezone).
+// IssueGrace (S-U7 periods in the SLA's timezone). slas.Service.Update
+// applies the same rule when the SLA's period or timezone changes.
 func nextRun(sla *models.SLA, now time.Time) (time.Time, error) {
-	loc, err := time.LoadLocation(sla.Timezone)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("SLA timezone: %w", err)
-	}
-	period, err := sharedanalytics.PeriodContaining(sharedanalytics.PeriodKind(sla.Period), loc, now)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return period.End.Add(IssueGrace).UTC(), nil
+	return slas.ReportRunAt(sla.Period, sla.Timezone, now)
 }
 
 // lastClosedPeriod is the newest period that has closed by now.

@@ -260,9 +260,12 @@ freezes the report document in `sla_reports` (see
 
 Report schedules (`sla_report_schedules`) email a closed period's report: a
 runner in every API replica (`api/internal/services/reportschedules`) claims
-due rows `FOR UPDATE SKIP LOCKED`, issues the period through the SLA
+due rows `FOR UPDATE SKIP LOCKED` and commits the claimed period before
+mailing (at most once per period), issues the period through the SLA
 service, and sends one message per recipient through the platform mailer
 with a public unsubscribe link (`/api/v1/report-unsubscribe/{token}`).
+Changing an SLA's period or timezone re-plans its enabled schedules
+(`slas.ReportRunAt`).
 
 ## Shared code and security boundaries
 

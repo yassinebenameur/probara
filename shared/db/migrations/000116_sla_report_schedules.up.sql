@@ -1,6 +1,7 @@
 -- Scheduled emailed SLA reports (api/internal/services/reportschedules).
--- The API's runner claims due rows FOR UPDATE SKIP LOCKED, so any number of
--- API replicas send each closed period once.
+-- The API's runner claims due rows FOR UPDATE SKIP LOCKED and commits the
+-- claim before mailing, so any number of API replicas send each closed
+-- period at most once.
 CREATE TABLE sla_report_schedules (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -14,7 +15,8 @@ CREATE TABLE sla_report_schedules (
     auto_issue      BOOLEAN NOT NULL DEFAULT TRUE,
     enabled         BOOLEAN NOT NULL DEFAULT TRUE,
     -- The current period's close plus the grace the runner waits for late
-    -- results; recomputed after every run and on (re-)enable.
+    -- results; recomputed after every run, on (re-)enable and when the
+    -- SLA's period or timezone changes.
     next_run_at     TIMESTAMPTZ NOT NULL,
     last_run_at     TIMESTAMPTZ,
     last_period_key TEXT,
