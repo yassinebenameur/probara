@@ -821,6 +821,14 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   a nonce and sets the header — a 304 must not carry a CSP. Every
   `<script>`/`<style>` in `default.gohtml` carries `nonce="{{cspNonce}}"`;
   a new one must too, or strict pages silently drop it.
+- **Every page sub-route dispatches from `HandleStatusPage`**, never from
+  its own mux pattern, so a gate there covers it. Read-only add-ons
+  (`summary.json`, badges, `embed.js`, `feed.atom`) go through
+  `servePageAddon` (`addons.go`, suffixes in `pageAddonSuffixes`). Summary
+  and badges read the `pageSummary` built in `cachedPage` with the page's
+  HTML, so they cannot disagree with it; badges exist only for rendered
+  components. `writeAddon` never overwrites a `Cache-Control` set before
+  dispatch (a gated page's `private, no-store` must win).
 - **`Subscriber.handleEvent` early-returns** when no SSE client is connected
   and the render cache is empty — exactly when browser notifications matter —
   so the push wake-up sits **above** that guard. Anything hooked in below it

@@ -792,7 +792,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_BASE_URL`',
               'Empty',
-              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications); when empty, the notification opens the page via the service worker scope rather than a guessed host.',
+              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications), each page’s [canonical link and `og:url`](/docs/status-pages/#seo), `page.url` in [`summary.json`](/docs/status-pages/#summary-json) and absolute links in the [Atom feed](/docs/status-pages/#feed). When empty, pages carry no canonical link, the feed links by path and notifications open the page via the service worker scope — never a guessed host.',
             ],
             [
               '`STATUS_PAGE_API_BASE_URL`',

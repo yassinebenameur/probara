@@ -112,3 +112,40 @@ func TestStatusPageSettingsCSPRoundTrip(t *testing.T) {
 		t.Fatalf("cleared settings came back as %v %v", *back.CSPMode, back.AllowedEmbedOrigins)
 	}
 }
+
+// TestStatusPageSettingsSEODescriptionRoundTrip is the write half of the
+// seo_description three-mirror round trip (read half:
+// status-page TestParseStatusPageSettings_SEODescription): applyPatch stores
+// it under that key, toAPI returns it, an unrelated patch keeps it and ""
+// clears it.
+func TestStatusPageSettingsSEODescriptionRoundTrip(t *testing.T) {
+	desc := "  Live status for Acme APIs.  "
+	stored := defaultStatusPageSettings().applyPatch(&models.StatusPageSettings{SEODescription: &desc})
+	raw, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]any
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	if keys["seo_description"] != "Live status for Acme APIs." {
+		t.Fatalf("stored seo_description = %v (raw %s)", keys["seo_description"], raw)
+	}
+	api := parseStatusPageSettings(raw).toAPI()
+	if api.SEODescription == nil || *api.SEODescription != "Live status for Acme APIs." {
+		t.Fatalf("toAPI seo_description = %v", api.SEODescription)
+	}
+
+	footer := "hi"
+	kept := parseStatusPageSettings(raw).applyPatch(&models.StatusPageSettings{FooterText: &footer})
+	if kept.SEODescription == nil {
+		t.Fatal("unrelated patch dropped seo_description")
+	}
+	empty := ""
+	cleared := kept.applyPatch(&models.StatusPageSettings{SEODescription: &empty})
+	clearedRaw, _ := json.Marshal(cleared)
+	if back := parseStatusPageSettings(clearedRaw).toAPI(); back.SEODescription != nil {
+		t.Fatalf("cleared seo_description came back as %q", *back.SEODescription)
+	}
+}

@@ -832,3 +832,15 @@ func TestValidateStatusPageCSPSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateStatusPageSEODescription(t *testing.T) {
+	ok := strings.Repeat("é", models.MaxSEODescriptionLength)
+	long := strings.Repeat("a", models.MaxSEODescriptionLength+1)
+	if err := ValidateStatusPageUpdate(&models.UpdateStatusPageRequest{Settings: &models.StatusPageSettings{SEODescription: &ok}}); err != nil {
+		t.Fatalf("%d multibyte characters rejected: %v", models.MaxSEODescriptionLength, err)
+	}
+	err := ValidateStatusPageUpdate(&models.UpdateStatusPageRequest{Settings: &models.StatusPageSettings{SEODescription: &long}})
+	if err == nil || !strings.Contains(err.Error(), "seo_description") {
+		t.Fatalf("error = %v, want a seo_description length error", err)
+	}
+}

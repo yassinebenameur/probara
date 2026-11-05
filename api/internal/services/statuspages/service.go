@@ -39,6 +39,8 @@ type statusPageSettingsStored struct {
 
 	CSPMode             string   `json:"csp_mode,omitempty"`
 	AllowedEmbedOrigins []string `json:"allowed_embed_origins,omitempty"`
+
+	SEODescription *string `json:"seo_description,omitempty"`
 }
 
 type statusPageSectionInput struct {
@@ -144,6 +146,9 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 	if patch.AllowedEmbedOrigins != nil {
 		s.AllowedEmbedOrigins = normalizeEmbedOrigins(patch.AllowedEmbedOrigins)
 	}
+	if patch.SEODescription != nil {
+		s.SEODescription = trimOptionalString(patch.SEODescription)
+	}
 	return s
 }
 
@@ -207,6 +212,7 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 		CustomFooterHTML:        s.CustomFooterHTML,
 		CSPMode:                 &cspMode,
 		AllowedEmbedOrigins:     append([]string(nil), s.AllowedEmbedOrigins...),
+		SEODescription:          s.SEODescription,
 	}
 }
 

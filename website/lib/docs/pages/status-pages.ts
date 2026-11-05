@@ -7,13 +7,16 @@ export const STATUS_PAGES_PAGE: DocPage = {
   description:
     "Publish branded, live public status pages with sections, incidents, maintenance, and versioned templates.",
   eyebrow: "Public communication",
-  readingTime: "24 min read",
+  readingTime: "28 min read",
   keywords: [
     "status page",
     "public incidents",
     "status page template",
     "SSE",
     "custom CSS",
+    "status badge",
+    "Atom feed",
+    "embed widget",
   ],
   sections: [
     {
@@ -86,7 +89,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`show_latency_charts`",
-              "Present in the settings schema; not currently wired into the built-in template",
+              "Draws a [response-time chart](#monitor-data) in each component's expanded panel for the selected range. On by default",
             ],
             [
               "`show_agent_metrics`",
@@ -121,12 +124,16 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`allowed_embed_origins`",
               "Up to 20 origins (`https://host[:port]`, a leading `*.` host wildcard allowed) that may [embed the page](#content-security-policy) in an iframe. `[]` clears the list",
             ],
+            [
+              "`seo_description`",
+              "Search and link-preview text, up to 300 characters: the page's `meta description`, `og:description` and `twitter:description`. `\"\"` clears it; the page then uses `description`, else a generic line. See [search and link previews](#seo)",
+            ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Settings are part of the page definition and can be supplied at creation or update. Several visibility fields are reserved in the schema but are not yet consumed by the active built-in renderer; storing them does not make those panels appear. Custom template authors must verify which data is present in the current template context.",
+            "Settings are part of the page definition and can be supplied at creation or update. `show_monitor_tags`, `show_monitor_url`, `show_monitor_tls` and `show_agent_metrics` are reserved in the schema but not yet consumed by the built-in renderer; storing them does not make those panels appear. The page editor offers the response-time chart toggle and the search description; the remaining settings are set through the API or the template screen. Custom template authors must verify which data is present in the current template context.",
         },
         {
           type: "paragraph",
@@ -228,7 +235,32 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`POST /public/status/{slug}/push/unsubscribe`",
               "Removes a browser push subscription. Always 204, so it cannot be used to probe which endpoints exist",
             ],
+            [
+              "`GET /public/status/{slug}/summary.json`",
+              "The page's current status as a [versioned JSON contract](#summary-json). Readable cross-origin",
+            ],
+            [
+              "`GET /public/status/{slug}/badge.svg`",
+              "Page [status or uptime badge](#badges)",
+            ],
+            [
+              "`GET /public/status/{slug}/monitors/{id}/badge.svg`",
+              "Badge for one component the page shows; any other monitor ID is a 404",
+            ],
+            [
+              "`GET /public/status/{slug}/embed.js`",
+              "[Embeddable widget](#embed-widget) script",
+            ],
+            [
+              "`GET /public/status/{slug}/feed.atom`",
+              "[Atom feed](#feed) of incidents and maintenance. `feed.rss` redirects here permanently",
+            ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The page itself is sent with `Cache-Control: no-cache` and an `ETag`, so browsers revalidate it every time. `summary.json` and the badges are sent with `Cache-Control: public, max-age=60`, the feed with `max-age=300` and `embed.js` with `max-age=3600`, each with an `ETag`, so a CDN in front of the status service can absorb README badges and feed readers. Every route under `/public/status/{slug}/` is dispatched by the same handler as the page.",
         },
         {
           type: "paragraph",
@@ -241,6 +273,135 @@ export const STATUS_PAGES_PAGE: DocPage = {
           title: "Live delivery is eventually consistent",
           text:
             "Core NATS status messages are not durable. PostgreSQL/API data remains authoritative, and the fallback refresh repairs a missed invalidation without requiring the visitor to reload manually.",
+        },
+      ],
+    },
+    {
+      id: "seo",
+      title: "Search and link previews",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The built-in template's `<head>` carries a `meta description`, Open Graph tags (`og:type`, `og:title`, `og:description`) and a `twitter:card` of type `summary`, so a shared link unfurls with the page title and description. The description is `seo_description`, else the page `description`, else \"Live status, uptime and incident history for {title}.\" An absolute `http(s)` `logo_url` also becomes `og:image`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "`<link rel=\"canonical\">` and `og:url` need an absolute URL, so they appear only when the status-page service knows its public origin: set [`STATUS_PAGE_BASE_URL`](/docs/configuration/#status-page-service) (Helm `statusPage.baseUrl`) and the page's canonical URL becomes `{STATUS_PAGE_BASE_URL}/public/status/{slug}`. Without it the tags are left out rather than guessed. The head also links the [Atom feed](#feed) with `<link rel=\"alternate\" type=\"application/atom+xml\">`, so feed readers discover it from the page URL.",
+        },
+      ],
+    },
+    {
+      id: "summary-json",
+      title: "Summary JSON",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "`GET /public/status/{slug}/summary.json` is a stable, documented view of what the page shows, for scripts, dashboards and the [widget](#embed-widget). It is built with the page from the same data and cached with it, so it never disagrees with the rendered page, and it carries `Access-Control-Allow-Origin: *` (without credentials) so any site can read it. Fields are only ever added; a removed or redefined field bumps `version`.",
+        },
+        {
+          type: "table",
+          columns: ["Field", "Meaning"],
+          rows: [
+            ["`version`", "Contract version, currently `1`"],
+            ["`page`", "`slug`, `title`, and `url` (the canonical URL; omitted when `STATUS_PAGE_BASE_URL` is unset)"],
+            [
+              "`status`",
+              "`indicator` — `operational`, `issues` or `maintenance`, the page header's own rule (any down, degraded or unknown component is `issues`); `description` — the header label, e.g. \"All systems operational\"; `counts` — `total`, `operational`, `degraded`, `down`, `maintenance`, `unknown`",
+            ],
+            [
+              "`uptime`",
+              "Page-level availability in percent for `1h`, `24h`, `7d`, `30d` and `90d`, rounded to two decimals; `null` for a range with no data",
+            ],
+            [
+              "`components[]`",
+              "Every component the page renders, in page order: `id` (the monitor ID), `name` (its public display name), `section`, `status` (`operational`, `degraded`, `down`, `maintenance` or `unknown`) and the same `uptime` object",
+            ],
+            [
+              "`incidents[]`",
+              "Published incidents that are not resolved: `id`, `title`, `state`, `published_at`, `affected_components`, and `latest_update` (`message`, `created_at`) when there is one",
+            ],
+            [
+              "`maintenance[]`",
+              "Windows in progress or starting within 14 days: `title`, `starts_at`, `ends_at`, `in_progress`, `affected_components`",
+            ],
+            ["`updated_at`", "When this snapshot was built (at most the render-cache TTL old)"],
+          ],
+        },
+      ],
+    },
+    {
+      id: "badges",
+      title: "Status badges",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "`/public/status/{slug}/badge.svg` is a flat SVG badge for the page, and `/public/status/{slug}/monitors/{id}/badge.svg` one for a single component, labelled with its public name. Only components the page renders have a badge; any other monitor ID returns 404, so badges never reveal a monitor the page does not show. Embed them as ordinary images, for example `![status](https://status.example.com/public/status/acme/badge.svg)` in a README.",
+        },
+        {
+          type: "table",
+          columns: ["Query", "Effect"],
+          rows: [
+            [
+              "`metric=status` (default)",
+              "The page badge shows the worst component state: `outage`, `degraded`, `unknown`, `maintenance`, else `operational`. A component badge shows that component's status",
+            ],
+            [
+              "`metric=uptime`",
+              "Availability for `range` with the page's own colors: green from 99%, amber from 95%, red below; `no data` when the range is empty",
+            ],
+            ["`range`", "`1h`, `24h`, `7d`, `30d` (default) or `90d`; anything else is a 400"],
+          ],
+        },
+      ],
+    },
+    {
+      id: "embed-widget",
+      title: "Embeddable widget",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Add the page's current status to another site with one script tag. The widget renders where the tag sits (or into `data-target`), inside a shadow root so neither page's CSS reaches the other, reads `summary.json` next to its own URL and refreshes every 60 seconds. Everything from the summary is inserted as text, never as HTML.",
+        },
+        {
+          type: "code",
+          language: "html",
+          code: '<script src="https://status.example.com/public/status/acme/embed.js" async\n        data-components="true" data-theme="light"></script>',
+        },
+        {
+          type: "table",
+          columns: ["Attribute", "Effect"],
+          rows: [
+            ["`data-target`", "CSS selector of the element to render into, instead of after the script tag"],
+            ["`data-components`", "`true` lists every component with its status"],
+            ["`data-theme`", "`light` or `dark`; by default the visitor's color scheme"],
+            ["`data-refresh`", "Seconds between refreshes, at least 30; `0` turns refreshing off"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The widget is a script, not a frame, so `allowed_embed_origins` does not apply to it: that list controls only which sites may put the full page in an `<iframe>` (see [CSP and embedding](#content-security-policy)). Instead, the embedding site's own Content-Security-Policy must allow the status origin in `script-src` (for `embed.js`) and `connect-src` (for `summary.json`). The widget styles itself with a constructed stylesheet where the browser supports one and a `<style>` element otherwise; if the embedding site restricts `style-src`, check the widget under that policy, and allow `'unsafe-inline'` styles if it renders unstyled.",
+        },
+      ],
+    },
+    {
+      id: "feed",
+      title: "Incident and maintenance feed",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "`/public/status/{slug}/feed.atom` is an Atom feed of the page's published incidents and its maintenance windows; the page footer links it and the page head advertises it. Each incident entry carries its state, summary, affected components, resolution time and its five newest public updates, and is updated whenever the incident or one of those updates changes. Maintenance entries cover windows in progress or starting within 14 days, like the page. Unpublished incidents and incidents published only to other pages never appear.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The feed is bounded: the 50 most recently changed publications, read without the page's monitor and uptime work, so frequent polling stays cheap. Entry links point at the page — absolute when `STATUS_PAGE_BASE_URL` is set, otherwise relative to the feed URL, which feed readers resolve.",
         },
       ],
     },
@@ -307,7 +468,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The active built-in view shows current state and the configured monitor/global uptime summaries. It supports ordered sections, active/recent incidents, and maintenance. Group and passive monitors present derived or reported state rather than an active network-check result.",
+            "The active built-in view shows current state and the configured monitor/global uptime summaries. It supports ordered sections, active/recent incidents, and maintenance. A page lists at most 50 published incidents: every open one first, then the most recently updated resolved ones. Group and passive monitors present derived or reported state rather than an active network-check result.",
         },
         {
           type: "paragraph",
@@ -318,6 +479,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Visitors can switch among list, compact, and kiosk presentation modes, select an uptime range (`1h`, `24h`, `7d`, `30d` or `90d`; `24h` by default, kept in the `?range=` URL parameter), search monitors, filter by status, and use keyboard/URL preferences supported by the shared template. Those visitor controls are distinct from saved page settings. Kiosk mode auto-fits tile density to the screen so every monitor stays visible without scrolling on wall displays — tiles progressively shed detail (metrics, then meta line and uptime strip) as the count grows, with the hidden detail available on hover; only past the smallest tier (roughly 500+ monitors on a 1080p display) does the grid fall back to scrolling.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "With `show_latency_charts` on, a component's expanded panel also draws its response time for the selected range, with its average and maximum: the mean latency of successful checks per cell (two minutes at `1h`, an hour at `24h`, a day at `7d` and `30d`, two days at `90d`). Failed checks are left out, and a cell with no successful timed check is a gap in the line, never zero. `1h` and `24h` come from the same raw checks and hourly rollups as the uptime strips; `7d` and longer from the daily rollups. A group charts its members' checks pooled together.",
         },
         {
           type: "paragraph",
@@ -463,6 +629,36 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Each range has its own strip data (a JSON array of `{label, uptime}` cells, `uptime` -1 for no data, already resampled to the cell count the functions return) and uptime figure. The page exposes `.GlobalUptime1hJSON`, `.GlobalUptime24JSON`, `.GlobalUptime7JSON`, `.GlobalUptime30JSON` and `.GlobalUptime90JSON` with matching `…Value` strings. Each monitor exposes `.History1hJSON`, `.History24hJSON`, `.History7dJSON`, `.History30dJSON` and `.History90dJSON` for its row, `.ExpandedHistory1hJSON`, `.ExpandedHistory30dJSON` and `.ExpandedHistory90dJSON` for its expanded strip, and `.Uptime1hValue` through `.Uptime90Value`. The `1h` fields were added later; a template written before them simply offers no `1h` range.",
         },
         {
+          type: "table",
+          columns: ["Later fields", "Content"],
+          rows: [
+            [
+              "`.ShowLatencyCharts`",
+              "The page's `show_latency_charts` setting",
+            ],
+            [
+              "`.HasLatency`, `.Latency1hJSON` … `.Latency90dJSON` (per monitor)",
+              "Response-time series for `1h`, `24h`, `7d`, `30d` and `90d`: a JSON array of mean milliseconds per fixed cell, oldest first, `null` for a cell without data. `.HasLatency` is false when every range is empty",
+            ],
+            [
+              "`.MetaDescription`",
+              "The description the head tags use (`seo_description`, else the description, else a generic line)",
+            ],
+            [
+              "`.CanonicalURL`",
+              "Absolute page URL from `STATUS_PAGE_BASE_URL`; empty when unset",
+            ],
+            [
+              "`.FeedURL`",
+              "The Atom feed URL (absolute when `.CanonicalURL` is set)",
+            ],
+            [
+              "`.OGImageURL`",
+              "`logo_url` when it is an absolute `http(s)` URL, else empty",
+            ],
+          ],
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Template functions are an append-only compatibility surface",
@@ -520,7 +716,8 @@ export const STATUS_PAGES_PAGE: DocPage = {
           type: "list",
           items: [
             "Verify the slug, public title, monitor selection, display names, and section order.",
-            "Review built-in visibility settings and treat the URL, tag, agent-metric, TLS, and latency flags as schema-reserved until the renderer explicitly supports them.",
+            "Review built-in visibility settings and treat the URL, tag, agent-metric, and TLS flags as schema-reserved until the renderer explicitly supports them.",
+            "Set `STATUS_PAGE_BASE_URL` so the page carries a canonical link and `og:url`, and check a shared link's preview.",
             "Preview light and dark themes at desktop and mobile widths.",
             "Exercise unknown, suspect, degraded, down, maintenance, and incident states in a safe preview environment.",
             "Check custom HTML/CSS for content security, accessibility, focus states, contrast, and responsive overflow, and that the page runs under its [CSP mode](#content-security-policy) without console violations.",

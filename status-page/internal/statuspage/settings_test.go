@@ -91,3 +91,14 @@ func TestParseStatusPageSettings_CSPFields(t *testing.T) {
 		t.Fatalf("unknown csp_mode = %q, want automatic", got)
 	}
 }
+
+// Read half of the seo_description three-mirror round trip (write half:
+// api/internal/services/statuspages TestStatusPageSettingsSEODescriptionRoundTrip).
+func TestParseStatusPageSettings_SEODescription(t *testing.T) {
+	if got := parseStatusPageSettings([]byte(`{"seo_description":"  Acme status  "}`)).SEODescription; got != "Acme status" {
+		t.Fatalf("SEODescription = %q, want %q", got, "Acme status")
+	}
+	if got := parseStatusPageSettings([]byte(`{"show_footer":false}`)).SEODescription; got != "" {
+		t.Fatalf("absent seo_description = %q, want empty", got)
+	}
+}

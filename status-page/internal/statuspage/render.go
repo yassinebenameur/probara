@@ -78,6 +78,16 @@ type statusPageRenderView struct {
 	Monitors           []statusPageMonitorView
 	Incidents          []statusPageIncidentView
 	MaintenanceWindows []statusPageMaintenanceView
+	// Added with the response-time chart and the SEO/feed head tags
+	// (render_polish.go). ShowLatencyCharts is the page setting;
+	// MetaDescription is seo_description, else the description, else a
+	// generic line; CanonicalURL is "" when the public origin is unknown;
+	// FeedURL is the Atom feed (absolute when CanonicalURL is set).
+	ShowLatencyCharts bool
+	MetaDescription   string
+	CanonicalURL      string
+	FeedURL           string
+	OGImageURL        string
 }
 
 const (
@@ -162,6 +172,16 @@ type statusPageMonitorView struct {
 	ExpandedHistory30dJSON string
 	ExpandedHistory90dJSON string
 	History1yJSON          string
+	// Response-time series per visitor range (render_polish.go): a JSON
+	// array of mean latencies in ms, oldest first, one per fixed time cell,
+	// null where the cell had no successful timed check. HasLatency reports
+	// that at least one range has a value.
+	HasLatency     bool
+	Latency1hJSON  string
+	Latency24hJSON string
+	Latency7dJSON  string
+	Latency30dJSON string
+	Latency90dJSON string
 }
 
 // The template function contract (typeIcon, strip cell counts, join) lives in
@@ -321,6 +341,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 
 		for _, monitor := range section.Monitors {
 			renderMonitor := buildStatusPageMonitorView(monitor)
+			applyMonitorLatency(&renderMonitor, monitor, time.Now())
 			renderSection.Monitors = append(renderSection.Monitors, renderMonitor)
 			view.Monitors = append(view.Monitors, renderMonitor)
 			renderSection.MonitorCount++
@@ -408,6 +429,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	sort.Slice(view.Incidents, func(i, j int) bool {
 		return incidentStateRank(view.Incidents[i].State) < incidentStateRank(view.Incidents[j].State)
 	})
+	applyPageMeta(&view, data)
 
 	return view
 }

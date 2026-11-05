@@ -41,7 +41,16 @@ type StatusPageSettings struct {
 	// wildcard allowed) that may frame the page, on top of the page's own
 	// origin and the operator UI. Absent keeps the stored list; [] clears it.
 	AllowedEmbedOrigins []string `json:"allowed_embed_origins,omitempty"`
+	// SEODescription is the page's search/link-preview text (meta
+	// description, og:description, twitter:description), up to
+	// MaxSEODescriptionLength characters. "" clears it, and the page then
+	// falls back to its description.
+	SEODescription *string `json:"seo_description,omitempty"`
 }
+
+// MaxSEODescriptionLength bounds seo_description; search engines show about
+// 160 characters, link previews a little more.
+const MaxSEODescriptionLength = 300
 
 // StatusPageTemplateVersion summarizes one stored custom-template row.
 type StatusPageTemplateVersion struct {
