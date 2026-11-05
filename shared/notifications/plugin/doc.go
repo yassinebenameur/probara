@@ -56,4 +56,9 @@
 // recipient. Return Permanent only when every failure is permanent; otherwise
 // flatten the join into a plain error and carry the longest RetryAfterDelay
 // onto it (see builtin/twilio).
+//
+// A plugin that can address one person advertises CapabilityDirectRecipient:
+// when DispatchRequest.Recipient is set it sends only to Recipient.Address,
+// ignoring the configured recipients (which may then be empty), and sends
+// Recipient.Text verbatim when it is set. Mask the address in errors.
 package plugin
