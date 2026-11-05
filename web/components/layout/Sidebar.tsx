@@ -21,6 +21,7 @@ import {
   X,
   PanelLeftClose,
   PanelLeftOpen,
+  CircleUser,
 } from 'lucide-react';
 import { getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
@@ -83,6 +84,7 @@ const navGroups: { key: string; items: NavItem[] }[] = [
       { name: 'Users', href: '/users', icon: Users },
       { name: 'Audit log', href: '/audit', icon: ScrollText },
       { name: 'Settings', href: '/settings', icon: Settings, also: ['/alert-channels'] },
+      { name: 'Account', href: '/account', icon: CircleUser },
     ],
   },
 ];
@@ -311,6 +313,8 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
       items: group.items.filter((item) => {
         if (item.href === '/users') return canSeeUsers;
         if (item.href === '/audit') return canSeeAudit;
+        // Your own sessions: a signed-in user, never an API key.
+        if (item.href === '/account') return !apiKeyMode;
         return true;
       }),
     }))

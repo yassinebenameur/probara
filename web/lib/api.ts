@@ -111,6 +111,9 @@ import type {
   MetricQueryRequest,
   MetricQueryResponse,
   McpConnectionListResponse,
+  AdminSessionListResponse,
+  RevokeSessionsResponse,
+  UnlockUserResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -1510,4 +1513,30 @@ export function linkDiscoveryMonitor(id: string, monitor_id: string, key?: strin
 }
 export function unlinkDiscoveryMonitor(id: string, monitor: string) {
   return apiRequest<void>('DELETE', `/v1/discovery/services/${id}/links/${monitor}`);
+}
+
+// Account sessions (signed-in browser session only) and the superadmin
+// lockout/session actions on a user.
+export async function getMySessions(): Promise<AdminSessionListResponse> {
+  return apiRequest<AdminSessionListResponse>('GET', '/v1/account/sessions');
+}
+
+export async function revokeMySession(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/account/sessions/${id}`);
+}
+
+export async function revokeMyOtherSessions(): Promise<RevokeSessionsResponse> {
+  return apiRequest<RevokeSessionsResponse>('POST', '/v1/account/sessions/revoke-others');
+}
+
+export async function revokeAllMySessions(): Promise<RevokeSessionsResponse> {
+  return apiRequest<RevokeSessionsResponse>('POST', '/v1/account/sessions/revoke-all');
+}
+
+export async function unlockUser(id: string): Promise<UnlockUserResponse> {
+  return apiRequest<UnlockUserResponse>('POST', `/v1/users/${id}/unlock`);
+}
+
+export async function revokeUserSessions(id: string): Promise<RevokeSessionsResponse> {
+  return apiRequest<RevokeSessionsResponse>('DELETE', `/v1/users/${id}/sessions`);
 }

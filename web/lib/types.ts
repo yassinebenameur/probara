@@ -112,6 +112,8 @@ export interface AdminUser {
   updated_at: string;
   last_login_at?: string;
   disabled_at?: string;
+  // Set while a login lockout is active (user management responses only).
+  locked_until?: string;
 }
 
 export interface AdminUserListResponse {
@@ -2436,4 +2438,29 @@ export interface McpConnection {
 
 export interface McpConnectionListResponse {
   items: McpConnection[];
+}
+
+// Account: the signed-in user's sessions (session families) and the
+// superadmin lockout/session actions on a user.
+export interface AdminSession {
+  id: string;
+  auth_method: 'password' | 'oidc';
+  created_at: string;
+  last_active_at: string;
+  expires_at: string;
+  ip?: string;
+  user_agent?: string;
+  current: boolean;
+}
+
+export interface AdminSessionListResponse {
+  items: AdminSession[];
+}
+
+export interface RevokeSessionsResponse {
+  revoked: number;
+}
+
+export interface UnlockUserResponse {
+  was_locked: boolean;
 }
