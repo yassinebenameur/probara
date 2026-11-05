@@ -857,7 +857,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Operator UI origin. Every page’s [CSP](/docs/status-pages/#content-security-policy) `frame-ancestors` admits it so the template editor can preview pages in an iframe. Compose sets `http://localhost:3000`; Helm renders the top-level `appBaseURL`. Unset, only the draft preview route may be framed by any site.',
+              'Operator UI origin. Every page’s [CSP](/docs/status-pages/#content-security-policy) `frame-ancestors` admits it so the template editor can preview pages in an iframe. Compose passes it through from the shell (empty by default); Helm renders the top-level `appBaseURL`. Unset, the draft preview route may be framed by any site, so the template editor works from whatever host serves the UI; set it to restrict the preview to that origin.',
             ],
             [
               '`SECURITY_HSTS_MAX_AGE`',

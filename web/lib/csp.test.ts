@@ -6,7 +6,8 @@ test('buildWebCsp uses the nonce with strict-dynamic and forbids framing', () =>
   const policy = buildWebCsp({ nonce: 'abc', dev: false, statusPageOrigins: ['https://status.example.com'] });
   assert.match(policy, /script-src 'self' 'nonce-abc' 'strict-dynamic'(;|$)/);
   assert.match(policy, /frame-ancestors 'none'/);
-  assert.match(policy, /frame-src 'self' https:\/\/status\.example\.com/);
+  // Status pages on any https: custom domain can be previewed.
+  assert.match(policy, /frame-src 'self' https:(;|$)/);
   assert.match(policy, /connect-src 'self'(;|$)/);
   assert.doesNotMatch(policy, /unsafe-eval/);
   // A nonce in style-src would disable 'unsafe-inline' for style attributes.
@@ -14,7 +15,8 @@ test('buildWebCsp uses the nonce with strict-dynamic and forbids framing', () =>
 });
 
 test('buildWebCsp allows eval only in development and a direct API origin', () => {
-  const policy = buildWebCsp({ nonce: 'n', dev: true, statusPageOrigins: [], apiOrigin: 'https://api.example.com' });
+  const policy = buildWebCsp({ nonce: 'n', dev: true, statusPageOrigins: ['http://localhost:8082'], apiOrigin: 'https://api.example.com' });
+  assert.match(policy, /frame-src 'self' https: http:\/\/localhost:8082/);
   assert.match(policy, /'strict-dynamic' 'unsafe-eval'/);
   assert.match(policy, /connect-src 'self' https:\/\/api\.example\.com/);
 });

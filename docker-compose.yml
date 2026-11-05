@@ -373,9 +373,11 @@ services:
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
       # Same HSTS max-age as on api. APP_BASE_URL (the operator UI origin)
       # joins every page's CSP frame-ancestors so the template editor can
-      # preview pages in an iframe.
+      # preview pages in an iframe. Empty (the default) lets any site frame
+      # the draft preview route, so a UI on any host can preview; set it to
+      # lock the preview to your UI.
       SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
-      APP_BASE_URL: "${APP_BASE_URL:-http://localhost:3000}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
     ports:
       - "8082:8082"
       - "9093:9093"

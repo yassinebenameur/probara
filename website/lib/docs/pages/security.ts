@@ -179,7 +179,7 @@ export const SECURITY_PAGE: DocPage = {
             ],
             [
               'Operator UI',
-              '`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and a `Permissions-Policy` that denies camera, microphone and geolocation. A nonce-based Content-Security-Policy (`\'strict-dynamic\'`, `frame-ancestors \'none\'`, `frame-src` limited to the status-page origin) ships **report-only** for this release: violations appear in the browser console but nothing is blocked. Set `WEB_CSP_ENFORCE=true` to enforce it.',
+              '`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and a `Permissions-Policy` that denies camera, microphone and geolocation. A nonce-based Content-Security-Policy (`\'strict-dynamic\'`, `frame-ancestors \'none\'`, `frame-src` limited to the UI itself, `https:` origins (status pages on any custom domain) and the configured status-page origin) ships **report-only** for this release: violations appear in the browser console but nothing is blocked. Set `WEB_CSP_ENFORCE=true` to enforce it.',
             ],
             [
               'Status pages',
