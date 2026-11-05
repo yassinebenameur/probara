@@ -2,6 +2,7 @@ DELETE FROM alert_notification_deliveries WHERE channel_id IS NULL;
 ALTER TABLE alert_notification_deliveries
     DROP CONSTRAINT IF EXISTS alert_notification_deliveries_target_check,
     DROP COLUMN IF EXISTS recipient,
+    DROP COLUMN IF EXISTS contact_kind,
     DROP COLUMN IF EXISTS contact_id,
     DROP COLUMN IF EXISTS user_id,
     ALTER COLUMN channel_id SET NOT NULL;

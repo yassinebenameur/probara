@@ -871,7 +871,8 @@ Login lockout).
   only. Person sends go through `sendPerson`: email via the email plugin
   with no channel (the worker's `loadEnvelopeChannel` stands in for it),
   SMS via `personal_sms_channel_id`; each records a delivery row with
-  `user_id`/`contact_id`/`recipient`, and its ack link is scoped to the
+  `user_id`/`contact_id`/`contact_kind`/`recipient` (`contact_kind` types a
+  channel-less row: an SMS page with no SMS channel has none either), and its ack link is scoped to the
   contact (`DispatchRequest.View`, checked by the alert-actions `Scope`).
   `monitors.escalation_policy_id` is set in the same statement that enters
   `policy` mode (a CHECK requires it; a trigger clears it on leaving).

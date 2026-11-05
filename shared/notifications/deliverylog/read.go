@@ -21,8 +21,9 @@ type Delivery struct {
 	// page by email, through the platform mailer).
 	ChannelID   *uuid.UUID `json:"channel_id"`
 	ChannelName string     `json:"channel_name"`
-	// ChannelType is the channel's current plugin type ("email" for a
-	// channel-less person send).
+	// ChannelType is the channel's current plugin type. A channel-less
+	// person send carries its contact's kind instead: "email" (the platform
+	// mailer) or "sms" (an SMS page that found no personal SMS channel).
 	ChannelType string `json:"channel_type"`
 	// UserID, Username and Recipient (the masked address) are set on person
 	// sends: an escalation policy paging a user's verified contact.
@@ -65,7 +66,7 @@ type Querier interface {
 }
 
 const selectColumns = `
-	d.id, d.alert_id, d.channel_id, d.channel_name, COALESCE(c.type, 'email'), d.event_type,
+	d.id, d.alert_id, d.channel_id, d.channel_name, COALESCE(c.type, d.contact_kind, 'email'), d.event_type,
 	d.delivery_key, d.attempt, d.path, d.outcome, d.error,
 	d.recipients_total, d.recipients_delivered, a.kind, m.name, d.created_at,
 	d.user_id, du.username, d.recipient`

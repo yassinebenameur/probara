@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
@@ -339,6 +340,73 @@ func TestEscalationEmptyScheduleAndRelapse(t *testing.T) {
 	}
 	if key != "escalation:1:0:1" {
 		t.Fatalf("relapse ledger key = %q", key)
+	}
+}
+
+// An SMS send in a workspace whose personal SMS channel is gone fails with
+// no channel at all, like an email page; the delivery history types it from
+// the contact (sms), not as an email, even after the contact is deleted.
+// Pages skip such a contact (DeliverableContactPredicate), so the case is a
+// notice to someone paged by SMS before the channel was cleared or paused.
+func TestEscalationChannelLessSMSSendIsTypedSMS(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	installPageRecorder(t)
+
+	tenantID := testutil.InsertTenant(ctx, t, db, "escalation-sms-nochannel")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "API")
+	alice, _ := insertPerson(ctx, t, db, tenantID, "alice", "editor")
+	carol, carolContact := uuid.New(), uuid.New()
+	mustExec(ctx, t, db, `INSERT INTO admin_users (id, username, password_hash) VALUES ($1, $2, 'x')`, carol, "carol-"+carol.String()[:6])
+	mustExec(ctx, t, db, `INSERT INTO tenant_memberships (admin_user_id, tenant_id, role) VALUES ($1, $2, 'editor')`, carol, tenantID)
+	mustExec(ctx, t, db, `INSERT INTO user_contacts (id, user_id, kind, address, verified_at) VALUES ($1, $2, 'sms', '+33612345678', NOW())`,
+		carolContact, carol)
+	policy := insertEscalationPolicy(ctx, t, db, tenantID, 0, 1800,
+		policyStep{delay: 0, targets: []policyTarget{{kind: "user", id: alice}, {kind: "user", id: carol}}},
+	)
+	alertID := openDownAlert(ctx, t, db, tenantID, monitorID)
+	mustExec(ctx, t, db, `UPDATE monitors SET notification_mode = 'policy', escalation_policy_id = $2 WHERE id = $1`, monitorID, policy)
+	a := newIntegrationAlerter(db)
+	runEscalations(ctx, t, a) // pages alice by email; carol's SMS contact is not deliverable
+	// Carol was paged by SMS while the workspace still had an SMS channel.
+	mustExec(ctx, t, db, `INSERT INTO alert_escalation_pages (alert_id, contact_id, user_id, relapse_count, event, delivery_key)
+		VALUES ($1, $2, $3, 0, 'page', 'escalation:0:0')`, alertID, carolContact, carol)
+	mustExec(ctx, t, db, `UPDATE alerts SET status = 'resolved', resolved_at = NOW() WHERE id = $1`, alertID)
+	runEscalations(ctx, t, a)
+
+	rowsFor := func(user uuid.UUID) []deliverylog.Delivery {
+		t.Helper()
+		page, err := deliverylog.ListForAlert(ctx, db, tenantID, alertID, 1, 50)
+		if err != nil {
+			t.Fatalf("ListForAlert: %v", err)
+		}
+		var out []deliverylog.Delivery
+		for _, d := range page.Items {
+			if d.UserID != nil && *d.UserID == user {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	sms := rowsFor(carol)
+	if len(sms) != 1 {
+		t.Fatalf("carol's delivery rows = %d, want 1 (the resolved notice)", len(sms))
+	}
+	if sms[0].ChannelID != nil || sms[0].ChannelType != "sms" || sms[0].Outcome != deliverylog.OutcomePermanentFailure {
+		t.Fatalf("SMS notice row: channel_id=%v type=%q outcome=%q, want no channel, sms, permanent_failure",
+			sms[0].ChannelID, sms[0].ChannelType, sms[0].Outcome)
+	}
+	for _, d := range rowsFor(alice) {
+		if d.ChannelID != nil || d.ChannelType != "email" {
+			t.Fatalf("email row for alice: channel_id=%v type=%q, want a channel-less email row", d.ChannelID, d.ChannelType)
+		}
+	}
+
+	// The kind is stored on the row, so it outlives the contact.
+	mustExec(ctx, t, db, `DELETE FROM user_contacts WHERE id = $1`, carolContact)
+	if got := rowsFor(carol); len(got) != 1 || got[0].ChannelType != "sms" {
+		t.Fatalf("SMS notice row after the contact is deleted: %+v, want type sms", got)
 	}
 }
 

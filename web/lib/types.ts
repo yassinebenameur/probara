@@ -2713,6 +2713,8 @@ export interface NotificationDelivery {
   channel_id: string | null;
   // The channel's name when the attempt was made.
   channel_name: string;
+  // The channel's plugin type; on a channel-less person send, the
+  // contact's kind ('email', or 'sms' for an SMS page with no SMS channel).
   channel_type: AlertChannelType;
   event_type: string;
   delivery_key: string;

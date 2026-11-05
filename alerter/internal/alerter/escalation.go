@@ -468,6 +468,7 @@ func (a *Alerter) sendPerson(ctx context.Context, ps personSend, binding policyB
 		Path:        deliverylog.PathSync,
 		UserID:      ps.contact.UserID,
 		ContactID:   ps.contact.ID,
+		ContactKind: string(ps.contact.Kind),
 		Recipient:   contacts.Mask(ps.contact.Kind, ps.contact.Address),
 	}
 	err := a.sendPersonVia(ctx, ps, binding, alert, now, &entry)
