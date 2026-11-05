@@ -114,7 +114,7 @@ openssl rand -base64 32    # PROBARA_SECRETS_KEY`,
           tone: 'warning',
           title: 'The development Compose file still has development defaults',
           text:
-            '`docker-compose.yml` has no `ADMIN_JWT_SECRET` default: every `docker compose` command fails until it is exported or in `.env` (the Make targets fall back to a per-checkout random `.dev-admin-jwt-secret`). Its other interpolated variables (`PUBLIC_BASE_URL`, `STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `SMTP_*`, `LOCAL_AI_*`) are optional, the database password defaults to `probara`, and `LOCAL_AI_TOKEN` falls back to a public development token. The [release override](#release-compose) makes every credential required.',
+            '`docker-compose.yml` has no `ADMIN_JWT_SECRET` default: every `docker compose` command fails until it is exported or in `.env` (the Make targets fall back to a per-checkout random `.dev-admin-jwt-secret`). Its other interpolated variables (`PUBLIC_BASE_URL`, `STATUS_PAGE_PREVIEW_SECRET`, `STATUS_PAGE_SESSION_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `SMTP_*`, `LOCAL_AI_*`) are optional, the database password defaults to `probara`, and `LOCAL_AI_TOKEN` falls back to a public development token. The [release override](#release-compose) makes every credential required except `STATUS_PAGE_SESSION_SECRET`, which only password and private status pages need (`scripts/install.sh` generates it anyway).',
         },
       ],
     },
@@ -249,7 +249,7 @@ docker compose down`,
       id: 'release-compose',
       title: 'Release Compose install',
       intro:
-        'For a single host without building anything: `docker-compose.release.yml` is an override of `docker-compose.yml` that swaps every build for the release image on GHCR (`${PROBARA_IMAGE_REPOSITORY:-ghcr.io/yassinebenameur/probara}-<service>:${PROBARA_VERSION}`), adds the frontend, turns NATS authentication on, and makes every credential a required variable. `scripts/install.sh` downloads both files at a release tag and writes `.env`.',
+        'For a single host without building anything: `docker-compose.release.yml` is an override of `docker-compose.yml` that swaps every build for the release image on GHCR (`${PROBARA_IMAGE_REPOSITORY:-ghcr.io/yassinebenameur/probara}-<service>:${PROBARA_VERSION}`), adds the frontend, turns NATS authentication on, and makes every credential a required variable (except `STATUS_PAGE_SESSION_SECRET`, optional because only password and private status pages need it). `scripts/install.sh` downloads both files at a release tag and writes `.env`.',
       blocks: [
         {
           type: 'code',
@@ -268,7 +268,7 @@ curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/dev/scripts
         {
           type: 'list',
           items: [
-            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
+            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, `STATUS_PAGE_SESSION_SECRET`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
             'Back up `.env`. `PROBARA_SECRETS_KEY` decrypts every stored credential, and `POSTGRES_PASSWORD` is fixed when the database volume is first created.',
             'Generated values are hex or base64 because Compose embeds the database and NATS passwords in connection URLs; if you write your own, keep them URL-safe and free of `$`.',
             'Published ports: the UI on `3000` (`PROBARA_UI_PORT`), served by the `edge` proxy (Caddy), and status pages on `8082` (`PROBARA_STATUS_PAGE_PORT`). The API is reached through the UI\'s `/api` proxy; the frontend itself, PostgreSQL, NATS and every metrics port stay on the Compose network. Put HTTPS in front, then set `PUBLIC_BASE_URL` and `ADMIN_COOKIE_SECURE=true` in `.env` and run `docker compose up -d`.',
@@ -508,6 +508,11 @@ kubectl -n probara get jobs`,
               '`slack.enabled`, `.clientId`, `.clientSecret`, `.signingSecret` (each secret with `ExistingSecret` / `ExistingSecretKey`)',
               'Off; empty',
               'The install\'s [Slack app](/docs/alerting/#slack-app), rendered into the API only. Enabled, `signingSecret` (or an existing Secret supplying `slack_signing_secret`) is required, or the render fails; `clientId` turns on Add to Slack and then requires `clientSecret` (`slack_client_secret`) and `api.publicBaseURL`, the OAuth redirect URL being `<api.publicBaseURL>/api/v1/integrations/slack/callback`.',
+            ],
+            [
+              '`secrets.statusPageSessionSecret`',
+              'Empty',
+              'Signs visitor sessions on [password and private status pages](/docs/status-pages/#visibility) (`STATUS_PAGE_SESSION_SECRET`, status page only). At least 32 characters, or the render fails. Empty leaves those pages unavailable while public and unlisted pages serve; per-field `statusPageSessionSecretExistingSecret` / `ExistingSecretKey` as for the other credentials.',
             ],
             [
               '`secrets.<field>ExistingSecret`, `.<field>ExistingSecretKey`',
@@ -785,6 +790,7 @@ worker:
             ['`slack_signing_secret`', '`slack.enabled`', 'API'],
             ['`slack_client_secret`', '`slack.enabled` with `slack.clientId`', 'API'],
             ['`local_ai_token`', '`localAI.enabled` or `localAI.externalUrl`', 'API and platform worker (optional reference), local AI pod (required)'],
+            ['`status_page_session_secret`', 'Password or private status pages are used', 'Status page (optional reference: without the key those pages are unavailable, and the pod still starts)'],
           ],
         },
         {

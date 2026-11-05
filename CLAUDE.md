@@ -497,6 +497,12 @@ or imported groups come back empty. Any other path that creates groups through
   This policy is independent of the worker's `HTTP_BLOCK_PRIVATE_IPS`
   (default false); both use `shared/netguard`, the single SSRF range table
   and resolve-then-dial guard (the worker's `dialGuard` is an alias of it).
+- **`STATUS_PAGE_SESSION_SECRET`**: status-page only, optional — without it
+  password and private pages are unavailable (fail closed) and public ones
+  serve. Helm renders it through `monitoring-platform.secretEnv` with
+  `optional: true` (canonical key `status_page_session_secret`), so an
+  existing Secret without the key still starts the pod; Compose passes it
+  through and `scripts/install.sh` generates it.
 - **`STATUS_PAGE_VAPID_*`**: status-page only, and both key halves are
   required or visitor notifications are off (no control rendered, push routes
   404). The **public** key is a literal `value:` in the PodSpec — the one
@@ -870,6 +876,18 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   a nonce and sets the header — a 304 must not carry a CSP. Every
   `<script>`/`<style>` in `default.gohtml` carries `nonce="{{cspNonce}}"`;
   a new one must too, or strict pages silently drop it.
+- **The visibility gate runs before everything.** `authorize`
+  (`status-page/internal/statuspage/access.go`) is the first thing
+  `HandleStatusPage` does — before the method guard, every sub-route and the
+  slug-keyed render cache — and keys on the first path segment, so a new
+  sub-route under `/public/status/{slug}/` is gated without extra code. Add
+  its suffix to `dispatchedSuffixes` in `access_test.go`
+  (`TestAuthorize_TableCoversDispatcher` fails until you do). Only `/unlock`
+  and `sw.js` are exempt; never dispatch a page route outside
+  `HandleStatusPage` or above the gate. `shared/pageaccess` is the contract
+  with the API (visibility values, password/token hashing, session cookies);
+  sessions bind to `password_version` or a token id and nothing about them is
+  stored, so the service stays read-only.
 - **`Subscriber.handleEvent` early-returns** when no SSE client is connected
   and the render cache is empty — exactly when browser notifications matter —
   so the push wake-up sits **above** that guard. Anything hooked in below it

@@ -50,16 +50,28 @@ const (
 // pushRateLimiter is a per-IP token bucket, mirroring the OTLP ingest limiter
 // (api/internal/services/otlp/service.go). In-memory and per-replica, which is
 // fine: this is a spam control, not a quota.
+//
+// The unlock route (access.go) reuses it with its own rate.
 type pushRateLimiter struct {
-	mu       sync.Mutex
-	limiters map[string]*rate.Limiter
-	seen     map[string]time.Time
+	mu        sync.Mutex
+	limiters  map[string]*rate.Limiter
+	seen      map[string]time.Time
+	perMinute float64
+	burst     int
 }
 
 func newPushRateLimiter() *pushRateLimiter {
+	return newKeyedRateLimiter(pushRatePerMinute, pushRateBurst)
+}
+
+// newKeyedRateLimiter is a per-key token bucket refilling perMinute tokens a
+// minute, holding at most burst.
+func newKeyedRateLimiter(perMinute float64, burst int) *pushRateLimiter {
 	return &pushRateLimiter{
-		limiters: make(map[string]*rate.Limiter),
-		seen:     make(map[string]time.Time),
+		limiters:  make(map[string]*rate.Limiter),
+		seen:      make(map[string]time.Time),
+		perMinute: perMinute,
+		burst:     burst,
 	}
 }
 
@@ -82,7 +94,7 @@ func (l *pushRateLimiter) allow(key string) bool {
 
 	lim, ok := l.limiters[key]
 	if !ok {
-		lim = rate.NewLimiter(rate.Limit(float64(pushRatePerMinute)/60.0), pushRateBurst)
+		lim = rate.NewLimiter(rate.Limit(l.perMinute/60.0), l.burst)
 		l.limiters[key] = lim
 	}
 	l.seen[key] = time.Now()

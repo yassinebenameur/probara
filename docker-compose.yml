@@ -412,6 +412,11 @@ services:
       STATUS_PAGE_VAPID_PUBLIC_KEY: "${STATUS_PAGE_VAPID_PUBLIC_KEY:-}"
       STATUS_PAGE_VAPID_PRIVATE_KEY: "${STATUS_PAGE_VAPID_PRIVATE_KEY:-}"
       STATUS_PAGE_VAPID_SUBJECT: "${STATUS_PAGE_VAPID_SUBJECT:-}"
+      # Signs visitor sessions on password and private pages (at least 32
+      # characters; `openssl rand -hex 32`). Unset leaves those pages
+      # unavailable while public and unlisted pages serve as usual;
+      # scripts/install.sh generates one for release installs.
+      STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:-}"
       # Keys the push endpoints' per-IP rate limit; same value as on api.
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
       # Same HSTS max-age as on api. APP_BASE_URL (the operator UI origin)

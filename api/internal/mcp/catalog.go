@@ -34,6 +34,7 @@ func catalog() []spec {
 		deliveryTools(),
 		peopleTools(),
 		escalationTools(),
+		statusPageAccessTools(),
 	} {
 		all = append(all, group...)
 	}

@@ -1880,6 +1880,10 @@ export interface StatusPage {
   settings?: StatusPageSettings;
   created_at: string;
   updated_at: string;
+  /** Who may view the page (a column, not a setting). */
+  visibility?: StatusPageVisibility;
+  /** Whether a visitor password is set; the password itself is write-only. */
+  has_password?: boolean;
 }
 
 export interface StatusPageTemplateVersion {
@@ -1929,6 +1933,8 @@ export interface CreateStatusPageRequest {
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
   settings?: StatusPageSettings;
+  visibility?: StatusPageVisibility;
+  password?: string;
 }
 
 export interface UpdateStatusPageRequest {
@@ -1942,6 +1948,9 @@ export interface UpdateStatusPageRequest {
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
   settings?: StatusPageSettings;
+  visibility?: StatusPageVisibility;
+  /** Write-only: omit to keep, '' to clear, a value to replace. */
+  password?: string;
 }
 
 export interface StatusPageListResponse {
@@ -2764,4 +2773,20 @@ export interface DomainMetrics {
 
 export interface DomainMetricsEnvelope {
   domain?: DomainMetrics;
+}
+
+// Status page access (visibility, visitor password, kiosk tokens)
+export type StatusPageVisibility = 'public' | 'unlisted' | 'password' | 'private';
+
+export interface StatusPageAccessToken {
+  id: string;
+  label: string;
+  created_by?: string;
+  created_at: string;
+  revoked_at?: string;
+}
+
+/** The one response that carries the token value. */
+export interface CreatedStatusPageAccessToken extends StatusPageAccessToken {
+  token: string;
 }

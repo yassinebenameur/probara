@@ -265,8 +265,8 @@ func statusPageTools() []spec {
 		{
 			Name:  "create_status_page",
 			Title: "Create status page",
-			Description: "Create a PUBLIC status page at its slug. Lay monitors out in sections (title + monitors " +
-				"with optional display names); settings toggle what visitors see.",
+			Description: "Create a status page at its slug (public unless visibility says otherwise). Lay monitors " +
+				"out in sections (title + monitors with optional display names); settings toggle what visitors see.",
 			Method: http.MethodPost, Route: "/status-pages",
 			Body: typeOf[models.CreateStatusPageRequest](), Required: []string{"slug", "title"},
 			FieldDocs: map[string]string{
@@ -274,6 +274,8 @@ func statusPageTools() []spec {
 				"sections":              "Ordered sections: {title, monitors: [{monitor_id, display_name?}]}. A monitor may appear once.",
 				"monitor_ids":           "Legacy flat list (one \"Services\" section); prefer sections.",
 				"monitor_display_names": "Legacy: monitor ID -> public name, with monitor_ids.",
+				"visibility":            statusPageVisibilityDoc,
+				"password":              "Visitor password (8-72 bytes); required for visibility password.",
 			},
 		},
 		{
@@ -283,6 +285,10 @@ func statusPageTools() []spec {
 			Method:      http.MethodPatch, Route: "/status-pages/{id}",
 			PathDocs: page,
 			Body:     typeOf[models.UpdateStatusPageRequest](),
+			FieldDocs: map[string]string{
+				"visibility": statusPageVisibilityDoc,
+				"password":   "Write-only visitor password: omit to keep, \"\" to clear, a value (8-72 bytes) to replace. Changing it signs visitors out.",
+			},
 		},
 		{
 			Name:        "delete_status_page",

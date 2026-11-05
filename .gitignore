@@ -103,3 +103,4 @@ ai-service/artifacts/dataset/
 
 .dev-local-ai-token
 .dev-admin-jwt-secret
+.dev-status-page-session-secret

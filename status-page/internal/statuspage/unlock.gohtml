@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+{{/*
+  The password prompt for a password-protected status page. Served by
+  access.go under the strict status-page CSP: it runs no script, and any
+  script added here must carry nonce="{{"{{"}}cspNonce{{"}}"}}" like the page
+  template's (shared/securityheaders). It renders nothing from the page but
+  its title.
+*/}}
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>{{.Title}} · Password required</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f6f7f9; --panel: #ffffff; --text: #111827; --muted: #6b7280; --edge: #d1d5db; --accent: #ff5a24; --danger: #b91c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0b0d12; --panel: #141821; --text: #e5e7eb; --muted: #9ca3af; --edge: #2a3140; --danger: #f87171; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--edge); border-radius: 14px; padding: 28px 24px; }
+    h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
+    p { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
+    label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; }
+    input { width: 100%; padding: 10px 12px; border: 1px solid var(--edge); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
+    input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    button { width: 100%; margin-top: 14px; padding: 10px 12px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    .error { margin: 0 0 14px; color: var(--danger); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>{{.Title}}</h1>
+    <p>This status page is password protected.</p>
+    {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" action="{{.Action}}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus maxlength="256" />
+      <button type="submit">View status</button>
+    </form>
+  </main>
+</body>
+</html>

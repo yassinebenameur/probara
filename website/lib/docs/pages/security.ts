@@ -306,6 +306,11 @@ export const SECURITY_PAGE: DocPage = {
               'Changing invalidates outstanding one-hour preview tokens.',
             ],
             [
+              '`STATUS_PAGE_SESSION_SECRET`',
+              'Status-page service only',
+              'Signs [visitor sessions](/docs/status-pages/#visibility) on password and private pages. Changing it signs every visitor and kiosk out; kiosk URLs carrying `?token=` sign back in on the next load.',
+            ],
+            [
               '`NATS_LOCATION_AUTH_ISSUER_SEED`',
               'API only',
               'NATS receives the public account key, not the seed. Rotation requires coordinated broker/API changes.',
@@ -684,7 +689,9 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'list',
           items: [
-            'Published [status pages](/docs/status-pages/#page-model) are intentionally public. Do not include private monitor URLs, internal hostnames, customer names, or operational notes unless disclosure is intended.',
+            'Published [status pages](/docs/status-pages/#page-model) are public unless their [visibility](/docs/status-pages/#visibility) says otherwise. Do not include private monitor URLs, internal hostnames, customer names, or operational notes unless disclosure to every visitor the page admits is intended.',
+            'Password and private pages are checked before any page route and before the render cache. Visitor passwords are stored as bcrypt hashes and kiosk tokens as SHA-256 hashes; the plaintext token is shown once. Sessions are HMAC-signed cookies (`HttpOnly`, `SameSite=Lax`, `Secure` over HTTPS) keyed by `STATUS_PAGE_SESSION_SECRET` and bound to the password version or the token, so changing the password or revoking the token ends them on the next request. Unlock attempts are rate limited per client and per page. Gated responses send `Cache-Control: private, no-store`; anything but a public page sends `X-Robots-Tag: noindex`.',
+            'Unlisted is not access control: anyone holding the link sees the page. Use password or private visibility for anything that must stay out of view.',
             'Set one strong shared `STATUS_PAGE_PREVIEW_SECRET` on API and status service. Without it, preview-token enforcement is disabled.',
             'Preview tokens are HMAC-SHA256 values with a one-hour expiry. Treat preview URLs as temporary bearer links.',
             'The status service’s optional API proxy is intentionally restricted, but should still be exposed only through the expected status editing/preview flow.',

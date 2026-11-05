@@ -38,11 +38,13 @@ type Handlers struct {
 	// clientIPs keys pushLimiter: forwarding headers count only from
 	// TRUSTED_PROXY_CIDRS peers, so a visitor cannot spoof a fresh bucket.
 	clientIPs *clientip.Resolver
+	// access is the visibility gate (access.go).
+	access accessGate
 }
 
 // NewHandlers creates a new status page handlers
 func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Logger, hub *Hub, cache *renderCache, pushes *pushStore) *Handlers {
-	return &Handlers{
+	h := &Handlers{
 		service:     service,
 		config:      cfg,
 		logger:      log,
@@ -52,6 +54,8 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		pushLimiter: newPushRateLimiter(),
 		clientIPs:   newClientIPResolver(cfg),
 	}
+	h.initAccess(service)
+	return h
 }
 
 func newClientIPResolver(cfg *config.StatusPageConfig) *clientip.Resolver {
@@ -69,6 +73,21 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Status page not found", http.StatusNotFound)
 		return
 	}
+
+	// The visibility gate runs before everything below -- the method guard,
+	// every sub-route and the slug-keyed render cache -- so a route added
+	// here is gated without further work. /unlock is the one exemption
+	// (access.go).
+	gateSlug, gateRest := splitStatusPath(path)
+	if gateRest == unlockSuffix {
+		h.HandleUnlock(w, r, gateSlug)
+		return
+	}
+	gated, ok := h.authorize(w, r, gateSlug, gateRest)
+	if !ok {
+		return
+	}
+	w = gated
 
 	// The push routes are POST and do their own method checks. Every other
 	// route below is read-only, so the GET guard moved down here rather than
@@ -132,6 +151,10 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 			return renderedPage{}, err
 		}
 		data.PushPublicKey = h.webPushPublicKey()
+		if gatedResponse(w) {
+			// Browser notifications are for public and unlisted pages only.
+			data.PushPublicKey = ""
+		}
 		html, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
 		if customErr != nil {
 			h.logger.WithFields(map[string]interface{}{
@@ -158,7 +181,7 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 
 	// The CSP (and its per-response nonce) goes only on a full response; see
 	// pageCSP.apply for why a 304 must not carry one.
-	html := page.csp.apply(w.Header(), page.html)
+	html := noIndexHTML(w, page.csp.apply(w.Header(), page.html))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := w.Write([]byte(html)); err != nil {
 		h.logger.WithError(err).Error("Failed to write status page response")
@@ -448,6 +471,10 @@ func (h *Handlers) HandleAPIProxy(w http.ResponseWriter, r *http.Request) {
 				statusPageID = parsed
 			}
 		}
+	}
+
+	if !h.authorizeProxy(w, r, statusPageID) {
+		return
 	}
 
 	tenantHeader := ""

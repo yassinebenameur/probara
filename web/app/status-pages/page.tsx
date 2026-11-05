@@ -11,6 +11,7 @@ import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
+import { VISIBILITY_OPTIONS } from '@/lib/status-page-access';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import Select from '@/components/ui/Select';
@@ -198,7 +199,14 @@ export default function StatusPagesPage() {
                 >
                   {page.title}
                 </Link>
-                <p className="mt-0.5 truncate font-mono text-xs text-slate-500">/{page.slug}</p>
+                <p className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-slate-500">
+                  <span className="truncate font-mono">/{page.slug}</span>
+                  {page.visibility && page.visibility !== 'public' && (
+                    <Pill tone="neutral" size="xs">
+                      {VISIBILITY_OPTIONS.find((o) => o.value === page.visibility)?.label ?? page.visibility}
+                    </Pill>
+                  )}
+                </p>
 
                 <div className="flex-1">
                   {page.description && (

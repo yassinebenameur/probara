@@ -144,6 +144,12 @@ type StatusPage struct {
 	Settings       *StatusPageSettings `json:"settings,omitempty"`
 	CreatedAt      time.Time           `json:"created_at"`
 	UpdatedAt      time.Time           `json:"updated_at"`
+	// Visibility is who may view the page: public, unlisted, password or
+	// private (shared/pageaccess). A column, not a setting.
+	Visibility string `json:"visibility"`
+	// HasPassword reports whether a visitor password is set; the password
+	// itself is write-only.
+	HasPassword bool `json:"has_password"`
 }
 
 // CreateStatusPageRequest represents a request to create a status page
@@ -158,6 +164,10 @@ type CreateStatusPageRequest struct {
 	MonitorDisplayNames map[string]string   `json:"monitor_display_names,omitempty"`
 	Sections            []StatusPageSection `json:"sections,omitempty"`
 	Settings            *StatusPageSettings `json:"settings,omitempty"`
+	// Visibility defaults to public.
+	Visibility *string `json:"visibility,omitempty"`
+	// Password is the visitor password (required for password visibility).
+	Password *string `json:"password,omitempty"`
 }
 
 // UpdateStatusPageRequest represents a request to update a status page
@@ -172,6 +182,12 @@ type UpdateStatusPageRequest struct {
 	MonitorDisplayNames *map[string]string   `json:"monitor_display_names,omitempty"`
 	Sections            *[]StatusPageSection `json:"sections,omitempty"`
 	Settings            *StatusPageSettings  `json:"settings,omitempty"`
+	// Visibility: absent keeps the stored value.
+	Visibility *string `json:"visibility,omitempty"`
+	// Password is write-only: absent keeps the stored password, "" clears it,
+	// anything else replaces it. Setting or clearing it signs every visitor
+	// session out.
+	Password *string `json:"password,omitempty"`
 }
 
 // StatusPageListResponse represents a paginated list of status pages
@@ -180,4 +196,30 @@ type StatusPageListResponse struct {
 	Page     int          `json:"page"`
 	PageSize int          `json:"page_size"`
 	Total    int          `json:"total"`
+}
+
+// StatusPageAccessToken is a kiosk token for a password or private page. The
+// token itself is shown once, at creation; only its hash is stored.
+type StatusPageAccessToken struct {
+	ID        uuid.UUID  `json:"id"`
+	Label     string     `json:"label"`
+	CreatedBy *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+// CreateStatusPageAccessTokenRequest names a new kiosk token.
+type CreateStatusPageAccessTokenRequest struct {
+	Label string `json:"label"`
+}
+
+// CreatedStatusPageAccessToken is the one response that carries the token.
+type CreatedStatusPageAccessToken struct {
+	StatusPageAccessToken
+	Token string `json:"token"`
+}
+
+// StatusPageAccessTokenListResponse lists a page's kiosk tokens, newest first.
+type StatusPageAccessTokenListResponse struct {
+	Items []StatusPageAccessToken `json:"items"`
 }

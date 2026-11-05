@@ -1710,3 +1710,15 @@ export function deleteEscalationPolicy(id: string): Promise<void> {
 export function convertRoutesToEscalationPolicy(data: import('./escalation').ConvertRoutesRequest) {
   return apiRequest<import('./escalation').EscalationPolicy>('POST', '/v1/escalation-policies/convert', data);
 }
+
+// Status page kiosk tokens
+export async function getStatusPageAccessTokens(id: string): Promise<import('./types').StatusPageAccessToken[]> {
+  const res = await apiRequest<{ items: import('./types').StatusPageAccessToken[] }>('GET', `/v1/status-pages/${id}/access-tokens`);
+  return res.items || [];
+}
+export function createStatusPageAccessToken(id: string, label: string) {
+  return apiRequest<import('./types').CreatedStatusPageAccessToken>('POST', `/v1/status-pages/${id}/access-tokens`, { label });
+}
+export function revokeStatusPageAccessToken(id: string, accessId: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/status-pages/${id}/access-tokens/${accessId}`);
+}
