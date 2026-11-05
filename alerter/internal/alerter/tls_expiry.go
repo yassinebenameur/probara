@@ -23,10 +23,14 @@ type tlsExpiryConfig struct {
 	tenantID    uuid.UUID
 	monitorName string
 	minDays     int
+	// checkChain (tls_check_chain) measures the earliest expiry across the
+	// presented chain instead of the leaf's (tlscert.Info.Expiry).
+	checkChain bool
 }
 
 // evaluateTLSExpiry compares each monitor's latest recorded certificate expiry
-// (an HTTPS or SIP-over-TLS check's, located through shared/tlscert)
+// (an HTTPS, SIP-over-TLS or TLS-wrapped TCP check's, located through
+// shared/tlscert; the chain's earliest with tls_check_chain)
 // against its tls_min_days_valid threshold and opens or resolves a tls_expiry
 // alert. Like latency anomalies and host metrics, this is orthogonal to the
 // availability state machine: a healthy endpoint with an aging certificate
@@ -44,11 +48,13 @@ func (a *Alerter) evaluateTLSExpiry(ctx context.Context) error {
 	}
 
 	monitorIDs := make([]uuid.UUID, 0, len(configs))
+	checkChain := make([]bool, 0, len(configs))
 	for _, c := range configs {
 		monitorIDs = append(monitorIDs, c.monitorID)
+		checkChain = append(checkChain, c.checkChain)
 	}
 
-	latest, err := a.loadLatestCertExpiries(ctx, monitorIDs)
+	latest, err := a.loadLatestCertExpiries(ctx, monitorIDs, checkChain)
 	if err != nil {
 		return fmt.Errorf("load latest cert expiries: %w", err)
 	}
@@ -109,7 +115,8 @@ func (a *Alerter) loadTLSExpiryConfigs(ctx context.Context) ([]tlsExpiryConfig, 
 		}
 
 		var cfg struct {
-			TLSMinDaysValid *int `json:"tls_min_days_valid"`
+			TLSMinDaysValid *int  `json:"tls_min_days_valid"`
+			TLSCheckChain   *bool `json:"tls_check_chain"`
 		}
 		if err := json.Unmarshal(configBytes, &cfg); err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": id}).Warn("Skipping monitor with unparseable config")
@@ -123,6 +130,7 @@ func (a *Alerter) loadTLSExpiryConfigs(ctx context.Context) ([]tlsExpiryConfig, 
 			tenantID:    tenantID,
 			monitorName: name,
 			minDays:     *cfg.TLSMinDaysValid,
+			checkChain:  cfg.TLSCheckChain != nil && *cfg.TLSCheckChain,
 		})
 	}
 	return out, rows.Err()
@@ -131,7 +139,9 @@ func (a *Alerter) loadTLSExpiryConfigs(ctx context.Context) ([]tlsExpiryConfig, 
 // loadLatestCertExpiries returns days-until-expiry per monitor, computed at
 // evaluation time from the not_after recorded on the monitor's most recent
 // check result that carries certificate info. Falls back to the worker's
-// days_until_expiry snapshot when not_after is unparseable.
+// days_until_expiry snapshot when not_after is unparseable. checkChain[i]
+// (tls_check_chain of monitorIDs[i]) swaps in the chain's earliest expiry,
+// chosen by tlscert.ExpirySQL, the twin of the status page's Info.Expiry.
 //
 // The per-monitor LATERAL walks idx_check_results_monitor_id_created_at
 // backwards and stops at the first row with certificate info; the 24h bound
@@ -140,7 +150,7 @@ func (a *Alerter) loadTLSExpiryConfigs(ctx context.Context) ([]tlsExpiryConfig, 
 // historical row and timed out on large check_results tables). Monitors
 // with no certificate observed in the window are skipped this tick, which
 // leaves any open alert untouched — same as "no data yet".
-func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.UUID, checkChain []bool) (map[uuid.UUID]int, error) {
 	result := make(map[uuid.UUID]int)
 	if len(monitorIDs) == 0 {
 		return result, nil
@@ -149,11 +159,10 @@ func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.
 	// is shared/tlscert's to say; the status page reads the same location
 	// through tlscert.Extract (TestSQLExprMatchesExtract pins the pair).
 	certExpr := tlscert.SQLExpr("metrics_data")
+	notAfterExpr, daysExpr := tlscert.ExpirySQL("cr.tls", "m.check_chain")
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT m.id,
-			cr.tls #>> '{not_after}',
-			cr.tls #>> '{days_until_expiry}'
-		FROM unnest($1::uuid[]) AS m(id)
+		SELECT m.id, `+notAfterExpr+`, `+daysExpr+`
+		FROM unnest($1::uuid[], $2::boolean[]) AS m(id, check_chain)
 		JOIN LATERAL (
 			SELECT `+certExpr+` AS tls
 			FROM check_results
@@ -164,7 +173,7 @@ func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.
 			ORDER BY created_at DESC
 			LIMIT 1
 		) cr ON TRUE
-	`, pq.Array(monitorIDs))
+	`, pq.Array(monitorIDs), pq.Array(checkChain))
 	if err != nil {
 		return nil, err
 	}

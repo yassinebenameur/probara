@@ -574,6 +574,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Empty (every destination)',
               'Comma-separated regular expressions; a test call is placed only when the called user part (`call.number`, or the decoded user part of `call.target_uri`, which may carry no `;parameters` or `:password`) matches one in full (each is anchored), else it fails with `policy: destination not allowed by worker policy` before sending anything. An invalid expression fails startup.',
             ],
+            [
+              '`WORKER_PING_MODE`',
+              '`unprivileged`; `unprivileged`, `privileged` or `auto`',
+              'Socket type for [ping monitors](/docs/monitors/#network-protocols). `unprivileged` sends echoes over Linux ICMP datagram sockets: no capability, but the process group must sit inside the kernel\'s `net.ipv4.ping_group_range`, which the Helm chart (`worker.ping.sysctl`) and Compose set to `0 2147483647` (Docker 20.10+ sets it too). `privileged` opens raw ICMP sockets and needs `CAP_NET_RAW`; in Kubernetes a non-root container never holds it, so that means running the worker as root with the capability added. `auto` tries unprivileged and falls back to raw sockets only when the datagram socket is refused for lack of permission. Any other value fails startup.',
+            ],
           ],
         },
         {
@@ -581,7 +586,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'The HTTP prefix is historical',
           text:
-            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, browser, TCP, gRPC, database, broker, and other [outbound dial paths](/docs/security/#ssrf-network-policy). Disabling the policy grants broad internal-network reach to monitor configuration.',
+            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, browser, ping, TCP, gRPC, database, broker, and other [outbound dial paths](/docs/security/#ssrf-network-policy). Disabling the policy grants broad internal-network reach to monitor configuration.',
         },
       ],
     },

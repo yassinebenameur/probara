@@ -3,6 +3,11 @@
 // lives. A check that completes a TLS handshake writes an Info under its own
 // envelope key: {"http": {"tls": …}} for http, {"sip": {"tls": …}} for sip.
 //
+// A snapshot also carries the expiry of the whole presented chain
+// (chain_not_after, chain_min_days, chain). Readers use it only for monitors
+// that opt in with tls_check_chain: Expiry is the Go rule, ExpirySQL and
+// CheckChainSQL its SQL twins (TestExpirySQLMatchesExpiry pins them).
+//
 // Every reader goes through this package instead of hard-coding a path:
 // the alerter's tls_expiry evaluation selects through SQLExpr, the status
 // page decodes through Extract. MetricsPaths is the one list both are built
@@ -14,6 +19,7 @@ package tlscert
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -38,6 +44,52 @@ type Info struct {
 	IPAddresses      []string `json:"ip_addresses,omitempty"`
 	VerifiedChains   int      `json:"verified_chains,omitempty"`
 	PeerCertificates int      `json:"peer_certificates,omitempty"`
+	// ChainNotAfter is the earliest NotAfter across the chain (chainOf): the
+	// leaf plus every intermediate, never a self-signed root. It equals
+	// NotAfter when the leaf expires first.
+	ChainNotAfter string `json:"chain_not_after,omitempty"`
+	// ChainMinDays is days_until_expiry for ChainNotAfter.
+	ChainMinDays *int `json:"chain_min_days,omitempty"`
+	// Chain lists the certificates ChainNotAfter was taken over, leaf first.
+	Chain []ChainCert `json:"chain,omitempty"`
+}
+
+// ChainCert is one certificate of the presented chain.
+type ChainCert struct {
+	Subject  string `json:"subject"`
+	NotAfter string `json:"not_after"`
+}
+
+// CheckChainKey is the monitor config key that opts a monitor into
+// chain-wide expiry (Expiry, ExpirySQL).
+const CheckChainKey = "tls_check_chain"
+
+// Expiry is the expiry a reader should act on: the earliest across the
+// chain when checkChain is set and the snapshot carries one, else the
+// leaf's. Snapshots recorded before chain capture fall back to the leaf.
+func (i *Info) Expiry(checkChain bool) (notAfter string, days *int) {
+	if checkChain && i.ChainNotAfter != "" {
+		return i.ChainNotAfter, i.ChainMinDays
+	}
+	return i.NotAfter, i.DaysUntilExpiry
+}
+
+// ExpirySQL returns text expressions selecting Expiry's (not_after,
+// days_until_expiry) from a certificate object cert (SQLExpr's result),
+// given a boolean SQL expression checkChain (CheckChainSQL).
+func ExpirySQL(cert, checkChain string) (notAfter, days string) {
+	pick := func(chainKey, leafKey string) string {
+		return fmt.Sprintf(
+			"CASE WHEN (%s) AND (%s ->> '%s') IS NOT NULL AND (%s ->> '%s') <> '' THEN %s ->> '%s' ELSE %s ->> '%s' END",
+			checkChain, cert, "chain_not_after", cert, "chain_not_after", cert, chainKey, cert, leafKey)
+	}
+	return pick("chain_not_after", "not_after"), pick("chain_min_days", "days_until_expiry")
+}
+
+// CheckChainSQL returns a boolean SQL expression that is true when the
+// monitor config (a jsonb expression) opts into chain-wide expiry.
+func CheckChainSQL(config string) string {
+	return fmt.Sprintf("COALESCE((%s -> '%s') = 'true'::jsonb, FALSE)", config, CheckChainKey)
 }
 
 // FromConnectionState snapshots the leaf certificate of a completed
@@ -71,7 +123,42 @@ func FromConnectionState(cs tls.ConnectionState, serverName string, now time.Tim
 	for _, ip := range leaf.IPAddresses {
 		info.IPAddresses = append(info.IPAddresses, ip.String())
 	}
+	chain := chainOf(cs)
+	earliest := chain[0]
+	for _, c := range chain {
+		info.Chain = append(info.Chain, ChainCert{Subject: c.Subject.String(), NotAfter: c.NotAfter.UTC().Format(time.RFC3339)})
+		if c.NotAfter.Before(earliest.NotAfter) {
+			earliest = c
+		}
+	}
+	chainDays := int(earliest.NotAfter.Sub(now).Hours() / 24)
+	info.ChainNotAfter = earliest.NotAfter.UTC().Format(time.RFC3339)
+	info.ChainMinDays = &chainDays
 	return info
+}
+
+// chainOf is the chain whose expiry matters: the first verified chain, else
+// (InsecureSkipVerify, nothing verified) what the server presented. Either
+// way it keeps the leaf and drops self-signed certificates after it: a
+// trust anchor's expiry is the trust store's business, and a server that
+// sends its root gains nothing from it. A self-signed leaf stays.
+func chainOf(cs tls.ConnectionState) []*x509.Certificate {
+	certs := cs.PeerCertificates
+	if len(cs.VerifiedChains) > 0 && len(cs.VerifiedChains[0]) > 0 {
+		certs = cs.VerifiedChains[0]
+	}
+	out := []*x509.Certificate{certs[0]}
+	for _, c := range certs[1:] {
+		if isSelfSigned(c) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func isSelfSigned(c *x509.Certificate) bool {
+	return bytes.Equal(c.RawSubject, c.RawIssuer) && c.CheckSignatureFrom(c) == nil
 }
 
 // MetricsPaths lists where a certificate may sit in metrics_data, in
@@ -81,6 +168,7 @@ func FromConnectionState(cs tls.ConnectionState, serverName string, now time.Tim
 var MetricsPaths = [][]string{
 	{"http", "tls"},
 	{"sip", "tls"},
+	{"tcp", "tls"},
 }
 
 // SQLExpr returns a jsonb expression selecting the certificate object of the

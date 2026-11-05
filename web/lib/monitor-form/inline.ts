@@ -29,6 +29,7 @@ import {
   parseStatusRules,
 } from './http';
 import { SecretKV, secretRowsError, secretRowsFromMap, splitSecretRows } from './secret-map';
+import { buildPingConfig, initialPingFields, validatePingFields } from './ping';
 import {
   SyntheticBrowserGuidedDraft,
   SyntheticBrowserGuidedTemplate,
@@ -156,10 +157,13 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     max_redirects: initialHTTPConfig?.max_redirects ?? 10,
     tls_skip_verify: initialHTTPConfig?.tls_skip_verify ?? false,
     tls_min_days_valid: initialHTTPConfig?.tls_min_days_valid?.toString() || '',
+    // Chain-wide expiry is on for a new monitor; a stored or cloned one keeps its own.
+    tls_check_chain: initialHTTPConfig ? Boolean(initialHTTPConfig.tls_check_chain) : true,
     tls_server_name: initialHTTPConfig?.tls_server_name || '',
     tls_ca_pem: initialHTTPConfig?.tls_ca_pem || '',
     collect_timing: initialHTTPConfig?.collect_timing ?? false,
     host: initialPingConfig?.host || initialDNSConfig?.host || '',
+    ...initialPingFields(initialPingConfig),
     dns_record_type: initialDNSConfig?.record_type || 'A',
     dns_expected_answers: (initialDNSConfig?.expected_answers || []).join(', '),
     dns_nameserver: initialDNSConfig?.nameserver || '',
@@ -489,6 +493,7 @@ export function validateMonitorForm(
     }
   } else if (type === 'ping') {
     if (!form.host.trim()) newErrors.host = 'Host is required';
+    Object.assign(newErrors, validatePingFields(form, form.timeout_seconds));
   } else if (type === 'dns') {
     if (!form.host.trim()) newErrors.host = 'Host is required';
   } else if (type === 'synthetic_api') {
@@ -842,13 +847,14 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
     if (form.tls_min_days_valid.trim()) {
       const days = parseInt(form.tls_min_days_valid, 10);
       if (!isNaN(days)) httpConfig.tls_min_days_valid = days;
+      if (!isNaN(days) && form.tls_check_chain) httpConfig.tls_check_chain = true;
     }
     if (form.tls_server_name.trim()) httpConfig.tls_server_name = form.tls_server_name.trim();
     if (form.tls_ca_pem.trim()) httpConfig.tls_ca_pem = form.tls_ca_pem.trim();
 
     config = httpConfig;
   } else if (type === 'ping') {
-    config = { host: form.host.trim() };
+    config = buildPingConfig(form.host, form);
   } else if (type === 'dns') {
     const dnsExpected = parseDNSExpectedAnswers(form.dns_expected_answers);
     const dnsConfig: DNSMonitorConfig = {

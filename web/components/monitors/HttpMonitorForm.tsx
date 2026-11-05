@@ -38,6 +38,7 @@ export interface HttpFormData {
   max_redirects: number;
   tls_skip_verify: boolean;
   tls_min_days_valid: string;
+  tls_check_chain: boolean;
   tls_server_name: string;
   tls_ca_pem: string;
   collect_timing: boolean;
@@ -687,6 +688,15 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                 )}
               </FormField>
             </div>
+
+            {data.tls_min_days_valid.trim() !== '' && (
+              <ToggleRow
+                title="Include the certificate chain"
+                description="Alert on the earliest expiry among the server and intermediate certificates, not just the server's"
+                checked={data.tls_check_chain}
+                onChange={(next) => onChange({ tls_check_chain: next })}
+              />
+            )}
 
             <FormField label="Custom CA bundle (PEM)">
               {(control) => (

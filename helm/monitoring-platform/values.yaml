@@ -417,6 +417,22 @@ worker:
   # (Kubernetes EnvVar entries), e.g. HTTP_ALLOWED_CIDRS or check tuning.
   # Individual locations entries may also carry their own extraEnv list.
   extraEnv: []
+  # Ping (ICMP) checks, for the default fleet and every location worker.
+  ping:
+    # WORKER_PING_MODE. "unprivileged" (default) sends echoes over Linux
+    # "ping" datagram sockets: no capability, but the pod's group must sit in
+    # net.ipv4.ping_group_range, which `sysctl` below sets. "privileged" opens
+    # raw ICMP sockets and needs CAP_NET_RAW; Kubernetes grants no ambient
+    # capabilities to a non-root uid, so that means podSecurityContext
+    # runAsUser 0 / runAsNonRoot false plus securityContext.capabilities.add
+    # [NET_RAW] — a root container that can forge packets, which is why it is
+    # not the default. "auto" tries unprivileged, then raw on EPERM/EACCES.
+    mode: "unprivileged"
+    # Set net.ipv4.ping_group_range="0 2147483647" on worker pods. It is a
+    # namespaced "safe" sysctl (Kubernetes 1.18+), allowed without kubelet
+    # flags. Turn off only if your nodes' runtime already sets it (containerd
+    # 2.x enable_unprivileged_icmp) or a policy forbids pod sysctls.
+    sysctl: true
 
 # =============================================================================
 # ALERTER SERVICE

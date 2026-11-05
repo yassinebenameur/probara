@@ -306,6 +306,8 @@ export interface HTTPMonitorConfig {
   max_redirects?: number;
   tls_skip_verify?: boolean;
   tls_min_days_valid?: number;
+  // tls_expiry measures the chain's earliest expiry, not just the leaf's.
+  tls_check_chain?: boolean;
   tls_server_name?: string;
   tls_ca_pem?: string;
   collect_timing?: boolean;
@@ -318,6 +320,15 @@ export interface HTTPMonitorConfig {
 
 export interface PingMonitorConfig {
   host: string;
+  // Echoes per check, 1-10; absent means 1 (the form starts new monitors at 3).
+  count?: number;
+  interval_ms?: number;
+  packet_size?: number;
+  // Absent: only total loss fails.
+  max_packet_loss_pct?: number;
+  // Compared with the average round trip; warn only flags a passing check.
+  max_rtt_ms?: number;
+  warn_rtt_ms?: number;
 }
 
 export interface DNSMonitorConfig {
@@ -362,6 +373,12 @@ export interface TCPMonitorConfig {
   port: number;
   use_tls?: boolean;
   tls_skip_verify?: boolean;
+  // The TLS fields below require use_tls.
+  tls_min_days_valid?: number;
+  tls_server_name?: string;
+  tls_ca_pem?: string;
+  // tls_expiry measures the chain's earliest expiry, not just the leaf's.
+  tls_check_chain?: boolean;
 }
 
 export interface GroupMonitorConfig {
@@ -412,6 +429,8 @@ export interface SIPMonitorConfig {
   tls_server_name?: string;
   // Open a certificate-expiry alert when fewer days remain (transport tls only).
   tls_min_days_valid?: number;
+  // tls_expiry measures the chain's earliest expiry, not just the leaf's.
+  tls_check_chain?: boolean;
   // The test call; set if and only if method is "invite" (Go shared/models
   // sip_call.go SIPCallConfig).
   call?: SIPCallConfig;
@@ -1993,6 +2012,30 @@ export interface TCPMetrics {
   port?: number;
   use_tls?: boolean;
   tls_version?: string;
+  // The server certificate (Go shared/tlscert), when the handshake completed.
+  tls?: TLSCertInfo;
+  assertions_failed?: string[];
+}
+
+// metrics_data.ping (worker ping_checker.go pingMetrics). RTTs are absent
+// when no echo was answered.
+export interface PingMetricsEnvelope {
+  ping?: PingMetrics;
+}
+
+export interface PingMetrics {
+  host?: string;
+  ip?: string;
+  sent: number;
+  received: number;
+  loss_pct: number;
+  rtt_min_ms?: number;
+  rtt_avg_ms?: number;
+  rtt_max_ms?: number;
+  rtt_stddev_ms?: number;
+  privileged?: boolean;
+  // Set when the average round trip passed warn_rtt_ms on a passing check.
+  rtt_warn_ms?: number;
 }
 
 export interface WebSocketMetricsEnvelope {
@@ -2254,6 +2297,12 @@ export interface TLSCertInfo {
   ip_addresses?: string[];
   verified_chains?: number;
   peer_certificates?: number;
+  // Earliest expiry across the presented chain (leaf + intermediates, never
+  // a self-signed root). Readers use it only with the monitor's
+  // tls_check_chain (lib/tls-cert.ts effectiveCertExpiry, Go Info.Expiry).
+  chain_not_after?: string;
+  chain_min_days?: number;
+  chain?: { subject: string; not_after: string }[];
 }
 
 export type HTTPTLSInfo = TLSCertInfo;

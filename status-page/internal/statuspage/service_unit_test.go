@@ -59,8 +59,8 @@ func TestService_BatchCurrentStatus_UsesPerMonitorLateralLimit(t *testing.T) {
 	mock.ExpectQuery("(?s)JOIN monitors mon.*LEFT JOIN LATERAL.*ORDER BY cr\\.created_at DESC\\s+LIMIT 1").
 		WithArgs(sqlmock.AnyArg(), tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"monitor_id", "current_state", "status", "http_status", "latency_ms", "created_at", "metrics_data", "in_maintenance",
-		}).AddRow(monitorA, "down", "success", 200, 123, checkedAt, []byte("{}"), false))
+			"monitor_id", "current_state", "status", "http_status", "latency_ms", "created_at", "metrics_data", "in_maintenance", "tls_check_chain",
+		}).AddRow(monitorA, "down", "success", 200, 123, checkedAt, []byte("{}"), false, false))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
 	statuses, err := svc.batchCurrentStatus(context.Background(), []uuid.UUID{monitorA}, tenantID)
@@ -184,16 +184,23 @@ func TestService_BatchUptimeSummary_UsesHourlyRollupsAndBoundedRawScan(t *testin
 }
 
 // The status page finds a check's certificate wherever shared/tlscert says it
-// lives: an HTTPS check's http.tls and a SIP-over-TLS check's sip.tls alike.
+// lives: an HTTPS check's http.tls, a SIP-over-TLS check's sip.tls and a
+// TLS-wrapped TCP check's tcp.tls alike. With tls_check_chain it shows the
+// chain's earliest expiry, as the alerter measures it.
 func TestCurrentStatusApplyCertificate(t *testing.T) {
+	const tcpChain = `{"tcp":{"use_tls":true,"tls":{"not_after":"2027-03-01T00:00:00Z","days_until_expiry":90,"chain_not_after":"2026-12-01T00:00:00Z","chain_min_days":20}}}`
 	tests := []struct {
-		name     string
-		metrics  string
-		wantDays *int
-		wantNot  string
+		name       string
+		metrics    string
+		checkChain bool
+		wantDays   *int
+		wantNot    string
 	}{
 		{name: "http", metrics: `{"http":{"tls":{"not_after":"2027-01-01T00:00:00Z","days_until_expiry":30}}}`, wantDays: intPtr(30), wantNot: "2027-01-01T00:00:00Z"},
 		{name: "sip", metrics: `{"sip":{"method":"OPTIONS","transport":"tls","tls":{"not_after":"2027-02-01T00:00:00Z","days_until_expiry":12}}}`, wantDays: intPtr(12), wantNot: "2027-02-01T00:00:00Z"},
+		{name: "tcp leaf", metrics: tcpChain, wantDays: intPtr(90), wantNot: "2027-03-01T00:00:00Z"},
+		{name: "tcp chain", metrics: tcpChain, checkChain: true, wantDays: intPtr(20), wantNot: "2026-12-01T00:00:00Z"},
+		{name: "chain opt-in on an old snapshot", metrics: `{"http":{"tls":{"not_after":"2027-01-01T00:00:00Z","days_until_expiry":30}}}`, checkChain: true, wantDays: intPtr(30), wantNot: "2027-01-01T00:00:00Z"},
 		{name: "sip without tls", metrics: `{"sip":{"method":"OPTIONS","transport":"udp"}}`},
 		{name: "no metrics", metrics: ``},
 		{name: "garbage", metrics: `{"http":"tls"}`},
@@ -201,7 +208,7 @@ func TestCurrentStatusApplyCertificate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cs := &CurrentStatus{}
-			cs.applyCertificate([]byte(tt.metrics))
+			cs.applyCertificate([]byte(tt.metrics), tt.checkChain)
 			if (cs.TLSDaysUntilExpiry == nil) != (tt.wantDays == nil) ||
 				(cs.TLSDaysUntilExpiry != nil && *cs.TLSDaysUntilExpiry != *tt.wantDays) {
 				t.Errorf("TLSDaysUntilExpiry = %v, want %v", cs.TLSDaysUntilExpiry, tt.wantDays)

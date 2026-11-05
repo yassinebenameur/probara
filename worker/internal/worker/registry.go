@@ -67,7 +67,7 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	// Register default checkers
 	registry.Register("prometheus", NewPrometheusChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("http", NewHTTPChecker(maxBodySizeBytes, blockPrivateIPs, allowedCIDRs))
-	registry.Register("ping", NewPingChecker())
+	registry.Register("ping", NewPingChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("dns", NewDNSChecker())
 	registry.Register("grpc", NewGRPCChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("sip", NewSIPChecker(blockPrivateIPs, allowedCIDRs))

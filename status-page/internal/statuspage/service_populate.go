@@ -10,6 +10,7 @@ import (
 	"github.com/lib/pq"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
 // populatePageMonitors fills in status, uptime, latency, history and long-range analytics for
@@ -242,7 +243,8 @@ type uptimeSummary struct {
 func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID]*CurrentStatus, error) {
 	query := `
 		SELECT m.monitor_id, mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data,
-			` + maintenance.InMaintenancePredicate("mon") + ` AS in_maintenance
+			` + maintenance.InMaintenancePredicate("mon") + ` AS in_maintenance,
+			` + tlscert.CheckChainSQL("mon.config") + ` AS tls_check_chain
 		FROM unnest($1::uuid[]) AS m(monitor_id)
 		JOIN monitors mon ON mon.id = m.monitor_id
 		LEFT JOIN LATERAL (
@@ -269,8 +271,8 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 		var httpStatus, latencyMS sql.NullInt64
 		var createdAt sql.NullTime
 		var metricsJSON []byte
-		var inMaintenance bool
-		if err := rows.Scan(&monitorID, &currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON, &inMaintenance); err != nil {
+		var inMaintenance, checkChain bool
+		if err := rows.Scan(&monitorID, &currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON, &inMaintenance, &checkChain); err != nil {
 			return nil, fmt.Errorf("failed to scan batch current status: %w", err)
 		}
 
@@ -292,7 +294,7 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 			v := int(latencyMS.Int64)
 			cs.LastLatency = &v
 		}
-		cs.applyCertificate(metricsJSON)
+		cs.applyCertificate(metricsJSON, checkChain)
 		result[monitorID] = cs
 	}
 	if err := rows.Err(); err != nil {

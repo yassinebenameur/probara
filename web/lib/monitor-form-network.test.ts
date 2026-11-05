@@ -432,6 +432,7 @@ test('sip: create from a filled REGISTER form', () => {
       tls_skip_verify: true,
       tls_server_name: 'sip.example.com',
       tls_min_days_valid: 14,
+      tls_check_chain: true,
       expected_status: 200,
     },
     ...NEW_ENVELOPE,

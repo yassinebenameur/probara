@@ -143,6 +143,7 @@ test('http: create from a fully filled form', () => {
       collect_timing: true,
       tls_skip_verify: true,
       tls_min_days_valid: 14,
+      tls_check_chain: true,
       tls_server_name: 'api.internal',
       tls_ca_pem: '-----BEGIN CERTIFICATE-----',
     },
@@ -326,7 +327,7 @@ test('ping: create from defaults', () => {
   assertWire(buildMonitorFormRequest('ping', form, false), {
     name: 'Gateway',
     type: 'ping',
-    config: { host: '8.8.8.8' },
+    config: { host: '8.8.8.8', count: 3 },
     ...NEW_SCHEDULE,
     ...DEFAULT_ALERTING,
     ...NEW_TAIL,
@@ -346,7 +347,7 @@ test('ping: create from a filled form and an edit round trip', () => {
   assertWire(buildMonitorFormRequest('ping', filled, false), {
     name: 'Edge',
     type: 'ping',
-    config: { host: 'edge.example.com' },
+    config: { host: 'edge.example.com', count: 3 },
     interval_seconds: 30,
     timeout_seconds: 5,
     enabled: true,

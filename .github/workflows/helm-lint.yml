@@ -30,3 +30,14 @@ jobs:
     - name: Validate values
       run: |
         helm template monitoring-platform ./helm/monitoring-platform > /dev/null
+
+    - name: Worker pods carry the ping sysctl
+      run: |
+        # Unprivileged ping (WORKER_PING_MODE default) needs
+        # net.ipv4.ping_group_range on the default fleet AND location workers.
+        out=$(helm template monitoring-platform ./helm/monitoring-platform \
+          --set 'worker.locations[0].name=eu,worker.locations[0].locationId=6f1c2b8e-2f43-4c0e-9d41-0c3b3e0a9a11,worker.locations[0].credential=c,worker.locations[0].natsUrl=tls://nats.example:4222')
+        test "$(grep -c 'name: net.ipv4.ping_group_range' <<<"$out")" -eq 2
+        test "$(grep -c 'name: WORKER_PING_MODE' <<<"$out")" -eq 2
+        off=$(helm template monitoring-platform ./helm/monitoring-platform --set worker.ping.sysctl=false)
+        ! grep -q 'net.ipv4.ping_group_range' <<<"$off"

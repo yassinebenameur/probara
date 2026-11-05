@@ -68,7 +68,53 @@ func TestSQLExprMatchesExtract(t *testing.T) {
 	t.Run("sql null", func(t *testing.T) { run(t, nil) })
 }
 
-func jsonNumber(n int) string {
-	raw, _ := json.Marshal(n)
-	return string(raw)
+// TestExpirySQLMatchesExpiry pins ExpirySQL and CheckChainSQL to Info.Expiry:
+// for every certificate fixture and both opt-in states (as the monitor
+// config spells them), Postgres must pick the not_after and days Go picks.
+func TestExpirySQLMatchesExpiry(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	notAfterExpr, daysExpr := ExpirySQL("d.cert", CheckChainSQL("d.config"))
+	query := `SELECT ` + notAfterExpr + `, ` + daysExpr + `
+		FROM (SELECT $1::jsonb AS cert, $2::jsonb AS config) d`
+
+	configs := []struct {
+		raw   string
+		chain bool
+	}{
+		{`{"tls_check_chain":true}`, true},
+		{`{"tls_check_chain":false}`, false},
+		{`{}`, false},
+		{`{"tls_check_chain":"true"}`, false}, // a string is not the opt-in
+	}
+	for _, tt := range expiryFixtures {
+		for _, cfg := range configs {
+			t.Run(tt.name+" "+cfg.raw, func(t *testing.T) {
+				var notAfter, days sql.NullString
+				if err := dbClient.QueryRowContext(ctx, query, tt.cert, cfg.raw).Scan(&notAfter, &days); err != nil {
+					t.Fatalf("query: %v", err)
+				}
+				var info Info
+				if err := json.Unmarshal([]byte(tt.cert), &info); err != nil {
+					t.Fatal(err)
+				}
+				var cfgDoc map[string]json.RawMessage
+				_ = json.Unmarshal([]byte(cfg.raw), &cfgDoc)
+				goChain := string(cfgDoc[CheckChainKey]) == "true"
+				if goChain != cfg.chain {
+					t.Fatalf("fixture opt-in mismatch")
+				}
+				wantNotAfter, wantDays := info.Expiry(goChain)
+				gotDays := ""
+				if wantDays != nil {
+					gotDays = jsonNumber(*wantDays)
+				}
+				if notAfter.String != wantNotAfter || days.String != gotDays {
+					t.Errorf("SQL = %q, %q; Go = %q, %q", notAfter.String, days.String, wantNotAfter, gotDays)
+				}
+			})
+		}
+	}
 }

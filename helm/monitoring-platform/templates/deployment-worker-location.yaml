@@ -36,7 +36,7 @@ spec:
       serviceAccountName: {{ include "monitoring-platform.serviceAccountName" $ }}
       {{- end }}
       securityContext:
-        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+        {{- include "monitoring-platform.workerPodSecurityContext" $ | nindent 8 }}
       containers:
       - name: worker
         image: "{{ $.Values.image.repository }}-worker:{{ include "monitoring-platform.imageTag" $ }}"
@@ -58,6 +58,8 @@ spec:
           value: "{{ $.Values.worker.metricsPort }}"
         - name: LOG_LEVEL
           value: "{{ $.Values.worker.logLevel }}"
+        - name: WORKER_PING_MODE
+          value: {{ $.Values.worker.ping.mode | default "unprivileged" | quote }}
         {{- if .existingSecret }}
         - name: NATS_URL
           valueFrom:

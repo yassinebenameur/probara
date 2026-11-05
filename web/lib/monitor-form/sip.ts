@@ -62,6 +62,8 @@ export function initialSipFormState(monitor?: Monitor, initialData?: CreateMonit
     tls_server_name: editSipConfig?.tls_server_name || initialSipConfig?.tls_server_name || '',
     tls_min_days_valid:
       (editSipConfig?.tls_min_days_valid ?? initialSipConfig?.tls_min_days_valid)?.toString() ?? '',
+    // Chain-wide expiry is on for a new monitor; a stored or cloned one keeps its own.
+    tls_check_chain: loadedConfig ? Boolean(loadedConfig.tls_check_chain) : true,
     expected_status: editSipConfig?.expected_status?.toString()
       || initialSipConfig?.expected_status?.toString() || '',
     ...sipCallFormFields(loadedConfig?.call),
@@ -84,6 +86,7 @@ export const sipFieldsFromForm = (form: SipFormState): SipFormFields => ({
   tls_skip_verify: form.tls_skip_verify,
   tls_server_name: form.tls_server_name,
   tls_min_days_valid: form.tls_min_days_valid,
+  tls_check_chain: form.tls_check_chain,
   expected_status: form.expected_status,
   call_target_kind: form.call_target_kind,
   call_number: form.call_number,
