@@ -677,7 +677,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Evidence covers the alert's monitor (a group alert expands to its members), its configured upstreams, and the dependency root that suppressed it, if any. The window runs from 15 minutes before the alert triggered to 60 minutes after, capped at claim time. Window, sampling and exclusion rules are the same as for incident analysis. Each alert has one triage. It is not re-run while the alert stays open, and a reopened condition is a new alert.",
+            "Evidence covers the alert's monitor (a group alert expands to its members), its configured upstreams, and the dependency root that suppressed it, if any. The window runs from 15 minutes before the alert triggered to 60 minutes after, capped at claim time. Window, sampling and exclusion rules are the same as for incident analysis. Each alert has one triage, and it is not re-run while the alert stays open. A relapse within the [reopen cooldown](#availability) reuses the alert and its existing triage; only a condition that opens a new alert is triaged again.",
         },
         {
           type: "table",
