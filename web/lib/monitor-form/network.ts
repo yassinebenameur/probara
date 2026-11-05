@@ -1,7 +1,30 @@
 import { CreateMonitorRequest, GRPCMonitorConfig, Monitor, TCPMonitorConfig } from '../types';
 import { buildScheduledMonitorRequest, initialScheduledFormFields } from './common';
+import { isSensitiveHeaderName } from './http';
+import { SecretKV, plainRowsFromMap, secretRowsError, secretRowsFromMap, splitSecretRows } from './secret-map';
 
 // GrpcForm's and TcpForm's state and requests.
+
+// gRPC metadata: plain `metadata` beside the secret map `secret_metadata`
+// (shared/secrets MonitorSecretMapFields). Reads mask secret values as "***";
+// a submitted secret map is edited per key, an absent one keeps them all, so
+// a form that loaded stored secret metadata always submits the map.
+// Credential-named keys (authorization, x-api-key, …: the header rule) are
+// always secret, as in the HTTP form.
+
+/** The metadata rows of a loaded gRPC config (stored values only on edit). */
+export function grpcMetadataRows(config: GRPCMonitorConfig | undefined, isEditMode: boolean): SecretKV[] {
+  return [...plainRowsFromMap(config?.metadata), ...secretRowsFromMap(config?.secret_metadata, isEditMode)];
+}
+
+/** The first problem with the metadata rows, or undefined. */
+export function grpcMetadataError(rows: SecretKV[]): string | undefined {
+  const error = secretRowsError(rows, 'Metadata entries', isSensitiveHeaderName);
+  if (error) return error;
+  const reserved = rows.find((row) => row.key.trim().toLowerCase().startsWith('grpc-'));
+  if (reserved) return `"${reserved.key.trim()}" is reserved: grpc- metadata keys belong to the protocol`;
+  return undefined;
+}
 
 /** GrpcForm's initial state: the stored monitor on edit, else the clone source. */
 export function initialGrpcFormState(monitor?: Monitor, initialData?: CreateMonitorRequest) {
@@ -23,6 +46,14 @@ export function initialGrpcFormState(monitor?: Monitor, initialData?: CreateMoni
     use_tls: monitor && monitor.type === 'grpc'
       ? (monitor.config as GRPCMonitorConfig)?.use_tls ?? true
       : initialGrpcConfig?.use_tls ?? true,
+    metadata: grpcMetadataRows(
+      monitor && monitor.type === 'grpc' ? (monitor.config as GRPCMonitorConfig) : initialGrpcConfig,
+      isEditMode
+    ),
+    secret_metadata_stored:
+      isEditMode && monitor?.type === 'grpc'
+        ? Object.keys((monitor.config as GRPCMonitorConfig)?.secret_metadata || {}).length > 0
+        : false,
   };
 }
 
@@ -39,6 +70,10 @@ export function buildGrpcRequest(form: GrpcFormState): CreateMonitorRequest {
   if (form.service.trim()) {
     config.service = form.service.trim();
   }
+
+  const { plain, secret } = splitSecretRows(form.metadata, isSensitiveHeaderName);
+  if (Object.keys(plain).length > 0) config.metadata = plain;
+  if (Object.keys(secret).length > 0 || form.secret_metadata_stored) config.secret_metadata = secret;
 
   return buildScheduledMonitorRequest('grpc', config, form);
 }

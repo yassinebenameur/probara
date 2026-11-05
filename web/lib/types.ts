@@ -307,6 +307,11 @@ export interface HTTPMonitorConfig {
   tls_server_name?: string;
   tls_ca_pem?: string;
   collect_timing?: boolean;
+  // Secret request headers (values masked "***" on read) and basic auth;
+  // the password is a secret too. See shared/secrets MonitorSecretFields.
+  secret_headers?: Record<string, string>;
+  basic_auth_username?: string;
+  basic_auth_password?: string;
 }
 
 export interface PingMonitorConfig {
@@ -327,6 +332,9 @@ export interface GRPCMonitorConfig {
   port?: number;
   service?: string;
   use_tls?: boolean;
+  // Sent with the health RPC; secret_metadata values are masked "***" on read.
+  metadata?: Record<string, string>;
+  secret_metadata?: Record<string, string>;
 }
 
 export interface PrometheusMonitorConfig {
@@ -673,6 +681,9 @@ export interface SyntheticAPIMonitorConfig {
   failure_mode?: SyntheticFailureMode;
   variables?: Record<string, string>;
   steps: SyntheticAPIStepConfig[];
+  // {{name}} references like `variables`, but secret: masked "***" on read
+  // and redacted from check results by the worker.
+  secret_variables?: Record<string, string>;
 }
 
 export type SyntheticBrowserAction =
@@ -706,6 +717,8 @@ export interface SyntheticBrowserMonitorConfig {
   variables?: Record<string, string>;
   artifacts?: SyntheticBrowserArtifacts;
   steps: SyntheticBrowserStepConfig[];
+  // See SyntheticAPIMonitorConfig.secret_variables.
+  secret_variables?: Record<string, string>;
 }
 
 export type MonitorConfig =

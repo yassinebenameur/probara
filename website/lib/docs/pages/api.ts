@@ -301,7 +301,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Test and run have different side effects",
           text:
-            "`POST /monitors/test` is allowed for viewers/read keys because it is compute-only. `POST /monitors/{id}/run` publishes a normal job, stores the result, changes state, and can trigger alerts, so it requires write permission. For a SIP test-call monitor (`method: invite`) both place a real call, so both, like creating or changing one, need a signed-in tenant admin or superadmin; every API key gets HTTP 403.",
+            "`POST /monitors/test` is allowed for viewers/read keys because it is compute-only, but a test that names a saved monitor (`monitor_id`) of a type with [secret fields](/docs/monitors/#secrets), which includes `http`, `grpc` and the synthetic types, runs with its stored credentials and so requires write permission. `POST /monitors/{id}/run` publishes a normal job, stores the result, changes state, and can trigger alerts, so it requires write permission. For a SIP test-call monitor (`method: invite`) both place a real call, so both, like creating or changing one, need a signed-in tenant admin or superadmin; every API key gets HTTP 403.",
         },
       ],
     },

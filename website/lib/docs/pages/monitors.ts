@@ -176,7 +176,10 @@ export const MONITORS_PAGE: DocPage = {
               "`method`",
               "Required: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, or `OPTIONS`",
             ],
-            ["`headers`", "Request header map"],
+            ["`headers`", "Request header map, stored in plaintext. A credential-named header (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-API-Key`, `Api-Key`, `X-Auth-Token`, or any name containing `token`, `secret`, `password`, `apikey` or `api-key`) is moved to `secret_headers` on save"],
+            ["`secret_headers`", "Request header map whose values are [secret](#secrets): encrypted at rest, returned as `***`. A name may not appear in both maps"],
+            ["`basic_auth_username`", "HTTP basic auth user; cannot contain `:`, or be combined with an `Authorization` header"],
+            ["`basic_auth_password`", "HTTP basic auth password, a [secret](#secrets); requires `basic_auth_username`"],
             ["`body`", "Optional request body"],
             [
               "`expected_status`",
@@ -289,7 +292,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "gRPC",
               description:
-                "Set `host`, optional `port`, optional `service`, and `use_tls`. Probara calls the standard `grpc.health.v1.Health/Check` method and succeeds only for `SERVING`. The default port is 443 with TLS and 80 without it.",
+                "Set `host`, optional `port`, optional `service`, and `use_tls`. Probara calls the standard `grpc.health.v1.Health/Check` method and succeeds only for `SERVING`. The default port is 443 with TLS and 80 without it. `metadata` is sent with the call as request metadata, and so is `secret_metadata`, whose values are [secret](#secrets) (put an `authorization` token there). Keys use letters, digits, `-`, `_` and `.`, are sent lowercased, may not start with `grpc-`, and may not appear in both maps.",
             },
             {
               term: "TCP",
@@ -365,7 +368,7 @@ export const MONITORS_PAGE: DocPage = {
           tone: "warning",
           title: "Header values are secret material",
           text:
-            "WebSocket header values are encrypted when a secrets key is configured and returned as `***` through the API. Header names remain visible.",
+            "WebSocket header values are encrypted when a secrets key is configured and returned as `***` through the API. Header names remain visible. HTTP and gRPC monitors split the two: `headers` and `metadata` stay plaintext, `secret_headers` and `secret_metadata` are protected the same way, and credential-named HTTP headers are moved to the secret side on save.",
         },
       ],
     },
@@ -527,7 +530,7 @@ export const MONITORS_PAGE: DocPage = {
           rows: [
             [
               "Journey",
-              "`base_url`, `failure_mode`, `variables`, and ordered `steps`",
+              "`base_url`, `failure_mode`, `variables`, `secret_variables`, and ordered `steps`",
             ],
             [
               "Step",
@@ -547,6 +550,11 @@ export const MONITORS_PAGE: DocPage = {
           type: "paragraph",
           text:
             "URLs may be absolute, or relative when `base_url` is present. Static and extracted variables are referenced with `{{variable_name}}` in subsequent supported fields. `failure_mode` is `fail_fast` by default; use `continue` when later diagnostic steps should still execute after a failed step.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Put credentials in `secret_variables` and reference them the same way, for example `\"Authorization\": \"Bearer {{api_token}}\"`. Their values are [secret](#secrets), and the worker replaces every occurrence of one (also URL-encoded) with `[REDACTED]` in what the check records: step URLs, errors, assertion messages and extracted values. A name may not be in both `variables` and `secret_variables`, and saving refuses a `{{name}}` that no variable, secret variable or extraction defines. A credential-named step header written as a literal value is moved into a generated secret variable on save (`<step id>_<header>`, for example `{{login_authorization}}`).",
         },
         {
           type: "paragraph",
@@ -598,7 +606,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Journey variables include `start_url`, optional device profile, `failure_mode`, static `variables`, artifact settings, and steps. Each step has a unique ID and a 1–180 second timeout. The configuration model exposes screenshot, Playwright trace, and HAR-on-failure switches, but the current worker implements screenshots only; trace and HAR requests produce warnings rather than artifacts.",
+            "Journey variables include `start_url`, optional device profile, `failure_mode`, static `variables`, `secret_variables`, artifact settings, and steps. Each step has a unique ID and a 1–180 second timeout. `secret_variables` work as in API journeys: reference one as `{{password}}` in a `fill` value (the guided login template stores its password there), and its value is redacted from step URLs, selectors, errors, warnings and screenshot metadata. The configuration model exposes screenshot, Playwright trace, and HAR-on-failure switches, but the current worker implements screenshots only; trace and HAR requests produce warnings rather than artifacts.",
         },
         {
           type: "paragraph",
@@ -654,7 +662,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password` (also used for INVITE test calls), the Prometheus `password` and `bearer_token`, plus every WebSocket header value. API reads replace protected values with `***`.",
+            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password` (also used for INVITE test calls), the Prometheus `password` and `bearer_token`, the HTTP `basic_auth_password` and every `secret_headers` value, every gRPC `secret_metadata` value, every `secret_variables` value of synthetic API and browser journeys, plus every WebSocket header value. API reads replace protected values with `***`.",
         },
         {
           type: "list",
@@ -663,8 +671,9 @@ export const MONITORS_PAGE: DocPage = {
             "Omit the field entirely and the stored value is preserved as well, so an update that resubmits a config read back from the API cannot destroy a credential it was never shown.",
             "Submit a new value to replace and encrypt it.",
             "Submit an empty string to clear a protected field. That is the only spelling that removes a stored secret.",
-            "WebSocket header names remain visible while their values are masked. Submitting the `headers` object edits it key by key, so a key left out of a submitted object is removed; omitting the whole object keeps the stored headers.",
-            "On create there is no stored value, so `***` is dropped exactly like an omitted field and the monitor is created without that secret. Cloning a monitor in the operator UI therefore never copies its secrets: the clone keeps WebSocket header names with blank values and leaves passwords, tokens, connection strings and client keys empty, to be entered again.",
+            "Secret maps (WebSocket `headers`, HTTP `secret_headers`, gRPC `secret_metadata`, synthetic `secret_variables`) keep their names visible while their values are masked. Submitting the map edits it key by key, so a key left out of a submitted object is removed and `{}` removes them all; omitting the whole object keeps the stored map.",
+            "Secrets nested inside steps are never protected in place: a synthetic step refers to a `secret_variables` entry with `{{name}}` instead. On save, credential-named HTTP `headers` move to `secret_headers` and literal credential-named synthetic API step headers move to generated secret variables, for API, MCP and import writes alike. `go run ./cmd/admin/migrate_sensitive_headers` (dry run; add `-apply` to write) does the same to monitors saved before, encrypting with the current key.",
+            "On create there is no stored value, so `***` is dropped exactly like an omitted field and the monitor is created without that secret. Cloning a monitor in the operator UI therefore never copies its secrets: the clone keeps secret header, metadata and variable names with blank values and leaves passwords, tokens, connection strings and client keys empty, to be entered again.",
           ],
         },
         {

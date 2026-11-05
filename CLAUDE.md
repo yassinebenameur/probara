@@ -146,6 +146,17 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   clone strips masks for every type first (`stripMaskedSecrets` in
   `web/lib/monitor-clone.ts`), and a form marks a masked value "stored" only
   in edit mode.
+  Secrets below the top level (synthetic step headers, browser `fill`
+  values) never get nested registry paths: they are `{{name}}` references to
+  a top-level `secret_variables` map, whose values the worker redacts from
+  the whole result (`worker/internal/worker/synthetic_redact.go`). On write,
+  `secrets.NormalizeSensitiveHeaders` runs after the merge and before
+  encrypt, moving credential-named http `headers` into `secret_headers`
+  (literal synthetic_api step ones into `secret_variables`); its name rule
+  `IsSensitiveHeaderName` has a TS twin in `web/lib/monitor-form/http.ts`,
+  pinned by `shared/secrets/testdata/sensitive_header_names.json`. Skip
+  secret work for a config with no secret key via `secrets.HasSecretValues`
+  (byte-level, no decode).
 - **Channel config secrets** are the plugin manifest's `secret` fields, and
   they merge differently (`secrets.MergePreserveSecrets`): absent, `""` and
   `***` all **keep** the stored value (the channel form submits every secret

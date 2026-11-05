@@ -24,7 +24,15 @@ import {
   syntheticAssertionOpsByTarget,
 } from '@/lib/monitor-form/synthetic';
 import { FIELD_LABEL, FormInput, FormSelect, FormTextarea, ToggleRow, FormPanel } from './form-kit';
-import { SyntheticModeHeader, SyntheticTemplatesWell, SyntheticVariablesField, swapped, withItem, withoutItem } from './synthetic-kit';
+import {
+  SyntheticModeHeader,
+  SyntheticSecretVariablesField,
+  SyntheticTemplatesWell,
+  SyntheticVariablesField,
+  swapped,
+  withItem,
+  withoutItem,
+} from './synthetic-kit';
 
 const STEP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'].map((m) => ({ value: m, label: m }));
 
@@ -61,6 +69,7 @@ export default function SyntheticApiEditor({
       ...prev,
       synthetic_api_steps: '',
       synthetic_api_variables: '',
+      synthetic_api_secret_variables: '',
       synthetic_api_base_url: '',
     }));
   };
@@ -72,7 +81,10 @@ export default function SyntheticApiEditor({
         onModeChange={onModeChange}
         facts={[
           `${steps.length} steps`,
-          `${(form.synthetic_api_variables || []).filter((v) => v.key.trim()).length} variables`,
+          `${
+            (form.synthetic_api_variables || []).filter((v) => v.key.trim()).length +
+            (form.synthetic_api_secret_variables || []).filter((v) => v.key.trim()).length
+          } variables`,
           `${steps.reduce((sum, step) => sum + step.extracts.length, 0)} extracts`,
         ]}
         description="Basic keeps the journey builder focused. Advanced unlocks headers, extracts, and assertion tuning."
@@ -115,6 +127,14 @@ export default function SyntheticApiEditor({
           onChange={(rows) => patch({ synthetic_api_variables: rows })}
           error={errors.synthetic_api_variables}
           hint={<>Use <code>{'{{variable_name}}'}</code> in URLs, headers, and request bodies.</>}
+        />
+      )}
+
+      {mode === 'advanced' && (
+        <SyntheticSecretVariablesField
+          rows={form.synthetic_api_secret_variables}
+          onChange={(rows) => patch({ synthetic_api_secret_variables: rows })}
+          error={errors.synthetic_api_secret_variables}
         />
       )}
 

@@ -1,5 +1,6 @@
 import {
   CheckResult,
+  MASKED_SECRET,
   SyntheticAPIAssertionConfig,
   SyntheticAPIAssertionTarget,
   SyntheticAPIExtractConfig,
@@ -72,6 +73,8 @@ export type SyntheticBrowserGuidedDraft = {
   expected_url: string;
   username: string;
   password: string;
+  /** Edit mode: a stored password sits behind the mask; blank keeps it. */
+  password_stored?: boolean;
 };
 
 export const mapVariablesToRows = (variables?: Record<string, string>): SyntheticVarKV[] => {
@@ -375,28 +378,36 @@ export const defaultSyntheticBrowserGuidedDraft = (
 export const normalizeSyntheticBrowserGuidedTemplate = (value: string): SyntheticBrowserGuidedTemplate =>
   value === 'login_flow' ? 'login_flow' : 'homepage_smoke';
 
+/**
+ * The guided journey. The password is a secret variable (encrypted, masked
+ * on read, redacted from results): typed, it submits as is; left blank over
+ * a stored one, it submits "***" to keep it.
+ */
 export const buildSyntheticBrowserGuidedDraft = (draft: SyntheticBrowserGuidedDraft): {
   startURL: string;
   variables: Record<string, string>;
+  secretVariables: Record<string, string>;
   steps: SyntheticBrowserStepDraft[];
 } => {
   const template = normalizeSyntheticBrowserGuidedTemplate(draft.template);
   const startURL = draft.start_url.trim();
   const variables: Record<string, string> = {};
+  const secretVariables: Record<string, string> = {};
   const username = draft.username.trim();
-  const password = draft.password.trim();
+  const password = draft.password.trim() ? draft.password.trim() : draft.password_stored ? MASKED_SECRET : '';
 
   if (username) {
     variables.username = username;
   }
   if (password) {
-    variables.password = password;
+    secretVariables.password = password;
   }
 
   if (template === 'homepage_smoke') {
     return {
       startURL,
       variables,
+      secretVariables,
       steps: [
         {
           ...defaultSyntheticBrowserStep(1),
@@ -464,5 +475,5 @@ export const buildSyntheticBrowserGuidedDraft = (draft: SyntheticBrowserGuidedDr
     }
   );
 
-  return { startURL, variables, steps };
+  return { startURL, variables, secretVariables, steps };
 };
