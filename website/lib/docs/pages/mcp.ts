@@ -163,6 +163,7 @@ export const MCP_PAGE: DocPage = {
             ["Status pages", "pages, sections and settings, custom template draft/publish/revert, template library"],
             ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message)"],
             ["Workspace", "local AI settings, `export_ai_labels`, API keys, workspace settings, audit log"],
+            ["People", "`get_people_settings` / `update_people_settings` (the workspace's SMS channel for people)"],
             ["Platform", "`list_tenants`, users, SSO group mappings, `create_tenant`, `rename_tenant`, `delete_tenant` (destructive) (superadmins)"],
           ],
         },
@@ -189,7 +190,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); and the OAuth protocol routes themselves.",
+            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); your own account's sessions and contacts (`/account/…`, browser sessions only); and the OAuth protocol routes themselves.",
         },
       ],
     },

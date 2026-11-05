@@ -19,6 +19,7 @@ import { clearSelectedTenantId } from '@/lib/tenant';
 import { formatDateTime, formatRelativeTime, pluralize } from '@/lib/format';
 import { describeUserAgent, sessionMethodLabel } from '@/lib/sessions';
 import type { AdminSession } from '@/lib/types';
+import ContactsPanel from '@/components/account/ContactsPanel';
 
 type Pending =
   | { kind: 'one'; session: AdminSession }
@@ -113,7 +114,7 @@ export default function AccountPage() {
 
   return (
     <Page width="form">
-      <PageHeader title="Account" subtitle="Your profile and the browsers signed in as you." />
+      <PageHeader title="Account" subtitle="Your profile, the contacts you can be reached at and the browsers signed in as you." />
 
       <Panel title="Profile">
         {userLoading ? (
@@ -145,6 +146,8 @@ export default function AccountPage() {
           <p className="text-sm text-slate-500">Profile unavailable.</p>
         )}
       </Panel>
+
+      <ContactsPanel />
 
       <Panel
         title="Sessions"

@@ -284,6 +284,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.Get("/users/bootstrap/status", adminUsersHandlers.BootstrapStatus)
 		r.Post("/users/bootstrap/first", adminUsersHandlers.BootstrapFirstUser)
 		identityAccountRoutes(r, authMiddleware, authHandlers)
+		people := newPeopleDeps(dbClient, secretsEncryptor, cfg, auditRecorder, log)
+		peopleOpenRoutes(r, authMiddleware, people) // routes_people.go
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -621,6 +623,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/", tenantHandlers.ListTenants)
 				registerWorkspaceRoutes(r, tenantSvc, cfg, auditRecorder, log)
 			})
+			peopleRoutes(r, people) // routes_people.go
 
 			// Audit log (tenant admins and superadmins)
 			auditHandlers := audithandlers.NewHandlers(auditSvc, log)

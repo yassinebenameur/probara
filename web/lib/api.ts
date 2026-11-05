@@ -1580,3 +1580,33 @@ export function renameTenant(id: string, data: RenameTenantRequest): Promise<Ten
 export function deleteTenant(id: string, data: DeleteTenantRequest): Promise<DeleteTenantResponse> {
   return apiRequest<DeleteTenantResponse>('DELETE', `/v1/tenants/${id}`, data);
 }
+
+// Personal contacts (signed-in browser session only) and the workspace's
+// personal SMS channel. Types live in lib/contacts.ts.
+export function getMyContacts() {
+  return apiRequest<import('./contacts').ContactListResponse>('GET', '/v1/account/contacts');
+}
+export function createMyContact(data: import('./contacts').CreateContactRequest) {
+  return apiRequest<import('./contacts').UserContact>('POST', '/v1/account/contacts', data);
+}
+export function updateMyContact(id: string, data: { label: string }) {
+  return apiRequest<import('./contacts').UserContact>('PATCH', `/v1/account/contacts/${id}`, data);
+}
+export function deleteMyContact(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/account/contacts/${id}`);
+}
+export function sendContactCode(id: string) {
+  return apiRequest<import('./contacts').UserContact>('POST', `/v1/account/contacts/${id}/send-code`);
+}
+export function verifyContact(id: string, code: string) {
+  return apiRequest<import('./contacts').UserContact>('POST', `/v1/account/contacts/${id}/verify`, { code });
+}
+export function testContact(id: string) {
+  return apiRequest<{ sent: boolean }>('POST', `/v1/account/contacts/${id}/test`);
+}
+export function getPeopleSettings() {
+  return apiRequest<import('./contacts').PeopleSettings>('GET', '/v1/people-settings');
+}
+export function updatePeopleSettings(data: { personal_sms_channel_id: string | null }) {
+  return apiRequest<import('./contacts').PeopleSettings>('PUT', '/v1/people-settings', data);
+}

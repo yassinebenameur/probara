@@ -727,6 +727,11 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   inherits the first send's recipients and reaches nobody. A multi-recipient
   plugin skips what it reports delivered and records each acceptance (the
   `plugin` doc; `twilio` does).
+- **People layer.** Contact addresses (`user_contacts`, `shared/contacts`)
+  are secrets envelopes shown only to their owner. A send to one person goes
+  through a plugin with `CapabilityDirectRecipient`
+  (`DispatchRequest.Recipient`), and an async envelope carries `ContactID`,
+  never the address (the worker resolves it with `contacts.LoadVerified`).
 
 ## Status pages
 

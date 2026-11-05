@@ -186,6 +186,39 @@ export const ADMINISTRATION_PAGE: DocPage = {
       ],
     },
     {
+      id: "contacts",
+      title: "Your contacts",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The **Contacts** panel on the **Account** page holds the addresses where Probara can reach you directly: email addresses and mobile numbers (international format, `+` and the country code). A contact counts only once verified: adding one sends a 6-digit code to the address, and you enter it on the page. Every role manages its own contacts, viewers included; nobody else, superadministrators included, sees or changes them.",
+        },
+        {
+          type: "list",
+          items: [
+            "Email codes go through the installation's mailer (`SMTP_*` on the API, see [SMTP](/docs/configuration/#alerter-and-smtp)); without it, email contacts can be added but not verified.",
+            "SMS codes go through the selected workspace's **SMS for people** channel (Settings › Notifications), a Twilio SMS channel a workspace admin designates. Only the one recipient is texted; the channel's own recipient list is not used. Without one, SMS contacts cannot be verified in that workspace.",
+            "A code lives 15 minutes and allows 5 guesses; the fifth wrong guess voids it. A new code needs 60 seconds since the last, and one user sends at most 10 codes and test messages per hour, so a member cannot run up a workspace's SMS bill. A message the provider refused uses none of that budget.",
+            "Addresses are encrypted at rest with `PROBARA_SECRETS_KEY`, like channel secrets, and only their owner sees them. Codes are stored as hashes. The address of a contact cannot be edited: remove it and add the new one, which needs its own code.",
+            "**Send a test message** checks a verified contact end to end.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Nothing pages contacts yet",
+          text:
+            "Verified contacts are the groundwork for escalation policies, which will page people directly. Until then alerts reach people only through notification channels.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The routes (`/api/v1/account/contacts`, see [Contacts and on-call endpoints](/docs/api/#people-api)) accept a signed-in browser session only and are not MCP tools. Changes are recorded in the audit log as `account.*` actions; the address is never in the record. No admin tool re-encrypts contact addresses yet: when [rotating keys](/docs/security/#encryption-at-rest), keep a retired key version configured while contacts sealed with it remain, or have their owners re-add them.",
+        },
+      ],
+    },
+    {
       id: "tenant-context",
       title: "Tenant context",
       blocks: [
