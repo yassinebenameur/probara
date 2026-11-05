@@ -191,7 +191,7 @@ func TestDefaultBody_RootCauseAnnotation(t *testing.T) {
 		t.Fatalf("root-cause line missing from body:\n%s", body)
 	}
 
-	data := templateData(event, "")
+	data := templateData(event, Templates{}, "")
 	if data["root_cause_monitor_name"] != "Postgres prod" {
 		t.Fatalf("template variable root_cause_monitor_name = %v", data["root_cause_monitor_name"])
 	}
@@ -211,7 +211,7 @@ func TestDefaultBody_ImpactedMonitors(t *testing.T) {
 			t.Fatalf("impact list missing %q from body:\n%s", want, body)
 		}
 	}
-	text := renderAlertText(newAlertView(event, ""))
+	text := renderAlertText(newAlertView(event, Templates{}, ""))
 	if !strings.Contains(text, "Also affecting") || !strings.Contains(text, "Checkout") || !strings.Contains(text, "3 more") {
 		t.Fatalf("impact list missing from plain-text part:\n%s", text)
 	}
@@ -223,7 +223,7 @@ func TestDefaultBody_ImpactedMonitors(t *testing.T) {
 		t.Fatal("impact list rendered on a resolved notification")
 	}
 
-	data := templateData(event, "")
+	data := templateData(event, Templates{}, "")
 	names, _ := data["impacted_monitors"].([]string)
 	if len(names) != 2 || data["impacted_count"] != 5 {
 		t.Fatalf("template variables impacted_monitors=%v impacted_count=%v", data["impacted_monitors"], data["impacted_count"])

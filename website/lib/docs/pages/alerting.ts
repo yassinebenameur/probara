@@ -76,7 +76,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "info",
           title: "Acknowledging stops the paging",
           text:
-            "Acknowledging records who owns the alert (`acknowledged_by_user_id`, and `acknowledged_via`: `ui`, `api` or `mcp`) and leaves the condition open. By default it also stops the paging: escalation tiers that have not fired yet never fire, and reminders stop, until the alert resolves or is unacknowledged. Paging channels (PagerDuty, Opsgenie / JSM) also receive the acknowledgement itself, once, so the provider stops its own escalation. A route marked **keep notifying after ack** (`notify_after_ack`, on a tenant default route or a monitor's custom route) keeps its tiers and reminders, for example a status-room channel. Turning off the workspace setting `ack_stops_notifications` restores the older behaviour, where reminders continued after an acknowledgement. Suspected-cause follow-ups still reach acknowledged alerts. With asynchronous dispatch, a tier or reminder already queued when the acknowledgement lands is dropped by the delivery worker, and a dropped tier counts as not sent: it pages after an unacknowledge like any unfired tier.",
+            "Acknowledging records who owns the alert (`acknowledged_by_user_id`, and `acknowledged_via`: `ui`, `api`, `mcp` or `magic_link`, the [acknowledge link](#ack-links) in a notification) and leaves the condition open. By default it also stops the paging: escalation tiers that have not fired yet never fire, and reminders stop, until the alert resolves or is unacknowledged. Paging channels (PagerDuty, Opsgenie / JSM) also receive the acknowledgement itself, once, so the provider stops its own escalation. A route marked **keep notifying after ack** (`notify_after_ack`, on a tenant default route or a monitor's custom route) keeps its tiers and reminders, for example a status-room channel. Turning off the workspace setting `ack_stops_notifications` restores the older behaviour, where reminders continued after an acknowledgement. Suspected-cause follow-ups still reach acknowledged alerts. With asynchronous dispatch, a tier or reminder already queued when the acknowledgement lands is dropped by the delivery worker, and a dropped tier counts as not sent: it pages after an unacknowledge like any unfired tier.",
         },
         {
           type: "paragraph",
@@ -295,7 +295,7 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`twilio_sms`",
               "`account_sid`, optional `api_key_sid`, `auth_token` (API key secret or account token), `from` number or Messaging Service SID, up to 10 E.164 `to` numbers",
-              "One SMS per recipient per event, the short form of the alert plus the deep link",
+              "One SMS per recipient per event, the short form of the alert plus the deep link and, on triggers and reminders, the [acknowledge link](#ack-links)",
             ],
             [
               "`ntfy`",
@@ -337,7 +337,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
+            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not, and so does the one-click [acknowledge link](#ack-links) on triggers and reminders.",
         },
         {
           type: "table",
@@ -402,7 +402,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
+            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host, and so is the [Acknowledge](#ack-links) button that triggers and reminders carry. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
         },
         {
           type: "table",
@@ -425,7 +425,42 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
+            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, `ack_url` and `ack_label` (the [acknowledge link](#ack-links), empty when the email carries none), and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
+        },
+      ],
+    },
+    {
+      id: "ack-links",
+      title: "Acknowledge from a notification",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every trigger and reminder carries an **Acknowledge** link, so whoever is paged can take the alert from the message itself without signing in. The link opens a confirm page in the operator UI (`/alert-action/<token>`) that shows the alert and acknowledges it when you press the button. Opening the link never acknowledges anything: mail security scanners and chat link previews fetch every URL in a message, so only the button's `POST` acts. The acknowledgement is recorded with `acknowledged_via` `magic_link` and no user, stops the paging exactly like any other acknowledgement, and appears in the audit log as `alert.acknowledge` by an anonymous `magic link` actor, with the channel the link came through.",
+        },
+        {
+          type: "table",
+          columns: ["Channel", "How the link appears"],
+          rows: [
+            ["`email`", "Primary button next to the open-the-monitor button, and an `Acknowledge: <url>` line in the plain-text part. Override templates receive it as `ack_url` and `ack_label`"],
+            ["`slack`, `teams`, `google_chat`", "Button next to the deep-link button"],
+            ["`discord`, `mattermost`", "Bold link under the summary"],
+            ["`telegram`, `matrix`", "Link above the deep link"],
+            ["`ntfy`", "A view action on the notification"],
+            ["`gotify`, `pushover`", "Last line of the message text; the text is shortened to keep the link whole"],
+            ["`twilio_sms`", "Last line of the SMS; the alert text is clipped to keep the link whole within 1,600 characters"],
+            ["`generic_webhook`", "`alert.links.acknowledge` in the body (absent when there is no link). A receiver can acknowledge programmatically with `POST /api/v1/alert-actions/<token>`"],
+            ["`pagerduty`, `opsgenie`", "None: acknowledge in the provider, or in Probara, which syncs the acknowledgement to them"],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "A link needs `APP_BASE_URL` (the confirm page's origin) and `PROBARA_SECRETS_KEY` (which signs it) on the alerter and the asynchronous delivery workers, and the same key on the API, which checks it. Without either, notifications carry no link.",
+            "Each link is valid for 72 hours from the notification that carried it; every reminder carries a fresh one. It acknowledges only, only that alert, and only while it is active: an acknowledged or resolved alert is reported as such.",
+            "Channel test sends, recoveries, acknowledgement notices and suspected-cause follow-ups carry no link, and neither does a reminder that a `notify_after_ack` route receives after the alert was acknowledged.",
+            "Deleting the channel revokes every link it delivered, and deleting the workspace revokes all of its links. See [Security](/docs/security/#action-links) for the token model and key rotation.",
+          ],
         },
       ],
     },

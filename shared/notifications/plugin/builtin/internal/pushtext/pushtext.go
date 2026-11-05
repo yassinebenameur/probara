@@ -61,3 +61,22 @@ func Clip(s string, n int) string {
 	}
 	return s[:i] + ellipsis
 }
+
+// BodyWithAck is Body plus the acknowledge link on its own last line, the
+// whole within maxBytes. The link is kept whole and the body shrunk to make
+// room; a link that does not fit at all is left out.
+func BodyWithAck(m present.Message, maxBytes int) string {
+	if m.AckURL == "" {
+		return Body(m, maxBytes)
+	}
+	line := m.AckLabel + ": " + m.AckURL
+	room := maxBytes - len(line) - len("\n\n")
+	if room < 0 {
+		return Body(m, maxBytes)
+	}
+	body := Body(m, room)
+	if body == "" {
+		return line
+	}
+	return body + "\n\n" + line
+}

@@ -316,12 +316,12 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY`',
               'Base64 encoding of exactly 32 bytes',
-              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback).',
+              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback). Also signs the [acknowledge links](/docs/alerting/#ack-links) in notifications (an HKDF-derived key, never the key itself); without it notifications carry none.',
             ],
             [
               '`PROBARA_SECRETS_KEY_V2` … `PROBARA_SECRETS_KEY_V100`',
               'Each is base64 encoding of exactly 32 bytes',
-              'Optional rotation keys. The highest configured version encrypts new writes; older keys remain available for decryption.',
+              'Optional rotation keys. The highest configured version encrypts new writes and signs new acknowledge links; older keys remain available for decryption and keep the links they signed valid.',
             ],
           ],
         },
@@ -747,7 +747,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel; omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one).',
+              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel, and (with `PROBARA_SECRETS_KEY`) the one-click [acknowledge link](/docs/alerting/#ack-links) to triggers and reminders; both are omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one).',
             ],
           ],
         },

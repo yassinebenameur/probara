@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/actionlink"
 	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -67,14 +68,23 @@ func main() {
 	// Create worker
 	w := worker.NewWorker(cfg, log, metricsRegistry, queueClient)
 
-	// Process-level plugin runtime: deep-link origin and the egress (SSRF)
-	// policy every notification channel dials through.
+	// Signer for the one-click acknowledge links in notifications
+	// (shared/actionlink), keyed off PROBARA_SECRETS_KEY. Nil without a key,
+	// which renders no links; its methods are nil-safe.
+	linkSigner, linkErr := actionlink.FromEnv()
+	if linkErr != nil {
+		log.WithError(linkErr).Warn("Acknowledge links disabled: invalid PROBARA_SECRETS_KEY")
+	}
+
+	// Process-level plugin runtime: deep-link origin, the egress (SSRF)
+	// policy every notification channel dials through, and the link signer.
 	plugin.Configure(plugin.Runtime{
 		AppBaseURL: cfg.AppBaseURL,
 		Egress: netguard.Policy{
 			BlockPrivate: cfg.NotificationBlockPrivateIPs,
 			AllowedCIDRs: cfg.NotificationAllowedCIDRs,
 		},
+		Links: linkSigner,
 	})
 
 	// Wire SMTP backend into the email plugin so the notifications consumer

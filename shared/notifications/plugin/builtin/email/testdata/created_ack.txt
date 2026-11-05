@@ -1,0 +1,22 @@
+DOWN · Alert Triggered
+API health
+==========
+
+Stopped responding — 3 checks failed in a row.
+
+Alert rule:    Critical
+Triggered:     24 May 2026, 12:00 UTC
+Failed checks: 3
+
+Last error:
+  timeout
+
+Acknowledge: https://probara.example.com/alert-action/ack-token
+
+Open the monitor: https://probara.example.com/monitors/3f2a91cc-11de-4b7a-9a2e-6c5f8d0e1234
+
+--
+Probara · uptime & voice observability
+You are receiving this because your address is on an email alert
+channel for this workspace.
+alert a-1 · workspace tenant-1

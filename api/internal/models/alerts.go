@@ -74,7 +74,8 @@ type AlertWithDetails struct {
 	// the alert has no triage row, and always absent on SSE events.
 	Triage *AlertTriage `json:"triage,omitempty"`
 	// AcknowledgedByUserID / AcknowledgedVia record who acknowledged the
-	// alert and through which surface (ui, api, mcp). Cleared on unack.
+	// alert and through which surface (ui, api, mcp, magic_link). Cleared
+	// on unack.
 	AcknowledgedByUserID *uuid.UUID `json:"acknowledged_by_user_id,omitempty"`
 	AcknowledgedVia      *string    `json:"acknowledged_via,omitempty"`
 	// UnacknowledgedAt is the last unacknowledge; escalation tiers and

@@ -452,7 +452,11 @@ or imported groups come back empty. Any other path that creates groups through
   `monitoring-platform.hasSecret` — the guard tests "literal **or** any
   existing-Secret ref", never the literal alone, or an external-secret install
   silently runs with encryption off. Rotation keys (`_V2`+) go through the
-  chart's top-level `extraEnv`.
+  chart's top-level `extraEnv`. The same keyring also signs the one-click
+  acknowledge links (`shared/actionlink`, HKDF per key version): the alerter
+  and worker mint them through `plugin.Runtime.Links`, the API verifies them
+  at the public `/api/v1/alert-actions/{token}` (`routes_actions.go`), so a
+  keyring mismatch between them breaks the links.
 - **`SMTP_*` / `APP_BASE_URL`**: needed by alerter (alert delivery), worker
   (async dispatch), and **api** — `POST /alert-channels/{id}/test` runs the
   email plugin in the API process, so alerter-only SMTP yields channels that
@@ -464,7 +468,10 @@ or imported groups come back empty. Any other path that creates groups through
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
   `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
   deep links to notifications (every channel, via `plugin.Configure`) —
-  unset omits them, never a guessed host.
+  unset omits them, never a guessed host. It also gates the signed
+  acknowledge link (`present.Message.AckURL`, created/reminder only, never
+  on `DispatchRequest.Test`), which every plugin that can carry a link
+  renders and the paging plugins leave out.
 - **Notification egress**: the same three workloads read
   `NOTIFICATION_BLOCK_PRIVATE_IPS` (default **true**) /
   `NOTIFICATION_ALLOWED_CIDRS` (`loadNotificationEgressConfig`); each main

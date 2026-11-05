@@ -40,6 +40,14 @@ type Templates struct {
 	Subject string
 	Body    string
 	HTML    string
+
+	// AckURL and AckLabel are this delivery's signed acknowledge link
+	// (present.Message.AckURL), which Send takes from the request's view so
+	// it is scoped to the channel and absent on test sends. They are not
+	// templates: the built-in rendering prints them, and overrides reach
+	// them as ack_url / ack_label. Empty renders none.
+	AckURL   string
+	AckLabel string
 }
 
 // Mailer is the SMTP backend the email plugin delegates to. The alerter
@@ -161,10 +169,13 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	if err != nil {
 		return err
 	}
+	view := req.View()
 	return mailer.SendAlert(ctx, req.Event, Templates{
-		Subject: cfg.SubjectTemplate,
-		Body:    cfg.BodyTemplate,
-		HTML:    cfg.BodyHTMLTemplate,
+		Subject:  cfg.SubjectTemplate,
+		Body:     cfg.BodyTemplate,
+		HTML:     cfg.BodyHTMLTemplate,
+		AckURL:   view.AckURL,
+		AckLabel: view.AckLabel,
 	}, cfg.To)
 }
 
@@ -189,18 +200,18 @@ func RenderSubject(event notifications.AlertEvent, templates Templates, appBaseU
 	if strings.TrimSpace(templates.Subject) == "" {
 		return fallback, nil
 	}
-	return renderTemplate(templates.Subject, fallback, templateData(event, appBaseURL))
+	return renderTemplate(templates.Subject, fallback, templateData(event, templates, appBaseURL))
 }
 
 // RenderBody computes the plain-text email body for an event, applying the
 // override template if present. Exposed for use by Mailer implementations.
 func RenderBody(event notifications.AlertEvent, templates Templates, appBaseURL string) (string, error) {
 	templates = effectiveTemplates(event, templates)
-	fallback := DefaultBodyWithLinks(event, appBaseURL)
+	fallback := renderAlertText(newAlertView(event, templates, appBaseURL))
 	if strings.TrimSpace(templates.Body) == "" {
 		return fallback, nil
 	}
-	return renderTemplate(templates.Body, fallback, templateData(event, appBaseURL))
+	return renderTemplate(templates.Body, fallback, templateData(event, templates, appBaseURL))
 }
 
 // RenderHTML computes the rich HTML part for an event. It returns an empty
@@ -210,12 +221,12 @@ func RenderBody(event notifications.AlertEvent, templates Templates, appBaseURL 
 func RenderHTML(event notifications.AlertEvent, templates Templates, appBaseURL string) (string, error) {
 	templates = effectiveTemplates(event, templates)
 	if strings.TrimSpace(templates.HTML) != "" {
-		return renderHTMLTemplate(templates.HTML, templateData(event, appBaseURL))
+		return renderHTMLTemplate(templates.HTML, templateData(event, templates, appBaseURL))
 	}
 	if strings.TrimSpace(templates.Body) != "" {
 		return "", nil
 	}
-	return renderAlertHTML(newAlertView(event, appBaseURL))
+	return renderAlertHTML(newAlertView(event, templates, appBaseURL))
 }
 
 // DefaultSubject is the subject line used when no override template is set.
@@ -235,7 +246,7 @@ func DefaultBody(event notifications.AlertEvent) string {
 // DefaultBodyWithLinks is DefaultBody plus a deep link into the operator UI at
 // appBaseURL. An empty appBaseURL omits the link.
 func DefaultBodyWithLinks(event notifications.AlertEvent, appBaseURL string) string {
-	return renderAlertText(newAlertView(event, appBaseURL))
+	return renderAlertText(newAlertView(event, Templates{}, appBaseURL))
 }
 
 func renderTemplate(text, fallback string, data map[string]any) (string, error) {
@@ -266,7 +277,7 @@ func renderHTMLTemplate(text string, data map[string]any) (string, error) {
 	return sb.String(), nil
 }
 
-func templateData(event notifications.AlertEvent, appBaseURL string) map[string]any {
+func templateData(event notifications.AlertEvent, templates Templates, appBaseURL string) map[string]any {
 	var lastError, resolvedAt string
 	if event.Alert.LastError != nil {
 		lastError = *event.Alert.LastError
@@ -312,7 +323,7 @@ func templateData(event notifications.AlertEvent, appBaseURL string) map[string]
 	// Presentation values, so an override template can reuse the built-in
 	// wording (human timestamps, the summary sentence, the deep link) instead of
 	// re-deriving it from raw fields.
-	view := newAlertView(event, appBaseURL)
+	view := newAlertView(event, templates, appBaseURL)
 
 	return map[string]any{
 		"alert_id":      event.Alert.ID,
@@ -355,6 +366,8 @@ func templateData(event notifications.AlertEvent, appBaseURL string) map[string]
 		"resolved_at_human":  humanTimeOf(event.Alert.ResolvedAt),
 		"action_url":         view.ActionURL,
 		"action_label":       view.ActionLabel,
+		"ack_url":            view.AckURL,
+		"ack_label":          view.AckLabel,
 		"accent_color":       view.Tone.Accent,
 	}
 }

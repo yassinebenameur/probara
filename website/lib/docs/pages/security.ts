@@ -229,7 +229,7 @@ export const SECURITY_PAGE: DocPage = {
           type: 'list',
           items: [
             'The API has a general rate limit: token buckets of `API_RATE_LIMIT_PER_MINUTE` (default 600) with `API_RATE_LIMIT_BURST` (default 120). On authenticated routes a request whose credential validates spends from that credential’s bucket — API key, MCP grant, or session user — and never from an address bucket, so users behind one NAT or proxy do not share one and a valid credential is never refused because of other traffic from the same address.',
-            'Per-address buckets, keyed by client address resolved through the [trusted proxy list](#audit-proxy-trust), apply only to two things: authentication failures, and unauthenticated routes (sign-in, refresh, OAuth registration and token, bootstrap). A 401 on an authenticated route spends from the address’s failure bucket, and once it is empty further failures from that address are answered `429`, so guessing API keys cannot buy unlimited database lookups. On unauthenticated routes every request spends from the address bucket whatever headers it carries; only a session cookie whose signature verifies moves it to that user’s bucket.',
+            'Per-address buckets, keyed by client address resolved through the [trusted proxy list](#audit-proxy-trust), apply only to two things: authentication failures, and unauthenticated routes (sign-in, refresh, OAuth registration and token, bootstrap, [acknowledge links](#action-links)). A 401 on an authenticated route spends from the address’s failure bucket, and once it is empty further failures from that address are answered `429`, so guessing API keys cannot buy unlimited database lookups. On unauthenticated routes every request spends from the address bucket whatever headers it carries; only a session cookie whose signature verifies moves it to that user’s bucket.',
             'Over the limit the API answers `429 Too Many Requests` with `Retry-After` in seconds. `0` disables the limiter.',
             'Exempt: health and metrics probes, `/static`, push heartbeats (`/api/v1/push`), discovery collectors, and — for credentials that validate — OTLP export (limited per monitor by `OTLP_MONITOR_RATE_PER_MIN`) and the alert stream. Failed authentication on those routes still spends from the failure bucket.',
             'Buckets live in memory on each API replica, so the effective cluster-wide ceiling is the limit times the replica count, and a restart resets them. Behind a proxy that is not in `TRUSTED_PROXY_CIDRS`, every anonymous visitor and every authentication failure shares the proxy’s address buckets; the API logs a warning at startup when the limiter is on and the list is empty. List your ingress there.',
@@ -288,7 +288,7 @@ export const SECURITY_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY*`',
               'API, scheduler, worker, alerter, maintenance CLIs',
-              'Historical versions are needed to open existing ciphertext.',
+              'Historical versions are needed to open existing ciphertext. Each version also signs [acknowledge links](#action-links): removing a version revokes the links it signed.',
             ],
             [
               '`OIDC_CLIENT_SECRET`',
@@ -601,6 +601,42 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Review alert and RCA payloads before sending them to third-party notification providers; error bodies, URLs, headers, and incident context can be sensitive.',
             'Keep the local AI service reachable only from the API and platform worker. The chart’s NetworkPolicy does this only on a CNI that enforces NetworkPolicy; elsewhere the token is the only barrier. Share label export files only with the people who retrain the model.',
             'Keep asynchronous dispatch stream/consumer permissions separate from check execution permissions.',
+          ],
+        },
+      ],
+    },
+    {
+      id: 'action-links',
+      title: 'Signed acknowledge links',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'The [acknowledge link](/docs/alerting/#ack-links) in a notification is a bearer capability: anyone holding the message can acknowledge that one alert, without signing in, until the link expires. It cannot resolve, unacknowledge, read anything beyond the alert\'s name and status, or reach another alert. Treat forwarded alert emails and public chat channels accordingly.',
+        },
+        {
+          type: 'definitions',
+          items: [
+            {
+              term: 'Token model',
+              description:
+                'Stateless and nothing stored: the token carries the workspace, alert and channel it was delivered for, its expiry (72 hours after sending) and a key version, sealed by a 128-bit truncated HMAC-SHA256. The HMAC key is derived with HKDF-SHA256 from that version of `PROBARA_SECRETS_KEY` (info `probara/alert-action/v1`), so it never equals the encryption key and needs no new secret. The API checks the signature, the expiry, that the alert belongs to the token\'s workspace, that the workspace is not deleted and that the channel still exists.',
+            },
+            {
+              term: 'Link scanners',
+              description:
+                'Mail security gateways and chat previews fetch every URL they see. Opening a link (`GET`) therefore never acts; the confirm page acknowledges with a `POST` on a button press. Responses are `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and the confirm page is excluded from search indexing.',
+            },
+            {
+              term: 'Replay and abuse',
+              description:
+                'A link stays usable until it expires, but acknowledging twice is a no-op reported as `already`. The routes are public and charged to the client address by the [anonymous rate limit](#edge-controls). Every attempt with an authentic token is audited as `alert.acknowledge` with `details.via` `magic_link` and the channel; forged tokens name no workspace and are only rate limited.',
+            },
+            {
+              term: 'Revocation and rotation',
+              description:
+                'Delete the channel to revoke the links it delivered, or the workspace to revoke all of its links. Links signed with a key version keep working after a [rotation](#encryption-at-rest) adds `PROBARA_SECRETS_KEY_V<n>`, and stop working when that version is removed. Every service that sends notifications and the API need the same keyring, or links minted by one fail on the other.',
+            },
           ],
         },
       ],

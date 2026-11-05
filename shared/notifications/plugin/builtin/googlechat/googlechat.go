@@ -194,11 +194,15 @@ func build(m present.Message) message {
 			Widgets: []widget{{TextParagraph: &textParagraph{Text: text(truncate(m.LastError, maxLastError))}}},
 		})
 	}
+	var buttons []button
+	if m.AckURL != "" {
+		buttons = append(buttons, button{Text: m.AckLabel, OnClick: onClick{OpenLink: openLink{URL: m.AckURL}}})
+	}
 	if m.ActionURL != "" {
-		sections = append(sections, section{Widgets: []widget{{ButtonList: &buttonList{Buttons: []button{{
-			Text:    m.ActionLabel,
-			OnClick: onClick{OpenLink: openLink{URL: m.ActionURL}},
-		}}}}}})
+		buttons = append(buttons, button{Text: m.ActionLabel, OnClick: onClick{OpenLink: openLink{URL: m.ActionURL}}})
+	}
+	if len(buttons) > 0 {
+		sections = append(sections, section{Widgets: []widget{{ButtonList: &buttonList{Buttons: buttons}}}})
 	}
 	out := message{
 		FallbackText: plainSafe(title),

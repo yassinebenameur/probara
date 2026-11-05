@@ -189,8 +189,13 @@ func build(topic string, m present.Message) message {
 		// ntfy substitutes "triggered" for an empty body.
 		out.Message = m.StatusWord
 	}
+	if m.AckURL != "" {
+		// "view" opens the confirm page; an "http" action would act
+		// without the confirmation the page exists for.
+		out.Actions = append(out.Actions, action{Action: "view", Label: m.AckLabel, URL: m.AckURL})
+	}
 	if m.ActionURL != "" {
-		out.Actions = []action{{Action: "view", Label: m.ActionLabel, URL: m.ActionURL}}
+		out.Actions = append(out.Actions, action{Action: "view", Label: m.ActionLabel, URL: m.ActionURL})
 	}
 	return out
 }

@@ -284,6 +284,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.Get("/users/bootstrap/status", adminUsersHandlers.BootstrapStatus)
 		r.Post("/users/bootstrap/first", adminUsersHandlers.BootstrapFirstUser)
 		identityAccountRoutes(r, authMiddleware, authHandlers)
+		alertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_actions.go)
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {

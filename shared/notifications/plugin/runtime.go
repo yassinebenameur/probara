@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/netguard"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 // Runtime is the process-level context every plugin shares. Each binary that
@@ -27,6 +28,11 @@ type Runtime struct {
 	// Egress is the outbound-connection policy applied to every plugin HTTP
 	// request. Channel URLs are tenant-supplied, so this is the SSRF boundary.
 	Egress netguard.Policy
+
+	// Links signs the one-click action links (acknowledge) in notifications:
+	// an *actionlink.Signer over PROBARA_SECRETS_KEY. Nil, or no AppBaseURL,
+	// renders none.
+	Links present.LinkSigner
 }
 
 // runtime defaults to blocking private addresses: a binary that forgets

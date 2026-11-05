@@ -189,7 +189,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); and the OAuth protocol routes themselves.",
+            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); the signed [acknowledge-link](/docs/alerting/#ack-links) routes (`/alert-actions/{token}`, authorized by their token; `acknowledge_alert` covers acknowledging); and the OAuth protocol routes themselves.",
         },
       ],
     },
