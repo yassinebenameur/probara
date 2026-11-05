@@ -221,7 +221,8 @@ export type MonitorType =
   | "tcp"
   | "mysql"
   | "websocket"
-  | "prometheus";
+  | "prometheus"
+  | "domain";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -316,6 +317,11 @@ export interface HTTPMonitorConfig {
   secret_headers?: Record<string, string>;
   basic_auth_username?: string;
   basic_auth_password?: string;
+  // Record a redacted excerpt of a failed check's response
+  // (metrics_data.http.failure_response); off by default.
+  capture_failure_response?: boolean;
+  // Body excerpt budget, 1-8192; absent means 2048.
+  capture_body_bytes?: number;
 }
 
 export interface PingMonitorConfig {
@@ -760,7 +766,8 @@ export type MonitorConfig =
   | RabbitMQMonitorConfig
   | MySQLMonitorConfig
   | WebSocketMonitorConfig
-  | PrometheusMonitorConfig;
+  | PrometheusMonitorConfig
+  | DomainMonitorConfig;
 
 export type NotificationMode = 'default' | 'custom';
 
@@ -810,7 +817,7 @@ export interface NotificationSettings {
   alert_reopen_cooldown_seconds: number;
 }
 
-export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'location_offline';
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'location_offline' | 'domain_expiry';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
 
@@ -1946,7 +1953,8 @@ export interface CheckResult {
     | WebSocketMetricsEnvelope
     | SIPMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
-    | SyntheticBrowserMetricsEnvelope;
+    | SyntheticBrowserMetricsEnvelope
+    | DomainMetricsEnvelope;
   location_id?: string; // Absent = default fleet
   location_name?: string;
   created_at: string;
@@ -2050,6 +2058,18 @@ export interface HTTPMetrics {
   tls?: TLSCertInfo;
   assertions_failed?: string[];
   display_values?: HTTPDisplayValue[];
+  failure_response?: HTTPFailureResponse;
+}
+
+// A failed check's redacted response excerpt (capture_failure_response):
+// credential-like and monitor-sent header values read "[REDACTED]".
+export interface HTTPFailureResponse {
+  status_line: string;
+  content_type?: string;
+  headers?: Record<string, string>;
+  headers_truncated?: boolean;
+  body_excerpt?: string;
+  body_truncated?: boolean;
 }
 
 export interface HTTPDisplayValue {
@@ -2691,4 +2711,38 @@ export interface NotificationDeliveryListResponse {
 // merging keeps this lane's addition out of the AlertChannel block above).
 export interface AlertChannel {
   last_delivery?: NotificationDelivery;
+}
+
+// --- Domain (registration expiry) monitors -----------------------------------
+
+// shared/models.DomainMonitorConfig. min_days_valid opens a domain_expiry
+// alert; the check itself fails only once the domain expired or is free.
+export interface DomainMonitorConfig {
+  domain: string;
+  min_days_valid?: number;
+  // RDAP base URL (https) used instead of the IANA bootstrap registry.
+  rdap_server_override?: string;
+  // Fall back to WHOIS (TCP 43) when RDAP cannot answer; absent means true.
+  whois_fallback?: boolean;
+}
+
+// metrics_data.domain (shared/domainexpiry.Info).
+export interface DomainMetrics {
+  domain: string;
+  expires_at?: string;
+  days_until_expiry?: number;
+  registered_at?: string;
+  updated_at?: string;
+  registrar?: string;
+  statuses?: string[];
+  nameservers?: string[];
+  registered: boolean;
+  source: 'rdap' | 'whois';
+  server?: string;
+  rdap_error?: string;
+  note?: string;
+}
+
+export interface DomainMetricsEnvelope {
+  domain?: DomainMetrics;
 }

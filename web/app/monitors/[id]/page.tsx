@@ -5,10 +5,11 @@ import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import Image from 'next/image';
 import { AlertTriangle, Eraser, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react';
-import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope, SIPMonitorConfig, PingMonitorConfig } from '@/lib/types';
+import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope, SIPMonitorConfig, PingMonitorConfig, DomainMonitorConfig } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings, getSlas, runMonitorNow, toggleMonitorEnabled } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { latestPingMetrics, pingFacts } from '@/lib/ping-metrics';
+import { domainFacts, latestDomainMetrics } from '@/lib/domain-metrics';
 import { effectiveCertExpiry } from '@/lib/tls-cert';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
@@ -195,6 +196,17 @@ function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
     const ping = latestPingMetrics(results);
     const cfg = monitor.config as PingMonitorConfig | undefined;
     for (const fact of ping ? pingFacts(ping, cfg?.max_packet_loss_pct) : []) {
+      rows.push(
+        <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
+          {fact.value}
+        </DetailRow>
+      );
+    }
+  }
+  if (monitor.type === 'domain') {
+    const domain = latestDomainMetrics(results);
+    const cfg = monitor.config as DomainMonitorConfig | undefined;
+    for (const fact of domain ? domainFacts(domain, cfg?.min_days_valid) : []) {
       rows.push(
         <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
           {fact.value}

@@ -21,6 +21,7 @@ import {
   SyntheticBrowserMonitorConfig,
   TCPMonitorConfig,
   PrometheusMonitorConfig,
+  DomainMonitorConfig,
 } from './types';
 
 function cloneObject<T>(value: T): T {
@@ -109,6 +110,9 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
     }
     case 'prometheus':
       return cloneObject(monitor.config as PrometheusMonitorConfig);
+    case 'domain':
+      // No secrets: every field carries over.
+      return cloneObject((monitor.config as DomainMonitorConfig | undefined) || { domain: '' });
     case 'websocket': {
       const cfg = (monitor.config as WebSocketMonitorConfig | undefined) || { url: '' };
       return cloneObject(cfg);

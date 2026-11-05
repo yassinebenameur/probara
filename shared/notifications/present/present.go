@@ -257,7 +257,7 @@ func suspectedCauseRows(alert notifications.AlertDetails, elapsed string) []Row 
 // followedUpPage names the page a follow-up refers to: the kind-aware
 // headline the page itself carried, e.g. "CPU Usage High".
 func followedUpPage(alert notifications.AlertDetails) string {
-	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() {
+	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() || alert.IsDomainExpiry() {
 		return labelFor(alert, EventCreated)
 	}
 	return "Down alert"
@@ -366,6 +366,8 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 			return ToneUp, "BACK TO NORMAL"
 		case alert.IsTLSExpiry():
 			return ToneUp, "CERTIFICATE RENEWED"
+		case alert.IsDomainExpiry():
+			return ToneUp, "DOMAIN RENEWED"
 		case alert.IsLocationOffline():
 			if locationClosedWithoutRecovery(alert) {
 				// Nothing came back: the alert just stopped applying.
@@ -393,6 +395,11 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 	case alert.IsHostMetric():
 		return ToneWarn, "THRESHOLD BREACHED"
 	case alert.IsTLSExpiry():
+		return ToneWarn, "EXPIRING SOON"
+	case alert.IsDomainExpiry():
+		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+			return ToneDown, "DOMAIN EXPIRED"
+		}
 		return ToneWarn, "EXPIRING SOON"
 	case alert.IsMeshEdge():
 		if eventType == EventReminder {
@@ -440,6 +447,15 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 		return alert.HostMetricLabel(eventType)
 	case alert.IsTLSExpiry():
 		return alert.TLSExpiryLabel(eventType)
+	case alert.IsDomainExpiry():
+		switch eventType {
+		case EventResolved:
+			return "Domain Renewed"
+		case EventReminder:
+			return "Domain Still Expiring"
+		default:
+			return "Domain Expiring"
+		}
 	case alert.IsMeshEdge():
 		switch eventType {
 		case EventResolved:
@@ -541,6 +557,22 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		}
 		return "The TLS certificate is approaching expiry."
 
+	case alert.IsDomainExpiry():
+		if resolved {
+			return "The domain registration has been renewed."
+		}
+		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+			return fmt.Sprintf("The domain registration expired %s ago. Renew it before the registry releases the name.", dayValue(-*alert.MetricValue))
+		}
+		if alert.MetricValue != nil {
+			s := fmt.Sprintf("The domain registration expires in %s", dayValue(*alert.MetricValue))
+			if alert.ThresholdValue != nil {
+				s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
+			}
+			return s + "."
+		}
+		return "The domain registration is approaching expiry."
+
 	case alert.IsMeshEdge():
 		path := meshPath(alert)
 		if resolved {
@@ -639,6 +671,18 @@ func metricFor(alert notifications.AlertDetails, resolved bool) *Metric {
 			return nil
 		}
 		p := &Metric{Label: "Certificate lifetime left", Value: dayValue(*alert.MetricValue)}
+		if alert.ThresholdValue != nil {
+			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
+		}
+		return p
+	case alert.IsDomainExpiry():
+		if alert.MetricValue == nil {
+			return nil
+		}
+		p := &Metric{Label: "Registration left", Value: dayValue(*alert.MetricValue)}
+		if *alert.MetricValue < 0 {
+			p = &Metric{Label: "Registration expired", Value: dayValue(-*alert.MetricValue) + " ago"}
+		}
 		if alert.ThresholdValue != nil {
 			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
 		}

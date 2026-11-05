@@ -818,6 +818,8 @@ func typeLabel(kind string) string {
 		return "WebSocket"
 	case "prometheus":
 		return "Prometheus"
+	case "domain":
+		return "Domain"
 	default:
 		return strings.ToUpper(kind)
 	}
@@ -838,6 +840,8 @@ func typeBadge(kind string) string {
 		return "WS"
 	case "prometheus":
 		return "PROM"
+	case "domain":
+		return "DOM"
 	case "synthetic_api":
 		return "API"
 	case "synthetic_browser":

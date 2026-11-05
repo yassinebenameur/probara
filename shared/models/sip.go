@@ -24,7 +24,7 @@ type SIPMonitorConfig struct {
 	TLSSkipVerify  bool   `json:"tls_skip_verify,omitempty"` // Skip certificate verification (lab/self-signed)
 	TLSServerName  string `json:"tls_server_name,omitempty"` // SNI/verification name override
 	// TLSMinDaysValid opens a tls_expiry alert when the server certificate
-	// has fewer days left (alerter tls_expiry.go); the check itself passes.
+	// has fewer days left (alerter expiry.go); the check itself passes.
 	TLSMinDaysValid *int `json:"tls_min_days_valid,omitempty"`
 	// TLSCheckChain makes tls_expiry measure the earliest expiry across the
 	// presented chain (shared/tlscert chain_not_after), not just the leaf.

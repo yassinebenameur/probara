@@ -31,7 +31,8 @@ type Alert struct {
 	LastError      *string     `json:"last_error,omitempty"`
 	// Kind distinguishes an availability outage ("availability") from the
 	// orthogonal alert kinds: "latency_anomaly", "host_metric", "mesh_edge",
-	// and "tls_expiry" (certificate inside its expiry window, endpoint up).
+	// "tls_expiry" (certificate inside its expiry window, endpoint up) and
+	// "domain_expiry" (domain registration inside its expiry window).
 	Kind string `json:"kind"`
 	// Latency-anomaly annotation: populated when Kind == "latency_anomaly".
 	BaselineLatencyMs *float64 `json:"baseline_latency_ms,omitempty"`

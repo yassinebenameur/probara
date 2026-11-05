@@ -57,6 +57,9 @@ func newMonitorPresenters() map[string]monitorPresenter {
 		"tcp": regularMonitorPresenter{
 			urlExtractor: extractHostPortTarget,
 		},
+		"domain": regularMonitorPresenter{
+			urlExtractor: func(configJSON []byte) string { return extractConfigString(configJSON, "domain") },
+		},
 		"agent": regularMonitorPresenter{
 			urlExtractor: func(_ []byte) string { return "System Agent" },
 		},

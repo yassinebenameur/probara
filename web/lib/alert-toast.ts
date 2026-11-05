@@ -46,6 +46,11 @@ export function alertCondition(alert: Alert): string {
       return alert.metric_value != null
         ? `certificate expires in ${Math.max(0, Math.round(alert.metric_value))}d`
         : 'certificate is about to expire';
+    case 'domain_expiry':
+      if (alert.metric_value != null && alert.metric_value < 0) return 'domain registration has expired';
+      return alert.metric_value != null
+        ? `domain expires in ${Math.round(alert.metric_value)}d`
+        : 'domain registration is about to expire';
     case 'mesh_edge':
       return 'path is down';
     case 'location_offline':
@@ -65,6 +70,7 @@ const RESOLVED_NOUN: Record<Alert['kind'], string> = {
   tls_expiry: 'certificate alert',
   mesh_edge: 'path alert',
   location_offline: 'location offline alert',
+  domain_expiry: 'domain expiry alert',
 };
 
 function isDependencySuppressed(alert: Alert): boolean {

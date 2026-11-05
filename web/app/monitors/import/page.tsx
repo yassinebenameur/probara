@@ -93,6 +93,7 @@ const SUPPORTED_TYPES = [
   { value: 'rabbitmq', description: 'AMQP connect + auth checks' },
   { value: 'websocket', description: 'WebSocket connect + message checks' },
   { value: 'prometheus', description: 'PromQL query + numeric threshold checks' },
+  { value: 'domain', description: 'Domain registration expiry (RDAP, WHOIS)' },
 ];
 
 // Step indicator component

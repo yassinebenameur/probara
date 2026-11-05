@@ -162,9 +162,8 @@ func (d AlertDetails) ImpactedMonitorNames() []string {
 }
 
 // The alert kinds. This block mirrors the alerts_kind_check SQL constraint
-// (latest rewrite: migration 000100); change them together. KindDomainExpiry,
-// KindSLOBurn, KindLocationOffline and KindCheckWarning are reserved there
-// ahead of the features that open them.
+// (latest rewrite: migration 000100); change them together. KindSLOBurn and
+// KindCheckWarning are reserved there ahead of the features that open them.
 const (
 	KindAvailability    = "availability"
 	KindLatencyAnomaly  = "latency_anomaly"
@@ -201,6 +200,12 @@ func (d AlertDetails) IsLocationOffline() bool {
 // IsTLSExpiry reports whether this alert is a TLS-certificate-expiry warning.
 func (d AlertDetails) IsTLSExpiry() bool {
 	return d.Kind == KindTLSExpiry
+}
+
+// IsDomainExpiry reports whether this alert is a domain-registration
+// expiry warning.
+func (d AlertDetails) IsDomainExpiry() bool {
+	return d.Kind == KindDomainExpiry
 }
 
 // TLSExpiryLabel returns a header label for a tls_expiry alert, for use in

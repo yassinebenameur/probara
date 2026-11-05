@@ -4,7 +4,7 @@ import { ReactNode } from 'react';
 import { Plus, X } from 'lucide-react';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import CurlPreview from './CurlPreview';
-import { FormPanel, ToggleRow } from './form-kit';
+import { FormPanel, NumberInput, ToggleRow } from './form-kit';
 import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
 import FormField from '@/components/ui/FormField';
@@ -17,7 +17,7 @@ import {
   HTTPJSONAssertion,
   HTTPJSONAssertionOp,
 } from '@/lib/types';
-import { HeaderKV, isSensitiveHeaderName } from '@/lib/monitor-form/http';
+import { HTTP_CAPTURE_MAX_BODY_BYTES, HeaderKV, isSensitiveHeaderName } from '@/lib/monitor-form/http';
 import type { BasicAuthPasswordState } from '@/lib/monitor-form/inline';
 import SecretRowsEditor from './SecretRowsEditor';
 
@@ -42,6 +42,8 @@ export interface HttpFormData {
   tls_server_name: string;
   tls_ca_pem: string;
   collect_timing: boolean;
+  capture_failure_response: boolean;
+  capture_body_bytes: number;
 }
 
 export const SECTION_IDS = {
@@ -61,6 +63,7 @@ const FIELD_SECTION: Record<string, SectionId> = {
   max_latency_ms: SECTION_IDS.validation,
   max_redirects: SECTION_IDS.tls,
   tls_min_days_valid: SECTION_IDS.tls,
+  capture_body_bytes: SECTION_IDS.tls,
 };
 
 /** The section ids that hold at least one of `errors`, as an open-state patch. */
@@ -256,6 +259,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
         data.follow_redirects ? 'Follows redirects' : 'No redirects',
         'verifies TLS',
         data.collect_timing ? 'collects timing' : '',
+        data.capture_failure_response ? 'captures failed responses' : '',
       ]
         .filter(Boolean)
         .join(', ');
@@ -720,6 +724,33 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
               checked={data.collect_timing}
               onChange={(next) => onChange({ collect_timing: next })}
             />
+
+            <ToggleRow
+              title="Capture failed responses"
+              description="Store the status line, headers and the start of the body when a check fails. Credential-like headers, headers this monitor sends and its secret values are redacted; anyone who can view the monitor can read the rest."
+              checked={data.capture_failure_response}
+              onChange={(next) => onChange({ capture_failure_response: next })}
+            />
+            {data.capture_failure_response && (
+              <FormField label="Body excerpt" error={errors.capture_body_bytes}>
+                {(control) => (
+                  <>
+                    <span className="flex items-center gap-2">
+                      <NumberInput
+                        {...control}
+                        value={data.capture_body_bytes}
+                        onChange={(n) => onChange({ capture_body_bytes: n })}
+                        min={1}
+                        max={HTTP_CAPTURE_MAX_BODY_BYTES}
+                        className="input !w-28 tabular-nums"
+                      />
+                      <span className="text-xs text-slate-500">bytes</span>
+                    </span>
+                    {!errors.capture_body_bytes && <Hint>At most {HTTP_CAPTURE_MAX_BODY_BYTES} bytes, kept with the check for 30 days</Hint>}
+                  </>
+                )}
+              </FormField>
+            )}
           </CollapsibleSection>
         </>
       }

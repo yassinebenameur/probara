@@ -21,7 +21,7 @@ import {
   syntheticBrowserGuidedDraftFromForm,
   validateMonitorForm,
 } from '@/lib/monitor-form/inline';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame } from 'lucide-react';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame, CalendarClock } from 'lucide-react';
 import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
 import { AlertingSection } from './AlertingSection';
 import GroupForm from './GroupForm';
@@ -32,6 +32,7 @@ import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
 import PrometheusForm from './PrometheusForm';
 import WebsocketForm from './WebsocketForm';
+import DomainForm from './DomainForm';
 import DatabaseForm from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow, sectionsWithErrors } from './HttpMonitorForm';
 import DnsEditor from './DnsEditor';
@@ -79,6 +80,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   typeMeta('grpc', { description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' }),
   typeMeta('tcp', { description: 'Connect to a host and port', icon: PlugZap, category: 'Network', namePlaceholder: 'Postgres port reachability' }),
   typeMeta('sip', { description: 'OPTIONS, REGISTER, test calls', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' }),
+  typeMeta('domain', { description: 'Registration expiry via RDAP', icon: CalendarClock, category: 'Network', namePlaceholder: 'example.com registration' }),
   typeMeta('postgres', { description: 'Connect, auth and query', icon: Database, category: 'Databases & brokers', namePlaceholder: 'Postgres production' }),
   typeMeta('mysql', { description: 'Connect, auth and query', icon: Cylinder, category: 'Databases & brokers', namePlaceholder: 'MySQL production' }),
   typeMeta('redis', { description: 'Connect and PING latency', icon: Zap, category: 'Databases & brokers', namePlaceholder: 'Redis cache' }),
@@ -107,6 +109,7 @@ const TYPE_FORMS: Partial<Record<MonitorType, ComponentType<MonitorFormProps>>> 
   prometheus: PrometheusForm,
   tcp: TcpForm,
   websocket: WebsocketForm,
+  domain: DomainForm,
 };
 
 const isDatabaseType = (type: MonitorType): type is DatabaseMonitorType => type in DB_TYPE_META;

@@ -22,6 +22,8 @@ import {
 } from '../types';
 import { buildScheduledMonitorRequest } from './common';
 import {
+  HTTP_CAPTURE_DEFAULT_BODY_BYTES,
+  HTTP_CAPTURE_MAX_BODY_BYTES,
   buildStatusRulesFromHTTPConfig,
   isSensitiveHeaderName,
   mapHeadersToRows,
@@ -162,6 +164,8 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     tls_server_name: initialHTTPConfig?.tls_server_name || '',
     tls_ca_pem: initialHTTPConfig?.tls_ca_pem || '',
     collect_timing: initialHTTPConfig?.collect_timing ?? false,
+    capture_failure_response: initialHTTPConfig?.capture_failure_response ?? false,
+    capture_body_bytes: initialHTTPConfig?.capture_body_bytes ?? HTTP_CAPTURE_DEFAULT_BODY_BYTES,
     host: initialPingConfig?.host || initialDNSConfig?.host || '',
     ...initialPingFields(initialPingConfig),
     dns_record_type: initialDNSConfig?.record_type || 'A',
@@ -491,6 +495,12 @@ export function validateMonitorForm(
     }
     if ((form.display_fields || []).some(f => f.label?.trim() && !f.path.trim())) {
       newErrors.display_fields = 'Each display value needs a path';
+    }
+    if (
+      form.capture_failure_response &&
+      (!Number.isInteger(form.capture_body_bytes) || form.capture_body_bytes < 1 || form.capture_body_bytes > HTTP_CAPTURE_MAX_BODY_BYTES)
+    ) {
+      newErrors.capture_body_bytes = `Between 1 and ${HTTP_CAPTURE_MAX_BODY_BYTES} bytes`;
     }
   } else if (type === 'ping') {
     if (!form.host.trim()) newErrors.host = 'Host is required';
@@ -843,6 +853,12 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
     httpConfig.follow_redirects = form.follow_redirects;
     httpConfig.max_redirects = form.max_redirects;
     httpConfig.collect_timing = form.collect_timing;
+    // Sent only when on (and the budget only when not the default), so a
+    // monitor that never captures keeps its payload.
+    if (form.capture_failure_response) {
+      httpConfig.capture_failure_response = true;
+      if (form.capture_body_bytes !== HTTP_CAPTURE_DEFAULT_BODY_BYTES) httpConfig.capture_body_bytes = form.capture_body_bytes;
+    }
 
     if (form.tls_skip_verify) httpConfig.tls_skip_verify = true;
     if (form.tls_min_days_valid.trim()) {

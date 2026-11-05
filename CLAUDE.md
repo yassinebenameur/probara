@@ -185,6 +185,12 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   counts (leaf, or the chain's earliest under the monitor's `tls_check_chain`)
   is `Info.Expiry`, with SQL twins `ExpirySQL`/`CheckChainSQL`
   (`TestExpirySQLMatchesExpiry`); web's `effectiveCertExpiry` mirrors it.
+- **Expiry alerts are one table**: `alerter/internal/alerter/expiry.go`
+  evaluates `tls_expiry` and `domain_expiry` from `expirySpecs` (threshold
+  config key, snapshot location, last_error wording). A new expiry kind is a
+  spec there plus its `openAlertDispatchablePredicate` kind line; the domain
+  snapshot's location is `shared/domainexpiry` (`SQLExpr`/`Extract`, pinned
+  by its own `TestSQLExprMatchesExtract`), never a hard-coded `#> '{domain}'`.
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
@@ -1295,6 +1301,11 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **HTTP failure capture** (`capture_failure_response`) lives in
+  `worker/internal/worker/http_failure_capture.go`: it stores a redacted
+  response excerpt in `metrics_data.http.failure_response`, budgeted by
+  JSON-encoded size (`TestHTTPFailureCaptureSizeBound` keeps a row < 16 KiB).
+  Captured text never goes into `ErrorMessage`, which notifications quote.
 
 ## Commits and PRs
 

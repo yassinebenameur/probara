@@ -44,11 +44,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateHostMetricThresholds(ctx); err != nil {
 		return err
 	}
-	// TLS expiry is advisory — a failure here must never block availability
-	// alerting or notification dispatch further down the lifecycle.
-	if err := a.evaluateTLSExpiry(ctx); err != nil {
-		a.logger.WithError(err).Error("TLS expiry evaluation failed")
-	}
+	// Expiry alerts (TLS certificates, domain registrations) are advisory —
+	// a failure there must never block availability alerting or
+	// notification dispatch further down the lifecycle; it logs its own.
+	a.evaluateExpiryAlerts(ctx)
 	// Before the mesh: its dispatch skips edges whose endpoint is offline,
 	// which the location's own alert speaks for. A failure here must not
 	// block mesh or availability dispatch.
@@ -94,6 +93,7 @@ func openAlertDispatchablePredicate() string {
 			OR al.kind = 'latency_anomaly'
 			OR al.kind = 'host_metric'
 			OR al.kind = 'tls_expiry'
+			OR al.kind = 'domain_expiry'
 		  )
 		  AND NOT ` + maintenance.InMaintenancePredicate("m") + `
 		  -- A snoozed alert sends nothing until snoozed_until.

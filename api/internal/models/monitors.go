@@ -31,6 +31,7 @@ const (
 	MonitorTypeTCP              MonitorType = "tcp"
 	MonitorTypeMySQL            MonitorType = "mysql"
 	MonitorTypeWebSocket        MonitorType = "websocket"
+	MonitorTypeDomain           MonitorType = "domain"
 )
 
 // MonitorChannelAssignment is one channel in a monitor's custom routing list.

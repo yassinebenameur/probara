@@ -3,6 +3,7 @@ import {
   Boxes,
   Braces,
   Cable,
+  CalendarClock,
   CircleDot,
   Database,
   Globe2,
@@ -42,6 +43,7 @@ export const monitorGroups = [
       { name: 'gRPC', icon: Network },
       { name: 'TCP', icon: CircleDot },
       { name: 'SIP', icon: Send },
+      { name: 'Domain expiry', icon: CalendarClock },
     ],
   },
   {

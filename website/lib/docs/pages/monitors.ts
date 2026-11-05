@@ -122,6 +122,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`sip`", "SIP `OPTIONS` ping, `REGISTER` auth probe, or `INVITE` test call (PDD, answer, ACK/BYE)", "Yes"],
             ["`websocket`", "WebSocket upgrade and optional message exchange", "Yes"],
             ["`prometheus`", "PromQL instant query compared against a numeric threshold", "Yes"],
+            ["`domain`", "Domain registration expiry through RDAP, with a WHOIS fallback; at most one check an hour", "Yes"],
             ["`redis`", "Redis authentication, `PING`, and optional role", "Yes"],
             ["`postgres`", "PostgreSQL connect and optional query assertion", "Yes"],
             ["`mysql`", "MySQL connect and optional query assertion", "Yes"],
@@ -255,7 +256,20 @@ export const MONITORS_PAGE: DocPage = {
               "`collect_timing`",
               "Collect detailed DNS, connect, TLS, TTFB, and total timing values",
             ],
+            [
+              "`capture_failure_response`",
+              "Record a redacted excerpt of the response a failed check got (status line, headers, start of the body) in `metrics_data.http.failure_response`; off by default",
+            ],
+            [
+              "`capture_body_bytes`",
+              "With capture on, the body excerpt's budget: 1–8192, default 2048",
+            ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "With `capture_failure_response: true`, a check that fails or errors after a response arrived (a status, body, header, JSON or latency assertion, an unreadable body) stores `failure_response`: `status_line` (`HTTP/1.1 503 Service Unavailable`), `content_type`, `headers` (one value per name, repeated headers joined with `, `), `body_excerpt` and `body_truncated`, plus `headers_truncated` when headers were dropped. Values are withheld as `[REDACTED]` for `Authorization`, `Cookie`, `Set-Cookie`, `WWW-Authenticate`, every `Proxy-*` header, any name containing `token`, `key`, `secret`, `auth`, `session`, `password` or `cookie`, and every header name the monitor itself sends, since servers echo request headers. The monitor's `secret_headers` values (and the token after a scheme such as `Bearer`), credential-named `headers` values and its basic-auth password and encoded credentials are replaced with `[REDACTED]` wherever they appear, body and status line included. Sizes are counted as stored: characters JSON escapes (`<`, `>`, `&`, control characters) count six bytes, so an HTML body yields less text than the budget suggests; the excerpt never splits a character, and invalid UTF-8 becomes U+FFFD. Headers share a 3 KiB budget, at most 40 names and 256 bytes per value, which keeps a captured row well under 16 KiB. The capture never enters the check's error message, so notifications never quote a response body. The monitor's History tab shows it under each failed run's Response expander. A capture is stored with the check result and kept as long as raw results (30 days); a monitor that fails every 30 seconds for that long stores about 260 MB of captures at the default size, and roughly three times that at the 8 KiB maximum, so keep the budget small on frequent checks.",
         },
         {
           type: "paragraph",
@@ -434,6 +448,42 @@ export const MONITORS_PAGE: DocPage = {
           title: "Prefer a numeric query plus a Probara threshold",
           text:
             "A PromQL filter such as `up == 0` returns an empty vector when everything is healthy, which then falls under `no_data_status`. Querying the numeric value and expressing the threshold in Probara is easier to read and preview.",
+        },
+      ],
+    },
+    {
+      id: "domain",
+      title: "Domain expiry monitors",
+      intro:
+        "A domain monitor watches a registered domain's expiry date, so a lapsed registration is caught before the name stops resolving. The worker asks the registry over RDAP and, when RDAP cannot answer, over WHOIS.",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Field", "Purpose"],
+          rows: [
+            ["`domain`", "Required registered name, such as `example.com` or `example.co.uk`, not a subdomain: registries only know the names they sell. Case and a trailing dot are ignored; a Unicode name is looked up in its ASCII (punycode) form. A scheme, port, path, IP address or single label is refused"],
+            ["`min_days_valid`", "Optional 0-3650. Open a [`domain_expiry` alert](/docs/alerting/#host-and-mesh) when fewer whole days remain before the registration expires; the check itself still passes. Absent: no expiry alert. The form starts new monitors at 30"],
+            ["`rdap_server_override`", "Optional `https://` RDAP base URL used instead of the IANA bootstrap registry, for a TLD it does not list; the worker requests `{base}/domain/{name}`"],
+            ["`whois_fallback`", "Ask WHOIS (TCP port 43) when RDAP has no server for the TLD or its lookup fails; absent means `true`"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "`interval_seconds` must be at least 3600: RDAP and WHOIS servers rate-limit, and a registration date moves in days. The form defaults to every 12 hours with a 30-second timeout, which has to cover the RDAP lookup and the WHOIS fallback. The worker finds the RDAP server for the domain's TLD in IANA's bootstrap registry (`https://data.iana.org/rdap/dns.json`, fetched once and cached in the worker process for 24 hours, the stale copy kept for an hour at a time when a refresh fails), requests the domain object, and follows up to five redirects. The WHOIS fallback asks `whois.iana.org` for the TLD's WHOIS server, then that server, and follows a thin registry's `Registrar WHOIS Server` one hop when the registry's answer carries no expiry. WHOIS answers have no standard format, so they are parsed best effort: the common expiry, creation, registrar, status and name-server fields in the usual date formats. Every connection, the bootstrap fetch included, goes through the worker's [network policy](/docs/security/#ssrf-network-policy). A private location's worker needs outbound HTTPS to `data.iana.org` and the registries, and TCP 43 for WHOIS.",
+        },
+        {
+          type: "list",
+          items: [
+            "`success`: the domain is registered and not expired, including inside its `min_days_valid` window (that is the `domain_expiry` alert's job), and when the registry publishes no expiry date at all (some ccTLDs do not), which the result notes.",
+            "`failure`: the registry reports the name as not found (`domain: example.com is not registered (rdap: not found)`), the expiry date has passed (`domain: expired 3 days ago (2026-11-02)`), or the status shows redemption, pending delete or pending restore.",
+            "`error`: no lookup succeeded, for example `domain: rdap: HTTP 429; whois: timed out`. Error messages never carry addresses.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Whenever a registry answered, the result records `metrics_data.domain`: `domain` (the name looked up), `registered`, `expires_at` and `days_until_expiry` (negative once expired), `registered_at`, `updated_at`, `registrar`, `statuses`, `nameservers`, `source` (`rdap` or `whois`), `server` (the RDAP origin or WHOIS host that answered), `rdap_error` when WHOIS answered after RDAP failed, and `note` when no expiry date is published. The monitor's detail page shows the expiry (amber inside the alert window), registrar, statuses and source in its Server panel.",
         },
       ],
     },
@@ -671,7 +721,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password` (also used for INVITE test calls), the Prometheus `password` and `bearer_token`, the HTTP `basic_auth_password` and every `secret_headers` value, every gRPC `secret_metadata` value, every `secret_variables` value of synthetic API and browser journeys, plus every WebSocket header value. API reads replace protected values with `***`.",
+            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password` (also used for INVITE test calls), the Prometheus `password` and `bearer_token`, the HTTP `basic_auth_password` and every `secret_headers` value, every gRPC `secret_metadata` value, every `secret_variables` value of synthetic API and browser journeys, plus every WebSocket header value. API reads replace protected values with `***`. Domain monitors have no secret fields.",
         },
         {
           type: "list",
