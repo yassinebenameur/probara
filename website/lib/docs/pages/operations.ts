@@ -35,7 +35,7 @@ export const OPERATIONS_PAGE: DocPage = {
             [
               'Scheduler',
               'PostgreSQL and NATS',
-              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors, enforces retention, and schedules mesh probes.',
+              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors and workspaces, enforces retention, and schedules mesh probes.',
             ],
             [
               'Worker',
@@ -238,7 +238,7 @@ make healthcheck`,
             [
               'Monitor purge',
               '`monitor_purge_runs_total`, `monitor_purge_rows_total`, `monitor_purge_monitors_total`, `monitor_purge_errors_total`, `monitor_purge_run_duration_seconds`',
-              'Growing errors or deleted monitors never becoming fully purged.',
+              'Growing errors, or deleted monitors or workspaces never becoming fully purged (`monitor_purge_rows_total` counts both phases).',
             ],
             [
               'Worker execution',
@@ -436,7 +436,7 @@ make db-restore`,
             {
               term: 'Monitor purge',
               description:
-                'Soft-deleted monitors are later purged with dependent rows in bounded batches.',
+                'Soft-deleted monitors are later purged with dependent rows in bounded batches. A deleted workspace is purged by the same job once its monitors are gone: its remaining alerts, mesh probe results, incidents, push subscriptions, discovery inventory, SLA reports, and AI labels in batches, then the workspace itself.',
             },
             {
               term: 'Rollups',
