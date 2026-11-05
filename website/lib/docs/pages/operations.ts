@@ -447,6 +447,11 @@ make db-restore`,
                 'Each `alert_triage` row lives as long as its alert: it is deleted with the alert (monitor purge or history deletion) or with its workspace, and is not pruned by time or by `data_retention_days`. Labels on a triage outlive it, like other AI labels.',
             },
             {
+              term: 'Notification delivery history',
+              description:
+                'Each attempt to deliver an alert notification ([delivery history](/docs/alerting/#channels)) is kept 90 days for every workspace, whatever its `data_retention_days`, and pruned by the daily retention cleanup in the same bounded batches as other stores (store `alert_notification_deliveries` in `retention_cleanup_backlogged_tenants` and `retention_cleanup_oldest_expired_timestamp_seconds`). Rows also go with their alert, channel or workspace.',
+            },
+            {
               term: 'AI training labels',
               description:
                 'Operator labels on AI analyses, alert triages and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',

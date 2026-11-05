@@ -41,3 +41,8 @@ export function withoutAlertFocus(params: URLSearchParams): URLSearchParams {
   next.delete('tenant');
   return next;
 }
+
+/** The focused view of one alert in the current workspace. */
+export function alertFocusHref(alertId: string): string {
+  return `/alerts?alert=${encodeURIComponent(alertId)}`;
+}

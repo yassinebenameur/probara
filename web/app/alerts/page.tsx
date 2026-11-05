@@ -3,7 +3,7 @@
 import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Alert, AlertBulkResult, AlertStatus } from '@/lib/types';
-import { getAlert, getAlerts, getTenants } from '@/lib/api';
+import { getAlert, getAlertDeliveries, getAlerts, getTenants } from '@/lib/api';
 import { markTriageLabelled, mergeAlertUpdate } from '@/lib/ai-triage';
 import { focusTenantSwitch, parseAlertFocus, withoutAlertFocus } from '@/lib/alert-links';
 import { emitTenantChange, setSelectedTenantId } from '@/lib/tenant';
@@ -24,6 +24,7 @@ import {
   type AlertStatusFilter,
 } from '@/lib/alert-list';
 import AlertBulkBar from '@/components/alerts/AlertBulkBar';
+import DeliveryHistory from '@/components/alerts/DeliveryHistory';
 import { useAlertSelection } from '@/components/alerts/useAlertSelection';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
@@ -272,6 +273,12 @@ function AlertsView() {
     };
   }, [focusAlertId, focusTenantId, selectedTenantId]);
 
+  // The focused alert's notification deliveries (the Deliveries panel).
+  const loadFocusedDeliveries = useCallback(
+    (page: number, pageSize: number) => getAlertDeliveries(focusAlertId ?? '', { page, page_size: pageSize }),
+    [focusAlertId]
+  );
+
   const clearFocus = () => {
     const query = withoutAlertFocus(new URLSearchParams(searchParams.toString())).toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
@@ -380,6 +387,7 @@ function AlertsView() {
           loading={!current}
           emptyTitle="Alert not found"
         />
+        {current?.alert && <DeliveryHistory scope="alert" load={loadFocusedDeliveries} />}
       </Page>
     );
   }

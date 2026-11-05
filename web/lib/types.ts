@@ -2644,3 +2644,51 @@ export interface DeleteTenantResponse {
   // Monitors tombstoned by the delete; the scheduler purges the data later.
   monitors: number;
 }
+
+// Notification delivery history (GET /v1/alerts/{id}/deliveries and
+// /v1/alert-channels/{id}/deliveries): one row per attempt to deliver an
+// alert event to a channel, kept 90 days.
+export type DeliveryOutcome =
+  | 'queued'
+  | 'delivered'
+  | 'failed'
+  | 'permanent_failure'
+  | 'dropped_superseded'
+  | 'dropped_ack';
+
+export interface NotificationDelivery {
+  id: string;
+  alert_id: string;
+  channel_id: string;
+  // The channel's name when the attempt was made.
+  channel_name: string;
+  channel_type: AlertChannelType;
+  event_type: string;
+  delivery_key: string;
+  attempt: number;
+  // sync: sent by the alerter; async: queued for, then sent by, a worker.
+  path: 'sync' | 'async';
+  outcome: DeliveryOutcome;
+  // Sanitized (no URLs past the host, no credentials), at most 512 chars.
+  error: string | null;
+  // Fan-out channels (SMS) only.
+  recipients_total: number | null;
+  recipients_delivered: number | null;
+  alert_kind: AlertKind;
+  // Null for alerts without a monitor (mesh edges, locations).
+  monitor_name: string | null;
+  created_at: string;
+}
+
+export interface NotificationDeliveryListResponse {
+  items: NotificationDelivery[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+// The channel list carries each channel's newest delivery (declaration
+// merging keeps this lane's addition out of the AlertChannel block above).
+export interface AlertChannel {
+  last_delivery?: NotificationDelivery;
+}

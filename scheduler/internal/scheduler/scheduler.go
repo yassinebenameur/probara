@@ -495,6 +495,7 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 			func(ctx context.Context, _ int) (time.Time, error) { return s.checkResultsPruneCutoff(ctx) }},
 		{"mesh_probe_results", s.pruneTenantMeshResults, tenantDaysCutoff},
 		{"metric_samples", s.pruneTenantMetricSamples, tenantDaysCutoff},
+		{"alert_notification_deliveries", s.pruneTenantDeliveryLog, deliveryLogCutoff},
 	}
 	var totalDeleted int64
 	backlogged := make(map[string]int)

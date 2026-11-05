@@ -124,6 +124,7 @@ import type {
   RenameTenantRequest,
   Tenant,
 } from './types';
+import type { NotificationDeliveryListResponse } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
@@ -1592,4 +1593,25 @@ export function renameTenant(id: string, data: RenameTenantRequest): Promise<Ten
 }
 export function deleteTenant(id: string, data: DeleteTenantRequest): Promise<DeleteTenantResponse> {
   return apiRequest<DeleteTenantResponse>('DELETE', `/v1/tenants/${id}`, data);
+}
+
+// Notification delivery history, newest first (page_size at most 100).
+function deliveriesPath(base: string, params?: { page?: number; page_size?: number }): string {
+  const query = new URLSearchParams();
+  if (params?.page) query.append('page', String(params.page));
+  if (params?.page_size) query.append('page_size', String(params.page_size));
+  const qs = query.toString();
+  return `${base}/deliveries${qs ? `?${qs}` : ''}`;
+}
+export function getAlertDeliveries(
+  alertId: string,
+  params?: { page?: number; page_size?: number }
+): Promise<NotificationDeliveryListResponse> {
+  return apiRequest<NotificationDeliveryListResponse>('GET', deliveriesPath(`/v1/alerts/${alertId}`, params));
+}
+export function getAlertChannelDeliveries(
+  channelId: string,
+  params?: { page?: number; page_size?: number }
+): Promise<NotificationDeliveryListResponse> {
+  return apiRequest<NotificationDeliveryListResponse>('GET', deliveriesPath(`/v1/alert-channels/${channelId}`, params));
 }

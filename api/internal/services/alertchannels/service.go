@@ -164,6 +164,9 @@ func (s *Service) ListAlertChannels(ctx context.Context, tenantID uuid.UUID, pag
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating alert channels: %w", err)
 	}
+	if err := s.attachLastDeliveries(ctx, tenantID, items); err != nil {
+		return nil, err
+	}
 
 	return &models.AlertChannelListResponse{
 		Items:    items,

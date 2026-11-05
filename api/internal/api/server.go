@@ -495,6 +495,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				// suspected-cause follow-ups.
 				r.Post("/{id}/triage/label", aiLabelHdlrs.LabelAlertTriage)
 				registerPagingAlertRoutes(r, alertHandlers.WithPaging(alertSvc))
+				registerDeliveryAlertRoutes(r, dbClient, log)
 			})
 
 			// Incidents
@@ -547,6 +548,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Patch("/{id}", alertChannelHandlers.UpdateAlertChannel)
 				r.Delete("/{id}", alertChannelHandlers.DeleteAlertChannel)
 				r.Post("/{id}/test", alertChannelHandlers.TestAlertChannel)
+				registerDeliveryChannelRoutes(r, dbClient, log)
 			})
 
 			// Alert channel plugin catalog (manifests driving the UI form).
