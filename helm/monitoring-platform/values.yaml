@@ -173,6 +173,8 @@ secrets:
   #   nats.auth.enabled   nats_platform_password (embedded broker only),
   #                     nats_location_auth_issuer_seed
   #   oidc enabled      oidc_client_secret
+  #   slack.enabled     slack_signing_secret (+ slack_client_secret with
+  #                     slack.clientId)
   #   local AI in use   local_ai_token (localAI.enabled or localAI.externalUrl)
   # A key the chart asks for but the Secret does not carry keeps the pod in
   # CreateContainerConfigError — deliberate: silently starting without, say,
@@ -734,3 +736,31 @@ localAI:
   # reads has its own value above. The only extra env it gets: the top-level
   # extraEnv does not reach it.
   extraEnv: []
+
+# =============================================================================
+# SLACK APP (slack_app alert channels)
+# =============================================================================
+# The install's own Slack app, created from the manifest in the docs
+# (Alerting -> Slack app). Rendered into the api only: the OAuth install and
+# the interactivity endpoint run there, while alert delivery uses each
+# channel's own bot token. Leave it off to create slack_app channels by hand
+# with Acknowledge falling back to the signed acknowledge link.
+slack:
+  enabled: false
+  # SLACK_CLIENT_ID, the app's Client ID (not a secret). Set it, with
+  # clientSecret, to offer "Add to Slack"; the app's OAuth redirect URL is
+  # <api.publicBaseURL>/api/v1/integrations/slack/callback, so set
+  # api.publicBaseURL too.
+  clientId: ""
+  # SLACK_CLIENT_SECRET (canonical key slack_client_secret). Required with
+  # clientId.
+  clientSecret: ""
+  clientSecretExistingSecret: ""
+  clientSecretExistingSecretKey: slack_client_secret
+  # SLACK_SIGNING_SECRET (canonical key slack_signing_secret), which verifies
+  # the button presses Slack posts to
+  # <api.publicBaseURL>/api/v1/integrations/slack/interactions. Required when
+  # slack.enabled.
+  signingSecret: ""
+  signingSecretExistingSecret: ""
+  signingSecretExistingSecretKey: slack_signing_secret

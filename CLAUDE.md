@@ -506,6 +506,16 @@ or imported groups come back empty. Any other path that creates groups through
   `go run ./cmd/admin/gen_vapid_keys`; never generate it at startup, and
   rotating it invalidates **every** stored subscription (`statusPage.vapid`
   in `values.yaml` explains both).
+- **`SLACK_*`** (`SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`,
+  `SLACK_SIGNING_SECRET`): api only, optional, parsed once in `shared/config`
+  (`loadSlackConfig`; ID and secret come as a pair). The alerter and worker
+  never need them: slack_app channels carry their own bot token. Compose
+  passes all three through (empty defaults; `install.sh` writes
+  placeholders); Helm's top-level `slack:` block renders them via
+  `monitoring-platform.secretEnv` (canonical keys `slack_signing_secret`,
+  `slack_client_secret`), and `slack.enabled` fails the render without the
+  signing secret. The OAuth redirect and interactivity URLs hang off
+  `PUBLIC_BASE_URL` (`api/internal/api/routes_chat.go`).
 - **`TRUSTED_PROXY_CIDRS`**: api and status-page. Every client IP (audit
   log, session IPs, rate-limit keys) comes from `shared/clientip`, which
   believes `X-Forwarded-For`/`X-Real-IP` only from those peers; never read a
@@ -563,7 +573,8 @@ or imported groups come back empty. Any other path that creates groups through
   as a literal `value:` in a PodSpec and never hardcode the Secret name — the
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
-  `oidc_client_secret`, `local_ai_token`) are the contract external secret
+  `oidc_client_secret`, `local_ai_token`, `slack_signing_secret`,
+  `slack_client_secret`) are the contract external secret
   managers fill.
   Helm cannot read Secrets, so anything the chart *composes* from a
   credential (the Postgres DSN, the embedded NATS URL) needs the composed
@@ -818,6 +829,21 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   lists members plus superadmins already scheduled in the workspace (all of
   them only for a superadmin caller); never list installation-wide users to
   a workspace.
+- **Chat cards follow the alert** (`alerter/internal/alerter/card_updates.go`).
+  A plugin with `CapabilityMessageUpdate` saves the card it posted through
+  `DispatchRequest.Messages` (`shared/notifications/messagestore`, table
+  `alert_notification_messages`, pool-only like the recipient ledger, one row
+  per alert and channel and paging episode). `dispatchCardUpdates` sends the
+  `updated` event when `rendered_state` differs from
+  `messagestore.CardStateSQL` (status, plus the snooze end); the claim case
+  `updated` in `claimNotificationTx` (`cardUpdateClaimSQL`) and
+  `shouldSendNotification` encode it, `claimStatusAllows` lets it through in
+  every state, and `messagestore.RenderedState` is the Go twin
+  (`TestCardStateSQLMatchesGo`). Never add one-shot events per ack/snooze
+  transition for chat; the reconcile converges. Its delivery key is
+  round-keyed like a reminder's (`RecipientEventKey`). The worker drops a queued
+  `updated` whose state the alert left (`eventSuperseded`); `Save` is a no-op
+  on `updated` (the claim holds the row).
 
 ## Status pages
 

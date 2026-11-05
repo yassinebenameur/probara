@@ -70,6 +70,8 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	// everyone they paged (escalation.go); their channel targets went out
 	// with dispatchOpenAlerts.
 	err = errors.Join(err, a.dispatchEscalations(ctx), a.dispatchEscalationNotices(ctx))
+	// Chat cards follow the alert's state (card_updates.go).
+	err = errors.Join(err, a.dispatchCardUpdates(ctx))
 	// Advisory, so last and bounded: it runs on its own sub-deadline that
 	// leaves the deferred recovery sweep its full budget, and a failure here
 	// never fails the tick.

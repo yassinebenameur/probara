@@ -218,6 +218,12 @@ services:
       API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-}"
       # Externally reachable API origin for agent installers and push URLs.
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+      # Slack app (slack_app channels; api only, all optional): the OAuth
+      # client pair turns on "Add to Slack" (needs PUBLIC_BASE_URL), the
+      # signing secret verifies Acknowledge button presses.
+      SLACK_CLIENT_ID: "${SLACK_CLIENT_ID:-}"
+      SLACK_CLIENT_SECRET: "${SLACK_CLIENT_SECRET:-}"
+      SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET:-}"
       <<: *smtp-env
     ports:
       - "8080:8080"

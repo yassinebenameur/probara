@@ -10,6 +10,7 @@ const EVENT_LABEL: Record<string, string> = {
   resolved: 'Resolved',
   acknowledged: 'Acknowledged',
   suspected_cause: 'Suspected cause',
+  updated: 'Card updated',
 };
 
 /** The event a delivery carried; unknown (newer) event types show as sent. */

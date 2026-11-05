@@ -186,6 +186,10 @@ env_init ADMIN_COOKIE_SECURE "false"
 for key in PUBLIC_BASE_URL PUBLIC_NATS_URL PROBARA_TRUSTED_PROXIES APP_BASE_URL SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM; do
   env_init "$key" ""
 done
+# Optional Slack app (see the Alerting docs): empty placeholders to fill in.
+for key in SLACK_CLIENT_ID SLACK_CLIENT_SECRET SLACK_SIGNING_SECRET; do
+  env_init "$key" ""
+done
 
 docker compose config --quiet || die "the Compose configuration does not render; check $(pwd)/$env_file"
 

@@ -152,6 +152,9 @@ func BuildWith(event notifications.AlertEvent, eventType string, opts Options) M
 	if eventType == "" {
 		eventType = EventCreated
 	}
+	if eventType == EventUpdated {
+		return buildCard(event, opts) // card.go
+	}
 	alert := event.Alert
 	resolved := eventType == EventResolved || alert.Status == "resolved"
 	// The event's own timestamp is the clock reference, not time.Now(): a

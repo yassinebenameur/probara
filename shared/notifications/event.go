@@ -107,6 +107,11 @@ type AlertDetails struct {
 	// reopen.
 	RelapseCount int        `json:"relapse_count,omitempty"`
 	ReopenedAt   *time.Time `json:"reopened_at,omitempty"`
+
+	// SnoozedUntil is set only on the "updated" event (a chat card
+	// rewritten to the alert's current state) while the alert is snoozed:
+	// the card then says until when.
+	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
 }
 
 // Resolve reasons of a location_offline alert (alerts.resolve_reason).

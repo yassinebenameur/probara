@@ -217,6 +217,8 @@ type APIConfig struct {
 	// cross-origin request; the operator UI reaches the API same-origin
 	// through its /api proxy.
 	AllowedOrigins []string
+	// Slack is the two-way Slack app (SLACK_*, loadSlackConfig).
+	Slack SlackConfig
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -662,6 +664,9 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, err
 	}
 	if cfg.AllowedOrigins, err = loadAllowedOrigins(); err != nil {
+		return nil, err
+	}
+	if cfg.Slack, err = loadSlackConfig(); err != nil {
 		return nil, err
 	}
 
@@ -1480,4 +1485,40 @@ func parseSIPCallAllowedDestinations(raw string) ([]*regexp.Regexp, error) {
 		patterns = append(patterns, re)
 	}
 	return patterns, nil
+}
+
+// SlackConfig is the platform's Slack app (the slack_app channel type): one
+// app per install, which self-hosters create from the manifest in the docs.
+// The api is its only reader: the OAuth install and the interactions
+// endpoint run there, while channel sends use each channel's own bot token.
+type SlackConfig struct {
+	// ClientID and ClientSecret are SLACK_CLIENT_ID / SLACK_CLIENT_SECRET,
+	// the OAuth credentials behind "Add to Slack". Both or neither.
+	ClientID     string
+	ClientSecret string
+	// SigningSecret is SLACK_SIGNING_SECRET, which verifies the button
+	// presses Slack posts to /api/v1/integrations/slack/interactions.
+	// Empty turns interactivity off: cards carry the signed acknowledge
+	// link instead of an in-Slack button.
+	SigningSecret string
+}
+
+// InstallEnabled reports whether the OAuth install flow is configured.
+func (c SlackConfig) InstallEnabled() bool {
+	return c.ClientID != "" && c.ClientSecret != ""
+}
+
+// loadSlackConfig reads SLACK_CLIENT_ID, SLACK_CLIENT_SECRET and
+// SLACK_SIGNING_SECRET. All are optional; a client ID without its secret (or
+// the reverse) is a configuration error rather than a half-working install.
+func loadSlackConfig() (SlackConfig, error) {
+	cfg := SlackConfig{
+		ClientID:      strings.TrimSpace(os.Getenv("SLACK_CLIENT_ID")),
+		ClientSecret:  strings.TrimSpace(os.Getenv("SLACK_CLIENT_SECRET")),
+		SigningSecret: strings.TrimSpace(os.Getenv("SLACK_SIGNING_SECRET")),
+	}
+	if (cfg.ClientID == "") != (cfg.ClientSecret == "") {
+		return SlackConfig{}, fmt.Errorf("SLACK_CLIENT_ID and SLACK_CLIENT_SECRET must be set together")
+	}
+	return cfg, nil
 }

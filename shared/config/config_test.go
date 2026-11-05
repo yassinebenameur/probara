@@ -456,3 +456,31 @@ func TestLoadStatusPageConfig_EdgeSecurity(t *testing.T) {
 		t.Fatalf("hsts=%d app=%q", cfg.HSTSMaxAge, cfg.AppBaseURL)
 	}
 }
+
+// The Slack app is optional; its OAuth credentials come as a pair, and the
+// signing secret alone (interactivity on manually created channels) is valid.
+func TestLoadAPIConfig_Slack(t *testing.T) {
+	setRequiredAPIEnv(t)
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatalf("unset: %v", err)
+	}
+	if cfg.Slack.InstallEnabled() || cfg.Slack.SigningSecret != "" {
+		t.Fatalf("unset Slack config = %+v", cfg.Slack)
+	}
+
+	t.Setenv("SLACK_SIGNING_SECRET", " sig ")
+	if cfg, err = LoadAPIConfig(); err != nil || cfg.Slack.SigningSecret != "sig" || cfg.Slack.InstallEnabled() {
+		t.Fatalf("signing secret only: cfg=%+v err=%v", cfg.Slack, err)
+	}
+
+	t.Setenv("SLACK_CLIENT_ID", "123.456")
+	if _, err := LoadAPIConfig(); err == nil {
+		t.Fatal("client ID without its secret must be refused")
+	}
+	t.Setenv("SLACK_CLIENT_SECRET", "s3cret")
+	cfg, err = LoadAPIConfig()
+	if err != nil || !cfg.Slack.InstallEnabled() || cfg.Slack.ClientID != "123.456" {
+		t.Fatalf("full config: cfg=%+v err=%v", cfg.Slack, err)
+	}
+}

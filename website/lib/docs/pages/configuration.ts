@@ -55,7 +55,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A populated .env file does not configure every Docker service',
           text:
-            'Compose has no `env_file` declaration. Notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services; `SMTP_*` and `APP_BASE_URL` to the api, worker, and alerter; `PUBLIC_BASE_URL` to the api.',
+            'Compose has no `env_file` declaration. Notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services; `SMTP_*` and `APP_BASE_URL` to the api, worker, and alerter; `PUBLIC_BASE_URL` and the optional `SLACK_*` variables to the api.',
         },
         {
           type: 'callout',
@@ -302,6 +302,38 @@ export const CONFIGURATION_PAGE: DocPage = {
           type: 'paragraph',
           text:
             'Compose includes development-oriented Dex defaults under its optional profile. Helm exposes the platform OIDC settings and stores the client secret separately. In production, register an exact HTTPS callback and choose the [least-privileged JIT role](/docs/security/#oidc-security).',
+        },
+      ],
+    },
+    {
+      id: 'slack-app',
+      title: 'Slack app',
+      blocks: [
+        {
+          type: 'table',
+          columns: ['Variable', 'Default / validation', 'Description'],
+          rows: [
+            [
+              '`SLACK_CLIENT_ID`',
+              'Empty; set together with `SLACK_CLIENT_SECRET`',
+              'Client ID of your [Slack app](/docs/alerting/#slack-app). With the secret it turns on **Add to Slack**, which also needs `PUBLIC_BASE_URL`: the OAuth redirect URL is `PUBLIC_BASE_URL` + `/api/v1/integrations/slack/callback`.',
+            ],
+            [
+              '`SLACK_CLIENT_SECRET`',
+              'Empty; set together with `SLACK_CLIENT_ID`',
+              'The app\'s client secret, used to exchange the install code and to sign the install state. Store it as a secret.',
+            ],
+            [
+              '`SLACK_SIGNING_SECRET`',
+              'Empty',
+              'Verifies the Acknowledge button presses Slack posts to `PUBLIC_BASE_URL` + `/api/v1/integrations/slack/interactions`. Empty turns that endpoint off (404); channels then carry the signed acknowledge link instead of an in-Slack button.',
+            ],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'All three are optional and read by the API only: the alerter and the delivery workers post with each channel\'s own bot token. A client ID without its secret (or the reverse) stops the API at startup. Compose passes all three through from the shell or `.env` (the release installer writes empty placeholders); Helm renders them from the `slack` values block, with both secrets through the chart\'s Secret sources (canonical keys `slack_signing_secret` and `slack_client_secret`).',
         },
       ],
     },
@@ -1077,6 +1109,7 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Required chart validation',
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
+            ['Slack app', '`SLACK_*` passed through to the API (empty by default)', '`slack` values block rendered into the API; secrets through the chart\'s Secret sources'],
             ['Encryption keyring', 'Base key passed through to API, scheduler, worker and alerter (required by the release override); rotation keys not wired', 'Base key wired to API, scheduler, worker and alerter; rotation keys through `extraEnv`'],
             ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker, `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` also to the alerter, `AI_TRIAGE_ENABLED` also to the API; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only (the alerter gets only `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED`; `AI_TRIAGE_ENABLED` also reaches the API)'],
             [

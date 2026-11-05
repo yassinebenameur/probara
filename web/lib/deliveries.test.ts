@@ -10,6 +10,7 @@ test('deliveryEventLabel names known events and humanizes new ones', () => {
   assert.equal(deliveryEventLabel('created'), 'Triggered');
   assert.equal(deliveryEventLabel('suspected_cause'), 'Suspected cause');
   assert.equal(deliveryEventLabel('reopened'), 'Reopened');
+  assert.equal(deliveryEventLabel('updated'), 'Card updated');
 });
 
 test('deliveryRecipients only describes fan-out deliveries', () => {

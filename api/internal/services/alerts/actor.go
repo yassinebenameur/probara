@@ -19,6 +19,10 @@ const (
 	// ViaMagicLink is a signed acknowledge link from a notification
 	// (api/internal/handlers/alertactions); it carries no user.
 	ViaMagicLink = "magic_link"
+	// ViaSlack is the Acknowledge button of a Slack app card
+	// (api/internal/handlers/slackapp); it carries no user, and the audit
+	// event names the Slack user.
+	ViaSlack = "slack"
 )
 
 // Actor identifies who acknowledged or resolved an alert and through which

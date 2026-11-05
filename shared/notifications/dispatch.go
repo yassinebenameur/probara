@@ -81,9 +81,13 @@ func (e DispatchEnvelope) RecipientKey() string {
 // The key names one send, not one event type: a deliberate second send of an
 // event needs a key of its own (see OvertakenAckKey), or a plugin skips every
 // recipient the first send already reached and the re-send goes nowhere.
+//
+// The "updated" event (a chat card rewritten to the alert's current state)
+// repeats too, and is keyed by its round the same way: the card's previous
+// write, which the updated claim replaces.
 func RecipientEventKey(eventType string, round time.Time) string {
-	if eventType == "reminder" && !round.IsZero() {
-		return "reminder:" + round.UTC().Format(time.RFC3339Nano)
+	if (eventType == "reminder" || eventType == "updated") && !round.IsZero() {
+		return eventType + ":" + round.UTC().Format(time.RFC3339Nano)
 	}
 	return eventType
 }

@@ -287,6 +287,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		alertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_actions.go)
 		people := newPeopleDeps(dbClient, secretsEncryptor, cfg, auditRecorder, log)
 		peopleOpenRoutes(r, authMiddleware, people) // routes_people.go
+		// Slack app install and interactions (routes_chat.go).
+		slackRoutes(r, authMiddleware, dbClient, secretsEncryptor, alertHub, auditRecorder, cfg, log)
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
