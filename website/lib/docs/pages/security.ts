@@ -305,8 +305,9 @@ export POSTGRES_URL='postgres://...'
 go run ./cmd/admin/reencrypt_monitor_configs -dry-run
 go run ./cmd/admin/reencrypt_monitor_configs
 
-# Once, after upgrading: move credential headers saved in plaintext HTTP
-# headers and literal synthetic API step headers into encrypted secrets.
+# Once, after upgrading: move credentials saved in plaintext (HTTP headers,
+# gRPC metadata, literal synthetic API step headers, credential-named
+# synthetic variables such as password) into encrypted secrets.
 go run ./cmd/admin/migrate_sensitive_headers          # dry run
 go run ./cmd/admin/migrate_sensitive_headers -apply`,
         },

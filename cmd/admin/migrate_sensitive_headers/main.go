@@ -4,8 +4,13 @@
 //
 //   - http: a sensitive name in `headers` (Authorization, Cookie, X-API-Key,
 //     any *token*/*secret*, …) moves to `secret_headers`.
+//   - grpc: a sensitive `metadata` key moves to `secret_metadata`.
 //   - synthetic_api: a literal sensitive step header becomes a generated
 //     `secret_variables` entry and the header becomes its {{ref}}.
+//   - synthetic_api and synthetic_browser: a credential-named plain variable
+//     (the old login templates' `password`) moves to `secret_variables` under
+//     the same name, so its {{ref}}s keep working
+//     (secrets.MoveSensitiveVariables).
 //
 // Moved values are encrypted with the current key. Deleted monitors are
 // skipped. It reports by default and writes only with -apply; running it
@@ -34,8 +39,9 @@ import (
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// migratedTypes are the types NormalizeSensitiveHeaders rewrites.
-var migratedTypes = []string{"http", "synthetic_api"}
+// migratedTypes are the types NormalizeSensitiveHeaders and
+// MoveSensitiveVariables rewrite.
+var migratedTypes = []string{"http", "grpc", "synthetic_api", "synthetic_browser"}
 
 type stats struct {
 	Processed, Updated, Skipped, Errored int
@@ -129,7 +135,7 @@ func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool,
 
 	for _, u := range updates {
 		if !apply {
-			logf("[dry-run] would move sensitive headers of monitor %s (type=%s)", u.id, u.mType)
+			logf("[dry-run] would move plaintext credentials of monitor %s (type=%s)", u.id, u.mType)
 			result.Updated++
 			continue
 		}
@@ -139,7 +145,7 @@ func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool,
 			continue
 		}
 		result.Updated++
-		logf("[ok] moved sensitive headers of monitor %s (type=%s)", u.id, u.mType)
+		logf("[ok] moved plaintext credentials of monitor %s (type=%s)", u.id, u.mType)
 	}
 	return result, nil
 }
@@ -148,8 +154,12 @@ func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool,
 // in the secret maps keep their envelopes (EncryptMonitorConfig passes them
 // through), so a row is only rewritten when a header actually moved.
 func migrateConfig(enc secrets.Encryptor, monitorType string, raw json.RawMessage) (json.RawMessage, bool, error) {
-	normalized, changed, err := secrets.NormalizeSensitiveHeaders(monitorType, raw)
-	if err != nil || !changed {
+	normalized, headersMoved, err := secrets.NormalizeSensitiveHeaders(monitorType, raw)
+	if err != nil {
+		return raw, false, err
+	}
+	normalized, variablesMoved, err := secrets.MoveSensitiveVariables(monitorType, normalized)
+	if err != nil || (!headersMoved && !variablesMoved) {
 		return raw, false, err
 	}
 	encrypted, err := secrets.EncryptMonitorConfig(enc, monitorType, normalized)

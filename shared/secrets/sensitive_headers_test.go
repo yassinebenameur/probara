@@ -283,3 +283,39 @@ func TestNormalizeSensitiveHeaders_GRPCMetadata(t *testing.T) {
 		t.Fatalf("second pass changed the config: %s", again)
 	}
 }
+
+func TestMoveSensitiveVariables(t *testing.T) {
+	in := json.RawMessage(`{"start_url":"https://x.test","variables":{"username":"u","password":"pw","api_token":"","x":"1"},"secret_variables":{"session_secret":"enc"}}`)
+	out, changed, err := MoveSensitiveVariables("synthetic_browser", in)
+	if err != nil || !changed {
+		t.Fatalf("MoveSensitiveVariables: changed=%v err=%v", changed, err)
+	}
+	var cfg struct {
+		Variables       map[string]string `json:"variables"`
+		SecretVariables map[string]string `json:"secret_variables"`
+	}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// An empty credential-named value has nothing to protect and stays.
+	if len(cfg.Variables) != 3 || cfg.Variables["username"] != "u" || cfg.Variables["x"] != "1" || cfg.Variables["api_token"] != "" {
+		t.Fatalf("variables = %v", cfg.Variables)
+	}
+	if cfg.SecretVariables["password"] != "pw" || cfg.SecretVariables["session_secret"] != "enc" {
+		t.Fatalf("secret_variables = %v", cfg.SecretVariables)
+	}
+
+	// A name already secret keeps its secret value; the plain copy goes.
+	both := json.RawMessage(`{"steps":[],"variables":{"password":"plain"},"secret_variables":{"password":"enc"}}`)
+	out, changed, _ = MoveSensitiveVariables("synthetic_api", both)
+	if !changed || strings.Contains(string(out), "plain") || !strings.Contains(string(out), `"password":"enc"`) {
+		t.Fatalf("collision handling: changed=%v out=%s", changed, out)
+	}
+
+	if _, changed, _ := MoveSensitiveVariables("synthetic_api", out); changed {
+		t.Fatal("second pass changed the config")
+	}
+	if _, changed, _ := MoveSensitiveVariables("http", in); changed {
+		t.Fatal("non-synthetic type changed")
+	}
+}

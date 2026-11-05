@@ -233,3 +233,55 @@ func uniqueVariableName(base string, taken func(string) bool) string {
 		}
 	}
 }
+
+// MoveSensitiveVariables moves credential-named entries of a synthetic
+// journey's plain `variables` (the IsSensitiveHeaderName rule: password,
+// token, secret, …) into `secret_variables` under the same name, so every
+// {{name}} reference keeps resolving while the value becomes encrypted,
+// masked and redacted. A name already in secret_variables keeps the secret
+// value (the one the worker already used) and the plain copy is dropped; an
+// empty plain value has nothing to protect and stays. Only the
+// cmd/admin/migrate_sensitive_headers backfill applies it, for monitors made
+// from the old login templates: on the write path a variable's name says too
+// little to silently reclassify it.
+func MoveSensitiveVariables(monitorType string, raw json.RawMessage) (json.RawMessage, bool, error) {
+	if (monitorType != "synthetic_api" && monitorType != "synthetic_browser") || len(raw) == 0 {
+		return raw, false, nil
+	}
+	cfg, err := unmarshalConfigMap(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	variables, ok := cfg["variables"].(map[string]any)
+	if !ok || len(variables) == 0 {
+		return raw, false, nil
+	}
+	secretVars, _ := stringMap(cfg["secret_variables"])
+	if secretVars == nil {
+		secretVars = map[string]string{}
+	}
+	changed := false
+	for name, value := range variables {
+		text, isString := value.(string)
+		if !isString || text == "" || !IsSensitiveHeaderName(name) {
+			continue
+		}
+		if _, exists := secretVars[name]; !exists {
+			secretVars[name] = text
+		}
+		delete(variables, name)
+		changed = true
+	}
+	if !changed {
+		return raw, false, nil
+	}
+	if len(variables) == 0 {
+		delete(cfg, "variables")
+	}
+	cfg["secret_variables"] = secretVars
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("secrets: encode monitor config: %w", err)
+	}
+	return out, true, nil
+}
