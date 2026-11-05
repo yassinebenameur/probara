@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	htmltemplate "html/template"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -92,6 +93,9 @@ func (p *Plugin) Manifest() plugin.Manifest {
 		Capabilities: []plugin.Capability{
 			plugin.CapabilityTestable,
 			plugin.CapabilityFollowUp,
+			// Escalation policies page a person's verified email contact
+			// through the platform mailer, with no channel config.
+			plugin.CapabilityDirectRecipient,
 		},
 		Fields: []plugin.Field{
 			{
@@ -156,20 +160,41 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 	return nil
 }
 
+// ErrNoMailer is Send's error when no SMTP mailer is installed.
+var ErrNoMailer = errors.New("email plugin: mailer not configured (call SetMailer at startup)")
+
 // Send renders the configured templates and delegates to the installed Mailer.
+// A direct send (req.Recipient, plugin.CapabilityDirectRecipient) goes to
+// that one address with the built-in rendering, or Recipient.Text verbatim,
+// and needs no channel config.
 func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	p.mu.RLock()
 	mailer := p.mailer
 	p.mu.RUnlock()
 	if mailer == nil {
-		return errors.New("email plugin: mailer not configured (call SetMailer at startup)")
+		return ErrNoMailer
+	}
+
+	view := req.View()
+	if req.Recipient != nil {
+		addr := strings.TrimSpace(req.Recipient.Address)
+		if !strings.Contains(addr, "@") {
+			return plugin.Permanent(errors.New("email plugin: direct recipient is not an email address"))
+		}
+		templates := Templates{AckURL: view.AckURL, AckLabel: view.AckLabel}
+		if req.Recipient.Text != "" {
+			// A Go string literal is a constant pipeline, so the text is
+			// sent as written, never parsed as a template.
+			templates.Subject = "Probara"
+			templates.Body = "{{" + strconv.Quote(req.Recipient.Text) + "}}"
+		}
+		return mailer.SendAlert(ctx, req.Event, templates, []string{addr})
 	}
 
 	cfg, err := configFromChannel(req.Channel.Config)
 	if err != nil {
 		return err
 	}
-	view := req.View()
 	return mailer.SendAlert(ctx, req.Event, Templates{
 		Subject:  cfg.SubjectTemplate,
 		Body:     cfg.BodyTemplate,

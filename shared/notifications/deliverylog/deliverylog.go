@@ -93,12 +93,23 @@ func SendOutcome(err error) Outcome {
 
 // Entry is one row to record.
 type Entry struct {
-	AlertID   uuid.UUID
+	AlertID uuid.UUID
+	// ChannelID is the channel the send went through. uuid.Nil only for a
+	// person send that needs no channel (an escalation page by email,
+	// through the platform mailer); such an entry must carry UserID and
+	// Recipient.
 	ChannelID uuid.UUID
 	// ChannelName is the channel's name at send time; empty takes the
 	// channel's current name.
 	ChannelName string
-	EventType   string
+	// UserID, ContactID and Recipient (the masked address,
+	// contacts.Mask) identify a person send: an escalation policy paging a
+	// user's verified contact (migration 000113). Zero/empty for channel
+	// sends.
+	UserID    uuid.UUID
+	ContactID uuid.UUID
+	Recipient string
+	EventType string
 	// DeliveryKey is the event's recipient-ledger key
 	// (notifications.RecipientEventKey): it tells reminder rounds apart.
 	DeliveryKey string
@@ -124,19 +135,29 @@ type Execer interface {
 // tenant, so a row can never pair an alert with another workspace's channel,
 // and writes nothing for an alert or channel deleted meanwhile or for a
 // workspace being deleted (tenancy.LiveTenantSQL).
+//
+// A person send ($12 user, $13 contact, $14 masked recipient) may have no
+// channel ($2 NULL, an email page): the channel join is then a LEFT JOIN
+// that must stay empty, and the attempt counter keys on the contact.
 var recordSQL = `
 	INSERT INTO alert_notification_deliveries (
 		tenant_id, alert_id, channel_id, channel_name, event_type, delivery_key,
-		attempt, path, outcome, error, recipients_total, recipients_delivered)
-	SELECT a.tenant_id, a.id, c.id, COALESCE(NULLIF($3::text, ''), c.name), $4::text, $5::text,
+		attempt, path, outcome, error, recipients_total, recipients_delivered,
+		user_id, contact_id, recipient)
+	SELECT a.tenant_id, a.id, c.id, COALESCE(NULLIF($3::text, ''), c.name, 'Email'), $4::text, $5::text,
 		CASE WHEN $6::int > 0 THEN $6::int ELSE 1 + (
 			SELECT COUNT(*) FROM alert_notification_deliveries p
-			WHERE p.alert_id = a.id AND p.channel_id = c.id
+			WHERE p.alert_id = a.id AND p.channel_id IS NOT DISTINCT FROM c.id
+			  AND p.contact_id IS NOT DISTINCT FROM $13::uuid
 			  AND p.delivery_key = $5::text AND p.path = $7::text)::int END,
-		$7::text, $8::text, $9::text, $10::int, $11::int
+		$7::text, $8::text, $9::text, $10::int, $11::int,
+		u.id, $13::uuid, NULLIF($14::text, '')
 	FROM alerts a
-	JOIN alert_channels c ON c.id = $2 AND c.tenant_id = a.tenant_id
-	WHERE a.id = $1 AND ` + tenancy.LiveTenantSQL("a.tenant_id")
+	LEFT JOIN alert_channels c ON c.id = $2::uuid AND c.tenant_id = a.tenant_id
+	LEFT JOIN admin_users u ON u.id = $12::uuid
+	WHERE a.id = $1 AND ` + tenancy.LiveTenantSQL("a.tenant_id") + `
+	  AND ($2::uuid IS NULL OR c.id IS NOT NULL)
+	  AND ($2::uuid IS NOT NULL OR (u.id IS NOT NULL AND $14::text <> ''))`
 
 // Record appends e to the history. It is safe to call with a nil db (no-op).
 // Before migration 000110 has run it records nothing and returns nil.
@@ -157,13 +178,19 @@ func Record(ctx context.Context, db Execer, e Entry) error {
 		delivered = sql.NullInt64{Int64: int64(d), Valid: true}
 	}
 	_, err := db.ExecContext(ctx, recordSQL,
-		e.AlertID, e.ChannelID, e.ChannelName, e.EventType, e.DeliveryKey,
-		e.Attempt, string(e.Path), string(e.Outcome), errText, total, delivered)
+		e.AlertID, nullUUID(e.ChannelID), e.ChannelName, e.EventType, e.DeliveryKey,
+		e.Attempt, string(e.Path), string(e.Outcome), errText, total, delivered,
+		nullUUID(e.UserID), nullUUID(e.ContactID), e.Recipient)
 	if isUndefinedTable(err) {
 		// Rollout window: this binary runs ahead of the migrations job.
 		return nil
 	}
 	return err
+}
+
+// nullUUID maps uuid.Nil to SQL NULL.
+func nullUUID(id uuid.UUID) uuid.NullUUID {
+	return uuid.NullUUID{UUID: id, Valid: id != uuid.Nil}
 }
 
 func isUndefinedTable(err error) bool {

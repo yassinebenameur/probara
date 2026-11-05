@@ -4,8 +4,11 @@ package plugin
 // single person's address (DispatchRequest.Recipient) instead of the
 // recipients configured on the channel, so a workspace can designate the
 // channel for texting people directly: contact verification codes, contact
-// tests and, later, on-call pages. A plugin advertising it must honour
-// Recipient.Address and Recipient.Text.
+// tests and escalation-policy pages (where the email plugin, the platform
+// mailer, also takes it). A plugin advertising it must honour
+// Recipient.Address and Recipient.Text. A send carrying a ContactID scopes
+// its acknowledge link to that contact instead of the channel
+// (DispatchRequest.View).
 const CapabilityDirectRecipient Capability = "direct_recipient"
 
 // Recipient addresses one send to one person. The address is a user's

@@ -15,18 +15,26 @@ import (
 
 // Delivery is one recorded attempt as the API returns it.
 type Delivery struct {
-	ID          uuid.UUID `json:"id"`
-	AlertID     uuid.UUID `json:"alert_id"`
-	ChannelID   uuid.UUID `json:"channel_id"`
-	ChannelName string    `json:"channel_name"`
-	// ChannelType is the channel's current plugin type.
-	ChannelType string  `json:"channel_type"`
-	EventType   string  `json:"event_type"`
-	DeliveryKey string  `json:"delivery_key"`
-	Attempt     int     `json:"attempt"`
-	Path        Path    `json:"path"`
-	Outcome     Outcome `json:"outcome"`
-	Error       *string `json:"error"`
+	ID      uuid.UUID `json:"id"`
+	AlertID uuid.UUID `json:"alert_id"`
+	// ChannelID is null for a person send without a channel (an escalation
+	// page by email, through the platform mailer).
+	ChannelID   *uuid.UUID `json:"channel_id"`
+	ChannelName string     `json:"channel_name"`
+	// ChannelType is the channel's current plugin type ("email" for a
+	// channel-less person send).
+	ChannelType string `json:"channel_type"`
+	// UserID, Username and Recipient (the masked address) are set on person
+	// sends: an escalation policy paging a user's verified contact.
+	UserID      *uuid.UUID `json:"user_id,omitempty"`
+	Username    *string    `json:"username,omitempty"`
+	Recipient   *string    `json:"recipient,omitempty"`
+	EventType   string     `json:"event_type"`
+	DeliveryKey string     `json:"delivery_key"`
+	Attempt     int        `json:"attempt"`
+	Path        Path       `json:"path"`
+	Outcome     Outcome    `json:"outcome"`
+	Error       *string    `json:"error"`
 	// RecipientsTotal/RecipientsDelivered are set for fan-out channels
 	// (SMS) only.
 	RecipientsTotal     *int `json:"recipients_total"`
@@ -57,15 +65,17 @@ type Querier interface {
 }
 
 const selectColumns = `
-	d.id, d.alert_id, d.channel_id, d.channel_name, c.type, d.event_type,
+	d.id, d.alert_id, d.channel_id, d.channel_name, COALESCE(c.type, 'email'), d.event_type,
 	d.delivery_key, d.attempt, d.path, d.outcome, d.error,
-	d.recipients_total, d.recipients_delivered, a.kind, m.name, d.created_at`
+	d.recipients_total, d.recipients_delivered, a.kind, m.name, d.created_at,
+	d.user_id, du.username, d.recipient`
 
 const fromJoins = `
 	FROM alert_notification_deliveries d
-	JOIN alert_channels c ON c.id = d.channel_id
+	LEFT JOIN alert_channels c ON c.id = d.channel_id
 	JOIN alerts a ON a.id = d.alert_id
-	LEFT JOIN monitors m ON m.id = a.monitor_id`
+	LEFT JOIN monitors m ON m.id = a.monitor_id
+	LEFT JOIN admin_users du ON du.id = d.user_id`
 
 // ListForAlert returns one alert's deliveries, newest first. ErrNotFound when
 // the alert is not tenantID's.
@@ -104,7 +114,8 @@ func LastForChannels(ctx context.Context, q Querier, tenantID uuid.UUID, channel
 		) d ON TRUE
 		JOIN alert_channels c ON c.id = d.channel_id
 		JOIN alerts a ON a.id = d.alert_id
-		LEFT JOIN monitors m ON m.id = a.monitor_id`, tenantID, pq.Array(channelIDs))
+		LEFT JOIN monitors m ON m.id = a.monitor_id
+		LEFT JOIN admin_users du ON du.id = d.user_id`, tenantID, pq.Array(channelIDs))
 	if err != nil {
 		if isUndefinedTable(err) {
 			return out, nil
@@ -117,7 +128,9 @@ func LastForChannels(ctx context.Context, q Querier, tenantID uuid.UUID, channel
 		if err != nil {
 			return nil, err
 		}
-		out[d.ChannelID] = d
+		if d.ChannelID != nil {
+			out[*d.ChannelID] = d
+		}
 	}
 	return out, rows.Err()
 }
@@ -186,13 +199,27 @@ func list(ctx context.Context, q Querier, column string, tenantID, id uuid.UUID,
 
 func scan(rows *sql.Rows) (Delivery, error) {
 	var d Delivery
-	var errText, monitorName sql.NullString
+	var errText, monitorName, username, recipient sql.NullString
 	var total, delivered sql.NullInt64
+	var channelID, userID uuid.NullUUID
 	var path, outcome string
-	if err := rows.Scan(&d.ID, &d.AlertID, &d.ChannelID, &d.ChannelName, &d.ChannelType, &d.EventType,
+	if err := rows.Scan(&d.ID, &d.AlertID, &channelID, &d.ChannelName, &d.ChannelType, &d.EventType,
 		&d.DeliveryKey, &d.Attempt, &path, &outcome, &errText,
-		&total, &delivered, &d.AlertKind, &monitorName, &d.CreatedAt); err != nil {
+		&total, &delivered, &d.AlertKind, &monitorName, &d.CreatedAt,
+		&userID, &username, &recipient); err != nil {
 		return Delivery{}, fmt.Errorf("scan delivery: %w", err)
+	}
+	if channelID.Valid {
+		d.ChannelID = &channelID.UUID
+	}
+	if userID.Valid {
+		d.UserID = &userID.UUID
+	}
+	if username.Valid {
+		d.Username = &username.String
+	}
+	if recipient.Valid {
+		d.Recipient = &recipient.String
 	}
 	d.Path, d.Outcome = Path(path), Outcome(outcome)
 	if errText.Valid {

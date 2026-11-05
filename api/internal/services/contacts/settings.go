@@ -24,7 +24,7 @@ type ChannelOption struct {
 // PeopleSettings is the workspace's people-layer configuration.
 type PeopleSettings struct {
 	// PersonalSMSChannelID texts people directly: SMS contact verification
-	// codes and tests now, on-call pages later. Null disables SMS contacts
+	// codes and tests, and escalation-policy pages. Null disables SMS contacts
 	// in this workspace.
 	PersonalSMSChannelID *uuid.UUID `json:"personal_sms_channel_id"`
 	// SMSChannelOptions are the workspace's channels that can fill it.
@@ -36,11 +36,19 @@ type UpdatePeopleSettingsRequest struct {
 	PersonalSMSChannelID *uuid.UUID `json:"personal_sms_channel_id"`
 }
 
-// directRecipientTypes lists the plugin types that can address one person.
+// textsPeople reports whether a channel of plugin m can be the personal SMS
+// channel: it addresses one person (plugin.CapabilityDirectRecipient), and
+// is not the email plugin, which takes direct recipients too (escalation
+// pages to email contacts go through the platform mailer, no channel).
+func textsPeople(m plugin.Manifest) bool {
+	return m.HasCapability(plugin.CapabilityDirectRecipient) && m.Type != "email"
+}
+
+// directRecipientTypes lists the plugin types that can text one person.
 func directRecipientTypes() []string {
 	var out []string
 	for _, m := range plugin.DefaultRegistry.All() {
-		if m.HasCapability(plugin.CapabilityDirectRecipient) {
+		if textsPeople(m) {
 			out = append(out, m.Type)
 		}
 	}
@@ -92,7 +100,7 @@ func (s *Service) UpdatePeopleSettings(ctx context.Context, tenantID uuid.UUID, 
 			return nil, fmt.Errorf("load channel: %w", err)
 		}
 		p, ok := plugin.DefaultRegistry.Get(typ)
-		if !ok || !p.Manifest().HasCapability(plugin.CapabilityDirectRecipient) {
+		if !ok || !textsPeople(p.Manifest()) {
 			return nil, invalid("personal_sms_channel_id: a %s channel cannot text a single person; choose an SMS (Twilio) channel", typ)
 		}
 	}
