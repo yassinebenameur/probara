@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/notifications"
@@ -97,6 +98,12 @@ type Message struct {
 
 	ActionURL   string
 	ActionLabel string
+	// AckURL is the signed one-click acknowledge link (the operator UI's
+	// /alert-action/<token> confirm page) and AckLabel its caption. Set only
+	// on created and reminder events for an alert still active, when a link
+	// signer, the app origin and the channel are all known; see ackFor.
+	AckURL   string
+	AckLabel string
 
 	AlertID   string
 	TenantID  string
@@ -107,8 +114,8 @@ type Message struct {
 
 // LinkSigner mints the signed token behind a one-click action link (for
 // example "acknowledge this alert") for one alert as delivered on one channel.
-// Options.Links may be nil, and a nil signer means no action links: Build
-// renders none today either way.
+// Options.Links may be nil, and a nil signer means no action links.
+// shared/actionlink implements it; BuildWith renders its token as AckURL.
 type LinkSigner interface {
 	// ActionToken returns an opaque, URL-safe token authorizing action on
 	// alertID in tenantID, as delivered on channelID, or an error when no
@@ -206,6 +213,7 @@ func BuildWith(event notifications.AlertEvent, eventType string, opts Options) M
 
 	m.Rows = detailRows(alert, elapsed)
 	m.ActionURL, m.ActionLabel = actionFor(alert, appBaseURL)
+	m.AckURL, m.AckLabel = ackFor(event, eventType, resolved, opts)
 	return m
 }
 
@@ -319,22 +327,9 @@ func (m Message) MetricLine() string {
 }
 
 // Short renders a compact plain-text form for length-limited channels (SMS,
-// push): title, summary, and the deep link when configured.
-func (m Message) Short() string {
-	var b strings.Builder
-	b.WriteString(m.StatusWord)
-	b.WriteString(" · ")
-	b.WriteString(m.Title)
-	if m.Summary != "" {
-		b.WriteString("\n")
-		b.WriteString(m.Summary)
-	}
-	if m.ActionURL != "" {
-		b.WriteString("\n")
-		b.WriteString(m.ActionURL)
-	}
-	return b.String()
-}
+// push): title, summary, the deep link and the acknowledge link when
+// configured. ShortWithin bounds it.
+func (m Message) Short() string { return m.ShortWithin(0) }
 
 // Facts returns the label/value pairs chat layouts show as fields: the
 // metric, the detail rows, root cause, failing locations and blast radius, in
@@ -886,4 +881,82 @@ func capitalize(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// --- signed action links ----------------------------------------------------
+
+// ActionAcknowledge is the action an acknowledge link's token authorizes
+// (LinkSigner.ActionToken); actionlink.ActionAcknowledge mirrors it.
+const ActionAcknowledge = "ack"
+
+// AckPath is the operator-UI route an acknowledge link opens: a confirm page
+// that acknowledges on a button press (POST), never on load, because mail
+// scanners and chat unfurlers prefetch links.
+const AckPath = "/alert-action/"
+
+// ackFor mints the signed acknowledge link. Only a page that asks for action
+// carries one: created and reminder events of an alert that is still active.
+// It needs the operator-UI origin, a signer (callers leave Options.Links nil
+// for test sends) and the delivering channel; any of them missing, or a
+// signer that cannot mint, renders no link rather than a broken one.
+func ackFor(event notifications.AlertEvent, eventType string, resolved bool, opts Options) (string, string) {
+	if eventType != EventCreated && eventType != EventReminder {
+		return "", ""
+	}
+	if resolved || event.Alert.Status == "acknowledged" || opts.Links == nil {
+		return "", ""
+	}
+	base := strings.TrimRight(strings.TrimSpace(opts.AppBaseURL), "/")
+	if base == "" || strings.TrimSpace(opts.ChannelID) == "" {
+		return "", ""
+	}
+	token, err := opts.Links.ActionToken(ActionAcknowledge, event.TenantID, event.Alert.ID, opts.ChannelID)
+	if err != nil || token == "" {
+		return "", ""
+	}
+	return base + AckPath + url.PathEscape(token), "Acknowledge"
+}
+
+// ShortWithin is Short bounded to limit runes (0 means unbounded) for an SMS
+// or push body. The links are kept whole, since a cut URL is useless: the
+// title and summary are clipped to make room, and only when the links alone
+// would not fit is the deep link dropped, then the acknowledge link.
+func (m Message) ShortWithin(limit int) string {
+	head := m.StatusWord + " · " + m.Title
+	if m.Summary != "" {
+		head += "\n" + m.Summary
+	}
+	var links []string
+	if m.ActionURL != "" {
+		links = append(links, m.ActionURL)
+	}
+	if m.AckURL != "" {
+		links = append(links, m.AckLabel+": "+m.AckURL)
+	}
+	for {
+		tail := ""
+		for _, l := range links {
+			tail += "\n" + l
+		}
+		if limit <= 0 {
+			return head + tail
+		}
+		room := limit - utf8.RuneCountInString(tail)
+		if room >= 16 || len(links) == 0 {
+			return clipRunes(head, room) + tail
+		}
+		links = links[1:]
+	}
+}
+
+// clipRunes bounds s to n runes, marking a cut with an ellipsis.
+func clipRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }

@@ -53,7 +53,8 @@ func (s *stubSigner) ActionToken(action, tenantID, alertID, channelID string) (s
 }
 
 // Build is BuildWith with only AppBaseURL set, and the delivery context the
-// later action links need (signer, channel) changes nothing yet.
+// action links need (signer, channel) adds the acknowledge link and nothing
+// else, and only to pages.
 func TestBuildWithMatchesBuild(t *testing.T) {
 	base := "https://probara.example.com/"
 	for _, eventType := range []string{"", EventCreated, EventReminder, EventResolved, EventAcknowledged, EventSuspectedCause} {
@@ -63,11 +64,16 @@ func TestBuildWithMatchesBuild(t *testing.T) {
 		}
 		signer := &stubSigner{}
 		got := BuildWith(sample(), eventType, Options{AppBaseURL: base, Links: signer, ChannelID: "c-1"})
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%q: signer and channel changed the message: %+v", eventType, got)
+		page := eventType == "" || eventType == EventCreated || eventType == EventReminder
+		if page != (got.AckURL != "") {
+			t.Fatalf("%q: AckURL = %q", eventType, got.AckURL)
 		}
-		if signer.calls != 0 {
-			t.Fatalf("%q: signer called %d times, want none", eventType, signer.calls)
+		got.AckURL, got.AckLabel = "", ""
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%q: signer and channel changed more than the ack link: %+v", eventType, got)
+		}
+		if wantCalls := map[bool]int{true: 1, false: 0}[page]; signer.calls != wantCalls {
+			t.Fatalf("%q: signer called %d times, want %d", eventType, signer.calls, wantCalls)
 		}
 	}
 }
@@ -316,5 +322,93 @@ func TestBuildLocationOfflineClosedWithoutRecovery(t *testing.T) {
 	}
 	if m := Build(ev, EventResolved, ""); m.Label != "Location Back Online" || m.StatusWord != "BACK ONLINE" {
 		t.Errorf("recovered: label=%q status=%q", m.Label, m.StatusWord)
+	}
+}
+
+type recordingSigner struct {
+	args []string
+	err  error
+}
+
+func (s *recordingSigner) ActionToken(action, tenantID, alertID, channelID string) (string, error) {
+	s.args = []string{action, tenantID, alertID, channelID}
+	if s.err != nil {
+		return "", s.err
+	}
+	return "tok_en-1", nil
+}
+
+func TestAckLinkOnPages(t *testing.T) {
+	for _, eventType := range []string{EventCreated, EventReminder} {
+		signer := &recordingSigner{}
+		m := BuildWith(sample(), eventType, Options{AppBaseURL: "https://probara.example.com/", Links: signer, ChannelID: "c-1"})
+		if m.AckURL != "https://probara.example.com/alert-action/tok_en-1" || m.AckLabel != "Acknowledge" {
+			t.Fatalf("%s: AckURL %q AckLabel %q", eventType, m.AckURL, m.AckLabel)
+		}
+		if want := []string{ActionAcknowledge, "tenant-1", "a-1", "c-1"}; !reflect.DeepEqual(signer.args, want) {
+			t.Fatalf("%s: token minted for %v, want %v", eventType, signer.args, want)
+		}
+	}
+}
+
+func TestAckLinkGating(t *testing.T) {
+	base := "https://probara.example.com"
+	acked := sample()
+	acked.Alert.Status = "acknowledged"
+	resolvedStatus := sample()
+	resolvedStatus.Alert.Status = "resolved"
+	cases := map[string]struct {
+		event     notifications.AlertEvent
+		eventType string
+		opts      Options
+	}{
+		"no signer (test sends)": {sample(), EventCreated, Options{AppBaseURL: base, ChannelID: "c-1"}},
+		"no app origin":          {sample(), EventCreated, Options{Links: &recordingSigner{}, ChannelID: "c-1"}},
+		"no channel":             {sample(), EventCreated, Options{AppBaseURL: base, Links: &recordingSigner{}}},
+		"signer cannot mint":     {sample(), EventCreated, Options{AppBaseURL: base, Links: &recordingSigner{err: errTest}, ChannelID: "c-1"}},
+		"resolved event":         {sample(), EventResolved, Options{AppBaseURL: base, Links: &recordingSigner{}, ChannelID: "c-1"}},
+		"acknowledged event":     {sample(), EventAcknowledged, Options{AppBaseURL: base, Links: &recordingSigner{}, ChannelID: "c-1"}},
+		"suspected cause":        {sample(), EventSuspectedCause, Options{AppBaseURL: base, Links: &recordingSigner{}, ChannelID: "c-1"}},
+		"already acknowledged":   {acked, EventReminder, Options{AppBaseURL: base, Links: &recordingSigner{}, ChannelID: "c-1"}},
+		"already resolved":       {resolvedStatus, EventReminder, Options{AppBaseURL: base, Links: &recordingSigner{}, ChannelID: "c-1"}},
+	}
+	for name, tc := range cases {
+		if m := BuildWith(tc.event, tc.eventType, tc.opts); m.AckURL != "" || m.AckLabel != "" {
+			t.Errorf("%s: AckURL %q, want none", name, m.AckURL)
+		}
+	}
+}
+
+type testError string
+
+func (e testError) Error() string { return string(e) }
+
+const errTest = testError("no key")
+
+func TestShortWithinKeepsLinksWhole(t *testing.T) {
+	m := BuildWith(sample(), EventCreated, Options{AppBaseURL: "https://probara.example.com", Links: &recordingSigner{}, ChannelID: "c-1"})
+	full := m.Short()
+	if !strings.HasSuffix(full, "\n"+m.ActionURL+"\nAcknowledge: "+m.AckURL) {
+		t.Fatalf("Short does not end with both links:\n%s", full)
+	}
+	if m.ShortWithin(0) != full || m.ShortWithin(10_000) != full {
+		t.Fatal("an unbounded or roomy ShortWithin differs from Short")
+	}
+
+	m.Summary = strings.Repeat("very long summary ", 200)
+	for _, limit := range []int{160, 320, 1600} {
+		out := m.ShortWithin(limit)
+		if n := len([]rune(out)); n > limit {
+			t.Fatalf("limit %d: %d runes", limit, n)
+		}
+		if !strings.Contains(out, m.AckURL) {
+			t.Fatalf("limit %d: the ack link was cut:\n%s", limit, out)
+		}
+	}
+	// Too small for both links: the deep link goes first, the ack link stays.
+	tight := len([]rune("\nAcknowledge: "+m.AckURL)) + 20
+	out := m.ShortWithin(tight)
+	if strings.Contains(out, m.ActionURL+"\n") || !strings.Contains(out, m.AckURL) || len([]rune(out)) > tight {
+		t.Fatalf("tight limit %d:\n%s", tight, out)
 	}
 }

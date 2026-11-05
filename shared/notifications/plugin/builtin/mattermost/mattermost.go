@@ -122,8 +122,15 @@ func build(m present.Message) payload {
 	if m.LastError != "" {
 		text += "\n\n**Last error**\n```\n" + codeSafe(truncate(m.LastError, maxLastError)) + "\n```"
 	}
+	var links []string
+	if m.AckURL != "" {
+		links = append(links, fmt.Sprintf("**[%s](%s)**", escape(m.AckLabel), m.AckURL))
+	}
 	if m.ActionURL != "" {
-		text += fmt.Sprintf("\n\n[%s](%s)", escape(m.ActionLabel), m.ActionURL)
+		links = append(links, fmt.Sprintf("[%s](%s)", escape(m.ActionLabel), m.ActionURL))
+	}
+	if len(links) > 0 {
+		text += "\n\n" + strings.Join(links, " · ")
 	}
 	var fields []field
 	for _, f := range m.Facts() {

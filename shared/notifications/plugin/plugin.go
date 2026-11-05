@@ -86,8 +86,12 @@ func (r DispatchRequest) Type() string {
 // plugin renders, with deep links built from the configured AppBaseURL.
 // Plugins own layout only; alert phrasing lives in package present.
 func (r DispatchRequest) View() present.Message {
-	return present.BuildWith(r.Event, r.Type(), present.Options{
-		AppBaseURL: CurrentRuntime().AppBaseURL,
-		ChannelID:  r.Channel.ID,
-	})
+	rt := CurrentRuntime()
+	opts := present.Options{AppBaseURL: rt.AppBaseURL, ChannelID: r.Channel.ID}
+	if !r.Test {
+		// A test send's synthetic alert does not exist, so it never
+		// carries an action link.
+		opts.Links = rt.Links
+	}
+	return present.BuildWith(r.Event, r.Type(), opts)
 }

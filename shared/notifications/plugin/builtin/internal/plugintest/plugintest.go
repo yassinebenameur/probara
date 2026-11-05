@@ -12,6 +12,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -143,4 +144,29 @@ func AssertSecrets(t *testing.T, p plugin.Plugin, cfg map[string]any, secretKeys
 			t.Errorf("merge dropped stored secret %q", k)
 		}
 	}
+}
+
+// AckToken is the token StaticSigner mints, and AckURL the acknowledge link
+// AckView carries.
+const (
+	AckToken = "ack-token"
+	AckURL   = "https://probara.example.com/alert-action/" + AckToken
+)
+
+// StaticSigner mints the same token for every action link.
+type StaticSigner string
+
+// ActionToken implements present.LinkSigner.
+func (s StaticSigner) ActionToken(action, tenantID, alertID, channelID string) (string, error) {
+	return string(s), nil
+}
+
+// AckView is SampleEvent's presentation as a real delivery renders it, with
+// both the deep link and a signed acknowledge link (AckURL).
+func AckView() present.Message {
+	return present.BuildWith(SampleEvent(), present.EventCreated, present.Options{
+		AppBaseURL: "https://probara.example.com",
+		Links:      StaticSigner(AckToken),
+		ChannelID:  "c-1",
+	})
 }

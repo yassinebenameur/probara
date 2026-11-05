@@ -145,9 +145,11 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 }
 
 func build(m present.Message) message {
+	// The supplementary URL field holds the deep link, so the acknowledge
+	// link rides in the text, which clients linkify.
 	out := message{
 		Title:    pushtext.Clip(m.Title, maxTitle),
-		Message:  pushtext.Body(m, maxMessage),
+		Message:  pushtext.BodyWithAck(m, maxMessage),
 		Priority: priorityFor(m.Tone),
 	}
 	if out.Message == "" {

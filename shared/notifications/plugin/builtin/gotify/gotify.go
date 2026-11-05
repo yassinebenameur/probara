@@ -115,7 +115,7 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 }
 
 func build(m present.Message) message {
-	body := pushtext.Body(m, maxMessage)
+	body := pushtext.BodyWithAck(m, maxMessage)
 	if m.ActionURL != "" {
 		// The web UI and desktop clients ignore the click extra, so the link
 		// is also printed.

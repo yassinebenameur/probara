@@ -123,6 +123,12 @@ alerter's claim so it fires again after the unack. A snooze end restarts the
 tier and reminder clocks on every route; an unacknowledge restarts them only
 on the routes the ack held.
 
+Triggers and reminders carry a signed acknowledge link (`shared/actionlink`,
+keyed off `PROBARA_SECRETS_KEY`) to the operator UI's confirm page, which
+POSTs to the API's public `/api/v1/alert-actions/{token}`; the API
+acknowledges through the alerts service as a `magic_link` actor, so the
+alerter sees an ordinary acknowledgement. Nothing about the link is stored.
+
 Monitor-less alerts route to the tenant defaults through
 `alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
 S-F6 in [state semantics](state-semantics.md),

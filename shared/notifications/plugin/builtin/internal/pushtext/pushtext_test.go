@@ -37,3 +37,23 @@ func TestBody_FitsAndKeepsSummary(t *testing.T) {
 		t.Errorf("body dropped parts it had room for: %q", got)
 	}
 }
+
+func TestBodyWithAckKeepsTheLinkWhole(t *testing.T) {
+	m := present.Message{Summary: strings.Repeat("long summary ", 200), AckURL: "https://probara.example.com/alert-action/tok", AckLabel: "Acknowledge"}
+	for _, max := range []int{80, 512, 1024} {
+		out := BodyWithAck(m, max)
+		if len(out) > max {
+			t.Fatalf("max %d: %d bytes", max, len(out))
+		}
+		if !strings.HasSuffix(out, "Acknowledge: "+m.AckURL) {
+			t.Fatalf("max %d: link cut or missing:\n%s", max, out)
+		}
+	}
+	if out := BodyWithAck(m, 20); strings.Contains(out, "alert-action") || len(out) > 20 {
+		t.Fatalf("a link that cannot fit must be left out, got %q", out)
+	}
+	m.AckURL = ""
+	if BodyWithAck(m, 512) != Body(m, 512) {
+		t.Fatal("without a link BodyWithAck must equal Body")
+	}
+}

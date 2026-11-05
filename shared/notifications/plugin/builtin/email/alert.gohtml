@@ -187,12 +187,20 @@ markup and the plain-text part always describe the same alert.
     </td></tr>
     {{end}}
 
-    {{if .ActionURL}}
+    {{if or .AckURL .ActionURL}}
     <tr><td class="pb-pad" style="padding:28px 40px 0 40px;">
       <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        {{if .AckURL}}
         <td align="center" style="background:{{.BrandOrange}};border-radius:8px;">
-          <a href="{{.ActionURL}}" style="display:inline-block;padding:13px 24px;font-family:'Archivo',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;letter-spacing:0.2px;color:{{.BrandInk}};">{{.ActionLabel}} &nbsp;&rarr;</a>
+          <a href="{{.AckURL}}" style="display:inline-block;padding:13px 24px;font-family:'Archivo',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;letter-spacing:0.2px;color:{{.BrandInk}};">{{.AckLabel}}</a>
         </td>
+        {{if .ActionURL}}<td style="width:12px;font-size:0;line-height:0;">&nbsp;</td>{{end}}
+        {{end}}
+        {{if .ActionURL}}
+        <td align="center" class="{{if .AckURL}}pb-rule{{end}}" style="{{if .AckURL}}border:1px solid #d4d4d8;{{else}}background:{{.BrandOrange}};{{end}}border-radius:8px;">
+          <a href="{{.ActionURL}}" class="{{if .AckURL}}pb-text{{end}}" style="display:inline-block;padding:13px 24px;font-family:'Archivo',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;letter-spacing:0.2px;color:{{if .AckURL}}#3f3f46{{else}}{{.BrandInk}}{{end}};">{{.ActionLabel}} &nbsp;&rarr;</a>
+        </td>
+        {{end}}
       </tr></table>
     </td></tr>
     {{end}}

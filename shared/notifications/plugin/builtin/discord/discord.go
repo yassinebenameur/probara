@@ -140,10 +140,16 @@ func buildEmbed(m present.Message) discordPayload {
 		fields = append(fields, discordEmbedField{Name: "Last error", Value: truncate(m.LastError, maxFieldValue)})
 	}
 
+	description := m.Summary
+	if m.AckURL != "" {
+		// A masked link, not a button: link buttons on a plain (not
+		// application-owned) webhook are refused or dropped.
+		description = strings.TrimSpace(description + "\n\n**[" + m.AckLabel + "](" + m.AckURL + ")**")
+	}
 	return discordPayload{
 		Embeds: []discordEmbed{{
 			Title:       truncate(m.Title, maxTitle),
-			Description: m.Summary,
+			Description: description,
 			URL:         m.ActionURL,
 			Color:       colorFor(m.Tone),
 			Timestamp:   m.Timestamp.UTC().Format(time.RFC3339),

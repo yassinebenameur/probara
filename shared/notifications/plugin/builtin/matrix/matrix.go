@@ -188,6 +188,10 @@ func build(m present.Message) content {
 		plain.WriteString("\n\nLast error:\n" + e)
 		fmt.Fprintf(&rich, "<br><br><strong>Last error</strong><pre><code>%s</code></pre>", html.EscapeString(e))
 	}
+	if m.AckURL != "" {
+		plain.WriteString("\n\n" + m.AckLabel + ": " + m.AckURL)
+		fmt.Fprintf(&rich, "<br><br><a href=\"%s\"><strong>%s</strong></a>", html.EscapeString(m.AckURL), html.EscapeString(m.AckLabel))
+	}
 	if m.ActionURL != "" {
 		plain.WriteString("\n\n" + m.ActionLabel + ": " + m.ActionURL)
 		fmt.Fprintf(&rich, "<br><a href=\"%s\">%s</a>", html.EscapeString(m.ActionURL), html.EscapeString(m.ActionLabel))
