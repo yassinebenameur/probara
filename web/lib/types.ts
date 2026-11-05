@@ -1861,6 +1861,11 @@ export interface StatusPageSettings {
   csp_mode?: StatusPageCSPMode;
   /** Origins (scheme://host[:port], "*." wildcard host) allowed to frame the page. */
   allowed_embed_origins?: string[];
+  /**
+   * Search and link-preview text (meta description, og:description), up to
+   * 300 characters. '' clears it; the page then falls back to its description.
+   */
+  seo_description?: string;
 }
 
 export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';

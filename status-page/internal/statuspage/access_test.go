@@ -129,6 +129,13 @@ var dispatchedSuffixes = []struct{ suffix, method string }{
 	{"/preview/draft", http.MethodGet},
 	{"/push/subscribe", http.MethodPost},
 	{"/push/unsubscribe", http.MethodPost},
+	// Read-only add-ons (servePageAddon, pageAddonSuffixes in addons.go).
+	{"/summary.json", http.MethodGet},
+	{"/badge.svg", http.MethodGet},
+	{"/monitors/00000000-0000-0000-0000-000000000001/badge.svg", http.MethodGet},
+	{"/embed.js", http.MethodGet},
+	{"/feed.atom", http.MethodGet},
+	{"/feed.rss", http.MethodGet},
 	// Not routed today: proves an unknown suffix is gated too.
 	{"/some-future-route.json", http.MethodGet},
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/pageaccess"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
@@ -128,6 +129,13 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Page add-ons: summary.json, badges, embed.js and the Atom feed
+	// (addons.go). Read-only GETs, dispatched here like every other
+	// sub-route so whatever gates this function gates them too.
+	if h.servePageAddon(w, r, path) {
+		return
+	}
+
 	// Extract slug (remove trailing slash if any)
 	slug := strings.TrimSuffix(path, "/")
 	if slug == "" {
@@ -135,36 +143,7 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load and render through the per-slug render cache. The rendered HTML
-	// depends only on the slug (and process-constant config): theme, kiosk and
-	// filter handling are entirely client-side, and no query parameter or
-	// header reaches the renderer — so the slug is the whole cache key.
-	//
-	// The build runs detached from this request's cancellation: with
-	// singleflight, one client disconnecting must not fail the render every
-	// concurrent waiter is collapsed onto. A timeout still bounds the load.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), statusPageBuildTimeout)
-	defer cancel()
-	page, etag, err := h.cache.GetPage(slug, func() (renderedPage, error) {
-		data, err := h.service.GetStatusPageBySlug(ctx, slug)
-		if err != nil {
-			return renderedPage{}, err
-		}
-		data.PushPublicKey = h.webPushPublicKey()
-		if gatedResponse(w) {
-			// Browser notifications are for public and unlisted pages only.
-			data.PushPublicKey = ""
-		}
-		html, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
-		if customErr != nil {
-			h.logger.WithFields(map[string]interface{}{
-				"error": customErr.Error(),
-				"slug":  slug,
-			}).Warn("Custom status page template failed; serving built-in template")
-		}
-		csp := pageCSPFor(data, h.appBaseURL(), strings.TrimSpace(data.CustomTemplateSource) != "")
-		return renderedPage{html: html, csp: csp}, err
-	})
+	page, etag, err := h.cachedPage(r.Context(), slug)
 	if err != nil {
 		h.writeStatusPageError(w, slug, err, "Failed to build status page")
 		return
@@ -186,6 +165,55 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte(html)); err != nil {
 		h.logger.WithError(err).Error("Failed to write status page response")
 	}
+}
+
+// cachedPage loads and renders slug through the per-slug render cache. The
+// rendered HTML depends only on the slug (and process-constant config):
+// theme, kiosk and filter handling are entirely client-side, and no query
+// parameter or header reaches the renderer — so the slug is the whole cache
+// key. The page and its add-ons (summary.json, badges) share one build.
+//
+// The build runs detached from this request's cancellation: with
+// singleflight, one client disconnecting must not fail the render every
+// concurrent waiter is collapsed onto. A timeout still bounds the load.
+func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage, string, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), statusPageBuildTimeout)
+	defer cancel()
+	return h.cache.GetPage(slug, func() (renderedPage, error) {
+		data, err := h.service.GetStatusPageBySlug(ctx, slug)
+		if err != nil {
+			return renderedPage{}, err
+		}
+		data.PushPublicKey = h.webPushPublicKey()
+		if h.access.store != nil {
+			// Browser notifications are for public and unlisted pages only.
+			// Visibility belongs to the page, so deciding it here keeps the
+			// per-slug cache correct for every caller (page and add-ons).
+			if acc, aerr := h.access.store.PageAccess(ctx, slug); aerr == nil && pageaccess.Gated(acc.Visibility) {
+				data.PushPublicKey = ""
+			}
+		}
+		data.CanonicalURL = h.canonicalURL(slug)
+		html, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
+		if customErr != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error": customErr.Error(),
+				"slug":  slug,
+			}).Warn("Custom status page template failed; serving built-in template")
+		}
+		csp := pageCSPFor(data, h.appBaseURL(), strings.TrimSpace(data.CustomTemplateSource) != "")
+		return renderedPage{html: html, csp: csp, summary: buildPageSummary(data, time.Now())}, err
+	})
+}
+
+// canonicalURL is the page's absolute public URL from STATUS_PAGE_BASE_URL,
+// or "" when it is unset (the head then carries no canonical link or og:url
+// rather than a guessed host).
+func (h *Handlers) canonicalURL(slug string) string {
+	if h.config == nil {
+		return ""
+	}
+	return publicPageURL(h.config.StatusPageBaseURL, slug)
 }
 
 // appBaseURL is APP_BASE_URL, the operator UI origin allowed to frame pages.
@@ -250,6 +278,7 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 		return
 	}
 	data.PushPublicKey = h.webPushPublicKey()
+	data.CanonicalURL = h.canonicalURL(slug)
 
 	var html string
 	if hasDraft {

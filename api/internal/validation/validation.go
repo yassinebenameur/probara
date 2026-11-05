@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -602,6 +603,9 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 		if _, err := securityheaders.NormalizeOrigin(origin); err != nil {
 			return fmt.Errorf("allowed_embed_origins: %v", err)
 		}
+	}
+	if settings.SEODescription != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEODescription)) > models.MaxSEODescriptionLength {
+		return fmt.Errorf("seo_description must be %d characters or less", models.MaxSEODescriptionLength)
 	}
 	return nil
 }

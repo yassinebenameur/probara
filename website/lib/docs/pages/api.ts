@@ -23,7 +23,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The control-plane API is rooted at `{API_ORIGIN}/api/v1`. The API serves `/healthz`, `/readyz`, and `/metrics` on `HTTP_PORT` (8080 in the bundled deployments); its declared `METRICS_PORT` does not have a separate listener. Public rendered status pages are served by the separate [status-page service](/docs/status-pages/#public-routes).",
+            "The control-plane API is rooted at `{API_ORIGIN}/api/v1`. The API serves `/healthz`, `/readyz`, and `/metrics` on `HTTP_PORT` (8080 in the bundled deployments); its declared `METRICS_PORT` does not have a separate listener. Public rendered status pages are served by the separate [status-page service](/docs/status-pages/#public-routes), together with their unauthenticated machine-readable views: [`summary.json`](/docs/status-pages/#summary-json), [SVG badges](/docs/status-pages/#badges) and the [Atom feed](/docs/status-pages/#feed).",
         },
         {
           type: "code",

@@ -40,6 +40,10 @@ export interface FormState {
   password: string;
   /** Submit password: '' to remove the stored password. */
   clearPassword: boolean;
+  /** Settings `show_latency_charts`: the response-time chart in each component's expanded panel. */
+  showLatencyCharts: boolean;
+  /** Settings `seo_description`; empty falls back to the description. */
+  seoDescription: string;
 }
 
 export const DEFAULT_PRIMARY = '#ff8a5c';
@@ -108,6 +112,9 @@ export function initialState(statusPage?: StatusPage): FormState {
     visibility: statusPage?.visibility ?? 'public',
     password: '',
     clearPassword: false,
+    // Defaults on, like the API: absent means the page shows the chart.
+    showLatencyCharts: statusPage?.settings?.show_latency_charts !== false,
+    seoDescription: statusPage?.settings?.seo_description || '',
   };
 }
 
@@ -140,7 +147,9 @@ export type Action =
   | { type: 'set_push_notifications'; value: boolean }
   | { type: 'set_visibility'; value: StatusPageVisibility }
   | { type: 'set_password'; value: string }
-  | { type: 'set_clear_password'; value: boolean };
+  | { type: 'set_clear_password'; value: boolean }
+  | { type: 'set_latency_charts'; value: boolean }
+  | { type: 'set_seo_description'; value: string };
 
 export function reducer(state: FormState, action: Action): FormState {
   switch (action.type) {
@@ -162,6 +171,12 @@ export function reducer(state: FormState, action: Action): FormState {
 
     case 'set_clear_password':
       return { ...state, clearPassword: action.value, password: action.value ? '' : state.password };
+
+    case 'set_latency_charts':
+      return { ...state, showLatencyCharts: action.value };
+
+    case 'set_seo_description':
+      return { ...state, seoDescription: action.value };
 
     case 'add_section': {
       const section = makeSection(action.title || 'New section', action.id);

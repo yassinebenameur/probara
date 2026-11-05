@@ -46,10 +46,13 @@ type cacheEntry struct {
 
 // renderedPage is one cached render: the HTML (with the CSP nonce still a
 // placeholder) and the page's CSP inputs, so every response can mint its own
-// nonce without re-rendering.
+// nonce without re-rendering. summary is the summary.json document built
+// from the same data, which the badges and embed.js read too; it is not part
+// of the ETag because it is never served with the HTML.
 type renderedPage struct {
-	html string
-	csp  pageCSP
+	html    string
+	csp     pageCSP
+	summary *pageSummary
 }
 
 // renderCache caches the rendered HTML of public status pages per slug so N

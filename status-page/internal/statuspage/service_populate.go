@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,11 +64,24 @@ func (s *Service) populatePageMonitors(ctx context.Context, tenantID uuid.UUID, 
 		regularIDs = append(regularIDs, id)
 	}
 
+	// Every leaf on the page: regular monitors and all group members. The 1h
+	// strip and the 1h/24h response-time series are read for this set, so a
+	// group costs no extra query -- its series are its members' sums pooled
+	// in Go.
+	leafIDs := append([]uuid.UUID(nil), regularIDs...)
+	for _, m := range mons {
+		if m.isGroup {
+			leafIDs = append(leafIDs, m.members...)
+		}
+	}
+	leafIDs = dedupeMonitorIDs(leafIDs)
+
 	var (
-		statusByID  map[uuid.UUID]*CurrentStatus
-		summaryByID map[uuid.UUID]*uptimeSummary
-		hourlyByID  map[uuid.UUID][]HourlyUptime
-		historyByID map[uuid.UUID][]CheckResultHistory
+		statusByID        map[uuid.UUID]*CurrentStatus
+		summaryByID       map[uuid.UUID]*uptimeSummary
+		hourlyByID        map[uuid.UUID][]HourlyUptime
+		hourlyLatencyByID map[uuid.UUID][]latencyBucket
+		historyByID       map[uuid.UUID][]CheckResultHistory
 	)
 	if len(regularIDs) > 0 {
 		var err error
@@ -77,24 +91,17 @@ func (s *Service) populatePageMonitors(ctx context.Context, tenantID uuid.UUID, 
 		if summaryByID, err = s.batchUptimeSummary(ctx, regularIDs, tenantID); err != nil {
 			return err
 		}
-		if hourlyByID, err = s.batchHourlyUptime(ctx, regularIDs, tenantID); err != nil {
-			return err
-		}
 		if historyByID, err = s.batchHistory(ctx, regularIDs, tenantID); err != nil {
 			return err
 		}
 	}
-
-	// The 1h strip: one raw per-minute query over every leaf on the page
-	// (regular monitors and all group members), so groups cost no extra
-	// query -- a group's strip is its members' counts summed in Go.
-	leafIDs := append([]uuid.UUID(nil), regularIDs...)
-	for _, m := range mons {
-		if m.isGroup {
-			leafIDs = append(leafIDs, m.members...)
+	if len(leafIDs) > 0 {
+		var err error
+		if hourlyByID, hourlyLatencyByID, err = s.batchHourlyUptime(ctx, leafIDs, tenantID); err != nil {
+			return err
 		}
 	}
-	leafIDs = dedupeMonitorIDs(leafIDs)
+
 	minuteStart, minuteEnd := oneHourWindow(s.now())
 	minuteByID, err := s.minuteBucketCounts(ctx, leafIDs, tenantID, minuteStart, minuteEnd)
 	if err != nil {
@@ -106,12 +113,17 @@ func (s *Service) populatePageMonitors(ctx context.Context, tenantID uuid.UUID, 
 		if m.isGroup {
 			s.populateGroupMonitorShortRange(ctx, m.ptr, m.members, tenantID)
 			if len(m.members) > 0 {
-				m.ptr.UptimeHistory1h = minuteUptime(sumMinuteBuckets(minuteByID, m.members), minuteStart)
+				members := sumMinuteBuckets(minuteByID, m.members)
+				m.ptr.UptimeHistory1h = minuteUptime(members, minuteStart)
+				m.ptr.LatencyHistory1h = minuteLatency(members, minuteStart)
+				m.ptr.LatencyHistory = hourlyLatency(sumLatencyBuckets(hourlyLatencyByID, m.members))
 			}
 			continue
 		}
 		assignRegularShortRange(m.ptr, m.id, statusByID, summaryByID, hourlyByID, historyByID)
 		m.ptr.UptimeHistory1h = minuteUptime(minuteByID[m.id], minuteStart)
+		m.ptr.LatencyHistory1h = minuteLatency(minuteByID[m.id], minuteStart)
+		m.ptr.LatencyHistory = hourlyLatency(hourlyLatencyByID[m.id])
 	}
 
 	// Agent monitors: latest host metrics from the metric store for the
@@ -486,14 +498,16 @@ func (s *Service) batchUptimeSummary(ctx context.Context, monitorIDs []uuid.UUID
 
 // batchHourlyUptime computes the 24-hour hourly uptime strip for each monitor in one query.
 // Each monitor gets a full 24-bucket series (empty hours carry -1), matching GetMonitorHourlyUptime.
+// The same pass returns each monitor's hourly latency sums (successful checks only, the
+// rollups' latency_success_* population) for the 24h response-time chart.
 //
 // The rollup cursor is read first and the hour-strip bounds are passed as parameters so the
 // raw past-cursor scan starts at an index-friendly constant ($5) instead of a CTE-join-derived
 // bound the planner could not push down.
-func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID][]HourlyUptime, error) {
+func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID][]HourlyUptime, map[uuid.UUID][]latencyBucket, error) {
 	cursor, err := sharedanalytics.LoadRollupCursor(ctx, s.db)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	now := time.Now().UTC()
@@ -510,7 +524,9 @@ func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID,
 				mhr.monitor_id,
 				mhr.bucket_hour AS hour,
 				SUM(mhr.total_checks)::bigint AS total,
-				SUM(mhr.success_checks)::bigint AS successful
+				SUM(mhr.success_checks)::bigint AS successful,
+				COALESCE(SUM(mhr.latency_success_sum_ms), 0)::double precision AS latency_sum_ms,
+				COALESCE(SUM(mhr.latency_success_count), 0)::bigint AS latency_count
 			FROM monitor_hourly_rollups mhr
 			WHERE mhr.tenant_id = $1
 			  AND mhr.monitor_id = ANY($2)
@@ -523,7 +539,9 @@ func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID,
 				cr.monitor_id,
 				date_trunc('hour', cr.created_at) AS hour,
 				COUNT(*)::bigint AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS successful
+				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS successful,
+				COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
+				COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
 			FROM check_results cr
 			WHERE cr.tenant_id = $1
 			  AND cr.monitor_id = ANY($2)
@@ -540,7 +558,9 @@ func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID,
 			m.monitor_id,
 			h.hour,
 			COALESCE(rs.total, 0) + COALESCE(raw.total, 0) AS total,
-			COALESCE(rs.successful, 0) + COALESCE(raw.successful, 0) AS successful
+			COALESCE(rs.successful, 0) + COALESCE(raw.successful, 0) AS successful,
+			COALESCE(rs.latency_sum_ms, 0) + COALESCE(raw.latency_sum_ms, 0) AS latency_sum_ms,
+			COALESCE(rs.latency_count, 0) + COALESCE(raw.latency_count, 0) AS latency_count
 		FROM mons m
 		CROSS JOIN generate_series($3::timestamptz, $4::timestamptz - INTERVAL '1 hour', INTERVAL '1 hour') AS h(hour)
 		LEFT JOIN rollup_stats rs ON rs.monitor_id = m.monitor_id AND rs.hour = h.hour
@@ -549,28 +569,78 @@ func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID,
 	`
 	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs), startHour, endExclusive, rawStart, cursor.LastCreatedAt, cursor.LastCheckResultID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to batch hourly uptime: %w", err)
+		return nil, nil, fmt.Errorf("failed to batch hourly uptime: %w", err)
 	}
 	defer rows.Close()
 
 	result := make(map[uuid.UUID][]HourlyUptime)
+	latency := make(map[uuid.UUID][]latencyBucket)
 	for rows.Next() {
 		var monitorID uuid.UUID
 		var hour time.Time
-		var total, successful int
-		if err := rows.Scan(&monitorID, &hour, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan batch hourly uptime: %w", err)
+		var total, successful, latencyCount int
+		var latencySum float64
+		if err := rows.Scan(&monitorID, &hour, &total, &successful, &latencySum, &latencyCount); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan batch hourly uptime: %w", err)
 		}
 		uptime := bucketUptime(total, successful)
 		result[monitorID] = append(result[monitorID], HourlyUptime{
 			Hour:   hour.Format("15:04"),
 			Uptime: uptime,
 		})
+		latency[monitorID] = append(latency[monitorID], latencyBucket{At: hour.UTC(), SumMS: latencySum, Count: latencyCount})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating batch hourly uptime: %w", err)
+		return nil, nil, fmt.Errorf("error iterating batch hourly uptime: %w", err)
 	}
-	return result, nil
+	return result, latency, nil
+}
+
+// latencyBucket is one time bucket's successful-check latency sum and count.
+// Sums, not means, so a group can pool its members' buckets with every check
+// weighing the same (the aggregation the uptime strips use).
+type latencyBucket struct {
+	At    time.Time
+	SumMS float64
+	Count int
+}
+
+// sumLatencyBuckets pools the buckets of the given monitors by bucket time.
+func sumLatencyBuckets(byID map[uuid.UUID][]latencyBucket, monitorIDs []uuid.UUID) []latencyBucket {
+	index := make(map[time.Time]int)
+	pooled := make([]latencyBucket, 0)
+	for _, id := range dedupeMonitorIDs(monitorIDs) {
+		for _, b := range byID[id] {
+			i, ok := index[b.At]
+			if !ok {
+				i = len(pooled)
+				index[b.At] = i
+				pooled = append(pooled, latencyBucket{At: b.At})
+			}
+			pooled[i].SumMS += b.SumMS
+			pooled[i].Count += b.Count
+		}
+	}
+	sort.Slice(pooled, func(i, j int) bool { return pooled[i].At.Before(pooled[j].At) })
+	return pooled
+}
+
+// hourlyLatency turns hourly buckets into the 24h response-time series; hours
+// without a successful timed check are left out (a gap, never zero).
+func hourlyLatency(buckets []latencyBucket) []LatencyPoint {
+	result := make([]LatencyPoint, 0, len(buckets))
+	for _, b := range buckets {
+		if b.Count <= 0 {
+			continue
+		}
+		result = append(result, LatencyPoint{
+			Timestamp: b.At,
+			LatencyMS: int(b.SumMS/float64(b.Count) + 0.5),
+			Time:      b.At.Format("15:04"),
+			Unix:      b.At.Unix(),
+		})
+	}
+	return result
 }
 
 // batchHistory loads the most recent 50 check results (last 24h, chronological) for each monitor

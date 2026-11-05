@@ -75,6 +75,12 @@ type StatusPageData struct {
 	// Published custom template ("" = render with the built-in template).
 	CustomTemplateSource  string `json:"-"` // For template use only
 	CustomTemplateVersion int    `json:"-"` // For template use only
+	// SEODescription is the stored seo_description setting ("" = fall back
+	// to the description). CanonicalURL is the page's absolute public URL,
+	// injected by the handler from STATUS_PAGE_BASE_URL like PushPublicKey;
+	// "" when the deployment does not name its public origin.
+	SEODescription string `json:"-"` // For template use only
+	CanonicalURL   string `json:"-"` // For template use only
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (1-min buckets)
@@ -121,6 +127,10 @@ type StatusPageMaintenanceWindow struct {
 	// three, within the 14-day look-ahead).
 	Repeating    bool        `json:"repeating,omitempty"`
 	NextStartsAt []time.Time `json:"next_starts_at,omitempty"`
+	// ID and UpdatedAt identify the window in the Atom feed (stable entry id
+	// and its last-modified time); not part of the /data JSON.
+	ID        string    `json:"-"`
+	UpdatedAt time.Time `json:"-"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -282,6 +292,8 @@ type statusPageSettingsPatch struct {
 
 	CSPMode             *string  `json:"csp_mode,omitempty"`
 	AllowedEmbedOrigins []string `json:"allowed_embed_origins,omitempty"`
+
+	SEODescription *string `json:"seo_description,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -305,6 +317,8 @@ type statusPageSettingsStored struct {
 
 	CSPMode             string
 	AllowedEmbedOrigins []string
+
+	SEODescription string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -395,6 +409,9 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	}
 	if patch.AllowedEmbedOrigins != nil {
 		stored.AllowedEmbedOrigins = patch.AllowedEmbedOrigins
+	}
+	if patch.SEODescription != nil {
+		stored.SEODescription = strings.TrimSpace(*patch.SEODescription)
 	}
 	return stored
 }
@@ -544,6 +561,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.CustomFooterHTML = settings.CustomFooterHTML
 	page.CSPMode = settings.CSPMode
 	page.AllowedEmbedOrigins = settings.AllowedEmbedOrigins
+	page.SEODescription = settings.SEODescription
 
 	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
 		return nil, fmt.Errorf("failed to get custom template: %w", err)
@@ -581,7 +599,8 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 		SELECT mw.id, mw.title, mw.description, mo.starts_at, mo.ends_at,
 			NOW() >= mo.starts_at AS is_active,
 			mw.recurrence <> 'none' AS repeating,
-			array_agg(DISTINCT pm.name) AS affected
+			array_agg(DISTINCT pm.name) AS affected,
+			mw.updated_at
 		FROM monitors pm
 		CROSS JOIN LATERAL `+maintenance.OccurrenceRangesSQL("$2", "pm.id", "NOW()", "NOW() + INTERVAL '14 days'")+` mo
 		JOIN maintenance_windows mw ON mw.id = mo.window_id AND mw.tenant_id = $2
@@ -608,9 +627,10 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 		var id uuid.UUID
 		var w StatusPageMaintenanceWindow
 		var affected []string
-		if err := rows.Scan(&id, &w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, &w.Repeating, pq.Array(&affected)); err != nil {
+		if err := rows.Scan(&id, &w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, &w.Repeating, pq.Array(&affected), &w.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan maintenance window: %w", err)
 		}
+		w.ID = id.String()
 		if i, seen := index[id]; seen {
 			// A later occurrence of a window already listed.
 			if len(windows[i].NextStartsAt) < maxListedNextStarts {
@@ -631,6 +651,12 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 // maxListedNextStarts caps the "then" starts a repeating window shows.
 const maxListedNextStarts = 3
 
+// maxPageIncidents bounds the incidents a page renders: every open one
+// first, then the most recently updated resolved ones. Publications are never
+// pruned, so without a bound a long-lived page would load its whole history
+// (and every public update of it) on each render.
+const maxPageIncidents = 50
+
 func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id, i.title, COALESCE(i.summary, ''), i.state, isp.published_at, i.resolved_at
@@ -638,7 +664,8 @@ func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tena
 		JOIN incidents i ON i.id = isp.incident_id AND i.tenant_id = isp.tenant_id
 		WHERE isp.status_page_id = $1 AND isp.tenant_id = $2 AND isp.unpublished_at IS NULL
 		ORDER BY CASE WHEN i.state = 'resolved' THEN 1 ELSE 0 END, i.updated_at DESC, isp.published_at DESC
-	`, statusPageID, tenantID)
+		LIMIT $3
+	`, statusPageID, tenantID, maxPageIncidents)
 	if err != nil {
 		return nil, fmt.Errorf("query published incidents: %w", err)
 	}

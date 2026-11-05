@@ -176,6 +176,10 @@ func (s *Service) hourlyUptimeForMonitors(ctx context.Context, monitorIDs []uuid
 type minuteBucketCount struct {
 	Total      int
 	Successful int
+	// LatencySumMS/LatencyCount cover successful checks with a latency, the
+	// same population as the hourly rollups' latency_success_* columns.
+	LatencySumMS float64
+	LatencyCount int
 }
 
 // oneHourBuckets is the number of one-minute buckets in the 1h strip.
@@ -205,7 +209,9 @@ func (s *Service) minuteBucketCounts(ctx context.Context, monitorIDs []uuid.UUID
 			cr.monitor_id,
 			date_trunc('minute', cr.created_at) AS bucket,
 			COUNT(*)::bigint AS total,
-			COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS successful
+			COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS successful,
+			COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
+			COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
 		FROM check_results cr
 		WHERE cr.tenant_id = $1
 		  AND cr.monitor_id = ANY($2)
@@ -222,8 +228,9 @@ func (s *Service) minuteBucketCounts(ctx context.Context, monitorIDs []uuid.UUID
 	for rows.Next() {
 		var monitorID uuid.UUID
 		var bucket time.Time
-		var total, successful int
-		if err := rows.Scan(&monitorID, &bucket, &total, &successful); err != nil {
+		var total, successful, latencyCount int
+		var latencySum float64
+		if err := rows.Scan(&monitorID, &bucket, &total, &successful, &latencySum, &latencyCount); err != nil {
 			return nil, fmt.Errorf("failed to scan minute uptime: %w", err)
 		}
 		idx := int(bucket.Sub(start) / time.Minute)
@@ -237,6 +244,8 @@ func (s *Service) minuteBucketCounts(ctx context.Context, monitorIDs []uuid.UUID
 		}
 		counts[idx].Total += total
 		counts[idx].Successful += successful
+		counts[idx].LatencySumMS += latencySum
+		counts[idx].LatencyCount += latencyCount
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating minute uptime: %w", err)
@@ -253,6 +262,8 @@ func sumMinuteBuckets(byID map[uuid.UUID][]minuteBucketCount, monitorIDs []uuid.
 		for i, c := range byID[id] {
 			sum[i].Total += c.Total
 			sum[i].Successful += c.Successful
+			sum[i].LatencySumMS += c.LatencySumMS
+			sum[i].LatencyCount += c.LatencyCount
 		}
 	}
 	return sum
@@ -272,6 +283,27 @@ func minuteUptime(counts []minuteBucketCount, start time.Time) []MinuteUptime {
 			Time:   start.Add(time.Duration(i) * time.Minute).Format("15:04"),
 			Uptime: bucketUptime(c.Total, c.Successful),
 		}
+	}
+	return result
+}
+
+// minuteLatency turns per-minute counts into the 1h response-time series:
+// one point per minute that had a successful check with a latency, carrying
+// the mean of those latencies. Minutes without one are absent (a gap in the
+// chart), never zero.
+func minuteLatency(counts []minuteBucketCount, start time.Time) []LatencyPoint {
+	result := make([]LatencyPoint, 0, len(counts))
+	for i, c := range counts {
+		if c.LatencyCount <= 0 {
+			continue
+		}
+		at := start.Add(time.Duration(i) * time.Minute).UTC()
+		result = append(result, LatencyPoint{
+			Timestamp: at,
+			LatencyMS: int(c.LatencySumMS/float64(c.LatencyCount) + 0.5),
+			Time:      at.Format("15:04"),
+			Unix:      at.Unix(),
+		})
 	}
 	return result
 }
