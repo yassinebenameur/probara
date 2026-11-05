@@ -258,6 +258,11 @@ func (s *Service) Update(ctx context.Context, tenantID, id uuid.UUID, req *model
 			return nil, err
 		}
 	}
+	if def.Period != existing.Period || def.Timezone != existing.Timezone {
+		if err := replanReportSchedulesTx(ctx, tx, tenantID, id, def.Period, def.Timezone, s.now()); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit SLA: %w", err)
 	}

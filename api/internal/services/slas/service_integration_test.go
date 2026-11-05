@@ -389,6 +389,46 @@ func TestSLAService(t *testing.T) {
 		}
 	})
 
+	t.Run("changing the period or timezone re-plans report schedules", func(t *testing.T) {
+		quarterly, err := svc.Create(ctx, tenantID, &models.CreateSLARequest{Name: "Replan", TargetPct: 99.9,
+			Period: "quarterly", MonitorIDs: []string{a.String()}})
+		require.NoError(t, err)
+		q4Run := time.Date(2027, 1, 1, 1, 0, 0, 0, time.UTC)
+		schedule := func(enabled bool) uuid.UUID {
+			id := uuid.New()
+			_, err := dbClient.ExecContext(ctx, `
+				INSERT INTO sla_report_schedules (id, tenant_id, sla_id, recipients, enabled, next_run_at, unsubscribe_key)
+				VALUES ($1, $2, $3, ARRAY['ops@example.com'], $4, $5, '\x00')
+			`, id, tenantID, quarterly.ID, enabled, q4Run)
+			require.NoError(t, err)
+			return id
+		}
+		enabled, disabled := schedule(true), schedule(false)
+		nextRun := func(id uuid.UUID) time.Time {
+			var next time.Time
+			require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT next_run_at FROM sla_report_schedules WHERE id = $1`, id).Scan(&next))
+			return next.UTC()
+		}
+
+		name := "Replan renamed"
+		_, err = svc.Update(ctx, tenantID, quarterly.ID, &models.UpdateSLARequest{Name: &name})
+		require.NoError(t, err)
+		require.Equal(t, q4Run, nextRun(enabled), "other edits leave the schedule alone")
+
+		monthly := "monthly"
+		_, err = svc.Update(ctx, tenantID, quarterly.ID, &models.UpdateSLARequest{Period: &monthly})
+		require.NoError(t, err)
+		require.Equal(t, time.Date(2026, 11, 1, 1, 0, 0, 0, time.UTC), nextRun(enabled),
+			"October goes out at its own close, not with the old quarter's")
+		require.Equal(t, q4Run, nextRun(disabled), "re-enabling plans a disabled schedule")
+
+		paris := "Europe/Paris"
+		_, err = svc.Update(ctx, tenantID, quarterly.ID, &models.UpdateSLARequest{Timezone: &paris})
+		require.NoError(t, err)
+		require.Equal(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), nextRun(enabled), "Paris's October closes at 23:00 UTC")
+		require.NoError(t, svc.Delete(ctx, tenantID, quarterly.ID))
+	})
+
 	require.NoError(t, svc.Delete(ctx, tenantID, serial.ID))
 	_, err = svc.Get(ctx, tenantID, serial.ID)
 	require.ErrorIs(t, err, ErrNotFound)

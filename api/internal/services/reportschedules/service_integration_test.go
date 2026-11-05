@@ -25,18 +25,29 @@ type fakeMailer struct {
 	mu   sync.Mutex
 	sent []mail.Message
 	fail map[string]bool
+	// after, when set, runs after each delivered message.
+	after func(mail.Message)
 }
 
-func (m *fakeMailer) SendMessage(_ context.Context, msg mail.Message) error {
+// SendMessage checks ctx first, as the SMTP mailer does.
+func (m *fakeMailer) SendMessage(ctx context.Context, msg mail.Message) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := msg.Validate(); err != nil {
 		return err
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.fail[msg.To[0]] {
+		m.mu.Unlock()
 		return errors.New("550 mailbox unavailable")
 	}
 	m.sent = append(m.sent, msg)
+	after := m.after
+	m.mu.Unlock()
+	if after != nil {
+		after(msg)
+	}
 	return nil
 }
 
@@ -230,6 +241,62 @@ func TestReportSchedules(t *testing.T) {
 		got, err := svc.Update(ctx, tenantID, sc.ID, &UpdateRequest{Enabled: &on})
 		require.NoError(t, err)
 		require.Equal(t, time.Date(2027, 1, 1, 1, 0, 0, 0, time.UTC), got.NextRunAt)
+	})
+
+	t.Run("a run cut short mid-send is recorded, never re-sent", func(t *testing.T) {
+		// Stop, runTimeout or a crash after the first recipient: the claim
+		// is already committed, so the period never goes out again.
+		sc2, err := svc.Create(ctx, tenantID, &CreateRequest{SLAID: sla.ID.String(),
+			Recipients: []string{"one@example.com", "two@example.com", "three@example.com"}, AutoIssue: new(bool)})
+		require.NoError(t, err)
+		_, err = dbClient.ExecContext(ctx, `UPDATE sla_report_schedules SET next_run_at = $2 WHERE id = $1`,
+			sc2.ID, time.Date(2026, 12, 1, 1, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+
+		runCtx, stop := context.WithCancel(ctx)
+		mailer.after = func(mail.Message) {
+			var key, lastErr string
+			var next time.Time
+			require.NoError(t, dbClient.QueryRowContext(ctx, `
+				SELECT last_period_key, last_error, next_run_at FROM sla_report_schedules WHERE id = $1
+			`, sc2.ID).Scan(&key, &lastErr, &next))
+			require.Equal(t, "2026-11", key, "the claim commits before the first email")
+			require.Equal(t, interruptedError, lastErr, "a crash from here on leaves this behind")
+			require.Equal(t, time.Date(2027, 1, 1, 1, 0, 0, 0, time.UTC), next.UTC())
+			stop()
+		}
+		n, err := svc.RunDue(runCtx)
+		mailer.after = nil
+		require.NoError(t, err, "a stop is not a failure")
+		require.Equal(t, 1, n)
+		require.Len(t, mailer.take(), 1, "only the first recipient was mailed")
+
+		got, err := svc.Get(ctx, tenantID, sc2.ID)
+		require.NoError(t, err)
+		require.Equal(t, "2026-11", got.LastPeriodKey)
+		require.Equal(t, 1, got.LastSentCount)
+		require.Contains(t, got.LastError, "2 of 3 recipients failed: context canceled",
+			"the outcome is recorded although the run's context is gone")
+
+		n, err = svc.RunDue(ctx)
+		require.NoError(t, err)
+		require.Zero(t, n, "the period is not claimed again")
+		require.Empty(t, mailer.take(), "nobody gets the period twice")
+
+		// Send now records its outcome too when the request goes away.
+		reqCtx, cancel := context.WithCancel(ctx)
+		mailer.after = func(mail.Message) { cancel() }
+		out, err := svc.SendNow(reqCtx, tenantID, sc2.ID)
+		mailer.after = nil
+		require.NoError(t, err)
+		require.Equal(t, 1, out.Sent)
+		require.Equal(t, 2, out.Failed)
+		require.Len(t, mailer.take(), 1)
+		got, err = svc.Get(ctx, tenantID, sc2.ID)
+		require.NoError(t, err)
+		require.Equal(t, 1, got.LastSentCount)
+		require.Contains(t, got.LastError, "2 of 3 recipients failed")
+		require.NoError(t, svc.Delete(ctx, tenantID, sc2.ID))
 	})
 
 	t.Run("a deleted workspace's schedules and links stop", func(t *testing.T) {

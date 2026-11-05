@@ -17,7 +17,6 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/slas"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
-	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/mail"
 	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 	"github.com/yassinebenameur/probara/shared/tenancy"
@@ -51,15 +50,16 @@ type Outcome struct {
 }
 
 // RunDue sends every due schedule's last closed period, one claimed row at a
-// time, and returns how many it ran. Rows are claimed FOR UPDATE SKIP LOCKED
-// inside a transaction that also records the run, so replicas never send a
-// period twice and a crash mid-send leaves the row due (the issued copy is
-// reused on the retry).
+// time, and returns how many it ran. It stops early, without an error, once
+// ctx is cancelled (Runner.Stop).
 func (s *Service) RunDue(ctx context.Context) (int, error) {
 	n := 0
-	for n < maxPerTick {
+	for n < maxPerTick && ctx.Err() == nil {
 		ran, err := s.runOne(ctx)
 		if err != nil || !ran {
+			if ctx.Err() != nil {
+				err = nil
+			}
 			return n, err
 		}
 		n++
@@ -67,13 +67,53 @@ func (s *Service) RunDue(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// interruptedError is what a claimed run shows until its outcome is
+// recorded; it stays only when the API died mid-send.
+const interruptedError = "sending, or interrupted before the outcome was recorded: some recipients may not have received it (Send now resends)"
+
+// recordTimeout bounds writing a run's outcome, which deliberately ignores
+// the run's own cancellation.
+const recordTimeout = 30 * time.Second
+
+// claimed is a due schedule whose period runOne committed as sent.
+type claimed struct {
+	sc        *Schedule
+	sla       *models.SLA
+	periodKey string
+}
+
+// runOne claims one due schedule and sends its period. The claim (the
+// period as last_period_key, next_run_at moved on) commits BEFORE any email
+// leaves, and the mail goes out after that transaction, never inside it.
+// Sending inside it would make delivery exactly as durable as the commit
+// that follows: Runner.Stop, runTimeout or a crash after some recipients
+// were mailed rolls the record back, and the next tick, on any replica,
+// mails the whole period to everyone again. Committing first makes a run at
+// most once; a run cut short records the recipients it failed, or keeps
+// interruptedError, and Send now resends.
 func (s *Service) runOne(parent context.Context) (bool, error) {
 	ctx, cancel := context.WithTimeout(parent, runTimeout)
 	defer cancel()
 	now := s.now()
+	c, ran, err := s.claim(ctx, now)
+	if err != nil || c == nil {
+		return ran, err
+	}
+	out := s.send(ctx, c.sc, c.sla, c.periodKey, c.sc.AutoIssue)
+	if err := s.recordOutcome(ctx, c.sc, out, c.periodKey); err != nil {
+		return true, err
+	}
+	s.recordSend(c.sc, out, "report schedule")
+	return true, nil
+}
+
+// claim locks the most overdue schedule, plans its run and commits it. It
+// returns the claim when a period is to be sent now, and whether a
+// schedule was handled at all.
+func (s *Service) claim(ctx context.Context, now time.Time) (*claimed, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("begin transaction: %w", err)
+		return nil, false, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 	sc, err := scanSchedule(tx.QueryRowContext(ctx, `SELECT `+scheduleColumns+` FROM sla_report_schedules s
@@ -82,10 +122,10 @@ func (s *Service) runOne(parent context.Context) (bool, error) {
 		LIMIT 1
 		FOR UPDATE OF s SKIP LOCKED`, now))
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("claim report schedule: %w", err)
+		return nil, false, fmt.Errorf("claim report schedule: %w", err)
 	}
 
 	sla, next, period, err := s.plan(ctx, sc, now)
@@ -95,34 +135,50 @@ func (s *Service) runOne(parent context.Context) (bool, error) {
 		if _, uerr := tx.ExecContext(ctx, `
 			UPDATE sla_report_schedules SET next_run_at = $2, last_error = $3 WHERE id = $1
 		`, sc.ID, now.Add(retryDelay), deliverylog.SanitizeError(err.Error())); uerr != nil {
-			return false, fmt.Errorf("record report schedule failure: %w", uerr)
+			return nil, false, fmt.Errorf("record report schedule failure: %w", uerr)
 		}
-		return true, tx.Commit()
+		return nil, true, tx.Commit()
 	}
+	var c *claimed
 	switch {
 	case now.Before(period.End.Add(IssueGrace)):
-		// Due early (the SLA's period or timezone changed): wait out the
-		// grace of the period that just closed.
+		// Due early (a stale next_run_at): wait out the grace of the
+		// period that just closed.
 		next = period.End.Add(IssueGrace).UTC()
 	case period.Key == sc.LastPeriodKey:
 		// Already sent; only the next run time was stale.
 	default:
-		out := s.send(ctx, tx, sc, sla, period.Key, sc.AutoIssue)
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE sla_report_schedules SET last_run_at = $2, last_period_key = $3, last_sent_count = $4, last_error = NULLIF($5, '')
+			UPDATE sla_report_schedules SET last_run_at = $2, last_period_key = $3, last_sent_count = 0, last_error = $4
 			WHERE id = $1
-		`, sc.ID, now, out.PeriodKey, out.Sent, out.Error); err != nil {
-			return false, fmt.Errorf("record report schedule run: %w", err)
+		`, sc.ID, now, period.Key, interruptedError); err != nil {
+			return nil, false, fmt.Errorf("claim report schedule period: %w", err)
 		}
-		s.recordSend(sc, out, "report schedule")
+		c = &claimed{sc: sc, sla: sla, periodKey: period.Key}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE sla_report_schedules SET next_run_at = $2 WHERE id = $1`, sc.ID, next); err != nil {
-		return false, fmt.Errorf("reschedule report schedule: %w", err)
+		return nil, false, fmt.Errorf("reschedule report schedule: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit report schedule run: %w", err)
+		return nil, false, fmt.Errorf("commit report schedule claim: %w", err)
 	}
-	return true, nil
+	return c, true, nil
+}
+
+// recordOutcome stores what a claimed run came to. It runs on a context
+// detached from the run's, so a run cut short by Stop or runTimeout still
+// records the recipients it reached and the ones it failed. The period
+// guard keeps a slow run from overwriting a later one's record.
+func (s *Service) recordOutcome(ctx context.Context, sc *Schedule, out Outcome, periodKey string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE sla_report_schedules SET last_sent_count = $3, last_error = NULLIF($4, '')
+		WHERE id = $1 AND last_period_key = $2
+	`, sc.ID, periodKey, out.Sent, out.Error); err != nil {
+		return fmt.Errorf("record report schedule run: %w", err)
+	}
+	return nil
 }
 
 // plan loads the schedule's SLA and works out its next run and the period
@@ -151,25 +207,18 @@ func isMissingSchema(err error) bool {
 // SendNow sends the last closed period's report to the schedule's
 // recipients at once, without issuing it: the issued copy when there is
 // one, else the live report of that period. It records the run on the
-// schedule but leaves the next scheduled run alone.
+// schedule but leaves the next scheduled run alone. Like the runner it
+// mails outside any transaction and records the outcome even when ctx is
+// cancelled mid-send.
 func (s *Service) SendNow(ctx context.Context, tenantID, id uuid.UUID) (*Outcome, error) {
 	if p := s.mailProblem(); p != "" {
 		return nil, invalid("%s", p)
 	}
 	ctx, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
-	tx, err := s.db.BeginTx(ctx, nil)
+	sc, err := s.Get(ctx, tenantID, id)
 	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-	sc, err := scanSchedule(tx.QueryRowContext(ctx, `SELECT `+scheduleColumns+` FROM sla_report_schedules s
-		WHERE s.tenant_id = $1 AND s.id = $2 FOR UPDATE OF s`, tenantID, id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get report schedule: %w", err)
+		return nil, err
 	}
 	sla, err := s.reports.Get(ctx, tenantID, sc.SLAID)
 	if err != nil {
@@ -179,22 +228,23 @@ func (s *Service) SendNow(ctx context.Context, tenantID, id uuid.UUID) (*Outcome
 	if err != nil {
 		return nil, err
 	}
-	out := s.send(ctx, tx, sc, sla, period.Key, false)
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE sla_report_schedules SET last_run_at = $2, last_sent_count = $3, last_error = NULLIF($4, '') WHERE id = $1
-	`, sc.ID, s.now(), out.Sent, out.Error); err != nil {
+	out := s.send(ctx, sc, sla, period.Key, false)
+	rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer rcancel()
+	if _, err := s.db.ExecContext(rctx, `
+		UPDATE sla_report_schedules SET last_run_at = $3, last_sent_count = $4, last_error = NULLIF($5, '')
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, sc.ID, s.now(), out.Sent, out.Error); err != nil {
 		return nil, fmt.Errorf("record report schedule run: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit report schedule run: %w", err)
 	}
 	return &out, nil
 }
 
 // send builds the period's report, renders the attachments and mails each
 // remaining recipient. Failures land in the Outcome, never as an error: a
-// run always records what happened and moves on.
-func (s *Service) send(ctx context.Context, q db.Querier, sc *Schedule, sla *models.SLA, periodKey string, issue bool) Outcome {
+// run always records what happened and moves on. A cancelled ctx fails the
+// recipients not yet mailed (the mailer checks it before each message).
+func (s *Service) send(ctx context.Context, sc *Schedule, sla *models.SLA, periodKey string, issue bool) Outcome {
 	out := Outcome{PeriodKey: periodKey}
 	report, issued, err := s.periodReport(ctx, sc.TenantID, sla.ID, periodKey, issue)
 	out.Issued = issued
@@ -211,7 +261,7 @@ func (s *Service) send(ctx context.Context, q db.Querier, sc *Schedule, sla *mod
 		out.Error = "render report: " + deliverylog.SanitizeError(err.Error())
 		return out
 	}
-	opted, err := unsubscribedHashes(ctx, q, sc.ID)
+	opted, err := unsubscribedHashes(ctx, s.db, sc.ID)
 	if err != nil {
 		out.Error = deliverylog.SanitizeError(err.Error())
 		return out
@@ -357,7 +407,8 @@ func (s *Service) recordSend(sc *Schedule, out Outcome, label string) {
 }
 
 // Runner runs RunDue on an interval (the audit pruner's pattern). Every API
-// replica runs one; SKIP LOCKED keeps them from sending a period twice.
+// replica runs one; SKIP LOCKED and the claim committed before sending keep
+// them from sending a period twice.
 type Runner struct {
 	svc      *Service
 	interval time.Duration
