@@ -930,6 +930,10 @@ export interface MaintenanceWindow {
   monitor_ids: string[];
   monitors?: MaintenanceWindowMonitorRef[];
   status: MaintenanceWindowStatus;
+  /** The rule; frequency 'none' is a one-off (starts_at..ends_at). */
+  recurrence?: MaintenanceRecurrence;
+  /** In-progress then next occurrences, at most five (S-M5). */
+  occurrences?: MaintenanceOccurrence[];
   created_at: string;
   updated_at: string;
 }
@@ -947,6 +951,7 @@ export interface CreateMaintenanceWindowRequest {
   starts_at: string;
   ends_at: string;
   monitor_ids: string[];
+  recurrence?: MaintenanceRecurrence;
 }
 
 export interface UpdateMaintenanceWindowRequest {
@@ -955,6 +960,42 @@ export interface UpdateMaintenanceWindowRequest {
   starts_at?: string;
   ends_at?: string;
   monitor_ids?: string[];
+  /** Replaces the whole rule when sent. */
+  recurrence?: MaintenanceRecurrence;
+}
+
+export type MaintenanceFrequency = 'none' | 'daily' | 'weekly' | 'monthly' | 'cron';
+
+/** A maintenance window's repeat rule (docs/state-semantics.md S-M5). */
+export interface MaintenanceRecurrence {
+  frequency: MaintenanceFrequency;
+  /** Every N days/weeks/months. */
+  interval?: number;
+  /** Weekly days, 0 = Sunday … 6 = Saturday. */
+  weekdays?: number[];
+  /** Monthly day 1–31; clamps to the last day of shorter months. */
+  month_day?: number;
+  cron?: string;
+  /** IANA zone the wall-clock times are read in. */
+  timezone?: string;
+  until?: string;
+}
+
+export interface MaintenanceOccurrence {
+  starts_at: string;
+  ends_at: string;
+}
+
+export interface PreviewMaintenanceWindowRequest {
+  starts_at: string;
+  ends_at: string;
+  recurrence?: MaintenanceRecurrence;
+  count?: number;
+}
+
+export interface PreviewMaintenanceWindowResponse {
+  recurrence: MaintenanceRecurrence;
+  occurrences: MaintenanceOccurrence[];
 }
 
 export interface SnoozeMonitorRequest {

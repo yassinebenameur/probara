@@ -1,10 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CircleStop, Pencil, Plus, Trash2, Wrench } from 'lucide-react';
-import type { MaintenanceWindow, MaintenanceWindowStatus } from '@/lib/types';
-import { deleteMaintenanceWindow, getMaintenanceWindows, updateMaintenanceWindow } from '@/lib/api';
+import { CircleStop, Pencil, Plus, Repeat, Trash2, Wrench } from 'lucide-react';
+import type { MaintenanceOccurrence, MaintenanceWindow, MaintenanceWindowStatus } from '@/lib/types';
+import {
+  deleteMaintenanceWindow,
+  endMaintenanceOccurrence,
+  getMaintenanceWindows,
+  updateMaintenanceWindow,
+} from '@/lib/api';
 import { formatDateTime, formatDateTimeFull, formatDurationBetween } from '@/lib/format';
+import { describeRecurrence, isRepeating } from '@/lib/maintenance-schedule';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
@@ -60,30 +66,41 @@ const TAB_ORDER_SORT: Record<Tab, SortState<MaintenanceSortKey>> = {
 };
 const DEFAULT_DIR = { monitors: 'desc' } as const;
 
+/**
+ * The span a row shows. A repeating window's own starts_at/ends_at are only
+ * its template, so it shows the occurrence in progress or the next one; a
+ * one-off (or a finished series) shows the window itself.
+ */
+function shownSpan(w: MaintenanceWindow): MaintenanceOccurrence {
+  const next = w.occurrences?.[0];
+  return isRepeating(w.recurrence) && next ? next : w;
+}
+
 const SORT_VALUE: Record<Exclude<MaintenanceSortKey, 'auto'>, (w: MaintenanceWindow) => SortValue> = {
   title: (w) => w.title,
-  starts: (w) => Date.parse(w.starts_at),
-  ends: (w) => Date.parse(w.ends_at),
+  starts: (w) => Date.parse(shownSpan(w).starts_at),
+  ends: (w) => Date.parse(shownSpan(w).ends_at),
   monitors: (w) => (w.monitors ?? []).length,
 };
 
 /** When the window starts or ends, relative to now, as the row's lead fact. */
 function relativeTiming(window: MaintenanceWindow) {
+  const span = shownSpan(window);
   if (window.status === 'active') {
     return (
       <Pill tone="info" size="xs" dot>
-        <RelativeTime value={window.ends_at} prefix="Ends " />
+        <RelativeTime value={span.ends_at} prefix="Ends " />
       </Pill>
     );
   }
   if (window.status === 'upcoming') {
     return (
       <Pill tone="neutral" size="xs">
-        <RelativeTime value={window.starts_at} prefix="Starts " />
+        <RelativeTime value={span.starts_at} prefix={isRepeating(window.recurrence) ? 'Next ' : 'Starts '} />
       </Pill>
     );
   }
-  return <RelativeTime value={window.ends_at} prefix="Ended " className="text-xs text-slate-500" />;
+  return <RelativeTime value={span.ends_at} prefix="Ended " className="text-xs text-slate-500" />;
 }
 
 async function fetchStatus(status: Tab): Promise<{ items: MaintenanceWindow[]; total: number }> {
@@ -166,8 +183,14 @@ export default function MaintenancePage() {
 
   const handleEndNow = async (window: MaintenanceWindow) => {
     try {
-      await updateMaintenanceWindow(window.id, { ends_at: new Date().toISOString() });
-      showToast('Maintenance window ended', 'success');
+      // A repeating window ends only the occurrence in progress; its rule
+      // (the template's ends_at included) must not change.
+      if (isRepeating(window.recurrence)) {
+        await endMaintenanceOccurrence(window.id);
+      } else {
+        await updateMaintenanceWindow(window.id, { ends_at: new Date().toISOString() });
+      }
+      showToast(isRepeating(window.recurrence) ? 'Occurrence ended; the window repeats as scheduled' : 'Maintenance window ended', 'success');
       loadWindows();
     } catch (err: any) {
       showToast(err.message || 'Failed to end maintenance window', 'error');
@@ -278,6 +301,8 @@ export default function MaintenancePage() {
               <tbody>
                 {windows.map((window) => {
                   const monitors = window.monitors ?? [];
+                  const span = shownSpan(window);
+                  const repeats = describeRecurrence(window.recurrence);
                   return (
                     <tr key={window.id}>
                       <td className="max-w-0">
@@ -285,6 +310,15 @@ export default function MaintenancePage() {
                           <p className="min-w-0 break-words font-medium text-white">{window.title}</p>
                           {relativeTiming(window)}
                         </div>
+                        {repeats && (
+                          <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-400">
+                            <Repeat className="h-3 w-3 flex-shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                            <span className="min-w-0 break-words">
+                              {repeats}
+                              {window.recurrence?.timezone ? ` · ${window.recurrence.timezone}` : ''}
+                            </span>
+                          </p>
+                        )}
                         {monitors.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                             {monitors.slice(0, MAX_MONITOR_CHIPS).map((m) => (
@@ -310,13 +344,13 @@ export default function MaintenancePage() {
                           </div>
                         )}
                       </td>
-                      <td className="whitespace-nowrap text-ui tabular-nums text-slate-300" title={formatDateTimeFull(window.starts_at)}>
-                        {formatDateTime(window.starts_at)}
+                      <td className="whitespace-nowrap text-ui tabular-nums text-slate-300" title={formatDateTimeFull(span.starts_at)}>
+                        {formatDateTime(span.starts_at)}
                       </td>
-                      <td className="whitespace-nowrap text-ui tabular-nums" title={formatDateTimeFull(window.ends_at)}>
-                        <div className="text-slate-300">{formatDateTime(window.ends_at)}</div>
+                      <td className="whitespace-nowrap text-ui tabular-nums" title={formatDateTimeFull(span.ends_at)}>
+                        <div className="text-slate-300">{formatDateTime(span.ends_at)}</div>
                         <div className="mt-0.5 text-xs text-slate-500">
-                          {formatDurationBetween(window.starts_at, window.ends_at)} long
+                          {formatDurationBetween(span.starts_at, span.ends_at)} long
                         </div>
                       </td>
                       <td className="hidden text-right text-ui tabular-nums text-slate-300 md:table-cell">
@@ -328,7 +362,7 @@ export default function MaintenancePage() {
                             {window.status === 'active' && (
                               <IconButton
                                 icon={<CircleStop strokeWidth={1.75} />}
-                                label="End now"
+                                label={isRepeating(window.recurrence) ? 'End this occurrence now' : 'End now'}
                                 onClick={() => handleEndNow(window)}
                               />
                             )}
@@ -383,7 +417,7 @@ export default function MaintenancePage() {
         title="Delete maintenance window"
         description={
           pendingDelete
-            ? `Delete “${pendingDelete.title}”? Alerts for the affected monitors resume immediately.`
+            ? `Delete “${pendingDelete.title}”? Alerts for the affected monitors resume immediately, and its past occurrences stop counting as planned downtime in live SLA reports.`
             : ''
         }
         confirmLabel="Delete"
