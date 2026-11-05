@@ -16,6 +16,7 @@ import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import { AlertRoutingNotice } from '@/components/monitors/AlertRoutingBadge';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
+import MonitorConfigHistory from '@/components/monitors/MonitorConfigHistory';
 import { GroupMembersCard } from '@/components/monitors/GroupMembersCard';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
 import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
@@ -48,7 +49,7 @@ import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/
 import { formatBytes } from '@/lib/metrics';
 import { certificateExpiryLabel, latestSIPMetrics, sipFacts, sipMediaOutdatedWorkersHint } from '@/lib/sip-metrics';
 
-const TAB_IDS = ['overview', 'history', 'settings', 'json'] as const;
+const TAB_IDS = ['overview', 'history', 'settings', 'versions', 'json'] as const;
 
 const isDatabaseMonitorType = (t: string): boolean =>
   t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq' || t === 'mysql';
@@ -867,6 +868,7 @@ export default function EditMonitorPage() {
     { id: 'overview', label: 'Overview' },
     { id: 'history', label: 'History' },
     { id: 'settings', label: 'Settings' },
+    { id: 'versions', label: 'Config history' },
     { id: 'json', label: 'JSON' },
   ] as const;
   const selectedWindowMs =
@@ -1146,6 +1148,9 @@ export default function EditMonitorPage() {
           onCancel={() => router.push('/monitors')}
           loading={saving}
         />
+      )}
+      {activeTab === 'versions' && (
+        <MonitorConfigHistory monitor={monitor} onRestored={setMonitor} />
       )}
       {activeTab === 'json' && (
         <MonitorDetailJson monitor={monitor} analytics={analytics} />
