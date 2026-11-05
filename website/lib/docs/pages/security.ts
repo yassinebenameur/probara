@@ -159,18 +159,48 @@ export const SECURITY_PAGE: DocPage = {
             'Session cookies are HttpOnly and SameSite=Lax. Their Secure attribute is controlled by `ADMIN_COOKIE_SECURE`, which defaults to false. Production HTTPS deployments must set it to true and preserve one stable JWT secret across API replicas.',
         },
         {
-          type: 'callout',
-          tone: 'warning',
-          title: 'CORS currently reflects arbitrary Origin values',
+          type: 'paragraph',
           text:
-            'Authenticated API and alert SSE paths echo a supplied `Origin` and set `Access-Control-Allow-Credentials: true`; there is no configured origin allowlist. SameSite=Lax provides some browser protection, but keep API traffic same-origin behind the frontend/reverse proxy or add explicit trusted-origin enforcement.',
+            'Cross-origin browser access is an allowlist: only origins in `API_ALLOWED_ORIGINS` get `Access-Control-Allow-Origin` (with credentials) and preflight answers; every other `Origin` gets no CORS headers, so the browser withholds the response. The default, empty, means same-origin only, which is all the operator UI needs because it calls the API through its own `/api` proxy. The public OAuth/MCP discovery and token routes keep a wildcard policy without credentials.',
+        },
+      ],
+    },
+    {
+      id: 'edge-controls',
+      title: 'Security headers and rate limits',
+      blocks: [
+        {
+          type: 'table',
+          columns: ['Surface', 'Headers'],
+          rows: [
+            [
+              'API',
+              '`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and `Content-Security-Policy: default-src \'none\'; frame-ancestors \'none\'` on every response.',
+            ],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'HSTS (`Strict-Transport-Security: max-age=…; includeSubDomains`) is off until `SECURITY_HSTS_MAX_AGE` is positive, and even then is sent only on HTTPS requests: TLS terminated by the service, or `X-Forwarded-Proto: https` from a peer in `TRUSTED_PROXY_CIDRS`. A forwarding header from any other peer never counts. Compose defaults to off; Helm turns it on (one year) when the chart’s ingress has `tls` configured.',
+        },
+        {
+          type: 'list',
+          items: [
+            'The API has a general rate limit: a token bucket of `API_RATE_LIMIT_PER_MINUTE` (default 600) with `API_RATE_LIMIT_BURST` (default 120). Authenticated requests are keyed by credential — API key, MCP grant, or session user — so users behind one NAT or proxy do not share a bucket. Requests without a credential are keyed by client address, resolved through the [trusted proxy list](#audit-proxy-trust).',
+            'A request that presents a credential and gets 401 also spends from an authentication-failure bucket for its address. Once that bucket is empty, credentialed requests from the address are refused before authentication runs, so guessing API keys cannot buy unlimited database lookups.',
+            'Over the limit the API answers `429 Too Many Requests` with `Retry-After` in seconds. `0` disables the limiter.',
+            'Exempt: health and metrics probes, `/static`, push heartbeats (`/api/v1/push`), OTLP export (limited per monitor by `OTLP_MONITOR_RATE_PER_MIN`), discovery collectors, and the alert stream.',
+            'Buckets live in memory on each API replica, so the effective cluster-wide ceiling is the limit times the replica count, and a restart resets them. Behind a proxy that is not in `TRUSTED_PROXY_CIDRS`, every anonymous visitor shares the proxy’s bucket — list your ingress there.',
+            'The limiter bounds request volume per credential; it is not an account lockout for password guessing.',
+          ],
         },
         {
           type: 'callout',
-          tone: 'warning',
-          title: 'Edge controls are still required',
+          tone: 'info',
+          title: 'Keep ingress limits too',
           text:
-            'The application does not provide a general login/API rate limiter or a complete production security-header policy. Apply rate limits, request-size limits, HSTS, CSP where compatible, frame protection, content-type protection, and trusted proxy/header rules at the ingress or reverse proxy.',
+            'The application limits are per replica and in memory. Keep request-size limits, connection limits, and a coarse per-address rate limit at the ingress or reverse proxy as the first line of defense.',
         },
       ],
     },
@@ -633,6 +663,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Confirm notification egress cannot reach internal metadata/control-plane addresses.',
             'Test location disable/revocation and ensure one location cannot consume another location’s jobs.',
             'Validate audit capture, drop warnings, retention, export restrictions, and external log durability.',
+            'Check the [security headers](#edge-controls) on API, UI, and status-page responses through the real ingress, including HSTS on HTTPS and `429` with `Retry-After` from the API limiter.',
             'Restore a database backup with the complete keyring and verify encrypted channels, monitors, and locations.',
             'Scan images/dependencies and run Go race tests, frontend production builds, Helm lint, and integration tests before release.',
           ],

@@ -56,6 +56,7 @@ spec:
           value: "{{ .Values.frontend.statusPageUrl | default .Values.statusPage.baseUrl }}"
         - name: API_PROXY_TARGET
           value: "{{ $apiProxyTarget }}"
+        {{- include "monitoring-platform.securityEnv" (dict "ctx" . "component" "frontend") | nindent 8 }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

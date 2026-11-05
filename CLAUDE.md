@@ -467,6 +467,16 @@ or imported groups come back empty. Any other path that creates groups through
   that re-parses the value as config (numeric, boolean-ish or
   space/comma/brace passwords abort startup), and quoting the reference
   silently disables the expansion.
+- **Browser/edge security**: `shared/securityheaders` owns the Go services'
+  headers (API strict policy, status-page per-page CSP, HSTS only on HTTPS
+  via `IsHTTPS` + `TRUSTED_PROXY_CIDRS`). The API mounts it, the CORS
+  allowlist (`middleware/cors.go`, `API_ALLOWED_ORIGINS`) and the anonymous
+  rate-limit stage in `useEdgeSecurity` (`api/internal/api/routes_edge.go`);
+  `rateLimiter.Identified` must stay directly after `authMiddleware`, since
+  it keys on the verified credential. Never echo `Origin` in a handler.
+  `SECURITY_HSTS_MAX_AGE` / `API_RATE_LIMIT_*` / `API_ALLOWED_ORIGINS` ride
+  Compose env and the chart's top-level `security:` block
+  (`monitoring-platform.securityEnv`) together.
 
 ## MCP server
 

@@ -133,6 +133,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	r.Use(clientip.NewResolver(cfg.TrustedProxyCIDRs).Middleware)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
+	// Edge security (routes_edge.go): headers, CORS allowlist, anonymous rate limit.
+	rateLimiter := useEdgeSecurity(r, cfg)
 
 	// Health and metrics endpoints (no auth required)
 	healthHandlers := NewHandlers(cfg, log, metricsRegistry, dbClient)
@@ -285,6 +287,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.Route("/", func(r chi.Router) {
 			// Apply auth middleware to all API routes
 			r.Use(authMiddleware)
+			r.Use(rateLimiter.Identified)
 			// Audit wraps the write gate so denied mutations are recorded too
 			// (RequireWrite 403s surface as outcome=denied).
 			r.Use(apimiddleware.AuditMutations(auditRecorder))

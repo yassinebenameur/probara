@@ -53,8 +53,6 @@ const identityQuery = `
 func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			applyCORSHeaders(w, r)
-
 			// Prefer admin JWT cookie if present
 			if cookie, err := r.Cookie("admin_access"); err == nil && cookie.Value != "" {
 				claims, err := auth.ParseAdminToken(cookie.Value, jwtSecret)
@@ -245,14 +243,6 @@ func isMissingSchema(err error) bool {
 		return false
 	}
 	return pqErr.Code == "42P01" || pqErr.Code == "42703"
-}
-
-func applyCORSHeaders(w http.ResponseWriter, r *http.Request) {
-	if origin := r.Header.Get("Origin"); origin != "" {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Vary", "Origin")
-	}
 }
 
 func writeAuthError(w http.ResponseWriter, message string) {

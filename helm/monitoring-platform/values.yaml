@@ -249,6 +249,31 @@ appBaseURL: ""
 trustedProxyCIDRs: []
 
 # =============================================================================
+# BROWSER / EDGE SECURITY
+# =============================================================================
+security:
+  # Strict-Transport-Security max-age in seconds for api, status-page and
+  # frontend (SECURITY_HSTS_MAX_AGE). Empty = automatic: 31536000 (one year)
+  # when ingress.enabled and ingress.tls is set, else 0 (off). The header is
+  # only ever sent on HTTPS requests -- TLS at the pod, or X-Forwarded-Proto:
+  # https from a trustedProxyCIDRs peer -- so list your ingress there.
+  hstsMaxAge: ""
+  # General API rate limit (API_RATE_LIMIT_PER_MINUTE / _BURST): one token
+  # bucket per credential (API key, MCP grant, session user), else per client
+  # IP, kept in memory on each api replica -- the effective cluster-wide
+  # ceiling is this times api.replicas. 0 disables it. Push heartbeats, OTLP
+  # export, discovery collectors, the alert stream and probes are exempt.
+  apiRateLimitPerMinute: 600
+  apiRateLimitBurst: 120
+  # Browser origins allowed credentialed cross-origin API calls
+  # (API_ALLOWED_ORIGINS). Empty: same-origin only, which is all the bundled
+  # frontend needs (it reaches the API through its /api proxy).
+  apiAllowedOrigins: []
+  # Operator UI Content-Security-Policy (WEB_CSP_ENFORCE). false ships it as
+  # Content-Security-Policy-Report-Only for this release; true enforces it.
+  webCspEnforce: false
+
+# =============================================================================
 # SMTP (builtin email notification channels)
 # =============================================================================
 # Process-level mail transport for email alert channels. Rendered into the

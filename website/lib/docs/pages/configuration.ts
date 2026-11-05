@@ -163,6 +163,26 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Empty (no proxy trusted: the TCP peer is the client); comma-separated CIDRs or bare IPs, an invalid entry stops startup',
               'The [trusted proxies](/docs/security/#audit-proxy-trust) whose `X-Forwarded-For` / `X-Real-IP` resolve the IP in audit records and admin sessions. Read by the API and the status-page service. Compose passes it through from the shell to both; Helm renders the top-level `trustedProxyCIDRs` list into both.',
             ],
+            [
+              '`SECURITY_HSTS_MAX_AGE`',
+              '`0` (no HSTS); nonnegative integer seconds, anything else stops startup',
+              '[HSTS](/docs/security/#edge-controls) max-age for API, status-page and frontend, sent only on HTTPS requests (direct TLS, or `X-Forwarded-Proto: https` from a trusted proxy). Compose passes it through (default `0`); Helm renders `security.hstsMaxAge`, which defaults to one year when `ingress.tls` is set and `0` otherwise.',
+            ],
+            [
+              '`API_RATE_LIMIT_PER_MINUTE`',
+              '`600`; nonnegative integer; `0` disables the limiter',
+              'General [API rate limit](/docs/security/#edge-controls), per credential (else per client IP), in memory on each API replica. Compose and Helm (`security.apiRateLimitPerMinute`) wire it.',
+            ],
+            [
+              '`API_RATE_LIMIT_BURST`',
+              '`120`; nonnegative integer',
+              'Bucket size of the general limiter. Compose and Helm (`security.apiRateLimitBurst`) wire it.',
+            ],
+            [
+              '`API_ALLOWED_ORIGINS`',
+              'Empty (same-origin only); comma-separated `scheme://host[:port]` origins, an invalid entry or `*` stops startup',
+              'Browser origins allowed credentialed cross-origin API calls ([CORS](/docs/security/#passwords-api-keys-sessions)). Compose passes it through; Helm renders `security.apiAllowedOrigins`.',
+            ],
           ],
         },
         {
@@ -1046,6 +1066,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['Status cache, proxy, preview, timeout, update subject', 'Preview only; most defaults', 'Not wired'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
             ['Trusted proxies (`TRUSTED_PROXY_CIDRS`)', 'Passed through from the shell to API and status-page', 'Top-level `trustedProxyCIDRs` rendered into API and status-page'],
+            ['Security headers, API rate limit, CORS allowlist', '`SECURITY_HSTS_MAX_AGE` (default `0`) and the `API_*` limits passed through from the shell to the API (HSTS also to status-page)', 'Top-level `security` block rendered into API, status-page and frontend'],
             ['Arbitrary extra environment', 'Requires editing Compose', 'No `extraEnv`; requires chart template change'],
           ],
         },

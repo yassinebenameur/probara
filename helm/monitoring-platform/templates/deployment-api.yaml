@@ -106,6 +106,7 @@ spec:
         {{- with (include "monitoring-platform.trustedProxyEnv" .) }}
         {{- . | nindent 8 }}
         {{- end }}
+        {{- include "monitoring-platform.securityEnv" (dict "ctx" . "component" "api") | nindent 8 }}
         - name: AUDIT_RETENTION_DAYS
           value: {{ .Values.auth.auditRetentionDays | quote }}
         {{- if .Values.auth.oidc.enabled }}
