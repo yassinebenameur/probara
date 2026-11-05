@@ -1688,3 +1688,116 @@ export function createOnCallFeedLink(id: string) {
 export function disableOnCallFeed(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/oncall-schedules/${id}/ical-token`);
 }
+
+// User lifecycle. The /auth/* flows are public (no session, no 401 redirect);
+// /account/* is the signed-in user's own account; the /users/{id} actions
+// are superadmin-only.
+type AuthCapabilities = import('./types').AuthCapabilities;
+type InviteInfo = import('./types').InviteInfo;
+type EmailChangePending = import('./types').EmailChangePending;
+type AccountMFAStatus = import('./types').AccountMFAStatus;
+type TOTPSetup = import('./types').TOTPSetup;
+type RecoveryCodesResponse = import('./types').RecoveryCodesResponse;
+type AccountLinkResponse = import('./types').AccountLinkResponse;
+type ResetMFAResponse = import('./types').ResetMFAResponse;
+
+async function publicRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const response = await fetch(getApiUrl(path), {
+    method,
+    credentials: 'include',
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await response.json() : null;
+  if (!response.ok) {
+    const error: ApiError & { status?: number } = {
+      error: data?.error || 'unknown_error',
+      message: data?.message || `Request failed (${response.status})`,
+      status: response.status,
+    };
+    throw error;
+  }
+  return (data ?? {}) as T;
+}
+
+export async function getAuthCapabilities(): Promise<AuthCapabilities> {
+  try {
+    return await publicRequest<AuthCapabilities>('GET', '/v1/auth/capabilities');
+  } catch {
+    return { password_reset: false, email_delivery: false, oidc: false };
+  }
+}
+
+export function loginWithMFA(mfaToken: string, code: string): Promise<{ user: AdminUser }> {
+  return publicRequest('POST', '/v1/auth/login/mfa', { mfa_token: mfaToken, code });
+}
+
+export function requestPasswordReset(login: string): Promise<void> {
+  return publicRequest<void>('POST', '/v1/auth/password/forgot', { login });
+}
+
+export function resetPassword(token: string, password: string): Promise<void> {
+  return publicRequest<void>('POST', '/v1/auth/password/reset', { token, password });
+}
+
+export function inspectInvite(token: string): Promise<InviteInfo> {
+  return publicRequest<InviteInfo>('POST', '/v1/auth/invite/inspect', { token });
+}
+
+export function acceptInvite(token: string, password: string): Promise<void> {
+  return publicRequest<void>('POST', '/v1/auth/invite/accept', { token, password });
+}
+
+export function confirmEmailChange(token: string): Promise<{ email: string }> {
+  return publicRequest('POST', '/v1/auth/email/confirm', { token });
+}
+
+export function changeMyPassword(currentPassword: string, newPassword: string): Promise<RevokeSessionsResponse> {
+  return apiRequest<RevokeSessionsResponse>('PATCH', '/v1/account/password', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+}
+
+export function requestMyEmailChange(newEmail: string, currentPassword: string): Promise<EmailChangePending> {
+  return apiRequest<EmailChangePending>('POST', '/v1/account/email', {
+    new_email: newEmail,
+    current_password: currentPassword,
+  });
+}
+
+export function getMyMFA(): Promise<AccountMFAStatus> {
+  return apiRequest<AccountMFAStatus>('GET', '/v1/account/2fa');
+}
+
+export function setupMyTOTP(currentPassword: string): Promise<TOTPSetup> {
+  return apiRequest<TOTPSetup>('POST', '/v1/account/2fa/setup', { current_password: currentPassword });
+}
+
+export function enableMyTOTP(code: string): Promise<RecoveryCodesResponse> {
+  return apiRequest<RecoveryCodesResponse>('POST', '/v1/account/2fa/enable', { code });
+}
+
+export function disableMyTOTP(currentPassword: string, code: string): Promise<void> {
+  return apiRequest<void>('POST', '/v1/account/2fa/disable', { current_password: currentPassword, code });
+}
+
+export function regenerateMyRecoveryCodes(currentPassword: string, code: string): Promise<RecoveryCodesResponse> {
+  return apiRequest<RecoveryCodesResponse>('POST', '/v1/account/2fa/recovery-codes', {
+    current_password: currentPassword,
+    code,
+  });
+}
+
+export function sendUserInvite(id: string, method?: 'password' | 'sso'): Promise<AccountLinkResponse> {
+  return apiRequest<AccountLinkResponse>('POST', `/v1/users/${id}/invite`, method ? { method } : {});
+}
+
+export function sendUserPasswordReset(id: string): Promise<AccountLinkResponse> {
+  return apiRequest<AccountLinkResponse>('POST', `/v1/users/${id}/password-reset`);
+}
+
+export function resetUserMFA(id: string): Promise<ResetMFAResponse> {
+  return apiRequest<ResetMFAResponse>('POST', `/v1/users/${id}/reset-2fa`);
+}

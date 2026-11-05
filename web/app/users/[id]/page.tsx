@@ -14,7 +14,9 @@ import Callout from '@/components/ui/Callout';
 import Button from '@/components/ui/Button';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
+import UserAccessPanel from '@/components/users/UserAccessPanel';
 import {
+  getOidcStatus,
   getTenants,
   getUser,
   listOidcGroupMappings,
@@ -43,6 +45,7 @@ export default function EditUserPage() {
   // True when OIDC group→role mappings exist: SSO users' roles are then
   // re-derived from IdP groups on every login, overwriting edits made here.
   const [groupMappingsActive, setGroupMappingsActive] = useState(false);
+  const [oidcEnabled, setOidcEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -50,6 +53,10 @@ export default function EditUserPage() {
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const { showToast } = useToast();
+
+  useEffect(() => {
+    getOidcStatus().then((status) => setOidcEnabled(status.enabled));
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -290,6 +297,12 @@ export default function EditUserPage() {
               </div>
             </div>
           </Panel>
+
+          <UserAccessPanel
+            user={user}
+            oidcEnabled={oidcEnabled}
+            onChanged={(patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev))}
+          />
         </div>
       </div>
 
