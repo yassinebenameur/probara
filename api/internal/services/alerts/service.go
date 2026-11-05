@@ -50,6 +50,7 @@ var alertDetailSelect = `
 			THEN json_array_length(` + alertrouting.ImpactedMonitorsSubquery("a.monitor_id") + `) ELSE 0 END,
 		a.acknowledged_by_user_id, a.acknowledged_via, a.unacknowledged_at,
 		a.snoozed_until, a.snoozed_by_user_id, ` + alertrouting.MutedReasonExpr("a", "te") + `,
+		a.relapse_count, a.reopened_at, a.resolved_by_user_id, a.resolved_via,
 		` + triageview.Columns + `
 	FROM alerts a
 	LEFT JOIN monitors m ON a.monitor_id = m.id
@@ -114,6 +115,7 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 		&alert.SuppressionReason, &alert.ImpactedCount,
 		&alert.AcknowledgedByUserID, &alert.AcknowledgedVia, &alert.UnacknowledgedAt,
 		&alert.SnoozedUntil, &alert.SnoozedByUserID, &alert.MutedReason,
+		&alert.RelapseCount, &alert.ReopenedAt, &alert.ResolvedByUserID, &alert.ResolvedVia,
 	}, triage.Dest()...)...)
 	if err != nil {
 		return nil, err
@@ -375,13 +377,16 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 }
 
 // ResolveAlert marks an alert as resolved, ending any snooze at the resolve
-// time. actor is accepted but not persisted yet.
+// time, and records actor as the resolver (resolved_by_user_id /
+// resolved_via). A manually resolved alert never reopens within the reopen
+// cooldown: the alerter reopens only alerts it resolved itself.
 func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error) {
 	now := time.Now()
 	query := `
 		UPDATE alerts
 		SET status = 'resolved', resolved_at = $1, updated_at = $1,
-			snoozed_until = LEAST(snoozed_until, $1)
+			snoozed_until = LEAST(snoozed_until, $1),
+			resolved_by_user_id = $4, resolved_via = $5
 		WHERE id = $2 AND tenant_id = $3 AND status IN ('active', 'acknowledged')
 		RETURNING id
 	`
@@ -395,7 +400,7 @@ func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID,
 	}()
 
 	var id uuid.UUID
-	err = tx.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
+	err = tx.QueryRowContext(ctx, query, now, alertID, tenantID, actor.UserID, resolvedVia(actor)).Scan(&id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("alert not found or already resolved")

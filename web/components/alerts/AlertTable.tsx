@@ -2,7 +2,7 @@
 
 import { KeyboardEvent, ReactNode, useState } from 'react';
 import Link from 'next/link';
-import { AlarmClockOff, Bell, BellOff, BellRing, Check, CircleCheck, MapPinOff, Network, PencilLine, Tag, Undo2, UserCheck } from 'lucide-react';
+import { AlarmClockOff, Bell, BellOff, BellRing, Check, CircleCheck, MapPinOff, Network, PencilLine, Repeat, Tag, Undo2, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
 import { acknowledgeAlert, labelAlertTriage, resolveAlert, unacknowledgeAlert, unsnoozeAlert } from '@/lib/api';
 import { labelErrorMessage } from '@/lib/ai-labels';
@@ -115,6 +115,22 @@ const DETAIL = 'mt-0.5 text-xs tabular-nums text-slate-400';
 // The key cap the sidebar's tooltips use (components/ui/Tooltip.tsx).
 const KBD = 'rounded border border-edge px-1 font-mono text-2xs leading-4 text-slate-400';
 const CHIP = 'inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-medium';
+
+// A relapsed alert: its monitor went down again within the workspace's
+// reopen cooldown, so this alert reopened instead of a new one opening.
+function RelapseChip({ alert }: { alert: Alert }) {
+  const n = alert.relapse_count ?? 0;
+  const last = alert.reopened_at ? ` Last reopened ${formatDateTimeFull(alert.reopened_at)}.` : '';
+  return (
+    <span
+      className={`${CHIP} bg-amber-500/[0.15] text-amber-300`}
+      title={`Went down again soon after recovering, so this alert reopened ${pluralize(n, 'time')}.${last}`}
+    >
+      <Repeat className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+      {n === 1 ? 'Relapsed' : `Relapsed ${n}×`}
+    </span>
+  );
+}
 
 function KindTag({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -517,9 +533,11 @@ export default function AlertTable({
                   {((alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id) ||
                     (alert.suppression_reason === 'dependency' && !alert.root_cause_monitor_name) ||
                     (alert.impacted_count ?? 0) > 0 ||
+                    (alert.relapse_count ?? 0) > 0 ||
                     isSnoozed(alert) ||
                     triagePresentation(alert.triage).visible) && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                      {(alert.relapse_count ?? 0) > 0 && <RelapseChip alert={alert} />}
                       {isSnoozed(alert) && alert.snoozed_until && (
                         <span
                           className={`${CHIP} bg-well-hover text-slate-400`}

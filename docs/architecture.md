@@ -123,6 +123,17 @@ alerter's claim so it fires again after the unack. A snooze end restarts the
 tier and reminder clocks on every route; an unacknowledge restarts them only
 on the routes the ack held.
 
+Within the tenant's `alert_reopen_cooldown_seconds` (default 0, off) of an
+auto-resolve, a monitor that goes down again reopens its latest availability
+alert (`relapse_count`+1, `reopened_at`; `alerter/internal/alerter/reopen.go`)
+instead of opening a new one; manual resolves (`resolved_via`) never reopen. A
+reopen is a new paging episode: it clears ack/unack/snooze, tiers count from
+`reopened_at` (`DispatchEligibleSinceExpr`), and a route that heard the
+previous resolve is paged through the `reopened` claim, sent as `created`
+with `relapse_count > 0`. The episode keys idempotency and the recipient
+ledger, and the delivery worker locks the alert row for resolves too, so a
+resolve published before a reopen is dropped rather than delivered after it.
+
 Monitor-less alerts route to the tenant defaults through
 `alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
 S-F6 in [state semantics](state-semantics.md),

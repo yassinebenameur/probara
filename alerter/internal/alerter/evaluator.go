@@ -70,6 +70,11 @@ type alertRecord struct {
 	LocationMonitorCount int
 	// ResolveReason is alerts.resolve_reason (notifications.ResolveReason*).
 	ResolveReason string
+	// RelapseCount / ReopenedAt are alerts.relapse_count / reopened_at: the
+	// paging episode. deliverNotification re-reads them under the alert row
+	// lock, so a send always carries the episode it was claimed in.
+	RelapseCount int
+	ReopenedAt   *time.Time
 }
 
 type alertChannel struct {
@@ -1200,6 +1205,8 @@ func shouldSendNotification(eventType string, state *notificationState, now time
 	switch eventType {
 	case "created":
 		return state == nil
+	case "reopened":
+		return state != nil && state.LastEventType == "resolved"
 	case "resolved":
 		return state == nil || state.LastEventType != "resolved"
 	case "reminder":
@@ -1237,7 +1244,7 @@ func (a *Alerter) sendChannelNotification(
 		}
 	}
 	event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
-	deliveryKey := recipientKey(ctx, eventType, now)
+	deliveryKey := recipientKey(ctx, eventType, now, alert.RelapseCount)
 
 	if a.config.AsyncDispatch && a.nats != nil {
 		envelope := notifications.DispatchEnvelope{
@@ -1376,6 +1383,8 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			LocationLastSeenAt:   alert.LocationLastSeenAt,
 			LocationMonitorCount: alert.LocationMonitorCount,
 			ResolveReason:        alert.ResolveReason,
+			RelapseCount:         alert.RelapseCount,
+			ReopenedAt:           alert.ReopenedAt,
 		},
 	}
 }

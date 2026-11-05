@@ -90,3 +90,46 @@ func TestDispatchEnvelope_RecipientKey(t *testing.T) {
 		t.Fatalf("key = %q, want the alerter's delivery_key", got)
 	}
 }
+
+// A reopened alert sends created, acknowledged and resolved again under the
+// same alert ID: from the first relapse on, the idempotency and ledger keys
+// carry the episode so receivers and fan-out plugins treat them as new.
+// Episode 0 keeps the original keys.
+func TestEpisodeKeys(t *testing.T) {
+	first := DispatchEnvelope{ChannelID: "c1", AlertID: "a1", EventType: "created"}
+	relapse := first
+	relapse.Event.Alert.RelapseCount = 2
+	if got := first.IdempotencyKey(); got != "a1:c1:created" {
+		t.Fatalf("episode 0 idempotency key = %q", got)
+	}
+	if got := relapse.IdempotencyKey(); got != "a1:c1:created:2" {
+		t.Fatalf("relapse idempotency key = %q", got)
+	}
+	if got := relapse.RecipientKey(); got != "created:2" {
+		t.Fatalf("relapse recipient key = %q", got)
+	}
+
+	round := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		event   string
+		round   time.Time
+		relapse int
+		want    string
+	}{
+		{"created", time.Time{}, 0, "created"},
+		{"resolved", time.Time{}, 0, "resolved"},
+		{"reopened", time.Time{}, 1, "reopened:1"},
+		{"resolved", time.Time{}, 1, "resolved:1"},
+		{"acknowledged", time.Time{}, 3, "acknowledged:3"},
+		{"reminder", round, 0, "reminder:2026-05-24T12:00:00Z"},
+		{"reminder", round, 2, "reminder:2026-05-24T12:00:00Z"},
+	}
+	for _, tc := range cases {
+		if got := RecipientEventKeyFor(tc.event, tc.round, tc.relapse); got != tc.want {
+			t.Fatalf("RecipientEventKeyFor(%s, %v, %d) = %q, want %q", tc.event, tc.round, tc.relapse, got, tc.want)
+		}
+	}
+	if OvertakenAckKeyFor(0) != OvertakenAckKey || OvertakenAckKeyFor(2) != OvertakenAckKey+":2" {
+		t.Fatalf("overtaken ack keys = %q / %q", OvertakenAckKeyFor(0), OvertakenAckKeyFor(2))
+	}
+}

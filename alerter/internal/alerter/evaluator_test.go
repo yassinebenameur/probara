@@ -22,6 +22,12 @@ func TestShouldSendNotification(t *testing.T) {
 	}{
 		{"created_no_state", "created", nil, now, true},
 		{"created_with_state", "created", &notificationState{LastEventType: "created"}, now, false},
+		{"reopened_no_state", "reopened", nil, now, false},
+		{"reopened_after_resolved", "reopened", &notificationState{LastEventType: "resolved"}, now, true},
+		{"reopened_twice", "reopened", &notificationState{LastEventType: "reopened"}, now, false},
+		{"reopened_unresolved_route", "reopened", &notificationState{LastEventType: "reminder"}, now, false},
+		{"reminder_after_reopened", "reminder", &notificationState{LastEventType: "reopened", LastSentAt: now.Add(-15 * time.Minute)}, now, true},
+		{"resolved_after_reopened", "resolved", &notificationState{LastEventType: "reopened"}, now, true},
 		{"resolved_no_state", "resolved", nil, now, true},
 		{"resolved_after_resolved", "resolved", &notificationState{LastEventType: "resolved"}, now, false},
 		{"resolved_after_created", "resolved", &notificationState{LastEventType: "created"}, now, true},

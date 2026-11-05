@@ -805,6 +805,9 @@ export interface NotificationSettings {
   // before has been silent this long (60-86400 s, default 180).
   location_offline_alerts_enabled: boolean;
   location_offline_after_seconds: number;
+  // Flap suppression: a monitor down again within this many seconds of its
+  // availability alert auto-resolving reopens that alert (0 = off, max 86400).
+  alert_reopen_cooldown_seconds: number;
 }
 
 export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'location_offline';
@@ -1196,6 +1199,13 @@ export interface Alert {
   snoozed_by_user_id?: string;
   // Why this open alert is not paging right now.
   muted_reason?: 'snoozed' | 'acknowledged';
+  // How many times the alert reopened within the workspace's reopen
+  // cooldown (each a new paging episode), and when it last did.
+  relapse_count?: number;
+  reopened_at?: string;
+  // Set by a manual resolve; empty when the alerter resolved it.
+  resolved_by_user_id?: string;
+  resolved_via?: 'ui' | 'api' | 'mcp';
 }
 
 // --- Automatic alert triage (never delays, routes or suppresses a page) ---

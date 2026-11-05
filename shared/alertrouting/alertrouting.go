@@ -339,11 +339,14 @@ func SuppressedByDependencyPredicate(alertAlias, monAlias, tenantAlias string) s
 // same way for every route (snoozed_until; GREATEST ignores NULLs), so unfired
 // tiers count from it instead of all firing at once. An unacknowledge
 // restarts it only on the routes the ack actually held (ResumedAt), which is
-// per route and so applied by the caller.
+// per route and so applied by the caller. A reopen (reopened_at, the alert
+// relapsed within the tenant's reopen cooldown) starts a new paging episode,
+// so the tiers count from it as they did from triggered_at.
 func DispatchEligibleSinceExpr(alertAlias, tenantAlias string) string {
 	return `GREATEST(` + alertAlias + `.triggered_at,
 		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at),
-		` + alertAlias + `.snoozed_until)`
+		` + alertAlias + `.snoozed_until,
+		` + alertAlias + `.reopened_at)`
 }
 
 // ResumedAt is when paging on one route resumed after a mute: the end of the
@@ -379,7 +382,8 @@ func AckStopsExpr(tenantAlias string) string {
 }
 
 // MuteHolds is the one ack/snooze rule for whether an event may go out: a
-// snooze holds escalation tiers ("created"), reminders and suspected-cause
+// snooze holds escalation tiers ("created", and "reopened", the alerter's
+// claim name for a relapse's page), reminders and suspected-cause
 // follow-ups; an acknowledgement holds tiers and reminders on a stopOnAck
 // route (AckStopsExpr on, route not notify_after_ack). Suspected-cause
 // follow-ups still reach acknowledged alerts, and acknowledged / resolved
@@ -387,7 +391,7 @@ func AckStopsExpr(tenantAlias string) string {
 // delivery worker's late re-check all call it.
 func MuteHolds(eventType string, acknowledged, snoozed, stopOnAck bool) bool {
 	switch eventType {
-	case "created", "reminder":
+	case "created", "reopened", "reminder":
 		return snoozed || (acknowledged && stopOnAck)
 	case "suspected_cause":
 		return snoozed

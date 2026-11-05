@@ -89,6 +89,11 @@ func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			monitorstate.MinLocationOfflineAfterSeconds, svc.MaxLocationOfflineAfterSeconds))
 		return
 	}
+	if v := req.AlertReopenCooldownSeconds; v != nil && (*v < 0 || *v > svc.MaxAlertReopenCooldownSeconds) {
+		apierrors.WriteValidationError(w, fmt.Sprintf("alert_reopen_cooldown_seconds must be between 0 and %d",
+			svc.MaxAlertReopenCooldownSeconds))
+		return
+	}
 
 	settings, err := h.service.Update(r.Context(), tenantUUID, req)
 	if err != nil {

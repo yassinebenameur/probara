@@ -1,6 +1,9 @@
 package notifications
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // DispatchEnvelope is the wire format for async notification dispatch.
 //
@@ -56,7 +59,7 @@ func (e DispatchEnvelope) RecipientKey() string {
 	if e.DeliveryKey != "" {
 		return e.DeliveryKey
 	}
-	return RecipientEventKey(e.EventType, e.Event.Timestamp)
+	return RecipientEventKeyFor(e.EventType, e.Event.Timestamp, e.Event.Alert.RelapseCount)
 }
 
 // RecipientEventKey names one event of one (alert, channel) pair in the
@@ -89,5 +92,45 @@ const OvertakenAckKey = "acknowledged:after-trigger"
 // x-idempotency-key NATS header and webhook plugins forward as
 // X-Probara-Idempotency-Key, so receivers can dedupe retried deliveries.
 func (e DispatchEnvelope) IdempotencyKey() string {
-	return e.AlertID + ":" + e.ChannelID + ":" + e.EventType
+	return IdempotencyKeyFor(e.AlertID, e.ChannelID, e.EventType, e.Event.Alert.RelapseCount)
+}
+
+// IdempotencyKeyFor is the receiver-facing idempotency key of one event of
+// one (alert, channel) pair: "<alert>:<channel>:<event>", plus ":<relapse>"
+// once the alert has relapsed. A reopened alert sends created, acknowledged
+// and resolved again under the same alert ID, and a receiver deduping on the
+// bare key would drop every page of the new episode; episode 0 keeps the
+// original format. The webhook plugin and the async envelope both use it.
+func IdempotencyKeyFor(alertID, channelID, eventType string, relapseCount int) string {
+	key := alertID + ":" + channelID + ":" + eventType
+	if relapseCount > 0 {
+		key += ":" + strconv.Itoa(relapseCount)
+	}
+	return key
+}
+
+// RecipientEventKeyFor is RecipientEventKey for an alert in paging episode
+// relapseCount (AlertDetails.RelapseCount). A reopened alert sends its
+// one-per-episode events (created, acknowledged, resolved, and the reopen
+// itself, which the alerter claims as "reopened") again, so from the first
+// relapse on they carry the episode, e.g. "reopened:1" or "resolved:2":
+// under the bare type a fan-out plugin would skip every recipient the
+// previous episode's send reached, and the new page would reach nobody.
+// Reminder rounds are already unique by their round timestamp.
+func RecipientEventKeyFor(eventType string, round time.Time, relapseCount int) string {
+	key := RecipientEventKey(eventType, round)
+	if relapseCount > 0 && key == eventType {
+		key += ":" + strconv.Itoa(relapseCount)
+	}
+	return key
+}
+
+// OvertakenAckKeyFor is OvertakenAckKey in paging episode relapseCount: a
+// relapse's trigger can be overtaken by its acknowledgement too, and that
+// re-send must not inherit the previous episode's progress.
+func OvertakenAckKeyFor(relapseCount int) string {
+	if relapseCount > 0 {
+		return OvertakenAckKey + ":" + strconv.Itoa(relapseCount)
+	}
+	return OvertakenAckKey
 }

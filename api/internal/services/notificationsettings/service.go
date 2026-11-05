@@ -59,7 +59,15 @@ type Settings struct {
 	// reported before has been silent for LocationOfflineAfterSeconds.
 	LocationOfflineAlertsEnabled bool `json:"location_offline_alerts_enabled"`
 	LocationOfflineAfterSeconds  int  `json:"location_offline_after_seconds"`
+
+	// Flap suppression: an availability alert the alerter auto-resolved less
+	// than this many seconds ago is reopened (relapse_count+1) when its
+	// monitor goes down again, instead of a new alert opening. 0 = off.
+	AlertReopenCooldownSeconds int `json:"alert_reopen_cooldown_seconds"`
 }
+
+// MaxAlertReopenCooldownSeconds bounds the reopen cooldown at one day.
+const MaxAlertReopenCooldownSeconds = 86400
 
 // MaxLocationOfflineAfterSeconds bounds the offline threshold at one day; the
 // floor is monitorstate.MinLocationOfflineAfterSeconds.
@@ -88,6 +96,8 @@ type UpdateRequest struct {
 
 	LocationOfflineAlertsEnabled *bool `json:"location_offline_alerts_enabled,omitempty"`
 	LocationOfflineAfterSeconds  *int  `json:"location_offline_after_seconds,omitempty"`
+
+	AlertReopenCooldownSeconds *int `json:"alert_reopen_cooldown_seconds,omitempty"`
 }
 
 // Service provides workspace notification settings CRUD.
@@ -117,6 +127,11 @@ func (s *Service) Get(ctx context.Context, tenantID uuid.UUID) (*Settings, error
 	`, tenantID).Scan(&settings.AckStopsNotifications,
 		&settings.LocationOfflineAlertsEnabled, &settings.LocationOfflineAfterSeconds); err != nil {
 		return nil, fmt.Errorf("load tenant paging settings: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT alert_reopen_cooldown_seconds FROM tenants WHERE id = $1
+	`, tenantID).Scan(&settings.AlertReopenCooldownSeconds); err != nil {
+		return nil, fmt.Errorf("load tenant reopen cooldown: %w", err)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -234,6 +249,16 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 			WHERE id = $1
 		`, tenantID, req.AckStopsNotifications, req.LocationOfflineAlertsEnabled, req.LocationOfflineAfterSeconds); err != nil {
 			return nil, fmt.Errorf("update tenant paging settings: %w", err)
+		}
+	}
+	if req.AlertReopenCooldownSeconds != nil {
+		if *req.AlertReopenCooldownSeconds < 0 || *req.AlertReopenCooldownSeconds > MaxAlertReopenCooldownSeconds {
+			return nil, fmt.Errorf("alert_reopen_cooldown_seconds must be between 0 and %d", MaxAlertReopenCooldownSeconds)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tenants SET alert_reopen_cooldown_seconds = $2, updated_at = NOW() WHERE id = $1
+		`, tenantID, *req.AlertReopenCooldownSeconds); err != nil {
+			return nil, fmt.Errorf("update tenant reopen cooldown: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

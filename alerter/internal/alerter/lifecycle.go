@@ -296,7 +296,9 @@ func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 // monitor without one. The partial unique index idx_alerts_one_open_per_monitor
 // makes this race-safe across alerter replicas. Monitors in an active
 // maintenance window are skipped; if still down when the window ends, the next
-// tick opens the alert.
+// tick opens the alert. Within the tenant's alert_reopen_cooldown_seconds of
+// an auto-resolve the monitor's last alert is reopened instead
+// (reopenOutageAlertTx).
 func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT m.id, m.tenant_id, m.name, m.consecutive_failures,
@@ -304,7 +306,8 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 			 WHERE cr.monitor_id = m.id AND cr.status IN ('failure', 'error')
 			 ORDER BY cr.created_at DESC LIMIT 1) AS last_error,
 			rc.id, rc.name, rc.last_state_change_at,
-			`+failingLocationsSubquery("m.id")+` AS failing_locations
+			`+failingLocationsSubquery("m.id")+` AS failing_locations,
+			(SELECT te.alert_reopen_cooldown_seconds FROM tenants te WHERE te.id = m.tenant_id) AS reopen_cooldown
 		FROM monitors m`+rootCauseLateral("m.id")+`
 		WHERE m.current_state = 'down' AND m.enabled = TRUE AND m.deleted_at IS NULL
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
@@ -325,7 +328,7 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 	for rows.Next() {
 		var dm downMonitor
 		if err := rows.Scan(&dm.id, &dm.tenantID, &dm.name, &dm.failCount, &dm.lastError,
-			&dm.rootCauseID, &dm.rootCauseName, &dm.rootCauseDownSince, &dm.failingLocations); err != nil {
+			&dm.rootCauseID, &dm.rootCauseName, &dm.rootCauseDownSince, &dm.failingLocations, &dm.reopenCooldownSeconds); err != nil {
 			return fmt.Errorf("scan down monitor: %w", err)
 		}
 		monitors = append(monitors, dm)
@@ -352,6 +355,9 @@ type downMonitor struct {
 	rootCauseName      sql.NullString
 	rootCauseDownSince sql.NullTime
 	failingLocations   []byte // raw JSONB; nil for location-less monitors
+	// reopenCooldownSeconds is the tenant's alert_reopen_cooldown_seconds
+	// (0 = never reopen).
+	reopenCooldownSeconds int
 }
 
 // setRootCause copies nullable root-cause scan columns onto an alertRecord.
@@ -402,6 +408,19 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 	var failingLocations interface{}
 	if len(dm.failingLocations) > 0 {
 		failingLocations = dm.failingLocations
+	}
+
+	if dm.reopenCooldownSeconds > 0 {
+		reopened, ok, err := a.reopenOutageAlertTx(ctx, tx, dm, lastError, rootCauseID, rootCauseDownSince, failingLocations)
+		if isUniqueViolation(err) {
+			return nil // another replica opened an alert for it first
+		}
+		if err != nil {
+			return err
+		}
+		if ok {
+			return a.finishReopen(ctx, tx, dm, reopened, lastError, rootCauseID, rootCauseName, rootCauseDownSince)
+		}
 	}
 
 	var alertID uuid.UUID
