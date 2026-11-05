@@ -125,6 +125,8 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     max_redirects: initialHTTPConfig?.max_redirects ?? 10,
     tls_skip_verify: initialHTTPConfig?.tls_skip_verify ?? false,
     tls_min_days_valid: initialHTTPConfig?.tls_min_days_valid?.toString() || '',
+    // Chain-wide expiry is on for a new monitor; a stored or cloned one keeps its own.
+    tls_check_chain: initialHTTPConfig ? Boolean(initialHTTPConfig.tls_check_chain) : true,
     tls_server_name: initialHTTPConfig?.tls_server_name || '',
     tls_ca_pem: initialHTTPConfig?.tls_ca_pem || '',
     collect_timing: initialHTTPConfig?.collect_timing ?? false,
@@ -755,6 +757,7 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
     if (form.tls_min_days_valid.trim()) {
       const days = parseInt(form.tls_min_days_valid, 10);
       if (!isNaN(days)) httpConfig.tls_min_days_valid = days;
+      if (!isNaN(days) && form.tls_check_chain) httpConfig.tls_check_chain = true;
     }
     if (form.tls_server_name.trim()) httpConfig.tls_server_name = form.tls_server_name.trim();
     if (form.tls_ca_pem.trim()) httpConfig.tls_ca_pem = form.tls_ca_pem.trim();

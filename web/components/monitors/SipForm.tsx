@@ -574,6 +574,14 @@ export default function SipForm({
                   </>
                 )}
               </FormField>
+              {formData.tls_min_days_valid.trim() !== '' && (
+                <ToggleRow
+                  title="Include the certificate chain"
+                  description="Alert on the earliest expiry among the server and intermediate certificates, not just the server's"
+                  checked={formData.tls_check_chain}
+                  onChange={(v) => setFormData({ ...formData, tls_check_chain: v })}
+                />
+              )}
             </>
           )}
 

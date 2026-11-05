@@ -49,7 +49,7 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`tls_expiry`",
-              "An HTTPS or SIP-over-TLS monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
+              "An HTTPS, SIP-over-TLS or TLS-wrapped TCP monitor's certificate (with `tls_check_chain`, the earliest-expiring certificate of its chain) has fewer remaining validity days than `tls_min_days_valid`",
               "A renewed certificate is observed, or the threshold is removed",
             ],
           ],
@@ -440,7 +440,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An HTTPS or SIP-over-TLS monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+            "An HTTPS, SIP-over-TLS or TLS-wrapped TCP monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. With `tls_check_chain: true` the measure is the earliest expiry across the chain the server presented, the leaf and every intermediate certificate (never a self-signed root, whose expiry is the trust store's), so an intermediate that lapses before the leaf alerts in time; certificates recorded before chain capture existed fall back to the leaf. The operator UI turns it on for new monitors; monitors saved without it keep measuring the leaf. The status page and the monitor detail page show the same date the alert measures. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
         },
         {
           type: "callout",

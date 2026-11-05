@@ -16,6 +16,7 @@ export interface SipFormFields {
   tls_skip_verify: boolean;
   tls_server_name: string;
   tls_min_days_valid: string;
+  tls_check_chain: boolean;
   expected_status: string;
   // The test call (method invite). Numeric fields are input strings; '' is unset.
   call_target_kind: 'number' | 'uri';
@@ -65,6 +66,7 @@ const FORM_OWNED_KEYS = [
   'tls_skip_verify',
   'tls_server_name',
   'tls_min_days_valid',
+  'tls_check_chain',
   'expected_status',
   'resolution',
   'nameserver',
@@ -578,6 +580,7 @@ export function buildSipConfig(
     // typed ("1e2" or "1.5" never pass, and never save as 1).
     const minDays = parseWhole(form.tls_min_days_valid);
     if (minDays !== null) config.tls_min_days_valid = minDays;
+    if (minDays !== null && form.tls_check_chain) config.tls_check_chain = true;
   }
 
   // Ring mode succeeds on ringing, never on a final, so the API refuses an

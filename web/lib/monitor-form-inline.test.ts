@@ -137,6 +137,7 @@ test('http: create from a fully filled form', () => {
       collect_timing: true,
       tls_skip_verify: true,
       tls_min_days_valid: 14,
+      tls_check_chain: true,
       tls_server_name: 'api.internal',
       tls_ca_pem: '-----BEGIN CERTIFICATE-----',
     },

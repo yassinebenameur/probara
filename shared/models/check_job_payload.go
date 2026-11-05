@@ -60,6 +60,7 @@ type HTTPMonitorConfig struct {
 	MaxRedirects             *int                  `json:"max_redirects,omitempty"`
 	TLSSkipVerify            *bool                 `json:"tls_skip_verify,omitempty"`
 	TLSMinDaysValid          *int                  `json:"tls_min_days_valid,omitempty"`
+	TLSCheckChain            *bool                 `json:"tls_check_chain,omitempty"` // tls_expiry measures the chain's earliest expiry (shared/tlscert)
 	TLSServerName            *string               `json:"tls_server_name,omitempty"`
 	TLSCAPem                 *string               `json:"tls_ca_pem,omitempty"`
 	CollectTiming            *bool                 `json:"collect_timing,omitempty"`

@@ -1186,19 +1186,22 @@ type CurrentStatus struct {
 }
 
 // applyCertificate copies the certificate a check recorded in its
-// metrics_data (an HTTPS or SIP-over-TLS check's) onto the status. The
-// location is shared/tlscert's, the same one the alerter's tls_expiry
-// evaluation reads, so the page and the alert never disagree on it.
-func (cs *CurrentStatus) applyCertificate(metricsJSON []byte) {
+// metrics_data (an HTTPS, SIP-over-TLS or TLS-wrapped TCP check's) onto the
+// status. The location is shared/tlscert's, the same one the alerter's
+// tls_expiry evaluation reads, and so is the expiry: checkChain (the
+// monitor's tls_check_chain, read through tlscert.CheckChainSQL) picks the
+// chain's earliest, so the page and the alert never disagree on it.
+func (cs *CurrentStatus) applyCertificate(metricsJSON []byte, checkChain bool) {
 	info := tlscert.Extract(metricsJSON)
 	if info == nil {
 		return
 	}
-	if info.DaysUntilExpiry != nil {
-		cs.TLSDaysUntilExpiry = info.DaysUntilExpiry
+	notAfter, days := info.Expiry(checkChain)
+	if days != nil {
+		cs.TLSDaysUntilExpiry = days
 	}
-	if info.NotAfter != "" {
-		cs.TLSNotAfter = info.NotAfter
+	if notAfter != "" {
+		cs.TLSNotAfter = notAfter
 	}
 }
 
@@ -1207,7 +1210,8 @@ func (cs *CurrentStatus) applyCertificate(metricsJSON []byte) {
 // raw result status, for consistency with batchCurrentStatus.
 func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenantID uuid.UUID) (*CurrentStatus, error) {
 	query := `
-		SELECT mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+		SELECT mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data,
+			` + tlscert.CheckChainSQL("mon.config") + `
 		FROM monitors mon
 		LEFT JOIN LATERAL (
 			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
@@ -1225,8 +1229,9 @@ func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenant
 	var latencyMS sql.NullInt64
 	var createdAt sql.NullTime
 	var metricsJSON []byte
+	var checkChain bool
 
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON)
+	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON, &checkChain)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("no check results found")
@@ -1252,7 +1257,7 @@ func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenant
 		result.LastLatency = &latencyInt
 	}
 
-	result.applyCertificate(metricsJSON)
+	result.applyCertificate(metricsJSON, checkChain)
 
 	return result, nil
 }

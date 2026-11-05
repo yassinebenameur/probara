@@ -9,6 +9,7 @@ import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, Mon
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings, getSlas, runMonitorNow, toggleMonitorEnabled } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { latestPingMetrics, pingFacts } from '@/lib/ping-metrics';
+import { effectiveCertExpiry } from '@/lib/tls-cert';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import { AlertRoutingNotice } from '@/components/monitors/AlertRoutingBadge';
@@ -44,7 +45,7 @@ import { isSipCall } from '@/lib/sip-config';
 import { strictestTarget, type Sla } from '@/lib/sla';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 import { formatBytes } from '@/lib/metrics';
-import { latestSIPMetrics, sipFacts, sipMediaOutdatedWorkersHint } from '@/lib/sip-metrics';
+import { certificateExpiryLabel, latestSIPMetrics, sipFacts, sipMediaOutdatedWorkersHint } from '@/lib/sip-metrics';
 
 const TAB_IDS = ['overview', 'history', 'settings', 'json'] as const;
 
@@ -210,12 +211,22 @@ function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
     const tcpMetrics = latest ? (latest.metrics_data as TCPMetricsEnvelope).tcp : null;
     if (cfg?.use_tls) {
       rows.push(<DetailRow key="tls" label="TLS">{tcpMetrics?.tls_version || 'Enabled'}</DetailRow>);
+      const expiry = tcpMetrics?.tls ? certificateExpiryLabel(tcpMetrics.tls, cfg.tls_check_chain) : '';
+      if (expiry && tcpMetrics?.tls) {
+        const days = effectiveCertExpiry(tcpMetrics.tls, cfg.tls_check_chain).days ?? 0;
+        const warn = days < 0 || (cfg.tls_min_days_valid !== undefined && days < cfg.tls_min_days_valid);
+        rows.push(
+          <DetailRow key="certificate" label="Certificate" tone={warn ? 'warning' : undefined}>
+            {expiry}
+          </DetailRow>
+        );
+      }
     }
   }
   if (monitor.type === 'sip') {
     const sip = latestSIPMetrics(results);
     const config = monitor.config as SIPMonitorConfig;
-    for (const fact of sip ? sipFacts(sip, config.tls_min_days_valid, config.call?.media) : []) {
+    for (const fact of sip ? sipFacts(sip, config.tls_min_days_valid, config.call?.media, config.tls_check_chain) : []) {
       rows.push(
         <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
           {fact.copyable ? (
