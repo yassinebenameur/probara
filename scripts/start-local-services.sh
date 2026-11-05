@@ -35,6 +35,16 @@ if [[ -z "${ADMIN_JWT_SECRET:-}" ]]; then
 fi
 export ADMIN_JWT_SECRET
 
+# Dev status page session key, per checkout (gitignored), so password and
+# private status pages work locally. An exported value wins.
+SESSION_SECRET_FILE="$ROOT_DIR/.dev-status-page-session-secret"
+if [[ -z "${STATUS_PAGE_SESSION_SECRET:-}" ]]; then
+  if [[ ! -s "$SESSION_SECRET_FILE" ]]; then
+    (umask 077; openssl rand -hex 32 > "$SESSION_SECRET_FILE")
+  fi
+  STATUS_PAGE_SESSION_SECRET="$(cat "$SESSION_SECRET_FILE")"
+fi
+
 mkdir -p "$ARTIFACTS_DIR"
 mkdir -p "$BIN_DIR"
 : > "$STARTUP_LOG"
@@ -248,7 +258,8 @@ start_service status-page ./status-page/cmd/status-page 8082 9093 \
   STATUS_PAGE_API_BASE_URL="${STATUS_PAGE_API_BASE_URL:-http://localhost:8080}" \
   STATUS_PAGE_VAPID_PUBLIC_KEY="${STATUS_PAGE_VAPID_PUBLIC_KEY:-}" \
   STATUS_PAGE_VAPID_PRIVATE_KEY="${STATUS_PAGE_VAPID_PRIVATE_KEY:-}" \
-  STATUS_PAGE_VAPID_SUBJECT="${STATUS_PAGE_VAPID_SUBJECT:-mailto:dev@localhost}"
+  STATUS_PAGE_VAPID_SUBJECT="${STATUS_PAGE_VAPID_SUBJECT:-mailto:dev@localhost}" \
+  STATUS_PAGE_SESSION_SECRET="$STATUS_PAGE_SESSION_SECRET"
 
 start_service alerter ./alerter/cmd/alerter 8084 9094 \
   ALERT_STREAM="${ALERT_STREAM:-ALERTS}" \

@@ -591,6 +591,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", statusPageHandlers.GetStatusPage)
 				r.Patch("/{id}", statusPageHandlers.UpdateStatusPage)
 				r.Delete("/{id}", statusPageHandlers.DeleteStatusPage)
+				registerStatusPageAccessRoutes(r, statusPageHandlers) // routes_pages_privacy.go
 
 				// Custom UI template lifecycle: export default, draft, publish,
 				// revert, reset. Sources are validated against the shared

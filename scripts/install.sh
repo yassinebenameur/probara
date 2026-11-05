@@ -153,6 +153,7 @@ env_default POSTGRES_PASSWORD "$(openssl rand -hex 24)"
 env_default NATS_PLATFORM_PASSWORD "$(openssl rand -hex 24)"
 env_default LOCAL_AI_TOKEN "$(openssl rand -hex 32)"
 env_default STATUS_PAGE_PREVIEW_SECRET "$(openssl rand -hex 32)"
+env_default STATUS_PAGE_SESSION_SECRET "$(openssl rand -hex 32)"
 
 seed="$(env_value NATS_LOCATION_AUTH_ISSUER_SEED)"
 public_key="$(env_value NATS_LOCATION_AUTH_ISSUER_PUBLIC_KEY)"

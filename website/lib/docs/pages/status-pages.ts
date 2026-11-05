@@ -47,6 +47,14 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`sections`",
               "Ordered groups with titles up to 80 characters and ordered monitor entries",
             ],
+            [
+              "`visibility`",
+              "Who may view the page: `public` (default), `unlisted`, `password` or `private`; see [visibility](#visibility)",
+            ],
+            [
+              "`password`",
+              "Write-only visitor password, 8 to 72 bytes. Omit to keep, `\"\"` to clear; required for `password` visibility. Reads report only `has_password`",
+            ],
           ],
         },
         {
@@ -59,7 +67,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           tone: "warning",
           title: "A public page exposes operational information",
           text:
-            "Only select monitors, names, descriptions, incidents, and maintenance details intended for unauthenticated visitors. The active built-in template does not currently render monitor target URLs, but custom templates and future use of schema-reserved fields must still be reviewed for disclosure.",
+            "Unless its [visibility](#visibility) gates it, only select monitors, names, descriptions, incidents, and maintenance details intended for unauthenticated visitors. The active built-in template does not currently render monitor target URLs, but custom templates and future use of schema-reserved fields must still be reviewed for disclosure.",
         },
       ],
     },
@@ -241,6 +249,63 @@ export const STATUS_PAGES_PAGE: DocPage = {
           title: "Live delivery is eventually consistent",
           text:
             "Core NATS status messages are not durable. PostgreSQL/API data remains authoritative, and the fallback refresh repairs a missed invalidation without requiring the visitor to reload manually.",
+        },
+      ],
+    },
+    {
+      id: "visibility",
+      title: "Visibility, passwords and kiosk tokens",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Visibility", "Who can view the page"],
+          rows: [
+            ["`public`", "Anyone. The default"],
+            ["`unlisted`", "Anyone with the link. Every response carries `X-Robots-Tag: noindex` and the page a robots `noindex` meta tag. Not access control"],
+            ["`password`", "Visitors who enter the page password, and [kiosk tokens](#kiosk-tokens). The page URL shows a password form"],
+            ["`private`", "Kiosk tokens only. Without one the page and every route under it answer 404, as if it did not exist"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The check runs before every route under `/public/status/{slug}/` — the page, `/data`, `/stream`, the push routes, the draft preview and any route added later — and before the render cache, so changing a page to password or private takes effect on the next request even for a cached page. Only `/public/status/sw.js` (no page data) and the unlock route are outside it. Set visibility and the password on the page's edit screen or through `visibility` and `password` on create and update.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Entering the password sets a session cookie for that page, valid 30 days. Changing or clearing the password signs every visitor out. Unlock attempts are limited to 5 a minute per client per page and 60 a minute per page. Responses for password and private pages send `Cache-Control: private, no-store`, so neither the browser nor a shared cache keeps them.",
+        },
+      ],
+    },
+    {
+      id: "kiosk-tokens",
+      title: "Kiosk tokens",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A kiosk token opens a password or private page without the password, for wall displays and dashboards. Create one with a label under **Access** on the page's edit screen (or `POST /api/v1/status-pages/{id}/access-tokens`); the token is shown once, together with the kiosk URL `…/public/status/{slug}?token=<token>`. Only a hash is stored. Opening that URL sets a session cookie, so the page's live updates keep working without the token. Revoking a token (`DELETE …/access-tokens/{accessId}`) ends every session it opened on that session's next request. A page holds at most 50 active tokens.",
+        },
+        {
+          type: "table",
+          columns: ["Route", "Response"],
+          rows: [
+            ["`POST /public/status/{slug}/unlock`", "Checks the form field `password`. Success sets the session cookie and redirects to the page (303); a wrong password shows the form again (401); too many attempts answer 429"],
+            ["`GET /api/v1/status-pages/{id}/access-tokens`", "The page's kiosk tokens, revoked ones included, without token values"],
+            ["`POST /api/v1/status-pages/{id}/access-tokens`", "Creates a token from `{label}` and returns it once in `token`"],
+            ["`DELETE /api/v1/status-pages/{id}/access-tokens/{accessId}`", "Revokes a token; idempotent"],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "Password and private pages need `STATUS_PAGE_SESSION_SECRET` on the status-page service. Without it they are unavailable — a password page answers 503 and a private page 404 — while public and unlisted pages serve as usual. See [configuration](/docs/configuration/) and [deployment](/docs/deployment/).",
+            "Browser notifications are offered on public and unlisted pages only. A page that becomes password or private stops notifying, including browsers that subscribed before.",
+            "The session cookie is `SameSite=Lax`, so a password or private page framed by another site gets no session. Open kiosk displays on the page itself.",
+            "The draft preview of a gated page opens with a valid preview token only when `STATUS_PAGE_PREVIEW_SECRET` is set; otherwise the editor's session on the page is needed.",
+            "The in-page customizer proxy (`/_sp_api/`) refuses calls naming a password or private page unless the caller holds a session for it.",
+          ],
         },
       ],
     },

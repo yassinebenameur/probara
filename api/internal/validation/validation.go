@@ -508,6 +508,10 @@ func ValidateStatusPage(req *models.CreateStatusPageRequest) error {
 		return err
 	}
 
+	if err := validateStatusPageAccess(req.Visibility, req.Password); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -541,6 +545,10 @@ func ValidateStatusPageUpdate(req *models.UpdateStatusPageRequest) error {
 		if err := validateStatusPageSections(*req.Sections); err != nil {
 			return err
 		}
+	}
+
+	if err := validateStatusPageAccess(req.Visibility, req.Password); err != nil {
+		return err
 	}
 
 	return nil

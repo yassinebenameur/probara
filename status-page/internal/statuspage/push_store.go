@@ -109,10 +109,15 @@ func (s *pushStore) DeleteSubscription(ctx context.Context, id uuid.UUID) error 
 
 // PageIDForSlug resolves a public slug to its page id, and reports whether the
 // page has opted into browser notifications. Both come from one query so the
-// subscribe handler cannot act on a stale or half-read page.
+// subscribe handler cannot act on a stale or half-read page. Password and
+// private pages never take subscriptions: a subscription outlives the visitor
+// session that created it, so it would keep telling a signed-out (or
+// revoked) browser about the page.
 func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, bool, error) {
 	const query = `
-		SELECT id, tenant_id, COALESCE(settings->>'enable_push_notifications', 'false') = 'true'
+		SELECT id, tenant_id,
+		       COALESCE(settings->>'enable_push_notifications', 'false') = 'true'
+		       AND visibility IN ('public', 'unlisted')
 		FROM status_pages
 		WHERE slug = $1
 	`

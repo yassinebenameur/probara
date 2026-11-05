@@ -244,15 +244,22 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 	query := `
 		INSERT INTO status_pages (
 			id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash, password_version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), $10, $11, $12)
 	`
+
+	access, err := newPageAccess(req.Visibility, req.Password)
+	if err != nil {
+		return nil, err
+	}
 
 	settingsStored := defaultStatusPageSettings().applyPatch(req.Settings)
 	settingsJSON, _ := json.Marshal(settingsStored)
 	if _, err := tx.ExecContext(ctx, query,
 		pageID, tenantID, req.Slug, req.Title, req.Description,
 		req.LogoURL, req.PrimaryColor, req.SecondaryColor, settingsJSON,
+		access.visibility, access.passwordHash, access.passwordVersion,
 	); err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 			return nil, fmt.Errorf("slug already exists")
@@ -279,7 +286,8 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID) (*models.StatusPage, error) {
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash IS NOT NULL
 		FROM status_pages
 		WHERE id = $1 AND tenant_id = $2
 	`
@@ -290,6 +298,7 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 		&page.ID, &page.TenantID, &page.Slug, &page.Title,
 		&page.Description, &page.LogoURL, &page.PrimaryColor,
 		&page.SecondaryColor, &settingsJSON, &page.CreatedAt, &page.UpdatedAt,
+		&page.Visibility, &page.HasPassword,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("status page not found")
@@ -329,7 +338,8 @@ func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page,
 
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash IS NOT NULL
 		FROM status_pages
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -350,6 +360,7 @@ func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page,
 			&item.ID, &item.TenantID, &item.Slug, &item.Title,
 			&item.Description, &item.LogoURL, &item.PrimaryColor,
 			&item.SecondaryColor, &settingsJSON, &item.CreatedAt, &item.UpdatedAt,
+			&item.Visibility, &item.HasPassword,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan status page: %w", err)
 		}
@@ -429,6 +440,16 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 		setParts = append(setParts, fmt.Sprintf("settings = $%d", argIndex))
 		args = append(args, mergedJSON)
 		argIndex++
+	}
+
+	if req.Visibility != nil || req.Password != nil {
+		parts, accessArgs, err := s.accessUpdate(ctx, tx, tenantID, pageID, req.Visibility, req.Password, argIndex)
+		if err != nil {
+			return nil, err
+		}
+		setParts = append(setParts, parts...)
+		args = append(args, accessArgs...)
+		argIndex += len(accessArgs)
 	}
 
 	sectionsUpdated := false

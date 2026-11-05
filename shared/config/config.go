@@ -396,6 +396,11 @@ type StatusPageConfig struct {
 	// AppBaseURL is APP_BASE_URL, the operator UI origin. Status pages allow
 	// it in frame-ancestors so the template editor can preview them.
 	AppBaseURL string
+	// SessionSecret is STATUS_PAGE_SESSION_SECRET, the key for visitor
+	// session cookies on password and private pages (shared/pageaccess).
+	// Optional: without it those pages are unavailable (fail closed), while
+	// public and unlisted pages serve as usual.
+	SessionSecret string
 }
 
 // LoadBaseConfig loads base configuration from environment variables
@@ -1417,6 +1422,13 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 		return nil, err
 	}
 	cfg.AppBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/")
+
+	// A secret too short to sign with is refused at startup rather than
+	// leaving gated pages silently unavailable.
+	cfg.SessionSecret = strings.TrimSpace(os.Getenv("STATUS_PAGE_SESSION_SECRET"))
+	if cfg.SessionSecret != "" && len(cfg.SessionSecret) < 32 {
+		return nil, fmt.Errorf("STATUS_PAGE_SESSION_SECRET must be at least 32 characters")
+	}
 
 	return cfg, nil
 }

@@ -2,6 +2,7 @@ package statuspages
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"net/http"
 	"strconv"
 
@@ -57,6 +58,10 @@ func (h *Handlers) CreateStatusPage(w http.ResponseWriter, r *http.Request) {
 
 	page, err := h.service.CreateStatusPage(r.Context(), tenantUUID, &req)
 	if err != nil {
+		if verr := (*statuspageservice.ValidationError)(nil); stderrors.As(err, &verr) {
+			errors.WriteValidationError(w, verr.Error())
+			return
+		}
 		if err.Error() == "slug already exists" {
 			errors.WriteValidationError(w, "slug already exists")
 			return
@@ -190,6 +195,10 @@ func (h *Handlers) UpdateStatusPage(w http.ResponseWriter, r *http.Request) {
 
 	page, err := h.service.UpdateStatusPage(r.Context(), tenantUUID, pageID, &req)
 	if err != nil {
+		if verr := (*statuspageservice.ValidationError)(nil); stderrors.As(err, &verr) {
+			errors.WriteValidationError(w, verr.Error())
+			return
+		}
 		if err.Error() == "status page not found" {
 			errors.WriteNotFoundError(w, "status page not found")
 			return
