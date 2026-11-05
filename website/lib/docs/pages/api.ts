@@ -94,6 +94,11 @@ export const API_PAGE: DocPage = {
                 "Used only in `/api/v1/push/{token}`. No cookie or bearer key is required because possession of the URL token authorizes a heartbeat.",
             },
             {
+              term: "Alert action token",
+              description:
+                "Used only in `/api/v1/alert-actions/{token}`, the signed one-click [acknowledge link](/docs/alerting/#ack-links) a notification carries. It authorizes acknowledging one alert, for 72 hours, and nothing else.",
+            },
+            {
               term: "MCP access token",
               description:
                 "`Bearer pbm_at_…`, issued to an AI agent by the [MCP sign-in](/docs/mcp/#authentication). Valid only on `/api/v1/mcp`: every tool call there runs as one of the routes below with the same checks. A direct REST call with it returns 401.",
@@ -571,6 +576,14 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/alerts/{id}/unsnooze`",
               "Write; end a running snooze now (404 when not snoozed)",
+            ],
+            [
+              "`GET /api/v1/alert-actions/{token}`",
+              "Public, authorized by a signed [acknowledge link](/docs/alerting/#ack-links) token; never changes anything. Returns `state` (`pending`, `already` or `resolved` with HTTP 200; `expired` 410; `invalid` 404), a small `alert` summary (`subject`, `kind`, `status`, `triggered_at`, `acknowledged_at`) and the link's `expires_at`",
+            ],
+            [
+              "`POST /api/v1/alert-actions/{token}`",
+              "Public, same token; acknowledges the alert with `acknowledged_via` `magic_link` and no user. `state` is `acknowledged` (200), `already` or `resolved` (409), `expired` (410) or `invalid` (404). Each attempt with an authentic token records an `alert.acknowledge` audit event (actor `anonymous`, label `magic link`, `details.channel_id`)",
             ],
             [
               "`GET /api/v1/alert-channels`",

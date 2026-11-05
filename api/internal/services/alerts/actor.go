@@ -16,6 +16,9 @@ const (
 	ViaAPI = "api"
 	// ViaMCP is a REST call an MCP tool dispatched.
 	ViaMCP = "mcp"
+	// ViaMagicLink is a signed acknowledge link from a notification
+	// (api/internal/handlers/alertactions); it carries no user.
+	ViaMagicLink = "magic_link"
 )
 
 // Actor identifies who acknowledged or resolved an alert and through which
