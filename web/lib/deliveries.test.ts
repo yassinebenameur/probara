@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { deliveryAlertSubject, deliveryEventLabel, deliveryPathLabel, deliveryRecipients } from './deliveries';
 import { alertFocusHref } from './alert-links';
-import { deliveryFailed, deliveryOutcomeLabel, deliveryOutcomeTone } from './status-tones';
+import { deliveryFailed, deliveryOutcomeHint, deliveryOutcomeLabel, deliveryOutcomeTone } from './status-tones';
 
 test('deliveryEventLabel names known events and humanizes new ones', () => {
   assert.equal(deliveryEventLabel('created'), 'Triggered');
@@ -26,6 +26,13 @@ test('delivery outcomes: only failures raise the channel badge', () => {
   assert.equal(deliveryOutcomeTone('dropped_superseded'), 'neutral');
   assert.equal(deliveryOutcomeLabel('mystery'), 'mystery');
   assert.equal(deliveryPathLabel('async'), 'Worker');
+});
+
+test('a superseded drop reads neutrally and its hint names every cause', () => {
+  assert.equal(deliveryOutcomeLabel('dropped_superseded'), 'Dropped (superseded)');
+  const hint = deliveryOutcomeHint('dropped_superseded') ?? '';
+  for (const cause of ['resolved', 'unacknowledged', 'reopened']) assert.ok(hint.includes(cause), cause);
+  assert.equal(deliveryOutcomeHint('delivered'), undefined);
 });
 
 test('alertFocusHref links the focused alert view', () => {

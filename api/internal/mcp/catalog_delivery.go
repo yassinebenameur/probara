@@ -7,7 +7,7 @@ import "net/http"
 func deliveryTools() []spec {
 	const outcomes = "Each row has event_type, attempt, path (sync: the alerter sent it; async: queued for, " +
 		"then sent by, a delivery worker), outcome (queued, delivered, failed = transient and retried, " +
-		"permanent_failure = rejected and not retried, dropped_superseded = the alert resolved first, " +
+		"permanent_failure = rejected and not retried, dropped_superseded = the alert resolved, was unacknowledged or reopened first, " +
 		"dropped_ack = held by an ack or snooze and sent once it lifts) and a sanitized error."
 	return []spec{
 		{

@@ -363,7 +363,7 @@ export const DELIVERY_OUTCOME_LABEL: Record<DeliveryOutcome, string> = {
   delivered: 'Delivered',
   failed: 'Failed, retrying',
   permanent_failure: 'Rejected',
-  dropped_superseded: 'Dropped (resolved)',
+  dropped_superseded: 'Dropped (superseded)',
   dropped_ack: 'Held (ack/snooze)',
 };
 
@@ -385,6 +385,21 @@ export function deliveryOutcomeTone(outcome: DeliveryOutcome | string | null | u
 
 export function deliveryOutcomeLabel(outcome: DeliveryOutcome | string | null | undefined): string {
   return DELIVERY_OUTCOME_LABEL[outcome as DeliveryOutcome] ?? (outcome || 'Unknown');
+}
+
+// A superseded drop is not always a resolve: an acknowledgement is dropped
+// after an unack, and anything from an earlier paging episode (a recovery
+// included) once the alert reopens — so the label stays neutral and the hint
+// names every case.
+const DELIVERY_OUTCOME_HINT: Partial<Record<DeliveryOutcome, string>> = {
+  dropped_superseded:
+    'Not sent: the alert changed before the queued event went out — it resolved, was unacknowledged (for an acknowledgement), or reopened (for an event of an earlier episode).',
+  dropped_ack: 'Not sent yet: held by an acknowledgement or snooze; it goes out once that lifts.',
+};
+
+/** Explains an outcome whose label alone can mislead (the drops), else undefined. */
+export function deliveryOutcomeHint(outcome: DeliveryOutcome | string | null | undefined): string | undefined {
+  return DELIVERY_OUTCOME_HINT[outcome as DeliveryOutcome];
 }
 
 /** Whether a channel's last delivery failed (the channel list's error badge). */

@@ -21,8 +21,8 @@ func (c *Consumer) recordAttempt(ctx context.Context, msg *queue.Message, envelo
 }
 
 // recordDrop appends an event the worker dropped without sending:
-// dropped_superseded (resolved, or unacknowledged, since publish) or
-// dropped_ack (held by an ack or snooze since publish).
+// dropped_superseded (resolved, unacknowledged, or reopened since publish)
+// or dropped_ack (held by an ack or snooze since publish).
 func (c *Consumer) recordDrop(ctx context.Context, msg *queue.Message, envelope notifications.DispatchEnvelope, channelName string, outcome deliverylog.Outcome) {
 	c.recordDelivery(ctx, msg, envelope, channelName, outcome, nil, nil)
 }
