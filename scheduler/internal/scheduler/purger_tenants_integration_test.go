@@ -224,3 +224,50 @@ func TestTenantPurgeCoversEveryTenantTable(t *testing.T) {
 		"(add a batched delete to tenantPurgeDeletes in purger_tenants.go, or list them here with the reason)",
 		strings.Join(missing, ", "))
 }
+
+// Rows a racing request writes after a workspace delete committed are
+// tombstoned or revoked by the next purger run, whatever the purge budget.
+func TestPurger_CutsOffRowsWrittenAfterWorkspaceDelete(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	deleted := testutil.InsertTenant(ctx, t, dbClient, "")
+	live := testutil.InsertTenant(ctx, t, dbClient, "")
+	_, err := dbClient.ExecContext(ctx, `UPDATE tenants SET deleted_at = NOW() WHERE id = $1`, deleted)
+	require.NoError(t, err)
+
+	for _, tenant := range []uuid.UUID{deleted, live} {
+		testutil.InsertHTTPMonitor(ctx, t, dbClient, tenant, "")
+		_, err := dbClient.ExecContext(ctx, `
+			INSERT INTO api_keys (tenant_id, name, key_hash, key_prefix, scope)
+			VALUES ($1, 'late', 'hash', $2, 'write')`, tenant, uuid.NewString())
+		require.NoError(t, err)
+		_, err = dbClient.ExecContext(ctx, `
+			INSERT INTO discovery_integrations (id, tenant_id, name, namespaces, home_namespace, token_hash)
+			VALUES (gen_random_uuid(), $1, 'cluster', ARRAY['default'], 'default', 'digest')`, tenant)
+		require.NoError(t, err)
+	}
+
+	conn, err := dbClient.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	p := newPurger(dbClient, testLogger(t), nil, purgerOptions{})
+	ok, err := p.cutOffDeletedTenants(ctx, conn)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	cutOff := func(tenant uuid.UUID) (liveMonitors, liveKeys, liveTokens int) {
+		require.NoError(t, dbClient.QueryRowContext(ctx, `
+			SELECT
+				(SELECT COUNT(*) FROM monitors WHERE tenant_id = $1 AND deleted_at IS NULL),
+				(SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL),
+				(SELECT COUNT(*) FROM discovery_integrations WHERE tenant_id = $1 AND token_hash <> 'revoked')
+		`, tenant).Scan(&liveMonitors, &liveKeys, &liveTokens))
+		return
+	}
+	m, k, tok := cutOff(deleted)
+	require.Equal(t, [3]int{0, 0, 0}, [3]int{m, k, tok}, "deleted workspace: live monitors, keys, collector tokens")
+	m, k, tok = cutOff(live)
+	require.Equal(t, [3]int{1, 1, 1}, [3]int{m, k, tok}, "a live workspace is untouched")
+}

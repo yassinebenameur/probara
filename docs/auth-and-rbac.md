@@ -99,6 +99,11 @@ SSO group mappings, and invalidates its discovery collector tokens. From then
 on `AuthMiddleware` answers 403 to any session request scoped to it,
 superadmins included (`rejectDeletedTenant`, `tenancy.IsDeleted`), every
 tenant list omits it, and the status-page service stops serving its pages.
+API key validation and the discovery collector token lookups add
+`tenancy.LiveTenantSQL` to their own query, so a key or integration that a
+request already past auth writes just after the delete commits is refused at
+read time too; the purger's next run also revokes such late credentials and
+tombstones late monitors (`deletedTenantCutoffs`).
 The scheduler purger removes the data in bounded batches and then the row
 (see `docs/architecture.md`); the API never deletes a tenant row. The
 default workspace (`tenancy.DefaultTenantID`), the

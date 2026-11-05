@@ -12,8 +12,9 @@ import (
 
 // rejectDeletedTenant answers 403 and returns true when a session request is
 // scoped to a soft-deleted workspace — superadmins included, since they
-// otherwise act on any tenant ID. API keys need no check here: deleting a
-// workspace revokes its keys in the same transaction.
+// otherwise act on any tenant ID. API keys are checked in their own lookup
+// (auth.ValidateAPIKey adds tenancy.LiveTenantSQL), which also refuses a key
+// created while the delete was committing.
 func rejectDeletedTenant(w http.ResponseWriter, r *http.Request, dbClient *db.Client, log *logger.Logger, tenantID uuid.UUID) bool {
 	if tenantID == uuid.Nil {
 		return false

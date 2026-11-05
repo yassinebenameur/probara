@@ -146,7 +146,9 @@ deletes of soft-deleted data, under one session advisory lock and a per-run
 row budget. Its monitor phase drains tombstoned monitors' child rows in
 batches, then the monitor rows. Its tenant phase (`purger_tenants.go`) owns
 workspace deletion: the API only soft-deletes a workspace (`deleted_at`, its
-monitors tombstoned, its credentials revoked; `shared/tenancy`), and once a
+monitors tombstoned, its credentials revoked; `shared/tenancy`), each run
+first re-applies those tombstones and revocations to rows a racing request
+wrote after the delete (`deletedTenantCutoffs`), and once a
 deleted workspace has no monitor rows left the purger drains its other
 unbounded tables (monitor-less alerts, mesh probe results, incidents, push
 subscriptions, discovery inventory, which has no tenant FK, SLA reports, AI

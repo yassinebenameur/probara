@@ -68,26 +68,45 @@ var tenantPurgeDeletes = []batchedDelete{
 		SELECT id FROM ai_labels WHERE tenant_id = $1 LIMIT $2)`},
 }
 
-// tombstoneDeletedTenantMonitors tombstones any live monitor of a deleted
-// workspace. The API tombstones them in the delete transaction; this catches
-// one created by a request already past the auth check, which would otherwise
-// keep the workspace from ever finishing its purge. ok is false before the
+// deletedTenantCutoffs repeat the workspace delete's tombstoning and
+// revocations for rows written after it: a request already past the auth
+// check when the delete committed can still create a monitor, API key, MCP
+// grant or discovery integration in the workspace. A late monitor would keep
+// the workspace from ever finishing its purge; late credentials are already
+// refused at read time (tenancy.LiveTenantSQL, the auth middleware), and this
+// makes the stored state agree.
+var deletedTenantCutoffs = []struct{ name, sql string }{
+	{"monitors", `UPDATE monitors SET deleted_at = NOW(), updated_at = NOW()
+		WHERE deleted_at IS NULL
+		  AND tenant_id IN (SELECT id FROM tenants WHERE deleted_at IS NOT NULL)`},
+	{"api keys", `UPDATE api_keys SET revoked_at = NOW()
+		WHERE revoked_at IS NULL
+		  AND tenant_id IN (SELECT id FROM tenants WHERE deleted_at IS NOT NULL)`},
+	{"mcp grants", `UPDATE mcp_oauth_grants SET revoked_at = NOW()
+		WHERE revoked_at IS NULL
+		  AND tenant_id IN (SELECT id FROM tenants WHERE deleted_at IS NOT NULL)`},
+	// Same marker as the API's delete: never equal to a hex token digest.
+	{"discovery collector tokens", `UPDATE discovery_integrations SET token_hash = 'revoked'
+		WHERE token_hash <> 'revoked'
+		  AND tenant_id IN (SELECT id FROM tenants WHERE deleted_at IS NOT NULL)`},
+}
+
+// cutOffDeletedTenants applies deletedTenantCutoffs. ok is false before the
 // soft-delete migration has run (no tenants.deleted_at): the tenant phase is
 // then skipped.
-func (p *purger) tombstoneDeletedTenantMonitors(ctx context.Context, conn *sql.Conn) (ok bool, err error) {
-	result, err := conn.ExecContext(ctx, `
-		UPDATE monitors SET deleted_at = NOW(), updated_at = NOW()
-		WHERE deleted_at IS NULL
-		  AND tenant_id IN (SELECT id FROM tenants WHERE deleted_at IS NOT NULL)
-	`)
-	if err != nil {
-		if isUndefinedColumn(err) {
-			return false, nil
+func (p *purger) cutOffDeletedTenants(ctx context.Context, conn *sql.Conn) (ok bool, err error) {
+	for _, c := range deletedTenantCutoffs {
+		result, err := conn.ExecContext(ctx, c.sql)
+		if err != nil {
+			if isUndefinedColumn(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("cut off deleted workspaces' %s: %w", c.name, err)
 		}
-		return false, fmt.Errorf("tombstone deleted workspaces' monitors: %w", err)
-	}
-	if n, _ := result.RowsAffected(); n > 0 {
-		p.logger.WithField("monitors", n).Info("tenant purge: tombstoned monitors of deleted workspaces")
+		if n, _ := result.RowsAffected(); n > 0 {
+			p.logger.WithFields(logrus.Fields{"rows": n, "kind": c.name}).
+				Info("tenant purge: cut off rows written after a workspace delete")
+		}
 	}
 	return true, nil
 }

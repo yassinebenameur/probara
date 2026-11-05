@@ -285,3 +285,56 @@ func TestWorkspaceManagement(t *testing.T) {
 		require.Subset(t, actions, []string{"tenant.create", "tenant.rename", "tenant.delete"})
 	})
 }
+
+// collectorIntegration inserts a discovery integration for tenant and returns
+// its ID and a collector token (43 characters, as the handler requires).
+func (f *workspaceFixture) collectorIntegration(tenant uuid.UUID) (uuid.UUID, string) {
+	f.t.Helper()
+	id := uuid.New()
+	token := strings.Repeat("t", 11) + strings.ReplaceAll(uuid.NewString(), "-", "")
+	digest := sha256.Sum256([]byte(token))
+	_, err := f.db.ExecContext(f.ctx, `
+		INSERT INTO discovery_integrations (id, tenant_id, name, namespaces, home_namespace, token_hash)
+		VALUES ($1, $2, $3, ARRAY['default'], 'default', $4)`,
+		id, tenant, "cluster-"+id.String()[:8], hex.EncodeToString(digest[:]))
+	require.NoError(f.t, err)
+	return id, token
+}
+
+// A credential written by a request that passed auth just before a workspace
+// delete committed lands after the delete's own revocations. It must still be
+// refused at once: API key and collector token lookups require a live
+// workspace, independently of the purger catching up.
+func TestCredentialsCreatedDuringWorkspaceDeleteAreRefused(t *testing.T) {
+	f := newWorkspaceFixture(t, uuid.Nil)
+	ctx := f.ctx
+	doomed := testutil.InsertTenant(ctx, t, f.db, "Doomed")
+	live := testutil.InsertTenant(ctx, t, f.db, "Live")
+	root := f.session("root", auth.PlatformRoleSuperadmin, nil)
+
+	status, body := f.do(root, "", http.MethodDelete, "/api/v1/tenants/"+doomed.String(), uuid.Nil, models.DeleteTenantRequest{ConfirmName: "Doomed"})
+	require.Equal(t, http.StatusOK, status, body)
+
+	// Written after the delete committed, as the racing request's insert
+	// would be.
+	lateKey, liveKey := f.apiKey(doomed), f.apiKey(live)
+	lateCollector, lateToken := f.collectorIntegration(doomed)
+	liveCollector, liveToken := f.collectorIntegration(live)
+
+	status, body = f.do(nil, liveKey, http.MethodGet, "/api/v1/monitors", uuid.Nil, nil)
+	require.Equal(t, http.StatusOK, status, "live workspace key: %s", body)
+	status, body = f.do(nil, lateKey, http.MethodGet, "/api/v1/monitors", uuid.Nil, nil)
+	require.Equal(t, http.StatusUnauthorized, status, "key of a deleted workspace: %s", body)
+
+	status, body = f.do(nil, liveToken, http.MethodGet, "/api/v1/discovery-collectors/"+liveCollector.String()+"/config", uuid.Nil, nil)
+	require.Equal(t, http.StatusOK, status, "live workspace collector: %s", body)
+	for _, path := range []string{"/config", "/snapshot"} {
+		method := http.MethodGet
+		var payload any
+		if path == "/snapshot" {
+			method, payload = http.MethodPost, map[string]any{}
+		}
+		status, body = f.do(nil, lateToken, method, "/api/v1/discovery-collectors/"+lateCollector.String()+path, uuid.Nil, payload)
+		require.Equalf(t, http.StatusNotFound, status, "collector of a deleted workspace %s: %s", path, body)
+	}
+}

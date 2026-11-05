@@ -120,8 +120,10 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (`shared/tenancy`, `purger_tenants.go`): the API stamps `deleted_at` and
   revokes access, the purger drains in batches; never `DELETE FROM tenants`
   from the API. A new table with `tenant_id` must be classified in
-  `TestTenantPurgeCoversEveryTenantTable`, and a new tenant listing or
-  public read filters `deleted_at IS NULL` (or `tenancy.IsDeleted`).
+  `TestTenantPurgeCoversEveryTenantTable`, a new tenant listing or
+  public read filters `deleted_at IS NULL` (or `tenancy.IsDeleted`), and a
+  credential lookup outside the session middleware (API keys, collector
+  tokens) adds `tenancy.LiveTenantSQL` to its query.
 
 ## Single sources of truth — never duplicate these lists
 
