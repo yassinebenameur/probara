@@ -740,6 +740,11 @@ func (s *Service) getFieldValue(fields map[string]interface{}, fieldName string)
 
 // ExecuteImport executes the import with the given rows and mapping
 func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *models.ImportExecuteRequest) (*models.ImportExecuteResponse, error) {
+	// Each imported monitor gets one version, recorded once its group
+	// members are synced in the second pass.
+	ctx, versions := monitorservice.DeferVersions(monitorservice.WithVersionSource(ctx, monitorservice.VersionSourceImport))
+	defer versions.Flush(ctx)
+
 	results := make([]models.ImportRowResult, len(req.Rows))
 	successCount := 0
 	failedCount := 0

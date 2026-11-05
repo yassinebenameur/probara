@@ -824,5 +824,33 @@ export const MONITORS_PAGE: DocPage = {
         },
       ],
     },
+    {
+      id: "config-history",
+      title: "Config history",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every change to a monitor's configuration is recorded as a numbered version: creates and updates from the operator UI, the API, MCP, import and discovery approval, bulk alerting edits, group member and dependency edits, and restores. A version is a snapshot of the monitor after the change: name, type, config, interval and timeout, tags, failure and recovery thresholds, alert routing with its custom channels, member alert roll-up, dependency suppression, locations and quorum, dependencies, and group members. Each version records who made it (the user or API key) and the surface it came through (`ui`, `api`, `mcp`, `import`, `restore`, `discovery`). The monitor's Config history tab lists the versions, shows what each one changed against the previous version or against the live monitor, and restores one.",
+        },
+        {
+          type: "list",
+          items: [
+            "Snapshots are masked like every API read: a secret field reads `***` when set, so history never holds a secret value. A version still records which secret fields were set, replaced or cleared (`changed_secret_fields`), and a change that only rotates a secret is a version of its own.",
+            "A save that changes nothing records nothing: a write whose snapshot matches the latest version and touches no secret is skipped.",
+            "Restore re-applies the version through a normal update, as a new version marked with the version it restored. Secrets are never restored: every secret keeps its current value (a secret the old version had and the monitor has since cleared stays cleared). Channels, locations and monitors the version named that no longer exist are left out and reported. Pause state is not part of a version, so a restore never pauses or resumes a monitor.",
+            "Each monitor keeps its last 100 versions; older ones are deleted as new ones are recorded. History is not backfilled: it starts at the first change after the upgrade that introduced it, and the tab says when. Deleting the monitor deletes its history when the monitor is purged.",
+            "Reading history needs read access; restoring needs write access (and a tenant admin's session for SIP test-call monitors, like any edit of one). Restores are audited like other writes.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Review a restore before applying it",
+          text:
+            "Compare the version with Current first: that diff is exactly what the restore will change on the live monitor.",
+        },
+      ],
+    },
   ],
 };

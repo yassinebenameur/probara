@@ -36,6 +36,7 @@ func catalog() []spec {
 		escalationTools(),
 		statusPageAccessTools(),
 		reportScheduleTools(),
+		historyTools(),
 	} {
 		all = append(all, group...)
 	}

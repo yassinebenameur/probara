@@ -162,6 +162,7 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 		h.writeDependencyError(w, tenantUUID, monitorID, err)
 		return
 	}
+	h.recordVersion(r.Context(), tenantUUID, monitorID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

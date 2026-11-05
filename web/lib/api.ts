@@ -1852,3 +1852,22 @@ export function sendUserPasswordReset(id: string): Promise<AccountLinkResponse> 
 export function resetUserMFA(id: string): Promise<ResetMFAResponse> {
   return apiRequest<ResetMFAResponse>('POST', `/v1/users/${id}/reset-2fa`);
 }
+
+// Monitor config version history (lib/monitor-versions.ts).
+export async function getMonitorVersions(id: string) {
+  return apiRequest<import('./monitor-versions').MonitorVersionListResponse>('GET', `/v1/monitors/${id}/versions`);
+}
+export function getMonitorVersion(id: string, version: number) {
+  return apiRequest<import('./monitor-versions').MonitorVersion>('GET', `/v1/monitors/${id}/versions/${version}`);
+}
+/** Changes from `against` (a version, 'current', or the previous version when omitted) to `version`. */
+export function diffMonitorVersion(id: string, version: number, against?: number | 'current') {
+  const q = against === undefined ? '' : `?against=${encodeURIComponent(String(against))}`;
+  return apiRequest<import('./monitor-versions').MonitorVersionDiff>('GET', `/v1/monitors/${id}/versions/${version}/diff${q}`);
+}
+export function restoreMonitorVersion(id: string, version: number) {
+  return apiRequest<import('./monitor-versions').RestoreMonitorVersionResponse<Monitor>>(
+    'POST',
+    `/v1/monitors/${id}/versions/${version}/restore`,
+  );
+}

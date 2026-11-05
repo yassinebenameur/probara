@@ -388,6 +388,27 @@ export const API_PAGE: DocPage = {
       ],
     },
     {
+      id: "monitor-history-api",
+      title: "Monitor config history",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every create and update of a monitor (from any surface, including import, MCP, bulk edits, member and dependency edits, discovery approval and restores) records a numbered [config version](/docs/monitors/#config-history): a masked snapshot of the monitor's configuration with the actor (`actor_type` `user`, `api_key` or `system`, `actor_id`, `actor_label`), the `source` (`ui`, `api`, `mcp`, `import`, `restore`, `discovery`) and the secret fields the write set or cleared (`changed_secret_fields`, names only). A write that changes nothing is not recorded. Each monitor keeps its last 100 versions; there is no backfill, so `history_starts_at` says when the monitor's history begins and `truncated` whether older versions were pruned.",
+        },
+        {
+          type: "table",
+          columns: ["Method and path", "Required role and purpose"],
+          rows: [
+            ["`GET /api/v1/monitors/{id}/versions`", "Authenticated; versions newest first, each with `changed_fields` (snapshot paths such as `config.url` that differ from the previous version)"],
+            ["`GET /api/v1/monitors/{id}/versions/{version}`", "Authenticated; one version with its `snapshot` (secrets read `***`); 404 for an unknown or pruned version"],
+            ["`GET /api/v1/monitors/{id}/versions/{version}/diff`", "Authenticated; `changes` (`path`, `before`, `after`) leading from `against` to the version. `against` is a version number, `current` (the live monitor: what a restore would change) or omitted (the previous version)"],
+            ["`POST /api/v1/monitors/{id}/versions/{version}/restore`", "Write; re-apply the version as a new version (`restored_from`). Validation, the SIP test-call gate and group member and dependency syncs apply as for `PATCH`. Secrets are never restored: every secret keeps its current value. Returns the `monitor` and `dropped_references` (`channel:`, `location:`, `dependency:`, `member:` IDs that no longer exist and were left out); 400 when the version no longer validates"],
+          ],
+        },
+      ],
+    },
+    {
       id: "locations-and-mesh",
       title: "Locations, mesh, and maintenance",
       blocks: [

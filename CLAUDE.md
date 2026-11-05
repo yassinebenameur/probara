@@ -339,6 +339,23 @@ call `groupService.AddMonitorsToGroup` itself (it does — `syncGroupMembers`),
 or imported groups come back empty. Any other path that creates groups through
 `monitorService.CreateMonitor` directly inherits the same obligation.
 
+## Monitor config history
+
+- **Every monitor write records a config version** (`monitor_config_versions`,
+  `api/internal/services/monitors/versions.go`). `CreateMonitor`/
+  `UpdateMonitor` record it, so paths through the service inherit it; a path
+  that writes `monitors` or its junction tables (members, dependencies,
+  channels, locations) any other way must call `RecordVersion`, or
+  `RecordVersionTx` inside its own transaction (discovery approval does,
+  beside `CreateInTx`). A multi-step write (create + member/dependency sync,
+  import's second pass, restore) wraps its context in `DeferVersions` and
+  `Flush`es once, or one change splits into two versions; a new non-default
+  source goes through `WithVersionSource`.
+- Snapshots are masked (`MaskMonitorConfig`) and hash-deduplicated; a new
+  monitor field that is configuration goes in `models.MonitorConfigSnapshot`,
+  `loadSnapshot` and `RestoreRequest` together. Restore goes through
+  `UpdateMonitor` with the masked config, so it can never restore a secret.
+
 ## Adding a monitor type (checklist)
 
 1. `MonitorType` constant in `api/internal/models/monitors.go`; config struct in
