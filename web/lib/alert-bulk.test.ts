@@ -9,6 +9,7 @@ test('bulkTargets sends each action only the alerts it can move', () => {
   const targets = bulkTargets([alert('a', 'active'), alert('b', 'acknowledged'), alert('c', 'resolved')]);
   assert.deepEqual(targets.acknowledge, ['a']);
   assert.deepEqual(targets.resolve, ['a', 'b']);
+  assert.deepEqual(targets.unacknowledge, ['b']);
 });
 
 test('bulkOutcome reads a full success', () => {

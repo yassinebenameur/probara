@@ -60,6 +60,12 @@ export interface ChannelPickerProps {
   allowCreate?: boolean;
   /** Replaces the "No channels yet" line, e.g. with a pointer to where channels are made. */
   emptyState?: ReactNode;
+  /**
+   * Offer a per-channel "Keep after ack" box (notify_after_ack) beside the
+   * delay: the route keeps paging while an alert is acknowledged. Defaults
+   * to showDelays (routing lists, not single picks).
+   */
+  showNotifyAfterAck?: boolean;
 }
 
 export default function ChannelPicker({
@@ -72,6 +78,7 @@ export default function ChannelPicker({
   ariaLabelledBy,
   allowCreate = true,
   emptyState,
+  showNotifyAfterAck = showDelays,
 }: ChannelPickerProps) {
   const pluginName = usePluginNames();
   const [channels, setChannels] = useState<AlertChannel[]>([]);
@@ -133,6 +140,10 @@ export default function ChannelPicker({
       next.splice(removed ? Math.min(removed.index, next.length) : next.length, 0, assignment);
       onChange(next);
     }
+  };
+
+  const handleNotifyAfterAckChange = (channelId: string, notifyAfterAck: boolean) => {
+    onChange(value.map((a) => (a.channel_id === channelId ? { ...a, notify_after_ack: notifyAfterAck } : a)));
   };
 
   const handleDelayChange = (channelId: string, delay: number) => {
@@ -248,6 +259,21 @@ export default function ChannelPicker({
                       </span>
                     </label>
 
+                    {showNotifyAfterAck && isSelected && assignment && (
+                      <span
+                        className="flex-shrink-0 text-xs text-slate-400"
+                        title="Keep sending escalation tiers and reminders to this channel while the alert is acknowledged"
+                      >
+                        <Checkbox
+                          size="sm"
+                          checked={!!assignment.notify_after_ack}
+                          onChange={(checked) => handleNotifyAfterAckChange(channel.id, checked)}
+                          disabled={disabled}
+                          label="Keep after ack"
+                          aria-label={`Keep paging ${channel.name} after an acknowledgement`}
+                        />
+                      </span>
+                    )}
                     {showDelays && isSelected && assignment && (
                       <select
                         value={assignment.delay_seconds}

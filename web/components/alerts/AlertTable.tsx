@@ -2,9 +2,9 @@
 
 import { KeyboardEvent, ReactNode, useState } from 'react';
 import Link from 'next/link';
-import { Bell, BellOff, Check, CircleCheck, Network, PencilLine, Tag, UserCheck } from 'lucide-react';
+import { AlarmClockOff, Bell, BellOff, BellRing, Check, CircleCheck, MapPinOff, Network, PencilLine, Tag, Undo2, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
-import { acknowledgeAlert, labelAlertTriage, resolveAlert } from '@/lib/api';
+import { acknowledgeAlert, labelAlertTriage, resolveAlert, unacknowledgeAlert, unsnoozeAlert } from '@/lib/api';
 import { labelErrorMessage } from '@/lib/ai-labels';
 import { buildTriageLabelRequest, triageMenuCopy, triagePresentation } from '@/lib/ai-triage';
 import { formatDateTime, formatDateTimeFull, pluralize } from '@/lib/format';
@@ -20,6 +20,7 @@ import Pill from '@/components/ui/Pill';
 import RowMenu, { RowMenuItem } from '@/components/ui/RowMenu';
 import TriagePill from '@/components/alerts/TriagePill';
 import TriageLabelDialog from '@/components/alerts/TriageLabelDialog';
+import SnoozeAlertDialog from '@/components/alerts/SnoozeAlertDialog';
 import TableSkeleton from '@/components/ui/TableSkeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import { ElapsedTime } from '@/components/ui/RelativeTime';
@@ -31,6 +32,8 @@ import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import {
   ALERT_SORT_DEFAULT_DIR,
   SHORTCUT_EXEMPT,
+  isSnoozed,
+  pagingActions,
   rowShortcut,
   shortcutEffect,
   type AlertSortKey,
@@ -52,6 +55,7 @@ const REVEAL_ON_LIST_HOVER =
   'opacity-0 transition-opacity duration-fast ease-standard focus-within:opacity-100 group-hover/list:opacity-100 [@media(hover:none)]:opacity-100';
 
 function alertSubject(alert: Alert): string {
+  if (alert.kind === 'location_offline') return alert.source_location_name || '';
   return alert.kind === 'mesh_edge'
     ? `${alert.source_location_name || ''} → ${alert.target_location_name || ''}`
     : alert.monitor_name || alert.monitor_id || '';
@@ -136,8 +140,12 @@ export default function AlertTable({
   selection,
   flashClass,
 }: AlertTableProps) {
-  const [processing, setProcessing] = useState<{ id: string; action: 'ack' | 'resolve' | 'label' } | null>(null);
+  const [processing, setProcessing] = useState<{
+    id: string;
+    action: 'ack' | 'resolve' | 'label' | 'unack' | 'unsnooze';
+  } | null>(null);
   const [labelling, setLabelling] = useState<{ alert: Alert; mode: 'prompt' | 'correct' } | null>(null);
+  const [snoozing, setSnoozing] = useState<Alert | null>(null);
   // Screen-reader echo of the user's own ack/resolve; sighted users see the
   // row change (and flash), so there is no success toast. `seq` alternates a
   // trailing no-break space so a repeat of the same text still changes the
@@ -178,6 +186,29 @@ export default function AlertTable({
     } finally {
       setProcessing(null);
     }
+  };
+
+  // Unacknowledge and unsnooze: paging resumes, its clocks counted from now.
+  const handlePagingAction = async (alert: Alert, action: 'unack' | 'unsnooze') => {
+    try {
+      setProcessing({ id: alert.id, action });
+      stream?.markLocalAction(alert.id);
+      const updated = action === 'unack' ? await unacknowledgeAlert(alert.id) : await unsnoozeAlert(alert.id);
+      onAlertUpdate?.(updated);
+      setAnnouncement(`Alert for ${alertSubject(updated)} ${action === 'unack' ? 'unacknowledged' : 'unsnoozed'}`);
+    } catch (err) {
+      setAnnouncement('');
+      showToast(errorMessage(err, `Failed to ${action === 'unack' ? 'unacknowledge' : 'unsnooze'} alert`), 'error');
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  const handleSnoozed = (updated: Alert) => {
+    stream?.markLocalAction(updated.id);
+    setSnoozing(null);
+    onAlertUpdate?.(updated);
+    setAnnouncement(`Alert for ${alertSubject(updated)} snoozed`);
   };
 
   // A / R act on the row that has focus (its link, buttons or box), so the
@@ -409,7 +440,16 @@ export default function AlertTable({
                   </span>
                 </td>
                 <td className="max-w-0">
-                  {alert.kind === 'mesh_edge' ? (
+                  {alert.kind === 'location_offline' ? (
+                    <Link
+                      href="/locations"
+                      className={`alert-row-link inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
+                      title="Check location stopped reporting — view locations"
+                    >
+                      <MapPinOff className="h-3.5 w-3.5 text-slate-400" strokeWidth={1.75} />
+                      {alert.source_location_name || 'unknown'}
+                    </Link>
+                  ) : alert.kind === 'mesh_edge' ? (
                     <Link
                       href="/locations?tab=mesh"
                       className={`alert-row-link inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
@@ -428,6 +468,9 @@ export default function AlertTable({
                   )}
                   {alert.kind === 'mesh_edge' && (
                     <KindTag title="Directed inter-location connectivity path">mesh</KindTag>
+                  )}
+                  {alert.kind === 'location_offline' && (
+                    <KindTag title="The location's worker stopped sending heartbeats; its monitors go stale">offline</KindTag>
                   )}
                   {alert.kind === 'latency_anomaly' && (
                     <KindTag title="Latency degraded relative to baseline">latency</KindTag>
@@ -474,8 +517,18 @@ export default function AlertTable({
                   {((alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id) ||
                     (alert.suppression_reason === 'dependency' && !alert.root_cause_monitor_name) ||
                     (alert.impacted_count ?? 0) > 0 ||
+                    isSnoozed(alert) ||
                     triagePresentation(alert.triage).visible) && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                      {isSnoozed(alert) && alert.snoozed_until && (
+                        <span
+                          className={`${CHIP} bg-well-hover text-slate-400`}
+                          title={`No tier, reminder or follow-up until ${formatDateTimeFull(alert.snoozed_until)}`}
+                        >
+                          <BellOff className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                          Snoozed until {formatDateTime(alert.snoozed_until)}
+                        </span>
+                      )}
                       {alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id && (
                         <Link
                           href={`/monitors/${alert.root_cause_monitor_id}`}
@@ -580,12 +633,28 @@ export default function AlertTable({
                       ) : (
                         <span className={PRIMARY_SLOT} aria-hidden="true" />
                       )}
-                      {alert.status === 'active' || alert.triage?.labelable ? (
+                      {alert.status !== 'resolved' || alert.triage?.labelable ? (
                         <RowMenu label={`More actions for ${alertSubject(alert)}`} disabled={processing?.id === alert.id}>
                           {alert.status === 'active' && (
                             <RowMenuItem icon={<CircleCheck strokeWidth={1.75} />} onSelect={() => void handleResolve(alert.id)}>
                               Resolve
                             </RowMenuItem>
+                          )}
+                          {pagingActions(alert).unacknowledge && (
+                            <RowMenuItem icon={<Undo2 strokeWidth={1.75} />} onSelect={() => void handlePagingAction(alert, 'unack')}>
+                              Unacknowledge
+                            </RowMenuItem>
+                          )}
+                          {pagingActions(alert).unsnooze ? (
+                            <RowMenuItem icon={<BellRing strokeWidth={1.75} />} onSelect={() => void handlePagingAction(alert, 'unsnooze')}>
+                              Unsnooze
+                            </RowMenuItem>
+                          ) : (
+                            pagingActions(alert).snooze && (
+                              <RowMenuItem icon={<AlarmClockOff strokeWidth={1.75} />} onSelect={() => setSnoozing(alert)}>
+                                Snooze…
+                              </RowMenuItem>
+                            )
                           )}
                           {alert.triage?.labelable && alert.triage.labelled && (
                             <RowMenuItem icon={<Tag strokeWidth={1.75} />} onSelect={() => setLabelling({ alert, mode: 'prompt' })}>
@@ -626,6 +695,14 @@ export default function AlertTable({
           <kbd className={KBD}>↑</kbd>
           <kbd className={KBD}>↓</kbd> move
         </p>
+      )}
+      {snoozing && (
+        <SnoozeAlertDialog
+          alert={snoozing}
+          subject={alertSubject(snoozing)}
+          onClose={() => setSnoozing(null)}
+          onSnoozed={handleSnoozed}
+        />
       )}
       {labelling && (
         <TriageLabelDialog

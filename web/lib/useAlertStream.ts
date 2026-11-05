@@ -84,6 +84,8 @@ interface UseAlertStreamOptions {
   onAlertCreated?: (alert: Alert) => void;
   onAlertAcknowledged?: (alert: Alert) => void;
   onAlertResolved?: (alert: Alert) => void;
+  /** Unacknowledge, snooze or unsnooze: the alert changed without a status transition the alerter announces. */
+  onAlertUpdated?: (alert: Alert) => void;
   onError?: (error: Error) => void;
   onConnected?: () => void;
   /**
@@ -104,6 +106,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
     onAlertCreated,
     onAlertAcknowledged,
     onAlertResolved,
+    onAlertUpdated,
     onError,
     onConnected,
     onDisconnected,
@@ -115,6 +118,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
     onAlertCreated,
     onAlertAcknowledged,
     onAlertResolved,
+    onAlertUpdated,
     onError,
     onConnected,
     onDisconnected,
@@ -126,12 +130,13 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
       onAlertCreated,
       onAlertAcknowledged,
       onAlertResolved,
+      onAlertUpdated,
       onError,
       onConnected,
       onDisconnected,
       onStalled,
     };
-  }, [onAlertCreated, onAlertAcknowledged, onAlertResolved, onError, onConnected, onDisconnected, onStalled]);
+  }, [onAlertCreated, onAlertAcknowledged, onAlertResolved, onAlertUpdated, onError, onConnected, onDisconnected, onStalled]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -188,6 +193,9 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
           break;
         case 'alert_resolved':
           callbacksRef.current.onAlertResolved?.(alert);
+          break;
+        case 'alert_updated':
+          callbacksRef.current.onAlertUpdated?.(alert);
           break;
         default:
           console.warn('SSE: Unknown event type:', eventType);

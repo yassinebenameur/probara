@@ -37,7 +37,9 @@ export default function TriageLabelDialog({ alert, initialMode, onClose, onLabel
     return () => { cancelled = true; };
   }, [alert.id]);
 
-  const subject = alert.kind === 'mesh_edge'
+  const subject = alert.kind === 'location_offline'
+    ? alert.source_location_name || 'unknown'
+    : alert.kind === 'mesh_edge'
     ? `${alert.source_location_name || 'unknown'} → ${alert.target_location_name || 'unknown'}`
     : alert.monitor_name || alert.monitor_id || 'Alert';
 

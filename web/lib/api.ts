@@ -636,6 +636,24 @@ export async function bulkResolveAlerts(ids: string[]): Promise<AlertBulkResult>
   return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/resolve', { ids });
 }
 
+// Paging: unacknowledge resumes paging (clocks restart from now); a snooze
+// mutes tiers, reminders and follow-ups until a time (1 min to 7 days).
+export async function unacknowledgeAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/unacknowledge`);
+}
+
+export async function bulkUnacknowledgeAlerts(ids: string[]): Promise<AlertBulkResult> {
+  return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/unacknowledge', { ids });
+}
+
+export async function snoozeAlert(id: string, minutes: number): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/snooze`, { minutes });
+}
+
+export async function unsnoozeAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/unsnooze`);
+}
+
 // Alert Channel API functions
 export async function getAlertChannels(params?: {
   page?: number;
