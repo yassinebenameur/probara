@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 var (
@@ -27,7 +28,7 @@ var (
 )
 
 const (
-	defaultTenantID   = "00000000-0000-0000-0000-000000000001"
+	defaultTenantID   = tenancy.DefaultTenantID
 	defaultTenantName = "Default"
 )
 

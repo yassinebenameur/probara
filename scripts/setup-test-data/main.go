@@ -33,7 +33,7 @@ func main() {
 
 	// Create test tenant
 	tenantID := uuid.New()
-	_, err = db.Exec("INSERT INTO tenants (id, name) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", tenantID, "test-tenant")
+	_, err = db.Exec("INSERT INTO tenants (id, name) VALUES ($1, $2) ON CONFLICT (name) WHERE deleted_at IS NULL DO NOTHING", tenantID, "test-tenant")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create tenant: %v\n", err)
 		os.Exit(1)
@@ -41,7 +41,7 @@ func main() {
 
 	// Get tenant ID (in case it already existed)
 	var existingTenantID string
-	err = db.QueryRow("SELECT id FROM tenants WHERE name = $1", "test-tenant").Scan(&existingTenantID)
+	err = db.QueryRow("SELECT id FROM tenants WHERE name = $1 AND deleted_at IS NULL", "test-tenant").Scan(&existingTenantID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to get tenant ID: %v\n", err)
 		os.Exit(1)
