@@ -124,8 +124,9 @@ Monitor-less alerts route to the tenant defaults through
 `alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
 S-F6 in [state semantics](state-semantics.md),
 `monitorstate.LocationOfflinePredicate`), one alert per check location that
-reported before and has been silent past the tenant threshold. While a
-location is offline its mesh edges stay open but do not dispatch. The
+reported within 7 days and has been silent past the tenant threshold (none
+open while the whole fleet is silent). From the moment a location misses its
+1-minute connected window its mesh edges stay open but do not dispatch. The
 alerter exports `locations_offline` and `open_alerts{kind}` gauges; the
 scheduler exports `check_jobs_pending`, the check-job stream backlog.
 

@@ -54,8 +54,8 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`location_offline`",
-              "A check location that reported before sends no heartbeat for the workspace's `location_offline_after_seconds` ([details](/docs/locations/#heartbeats)); routed to the default channels, and its mesh paths go quiet meanwhile",
-              "The location reports again, is disabled or deleted, or the workspace turns these alerts off",
+              "A check location that reported in the last 7 days sends no heartbeat for the workspace's `location_offline_after_seconds` ([details](/docs/locations/#heartbeats)); routed to the default channels, and its mesh paths go quiet meanwhile",
+              "The location reports again, is disabled or deleted, or the workspace turns these alerts off; the closing notification says which",
             ],
           ],
         },

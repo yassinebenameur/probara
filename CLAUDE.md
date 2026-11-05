@@ -180,7 +180,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (mesh edges, `location_offline`) route through `TenantTargetsSQL`, the
   tenant defaults without a monitor (`TestTenantTargetsSQLMatchesDefaults`).
   Whether a location is offline is `monitorstate.LocationOfflinePredicate`
-  (S-F6, Go twin `LocationOffline`); never re-derive it from
+  (S-F6, Go twin `LocationOffline`), disconnected (the mesh hold)
+  `LocationDisconnectedPredicate`; never re-derive either from
   `last_seen_at`. Escalation delays
   count from `DispatchEligibleSinceExpr` (the end of a cleared root cause's
   grace period, else `triggered_at`, and never before the snooze end);

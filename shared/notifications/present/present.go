@@ -372,6 +372,10 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		case alert.IsTLSExpiry():
 			return ToneUp, "CERTIFICATE RENEWED"
 		case alert.IsLocationOffline():
+			if locationClosedWithoutRecovery(alert) {
+				// Nothing came back: the alert just stopped applying.
+				return ToneInfo, "CLOSED"
+			}
 			return ToneUp, "BACK ONLINE"
 		}
 		return ToneUp, "RECOVERED"
@@ -447,6 +451,9 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 	case alert.IsLocationOffline():
 		switch eventType {
 		case EventResolved:
+			if locationClosedWithoutRecovery(alert) {
+				return "Location Alert Closed"
+			}
 			return "Location Back Online"
 		case EventReminder:
 			return "Location Still Offline"
@@ -546,6 +553,14 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 	case alert.IsLocationOffline():
 		name := locationName(alert)
 		if resolved {
+			switch alert.ResolveReason {
+			case notifications.ResolveReasonLocationDisabled:
+				return fmt.Sprintf("Location %s was disabled, so it is no longer expected to report.", name)
+			case notifications.ResolveReasonLocationDeleted:
+				return fmt.Sprintf("Location %s was deleted.", name)
+			case notifications.ResolveReasonAlertsDisabled:
+				return fmt.Sprintf("Offline-location alerts were turned off for this workspace; %s may still be offline.", name)
+			}
 			if outage != "" {
 				return fmt.Sprintf("Location %s is reporting again after %s offline.", name, outage)
 			}
@@ -840,6 +855,17 @@ func meshPath(alert notifications.AlertDetails) string {
 		return "on " + name
 	}
 	return "between locations"
+}
+
+// locationClosedWithoutRecovery reports whether a resolved location_offline
+// alert closed for a reason other than the location reporting again.
+func locationClosedWithoutRecovery(alert notifications.AlertDetails) bool {
+	switch alert.ResolveReason {
+	case notifications.ResolveReasonLocationDisabled, notifications.ResolveReasonLocationDeleted,
+		notifications.ResolveReasonAlertsDisabled:
+		return true
+	}
+	return false
 }
 
 // locationName is an offline-location alert's subject.

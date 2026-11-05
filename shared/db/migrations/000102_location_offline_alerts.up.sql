@@ -19,6 +19,13 @@ ALTER TABLE alerts
         OR (kind NOT IN ('mesh_edge', 'location_offline') AND monitor_id IS NOT NULL)
     );
 
+-- Why an alert resolved, when that is not its condition clearing: a
+-- location_offline alert can also close because the location was disabled
+-- or deleted, or the tenant turned these alerts off. NULL for every other
+-- resolve; notifications word the close by it.
+ALTER TABLE alerts
+    ADD COLUMN resolve_reason TEXT;
+
 -- One open alert per location; the alerter's ON CONFLICT infers against it,
 -- so replicas racing to open the same alert collide here.
 CREATE UNIQUE INDEX idx_alerts_one_open_location_offline

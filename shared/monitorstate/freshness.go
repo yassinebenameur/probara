@@ -103,10 +103,16 @@ func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID
 // A never-seen location is neither connected nor offline: it was never
 // deployed, so there is nothing to have lost. Offline is a fleet signal,
 // never a monitor-state input — monitors keep following S-A10 and S-F2.
+//
+// The offline alert only opens for a location seen within
+// LocationOfflineAlertHorizon: a location silent for longer (for example
+// one abandoned before the alert existed) is not news, so an upgrade does
+// not page for it.
 const (
 	LocationConnectedWindow            = time.Minute
 	DefaultLocationOfflineAfterSeconds = 180
 	MinLocationOfflineAfterSeconds     = 60
+	LocationOfflineAlertHorizon        = 7 * 24 * time.Hour
 )
 
 // LocationConnected reports whether a heartbeat at lastSeenAt still shows the
@@ -138,4 +144,26 @@ func LocationOfflinePredicate(locAlias, tenantAlias string) string {
 		AND %[1]s.last_seen_at IS NOT NULL
 		AND %[1]s.last_seen_at <= NOW() - make_interval(secs => GREATEST(%[2]s.location_offline_after_seconds, %[3]d)))`,
 		locAlias, tenantAlias, MinLocationOfflineAfterSeconds)
+}
+
+// LocationDisconnectedPredicate returns a SQL boolean that is TRUE when the
+// location aliased by locAlias was seen before but has missed
+// LocationConnectedWindow: the SQL twin of "seen, and not LocationConnected".
+// It turns true long before LocationOfflinePredicate, which is why mesh
+// dispatch holds on it (S-F6): edges into a dead site fail after a few
+// probes, before the site counts as offline.
+func LocationDisconnectedPredicate(locAlias string) string {
+	return fmt.Sprintf(`(%[1]s.enabled AND %[1]s.deleted_at IS NULL
+		AND %[1]s.last_seen_at IS NOT NULL
+		AND %[1]s.last_seen_at <= NOW() - make_interval(secs => %[2]d))`,
+		locAlias, int(LocationConnectedWindow/time.Second))
+}
+
+// LocationWithinOfflineHorizonPredicate returns a SQL boolean that is TRUE
+// when the location aliased by locAlias was seen within
+// LocationOfflineAlertHorizon, the precondition for opening its offline
+// alert.
+func LocationWithinOfflineHorizonPredicate(locAlias string) string {
+	return fmt.Sprintf(`(%[1]s.last_seen_at >= NOW() - make_interval(secs => %[2]d))`,
+		locAlias, int(LocationOfflineAlertHorizon/time.Second))
 }

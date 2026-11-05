@@ -68,6 +68,8 @@ type alertRecord struct {
 	// rides in SourceLocationID/Name; MonitorID is the zero UUID.
 	LocationLastSeenAt   *time.Time
 	LocationMonitorCount int
+	// ResolveReason is alerts.resolve_reason (notifications.ResolveReason*).
+	ResolveReason string
 }
 
 type alertChannel struct {
@@ -748,10 +750,17 @@ func (a *Alerter) createAlert(ctx context.Context, binding policyBinding, failur
 var errAlertAlreadyResolved = errors.New("alert already resolved")
 
 func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time) (time.Time, error) {
+	return a.resolveAlertWithReason(ctx, alertID, now, "")
+}
+
+// resolveAlertWithReason is resolveAlert recording why the alert closed
+// (alerts.resolve_reason; "" leaves it NULL).
+func (a *Alerter) resolveAlertWithReason(ctx context.Context, alertID uuid.UUID, now time.Time, reason string) (time.Time, error) {
 	query := `
 		UPDATE alerts
 		SET status = 'resolved', resolved_at = $1, updated_at = $1,
-			snoozed_until = LEAST(snoozed_until, $1)
+			snoozed_until = LEAST(snoozed_until, $1),
+			resolve_reason = NULLIF($3, '')
 		WHERE id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING resolved_at
 	`
@@ -765,7 +774,7 @@ func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.
 	}()
 
 	var resolvedAt time.Time
-	if err := tx.QueryRowContext(ctx, query, now, alertID).Scan(&resolvedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, query, now, alertID, reason).Scan(&resolvedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return time.Time{}, errAlertAlreadyResolved
 		}
@@ -1366,6 +1375,7 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			SuspectedCause:       alert.SuspectedCause,
 			LocationLastSeenAt:   alert.LocationLastSeenAt,
 			LocationMonitorCount: alert.LocationMonitorCount,
+			ResolveReason:        alert.ResolveReason,
 		},
 	}
 }
