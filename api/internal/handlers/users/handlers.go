@@ -17,14 +17,13 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	adminusers "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
+	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
 const (
 	minUsernameLength = 3
 	maxUsernameLength = 64
-	minPasswordLength = 12
-	maxPasswordLength = 128
 )
 
 var usernameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -415,12 +414,7 @@ func validateUsername(username string) error {
 	return nil
 }
 
+// validatePassword is the shared local-account policy (shared/auth).
 func validatePassword(password string) error {
-	if password == "" {
-		return errors.New("password is required")
-	}
-	if len(password) < minPasswordLength || len(password) > maxPasswordLength {
-		return errors.New("password must be between 12 and 128 characters")
-	}
-	return nil
+	return auth.ValidatePassword(password)
 }

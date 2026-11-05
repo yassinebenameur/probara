@@ -35,3 +35,22 @@ func ComparePassword(hashedPassword, plainPassword string) (bool, error) {
 	}
 	return true, nil
 }
+
+// Password policy for local accounts. One rule for every path that sets a
+// password: user management, the first-admin form, invites, resets and the
+// self-service change.
+const (
+	MinPasswordLength = 12
+	MaxPasswordLength = 128
+)
+
+// ValidatePassword checks a new password against the policy.
+func ValidatePassword(password string) error {
+	if password == "" {
+		return errors.New("password is required")
+	}
+	if len(password) < MinPasswordLength || len(password) > MaxPasswordLength {
+		return fmt.Errorf("password must be between %d and %d characters", MinPasswordLength, MaxPasswordLength)
+	}
+	return nil
+}
