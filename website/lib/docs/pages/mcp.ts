@@ -163,7 +163,7 @@ export const MCP_PAGE: DocPage = {
             ["Status pages", "pages, sections and settings, custom template draft/publish/revert, template library"],
             ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message)"],
             ["Workspace", "local AI settings, `export_ai_labels`, API keys, workspace settings, audit log"],
-            ["Platform", "`list_tenants`, users, SSO group mappings (superadmins)"],
+            ["Platform", "`list_tenants`, users, SSO group mappings, `create_tenant`, `rename_tenant`, `delete_tenant` (destructive) (superadmins)"],
           ],
         },
         {

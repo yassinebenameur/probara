@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
@@ -458,6 +459,13 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 			return nil, ErrStatusPageNotFound
 		}
 		return nil, fmt.Errorf("failed to get status page: %w", err)
+	}
+	// A deleted workspace's pages stop serving at once, before the purger
+	// removes them (shared/tenancy).
+	if deleted, err := tenancy.IsDeleted(ctx, s.db, tenantID); err != nil {
+		return nil, err
+	} else if deleted {
+		return nil, ErrStatusPageNotFound
 	}
 
 	page.ID = pageID.String()

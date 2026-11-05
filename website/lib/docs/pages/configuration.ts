@@ -274,7 +274,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`OIDC_JIT_DEFAULT_TENANT_ID`',
               '`00000000-0000-0000-0000-000000000001`',
-              'Tenant receiving JIT users. The loader does not validate UUID syntax; verify it refers to the intended tenant.',
+              'Tenant receiving JIT users. The loader does not validate UUID syntax; verify it refers to the intended tenant. The API refuses to delete this workspace.',
             ],
           ],
         },

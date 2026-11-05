@@ -9,6 +9,7 @@ import {
   FileText,
   AlertTriangle,
   Users,
+  Building2,
   Settings,
   LogOut,
   Siren,
@@ -82,6 +83,7 @@ const navGroups: { key: string; items: NavItem[] }[] = [
     key: 'admin',
     items: [
       { name: 'Users', href: '/users', icon: Users },
+      { name: 'Workspaces', href: '/workspaces', icon: Building2 },
       { name: 'Audit log', href: '/audit', icon: ScrollText },
       { name: 'Settings', href: '/settings', icon: Settings, also: ['/alert-channels'] },
       { name: 'Account', href: '/account', icon: CircleUser },
@@ -312,6 +314,7 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
       ...group,
       items: group.items.filter((item) => {
         if (item.href === '/users') return canSeeUsers;
+        if (item.href === '/workspaces') return canSeeUsers;
         if (item.href === '/audit') return canSeeAudit;
         // Your own sessions: a signed-in user, never an API key.
         if (item.href === '/account') return !apiKeyMode;

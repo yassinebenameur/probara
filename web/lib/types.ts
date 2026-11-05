@@ -2492,3 +2492,24 @@ export interface RevokeSessionsResponse {
 export interface UnlockUserResponse {
   was_locked: boolean;
 }
+
+// Workspace management (superadmins; POST/PATCH/DELETE /v1/tenants).
+export interface CreateTenantRequest {
+  name: string;
+}
+
+export interface RenameTenantRequest {
+  name: string;
+}
+
+export interface DeleteTenantRequest {
+  // The workspace's current name, typed again.
+  confirm_name: string;
+}
+
+export interface DeleteTenantResponse {
+  id: string;
+  name: string;
+  // Monitors tombstoned by the delete; the scheduler purges the data later.
+  monitors: number;
+}

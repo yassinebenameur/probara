@@ -197,7 +197,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Public tenant create/update/delete management is not exposed through the normal product API.",
+            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Superadministrators create, rename, and delete workspaces; see [Manage workspaces](#workspaces).",
         },
         {
           type: "callout",
@@ -205,6 +205,32 @@ export const ADMINISTRATION_PAGE: DocPage = {
           title: "Never reuse a cross-tenant cache key",
           text:
             "External integrations should include tenant identity in caches, queues, and idempotency keys even when resource UUIDs appear globally unique.",
+        },
+      ],
+    },
+    {
+      id: "workspaces",
+      title: "Manage workspaces",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Superadministrators create, rename, and delete workspaces (tenants) on the **Workspaces** page, reached from the sidebar or the workspace switcher, through `POST /api/v1/tenants`, `PATCH /api/v1/tenants/{id}` and `DELETE /api/v1/tenants/{id}`, or with the MCP tools `create_tenant`, `rename_tenant`, and `delete_tenant`. Members cannot create workspaces. A name is 1–100 characters, trimmed, and unique among live workspaces. A new workspace starts empty with default settings; superadministrators act in it at once, and members join it through their user's memberships.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Deleting a workspace requires typing its name again (`confirm_name` in the API). The workspace disappears at once: it leaves every workspace list, every request scoped to it is refused with 403 (superadministrators included), its API keys and MCP connections are revoked, its memberships and SSO group mappings are removed, its monitors stop running, its private locations and Kubernetes collectors are refused, and its status pages return 404. Its name is free for a new workspace immediately.",
+        },
+        {
+          type: "list",
+          items: [
+            "The data is removed in the background by the scheduler purger, in bounded batches paced by the `MONITOR_PURGE_*` settings: monitors and their history first, then the rest of the workspace. A large workspace can take several purge runs. A deleted workspace cannot be restored.",
+            "Open availability alerts of its monitors resolve as they do for any deleted monitor, so its channels can send one resolve notice each before they are purged.",
+            "Status page slugs stay taken until the purge removes the pages.",
+            "Audit log entries of the workspace are kept until `AUDIT_RETENTION_DAYS` prunes them. Create, rename, and delete are recorded as platform events (`tenant.create`, `tenant.rename`, `tenant.delete`, with the name at that moment), which superadministrators see from any workspace's audit log.",
+            "The default workspace, the workspace named by `OIDC_JIT_DEFAULT_TENANT_ID`, and the last remaining workspace cannot be deleted (409).",
+          ],
         },
       ],
     },

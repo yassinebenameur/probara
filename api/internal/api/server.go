@@ -616,6 +616,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			})
 			r.Route("/tenants", func(r chi.Router) {
 				r.Get("/", tenantHandlers.ListTenants)
+				registerWorkspaceRoutes(r, tenantSvc, cfg, auditRecorder, log)
 			})
 
 			// Audit log (tenant admins and superadmins)

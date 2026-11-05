@@ -41,3 +41,26 @@ type UpdateTenantSettingsRequest struct {
 	DataRetentionDays  *int      `json:"data_retention_days,omitempty"`
 	DashboardGroupTags *[]string `json:"dashboard_group_tags,omitempty"`
 }
+
+// CreateTenantRequest creates a workspace (superadmins only).
+type CreateTenantRequest struct {
+	Name string `json:"name"`
+}
+
+// RenameTenantRequest renames a workspace (superadmins only).
+type RenameTenantRequest struct {
+	Name string `json:"name"`
+}
+
+// DeleteTenantRequest confirms a workspace delete by re-typing its name.
+type DeleteTenantRequest struct {
+	ConfirmName string `json:"confirm_name"`
+}
+
+// DeleteTenantResponse reports what a workspace delete tombstoned; the data
+// itself is purged in the background.
+type DeleteTenantResponse struct {
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	Monitors int64     `json:"monitors"`
+}

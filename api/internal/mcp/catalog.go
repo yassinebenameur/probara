@@ -29,6 +29,7 @@ func catalog() []spec {
 		platformTools(),
 		pagingTools(),
 		identityTools(),
+		workspaceAdminTools(),
 	} {
 		all = append(all, group...)
 	}

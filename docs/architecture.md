@@ -11,7 +11,7 @@ website (`website/`) are separate applications.
 | Component | Responsibilities | Data access |
 |---|---|---|
 | `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV), notification configuration, templates, locations, push and OTLP ingestion, Kubernetes discovery inventory and coverage; the MCP endpoint and its OAuth authorization server (tools re-dispatched through the REST router) | PostgreSQL and NATS |
-| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
+| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging (monitors and deleted workspaces) | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
 | `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
@@ -159,6 +159,19 @@ dedicated connections, releasing the same session when a run ends. Retention
 works in bounded batches; expired data remaining after a run keeps cleanup
 eligible for subsequent passes. Backlog gauges expose affected tenant counts
 and the oldest expired timestamp without scanning every expired row.
+
+The scheduler purger (`scheduler/internal/scheduler/purger.go`) owns hard
+deletes of soft-deleted data, under one session advisory lock and a per-run
+row budget. Its monitor phase drains tombstoned monitors' child rows in
+batches, then the monitor rows. Its tenant phase (`purger_tenants.go`) owns
+workspace deletion: the API only soft-deletes a workspace (`deleted_at`, its
+monitors tombstoned, its credentials revoked; `shared/tenancy`), and once a
+deleted workspace has no monitor rows left the purger drains its other
+unbounded tables (monitor-less alerts, mesh probe results, incidents, push
+subscriptions, discovery inventory, which has no tenant FK, SLA reports, AI
+labels) and only then deletes the tenant row, leaving the cascade small
+configuration tables. `audit_log` rows outlive the workspace (audit
+retention prunes them).
 
 Analytics choose raw, rollup, or interval-based calculations according to
 window coverage and the existing state semantics. Raw analytics stream

@@ -1,10 +1,12 @@
 'use client';
 
+import Link from 'next/link';
 import { KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronsUpDown } from 'lucide-react';
+import { Check, ChevronsUpDown, Plus } from 'lucide-react';
 import { hasApiKey } from '@/lib/auth';
 import {
+  TENANTS_CHANGED_EVENT,
   clearSelectedTenantId,
   emitTenantChange,
   getSelectedTenantId,
@@ -13,13 +15,20 @@ import {
 import { getTenants } from '@/lib/api';
 import type { Tenant } from '@/lib/types';
 import { useSelectedTenantId } from '@/components/providers/TenantProvider';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
+import IconButton from '@/components/ui/IconButton';
 import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 import { useTooltip } from '@/components/ui/Tooltip';
+
+// Opens the create dialog on the workspaces page.
+const NEW_WORKSPACE_HREF = '/workspaces?new=1';
 
 /**
  * Tenant picker in the sidebar foot. Admin sessions load the tenant list,
  * settle the selection (stored id if still valid, else the first tenant) and
- * announce it; the picker only renders when there is more than one tenant.
+ * announce it, and reload on TENANTS_CHANGED_EVENT (a workspace created,
+ * renamed or deleted). The picker renders when there is more than one tenant,
+ * and always for superadmins, who get a "New workspace" entry.
  * Mounted once: the sidebar is a single instance on every breakpoint, and
  * the collapsed rail passes `rail` to this same instance (a square initials
  * button opening a portaled menu) rather than rendering a second copy, so the
@@ -32,9 +41,15 @@ export default function TenantSwitcher({ rail = false }: { rail?: boolean }) {
   // The provider is the single source of truth for the selection; this picker
   // only writes to it, so no local copy can drift out of sync.
   const selectedTenantId = useSelectedTenantId();
+  const { isSuperadmin } = useCurrentUser();
+  const [reloadKey, setReloadKey] = useState(0);
+  const selectId = useId();
 
   useEffect(() => {
     setMounted(true);
+    const reload = () => setReloadKey((key) => key + 1);
+    window.addEventListener(TENANTS_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(TENANTS_CHANGED_EVENT, reload);
   }, []);
 
   useEffect(() => {
@@ -72,9 +87,9 @@ export default function TenantSwitcher({ rail = false }: { rail?: boolean }) {
     return () => {
       isActive = false;
     };
-  }, [mounted]);
+  }, [mounted, reloadKey]);
 
-  if (!isAdmin || tenants.length <= 1) return null;
+  if (!isAdmin || (tenants.length <= 1 && !isSuperadmin)) return null;
 
   const select = (tenantId: string) => {
     setSelectedTenantId(tenantId);
@@ -82,14 +97,29 @@ export default function TenantSwitcher({ rail = false }: { rail?: boolean }) {
   };
 
   if (rail) {
-    return <TenantRailMenu tenants={tenants} selectedTenantId={selectedTenantId} onSelect={select} />;
+    return (
+      <TenantRailMenu
+        tenants={tenants}
+        selectedTenantId={selectedTenantId}
+        onSelect={select}
+        canCreate={isSuperadmin}
+      />
+    );
   }
 
   return (
-    <label className="block">
-      <span className="mb-1 block px-1 text-2xs font-medium text-slate-500">Workspace</span>
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2 px-1">
+        <label htmlFor={selectId} className="text-2xs font-medium text-slate-500">
+          Workspace
+        </label>
+        {isSuperadmin && (
+          <IconButton icon={<Plus strokeWidth={1.75} />} label="New workspace" href={NEW_WORKSPACE_HREF} size="sm" />
+        )}
+      </div>
       <span className="relative block">
       <select
+        id={selectId}
         className={`w-full cursor-pointer appearance-none truncate rounded-lg border border-[var(--input-edge)] bg-control py-2 pl-3 pr-8 text-ui font-medium text-slate-200 transition-colors hover:border-slate-400 hover:bg-control-hover ${FOCUS_RING}`}
         value={selectedTenantId ?? ''}
         onChange={(e) => select(e.target.value)}
@@ -106,7 +136,7 @@ export default function TenantSwitcher({ rail = false }: { rail?: boolean }) {
         aria-hidden="true"
       />
       </span>
-    </label>
+    </div>
   );
 }
 
@@ -134,10 +164,12 @@ function TenantRailMenu({
   tenants,
   selectedTenantId,
   onSelect,
+  canCreate,
 }: {
   tenants: Tenant[];
   selectedTenantId: string | null;
   onSelect: (tenantId: string) => void;
+  canCreate: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -206,7 +238,9 @@ function TenantRailMenu({
       closeToTrigger();
       return;
     }
-    const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []);
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"], [role="menuitem"]') ?? []
+    );
     if (items.length === 0) return;
     const index = items.indexOf(document.activeElement as HTMLElement);
     let next: number | null = null;
@@ -285,6 +319,25 @@ function TenantRailMenu({
                 );
               })}
             </div>
+            {canCreate && (
+              <div className="mt-1 border-t border-divider pt-1">
+                <Link
+                  href={NEW_WORKSPACE_HREF}
+                  role="menuitem"
+                  tabIndex={-1}
+                  onClick={close}
+                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui text-slate-300 transition-colors duration-fast ${FOCUS_RING_INSET} hover:bg-well-hover hover:text-white focus-visible:bg-well-hover focus-visible:text-white active:bg-control-hover`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border border-dashed border-[var(--input-edge)] text-slate-400"
+                  >
+                    <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">New workspace</span>
+                </Link>
+              </div>
+            )}
           </div>,
           document.body
         )}

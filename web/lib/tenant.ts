@@ -6,6 +6,19 @@ const TENANT_STORAGE_KEY = 'probara_selected_tenant_id';
  */
 export const TENANT_CHANGED_EVENT = 'tenant-changed';
 
+/**
+ * Fired after a workspace is created, renamed or deleted, so the switcher
+ * (outside the page subtree) reloads its list and re-settles the selection.
+ */
+export const TENANTS_CHANGED_EVENT = 'tenants-changed';
+
+export function emitTenantsChange(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(new Event(TENANTS_CHANGED_EVENT));
+}
+
 export function emitTenantChange(): void {
   if (typeof window === 'undefined') {
     return;
