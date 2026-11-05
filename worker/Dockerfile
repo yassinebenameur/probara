@@ -1,5 +1,7 @@
 # Build stage
-FROM golang:1.26.5-alpine AS builder
+# Runs on the build host and cross-compiles for the target platform, so a
+# multi-arch build never compiles Go under QEMU (only the runtime stage does).
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS builder
 
 WORKDIR /build
 
@@ -15,10 +17,11 @@ COPY . .
 # metadata action's version). Declared just before the build so a new version
 # only invalidates this layer.
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags "-X github.com/yassinebenameur/probara/shared/buildinfo.Version=${VERSION}" -o /app/worker ./worker/cmd/worker
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -installsuffix cgo -ldflags "-X github.com/yassinebenameur/probara/shared/buildinfo.Version=${VERSION}" -o /app/worker ./worker/cmd/worker
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.24
 
 RUN apk --no-cache add \
     ca-certificates \

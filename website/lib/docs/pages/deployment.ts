@@ -307,6 +307,13 @@ kubectl -n probara get jobs`,
         },
         {
           type: 'callout',
+          tone: 'info',
+          title: 'arm64 nodes: turn local AI off',
+          text:
+            'Every Probara image (API, scheduler, worker, alerter, status page, migrations, frontend and discovery collector) is published for `linux/amd64` and `linux/arm64`, and the worker image carries Chromium on both. The local AI image is `linux/amd64` only, so on arm64 nodes set `localAI.enabled=false` (Compose: `LOCAL_AI_DISABLED=true`), or schedule the local AI pod onto an amd64 node with `localAI.nodeSelector` (`kubernetes.io/arch: amd64`).',
+        },
+        {
+          type: 'callout',
           tone: 'warning',
           title: 'Pin image tags in production',
           text:
