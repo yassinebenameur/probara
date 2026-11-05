@@ -84,7 +84,8 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
 	// Port 8080 is the mesh echo endpoint (GET /mesh/echo). Publish it and set
 	// this host's reachable host:port as the location's "Mesh endpoint" to let
 	// other locations probe network connectivity to this one.
-	dockerRun := fmt.Sprintf(`docker run -d \
+	dockerRun := fmt.Sprintf(`# %s
+docker run -d \
   --name %s \
   --restart unless-stopped \
   --sysctl net.ipv4.ping_group_range="0 2147483647" \
@@ -94,7 +95,7 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
   -e LOCATION_CREDENTIAL=%q \
   -e HTTP_PORT=8080 \
   -e METRICS_PORT=9090 \
-  %s`, containerName, natsURL, location.ID.String(), credential, image)
+  %s`, natsTransportNote(natsURL), containerName, natsURL, location.ID.String(), credential, image)
 
 	compose := fmt.Sprintf(`services:
   worker-%s:
@@ -107,12 +108,13 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
       # Mesh echo port — set this host's host:port as the location's Mesh endpoint.
       - "8080:8080"
     environment:
+      # %s
       NATS_URL: %q
       WORKER_LOCATION_ID: %q
       LOCATION_CREDENTIAL: %q
       HTTP_PORT: "8080"
       METRICS_PORT: "9090"
-`, location.Slug, image, natsURL, location.ID.String(), credential)
+`, location.Slug, image, natsTransportNote(natsURL), natsURL, location.ID.String(), credential)
 
 	return &models.LocationDeployInfo{
 		LocationID:        location.ID,
@@ -121,6 +123,18 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
 		DockerComposeYAML: compose,
 		Env:               env,
 	}, nil
+}
+
+// natsTransportNote is the one-line comment the snippets carry above the
+// broker URL. A wss:// PUBLIC_NATS_URL (the broker's websocket listener behind
+// an HTTPS ingress) needs only outbound HTTPS from the location's network,
+// which is what restricted networks usually allow; tls:// needs the broker's
+// TCP port opened outbound, so that note points at the wss alternative.
+func natsTransportNote(natsURL string) string {
+	if strings.HasPrefix(strings.ToLower(natsURL), "wss://") {
+		return "NATS over WebSocket (wss://): this host needs only outbound HTTPS to the broker."
+	}
+	return "NATS over TLS (tls://): this host needs outbound access to the broker's TCP port. A wss:// PUBLIC_NATS_URL needs only outbound HTTPS."
 }
 
 func locationWorkerNATSURL(baseURL, locationID, credential string) (string, error) {
@@ -132,7 +146,7 @@ func locationWorkerNATSURL(baseURL, locationID, credential string) (string, erro
 		return "", fmt.Errorf("public NATS URL must not contain userinfo")
 	}
 	if parsedNATSURL.Scheme != "tls" && parsedNATSURL.Scheme != "wss" {
-		return "", fmt.Errorf("public NATS URL must use tls:// or wss://")
+		return "", fmt.Errorf("public NATS URL must use tls:// or wss:// (wss:// is the broker's websocket listener behind an HTTPS ingress, reachable over 443)")
 	}
 	parsedNATSURL.User = url.UserPassword(locationID, credential)
 	return parsedNATSURL.String(), nil

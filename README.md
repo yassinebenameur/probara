@@ -235,7 +235,24 @@ masked and must be re-entered).
 
 ## Quick start
 
-### Try it locally
+### Install from release images
+
+On a single host with Docker Compose 2.24.4 or newer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/dev/scripts/install.sh \
+  | bash -s -- --dir probara
+```
+
+It downloads the Compose files of the newest release, generates every secret
+into `probara/.env` (never overwriting one already there), and starts the
+stack: UI on <http://localhost:3000>, status pages on port 8082. Images are
+linux/amd64 and linux/arm64; local AI is amd64 only and stays off on arm64
+hosts. Re-run it with `--version X` to upgrade. Details, HTTPS and private
+locations over 443:
+[release Compose](https://probara-uptime.com/docs/deployment/#release-compose).
+
+### Try it locally from source
 
 You need Docker with Compose v2, `make`, Node.js 20.9 or newer, and free
 ports 3000, 4222, 5432 and 8080–8084.
@@ -260,9 +277,10 @@ first visit, the login page asks you to create the first administrator.
 Status pages are served at `http://localhost:8082/public/status/<slug>`.
 `make stop-all` stops everything.
 
-These Compose defaults are for a laptop: a development JWT secret and AI
-token, secret encryption off, no SMTP and no `PUBLIC_BASE_URL` (agent
-installers and location workers need it). Before you expose an install, read
+These Compose defaults are for a laptop: a generated per-checkout JWT secret
+(`.dev-admin-jwt-secret`), a development AI token and database password,
+secret encryption off, unauthenticated NATS, no SMTP and no `PUBLIC_BASE_URL`
+(agent installers and location workers need it). Before you expose an install, read
 the [production checklist](https://probara-uptime.com/docs/deployment/#production-checklist).
 
 ### Kubernetes
@@ -277,8 +295,9 @@ kubectl -n probara port-forward svc/probara-frontend 3000:3000
 
 `--devel` installs the newest 2.0 prerelease; without it, Helm picks the 1.0
 chart. Pin `--version 2.0.0-alpha.N` for repeatable installs. The images are
-linux/amd64 only, and the bundled Postgres and NATS need a default
-StorageClass. Add `--set localAI.enabled=false` to skip the AI pod. If you
+published for linux/amd64 and linux/arm64, except local AI, which is
+linux/amd64 only: on arm64 nodes add `--set localAI.enabled=false`. The
+bundled Postgres and NATS need a default StorageClass. If you
 pull images yourself, use `:alpha` or an exact version: `:latest` is still
 1.0. The location-worker snippet the UI generates already pins the worker to
 the platform's own version.

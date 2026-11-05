@@ -1,4 +1,6 @@
-FROM golang:1.26.5-alpine AS build
+# Runs on the build host and cross-compiles for the target platform, so a
+# multi-arch build never compiles Go under QEMU (only the runtime stage does).
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -8,7 +10,8 @@ COPY cmd/discovery-collector ./cmd/discovery-collector
 # metadata action's version). Declared just before the build so a new version
 # only invalidates this layer.
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X github.com/yassinebenameur/probara/shared/buildinfo.Version=${VERSION}" -o /collector ./cmd/discovery-collector
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-X github.com/yassinebenameur/probara/shared/buildinfo.Version=${VERSION}" -o /collector ./cmd/discovery-collector
 FROM alpine:3.23
 RUN apk add --no-cache ca-certificates
 COPY --from=build /collector /collector

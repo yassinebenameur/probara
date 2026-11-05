@@ -155,6 +155,20 @@ NATS connection URL
 {{- .Values.nats.externalUrl }}
 {{- end }}
 {{- end }}{{/*
+Broker URL baked into private-location deploy snippets (PUBLIC_NATS_URL):
+api.publicNatsURL, else wss://<host><path> of the NATS websocket ingress,
+else empty (deploy snippets disabled).
+*/}}
+{{- define "monitoring-platform.publicNatsUrl" -}}
+{{- if .Values.api.publicNatsURL }}
+{{- .Values.api.publicNatsURL }}
+{{- else if and .Values.nats.enabled .Values.nats.websocket.enabled .Values.nats.websocket.ingress.enabled }}
+{{- $path := trimSuffix "/" (.Values.nats.websocket.ingress.path | default "/") }}
+{{- printf "wss://%s%s" .Values.nats.websocket.ingress.host $path }}
+{{- end }}
+{{- end }}
+
+{{/*
 PostgreSQL host
 */}}
 {{- define "monitoring-platform.postgresHost" -}}

@@ -69,6 +69,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   `testing.md` (test suites and CI jobs), `monitoring-discovery.md`
 - `helm/monitoring-platform/` — chart; `docker-compose.yml` — full local stack;
   `infra/` — dev infra config (dex for the SSO profile)
+- `docker-compose.release.yml` — override of `docker-compose.yml` for
+  installs from prebuilt GHCR images (adds the frontend, NATS auth, required
+  secrets); `scripts/install.sh` downloads both and generates `.env`
 
 ## Service boundaries
 
@@ -402,12 +405,27 @@ or imported groups come back empty. Any other path that creates groups through
   form for non-admins (`useIsTenantAdmin`), and confirms every Test and run.
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
-  check-job names above show what drift costs).
+  check-job names above show what drift costs). `docker-compose.release.yml`
+  overrides only images, ports and credentials (every one `${VAR:?}`, no
+  defaults) and never re-declares wiring: new env goes in the base file.
+  The base has no `ADMIN_JWT_SECRET` default, so every `docker compose`
+  command needs it (Make falls back to `.dev-admin-jwt-secret`, CI sets a
+  dummy). Validate with
+  `docker compose -f docker-compose.yml -f docker-compose.release.yml config -q`
+  under dummy env, and keep `scripts/install.sh` generating every `:?` secret.
 - **Unprivileged ping** (`WORKER_PING_MODE`, default `unprivileged`) needs
   the `net.ipv4.ping_group_range` sysctl, set in Compose (worker `sysctls:`),
   Helm (`worker.ping.sysctl` via the `workerPodSecurityContext` helper, for
   the default fleet and location workers) and the location deploy snippets
   (`api/internal/services/locations/deploy.go`). Change them together.
+- **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
+  ingress/proxy) lets private locations dial `wss://` on 443. Helm
+  `nats.websocket.*` (+ Ingress, which fails the render without
+  `nats.auth.enabled`; `PUBLIC_NATS_URL` derives from its host/path via
+  `monitoring-platform.publicNatsUrl`), Compose `nats_conf`/`nats_release_conf`
+  configs. The listener has no authorization block of its own, so the auth
+  callout covers it (`TestAuthorizationCalloutCoversWebsocketClients`);
+  `shared/queue` moves a ws URL's path into `nats.ProxyPath`.
 - **`PROBARA_SECRETS_KEY`**: needed by api, scheduler (dispatch decrypt),
   worker, alerter. Compose passes it through from the shell env to all four;
   Helm renders it through `monitoring-platform.secretEnv`, guarded by
@@ -421,7 +439,8 @@ or imported groups come back empty. Any other path that creates groups through
   deliver alerts but fail every test with `mailer not configured`. Parsed once
   in `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
   top-level `smtp:` and `appBaseURL:` values render the env into all three
-  workloads via the `smtpEnv` helper. Compose wires none of it.
+  workloads via the `smtpEnv` helper; Compose passes them through from the
+  shell/`.env` to the same three (`x-smtp-env` anchor).
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
   `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
   deep links to notifications (every channel, via `plugin.Configure`) —
@@ -464,7 +483,11 @@ or imported groups come back empty. Any other path that creates groups through
   Compose passes it through. `shared/buildinfo.Version` is stamped by
   `-ldflags -X` from each Go Dockerfile's `VERSION` build-arg
   (`docker-build.yml`: the metadata action's version; Compose:
-  `PROBARA_VERSION`); a new Go Dockerfile must stamp it too.
+  `PROBARA_VERSION`); a new Go Dockerfile must stamp it too. Images ship
+  linux/amd64 + linux/arm64 (`platforms` in the `docker-build.yml` matrix;
+  local-ai amd64 only): Go builders run `--platform=$BUILDPLATFORM` and
+  cross-compile with `TARGETOS`/`TARGETARCH`, and runtime bases are pinned
+  (`alpine:3.24`, never `latest`).
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job, but
   never the local AI pod, which holds no platform credentials — it has
   `localAI.extraEnv`) and `<service>.extraEnv`; `worker.extraEnv` also
@@ -501,7 +524,8 @@ or imported groups come back empty. Any other path that creates groups through
   `nats-statefulset.yaml`). Never move it into `nats.conf` `$VAR` expansion:
   that re-parses the value as config (numeric, boolean-ish or
   space/comma/brace passwords abort startup), and quoting the reference
-  silently disables the expansion.
+  silently disables the expansion. The release Compose file passes it the same
+  way (a `--pass` command argument), never in its `nats_release_conf`.
 - **Browser/edge security**: `shared/securityheaders` owns the Go services'
   headers (API strict policy, status-page per-page CSP, HSTS only on HTTPS
   via `IsHTTPS` + `TRUSTED_PROXY_CIDRS`). The API mounts it, the CORS
@@ -982,7 +1006,9 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   start script, run `python .github/workflows/scripts/local_ai_helm_cases.py`
   and `python3 -I scripts/check-local-ai-packaging.py` (render cases, fail
   cases and Compose wiring; CI runs both in `local-ai-pr.yml`).
-- Compose: `docker compose config` validates env wiring.
+- Compose: `ADMIN_JWT_SECRET=x docker compose config -q` validates env
+  wiring; for the release override add `-f docker-compose.yml -f
+  docker-compose.release.yml` and dummy values for its `:?` variables.
 - ai-service: from the repo root with the hash-locked deps installed
   (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
   PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests
@@ -1006,7 +1032,11 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   `stop-all-local` / `restart-all-local`. `make start-all` / `stop-all`
   instead run the backend in Compose (`docker-compose.yml` defines every
   service). Dex (test OIDC IdP, :5556) is opt-in in either mode:
-  `docker compose --profile sso up -d dex`.
+  `docker compose --profile sso up -d dex`. The dev nats also listens for
+  websockets on :8443. Compose requires `ADMIN_JWT_SECRET`: the Make targets
+  and `start-local-services.sh` use the shell value, else `.env`'s (Make
+  only), else the gitignored per-checkout `.dev-admin-jwt-secret`; raw
+  `docker compose` commands need it exported or in `.env`.
 - AI analysis is local only and default-on: api and the DB-connected worker
   call `ai-service` at `LOCAL_AI_URL` with `LOCAL_AI_TOKEN` (`shared/config`
   `loadLocalAIConfig`); absent workspace `ai_settings` rows default enabled.

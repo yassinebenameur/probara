@@ -61,6 +61,9 @@ jobs:
         run: python .github/workflows/scripts/local_ai_helm_cases.py
 
       - name: Compose wiring
+        env:
+          # Required by docker-compose.yml (no insecure default); any value renders.
+          ADMIN_JWT_SECRET: compose-config-check
         run: docker compose config --quiet
 
       - name: Rendered packaging boundaries (Helm and Compose)

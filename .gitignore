@@ -102,3 +102,4 @@ ai-service/artifacts/dataset/
 .pytest_cache/
 
 .dev-local-ai-token
+.dev-admin-jwt-secret

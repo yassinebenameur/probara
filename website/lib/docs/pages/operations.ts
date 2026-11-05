@@ -617,8 +617,8 @@ helm lint ./helm/monitoring-platform \\
             ],
             [
               'Compose command fails before containers start',
-              'Required `${ADMIN_JWT_SECRET:?…}` or `${PUBLIC_BASE_URL:?…}` interpolation is missing',
-              'Populate `.env` before any Compose-backed Make target.',
+              'A required `${VAR:?…}` interpolation is missing: `ADMIN_JWT_SECRET` in `docker-compose.yml`, or any credential of the release override',
+              'Export it or put it in `.env` (the Make targets fall back to `.dev-admin-jwt-secret`); for a release install, re-run `scripts/install.sh`, which fills only missing values.',
             ],
             [
               'PostgreSQL authentication fails after old local experiments',

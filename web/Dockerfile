@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:20-alpine3.23 AS builder
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ RUN mkdir -p /app/public
 RUN npm run build
 
 # Production stage
-FROM node:20-alpine AS runner
+FROM node:20-alpine3.23 AS runner
 
 WORKDIR /app
 

@@ -533,7 +533,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'list',
           items: [
-            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo.',
+            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo. The websocket listener declares no authorization of its own, so websocket clients go through the same callout as TCP clients (an anonymous or wrong-credential websocket client is refused).',
             'Keep the account issuer seed only in API. Configure only its public account key in NATS.',
             'Use a separate platform NATS user for trusted internal services. Never give it to a location worker.',
             'Location claims restrict result publication, heartbeat publication, consumer pull/ACK operations, inbox responses, and test-job subscription to that location.',
@@ -545,9 +545,9 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'callout',
           tone: 'warning',
-          title: 'Local Compose NATS is not a private-location broker',
+          title: 'The development Compose NATS is not a private-location broker',
           text:
-            'It listens without authentication or TLS. The embedded Helm NATS service is ClusterIP-only until you add secure external exposure. Setting `PUBLIC_NATS_URL` alone does not create that exposure.',
+            'The root `docker-compose.yml` broker listens without authentication or TLS. The [release Compose stack](/docs/deployment/#release-compose) turns the auth callout on and publishes only its websocket listener, on loopback, for a TLS proxy to front. The embedded Helm broker is ClusterIP-only until you enable `nats.websocket.ingress` (which the chart refuses without `nats.auth.enabled`) or add another secure exposure. Setting `PUBLIC_NATS_URL` alone does not create that exposure.',
         },
       ],
     },
