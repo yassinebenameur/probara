@@ -13,6 +13,9 @@ import (
 // secret and a restore can never bring one back. Pause state (enabled),
 // runtime state and the generated push token / agent ID are not
 // configuration and are left out. ID lists are sorted sets.
+// EscalationPolicyID is set only in notification_mode 'policy' (the
+// database clears it in every other mode); omitempty keeps the hash of every
+// version recorded without a policy unchanged.
 type MonitorConfigSnapshot struct {
 	Name                         string                   `json:"name"`
 	Type                         MonitorType              `json:"type"`
@@ -23,6 +26,7 @@ type MonitorConfigSnapshot struct {
 	ConsecutiveFailuresThreshold int                      `json:"consecutive_failures_threshold"`
 	RecoveryThreshold            int                      `json:"recovery_threshold"`
 	NotificationMode             string                   `json:"notification_mode"`
+	EscalationPolicyID           string                   `json:"escalation_policy_id,omitempty"`
 	NotificationChannels         []MonitorSnapshotChannel `json:"notification_channels"`
 	MemberAlertRollup            string                   `json:"member_alert_rollup"`
 	DependencySuppression        string                   `json:"dependency_suppression"`
@@ -104,8 +108,10 @@ type MonitorVersionDiffResponse struct {
 type RestoreMonitorVersionResponse struct {
 	Monitor      *Monitor `json:"monitor"`
 	RestoredFrom int      `json:"restored_from"`
-	// DroppedReferences are channels, locations, dependencies and members
-	// the version named that no longer exist ("channel:<id>", …); the
-	// restore applied everything else.
+	// DroppedReferences are channels, locations, dependencies, members and
+	// the escalation policy the version named that no longer exist
+	// ("channel:<id>", "escalation_policy:<id>", …); the restore applied
+	// everything else. A dropped policy restores notification_mode
+	// 'default'.
 	DroppedReferences []string `json:"dropped_references"`
 }

@@ -127,7 +127,7 @@ func TestRestoreRequest(t *testing.T) {
 	s.NotificationMode = "custom"
 	s.NotificationChannels = []models.MonitorSnapshotChannel{}
 	s.DependsOnIDs = []string{"dep-1"}
-	req, err := RestoreRequest(*s, models.MonitorTypeHTTP)
+	req, err := RestoreRequest(*s, models.MonitorTypeHTTP, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestRestoreRequest(t *testing.T) {
 	}
 
 	s.NotificationMode = "default"
-	req, _ = RestoreRequest(*s, models.MonitorTypeTCP)
+	req, _ = RestoreRequest(*s, models.MonitorTypeTCP, nil)
 	if req.NotificationChannels != nil {
 		t.Fatal("default mode must leave channels to the mode switch")
 	}
@@ -159,7 +159,7 @@ func TestRestoreRequest(t *testing.T) {
 	group := snapshot(`{"monitor_ids":["stale"]}`)
 	group.Type = models.MonitorTypeGroup
 	group.MemberIDs = []string{"m-1", "m-2"}
-	req, err = RestoreRequest(*group, models.MonitorTypeGroup)
+	req, err = RestoreRequest(*group, models.MonitorTypeGroup, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +168,54 @@ func TestRestoreRequest(t *testing.T) {
 	}
 	if req.DependsOnIDs != nil {
 		t.Fatal("groups have no dependencies")
+	}
+}
+
+func TestRestoreRequest_EscalationPolicy(t *testing.T) {
+	s := snapshot(`{"url":"https://a"}`)
+	s.NotificationMode = "policy"
+	s.EscalationPolicyID = "6f1c0d3e-1a2b-4c5d-8e9f-0a1b2c3d4e5f"
+	req, err := RestoreRequest(*s, models.MonitorTypeHTTP, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.EscalationPolicyID == nil || *req.EscalationPolicyID != s.EscalationPolicyID {
+		t.Fatalf("policy mode must send the version's policy, got %v", req.EscalationPolicyID)
+	}
+	s.NotificationMode = "default"
+	s.EscalationPolicyID = ""
+	if req, _ = RestoreRequest(*s, models.MonitorTypeHTTP, nil); req.EscalationPolicyID != nil {
+		t.Fatal("only policy mode sends a policy")
+	}
+}
+
+func TestRestoreRequest_KeepsSecretMapKeysAddedSince(t *testing.T) {
+	s := snapshot(`{"url":"https://a","headers":{"Accept":"json"},"secret_headers":{"Authorization":"***"}}`)
+	current := json.RawMessage(`{"url":"https://b","headers":{"X-Plain":"1"},"secret_headers":{"authorization":"***","X-Api-Key":"***"}}`)
+	req, err := RestoreRequest(*s, models.MonitorTypeHTTP, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := decodeConfigMap(req.Config)
+	want := map[string]any{"Authorization": "***", "X-Api-Key": "***"}
+	if !reflect.DeepEqual(config["secret_headers"], want) {
+		t.Fatalf("secret_headers = %v, want %v (a key added since must be kept, a case variant not doubled)", config["secret_headers"], want)
+	}
+	if !reflect.DeepEqual(config["headers"], map[string]any{"Accept": "json"}) {
+		t.Fatalf("plain headers are the version's, got %v", config["headers"])
+	}
+	if config["url"] != "https://a" {
+		t.Fatalf("url = %v", config["url"])
+	}
+
+	// A version without the map leaves it absent: the merge keeps it whole.
+	bare := snapshot(`{"url":"https://a"}`)
+	if req, _ = RestoreRequest(*bare, models.MonitorTypeHTTP, current); decodeConfigMap(req.Config)["secret_headers"] != nil {
+		t.Fatal("an absent secret map must stay absent")
+	}
+	// Another type's keys never leak across a type change.
+	if req, _ = RestoreRequest(*s, models.MonitorTypeWebSocket, json.RawMessage(`{"headers":{"Cookie":"***"}}`)); !reflect.DeepEqual(decodeConfigMap(req.Config)["headers"], map[string]any{"Accept": "json"}) {
+		t.Fatalf("type change merged the live type's map: %v", decodeConfigMap(req.Config)["headers"])
 	}
 }
 

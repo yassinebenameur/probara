@@ -150,7 +150,7 @@ func TestMonitorConfigVersions_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := RestoreRequest(stored1.Snapshot, models.MonitorTypeHTTP)
+	req, err := RestoreRequest(stored1.Snapshot, models.MonitorTypeHTTP, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,5 +228,193 @@ func TestMonitorConfigVersions_Integration(t *testing.T) {
 	}
 	if n := versionCount(t, ctx, db, second.ID); n != 0 {
 		t.Fatalf("hard delete left %d versions", n)
+	}
+}
+
+// A policy switch is configuration: it records a version, and restoring a
+// version re-applies its policy (or falls back to 'default' once the policy
+// is deleted).
+func TestMonitorConfigVersions_EscalationPolicy_Integration(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenant := testutil.InsertTenant(ctx, t, db, "versions-policy")
+	policy := func(name string) string {
+		var id string
+		if err := db.QueryRowContext(ctx, `INSERT INTO escalation_policies (tenant_id, name) VALUES ($1, $2) RETURNING id::text`, tenant, name).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	policyA, policyB := policy("A"), policy("B")
+
+	svc := NewService(NewPostgresRepository(db))
+	svc.ConfigureEncryption(testEncryptor(t))
+	store := svc.Versions()
+	currentPolicy := func(id uuid.UUID) (string, string) {
+		var mode, policyID string
+		if err := db.QueryRowContext(ctx, `SELECT notification_mode, COALESCE(escalation_policy_id::text, '') FROM monitors WHERE id = $1`, id).Scan(&mode, &policyID); err != nil {
+			t.Fatal(err)
+		}
+		return mode, policyID
+	}
+	restore := func(id uuid.UUID, version int) ([]string, error) {
+		stored, err := store.Get(ctx, tenant, id, version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, dropped, err := store.LiveReferences(ctx, tenant, stored.Snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := RestoreRequest(snapshot, models.MonitorTypeHTTP, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = svc.UpdateMonitor(WithVersionRestore(ctx, version), tenant, id, req)
+		return dropped, err
+	}
+
+	policyMode := "policy"
+	created, err := svc.CreateMonitor(ctx, tenant, &models.CreateMonitorRequest{
+		Name: "paged", Type: models.MonitorTypeHTTP, IntervalSeconds: 60, TimeoutSeconds: 10,
+		Config:           json.RawMessage(`{"url":"https://p.example","method":"GET","expected_status":200}`),
+		NotificationMode: &policyMode, EscalationPolicyID: &policyA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1, err := store.Get(ctx, tenant, created.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1.Snapshot.NotificationMode != "policy" || v1.Snapshot.EscalationPolicyID != policyA {
+		t.Fatalf("v1 snapshot = %s/%q, want policy/%s", v1.Snapshot.NotificationMode, v1.Snapshot.EscalationPolicyID, policyA)
+	}
+
+	// A -> B in policy mode is a change of its own.
+	if _, err := svc.UpdateMonitor(ctx, tenant, created.ID, &models.UpdateMonitorRequest{EscalationPolicyID: &policyB}); err != nil {
+		t.Fatal(err)
+	}
+	if n := versionCount(t, ctx, db, created.ID); n != 2 {
+		t.Fatalf("policy switch recorded %d versions, want 2", n)
+	}
+	v2, _ := store.Get(ctx, tenant, created.ID, 2)
+	if v2.Snapshot.EscalationPolicyID != policyB || strings.Join(v2.ChangedFields, ",") != "escalation_policy_id" {
+		t.Fatalf("v2 = %+v / %q", v2.MonitorVersionSummary, v2.Snapshot.EscalationPolicyID)
+	}
+
+	// Restore v1 onto a monitor still in policy mode: A comes back.
+	if dropped, err := restore(created.ID, 1); err != nil || len(dropped) != 0 {
+		t.Fatalf("restore v1 = %v (dropped %v)", err, dropped)
+	}
+	if mode, id := currentPolicy(created.ID); mode != "policy" || id != policyA {
+		t.Fatalf("after restoring v1: %s/%s, want policy/%s", mode, id, policyA)
+	}
+
+	// Leave policy mode, then restore v2: the mode and policy B come back.
+	defaultMode := "default"
+	if _, err := svc.UpdateMonitor(ctx, tenant, created.ID, &models.UpdateMonitorRequest{NotificationMode: &defaultMode}); err != nil {
+		t.Fatal(err)
+	}
+	if mode, id := currentPolicy(created.ID); mode != "default" || id != "" {
+		t.Fatalf("after leaving policy mode: %s/%s", mode, id)
+	}
+	if dropped, err := restore(created.ID, 2); err != nil || len(dropped) != 0 {
+		t.Fatalf("restore v2 onto a default-mode monitor = %v (dropped %v)", err, dropped)
+	}
+	if mode, id := currentPolicy(created.ID); mode != "policy" || id != policyB {
+		t.Fatalf("after restoring v2: %s/%s, want policy/%s", mode, id, policyB)
+	}
+
+	// A deleted policy is dropped and reported; the restore lands in
+	// 'default' mode instead of failing.
+	if _, err := svc.UpdateMonitor(ctx, tenant, created.ID, &models.UpdateMonitorRequest{NotificationMode: &defaultMode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM escalation_policies WHERE id = $1`, policyA); err != nil {
+		t.Fatal(err)
+	}
+	dropped, err := restore(created.ID, 1)
+	if err != nil {
+		t.Fatalf("restore of a version naming a deleted policy = %v", err)
+	}
+	if strings.Join(dropped, ",") != "escalation_policy:"+policyA {
+		t.Fatalf("dropped = %v", dropped)
+	}
+	if mode, id := currentPolicy(created.ID); mode != "default" || id != "" {
+		t.Fatalf("after restoring a deleted policy: %s/%s, want default", mode, id)
+	}
+
+	// Another tenant's policy is never resolved, whatever the id.
+	other := testutil.InsertTenant(ctx, t, db, "versions-policy-other")
+	foreign, _ := store.Get(ctx, tenant, created.ID, 2)
+	if _, dropped, err := store.LiveReferences(ctx, other, foreign.Snapshot); err != nil || strings.Join(dropped, ",") != "escalation_policy:"+policyB {
+		t.Fatalf("other tenant resolved policy B: %v (%v)", dropped, err)
+	}
+}
+
+// Restore keeps every current secret, including secret map keys the
+// version never had.
+func TestMonitorConfigVersions_RestoreKeepsNewerSecretKeys_Integration(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenant := testutil.InsertTenant(ctx, t, db, "versions-secret-keys")
+	enc := testEncryptor(t)
+	svc := NewService(NewPostgresRepository(db))
+	svc.ConfigureEncryption(enc)
+	store := svc.Versions()
+
+	created, err := svc.CreateMonitor(ctx, tenant, &models.CreateMonitorRequest{
+		Name: "keys", Type: models.MonitorTypeHTTP, IntervalSeconds: 60, TimeoutSeconds: 10,
+		Config: json.RawMessage(`{"url":"https://k.example","method":"GET","expected_status":200,"secret_headers":{"Authorization":"Bearer one"}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpdateMonitor(ctx, tenant, created.ID, &models.UpdateMonitorRequest{
+		Config: json.RawMessage(`{"url":"https://k2.example","method":"GET","expected_status":200,"secret_headers":{"Authorization":"***","X-Api-Key":"key-two"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := svc.GetMonitor(ctx, tenant, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored1, err := store.Get(ctx, tenant, created.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := RestoreRequest(stored1.Snapshot, current.Type, current.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpdateMonitor(WithVersionRestore(ctx, 1), tenant, created.ID, req); err != nil {
+		t.Fatal(err)
+	}
+
+	var raw json.RawMessage
+	if err := db.QueryRowContext(ctx, `SELECT config FROM monitors WHERE id = $1`, created.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := secrets.DecryptMonitorConfig(enc, "http", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := decodeConfig(t, plain)
+	if config["url"] != "https://k.example" {
+		t.Fatalf("restore did not apply the version: url = %v", config["url"])
+	}
+	headers, _ := config["secret_headers"].(map[string]any)
+	if headers["Authorization"] != "Bearer one" || headers["X-Api-Key"] != "key-two" {
+		t.Fatalf("restore lost a current secret: secret_headers = %v", headers)
 	}
 }

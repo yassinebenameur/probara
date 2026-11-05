@@ -353,8 +353,11 @@ or imported groups come back empty. Any other path that creates groups through
   source goes through `WithVersionSource`.
 - Snapshots are masked (`MaskMonitorConfig`) and hash-deduplicated; a new
   monitor field that is configuration goes in `models.MonitorConfigSnapshot`,
-  `loadSnapshot` and `RestoreRequest` together. Restore goes through
-  `UpdateMonitor` with the masked config, so it can never restore a secret.
+  `loadSnapshot` and `RestoreRequest` together (and `LiveReferences` when it
+  names another row, as `escalation_policy_id` does). Restore goes through
+  `UpdateMonitor` with the masked config, so it can never restore a secret;
+  `RestoreRequest` adds the live secret map keys the version lacks as `***`
+  so it never removes one either.
 
 ## Adding a monitor type (checklist)
 

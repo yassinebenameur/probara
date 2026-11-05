@@ -22,6 +22,7 @@ export interface MonitorConfigSnapshot {
   consecutive_failures_threshold: number;
   recovery_threshold: number;
   notification_mode: string;
+  escalation_policy_id?: string;
   notification_channels: MonitorSnapshotChannel[];
   member_alert_rollup: string;
   dependency_suppression: string;
@@ -101,6 +102,7 @@ const FIELD_LABEL: Record<string, string> = {
   consecutive_failures_threshold: 'Failure threshold',
   recovery_threshold: 'Recovery threshold',
   notification_mode: 'Alert routing',
+  escalation_policy_id: 'Escalation policy',
   notification_channels: 'Channels',
   member_alert_rollup: 'Member alerts',
   dependency_suppression: 'Dependency suppression',

@@ -245,8 +245,8 @@ export default function MonitorConfigHistory({ monitor, onRestored }: MonitorCon
                 ? 'The monitor already matches this version.'
                 : `This changes ${pluralize(restoreChanges, 'field')} of the live monitor (compare with Current to review them).`
               : 'This re-applies the version to the live monitor.'}{' '}
-            Secrets keep their current values, pause state is left as it is, and channels, locations or monitors that
-            no longer exist are left out. The restore is recorded as a new version.
+            Secrets keep their current values, pause state is left as it is, and channels, locations, monitors or an
+            escalation policy that no longer exist are left out. The restore is recorded as a new version.
           </>
         }
         confirmLabel="Restore"

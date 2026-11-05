@@ -43,10 +43,12 @@ func historyTools() []spec {
 			Name:  "restore_monitor_version",
 			Title: "Restore monitor version",
 			Description: "Re-apply a version's configuration (name, config, schedule, alerting, channels, locations, " +
-				"dependencies, group members) to the monitor, as a new version. Secrets are never restored: every " +
-				"secret keeps its current value. Channels, locations and monitors that no longer exist are dropped " +
-				"and listed in dropped_references. Pause state is not part of a version and is left as is. Check the " +
-				"effect first with diff_monitor_version against=current.",
+				"escalation policy, dependencies, group members) to the monitor, as a new version. Secrets are never " +
+				"restored or removed: every secret keeps its current value, including secret map keys added since the " +
+				"version. Channels, locations, monitors and an escalation policy that no longer exist are dropped and " +
+				"listed in dropped_references (a dropped policy leaves the monitor on default routing). Pause state " +
+				"is not part of a version and is left as is. Check the effect first with diff_monitor_version " +
+				"against=current.",
 			Method: http.MethodPost, Route: "/monitors/{id}/versions/{version}/restore",
 			PathDocs: monitorVersion, Destructive: true, NeedsWrite: true,
 		},
