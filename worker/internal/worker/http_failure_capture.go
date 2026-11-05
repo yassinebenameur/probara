@@ -167,14 +167,18 @@ func (r *secretRedactor) longestNeedle() int {
 
 // truncateJSONString cuts s so that its JSON string encoding (as
 // encoding/json writes it, quotes excluded) takes at most budget bytes,
-// replacing invalid UTF-8 with U+FFFD and never splitting a rune. cut
-// reports whether anything was dropped.
+// replacing invalid UTF-8 and NUL with U+FFFD and never splitting a rune.
+// cut reports whether anything was dropped.
+//
+// NUL must go: encoding/json writes it as \u0000, which PostgreSQL's jsonb
+// rejects, so one NUL in a UTF-16 or binary error body would make the whole
+// check result unstorable (monitorstate also scrubs it, as a backstop).
 func truncateJSONString(s string, budget int) (out string, cut bool) {
 	var b strings.Builder
 	used := 0
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
-		if r == utf8.RuneError && size <= 1 {
+		if r == 0 {
 			r = utf8.RuneError
 		}
 		cost := jsonRuneCost(r)

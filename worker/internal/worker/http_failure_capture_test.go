@@ -179,3 +179,27 @@ func TestHTTPFailureCaptureSizeBound(t *testing.T) {
 		t.Fatalf("metrics_data is %d bytes, want < 16 KiB", n)
 	}
 }
+
+// A NUL byte would marshal as \u0000, which PostgreSQL's jsonb rejects, so a
+// UTF-16 or binary error body would make the check result unstorable.
+func TestHTTPFailureCaptureNULBody(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_, _ = w.Write([]byte("\xff\xfee\x00r\x00r\x00"))
+	}
+	res, capture := runCaptureCheck(t, handler, map[string]any{"capture_failure_response": true})
+	if capture == nil {
+		t.Fatalf("no capture in %s", res.MetricsData)
+	}
+	if strings.Contains(string(res.MetricsData), `\u0000`) {
+		t.Fatalf("metrics_data carries \\u0000: %s", res.MetricsData)
+	}
+	if want := "\uFFFD\uFFFDe\uFFFDr\uFFFDr\uFFFD"; capture.BodyExcerpt != want || capture.BodyTruncated {
+		t.Fatalf("excerpt = %q truncated=%v, want %q", capture.BodyExcerpt, capture.BodyTruncated, want)
+	}
+
+	// The replacement is budgeted at its own encoded size.
+	if got, cut := truncateJSONString("a\x00b", 4); got != "a\uFFFD" || !cut {
+		t.Fatalf("NUL budget = %q %v", got, cut)
+	}
+}
