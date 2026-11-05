@@ -215,6 +215,9 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
+	if err := ValidateEscalationPolicyField(req.NotificationMode, req.EscalationPolicyID, true); err != nil {
+		return err
+	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
 		return err
 	}
@@ -302,6 +305,9 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 	}
 
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
+		return err
+	}
+	if err := ValidateEscalationPolicyField(req.NotificationMode, req.EscalationPolicyID, false); err != nil {
 		return err
 	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
@@ -427,8 +433,8 @@ func ValidateMonitorNotificationFields(threshold *int, mode *string, rollup *str
 	if threshold != nil && (*threshold < 1 || *threshold > 10) {
 		return fmt.Errorf("consecutive_failures_threshold must be between 1 and 10")
 	}
-	if mode != nil && *mode != "default" && *mode != "custom" {
-		return fmt.Errorf("notification_mode must be 'default' or 'custom'")
+	if mode != nil && *mode != "default" && *mode != "custom" && *mode != "policy" {
+		return fmt.Errorf("notification_mode must be 'default', 'custom' or 'policy'")
 	}
 	if rollup != nil && *rollup != "per_monitor" && *rollup != "group" {
 		return fmt.Errorf("member_alert_rollup must be 'per_monitor' or 'group'")

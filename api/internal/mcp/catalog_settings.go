@@ -88,7 +88,9 @@ func notificationTools() []spec {
 			Name:  "update_notification_settings",
 			Title: "Update notification settings",
 			Description: "Change workspace alerting defaults. Unsent fields stay. default_channels, when sent, " +
-				"replaces the default routing in order ([] routes default-mode monitors to nobody).",
+				"replaces the default routing in order ([] routes default-mode monitors to nobody). " +
+				"default_escalation_policy_id (from list_escalation_policies) routes default-mode monitors through " +
+				"that escalation policy instead; \"\" clears it.",
 			Method: http.MethodPut, Route: "/notification-settings",
 			Body: typeOf[notificationsettings.UpdateRequest](),
 		},

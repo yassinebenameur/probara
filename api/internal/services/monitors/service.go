@@ -224,6 +224,11 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	if req.NotificationMode != nil {
 		notificationMode = *req.NotificationMode
 	}
+	// Escalation policies (escalation.go): verified now, assigned after insert.
+	escalationPolicyID, err := s.prepareEscalationCreate(ctx, tenantID, req, &notificationMode)
+	if err != nil {
+		return nil, err
+	}
 	memberAlertRollup := "per_monitor" // DB default
 	if req.MemberAlertRollup != nil {
 		memberAlertRollup = *req.MemberAlertRollup
@@ -269,6 +274,9 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
+		return nil, err
+	}
+	if err := s.applyEscalationCreate(ctx, monitor, escalationPolicyID); err != nil {
 		return nil, err
 	}
 
@@ -347,6 +355,7 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 			monitor.AlertRouting = &status
 		}
 	}
+	s.attachEscalationPolicies(ctx, []*models.Monitor{monitor})
 
 	// Attach the private-location selection + per-location breakdown
 	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
@@ -418,6 +427,11 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 		}
 	}
 
+	listed := make([]*models.Monitor, len(monitors))
+	for i := range monitors {
+		listed[i] = &monitors[i]
+	}
+	s.attachEscalationPolicies(ctx, listed)
 	for i := range monitors {
 		s.maskSecrets(&monitors[i])
 	}
@@ -574,6 +588,15 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		args = append(args, *req.NotificationMode)
 		argIndex++
 	}
+	// Escalation policies (escalation.go): entering 'policy' mode sets the
+	// policy in the same UPDATE.
+	escalationParts, escalationArgs, err := s.escalationUpdateParts(ctx, tenantID, existing, req, argIndex)
+	if err != nil {
+		return nil, err
+	}
+	setParts = append(setParts, escalationParts...)
+	args = append(args, escalationArgs...)
+	argIndex += len(escalationArgs)
 
 	if req.MemberAlertRollup != nil {
 		setParts = append(setParts, fmt.Sprintf("member_alert_rollup = $%d", argIndex))
@@ -734,6 +757,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 			}
 		}
 	}
+	s.attachEscalationPolicies(ctx, []*models.Monitor{monitor})
 
 	return monitor, nil
 }

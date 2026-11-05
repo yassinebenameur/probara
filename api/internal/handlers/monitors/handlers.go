@@ -296,6 +296,10 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 			errors.WriteValidationError(w, err.Error())
 			return
 		}
+		if stderrors.Is(err, monitorservice.ErrEscalationPolicyNotFound) {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
@@ -554,6 +558,10 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if stderrors.Is(err, monitorservice.ErrSecretConflict) {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
+		if stderrors.Is(err, monitorservice.ErrEscalationPolicyNotFound) {
 			errors.WriteValidationError(w, err.Error())
 			return
 		}
