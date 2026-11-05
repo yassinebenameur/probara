@@ -439,3 +439,82 @@ export function burnRateTone(rate: number | null | undefined): SlaTone {
   if (rate <= 2) return 'warn';
   return 'bad';
 }
+
+// ── Report schedules (/v1/report-schedules) ─────────────────────────────
+
+export type SlaScheduleFormat = 'pdf' | 'csv';
+
+export interface SlaReportSchedule {
+  id: string;
+  tenant_id: string;
+  sla_id: string;
+  recipients: string[];
+  /** Recipients who followed their unsubscribe link: they get nothing more from this schedule. */
+  unsubscribed: string[];
+  formats: SlaScheduleFormat[];
+  auto_issue: boolean;
+  enabled: boolean;
+  /** The running period's close plus an hour; meaningful only while enabled. */
+  next_run_at: string;
+  last_run_at: string | null;
+  last_period_key: string;
+  last_sent_count: number;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlaReportScheduleList {
+  items: SlaReportSchedule[];
+  /** False when the API has no SMTP or no APP_BASE_URL: schedules cannot be enabled. */
+  mail_ready: boolean;
+  mail_problem?: string;
+}
+
+export interface SlaReportScheduleInput {
+  recipients: string[];
+  formats: SlaScheduleFormat[];
+  auto_issue: boolean;
+  enabled: boolean;
+}
+
+export interface SlaScheduleSendOutcome {
+  period_key: string;
+  issued: boolean;
+  sent: number;
+  skipped: number;
+  failed: number;
+  error?: string;
+}
+
+export const SLA_SCHEDULE_FORMAT_LABELS: Record<SlaScheduleFormat, string> = { pdf: 'PDF', csv: 'CSV' };
+
+/** Splits a typed recipient list on commas, semicolons, whitespace and newlines; lower-cased, de-duplicated. */
+export function parseRecipients(text: string): string[] {
+  const seen = new Set<string>();
+  for (const part of text.split(/[\s,;]+/)) {
+    const value = part.trim().toLowerCase();
+    if (value) seen.add(value);
+  }
+  return [...seen];
+}
+
+/** Validates the schedule form before it reaches the API; returns a message or null. */
+export function scheduleInputError(input: SlaReportScheduleInput): string | null {
+  if (input.recipients.length === 0) return 'Add at least one recipient.';
+  if (input.recipients.length > 50) return 'A schedule has at most 50 recipients.';
+  const bad = input.recipients.find((r) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
+  if (bad) return `${bad} is not an email address.`;
+  if (input.formats.length === 0) return 'Attach at least one format.';
+  return null;
+}
+
+/** A send's outcome as a toast: what went out, who was skipped, what failed. */
+export function describeSendOutcome(o: SlaScheduleSendOutcome): { tone: 'success' | 'error'; text: string } {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const copy = o.issued ? 'issued' : 'live';
+  const parts = [`${o.period_key} (${copy}) sent to ${plural(o.sent, 'recipient')}`];
+  if (o.skipped > 0) parts.push(`${o.skipped} unsubscribed`);
+  if (o.error) return { tone: 'error', text: `${parts.join(', ')}. ${o.error}` };
+  return { tone: 'success', text: `${parts.join(', ')}.` };
+}
