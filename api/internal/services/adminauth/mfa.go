@@ -189,13 +189,39 @@ func (s *Service) DisableTOTP(ctx context.Context, userID uuid.UUID) (bool, erro
 	return was, err
 }
 
-// ResetMFA is the superadmin reset: same as DisableTOTP, no proof needed.
-// It reports whether a second factor was enabled.
+// ResetMFA is the superadmin reset: same as DisableTOTP, no proof needed,
+// and it also cancels a pending email change (a 2FA reset is a recovery
+// step, see RevokeUserAccess). It reports whether a second factor was
+// enabled.
 func (s *Service) ResetMFA(ctx context.Context, userID uuid.UUID) (bool, error) {
 	if _, err := s.LoadAccount(ctx, userID); err != nil {
 		return false, err
 	}
-	return s.DisableTOTP(ctx, userID)
+	var was bool
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if was, err = clearTOTP(ctx, tx, userID); err != nil {
+			return err
+		}
+		// Migration 000118 is in place, so 000117's table is too.
+		return retireTokens(ctx, tx, userID, PurposeEmailChange)
+	})
+	if isMissingSchema(err) {
+		return false, nil
+	}
+	return was, err
+}
+
+// totpEnabledTx reports, in tx, whether userID has a second factor on.
+// Before migration 000118 nobody does.
+func totpEnabledTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID) (bool, error) {
+	var enabled bool
+	err := tolerateMissingSchema(ctx, tx, func() error {
+		return tx.QueryRowContext(ctx, `
+			SELECT totp_enabled_at IS NOT NULL FROM admin_users WHERE id = $1
+		`, userID).Scan(&enabled)
+	})
+	return enabled, err
 }
 
 func clearTOTP(ctx context.Context, tx *sql.Tx, userID uuid.UUID) (bool, error) {

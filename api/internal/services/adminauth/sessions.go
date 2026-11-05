@@ -196,6 +196,21 @@ func (s *Service) RevokeAllSessions(ctx context.Context, adminID, keep uuid.UUID
 	return RevokeUserSessions(ctx, s.db, adminID, keep, reason)
 }
 
+// RevokeUserAccess is the superadmin "sign out everywhere": it ends every
+// session of adminID and cancels a pending email change, which an intruder
+// holding a session may have started and could otherwise still confirm from
+// their own mailbox, then use to reset the password.
+func (s *Service) RevokeUserAccess(ctx context.Context, adminID uuid.UUID) (int, error) {
+	n, err := RevokeUserSessions(ctx, s.db, adminID, uuid.Nil, RevokeReasonAdmin)
+	if err != nil {
+		return 0, err
+	}
+	if err := retireTokens(ctx, s.db, adminID, PurposeEmailChange); err != nil && !isMissingSchema(err) {
+		return 0, fmt.Errorf("failed to cancel pending email change: %w", err)
+	}
+	return n, nil
+}
+
 // RevokeUserSessions ends every session of adminID except keep (uuid.Nil
 // keeps none): families and their refresh tokens, so access JWTs stop
 // working on their next request. Before migration 000104 it revokes the

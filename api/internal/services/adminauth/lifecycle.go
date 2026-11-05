@@ -201,10 +201,17 @@ func (s *Service) IssueInvite(ctx context.Context, userID uuid.UUID, createdBy *
 }
 
 // RedeemPasswordToken consumes an invite or reset token and sets the
-// account's password: it records password_changed_at, clears the lockout,
-// supersedes the account's other open invite and reset links, and ends
-// every session. It returns the account. An account that was disabled or
-// linked to an IdP since the link was issued gets ErrTokenInvalid.
+// account's password: it records password_changed_at, clears the lockout
+// (unless two-factor is on, see below), retires the account's other open
+// invite, reset and email-change links, and ends every session. It returns
+// the account. An account that was disabled or linked to an IdP since the
+// link was issued gets ErrTokenInvalid.
+//
+// With two-factor on, the failure streak and any lock survive: wrong codes
+// count on that streak, and a reset needs only the mailbox and can repeat
+// every passwordResetThrottle, so clearing it here would let a mailbox
+// holder buy a fresh batch of code guesses each minute. Only a completed
+// sign-in, a superadmin unlock or a superadmin password set clears it.
 func (s *Service) RedeemPasswordToken(ctx context.Context, plain, purpose, newPassword string) (*Account, error) {
 	if purpose != PurposeInvite && purpose != PurposePasswordReset {
 		return nil, ErrTokenInvalid
@@ -226,13 +233,14 @@ func (s *Service) RedeemPasswordToken(ctx context.Context, plain, purpose, newPa
 		if a.Disabled || a.Linked || (purpose == PurposePasswordReset && !a.HasPassword) {
 			return ErrTokenInvalid
 		}
-		if err := setPassword(ctx, tx, a.ID, hash); err != nil {
+		secondFactor, err := totpEnabledTx(ctx, tx, a.ID)
+		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE admin_user_tokens SET used_at = NOW()
-			WHERE admin_user_id = $1 AND purpose IN ($2, $3) AND used_at IS NULL
-		`, a.ID, PurposeInvite, PurposePasswordReset); err != nil {
+		if err := setPassword(ctx, tx, a.ID, hash, !secondFactor); err != nil {
+			return err
+		}
+		if err := retireTokens(ctx, tx, a.ID, credentialResetPurposes...); err != nil {
 			return err
 		}
 		reason := RevokeReasonPasswordReset
@@ -249,14 +257,17 @@ func (s *Service) RedeemPasswordToken(ctx context.Context, plain, purpose, newPa
 	return account, err
 }
 
-// setPassword stores a new hash, records the change and clears the lockout.
-func setPassword(ctx context.Context, q Querier, userID uuid.UUID, hash string) error {
+// setPassword stores a new hash, records the change and, with
+// clearLockout, clears the failure streak and any lock.
+func setPassword(ctx context.Context, q Querier, userID uuid.UUID, hash string, clearLockout bool) error {
 	_, err := q.ExecContext(ctx, `
 		UPDATE admin_users
 		SET password_hash = $2, password_changed_at = NOW(), updated_at = NOW(),
-		    failed_login_count = 0, last_failed_login_at = NULL, locked_until = NULL
+		    failed_login_count = CASE WHEN $3 THEN 0 ELSE failed_login_count END,
+		    last_failed_login_at = CASE WHEN $3 THEN NULL ELSE last_failed_login_at END,
+		    locked_until = CASE WHEN $3 THEN NULL ELSE locked_until END
 		WHERE id = $1
-	`, userID, hash)
+	`, userID, hash, clearLockout)
 	return err
 }
 
@@ -333,8 +344,9 @@ func (s *Service) lockedFor(ctx context.Context, userID uuid.UUID) time.Duration
 }
 
 // ChangePassword sets a signed-in local user's new password (the caller has
-// verified the current one) and ends every other session; keep is the
-// session making the change.
+// verified the current one), retires every open invite, reset and
+// email-change link, and ends every other session; keep is the session
+// making the change.
 func (s *Service) ChangePassword(ctx context.Context, userID, keep uuid.UUID, newPassword string) (int, error) {
 	hash, err := auth.HashPassword(newPassword, s.bcryptCost)
 	if err != nil {
@@ -349,14 +361,12 @@ func (s *Service) ChangePassword(ctx context.Context, userID, keep uuid.UUID, ne
 		if !a.Local() {
 			return ErrNotLocalAccount
 		}
-		if err := setPassword(ctx, tx, userID, hash); err != nil {
+		if err := setPassword(ctx, tx, userID, hash, true); err != nil {
 			return err
 		}
-		// Outstanding reset links were for the old password.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE admin_user_tokens SET used_at = NOW()
-			WHERE admin_user_id = $1 AND purpose IN ($2, $3) AND used_at IS NULL
-		`, userID, PurposeInvite, PurposePasswordReset); err != nil && !isMissingSchema(err) {
+		if err := tolerateMissingSchema(ctx, tx, func() error {
+			return retireTokens(ctx, tx, userID, credentialResetPurposes...)
+		}); err != nil {
 			return err
 		}
 		revoked, err = RevokeUserSessions(ctx, tx, userID, keep, RevokeReasonPasswordChange)
@@ -419,6 +429,10 @@ type ConfirmedEmailChange struct {
 }
 
 // ConfirmEmailChange consumes an email-change token and sets the address.
+// A link issued before the account's last password change is refused even
+// if nothing retired it: every password path records password_changed_at
+// (cmd/admin's break-glass too), so a recovered account never keeps an
+// email change started under the old password.
 func (s *Service) ConfirmEmailChange(ctx context.Context, plain string) (*ConfirmedEmailChange, error) {
 	var out ConfirmedEmailChange
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
@@ -428,6 +442,15 @@ func (s *Service) ConfirmEmailChange(ctx context.Context, plain string) (*Confir
 		}
 		a, err := loadAccount(ctx, tx, rec.UserID)
 		if err != nil || a.Disabled || !a.Local() || rec.NewEmail == nil {
+			return ErrTokenInvalid
+		}
+		var changedAt sql.NullTime
+		if err := tx.QueryRowContext(ctx, `
+			SELECT password_changed_at FROM admin_users WHERE id = $1
+		`, a.ID).Scan(&changedAt); err != nil {
+			return err
+		}
+		if changedAt.Valid && rec.CreatedAt.Before(changedAt.Time) {
 			return ErrTokenInvalid
 		}
 		if _, err := tx.ExecContext(ctx, `

@@ -159,7 +159,8 @@ func (h *Handlers) revokeMine(w http.ResponseWriter, r *http.Request, adminID, k
 }
 
 // RevokeUserSessions handles DELETE /api/v1/users/{id}/sessions (superadmin):
-// signs the user out everywhere, ending their access tokens immediately.
+// signs the user out everywhere, ending their access tokens immediately, and
+// cancels a pending email change.
 func (h *Handlers) RevokeUserSessions(w http.ResponseWriter, r *http.Request) {
 	userID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -170,7 +171,7 @@ func (h *Handlers) RevokeUserSessions(w http.ResponseWriter, r *http.Request) {
 		errors.WriteNotFoundError(w, "user not found")
 		return
 	}
-	count, err := h.service.RevokeAllSessions(r.Context(), userID, uuid.Nil, adminauth.RevokeReasonAdmin)
+	count, err := h.service.RevokeUserAccess(r.Context(), userID)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to revoke user sessions")
 		errors.WriteInternalError(w, "failed to revoke sessions")

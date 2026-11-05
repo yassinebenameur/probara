@@ -420,4 +420,151 @@ func TestMFAToleratesMissingSchema(t *testing.T) {
 	if was, err := s.ResetMFA(ctx, id); err != nil || was {
 		t.Fatalf("ResetMFA = %v, %v", was, err)
 	}
+	// Retiring links is skipped, not fatal, without admin_user_tokens.
+	if _, err := s.ChangePassword(ctx, id, uuid.Nil, "changed-password-1"); err != nil {
+		t.Fatalf("ChangePassword before 000117: %v", err)
+	}
+	if _, err := s.RevokeUserAccess(ctx, id); err != nil {
+		t.Fatalf("RevokeUserAccess before 000117: %v", err)
+	}
+	if err := RetireCredentialTokens(ctx, dbClient, id); err != nil {
+		t.Fatalf("RetireCredentialTokens before 000117: %v", err)
+	}
+}
+
+// Every credential reset cancels a pending email change, so an intruder who
+// started one cannot confirm it after the owner recovers the account.
+func TestCredentialResetsCancelPendingEmailChange(t *testing.T) {
+	ctx, dbClient, s := setupService(t)
+	n := 0
+	pending := func(t *testing.T) (uuid.UUID, string) {
+		t.Helper()
+		n++
+		id := insertUser(ctx, t, dbClient, "victim"+string(rune('a'+n)))
+		setEmail(ctx, t, dbClient, id, "victim"+string(rune('a'+n))+"@example.com")
+		change, err := s.RequestEmailChange(ctx, id, "intruder"+string(rune('a'+n))+"@evil.test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id, change.Token.Token
+	}
+	refused := func(t *testing.T, token string) {
+		t.Helper()
+		if _, err := s.ConfirmEmailChange(ctx, token); !errors.Is(err, ErrTokenInvalid) {
+			t.Fatalf("pending email change confirmed after the reset: %v", err)
+		}
+	}
+
+	t.Run("password change", func(t *testing.T) {
+		id, token := pending(t)
+		if _, err := s.ChangePassword(ctx, id, uuid.Nil, "changed-password-1"); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, token)
+		// A change requested after the new password still works.
+		again, err := s.RequestEmailChange(ctx, id, "owner-new@example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ConfirmEmailChange(ctx, again.Token.Token); err != nil {
+			t.Fatalf("email change after the password change: %v", err)
+		}
+	})
+	t.Run("password reset", func(t *testing.T) {
+		id, token := pending(t)
+		_, reset, err := s.IssuePasswordReset(ctx, id, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.RedeemPasswordToken(ctx, reset.Token, PurposePasswordReset, "reset-password-12"); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, token)
+	})
+	t.Run("superadmin sign-out everywhere", func(t *testing.T) {
+		id, token := pending(t)
+		if _, err := s.CreateSession(ctx, id, "intruder-"+id.String(), time.Now().Add(time.Hour), "", "", AuthMethodPassword); err != nil {
+			t.Fatal(err)
+		}
+		if revoked, err := s.RevokeUserAccess(ctx, id); err != nil || revoked != 1 {
+			t.Fatalf("RevokeUserAccess = %d, %v", revoked, err)
+		}
+		refused(t, token)
+	})
+	t.Run("superadmin password set", func(t *testing.T) {
+		id, token := pending(t)
+		if err := RetireCredentialTokens(ctx, dbClient, id); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, token)
+	})
+	t.Run("superadmin 2FA reset", func(t *testing.T) {
+		id, token := pending(t)
+		if _, err := s.ResetMFA(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, token)
+	})
+	t.Run("password changed by a path that retires nothing", func(t *testing.T) {
+		// cmd/admin's break-glass only records password_changed_at.
+		id, token := pending(t)
+		if _, err := dbClient.ExecContext(ctx, `UPDATE admin_users SET password_changed_at = NOW() WHERE id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, token)
+	})
+}
+
+// A password reset must not wash out the second-factor failure streak: a
+// mailbox holder could otherwise reset every minute for a fresh batch of
+// code guesses. Without two-factor a reset still clears the lockout.
+func TestPasswordResetKeepsSecondFactorLock(t *testing.T) {
+	ctx, dbClient, s := setupService(t)
+	id := insertUser(ctx, t, dbClient, "ivan")
+	enrollTOTP(ctx, t, s, id)
+	for i := 0; i < LockoutThreshold; i++ {
+		_, err := s.Authenticate(ctx, "ivan", testPassword)
+		var sf *SecondFactorRequired
+		if !errors.As(err, &sf) {
+			t.Fatalf("attempt %d: Authenticate = %v", i+1, err)
+		}
+		if _, err := s.CompleteSecondFactor(ctx, id, sf.Binding, "000000"); err == nil {
+			t.Fatalf("attempt %d: wrong code accepted", i+1)
+		}
+	}
+	count, lockedFor := loginState(ctx, t, dbClient, id)
+	if count != LockoutThreshold || lockedFor <= 0 {
+		t.Fatalf("before reset: streak %d, locked for %v", count, lockedFor)
+	}
+
+	_, reset, err := s.IssuePasswordReset(ctx, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemPasswordToken(ctx, reset.Token, PurposePasswordReset, "reset-password-12"); err != nil {
+		t.Fatal(err)
+	}
+	if count, lockedFor := loginState(ctx, t, dbClient, id); count != LockoutThreshold || lockedFor <= 0 {
+		t.Fatalf("after reset: streak %d, locked for %v; want the lock kept", count, lockedFor)
+	}
+	if _, err := s.Authenticate(ctx, "ivan", "reset-password-12"); !errors.Is(err, ErrAccountLocked) {
+		t.Fatalf("login after reset = %v, want the lock", err)
+	}
+
+	// No second factor: the reset clears the lock as before.
+	plain := insertUser(ctx, t, dbClient, "judy")
+	failLogins(ctx, t, s, "judy", LockoutThreshold)
+	if _, lockedFor := loginState(ctx, t, dbClient, plain); lockedFor <= 0 {
+		t.Fatal("judy not locked")
+	}
+	_, reset, err = s.IssuePasswordReset(ctx, plain, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemPasswordToken(ctx, reset.Token, PurposePasswordReset, "reset-password-12"); err != nil {
+		t.Fatal(err)
+	}
+	if count, lockedFor := loginState(ctx, t, dbClient, plain); count != 0 || lockedFor > 0 {
+		t.Fatalf("no-2FA reset: streak %d, locked for %v; want cleared", count, lockedFor)
+	}
 }

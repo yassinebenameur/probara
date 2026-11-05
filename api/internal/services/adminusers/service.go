@@ -496,11 +496,15 @@ func insertMembershipsTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID, memb
 }
 
 // RevokeSessionsByAdminID runs after a superadmin sets a user's password: it
-// ends every session (families too, so access tokens die at once), records
-// password_changed_at and clears any login lockout, since the old password
-// being guessed no longer exists.
+// ends every session (families too, so access tokens die at once), retires
+// open invite, reset and email-change links, records password_changed_at
+// and clears any login lockout, since the old password being guessed no
+// longer exists.
 func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error {
 	if _, err := adminauth.RevokeUserSessions(ctx, r.db, adminID, uuid.Nil, adminauth.RevokeReasonPasswordChange); err != nil {
+		return err
+	}
+	if err := adminauth.RetireCredentialTokens(ctx, r.db, adminID); err != nil {
 		return err
 	}
 	_, err := r.db.ExecContext(ctx, `

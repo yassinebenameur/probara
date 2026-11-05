@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // One-time account tokens (admin_user_tokens, migration 000117). The plain
@@ -59,6 +60,7 @@ type TokenRecord struct {
 	Purpose   string
 	NewEmail  *string
 	ExpiresAt time.Time
+	CreatedAt time.Time
 }
 
 func tokenTTL(purpose string) time.Duration {
@@ -129,8 +131,8 @@ func consumeToken(ctx context.Context, tx *sql.Tx, plain, purpose string) (*Toke
 	err := tx.QueryRowContext(ctx, `
 		UPDATE admin_user_tokens SET used_at = NOW()
 		WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > NOW()
-		RETURNING id, admin_user_id, new_email, expires_at
-	`, hashAccountToken(plain), purpose).Scan(&rec.ID, &rec.UserID, &rec.NewEmail, &rec.ExpiresAt)
+		RETURNING id, admin_user_id, new_email, expires_at, created_at
+	`, hashAccountToken(plain), purpose).Scan(&rec.ID, &rec.UserID, &rec.NewEmail, &rec.ExpiresAt, &rec.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrTokenInvalid
 	}
@@ -148,10 +150,10 @@ func (s *Service) InspectToken(ctx context.Context, plain, purpose string) (*Tok
 	}
 	rec := TokenRecord{Purpose: purpose}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, admin_user_id, new_email, expires_at
+		SELECT id, admin_user_id, new_email, expires_at, created_at
 		FROM admin_user_tokens
 		WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > NOW()
-	`, hashAccountToken(plain), purpose).Scan(&rec.ID, &rec.UserID, &rec.NewEmail, &rec.ExpiresAt)
+	`, hashAccountToken(plain), purpose).Scan(&rec.ID, &rec.UserID, &rec.NewEmail, &rec.ExpiresAt, &rec.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrTokenInvalid
 	}
@@ -159,6 +161,51 @@ func (s *Service) InspectToken(ctx context.Context, plain, purpose string) (*Tok
 		return nil, mapTokenSchema(err)
 	}
 	return &rec, nil
+}
+
+// credentialResetPurposes are the open links a password change retires:
+// all of them. An invite or reset link was for the old password, and a
+// pending email change may have been started by whoever held it; leaving
+// that link alive would let them take the account back through the new
+// address after the owner has recovered it.
+var credentialResetPurposes = []string{PurposeInvite, PurposePasswordReset, PurposeEmailChange}
+
+// retireTokens marks userID's open tokens of the given purposes used.
+func retireTokens(ctx context.Context, q Querier, userID uuid.UUID, purposes ...string) error {
+	_, err := q.ExecContext(ctx, `
+		UPDATE admin_user_tokens SET used_at = NOW()
+		WHERE admin_user_id = $1 AND purpose = ANY($2) AND used_at IS NULL
+	`, userID, pq.Array(purposes))
+	return err
+}
+
+// RetireCredentialTokens retires every open invite, reset and email-change
+// link of userID; the user-management service calls it when a superadmin
+// sets a password. Before migration 000117 there is nothing to retire.
+func RetireCredentialTokens(ctx context.Context, q Querier, userID uuid.UUID) error {
+	if err := retireTokens(ctx, q, userID, credentialResetPurposes...); err != nil && !isMissingSchema(err) {
+		return err
+	}
+	return nil
+}
+
+// tolerateMissingSchema runs fn under a savepoint of tx. A missing-schema
+// error (an API newer than its database, before the migrate hook ran) rolls
+// back to the savepoint and is swallowed, so tx stays usable; in Postgres
+// any failed statement otherwise aborts the whole transaction.
+func tolerateMissingSchema(ctx context.Context, tx *sql.Tx, fn func() error) error {
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT adminauth_optional`); err != nil {
+		return err
+	}
+	if err := fn(); err != nil {
+		if !isMissingSchema(err) {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT adminauth_optional`)
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `RELEASE SAVEPOINT adminauth_optional`)
+	return err
 }
 
 // mapTokenSchema turns "migration 000117 not applied" into
