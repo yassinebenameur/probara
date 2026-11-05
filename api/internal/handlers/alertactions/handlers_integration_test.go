@@ -73,6 +73,10 @@ func TestAlertActions_Postgres(t *testing.T) {
 	other := testutil.InsertTenant(ctx, t, dbc, "links-other")
 	monitor := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "checkout")
 	otherMonitor := testutil.InsertHTTPMonitor(ctx, t, dbc, other, "theirs")
+	// One open alert per (monitor, kind): each further open alert below
+	// needs a monitor of its own.
+	mineMonitor := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "checkout-2")
+	otherMonitor2 := testutil.InsertHTTPMonitor(ctx, t, dbc, other, "theirs-2")
 	channel := insertChannel(ctx, t, dbc, tenant)
 	otherChannel := insertChannel(ctx, t, dbc, other)
 
@@ -128,7 +132,7 @@ func TestAlertActions_Postgres(t *testing.T) {
 	code, resp = call(http.MethodPost, mint(signer, tenant, theirs, channel))
 	require.Equal(t, http.StatusNotFound, code)
 	require.Equal(t, alertactions.StateInvalid, resp.State)
-	mine := insertAlert(ctx, t, dbc, tenant, monitor, "active")
+	mine := insertAlert(ctx, t, dbc, tenant, mineMonitor, "active")
 	code, _ = call(http.MethodPost, mint(signer, other, mine, otherChannel))
 	require.Equal(t, http.StatusNotFound, code)
 	// A channel of another workspace cannot scope a link either.
@@ -159,7 +163,7 @@ func TestAlertActions_Postgres(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, code)
 
 	// A soft-deleted workspace's links die with it.
-	otherAlert := insertAlert(ctx, t, dbc, other, otherMonitor, "active")
+	otherAlert := insertAlert(ctx, t, dbc, other, otherMonitor2, "active")
 	tok = mint(signer, other, otherAlert, otherChannel)
 	code, _ = call(http.MethodGet, tok)
 	require.Equal(t, http.StatusOK, code)
