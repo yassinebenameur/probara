@@ -164,6 +164,10 @@ export interface SlaReport {
     remaining_seconds: number;
     remaining_pct: number | null;
     allowed_full_period_seconds: number;
+    /** S-U8: (1 − availability) ÷ (1 − target); 1 spends the budget at the allowed pace. Absent without data and on older issued reports. */
+    burn_rate?: number;
+    /** Running periods only: when the full-period budget runs out at the pace so far, if before the period ends. */
+    projected_exhaustion_at?: string;
   };
   daily: SlaReportDay[];
   monitors: SlaReportMonitor[];
@@ -180,6 +184,16 @@ export interface SlaReport {
   notes: string[];
   /** Absent on reports issued before causes existed: render nothing for those. */
   suspected_causes?: SlaReportSuspectedCauses;
+  /** S-U8 burn-down, one point per day; absent on reports issued before it existed. */
+  burn_down?: SlaBurnPoint[];
+}
+
+/** Error budget at the end of one day: consumed since the period start, and what is left of the full period's allowance. */
+export interface SlaBurnPoint {
+  date: string;
+  consumed_seconds: number;
+  /** Negative once overspent; null while nothing was observed yet. */
+  remaining_pct: number | null;
 }
 
 export interface SlaReportRef {
@@ -406,4 +420,101 @@ export function slaCausesCaveat(c: Pick<SlaReportSuspectedCauses, 'outage_count'
     'Counts are monitor outages, not alerts, and downtime is summed per monitor, so it can exceed the service downtime when monitors fail together. ' +
     `${c.triaged_outage_count} of ${c.outage_count} monitor outages had a triaged alert.`
   );
+}
+
+/** A burn rate as "1.39×"; "—" without data. */
+export function formatBurnRate(rate: number | null | undefined): string {
+  if (rate === null || rate === undefined || !Number.isFinite(rate)) return '—';
+  return `${rate.toFixed(2)}×`;
+}
+
+/**
+ * Tone of a burn rate (S-U8): at or under the allowed pace is good, up to
+ * twice it warns, faster is bad. A closed period's verdict is the met pill;
+ * this colours the pace.
+ */
+export function burnRateTone(rate: number | null | undefined): SlaTone {
+  if (rate === null || rate === undefined || !Number.isFinite(rate)) return 'none';
+  if (rate <= 1 + 1e-9) return 'good';
+  if (rate <= 2) return 'warn';
+  return 'bad';
+}
+
+// ── Report schedules (/v1/report-schedules) ─────────────────────────────
+
+export type SlaScheduleFormat = 'pdf' | 'csv';
+
+export interface SlaReportSchedule {
+  id: string;
+  tenant_id: string;
+  sla_id: string;
+  recipients: string[];
+  /** Recipients who followed their unsubscribe link: they get nothing more from this schedule. */
+  unsubscribed: string[];
+  formats: SlaScheduleFormat[];
+  auto_issue: boolean;
+  enabled: boolean;
+  /** The running period's close plus an hour; meaningful only while enabled. */
+  next_run_at: string;
+  last_run_at: string | null;
+  last_period_key: string;
+  last_sent_count: number;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlaReportScheduleList {
+  items: SlaReportSchedule[];
+  /** False when the API has no SMTP or no APP_BASE_URL: schedules cannot be enabled. */
+  mail_ready: boolean;
+  mail_problem?: string;
+}
+
+export interface SlaReportScheduleInput {
+  recipients: string[];
+  formats: SlaScheduleFormat[];
+  auto_issue: boolean;
+  enabled: boolean;
+}
+
+export interface SlaScheduleSendOutcome {
+  period_key: string;
+  issued: boolean;
+  sent: number;
+  skipped: number;
+  failed: number;
+  error?: string;
+}
+
+export const SLA_SCHEDULE_FORMAT_LABELS: Record<SlaScheduleFormat, string> = { pdf: 'PDF', csv: 'CSV' };
+
+/** Splits a typed recipient list on commas, semicolons, whitespace and newlines; lower-cased, de-duplicated. */
+export function parseRecipients(text: string): string[] {
+  const seen = new Set<string>();
+  for (const part of text.split(/[\s,;]+/)) {
+    const value = part.trim().toLowerCase();
+    if (value) seen.add(value);
+  }
+  return [...seen];
+}
+
+/** Validates the schedule form before it reaches the API; returns a message or null. */
+export function scheduleInputError(input: SlaReportScheduleInput): string | null {
+  if (input.recipients.length === 0) return 'Add at least one recipient.';
+  if (input.recipients.length > 50) return 'A schedule has at most 50 recipients.';
+  const bad = input.recipients.find((r) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
+  if (bad) return `${bad} is not an email address.`;
+  if (input.formats.length === 0) return 'Attach at least one format.';
+  return null;
+}
+
+/** A send's outcome as a toast: what went out, who was skipped, what failed. */
+export function describeSendOutcome(o: SlaScheduleSendOutcome): { tone: 'success' | 'error'; text: string } {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const copy = o.issued ? 'issued' : 'live';
+  const parts = [`${o.period_key} (${copy}) sent to ${plural(o.sent, 'recipient')}`];
+  if (o.skipped > 0) parts.push(`${o.skipped} unsubscribed`);
+  if (o.error) return { tone: 'error', text: `${parts.join(', ')}. ${o.error}` };
+  return { tone: 'success', text: `${parts.join(', ')}.` };
 }

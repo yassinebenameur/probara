@@ -4,10 +4,10 @@ export const SLAS_PAGE: DocPage = {
   slug: "slas",
   group: "Use Probara",
   title: "SLA reporting",
-  description: "Define availability targets for sets of monitors, track error budgets per calendar period, and export or freeze reports.",
+  description: "Define availability targets for sets of monitors, track error budgets per calendar period, export or freeze reports, and email them on a schedule.",
   eyebrow: "Availability objectives",
-  readingTime: "8 min read",
-  keywords: ["SLA", "SLO", "error budget", "availability report", "uptime report", "MTTR", "MTTA", "PDF", "CSV", "suspected cause", "root cause"],
+  readingTime: "10 min read",
+  keywords: ["SLA", "SLO", "error budget", "burn rate", "burn-down", "availability report", "uptime report", "MTTR", "MTTA", "PDF", "CSV", "scheduled report", "email report", "suspected cause", "root cause"],
   sections: [
     {
       id: "define",
@@ -73,6 +73,10 @@ export const SLAS_PAGE: DocPage = {
           text: "The SLA page opens on the running period, reported to date. Step back through earlier periods, or pick a custom range of whole local days (up to 400). A report shows availability against the target and a met/breached verdict, coverage, and the error budget: the downtime the target allows so far (1 − target × eligible time), how much of it was consumed, and the allowance for the full calendar period.",
         },
         {
+          type: "paragraph",
+          text: "The error budget panel also shows the burn rate, (1 − availability) ÷ (1 − target) over the report: 1× spends the budget exactly at the allowed pace, 2× twice as fast, and a closed period meets its target exactly when its burn rate is at most 1×. Under it, a burn-down chart plots what is left of the full period's budget after each day, from 100% down, with a dashed line at 0 where the budget is spent. The chart measures against the whole period's allowance, so on a running period it falls more slowly than the headline remaining figure, which measures against the time eligible so far; the two agree on a closed, fully covered period. For a running period, projected exhaustion is when the full-period budget runs out if consumption continues at its pace so far, shown only when that falls before the period ends. Days before anything was observed have no point.",
+        },
+        {
           type: "list",
           items: [
             "Daily availability in the SLA's timezone, coloured at or above target / below target but ≥ 99% / below 99% / no data.",
@@ -85,7 +89,7 @@ export const SLAS_PAGE: DocPage = {
         },
         {
           type: "paragraph",
-          text: "Export any report as PDF (an A4 document with the headline, budget, daily strip, monitor table, suspected causes, outages and method note), CSV (summary, daily, monitor, outage and suspected-cause sections separated by blank lines, times in the SLA's timezone) or JSON (the full report document). The PDF's suspected-cause table appears under the same rule as the page's panel, only when at least one monitor outage was triaged (suspected or inconclusive), so a workspace without auto-triage never sends a table of \"Not triaged\". The CSV is the raw-data export, so its shape does not depend on AI settings: every report computed since the breakdown existed, AI on or off, gains `Cause key` and `Suspected cause` columns on its outage rows and a trailing suspected-cause section (attributed, triaged and pending outage counts, summed unplanned seconds, then one row per bucket), with Not triaged or No alert where nothing was triaged. Reports issued before the breakdown existed export exactly as they did. The monitor detail page uses the strictest target of the SLAs covering that monitor, falling back to 99.9%.",
+          text: "Export any report as PDF (an A4 document with the headline, budget, daily strip, monitor table, suspected causes, outages and method note), CSV (summary, daily, monitor, outage and suspected-cause sections separated by blank lines, times in the SLA's timezone) or JSON (the full report document). The PDF's suspected-cause table appears under the same rule as the page's panel, only when at least one monitor outage was triaged (suspected or inconclusive), so a workspace without auto-triage never sends a table of \"Not triaged\". The CSV is the raw-data export, so its shape does not depend on AI settings: every report computed since the breakdown existed, AI on or off, gains `Cause key` and `Suspected cause` columns on its outage rows and a trailing suspected-cause section (attributed, triaged and pending outage counts, summed unplanned seconds, then one row per bucket), with Not triaged or No alert where nothing was triaged. Reports issued before the breakdown existed export exactly as they did. The CSV ends with a burn section (burn rate, projected exhaustion, then each day's consumed seconds and full-period budget left), and the PDF's error budget lists the burn rate, projected exhaustion and the full-period budget left; reports issued before burn existed have neither and export unchanged. The monitor detail page uses the strictest target of the SLAs covering that monitor, falling back to 99.9%.",
         },
       ],
     },
@@ -135,7 +139,39 @@ export const SLAS_PAGE: DocPage = {
           type: "callout",
           tone: "warning",
           title: "Limits in this release",
-          text: "Reports are not emailed or scheduled; issue and download them from the UI or API. Availability alerts count toward MTTA only when they are on a member monitor or on a group monitor listed explicitly on the SLA. The PDF uses built-in fonts, so characters outside Western European scripts may not render.",
+          text: "Availability alerts count toward MTTA only when they are on a member monitor or on a group monitor listed explicitly on the SLA. The PDF uses built-in fonts, so characters outside Western European scripts may not render.",
+        },
+      ],
+    },
+    {
+      id: "schedules",
+      title: "Scheduled reports",
+      intro:
+        "A report schedule emails an SLA's report to a list of recipients each time a period closes, issued first so every recipient gets the same frozen document.",
+      blocks: [
+        {
+          type: "paragraph",
+          text: "Open an SLA's Schedules tab as an editor or admin and add a schedule: recipients (any email addresses, inside the workspace or not, up to 50), the attachments (PDF, CSV or both) and whether to issue the period before sending it (on by default). An SLA can have up to 10 schedules. The first report a new schedule sends is the running period's; re-enabling a paused schedule likewise starts from the running period instead of sending the periods it missed.",
+        },
+        {
+          type: "list",
+          items: [
+            "About an hour after each period closes in the SLA's timezone (the wait lets late check results land), the API issues the closed period, exactly as Issue report does, and records the schedule as its issuer (Report schedule). When the period was already issued, that copy is sent. With issuing off, the issued copy is sent when there is one, else the live report of the closed period, and the email says it is not frozen.",
+            "Every recipient gets their own message (no recipient sees the others): the headline (availability against target, coverage, error budget and burn rate, outages, MTTR, alerts and MTTA), the attachments, a link to the SLA in Probara for workspace members, and an unsubscribe link.",
+            "Each closed period goes out once. The runner runs in every API replica, every 5 minutes, and claims due schedules with a database row lock that the other replicas skip, so more replicas never mean duplicate emails. A failed delivery is not retried: the schedule shows how many recipients it reached and the sanitized error, and Send now resends.",
+            "Send now emails the last closed period immediately, without issuing it (the issued copy when there is one, else the live report), and leaves the next scheduled run alone. Use it to check the setup.",
+            "Sends, failures and unsubscribes are recorded in the audit log (report-schedule.send, report-schedule.unsubscribe).",
+          ],
+        },
+        {
+          type: "paragraph",
+          text: "The unsubscribe link opens a confirmation page in the operator UI that works signed out; mail clients that support one-click unsubscribe (the List-Unsubscribe and List-Unsubscribe-Post headers) use it directly. An unsubscribed address stays in the recipient list, marked unsubscribed, and gets nothing more from that schedule; there is no re-subscribe, so to mail it again delete the schedule and create a new one. Deleting a schedule invalidates every unsubscribe link it sent.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Needs SMTP and APP_BASE_URL on the API",
+          text: "Report emails go through the platform mailer (SMTP_HOST, SMTP_FROM and the other SMTP_* settings) and link to APP_BASE_URL for unsubscribing, both read by the API. Without either, a schedule can be created disabled but not enabled, and the Schedules tab says which setting is missing. If the mailer disappears later, enabled schedules still issue their periods and record that nothing was sent. See [Configuration](/docs/configuration/).",
         },
       ],
     },
@@ -152,11 +188,15 @@ export const SLAS_PAGE: DocPage = {
             ["GET /api/v1/slas/{id}/report", "Live report: period=2026-09 | 2026-Q3 | 2026-W39, or from=YYYY-MM-DD&to=YYYY-MM-DD, or neither for the running period. Add format=json|csv|pdf for a download."],
             ["GET/POST /api/v1/slas/{id}/reports", "List issued reports / issue one ({\"period\": \"2026-09\"}; empty body means the last closed period). 409 if already issued."],
             ["GET /api/v1/sla-reports/{id}[?format=]", "An issued report exactly as frozen."],
+            ["GET /api/v1/report-schedules[?sla_id=]", "Report schedules, with `mail_ready` (and `mail_problem`) saying whether the API can send."],
+            ["POST /api/v1/report-schedules, GET/PATCH/DELETE /api/v1/report-schedules/{id}", "Manage schedules: `sla_id`, `recipients`, `formats` (`pdf`, `csv`), `auto_issue`, `enabled`. PATCH is partial; lists replace."],
+            ["POST /api/v1/report-schedules/{id}/send", "Email the last closed period now, without issuing it."],
+            ["GET/POST /api/v1/report-unsubscribe/{token}", "Public: describe or follow a recipient's unsubscribe link (POST also serves one-click unsubscribe)."],
           ],
         },
         {
           type: "paragraph",
-          text: "The report document carries `suspected_causes` (`outage_count`, `triaged_outage_count`, `pending_outage_count`, `unplanned_seconds`, and `buckets` with `kind`, `key`, `title`, `outage_count`, `alert_count`, `monitor_count`, `unplanned_seconds`, `confirmed_outage_count`, `corrected_outage_count`), and each attributed monitor outage carries `cause_kind`, `cause_key` and `cause_title`. `key` is the catalogue key for suspected causes and the bucket kind otherwise. All of these are absent on reports issued before the breakdown existed; treat them as optional.",
+          text: "The report document carries `suspected_causes` (`outage_count`, `triaged_outage_count`, `pending_outage_count`, `unplanned_seconds`, and `buckets` with `kind`, `key`, `title`, `outage_count`, `alert_count`, `monitor_count`, `unplanned_seconds`, `confirmed_outage_count`, `corrected_outage_count`), and each attributed monitor outage carries `cause_kind`, `cause_key` and `cause_title`. `key` is the catalogue key for suspected causes and the bucket kind otherwise. All of these are absent on reports issued before the breakdown existed; treat them as optional. Likewise `budget.burn_rate`, `budget.projected_exhaustion_at` (running periods only) and `burn_down` (one `{date, consumed_seconds, remaining_pct}` per day, `remaining_pct` against the full period's budget and null before anything was observed) are absent on reports issued before burn existed and on reports without data.",
         },
       ],
     },

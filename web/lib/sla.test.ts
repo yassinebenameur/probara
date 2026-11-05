@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  causeShare, showSuspectedCauses, slaCausesCaveat, dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
+  burnRateTone, causeShare, describeSendOutcome, formatBurnRate, parseRecipients, scheduleInputError, showSuspectedCauses, slaCausesCaveat, dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
   DEFAULT_SLA_TARGET, type SlaInput, type SlaReport,
 } from './sla';
 
@@ -100,4 +100,35 @@ test('cause share and caveat', () => {
   assert.match(caveat, /observed symptoms, not confirmed root causes/);
   assert.match(caveat, /only at medium or high confidence/);
   assert.match(caveat, /3 of 4 monitor outages had a triaged alert\.$/);
+});
+
+test('burn rates read as a multiple of the allowed pace (S-U8)', () => {
+  assert.equal(formatBurnRate(1.38889), '1.39×');
+  assert.equal(formatBurnRate(0), '0.00×');
+  assert.equal(formatBurnRate(undefined), '—');
+  assert.equal(burnRateTone(0.5), 'good');
+  assert.equal(burnRateTone(1), 'good');
+  assert.equal(burnRateTone(1.5), 'warn');
+  assert.equal(burnRateTone(14.4), 'bad');
+  assert.equal(burnRateTone(undefined), 'none');
+});
+
+test('report schedule recipients are parsed and validated like the API', () => {
+  assert.deepEqual(parseRecipients(' Ops@Example.com, cto@example.org;\nops@example.com  '), ['ops@example.com', 'cto@example.org']);
+  const input = { recipients: ['ops@example.com'], formats: ['pdf' as const], auto_issue: true, enabled: true };
+  assert.equal(scheduleInputError(input), null);
+  assert.equal(scheduleInputError({ ...input, recipients: [] }), 'Add at least one recipient.');
+  assert.equal(scheduleInputError({ ...input, recipients: ['nope'] }), 'nope is not an email address.');
+  assert.equal(scheduleInputError({ ...input, formats: [] }), 'Attach at least one format.');
+});
+
+test('a send outcome reads as one toast', () => {
+  assert.deepEqual(describeSendOutcome({ period_key: '2026-09', issued: true, sent: 2, skipped: 1, failed: 0 }), {
+    tone: 'success',
+    text: '2026-09 (issued) sent to 2 recipients, 1 unsubscribed.',
+  });
+  assert.equal(
+    describeSendOutcome({ period_key: '2026-09', issued: false, sent: 0, skipped: 0, failed: 1, error: '1 of 1 recipients failed: 550' }).tone,
+    'error'
+  );
 });

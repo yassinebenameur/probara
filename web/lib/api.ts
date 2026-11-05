@@ -1722,3 +1722,20 @@ export function createStatusPageAccessToken(id: string, label: string) {
 export function revokeStatusPageAccessToken(id: string, accessId: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/status-pages/${id}/access-tokens/${accessId}`);
 }
+
+// SLA report schedules (lib/sla.ts holds the types)
+export function getSlaReportSchedules(slaId: string) {
+  return apiRequest<import('./sla').SlaReportScheduleList>('GET', `/v1/report-schedules?sla_id=${encodeURIComponent(slaId)}`);
+}
+export function createSlaReportSchedule(slaId: string, data: import('./sla').SlaReportScheduleInput) {
+  return apiRequest<import('./sla').SlaReportSchedule>('POST', '/v1/report-schedules', { sla_id: slaId, ...data });
+}
+export function updateSlaReportSchedule(id: string, data: Partial<import('./sla').SlaReportScheduleInput>) {
+  return apiRequest<import('./sla').SlaReportSchedule>('PATCH', `/v1/report-schedules/${id}`, data);
+}
+export function deleteSlaReportSchedule(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/report-schedules/${id}`);
+}
+export function sendSlaReportSchedule(id: string) {
+  return apiRequest<import('./sla').SlaScheduleSendOutcome>('POST', `/v1/report-schedules/${id}/send`);
+}
