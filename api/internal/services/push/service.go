@@ -42,7 +42,8 @@ func (s *Service) ProcessPush(ctx context.Context, token string, payload PushPay
 		token,
 	).Scan(&monitorID, &tenantID, &enabled)
 	if err == sql.ErrNoRows {
-		return fmt.Errorf("push monitor not found for token: %s", token)
+		// Never echo the token: the handler logs this error.
+		return fmt.Errorf("push monitor not found")
 	}
 	if err != nil {
 		return fmt.Errorf("failed to lookup push monitor: %w", err)

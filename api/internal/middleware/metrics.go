@@ -47,7 +47,10 @@ func MetricsMiddleware(serviceName string) func(http.Handler) http.Handler {
 			next.ServeHTTP(wrapped, r)
 
 			duration := time.Since(start)
-			route := r.URL.Path
+			// The matched pattern, never r.URL.Path: a raw path would put
+			// path-borne credentials (/push/{token}) on /metrics and give
+			// every distinct ID its own series.
+			route := routeLabel(r)
 			method := r.Method
 			statusCode := strconv.Itoa(wrapped.statusCode)
 

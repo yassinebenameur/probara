@@ -1253,6 +1253,12 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **Path-borne credentials** (`/push/{token}`, `/alert-actions/{token}`,
+  `/oncall-feeds/{token}.ics`): the API's request log, panic log and HTTP
+  metrics never use `r.URL.Path` raw — logs redact by the router's patterns,
+  metrics label by route pattern (`api/internal/middleware/route_redaction.go`).
+  Redaction keys on the parameter NAME, so a credential in a path must be a
+  `{…token}`/`{…secret}` parameter, and a handler must not log or echo it.
 
 ## Commits and PRs
 
