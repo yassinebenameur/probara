@@ -40,7 +40,12 @@ export const DEPLOYMENT_PAGE: DocPage = {
             [
               '`docker compose up -d` / `make up`',
               'Raw backend Compose lifecycle',
-              'Compose services only. There is no frontend service in the current root Compose file.',
+              'Compose services only. There is no frontend service in the root Compose file.',
+            ],
+            [
+              '`scripts/install.sh` (release Compose)',
+              'Single-host installs from prebuilt images',
+              'Every service, the frontend included, from the GHCR release images, with generated secrets and NATS authentication. See [release Compose](#release-compose).',
             ],
             [
               'Helm chart',
@@ -107,9 +112,9 @@ openssl rand -base64 32    # PROBARA_SECRETS_KEY`,
         {
           type: 'callout',
           tone: 'warning',
-          title: 'Compose ships an insecure hardcoded secret',
+          title: 'The development Compose file still has development defaults',
           text:
-            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `LOCAL_AI_*`) are optional, and `LOCAL_AI_TOKEN` falls back to a public development token. Populate `.env` anyway so the platform runs on real values instead of placeholders.',
+            '`docker-compose.yml` has no `ADMIN_JWT_SECRET` default: every `docker compose` command fails until it is exported or in `.env` (the Make targets fall back to a per-checkout random `.dev-admin-jwt-secret`). Its other interpolated variables (`PUBLIC_BASE_URL`, `STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `SMTP_*`, `LOCAL_AI_*`) are optional, the database password defaults to `probara`, and `LOCAL_AI_TOKEN` falls back to a public development token. The [release override](#release-compose) makes every credential required.',
         },
       ],
     },
@@ -143,6 +148,11 @@ make stop-all-local`,
               term: '`.dev-secrets.key`',
               description:
                 'Gitignored, persistent local encryption key created by the launcher.',
+            },
+            {
+              term: '`.dev-admin-jwt-secret`',
+              description:
+                'Gitignored per-checkout JWT signing secret, created on first use when `ADMIN_JWT_SECRET` is neither exported nor (for the Make targets) in `.env`. Compose and the local API both use it.',
             },
             {
               term: '`.dev-local-ai-token`',
@@ -216,6 +226,7 @@ docker compose down`,
             ['Alerter metrics/health', '`9094`', 'Only published alerter listener.'],
             ['PostgreSQL', '`5432`', 'Development database, user/database/password `probara`.'],
             ['NATS', '`4222`', 'Client connection; no local authentication or TLS.'],
+            ['NATS websocket', '`8443`', 'Plaintext websocket listener (`ws://`), the same one private locations reach as `wss://` behind a TLS proxy; no authentication in this file.'],
             ['NATS monitor', '`8222`', 'NATS HTTP monitoring endpoint.'],
             ['Local AI inference', '`8090` on `127.0.0.1` only', 'CPU inference for API and worker; `/healthz`, authenticated `/readyz`, `/metrics`.'],
           ],
@@ -230,7 +241,46 @@ docker compose down`,
           tone: 'warning',
           title: 'Compose is a development profile',
           text:
-            'It exposes PostgreSQL and an unauthenticated plaintext NATS broker on host ports, uses development credentials, and omits most advanced environment variables. Do not publish this topology directly to the internet.',
+            'It exposes PostgreSQL and an unauthenticated plaintext NATS broker on host ports, uses development credentials, and omits most advanced environment variables. Do not publish this topology directly to the internet; use the [release override](#release-compose) for a real install.',
+        },
+      ],
+    },
+    {
+      id: 'release-compose',
+      title: 'Release Compose install',
+      intro:
+        'For a single host without building anything: `docker-compose.release.yml` is an override of `docker-compose.yml` that swaps every build for the release image on GHCR (`${PROBARA_IMAGE_REPOSITORY:-ghcr.io/yassinebenameur/probara}-<service>:${PROBARA_VERSION}`), adds the frontend, turns NATS authentication on, and makes every credential a required variable. `scripts/install.sh` downloads both files at a release tag and writes `.env`.',
+      blocks: [
+        {
+          type: 'code',
+          language: 'bash',
+          title: 'Install, then upgrade',
+          code: `curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/dev/scripts/install.sh \\
+  | bash -s -- --dir /opt/probara            # newest release, prereleases included
+
+cd /opt/probara
+docker compose ps                          # .env sets COMPOSE_FILE to both files
+
+# Upgrade: re-run it with a version; only PROBARA_VERSION changes.
+curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/dev/scripts/install.sh \\
+  | bash -s -- --dir /opt/probara --version 2.0.1`,
+        },
+        {
+          type: 'list',
+          items: [
+            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
+            'Back up `.env`. `PROBARA_SECRETS_KEY` decrypts every stored credential, and `POSTGRES_PASSWORD` is fixed when the database volume is first created.',
+            'Generated values are hex or base64 because Compose embeds the database and NATS passwords in connection URLs; if you write your own, keep them URL-safe and free of `$`.',
+            'Published ports: the UI on `3000` (`PROBARA_UI_PORT`) and status pages on `8082` (`PROBARA_STATUS_PAGE_PORT`). The API is reached through the UI\'s `/api` proxy; PostgreSQL, NATS and every metrics port stay on the Compose network. Put HTTPS in front, then set `PUBLIC_BASE_URL` and `ADMIN_COOKIE_SECURE=true` in `.env` and run `docker compose up -d`.',
+            'Local AI is amd64 only. On amd64 Docker hosts the script sets `COMPOSE_PROFILES=local-ai`; elsewhere it sets `LOCAL_AI_DISABLED=true` and the service is not started. Every other image is published for `linux/amd64` and `linux/arm64`.',
+            'SMTP: fill `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `APP_BASE_URL` in `.env`; they reach the API, worker and alerter.',
+            'Container names are fixed (`probara-*`), so one host runs either this stack or the development stack, not both.',
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Private locations: platform services log in to NATS as `probara-platform`; every other client goes through the API-hosted auth callout. The broker\'s websocket listener is published on `127.0.0.1:8443` (`NATS_WEBSOCKET_PUBLISH`) for a TLS reverse proxy on 443 to front, for example Caddy with `nats.example.com { reverse_proxy 127.0.0.1:8443 }`. Then set `PUBLIC_NATS_URL=wss://nats.example.com` in `.env` and the [deploy snippets](/docs/locations/#create-and-deploy) point remote workers at it.',
         },
       ],
     },
@@ -243,7 +293,7 @@ docker compose down`,
           items: [
             'API, scheduler, and worker all use stream `check-jobs` and subject `check.job`, so scheduled and on-demand jobs share one subject contract. If you change these values, change them on all three services together.',
             'The root `.env` file is not passed as a service `env_file`; only variables explicitly declared in Compose reach containers. `PROBARA_SECRETS_KEY` is forwarded from the shell environment to the api, scheduler, worker, and alerter services.',
-            'SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired.',
+            '`SMTP_*` and `APP_BASE_URL` pass through to the api, worker and alerter, and `PUBLIC_BASE_URL` to the api. Asynchronous notifications, scheduler mesh/purge, and many result-ingest settings are not wired; NATS authorization for private locations exists only in the [release override](#release-compose).',
             'Without an exported `LOCAL_AI_TOKEN` (shell or `.env`), `local-ai`, API and worker share a fixed development token that is public in the repository. That is tolerable only because port 8090 is bound to loopback; set your own (`openssl rand -hex 32`) on any shared host. `make start-all-local` generates a per-checkout token instead.',
             'The commented private-location worker example omits required `LOCATION_CREDENTIAL` and should not be enabled as written.',
             'The API and worker correctly share the `synthetic_artifacts` volume used for failure screenshots. Trace and HAR capture are configured by the schema but are not implemented by the current worker.',
@@ -984,7 +1034,7 @@ api:
             'Align every NATS stream, subject, consumer, and status-update subject across services.',
             'Keep [private-destination blocking](/docs/security/#ssrf-network-policy) enabled and allow only narrowly scoped CIDRs.',
             'Share or externalize synthetic-browser artifact storage.',
-            'Provide secure TLS/WSS NATS exposure before enabling remote private locations.',
+            'Provide secure TLS/WSS NATS exposure before enabling remote private locations: `nats.websocket.ingress` with TLS on Helm, a TLS proxy in front of `127.0.0.1:8443` with the release Compose stack.',
             'Correct ingress routing and verify browser client URLs in the built frontend image.',
             'Scrape the listeners that actually serve `/metrics`; alert on readiness failures, result-ingest errors, queue backlog, and migration failure.',
             'Run the complete [verification suite](/docs/security/#security-verification) and a restore drill before launch.',

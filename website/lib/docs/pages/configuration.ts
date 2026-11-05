@@ -55,7 +55,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A populated .env file does not configure every Docker service',
           text:
-            'Compose has no `env_file` declaration. SMTP, notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services.',
+            'Compose has no `env_file` declaration. Notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services; `SMTP_*` and `APP_BASE_URL` to the api, worker, and alerter; `PUBLIC_BASE_URL` to the api.',
         },
         {
           type: 'callout',
@@ -131,7 +131,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`ADMIN_JWT_SECRET`',
               'Required; validation only rejects an empty value. Use at least 32 random characters.',
-              'Compose ships an insecure hardcoded default and the Helm values ship a placeholder default; override both for production.',
+              'Compose has no default and refuses to start without it: the `make` targets supply a per-checkout random value (gitignored `.dev-admin-jwt-secret`) and `scripts/install.sh` writes one into `.env`. The Helm values still ship a placeholder default; override it for production.',
             ],
             [
               '`ADMIN_ACCESS_TTL_MINUTES`',
@@ -183,7 +183,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PUBLIC_BASE_URL`',
               'Empty; surrounding whitespace and trailing slash removed',
-              'Externally reachable API origin used in agent installers, push webhooks, the default OIDC callback, and the [MCP](/docs/mcp/#authentication) OAuth issuer and discovery metadata (derived from the request when empty). Compose and Helm require it for normal deployment.',
+              'Externally reachable API origin used in agent installers, push webhooks, the default OIDC callback, and the [MCP](/docs/mcp/#authentication) OAuth issuer and discovery metadata (derived from the request when empty). Helm requires it; Compose passes it through from the shell or `.env` to the API.',
             ],
             [
               '`PUBLIC_NATS_URL`',
@@ -217,7 +217,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A public URL does not expose NATS for you',
           text:
-            'The embedded Helm NATS Service is ClusterIP-only, and local Compose NATS is unauthenticated plaintext. Production private locations need an independently exposed [TLS/WSS broker path](/docs/security/#private-locations-nats), authentication enabled, and the issuer/key configuration shared with the API.',
+            'The embedded Helm NATS Service is ClusterIP-only unless `nats.websocket.ingress` is enabled, and the development Compose NATS is unauthenticated plaintext (the [release Compose stack](/docs/deployment/#release-compose) enables auth and publishes the websocket listener on loopback for your TLS proxy). Production private locations need an exposed [TLS/WSS broker path](/docs/security/#private-locations-nats), authentication enabled, and the issuer/key configuration shared with the API.',
         },
       ],
     },
@@ -1028,16 +1028,21 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             [
               'Admin JWT and public API URL',
-              'Required interpolation',
+              '`ADMIN_JWT_SECRET` required interpolation (no default); `PUBLIC_BASE_URL` passed through',
               'Required chart validation',
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
-            ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
+            ['Encryption keyring', 'Base key passed through to API, scheduler, worker and alerter (required by the release override); rotation keys not wired', 'Base key wired to API, scheduler, worker and alerter; rotation keys through `extraEnv`'],
             ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker, `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` also to the alerter, `AI_TRIAGE_ENABLED` also to the API; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only (the alerter gets only `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED`; `AI_TRIAGE_ENABLED` also reaches the API)'],
             [
               'SMTP',
-              'Not wired',
+              '`SMTP_*` and `APP_BASE_URL` passed through to API, worker, and alerter',
               '`smtp` values block wired to API, worker, and alerter',
+            ],
+            [
+              'Private-location broker',
+              'Development: unauthenticated, websocket listener on 8443. Release override: auth callout on, websocket published on `127.0.0.1:8443`, issuer seed and `PUBLIC_NATS_URL` on the API',
+              '`nats.auth.*`; `nats.websocket.*` (listener on 8443, Service port, Ingress) and `api.publicNatsURL`',
             ],
             ['Notification dispatch mode', 'Not wired', 'Not wired'],
             ['Scheduler result ingest', 'Code defaults only', 'Code defaults only'],

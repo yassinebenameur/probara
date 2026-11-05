@@ -273,6 +273,9 @@ def check_failures():
 
 
 def check_compose():
+    # docker-compose.yml requires ADMIN_JWT_SECRET (no insecure default); any
+    # value renders the config.
+    os.environ.setdefault('ADMIN_JWT_SECRET', 'compose-config-check')
     compose = json.loads(subprocess.check_output(['docker', 'compose', 'config', '--format', 'json'], text=True, cwd=ROOT))
     services = compose['services']
     ai = services['local-ai']

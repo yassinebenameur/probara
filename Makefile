@@ -1,5 +1,18 @@
 .PHONY: help up down restart logs build build-collector-static kuma-export seed-demo seed-demo-targets seed-demo-stop seed-demo-teardown clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
 
+# docker-compose.yml has no ADMIN_JWT_SECRET default (no insecure literal), so
+# Compose refuses to run without one. Every target exports the shell's value,
+# else .env's, else a per-checkout random secret kept in the gitignored
+# .dev-admin-jwt-secret (the file scripts/start-local-services.sh also falls
+# back to), so Compose and the local processes sign with the same secret.
+ifeq ($(origin ADMIN_JWT_SECRET),undefined)
+ADMIN_JWT_SECRET := $(shell sed -n 's/^ADMIN_JWT_SECRET=//p' .env 2>/dev/null | tail -n 1)
+ifeq ($(ADMIN_JWT_SECRET),)
+ADMIN_JWT_SECRET := $(shell [ -s .dev-admin-jwt-secret ] || (umask 077; openssl rand -hex 32 > .dev-admin-jwt-secret); cat .dev-admin-jwt-secret)
+endif
+export ADMIN_JWT_SECRET
+endif
+
 # Local AI runs beside the platform, never in its way: its image build fails on
 # purpose for an artifact that is not release-approved, and Compose aborts a
 # whole `up`/`build` when any one build fails. So every target below addresses
