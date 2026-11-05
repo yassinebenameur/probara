@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -57,46 +58,66 @@ func (c *apiClient) doRetry(ctx context.Context, method, path string, in, out an
 		sep = "&"
 	}
 	u += sep + "tenant_id=" + url.QueryEscape(TenantID)
-	var rdr io.Reader
+	var body []byte
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
 			return err
 		}
-		rdr = bytes.NewReader(b)
+		body = b
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
-	if err != nil {
-		return err
-	}
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15")
-	if c.bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearer)
-	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, path, err)
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == http.StatusUnauthorized && retry && c.bearer == "" {
-		if err := c.login(ctx); err != nil {
+	// The API rate-limits per credential (API_RATE_LIMIT_*); a seed run
+	// creates far more than one burst, so a 429 waits out Retry-After.
+	for attempt := 0; ; attempt++ {
+		var rdr io.Reader
+		if body != nil {
+			rdr = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, u, rdr)
+		if err != nil {
 			return err
 		}
-		return c.doRetry(ctx, method, path, in, out, false)
-	}
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(b)))
-	}
-	if out != nil && len(b) > 0 {
-		if err := json.Unmarshal(b, out); err != nil {
-			return fmt.Errorf("%s %s: decode: %w (%s)", method, path, err, truncate(string(b), 200))
+		if in != nil {
+			req.Header.Set("Content-Type", "application/json")
 		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15")
+		if c.bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+c.bearer)
+		}
+		resp, err := c.hc.Do(req)
+		if err != nil {
+			return fmt.Errorf("%s %s: %w", method, path, err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < 60 {
+			wait := time.Second
+			if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
+				wait = time.Duration(s) * time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+		if resp.StatusCode == http.StatusUnauthorized && retry && c.bearer == "" {
+			if err := c.login(ctx); err != nil {
+				return err
+			}
+			return c.doRetry(ctx, method, path, in, out, false)
+		}
+		if resp.StatusCode >= 300 {
+			return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(b)))
+		}
+		if out != nil && len(b) > 0 {
+			if err := json.Unmarshal(b, out); err != nil {
+				return fmt.Errorf("%s %s: decode: %w (%s)", method, path, err, truncate(string(b), 200))
+			}
+		}
+		return nil
 	}
-	return nil
 }
 
 func truncate(s string, n int) string {

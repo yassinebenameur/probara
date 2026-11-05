@@ -697,7 +697,7 @@ func (w *world) seedAudit(ctx context.Context, _ *apiClient, pool *pgx.Conn) err
 		{w.users["lucas.martin"], "lucas.martin", "10.40.6.88", "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0"},
 		{w.users["priya.raman"], "priya.raman", "10.40.3.41", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"},
 		{w.users["tom.okafor"], "tom.okafor", "10.40.9.12", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"},
-		{AdminUserID, "admin", "10.40.0.5", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"},
+		{w.adminID, w.o.user, "10.40.0.5", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"},
 	}
 	var monitorKeys []string
 	for _, s := range w.specs {
