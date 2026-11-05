@@ -31,6 +31,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
+	"github.com/yassinebenameur/probara/shared/notifications/messagestore"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
@@ -283,8 +284,10 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// already reached. It writes through the pool, never tx: tx only
 		// holds the alert lock and always rolls back.
 		var recipients plugin.RecipientLedger
+		var messages plugin.MessageStore
 		if alertErr == nil && channelErr == nil {
 			recipients = recipientledger.For(c.db, alertID, channelID, deliveryKey)
+			messages = messagestore.For(c.db, alertID, channelID, eventType, event)
 		}
 		return p.Send(ctx, plugin.DispatchRequest{
 			Channel: plugin.ChannelRef{
@@ -297,6 +300,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			Attempt:    attempt,
 			Recipients: recipients,
 			Recipient:  recipient,
+			Messages:   messages,
 		})
 	}
 	ctx, tally := recipientledger.WithTally(ctx)
@@ -387,6 +391,19 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 		// dropped resolve the caller hands the route's claim back
 		// (releaseSupersededResolveClaim) so the relapse's resolve reaches it.
 		return true, false, status, nil
+	}
+	if envelope.EventType == present.EventUpdated {
+		// A chat card rewrite: superseded once the alert's card state moved
+		// past the one this envelope draws. The alerter's claim already
+		// recorded that older state as rendered, so it sees the difference
+		// and claims a fresh rewrite; delivering this one late would leave
+		// the card showing a state the alert has left.
+		var want string
+		if err := tx.QueryRowContext(ctx, `SELECT `+messagestore.CardStateSQL("al")+` FROM alerts al WHERE al.id = $1`,
+			alertID).Scan(&want); err != nil {
+			return false, false, "", err
+		}
+		return want != messagestore.RenderedState(envelope.Event), false, status, nil
 	}
 	if envelope.EventType == "resolved" {
 		return false, false, status, nil

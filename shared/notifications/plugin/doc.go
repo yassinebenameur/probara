@@ -61,6 +61,21 @@
 // flatten the join into a plain error and carry the longest RetryAfterDelay
 // onto it (see builtin/twilio).
 //
+// A two-way chat plugin (Slack app) advertises CapabilityMessageUpdate and
+// usually CapabilityInteractive (message.go). It posts the alert's card on
+// "created" and Saves the provider's handle on it through
+// DispatchRequest.Messages right after the provider accepted it; it may post
+// reminders, the resolve and follow-ups as replies to the card it Loads
+// (posting a new card, and Saving it, only when none is saved); and on
+// "updated" it rewrites the saved card from View, which draws the alert's
+// current state, and never Saves. The alerter sends "updated" whenever the
+// card's state differs from the alert's, so the card follows acknowledgements
+// and snoozes made anywhere. A failed Load is a transient error, never a
+// reason to post a second card; a nil store (test sends) means post only.
+// Interactive controls call back into the API, which verifies the provider's
+// signature and acts through the alerts service like any other surface;
+// keep View().AckURL as the fallback where the callback is not set up.
+//
 // A plugin that can address one person advertises CapabilityDirectRecipient:
 // when DispatchRequest.Recipient is set it sends only to Recipient.Address,
 // ignoring the configured recipients (which may then be empty), and sends

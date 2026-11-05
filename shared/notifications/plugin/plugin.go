@@ -59,6 +59,10 @@ type DispatchRequest struct {
 	// channel's configured recipients. Only plugins advertising
 	// CapabilityDirectRecipient receive it (see recipient.go).
 	Recipient *Recipient
+	// Messages is the card this alert already has on this channel, for
+	// plugins advertising CapabilityMessageUpdate (see message.go). Nil
+	// means untracked (test sends): post without saving.
+	Messages MessageStore
 }
 
 // RecipientLedger remembers which recipients of one event a provider has
@@ -74,8 +78,9 @@ type RecipientLedger interface {
 
 // Type returns the event type being delivered: "created", "reminder",
 // "resolved", "acknowledged" (only to plugins advertising
-// CapabilityAcknowledge) or "suspected_cause" (only to plugins advertising
-// CapabilityFollowUp).
+// CapabilityAcknowledge), "suspected_cause" (only to plugins advertising
+// CapabilityFollowUp) or "updated" (only to plugins advertising
+// CapabilityMessageUpdate).
 func (r DispatchRequest) Type() string {
 	if r.EventType != "" {
 		return r.EventType

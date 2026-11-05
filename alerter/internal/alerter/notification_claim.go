@@ -12,6 +12,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 // deliverNotification is the ONLY path that sends a channel notification and
@@ -33,6 +34,11 @@ import (
 // the tenant's reopen cooldown) on a route that heard the previous episode's
 // resolve. It is claimed under its own name, so it wins once per episode, and
 // sent as "created": plugins see a new trigger whose Alert.RelapseCount > 0.
+//
+// eventType "updated" rewrites a chat card (plugin.CapabilityMessageUpdate)
+// to the alert's current state; see card_updates.go. It is claimed on the
+// card's alert_notification_messages row rather than the state row, and sent
+// whatever the alert's status, ack or snooze.
 //
 // stopOnAck says whether an acknowledgement silences created/reminder on
 // this route (DispatchGate.stopOnAck); it is re-checked against the alert row
@@ -91,6 +97,9 @@ func (a *Alerter) deliverNotification(
 		return false, fmt.Errorf("lock notification alert: %w", err)
 	}
 	alert.RelapseCount, alert.ReopenedAt = relapseCount, reopenedAt
+	if eventType == present.EventUpdated {
+		setCardState(alert, status, resolvedAt, snoozed, snoozedUntil) // card_updates.go
+	}
 	// The route's reminder resume point, from the same rule as the
 	// pre-filters (DispatchGate.resumedAt).
 	var resumedAt *time.Time
@@ -147,6 +156,10 @@ func (a *Alerter) deliverNotification(
 // shouldSendNotification's gate check and dueEvent mirror it
 // (TestClaimStatusMatchesPreFilter).
 func claimStatusAllows(eventType, status string, snoozed, stopOnAck bool) bool {
+	if eventType == present.EventUpdated {
+		// A card follows the alert into every state.
+		return true
+	}
 	if (eventType == "resolved") != (status == "resolved") {
 		return false
 	}
@@ -177,6 +190,13 @@ func claimStatusAllows(eventType, status string, snoozed, stopOnAck bool) bool {
 //     existing, unresolved row; it leaves last_event_type alone so reminders
 //     and the resolve still flow.
 //   - suspected_cause: the same one-shot shape on suspected_cause_sent_at.
+//   - updated: an update of the chat card's alert_notification_messages row
+//     wins while the card belongs to the alert's current paging episode and
+//     its rendered_state IS DISTINCT FROM the alert's card state
+//     (messagestore.CardStateSQL, read under the caller's alert row lock).
+//     It sets rendered_state to that state, so a second claimant finds it
+//     taken; a failed send rolls it back and the next cycle retries.
+//     shouldSendNotification and dispatchCardUpdates select the same rows.
 //
 // The one-shot columns never touch last_event_type or last_sent_at, so the
 // created/reminder/resolved timing is identical with or without them.
@@ -185,7 +205,8 @@ func claimStatusAllows(eventType, status string, snoozed, stopOnAck bool) bool {
 // reminder it also returns the last_sent_at the claim replaced: the round's
 // identity in the per-recipient ledger (notifications.RecipientEventKey). A
 // transient failure rolls the claim back, so the retry finds the same value;
-// the next round finds the time this one committed.
+// the next round finds the time this one committed. An "updated" claim
+// returns the card's previous write the same way.
 func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uuid.UUID, eventType string, now time.Time, reminderInterval time.Duration, resumedAt *time.Time) (bool, time.Time, error) {
 	var query string
 	args := []interface{}{alertID, channelID, now}
@@ -251,6 +272,8 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			  AND suspected_cause_sent_at IS NULL
 			  AND last_event_type <> 'resolved'
 			RETURNING alert_id`
+	case present.EventUpdated:
+		query = cardUpdateClaimSQL // card_updates.go
 	default:
 		return false, time.Time{}, fmt.Errorf("unknown notification event type %q", eventType)
 	}
@@ -258,7 +281,7 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 	var claimedAlertID uuid.UUID
 	var round time.Time
 	dest := []any{&claimedAlertID}
-	if eventType == "reminder" {
+	if eventType == "reminder" || eventType == present.EventUpdated {
 		dest = append(dest, &round)
 	}
 	err := tx.QueryRowContext(ctx, query, args...).Scan(dest...)

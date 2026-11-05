@@ -15,7 +15,9 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/messagestore"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -75,6 +77,12 @@ type alertRecord struct {
 	// lock, so a send always carries the episode it was claimed in.
 	RelapseCount int
 	ReopenedAt   *time.Time
+	// SnoozedUntil and CardEvent are set only for the "updated" event (a
+	// chat card rewritten to the alert's current state, card_updates.go):
+	// the snooze end while snoozed, and the event the card was first
+	// rendered from.
+	SnoozedUntil *time.Time
+	CardEvent    *notifications.AlertEvent
 }
 
 type alertChannel struct {
@@ -90,6 +98,9 @@ type notificationState struct {
 	LastEventType        string
 	AcknowledgedSentAt   *time.Time
 	SuspectedCauseSentAt *time.Time
+	// Card is the alert's chat card on this channel, when the reconcile
+	// loaded it (card_updates.go); nil otherwise.
+	Card *cardState
 }
 
 type groupMember struct {
@@ -1215,6 +1226,10 @@ func shouldSendNotification(eventType string, state *notificationState, now time
 		return state != nil && state.LastEventType != "resolved" && state.AcknowledgedSentAt == nil
 	case "suspected_cause":
 		return state != nil && state.LastEventType != "resolved" && state.SuspectedCauseSentAt == nil
+	case "updated":
+		// The card shows another state than the alert's (the updated
+		// claim's IS DISTINCT FROM, card_updates.go).
+		return state != nil && state.Card != nil && state.Card.stale()
 	default:
 		return false
 	}
@@ -1244,6 +1259,9 @@ func (a *Alerter) sendChannelNotification(
 		}
 	}
 	event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
+	if eventType == present.EventUpdated {
+		event = cardUpdateEvent(binding, alert, now) // card_updates.go
+	}
 	deliveryKey := recipientKey(ctx, eventType, now, alert.RelapseCount)
 
 	if a.config.AsyncDispatch && a.nats != nil {
@@ -1259,8 +1277,9 @@ func (a *Alerter) sendChannelNotification(
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
 		messageID := envelope.IdempotencyKey()
-		if eventType == "reminder" {
-			// Distinct reminder rounds must not be coalesced by JetStream.
+		if eventType == "reminder" || eventType == present.EventUpdated {
+			// Distinct reminder rounds (and card rewrites) must not be
+			// coalesced by JetStream.
 			messageID += ":" + now.UTC().Format(time.RFC3339Nano)
 		}
 		headers := map[string][]string{
@@ -1282,10 +1301,12 @@ func (a *Alerter) sendChannelNotification(
 	}
 
 	var recipients plugin.RecipientLedger
+	var messages plugin.MessageStore
 	if a.db != nil {
 		// The pool, not deliverNotification's claim transaction: a failed
 		// send rolls that back, and the progress must survive it.
 		recipients = recipientledger.For(a.db, alert.ID, channel.ID, deliveryKey)
+		messages = messagestore.For(a.db, alert.ID, channel.ID, eventType, event)
 	}
 	return p.Send(ctx, plugin.DispatchRequest{
 		Channel: plugin.ChannelRef{
@@ -1297,6 +1318,7 @@ func (a *Alerter) sendChannelNotification(
 		EventType:  eventType,
 		Attempt:    1,
 		Recipients: recipients,
+		Messages:   messages,
 	})
 }
 

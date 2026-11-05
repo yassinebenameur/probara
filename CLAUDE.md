@@ -795,6 +795,21 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   lists members plus superadmins already scheduled in the workspace (all of
   them only for a superadmin caller); never list installation-wide users to
   a workspace.
+- **Chat cards follow the alert** (`alerter/internal/alerter/card_updates.go`).
+  A plugin with `CapabilityMessageUpdate` saves the card it posted through
+  `DispatchRequest.Messages` (`shared/notifications/messagestore`, table
+  `alert_notification_messages`, pool-only like the recipient ledger, one row
+  per alert and channel and paging episode). `dispatchCardUpdates` sends the
+  `updated` event when `rendered_state` differs from
+  `messagestore.CardStateSQL` (status, plus the snooze end); the claim case
+  `updated` in `claimNotificationTx` (`cardUpdateClaimSQL`) and
+  `shouldSendNotification` encode it, `claimStatusAllows` lets it through in
+  every state, and `messagestore.RenderedState` is the Go twin
+  (`TestCardStateSQLMatchesGo`). Never add one-shot events per ack/snooze
+  transition for chat; the reconcile converges. Its delivery key is
+  round-keyed like a reminder's (`RecipientEventKey`). The worker drops a queued
+  `updated` whose state the alert left (`eventSuperseded`); `Save` is a no-op
+  on `updated` (the claim holds the row).
 
 ## Status pages
 
