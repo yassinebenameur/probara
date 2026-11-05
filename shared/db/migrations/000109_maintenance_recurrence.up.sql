@@ -38,3 +38,23 @@ CREATE INDEX idx_maintenance_window_occurrences_window_end
 -- Every existing window is a one-off: exactly one occurrence.
 INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at)
 SELECT id, tenant_id, starts_at, ends_at FROM maintenance_windows;
+
+-- Targets follow the same edit rule (S-M5, shared/maintenance Retarget): a
+-- link covers occurrences only from linked_at on ('-infinity' for links made
+-- with the window), and a removed link moves here with the span it was in
+-- force, so changing a window's monitors never rewrites what an ended
+-- occurrence covered.
+ALTER TABLE maintenance_window_monitors
+    ADD COLUMN linked_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity';
+
+CREATE TABLE maintenance_window_past_targets (
+    maintenance_window_id UUID        NOT NULL REFERENCES maintenance_windows(id) ON DELETE CASCADE,
+    monitor_id            UUID        NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+    linked_at             TIMESTAMPTZ NOT NULL,
+    unlinked_at           TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (maintenance_window_id, monitor_id, unlinked_at),
+    CONSTRAINT maintenance_window_past_targets_span CHECK (unlinked_at > linked_at)
+);
+
+CREATE INDEX idx_maintenance_window_past_targets_monitor
+    ON maintenance_window_past_targets (monitor_id);

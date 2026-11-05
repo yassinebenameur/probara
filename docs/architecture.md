@@ -185,7 +185,9 @@ Maintenance windows are rules; what covers monitors is their materialized
 occurrences (`maintenance_window_occurrences`, S-M5). The API writes them in
 the window's create/update transaction, and the scheduler's hourly roller
 (`maintenance_occurrences.go`, one session advisory lock) extends repeating
-windows to the 35-day horizon. Ended occurrences are kept as SLA history.
+windows to the 35-day horizon, each under the window's row lock so it
+serializes with API edits. Ended occurrences, and the target links they
+covered (`maintenance_window_past_targets`), are kept as SLA history.
 
 Analytics choose raw, rollup, or interval-based calculations according to
 window coverage and the existing state semantics. Raw analytics stream

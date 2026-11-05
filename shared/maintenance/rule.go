@@ -21,6 +21,7 @@ package maintenance
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 	"sort"
 	"strings"
 	"time"
@@ -44,9 +45,10 @@ const (
 	// Horizon is how far ahead occurrences are materialized. The API expands
 	// this far on create/update and the scheduler rolls it forward.
 	Horizon = 35 * 24 * time.Hour
-	// MaxOccurrencesPerHorizon bounds a rule's density: a rule that would
-	// start more occurrences than this within one horizon is rejected, so a
-	// cron like "* * * * *" cannot flood the occurrence table.
+	// MaxOccurrencesPerHorizon bounds a rule's density: a rule that could
+	// start more occurrences than this within any Horizon-long span is
+	// rejected (checkDensity), so a cron like "* * * * *" cannot flood the
+	// occurrence table.
 	MaxOccurrencesPerHorizon = 1000
 	// MaxInterval bounds interval_n ("every N days/weeks/months").
 	MaxInterval = 366
@@ -159,12 +161,65 @@ func (r Rule) Normalize() (Rule, error) {
 	if r.Until != nil && !r.Until.After(r.StartsAt) {
 		return r, errors.New("recurrence until must be after starts_at")
 	}
-	// Density: the first horizon after StartsAt is representative of every
-	// later one (calendar rules are periodic within a year).
-	if _, err := Expand(r, r.StartsAt, r.StartsAt.Add(Horizon)); err != nil {
+	if err := checkDensity(r); err != nil {
 		return r, err
 	}
 	return r, nil
+}
+
+// densityDays is how many local calendar days a Horizon-long span can
+// touch: 35 whole days plus a partial one at each end, plus one for a
+// DST-shortened day inside it.
+const densityDays = int(Horizon/(24*time.Hour)) + 2
+
+// gregorianCycleDays is the length of the 400-year Gregorian cycle, after
+// which every (month, day of month, weekday) pattern repeats exactly.
+const gregorianCycleDays = 146097
+
+// checkDensity rejects a rule that could start more than
+// MaxOccurrencesPerHorizon occurrences in some Horizon-long span, wherever
+// that span falls. It is the one definition of density: Expand caps the
+// starts in [from, to) with the same bound, so a rule Normalize accepts
+// always expands, for every from the roller or an edit uses.
+//
+// Calendar rules start at most one occurrence per day (daily, weekly) or
+// per month, so they can never reach the cap. A cron rule starts the same
+// number of wall times on every day it matches; its bound is that number
+// times the most days it matches in any densityDays-long stretch of the
+// Gregorian cycle, an upper bound that holds whatever the start date.
+func checkDensity(r Rule) error {
+	if r.Frequency != FrequencyCron {
+		return nil
+	}
+	spec, err := parseCron(r.Cron)
+	if err != nil {
+		return err
+	}
+	perDay := bits.OnesCount64(spec.Hour&^cronStar) * bits.OnesCount64(spec.Minute&^cronStar)
+	if perDay*densityDays <= MaxOccurrencesPerHorizon {
+		return nil
+	}
+	if perDay > MaxOccurrencesPerHorizon {
+		return ErrTooManyOccurrences
+	}
+	// Sliding count of matching days across one full cycle (plus the window
+	// length, so stretches that wrap the cycle are counted too).
+	match := make([]bool, gregorianCycleDays+densityDays)
+	run := 0
+	for d := range match {
+		_, m, dd := dayDate(int64(d))
+		match[d] = spec.Month&(1<<uint(m)) != 0 && cronDayMatches(spec, dd, dayWeekday(int64(d)))
+		if match[d] {
+			run++
+		}
+		if d >= densityDays && match[d-densityDays] {
+			run--
+		}
+		if run*perDay > MaxOccurrencesPerHorizon {
+			return ErrTooManyOccurrences
+		}
+	}
+	return nil
 }
 
 func normalizeWeekdays(in []time.Weekday) ([]time.Weekday, error) {
@@ -294,6 +349,7 @@ func Expand(r Rule, from, to time.Time) ([]Occurrence, error) {
 	// drop duplicates so each instant runs once.
 	sort.Slice(starts, func(i, j int) bool { return starts[i].Before(starts[j]) })
 	out := make([]Occurrence, 0, len(starts))
+	started := 0
 	for i, s := range starts {
 		if i > 0 && s.Equal(starts[i-1]) {
 			continue
@@ -306,9 +362,15 @@ func Expand(r Rule, from, to time.Time) ([]Occurrence, error) {
 			continue
 		}
 		out = append(out, Occurrence{Start: s, End: e})
+		if !s.Before(from) {
+			started++
+		}
 	}
+	// The cap counts starts in [from, to) only, the quantity checkDensity
+	// bounds; occurrences still running from before from (a long duration)
+	// are not new rows for any caller.
 	horizons := int((to.Sub(from) + Horizon - 1) / Horizon)
-	if len(out) > MaxOccurrencesPerHorizon*horizons {
+	if started > MaxOccurrencesPerHorizon*horizons {
 		return nil, ErrTooManyOccurrences
 	}
 	return out, nil
