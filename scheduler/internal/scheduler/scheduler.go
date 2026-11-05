@@ -332,6 +332,7 @@ func (s *Scheduler) Start() error {
 	if s.config.MeshEnabled {
 		s.runMeshBatch(s.ctx)
 	}
+	go s.runMaintenanceRoller() // maintenance_occurrences.go
 
 	for {
 		select {

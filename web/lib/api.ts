@@ -98,6 +98,8 @@ import type {
   MaintenanceWindowStatus,
   CreateMaintenanceWindowRequest,
   UpdateMaintenanceWindowRequest,
+  PreviewMaintenanceWindowRequest,
+  PreviewMaintenanceWindowResponse,
   SnoozeMonitorRequest,
   Location,
   LocationListResponse,
@@ -417,6 +419,17 @@ export async function updateMaintenanceWindow(
   data: UpdateMaintenanceWindowRequest
 ): Promise<MaintenanceWindow> {
   return apiRequest<MaintenanceWindow>('PATCH', `/v1/maintenance-windows/${id}`, data);
+}
+
+export async function previewMaintenanceWindow(
+  data: PreviewMaintenanceWindowRequest
+): Promise<PreviewMaintenanceWindowResponse> {
+  return apiRequest<PreviewMaintenanceWindowResponse>('POST', '/v1/maintenance-windows/preview', data);
+}
+
+/** Ends the occurrence in progress now; a repeating window keeps its rule. */
+export async function endMaintenanceOccurrence(id: string): Promise<MaintenanceWindow> {
+  return apiRequest<MaintenanceWindow>('POST', `/v1/maintenance-windows/${id}/end`);
 }
 
 export async function deleteMaintenanceWindow(id: string): Promise<void> {

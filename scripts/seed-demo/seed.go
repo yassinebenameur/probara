@@ -664,6 +664,12 @@ func (w *world) seedHistory(ctx context.Context, _ *apiClient, pool *pgx.Conn) e
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`, mw.id, TenantID, mw.title, mw.desc, mw.start, mw.end, minTime(mw.start.Add(-5*24*time.Hour), w.now.Add(-2*time.Hour))); err != nil {
 			return err
 		}
+		// Coverage is the occurrence, never the rule (S-M5): a one-off window
+		// is exactly one.
+		if _, err := tx.Exec(ctx, `INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at)
+			VALUES ($1,$2,$3,$4)`, mw.id, TenantID, mw.start, mw.end); err != nil {
+			return err
+		}
 		for _, k := range mw.keys {
 			if _, err := tx.Exec(ctx, `INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id) VALUES ($1,$2)`, mw.id, w.ids[k]); err != nil {
 				return err

@@ -157,7 +157,7 @@ export const MCP_PAGE: DocPage = {
             ["Import / export", "`export_monitors`, `preview_monitor_import` (send the file's text), `import_monitors`"],
             ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `bulk_acknowledge_alerts`, `bulk_resolve_alerts`, `unacknowledge_alert`, `bulk_unacknowledge_alerts`, `snooze_alert`, `unsnooze_alert`, `label_alert_triage`, `wait_for_alert_events`"],
             ["Incidents", "create, update, state transitions, timeline entries, alert/monitor links, status-page publishing, AI analysis request/read/label"],
-            ["Operations", "maintenance windows, private locations and their deploy info, `get_mesh`, `get_mesh_edge_history`, `probe_mesh_edge`"],
+            ["Operations", "maintenance windows (with `preview_maintenance_window` for a schedule's next occurrences), private locations and their deploy info, `get_mesh`, `get_mesh_edge_history`, `probe_mesh_edge`"],
             ["Kubernetes discovery", "`list_discovery_integrations`, `create_discovery_integration`, `update_discovery_integration` (rename, location, namespace add/remove; destructive), `get_discovery_namespaces`, `get_discovery_coverage`, `approve_discovery_suggestion`, monitor link/unlink, collector token rotation"],
             ["Reporting", "SLAs, live reports (`format` json/csv/pdf returns a file), issued reports"],
             ["Status pages", "pages, sections and settings, custom template draft/publish/revert, template library"],

@@ -514,18 +514,32 @@ export const ALERTING_PAGE: DocPage = {
           rows: [
             ["`title`", "Required operator-facing title"],
             ["`description`", "Optional maintenance context"],
-            ["`starts_at`", "RFC 3339 start timestamp"],
-            ["`ends_at`", "RFC 3339 end timestamp, after the start"],
+            ["`starts_at`", "RFC 3339 start timestamp; for a repeating window, the first occurrence (its time of day and first date)"],
+            ["`ends_at`", "RFC 3339 end timestamp, after the start; for a repeating window, `ends_at - starts_at` is every occurrence's duration"],
             [
               "`monitor_ids`",
               "Selected tenant monitors; selecting a group also covers its members for muting",
+            ],
+            [
+              "`recurrence`",
+              "Optional repeat rule: `frequency` (`none`, `daily`, `weekly`, `monthly`, `cron`), `interval` (every N days/weeks/months), `weekdays` (weekly, 0 = Sunday), `month_day` (monthly, 1-31), `cron` (5-field expression), `timezone` (IANA, default UTC) and `until` (no occurrence starts after it)",
             ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Maintenance windows are classified as upcoming, active, or past. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during the active interval. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest start, past (and the unfiltered list) by most recent end, so a page cut never drops the next window.",
+            "A window is a rule; what mutes alerts and counts as planned downtime is its **occurrences**. A one-off window is a single occurrence. A repeating window runs at its first occurrence's wall-clock time in its timezone: a time a DST change skips shifts forward by the gap (02:30 on the spring-forward night runs at 03:30), a time a DST change repeats runs once at its first instance, and a monthly day past the end of a shorter month runs on that month's last day (day 31 runs on 28/29 February and 30 April). Durations are elapsed time. A rule may start at most 1,000 occurrences in 35 days. `POST /maintenance-windows/preview` (same fields, plus `count`) returns the next occurrences without saving anything; the schedule dialog shows them as you edit.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Occurrences are materialized 35 days ahead (the API on save, then the scheduler rolls the horizon forward hourly) and kept once they end, because SLA reports read them. An edit takes effect when you save it: occurrences that have ended never change, the one in progress keeps its start and takes the end the new schedule gives the present moment (so extending a running one-off window, or ending it now, is an ordinary edit; if the new schedule does not cover the present it ends at the save), and future occurrences are regenerated. An edit never puts maintenance into the past. `POST /maintenance-windows/{id}/end` ends just the occurrence in progress and leaves the rule alone, so a repeating window runs again at its next occurrence (the **End now** action). Each window lists its in-progress and next occurrences (`occurrences`, up to five).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Maintenance windows are classified as active (an occurrence is in progress), upcoming (one is ahead, or the rule still repeats), or past. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during an occurrence, and only then. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end of the running occurrence, upcoming by soonest next start, past by most recent end, and the unfiltered list by `starts_at`, newest first, so a page cut never drops the next window.",
         },
         {
           type: "paragraph",
@@ -538,6 +552,13 @@ export const ALERTING_PAGE: DocPage = {
           title: "Failure can surface when maintenance ends",
           text:
             "Because checks continue, a monitor that is still down at the end of maintenance can immediately open or resume an alert. Schedule enough time for validation or extend the window before it expires.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Deleting a window deletes its history",
+          text:
+            "Deleting a maintenance window also deletes its past occurrences, so live SLA reports for those periods count that downtime as unplanned again (issued reports are frozen and keep it). To stop a repeating window, set `until` or switch it to a one-off instead.",
         },
       ],
     },

@@ -53,8 +53,11 @@ func TestComputeIntervalAvailability_IntegratesTimeline(t *testing.T) {
 
 	mwID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at)
-		VALUES ($1, $2, 'planned work', $3, $4)
+		WITH w AS (
+			INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at)
+			VALUES ($1, $2, 'planned work', $3, $4)
+			RETURNING id, tenant_id, starts_at, ends_at)
+		INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT * FROM w
 	`, mwID, tenantID, tDown, tDown.Add(6*time.Minute)); err != nil {
 		t.Fatalf("insert maintenance window: %v", err)
 	}

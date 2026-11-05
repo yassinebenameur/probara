@@ -404,6 +404,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", maintenanceHandlers.GetMaintenanceWindow)
 				r.Patch("/{id}", maintenanceHandlers.UpdateMaintenanceWindow)
 				r.Delete("/{id}", maintenanceHandlers.DeleteMaintenanceWindow)
+				registerMaintenanceRecurrenceRoutes(r, maintenanceHandlers)
 			})
 
 			r.Route("/monitors", func(r chi.Router) {

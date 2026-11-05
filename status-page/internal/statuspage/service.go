@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/securityheaders"
@@ -115,6 +116,11 @@ type StatusPageMaintenanceWindow struct {
 	EndsAt           time.Time `json:"ends_at"`
 	IsActive         bool      `json:"is_active"`
 	AffectedMonitors []string  `json:"affected_monitors,omitempty"`
+	// Repeating marks a recurring window; StartsAt/EndsAt are then its
+	// earliest listed occurrence and NextStartsAt the following ones (up to
+	// three, within the 14-day look-ahead).
+	Repeating    bool        `json:"repeating,omitempty"`
+	NextStartsAt []time.Time `json:"next_starts_at,omitempty"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -563,20 +569,23 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	return &page, nil
 }
 
-// loadMaintenanceWindows returns active and upcoming (next 14 days) maintenance
-// windows that affect at least one monitor on this status page, directly or via
-// a targeted group. Affected monitor names are page-scoped.
+// loadMaintenanceWindows returns the maintenance windows with an occurrence
+// in progress or starting in the next 14 days that affects at least one
+// monitor on this status page, directly or via a targeted group. Coverage is
+// the shared occurrence fragment (S-M5), never the window's rule. Each window
+// is listed once, at its earliest such occurrence; a repeating window also
+// carries the starts of up to maxListedNextStarts later ones. Affected
+// monitor names are page-scoped.
 func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageMaintenanceWindow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT mw.title, mw.description, mw.starts_at, mw.ends_at,
-			NOW() >= mw.starts_at AS is_active,
+		SELECT mw.id, mw.title, mw.description, mo.starts_at, mo.ends_at,
+			NOW() >= mo.starts_at AS is_active,
+			mw.recurrence <> 'none' AS repeating,
 			array_agg(DISTINCT pm.name) AS affected
-		FROM maintenance_windows mw
-		JOIN maintenance_window_monitors mwm ON mwm.maintenance_window_id = mw.id
-		JOIN monitors pm ON pm.tenant_id = mw.tenant_id AND pm.deleted_at IS NULL
-			AND (pm.id = mwm.monitor_id
-				OR pm.id IN (SELECT mg.monitor_id FROM monitor_groups mg WHERE mg.group_id = mwm.monitor_id))
-		WHERE mw.tenant_id = $2
+		FROM monitors pm
+		CROSS JOIN LATERAL `+maintenance.OccurrenceRangesSQL("$2", "pm.id", "NOW()", "NOW() + INTERVAL '14 days'")+` mo
+		JOIN maintenance_windows mw ON mw.id = mo.window_id AND mw.tenant_id = $2
+		WHERE pm.tenant_id = $2 AND pm.deleted_at IS NULL
 		  AND pm.id IN (
 			SELECT spsm.monitor_id
 			FROM status_page_section_monitors spsm
@@ -585,10 +594,8 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 			UNION
 			SELECT spm.monitor_id FROM status_page_monitors spm WHERE spm.status_page_id = $1
 		  )
-		  AND mw.ends_at > NOW()
-		  AND mw.starts_at < NOW() + INTERVAL '14 days'
-		GROUP BY mw.id
-		ORDER BY mw.starts_at
+		GROUP BY mw.id, mo.starts_at, mo.ends_at
+		ORDER BY mo.starts_at, mw.id
 	`, statusPageID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("query maintenance windows: %w", err)
@@ -596,13 +603,23 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 	defer rows.Close()
 
 	windows := make([]StatusPageMaintenanceWindow, 0)
+	index := map[uuid.UUID]int{}
 	for rows.Next() {
+		var id uuid.UUID
 		var w StatusPageMaintenanceWindow
 		var affected []string
-		if err := rows.Scan(&w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, pq.Array(&affected)); err != nil {
+		if err := rows.Scan(&id, &w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, &w.Repeating, pq.Array(&affected)); err != nil {
 			return nil, fmt.Errorf("scan maintenance window: %w", err)
 		}
+		if i, seen := index[id]; seen {
+			// A later occurrence of a window already listed.
+			if len(windows[i].NextStartsAt) < maxListedNextStarts {
+				windows[i].NextStartsAt = append(windows[i].NextStartsAt, w.StartsAt)
+			}
+			continue
+		}
 		w.AffectedMonitors = affected
+		index[id] = len(windows)
 		windows = append(windows, w)
 	}
 	if err := rows.Err(); err != nil {
@@ -610,6 +627,9 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 	}
 	return windows, nil
 }
+
+// maxListedNextStarts caps the "then" starts a repeating window shows.
+const maxListedNextStarts = 3
 
 func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {
 	rows, err := s.db.QueryContext(ctx, `

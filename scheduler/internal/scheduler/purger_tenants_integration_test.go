@@ -196,6 +196,8 @@ func TestTenantPurgeCoversEveryTenantTable(t *testing.T) {
 	} {
 		covered[table] = "tenant cascade"
 	}
+	// Maintenance occurrences cascade with their window and their tenant.
+	covered["maintenance_window_occurrences"] = "tenant cascade"
 	// Kept on purpose: the audit trail outlives the workspace and has its
 	// own retention.
 	covered["audit_log"] = "retained"

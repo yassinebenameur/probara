@@ -104,6 +104,9 @@ type statusPageMaintenanceView struct {
 	IsActive               bool
 	TimeRangeText          string
 	AffectedComponentsText string
+	// RepeatText is set for a repeating window: "Repeats" plus the next
+	// starts when any fall within the look-ahead.
+	RepeatText string
 }
 
 type statusPageSectionView struct {
@@ -513,7 +516,24 @@ func buildStatusPageMaintenanceView(window StatusPageMaintenanceWindow) statusPa
 		IsActive:               window.IsActive,
 		TimeRangeText:          timeRangeText,
 		AffectedComponentsText: affectedComponentsText,
+		RepeatText:             maintenanceRepeatText(window),
 	}
+}
+
+// maintenanceRepeatText labels a repeating window and lists its next starts
+// (UTC, like the time range above it).
+func maintenanceRepeatText(window StatusPageMaintenanceWindow) string {
+	if !window.Repeating {
+		return ""
+	}
+	if len(window.NextStartsAt) == 0 {
+		return "Repeats"
+	}
+	next := make([]string, 0, len(window.NextStartsAt))
+	for _, t := range window.NextStartsAt {
+		next = append(next, t.UTC().Format("Jan 2, 15:04"))
+	}
+	return "Repeats · next: " + strings.Join(next, ", ") + " UTC"
 }
 
 func incidentStateRank(state string) int {
