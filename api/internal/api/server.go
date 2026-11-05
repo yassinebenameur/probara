@@ -459,6 +459,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
 				// Snooze: quick single-monitor maintenance window
 				r.Post("/{id}/snooze", maintenanceHandlers.SnoozeMonitor)
+				registerHistoryRoutes(r, monitorHandlers, monitorService, log) // routes_history.go
 			})
 
 			// Legacy custom-agent push — retired 2026-11-18, superseded by
