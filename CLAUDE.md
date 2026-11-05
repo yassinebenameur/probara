@@ -938,7 +938,9 @@ Login lockout).
   `servePageAddon` (`addons.go`, suffixes in `pageAddonSuffixes`). Summary
   and badges read the `pageSummary` built in `cachedPage` with the page's
   HTML, so they cannot disagree with it; badges exist only for rendered
-  components. `writeAddon` never overwrites a `Cache-Control` set before
+  components, and uptime only where `show_global_uptime` /
+  `show_monitor_uptime` show it (hidden → `null`, uptime badge 404).
+  `writeAddon` never overwrites a `Cache-Control` set before
   dispatch (a gated page's `private, no-store` must win).
 - **`Subscriber.handleEvent` early-returns** when no SSE client is connected
   and the render cache is empty — exactly when browser notifications matter —
