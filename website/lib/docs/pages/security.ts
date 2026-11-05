@@ -125,8 +125,8 @@ export const SECURITY_PAGE: DocPage = {
         {
           type: 'list',
           items: [
-            'A locked account, a throttled address and an unknown username all get the same `429` with `Retry-After`; wrong and unknown credentials share one `401`. Unknown and SSO-only usernames are throttled like real accounts and cost the same bcrypt comparison, so the responses do not reveal which accounts exist.',
-            'Each API replica also blocks a client address for 15 minutes after 50 failed logins (resolved through [`TRUSTED_PROXY_CIDRS`](#audit-proxy-trust)). This layer is per replica.',
+            'A locked account and a locked unknown username get the same `429` with `Retry-After`; wrong and unknown credentials share one `401`. Unknown, SSO-only and disabled usernames keep a failure streak in the database (hashed, never the username itself) counted exactly like a real account\'s, and cost the same bcrypt comparison, so the responses do not reveal which accounts exist, whichever replica answers.',
+            'Limits are per username only. There is no per-address block: behind a proxy or NAT every user shares one client address, and blocking it would let anyone deny sign-in to all of them. Volume limits per client are the job of the API rate limiter or your ingress.',
             'Superadministrators see the lock on the user page and can lift it with **Unlock** (`POST /api/v1/users/{id}/unlock`, MCP `unlock_user`). [`go run ./cmd/admin`](/docs/operations/#database-migrations) also clears it, and so does a superadministrator setting a new password.',
             'Audit events: `auth.login` failures and denials (with the reason), `auth.lockout` when a lock starts, `auth.unlock`.',
             'SSO (OIDC) sign-in is not affected; the identity provider owns its own protection.',

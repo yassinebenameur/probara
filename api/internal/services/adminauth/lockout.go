@@ -2,19 +2,24 @@ package adminauth
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-// Login brute-force policy. The account lockout lives in admin_users so it
-// holds across API replicas; the in-memory throttles only add a per-replica
-// layer in front of it.
+// Login brute-force policy. All of it lives in Postgres, so it holds across
+// API replicas and restarts: a real account's streak in admin_users, and the
+// streak of a username with no password account in login_failure_streaks
+// (migration 000106), counted by the same SQL so the two are
+// indistinguishable from outside. There is deliberately no per-address
+// stage: behind a proxy or NAT every user shares one address, and blocking
+// it would let anyone deny sign-in to all of them.
 const (
 	// LockoutThreshold failed passwords lock the account. Every further
 	// multiple of it locks again, for twice as long.
@@ -25,10 +30,6 @@ const (
 	// lockoutMemory forgets a failure streak after this much quiet, so a
 	// year of occasional typos never adds up to a lock.
 	lockoutMemory = 24 * time.Hour
-
-	// IPFailureLimit failed logins from one client address within
-	// LockoutBase block that address for LockoutBase (per replica).
-	IPFailureLimit = 50
 )
 
 var (
@@ -71,32 +72,50 @@ func (f *LoginFailure) Is(target error) bool {
 	return target == ErrInvalidCredentials
 }
 
-// failureCountExpr is the account's failure streak after one more failure:
-// a streak whose last failure is older than lockoutMemory starts over.
-// It reads the row's current values, so inside an UPDATE it sees the
-// re-fetched row when concurrent attempts serialize on the row lock.
-var failureCountExpr = fmt.Sprintf(`(CASE
-	WHEN last_failed_login_at IS NULL OR last_failed_login_at < NOW() - make_interval(secs => %d)
-	THEN 1 ELSE failed_login_count + 1 END)`, int(lockoutMemory.Seconds()))
+// lockoutAssignments is the SET list that records one more failure on a
+// streak row: the count (restarting after lockoutMemory of quiet), its time,
+// and a lock of LockoutBase·2^(k-1), capped at LockoutMax, on every k-th
+// multiple of the threshold. col qualifies the row's columns ("" or "s.").
+// It reads the row's current values, so inside an UPDATE (or ON CONFLICT DO
+// UPDATE) it sees the re-fetched row when concurrent attempts serialize on
+// the row lock. Parameters: $2 threshold, $3 base seconds, $4 max seconds.
+func lockoutAssignments(col string) string {
+	count := fmt.Sprintf(`(CASE
+	WHEN %[1]slast_failed_login_at IS NULL OR %[1]slast_failed_login_at < NOW() - make_interval(secs => %[2]d)
+	THEN 1 ELSE %[1]sfailed_login_count + 1 END)`, col, int(lockoutMemory.Seconds()))
+	return strings.NewReplacer("$COUNT", count, "$COL", col).Replace(`
+	failed_login_count = $COUNT,
+	last_failed_login_at = NOW(),
+	locked_until = CASE
+	    WHEN $COUNT % $2::int = 0
+	    THEN NOW() + make_interval(secs => LEAST($3::float8 * power(2, LEAST($COUNT / $2::int - 1, 30)), $4::float8))
+	    ELSE $COLlocked_until
+	END`)
+}
 
 // reserveAttemptQuery counts an attempt as a failure BEFORE the password is
 // compared, and refuses it (no row) while the account is locked. Reserving
 // first is what bounds concurrent guessing: N parallel requests cannot all
 // pass a "not locked yet" read and then all be compared. A correct password
-// clears the reservation (resetFailuresQuery). Crossing a multiple of the
-// threshold locks for LockoutBase·2^(k-1), capped at LockoutMax.
-var reserveAttemptQuery = strings.NewReplacer("$COUNT", failureCountExpr).Replace(`
+// clears the reservation (resetFailuresQuery).
+var reserveAttemptQuery = `
 	UPDATE admin_users
-	SET failed_login_count = $COUNT,
-	    last_failed_login_at = NOW(),
-	    locked_until = CASE
-	        WHEN $COUNT % $2::int = 0
-	        THEN NOW() + make_interval(secs => LEAST($3::float8 * power(2, LEAST($COUNT / $2::int - 1, 30)), $4::float8))
-	        ELSE locked_until
-	    END
+	SET ` + lockoutAssignments("") + `
 	WHERE id = $1 AND (locked_until IS NULL OR locked_until <= NOW())
 	RETURNING failed_login_count, locked_until
-`)
+`
+
+// reserveGhostQuery is reserveAttemptQuery for a username with no password
+// account, keyed by ghostKey: same counting, doubling, cap and expiry, and
+// the same "no row while locked" refusal (ON CONFLICT DO UPDATE ... WHERE).
+var reserveGhostQuery = `
+	INSERT INTO login_failure_streaks AS s (username_hash, failed_login_count, last_failed_login_at)
+	VALUES ($1, 1, NOW())
+	ON CONFLICT (username_hash) DO UPDATE
+	SET ` + lockoutAssignments("s.") + `
+	WHERE s.locked_until IS NULL OR s.locked_until <= NOW()
+	RETURNING failed_login_count, locked_until
+`
 
 const resetFailuresQuery = `
 	UPDATE admin_users
@@ -108,8 +127,18 @@ const resetFailuresQuery = `
 // refusal (the account is locked); otherwise count is the new streak and
 // lockedUntil is set when this attempt crossed the threshold.
 func (s *Service) reserveAttempt(ctx context.Context, userID uuid.UUID) (count int, lockedUntil *time.Time, locked bool, err error) {
+	return s.reserve(ctx, reserveAttemptQuery, userID)
+}
+
+// reserveGhost records one attempt against a username with no password
+// account (see reserveAttempt).
+func (s *Service) reserveGhost(ctx context.Context, key string) (count int, lockedUntil *time.Time, locked bool, err error) {
+	return s.reserve(ctx, reserveGhostQuery, key)
+}
+
+func (s *Service) reserve(ctx context.Context, query string, key any) (count int, lockedUntil *time.Time, locked bool, err error) {
 	var until sql.NullTime
-	err = s.db.QueryRowContext(ctx, reserveAttemptQuery, userID,
+	err = s.db.QueryRowContext(ctx, query, key,
 		LockoutThreshold, LockoutBase.Seconds(), LockoutMax.Seconds(),
 	).Scan(&count, &until)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -157,108 +186,50 @@ func (s *Service) UnlockUser(ctx context.Context, userID uuid.UUID) (bool, error
 	return wasLocked, nil
 }
 
-// FailureThrottle is the in-memory twin of the account lockout, keyed by an
-// arbitrary string: every limit-th failure in a streak blocks the key, for
-// block doubled per repeat and capped at maxBlock, and a streak ends after
-// window without failures. It is per process: replicas keep their own counts.
-type FailureThrottle struct {
-	mu       sync.Mutex
-	limit    int
-	window   time.Duration
-	block    time.Duration
-	maxBlock time.Duration
-	entries  map[string]*throttleEntry
+// ghostKey identifies a username with no password account in
+// login_failure_streaks: a SHA-256 of the username exactly as the account
+// lookup matches it (case-sensitive), so case variants form separate streaks
+// for real and unknown names alike, and the table never stores usernames.
+func ghostKey(username string) string {
+	sum := sha256.Sum256([]byte(username))
+	return hex.EncodeToString(sum[:])
 }
 
-type throttleEntry struct {
-	failures     int
-	lastFailure  time.Time
-	blockedUntil time.Time
+// ghostLockedFor reads how long a refused unknown username stays locked.
+func (s *Service) ghostLockedFor(ctx context.Context, key string) time.Duration {
+	var until sql.NullTime
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT locked_until FROM login_failure_streaks WHERE username_hash = $1`, key,
+	).Scan(&until); err != nil || !until.Valid {
+		return 0
+	}
+	return time.Until(until.Time)
 }
 
-// throttleMaxEntries bounds memory under a spray of distinct keys; stale
-// entries are pruned first, and only if that is not enough is the map reset.
-const throttleMaxEntries = 10000
+// ghostPruneEvery is the share of unknown-username failures that also prune
+// (1 in N): enough to bound the table under a username spray without
+// turning every failure into a DELETE.
+const ghostPruneEvery = 50
 
-// NewFailureThrottle returns a throttle that blocks a key after limit
-// failures in a streak (see FailureThrottle). maxBlock <= block disables the
-// doubling.
-func NewFailureThrottle(limit int, window, block, maxBlock time.Duration) *FailureThrottle {
-	if maxBlock < block {
-		maxBlock = block
-	}
-	return &FailureThrottle{limit: limit, window: window, block: block, maxBlock: maxBlock, entries: map[string]*throttleEntry{}}
-}
+// ghostPruneBatch bounds one prune.
+const ghostPruneBatch = 1000
 
-// BlockedFor reports how long key stays blocked (0 when it is not).
-func (t *FailureThrottle) BlockedFor(key string, now time.Time) time.Duration {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if e, ok := t.entries[key]; ok && e.blockedUntil.After(now) {
-		return e.blockedUntil.Sub(now)
+// PruneGhostStreaks deletes unknown-username streaks forgotten by
+// lockoutMemory. A forgotten streak is never locked (LockoutMax is shorter
+// than lockoutMemory and a lock starts at the last failure), so pruning
+// changes no answer. Called opportunistically from failed logins; there is
+// no other writer to clean up after.
+func PruneGhostStreaks(ctx context.Context, q Querier) (int64, error) {
+	res, err := q.ExecContext(ctx, `
+		DELETE FROM login_failure_streaks
+		WHERE username_hash IN (
+			SELECT username_hash FROM login_failure_streaks
+			WHERE last_failed_login_at < NOW() - make_interval(secs => $1)
+			LIMIT $2
+		)
+	`, int(lockoutMemory.Seconds()), ghostPruneBatch)
+	if err != nil {
+		return 0, err
 	}
-	return 0
-}
-
-// Fail records a failure for key and reports how long it is now blocked
-// (0 when this failure did not block it).
-func (t *FailureThrottle) Fail(key string, now time.Time) time.Duration {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	e, ok := t.entries[key]
-	if !ok {
-		if len(t.entries) >= throttleMaxEntries {
-			t.pruneLocked(now)
-		}
-		e = &throttleEntry{}
-		t.entries[key] = e
-	}
-	if now.Sub(e.lastFailure) >= t.window {
-		e.failures = 0
-	}
-	e.failures++
-	e.lastFailure = now
-	if e.failures%t.limit == 0 {
-		e.blockedUntil = now.Add(lockDuration(e.failures/t.limit, t.block, t.maxBlock))
-	}
-	if e.blockedUntil.After(now) {
-		return e.blockedUntil.Sub(now)
-	}
-	return 0
-}
-
-// Reset forgets key (a successful login).
-func (t *FailureThrottle) Reset(key string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	delete(t.entries, key)
-}
-
-func (t *FailureThrottle) pruneLocked(now time.Time) {
-	for k, e := range t.entries {
-		if now.Sub(e.lastFailure) >= t.window && !e.blockedUntil.After(now) {
-			delete(t.entries, k)
-		}
-	}
-	if len(t.entries) >= throttleMaxEntries {
-		t.entries = map[string]*throttleEntry{}
-	}
-}
-
-// lockDuration is the k-th lock's length (k >= 1): base doubled per repeat,
-// capped at maxBlock. The SQL in reserveAttemptQuery computes the same.
-func lockDuration(k int, base, maxBlock time.Duration) time.Duration {
-	d := base
-	for i := 1; i < k && d < maxBlock; i++ {
-		d *= 2
-	}
-	if d > maxBlock {
-		d = maxBlock
-	}
-	return d
-}
-
-// usernameKey normalizes a username for the in-memory throttle.
-func usernameKey(username string) string {
-	return strings.ToLower(strings.TrimSpace(username))
+	return res.RowsAffected()
 }

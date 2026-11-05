@@ -508,10 +508,12 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   never a bare `UPDATE admin_sessions`, and give any cookie path outside the
   middleware the same check (`readAccessSession` for `/auth/me`, `/logout`).
 - **Login lockout is DB-backed and reserved before the password compare**
-  (`adminauth/lockout.go`). Keep refusals generic (one 401, one 429) and send
-  usernames with no password account through its in-memory twin
-  (`FailureThrottle`) plus a dummy bcrypt, so no response reveals which
-  accounts exist.
+  (`adminauth/lockout.go`). Keep refusals generic (one 401, one 429) and
+  count usernames with no password account in `login_failure_streaks` with
+  the same SQL (`lockoutAssignments`) plus a dummy bcrypt, so no response
+  reveals which accounts exist, on any replica. Never add in-memory or
+  per-IP login state: it differs per replica, and behind a proxy one IP is
+  every user.
 - `/account/*` is browser-session only, outside the write gate and generic
   audit (`api/internal/api/routes_identity.go`); identity MCP tools live in
   `catalog_identity.go`.

@@ -86,8 +86,9 @@ family in its `sid` claim (`shared/auth.CreateAdminSessionToken`).
 ## Login lockout
 
 Migration 000103 (`admin_users.failed_login_count`, `last_failed_login_at`,
-`locked_until`, `password_changed_at`); policy constants in
-`api/internal/services/adminauth/lockout.go`.
+`locked_until`, `password_changed_at`) and 000106 (`login_failure_streaks`);
+policy constants in `api/internal/services/adminauth/lockout.go`. All state
+is in Postgres, so it holds across API replicas and restarts.
 
 - `Authenticate` **reserves** the attempt (one `UPDATE … WHERE not locked
   RETURNING`) before comparing the password, so concurrent guesses cannot
@@ -96,14 +97,20 @@ Migration 000103 (`admin_users.failed_login_count`, `last_failed_login_at`,
   forgotten after 24 h without failures. A locked account is refused without
   a password comparison.
 - Anti-enumeration: wrong and unknown credentials share one 401; every
-  lockout shares one 429 + `Retry-After`. Unknown and SSO-only usernames go
-  through an in-memory twin of the lockout (`FailureThrottle`, same
-  thresholds) and a dummy bcrypt compare. Each replica also blocks a client
-  IP (`clientip.FromRequest`) for 15 min after 50 failures.
+  lockout shares one 429 + `Retry-After`. Usernames with no password account
+  (unknown, SSO-only, disabled) keep their streak in `login_failure_streaks`,
+  keyed by SHA-256 of the exact (case-sensitive) username and counted by the
+  same SQL (`lockoutAssignments`), plus a dummy bcrypt compare, so they lock
+  on the same attempt as a real account on every replica. Streaks idle past
+  24 h are pruned opportunistically on failed logins (`PruneGhostStreaks`).
+- **No per-address stage.** With `TRUSTED_PROXY_CIDRS` unset every user
+  behind the ingress or the UI proxy (or one NAT) shares a client IP, so an
+  IP block would let anyone deny sign-in to all of them. Request-volume
+  limits per client belong to the general API rate limiter.
 - Unlock: superadmin `POST /users/{id}/unlock` (MCP `unlock_user`), the
   `cmd/admin` break-glass, or a superadmin setting the password.
-- Audit: `auth.login` (failure; `denied` with `reason` `locked` /
-  `ip_throttled`), `auth.lockout` (the failure that locked), `auth.unlock`.
+- Audit: `auth.login` (failure; `denied` with `reason` `locked`),
+  `auth.lockout` (the failure that locked), `auth.unlock`.
 - OIDC login is unaffected.
 
 ## Enforcement layers

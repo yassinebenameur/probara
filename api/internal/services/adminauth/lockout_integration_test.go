@@ -269,32 +269,140 @@ func TestAuthenticateToleratesPreLockoutSchema(t *testing.T) {
 	}
 }
 
-func TestFailureThrottleStreaks(t *testing.T) {
-	th := NewFailureThrottle(3, time.Hour, time.Minute, 4*time.Minute)
-	now := time.Unix(1_700_000_000, 0)
-	for i := 0; i < 2; i++ {
-		if wait := th.Fail("k", now); wait != 0 {
-			t.Fatalf("failure %d blocked for %v", i+1, wait)
+// Two API replicas are two Service values on one database: failures spread
+// round-robin across them lock a real account and an unknown username after
+// the same attempt, and a new Service (a restart) still sees both locks.
+func TestUnknownUsernameMatchesAccountAcrossReplicas(t *testing.T) {
+	ctx, dbClient, replicaA := setupService(t)
+	replicaB := NewService(dbClient, 4)
+	insertUser(ctx, t, dbClient, "alice")
+
+	for _, username := range []string{"alice", "nobody"} {
+		replicas := []*Service{replicaA, replicaB}
+		for i := 0; i < LockoutThreshold; i++ {
+			_, err := replicas[i%2].Authenticate(ctx, username, "wrong-password")
+			var failure *LoginFailure
+			if !errors.As(err, &failure) || failure.Locked {
+				t.Fatalf("%s attempt %d: err = %v, want a counted failure", username, i+1, err)
+			}
+			if failure.LockedNow != (i == LockoutThreshold-1) {
+				t.Fatalf("%s attempt %d: LockedNow = %v", username, i+1, failure.LockedNow)
+			}
+		}
+		restarted := NewService(dbClient, 4)
+		for name, s := range map[string]*Service{"A": replicaA, "B": replicaB, "restarted": restarted} {
+			_, err := s.Authenticate(ctx, username, "anything")
+			var failure *LoginFailure
+			if !errors.As(err, &failure) || !failure.Locked || failure.RetryAfter <= 0 {
+				t.Fatalf("%s on replica %s: err = %#v, want locked with a retry", username, name, err)
+			}
 		}
 	}
-	if wait := th.Fail("k", now); wait != time.Minute {
-		t.Fatalf("third failure blocks for %v, want 1m", wait)
+}
+
+// Usernames match case-sensitively for real accounts, so unknown names must
+// too: mixing case variants cannot tell the two apart.
+func TestUnknownUsernameStreaksAreCaseSensitiveLikeAccounts(t *testing.T) {
+	ctx, dbClient, s := setupService(t)
+	insertUser(ctx, t, dbClient, "alice")
+
+	for _, variants := range [][2]string{{"alice", "ALICE"}, {"nobody", "NOBODY"}} {
+		failLogins(ctx, t, s, variants[0], LockoutThreshold/2)
+		failLogins(ctx, t, s, variants[1], LockoutThreshold/2)
+		_, err := s.Authenticate(ctx, variants[0], "wrong-password")
+		if !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("%v: err = %v, want still unlocked", variants, err)
+		}
 	}
-	if th.BlockedFor("k", now.Add(59*time.Second)) == 0 || th.BlockedFor("k", now.Add(time.Minute)) != 0 {
-		t.Fatal("block window wrong")
+}
+
+// Unknown names double, cap and forget exactly like accounts.
+func TestUnknownUsernameDoublingCapAndMemory(t *testing.T) {
+	ctx, dbClient, s := setupService(t)
+	key := ghostKey("nobody")
+	state := func() (int, time.Duration) {
+		var count int
+		var seconds float64
+		if err := dbClient.QueryRowContext(ctx, `
+			SELECT failed_login_count, COALESCE(EXTRACT(EPOCH FROM locked_until - NOW()), 0)
+			FROM login_failure_streaks WHERE username_hash = $1
+		`, key).Scan(&count, &seconds); err != nil {
+			t.Fatal(err)
+		}
+		return count, time.Duration(seconds * float64(time.Second))
 	}
-	later := now.Add(2 * time.Minute)
-	th.Fail("k", later)
-	th.Fail("k", later)
-	if wait := th.Fail("k", later); wait != 2*time.Minute {
-		t.Fatalf("second block %v, want doubled 2m", wait)
+
+	failLogins(ctx, t, s, "nobody", LockoutThreshold)
+	if _, err := dbClient.ExecContext(ctx, `UPDATE login_failure_streaks SET locked_until = NOW() - INTERVAL '1 second' WHERE username_hash = $1`, key); err != nil {
+		t.Fatal(err)
 	}
-	// A quiet window ends the streak.
-	if wait := th.Fail("k", later.Add(2*time.Hour)); wait != 0 {
-		t.Fatalf("after a quiet window: blocked %v", wait)
+	failLogins(ctx, t, s, "nobody", LockoutThreshold)
+	if count, locked := state(); count != 2*LockoutThreshold || locked < 2*LockoutBase-time.Minute || locked > 2*LockoutBase {
+		t.Fatalf("second lock: count=%d locked=%v", count, locked)
 	}
-	th.Reset("k")
-	if th.BlockedFor("k", later) != 0 {
-		t.Fatal("Reset left the key blocked")
+
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE login_failure_streaks SET failed_login_count = $2, locked_until = NULL, last_failed_login_at = NOW() WHERE username_hash = $1
+	`, key, 10*LockoutThreshold-1); err != nil {
+		t.Fatal(err)
+	}
+	failLogins(ctx, t, s, "nobody", 1)
+	if _, locked := state(); locked < LockoutMax-time.Minute || locked > LockoutMax {
+		t.Fatalf("locked for %v, want the %v cap", locked, LockoutMax)
+	}
+
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE login_failure_streaks SET failed_login_count = $2, locked_until = NULL,
+		       last_failed_login_at = NOW() - INTERVAL '25 hours'
+		WHERE username_hash = $1
+	`, key, LockoutThreshold-1); err != nil {
+		t.Fatal(err)
+	}
+	failLogins(ctx, t, s, "nobody", 1)
+	if count, locked := state(); count != 1 || locked != 0 {
+		t.Fatalf("stale streak: count=%d locked=%v, want 1 and no lock", count, locked)
+	}
+}
+
+func TestPruneGhostStreaksDropsOnlyForgottenRows(t *testing.T) {
+	ctx, dbClient, s := setupService(t)
+	failLogins(ctx, t, s, "fresh", 1)
+	failLogins(ctx, t, s, "stale", 1)
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE login_failure_streaks SET last_failed_login_at = NOW() - INTERVAL '25 hours' WHERE username_hash = $1
+	`, ghostKey("stale")); err != nil {
+		t.Fatal(err)
+	}
+	n, err := PruneGhostStreaks(ctx, dbClient)
+	if err != nil || n != 1 {
+		t.Fatalf("PruneGhostStreaks = %d, %v; want 1", n, err)
+	}
+	var left []string
+	rows, err := dbClient.QueryContext(ctx, `SELECT username_hash FROM login_failure_streaks`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		_ = rows.Scan(&k)
+		left = append(left, k)
+	}
+	if len(left) != 1 || left[0] != ghostKey("fresh") {
+		t.Fatalf("left %v, want only the fresh streak", left)
+	}
+}
+
+// Before migration 000106 unknown names are never locked (and before 000103
+// neither are accounts), rather than falling back to per-replica state.
+func TestUnknownUsernameToleratesPreStreakSchema(t *testing.T) {
+	ctx, dbClient, s := setupService(t)
+	if _, err := dbClient.ExecContext(ctx, `DROP TABLE login_failure_streaks`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < LockoutThreshold+2; i++ {
+		if _, err := s.Authenticate(ctx, "nobody", "wrong-password"); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("attempt %d: err = %v, want invalid credentials", i+1, err)
+		}
 	}
 }
