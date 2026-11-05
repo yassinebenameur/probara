@@ -18,9 +18,11 @@ type pageCSP struct {
 
 // pageCSPFor resolves a page's policy inputs. customTemplate reports that
 // the render uses tenant-authored template source (published or draft),
-// which, like custom head/footer HTML, makes the automatic mode compatible.
+// which, like custom CSS or head/footer HTML, makes the automatic mode
+// compatible.
 func pageCSPFor(data *StatusPageData, appBaseURL string, customTemplate bool) pageCSP {
 	customized := customTemplate ||
+		strings.TrimSpace(data.CustomCSS) != "" ||
 		strings.TrimSpace(data.CustomHeadHTML) != "" ||
 		strings.TrimSpace(data.CustomFooterHTML) != ""
 	return pageCSP{

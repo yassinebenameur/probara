@@ -157,11 +157,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
           rows: [
             [
               "`strict`",
-              "Only `<script>` elements carrying `nonce=\"{{cspNonce}}\"`; styles, images (`data:` and `https:` for remote logos), connections and the push service worker from the page's own origin. No plugins, no `<base>` rewriting.",
+              "Only `<script>` elements carrying `nonce=\"{{cspNonce}}\"` run. Stylesheets and fonts may also come from any `https:` origin (custom CSS `@import` and `@font-face`), and images from `https:` or `http:` (a remote `logo_url`) — none of them can run code. Connections and the push service worker stay on the page's own origin. No plugins, no `<base>` rewriting.",
             ],
             [
               "`compatible`",
-              "Inline scripts and styles, plus scripts, styles, fonts, images, frames and connections from any `https:` origin. For pages whose custom HTML loads analytics or chat widgets.",
+              "Inline scripts and styles, plus scripts, styles, fonts, images, frames and connections from any `https:` or `http:` origin. For pages whose custom HTML or CSS loads analytics, chat widgets or web fonts. On an HTTPS page the browser still refuses `http:` scripts as mixed content.",
             ],
             [
               "`off`",
@@ -169,7 +169,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "empty (automatic)",
-              "`compatible` while the page has custom head/footer HTML or a published custom template, `strict` otherwise. Existing customized pages keep working without edits.",
+              "`compatible` while the page has custom CSS, custom head/footer HTML or a published custom template, `strict` otherwise. Existing customized pages keep working without edits, and an uncustomized page's remote logo keeps rendering under `strict`.",
             ],
           ],
         },

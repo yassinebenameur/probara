@@ -69,6 +69,11 @@ func TestStatusPageCSPModes(t *testing.T) {
 		{"plain page is strict", func(*StatusPageData) {}, securityheaders.CSPModeStrict},
 		{"custom head HTML is compatible", func(d *StatusPageData) { d.CustomHeadHTML = `<script>track()</script>` }, securityheaders.CSPModeCompatible},
 		{"custom footer HTML is compatible", func(d *StatusPageData) { d.CustomFooterHTML = `<div>hi</div>` }, securityheaders.CSPModeCompatible},
+		// Regression: a page customized only through CSS (remote @import,
+		// @font-face) must not turn strict on upgrade.
+		{"custom CSS is compatible", func(d *StatusPageData) {
+			d.CustomCSS = `@import url(https://fonts.googleapis.com/css2?family=Inter);`
+		}, securityheaders.CSPModeCompatible},
 		{"custom template is compatible", func(d *StatusPageData) {
 			d.CustomTemplateSource = `<html><body>{{.Title}}</body></html>`
 			d.CustomTemplateVersion = 7
@@ -91,7 +96,7 @@ func TestStatusPageCSPModes(t *testing.T) {
 					t.Fatalf("want strict, got %q", policy)
 				}
 			case securityheaders.CSPModeCompatible:
-				if !strings.Contains(policy, "script-src 'self' 'unsafe-inline' https:") {
+				if !strings.Contains(policy, "script-src 'self' 'unsafe-inline' https: http:") {
 					t.Fatalf("want compatible, got %q", policy)
 				}
 			case securityheaders.CSPModeOff:

@@ -115,20 +115,27 @@ func TestStatusPagePolicy(t *testing.T) {
 	ancestors := []string{"'self'", "https://ops.example.com"}
 
 	strict := StatusPagePolicy(CSPModeStrict, "abc123", ancestors)
-	for _, want := range []string{"script-src 'nonce-abc123'", "worker-src 'self'", "base-uri 'none'", "frame-ancestors 'self' https://ops.example.com"} {
+	for _, want := range []string{
+		"script-src 'nonce-abc123'", "worker-src 'self'", "base-uri 'none'", "frame-ancestors 'self' https://ops.example.com",
+		// Regression: custom CSS @import / @font-face and plain-http logos
+		// keep rendering under strict.
+		"style-src 'self' 'unsafe-inline' https:", "font-src 'self' data: https:", "img-src 'self' data: https: http:",
+	} {
 		if !strings.Contains(strict, want) {
 			t.Errorf("strict policy %q lacks %q", strict, want)
 		}
 	}
-	if strings.Contains(strict, "unsafe-inline' https:") || strings.Contains(strict, "script-src 'self' 'unsafe-inline'") {
-		t.Errorf("strict policy allows inline scripts: %q", strict)
+	for _, directive := range strings.Split(strict, "; ") {
+		if strings.HasPrefix(directive, "script-src ") && directive != "script-src 'nonce-abc123'" {
+			t.Errorf("strict script-src must be the nonce alone, got %q", directive)
+		}
 	}
 
 	compat := StatusPagePolicy(CSPModeCompatible, "abc123", ancestors)
 	if strings.Contains(compat, "nonce-") {
 		t.Errorf("compatible policy carries a nonce, which disables 'unsafe-inline': %q", compat)
 	}
-	if !strings.Contains(compat, "script-src 'self' 'unsafe-inline' https:") {
+	if !strings.Contains(compat, "script-src 'self' 'unsafe-inline' https: http:") {
 		t.Errorf("compatible policy %q does not allow inline/https scripts", compat)
 	}
 

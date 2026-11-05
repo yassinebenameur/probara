@@ -531,7 +531,7 @@ export default function StatusPageTemplatePage() {
           Strict runs only scripts that carry{' '}
           <code className="font-mono text-xs text-slate-200">nonce=&quot;{'{{cspNonce}}'}&quot;</code>{' '}
           (custom templates and the HTML snippets above can use it). Automatic is compatible
-          while the page has custom HTML or a custom template, strict otherwise. Off sends no
+          while the page has custom CSS, custom HTML or a custom template, strict otherwise. Off sends no
           resource policy; embedding is still limited to the origins below.
         </p>
         <div className="grid gap-4 lg:grid-cols-2">
