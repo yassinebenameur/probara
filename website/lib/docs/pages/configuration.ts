@@ -854,12 +854,22 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`false`',
               'Deprecated. `true` trusts `X-Forwarded-For` from every peer, and applies only while `TRUSTED_PROXY_CIDRS` is unset; the service logs a warning. Use `TRUSTED_PROXY_CIDRS`.',
             ],
+            [
+              '`APP_BASE_URL`',
+              'Empty',
+              'Operator UI origin. Every page’s [CSP](/docs/status-pages/#content-security-policy) `frame-ancestors` admits it so the template editor can preview pages in an iframe. Compose sets `http://localhost:3000`; Helm renders the top-level `appBaseURL`. Unset, only the draft preview route may be framed by any site.',
+            ],
+            [
+              '`SECURITY_HSTS_MAX_AGE`',
+              '`0`',
+              'Same variable as on the API: [HSTS](/docs/security/#edge-controls) on HTTPS responses.',
+            ],
           ],
         },
         {
           type: 'paragraph',
           text:
-            'The restricted proxy permits GET under `/api/v1/monitors` and PATCH under `/api/v1/status-pages/…`; it is not a general API proxy. Helm currently wires only basic status values and the status base URL, not the API proxy, cache, preview, timeout, or update-subject variables.',
+            'The restricted proxy permits GET under `/api/v1/monitors` and PATCH under `/api/v1/status-pages/…`; it is not a general API proxy. Helm currently wires only basic status values, the status base URL, `APP_BASE_URL` and `SECURITY_HSTS_MAX_AGE`, not the API proxy, cache, preview, timeout, or update-subject variables.',
         },
       ],
     },

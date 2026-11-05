@@ -290,8 +290,8 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		MonitorStripCells: monitorUptimeStripCells,
 		MonitorCount:      len(data.Monitors),
 		CustomCSS:         template.CSS(strings.TrimSpace(data.CustomCSS)),
-		CustomHeadHTML:    template.HTML(strings.TrimSpace(data.CustomHeadHTML)),
-		CustomFooterHTML:  template.HTML(strings.TrimSpace(data.CustomFooterHTML)),
+		CustomHeadHTML:    template.HTML(withNoncePlaceholder(data.CustomHeadHTML)),
+		CustomFooterHTML:  template.HTML(withNoncePlaceholder(data.CustomFooterHTML)),
 	}
 
 	if view.FooterText == "" {
@@ -956,4 +956,12 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// withNoncePlaceholder trims tenant-authored head/footer HTML and turns its
+// literal {{cspNonce}} tokens into the nonce placeholder. That HTML is data,
+// not template source, so the template function cannot expand inside it;
+// the placeholder is then swapped per response like the template's own.
+func withNoncePlaceholder(raw string) string {
+	return strings.ReplaceAll(strings.TrimSpace(raw), statustemplate.NonceToken, statustemplate.NoncePlaceholder)
 }

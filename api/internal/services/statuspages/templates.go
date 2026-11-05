@@ -85,6 +85,7 @@ func (s *Service) GetTemplateState(ctx context.Context, tenantID, pageID uuid.UU
 	switch {
 	case err == nil:
 		state.DraftSource = &draftSource
+		state.DraftWarnings = statustemplate.Warnings(draftSource)
 	case err != sql.ErrNoRows:
 		return nil, fmt.Errorf("failed to get draft source: %w", err)
 	}

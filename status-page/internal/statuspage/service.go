@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
@@ -64,6 +65,11 @@ type StatusPageData struct {
 	CustomCSS        string `json:"-"` // For template use only
 	CustomHeadHTML   string `json:"-"` // For template use only
 	CustomFooterHTML string `json:"-"` // For template use only
+	// CSPMode is the stored csp_mode ("" = automatic) and AllowedEmbedOrigins
+	// the stored allowed_embed_origins; the handler turns them into the
+	// page's Content-Security-Policy (csp.go).
+	CSPMode             string   `json:"-"`
+	AllowedEmbedOrigins []string `json:"-"`
 	// Published custom template ("" = render with the built-in template).
 	CustomTemplateSource  string `json:"-"` // For template use only
 	CustomTemplateVersion int    `json:"-"` // For template use only
@@ -266,6 +272,9 @@ type statusPageSettingsPatch struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+
+	CSPMode             *string  `json:"csp_mode,omitempty"`
+	AllowedEmbedOrigins []string `json:"allowed_embed_origins,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -286,6 +295,9 @@ type statusPageSettingsStored struct {
 	CustomCSS        string
 	CustomHeadHTML   string
 	CustomFooterHTML string
+
+	CSPMode             string
+	AllowedEmbedOrigins []string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -369,6 +381,13 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	}
 	if patch.CustomFooterHTML != nil {
 		stored.CustomFooterHTML = strings.TrimSpace(*patch.CustomFooterHTML)
+	}
+	if patch.CSPMode != nil {
+		// An unknown value reads as automatic; ResolveCSPMode decides.
+		stored.CSPMode, _ = securityheaders.ParseCSPMode(*patch.CSPMode)
+	}
+	if patch.AllowedEmbedOrigins != nil {
+		stored.AllowedEmbedOrigins = patch.AllowedEmbedOrigins
 	}
 	return stored
 }
@@ -509,6 +528,8 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.CustomCSS = settings.CustomCSS
 	page.CustomHeadHTML = settings.CustomHeadHTML
 	page.CustomFooterHTML = settings.CustomFooterHTML
+	page.CSPMode = settings.CSPMode
+	page.AllowedEmbedOrigins = settings.AllowedEmbedOrigins
 
 	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
 		return nil, fmt.Errorf("failed to get custom template: %w", err)

@@ -20,6 +20,7 @@ import {
   StatusPageTemplateState,
   StatusPageSettings,
   StatusPageLibraryTemplate,
+  StatusPageCSPMode,
 } from '@/lib/types';
 import {
   getStatusPage,
@@ -51,6 +52,7 @@ import Pill from '@/components/ui/Pill';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Dialog from '@/components/ui/Dialog';
 import Input from '@/components/ui/Input';
+import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
@@ -99,6 +101,9 @@ export default function StatusPageTemplatePage() {
   const [brandingHead, setBrandingHead] = useState('');
   const [brandingFooter, setBrandingFooter] = useState('');
   const [savingBranding, setSavingBranding] = useState(false);
+  const [cspMode, setCspMode] = useState<StatusPageCSPMode>('');
+  const [embedOrigins, setEmbedOrigins] = useState('');
+  const [savingPolicy, setSavingPolicy] = useState(false);
 
   const [libraryItems, setLibraryItems] = useState<StatusPageLibraryTemplate[]>([]);
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
@@ -112,6 +117,8 @@ export default function StatusPageTemplatePage() {
     setBrandingCSS(settings?.custom_css || '');
     setBrandingHead(settings?.custom_head_html || '');
     setBrandingFooter(settings?.custom_footer_html || '');
+    setCspMode(settings?.csp_mode || '');
+    setEmbedOrigins((settings?.allowed_embed_origins || []).join('\n'));
   };
 
   const load = useCallback(async () => {
@@ -380,6 +387,28 @@ export default function StatusPageTemplatePage() {
     }
   };
 
+  const handleSavePolicy = async () => {
+    try {
+      setSavingPolicy(true);
+      const updated = await updateStatusPage(id, {
+        settings: {
+          csp_mode: cspMode,
+          allowed_embed_origins: embedOrigins
+            .split(/[\s,]+/)
+            .map((origin) => origin.trim())
+            .filter(Boolean),
+        },
+      });
+      setStatusPage(updated);
+      applySettings(updated.settings);
+      showToast('Security policy saved', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to save the security policy', 'error');
+    } finally {
+      setSavingPolicy(false);
+    }
+  };
+
   saveDraftRef.current = () => {
     if (busy || !needsSave || confirm !== null || libraryName !== null || modalOpen()) return;
     void handleSaveDraft();
@@ -494,6 +523,48 @@ export default function StatusPageTemplatePage() {
         </div>
       </CollapsibleSection>
 
+      <CollapsibleSection
+        title="Security policy"
+        summary="Content-Security-Policy mode and the sites allowed to embed the page"
+      >
+        <p className="text-ui text-slate-400">
+          Strict runs only scripts that carry{' '}
+          <code className="font-mono text-xs text-slate-200">nonce=&quot;{'{{cspNonce}}'}&quot;</code>{' '}
+          (custom templates and the HTML snippets above can use it). Automatic is compatible
+          while the page has custom HTML or a custom template, strict otherwise. Off sends no
+          resource policy; embedding is still limited to the origins below.
+        </p>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <FormField label="Policy mode">
+            <Select value={cspMode} onChange={(e) => setCspMode(e.target.value as StatusPageCSPMode)}>
+              <option value="">Automatic</option>
+              <option value="strict">Strict</option>
+              <option value="compatible">Compatible (inline and https: scripts)</option>
+              <option value="off">Off</option>
+            </Select>
+          </FormField>
+          <FormField
+            label="Allowed embed origins"
+            description="One per line, e.g. https://intranet.example.com. The page's own origin and the operator UI are always allowed."
+          >
+            <textarea
+              value={embedOrigins}
+              onChange={(e) => setEmbedOrigins(e.target.value)}
+              rows={4}
+              spellCheck={false}
+              wrap="off"
+              placeholder={'https://intranet.example.com\nhttps://*.example.org'}
+              className={`${CODE_AREA} p-3`}
+            />
+          </FormField>
+        </div>
+        <div className="flex justify-end">
+          <Button variant="ghost" size="sm" onClick={handleSavePolicy} loading={savingPolicy}>
+            Save policy
+          </Button>
+        </div>
+      </CollapsibleSection>
+
       <div className="glass">
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
           <div className="min-w-0">
@@ -576,6 +647,16 @@ export default function StatusPageTemplatePage() {
             </Button>
           </div>
         </div>
+
+        {hasDraft && (templateState?.draft_warnings?.length ?? 0) > 0 && (
+          <div className="px-5 pb-4">
+            <Callout tone="warning" title="Draft warnings">
+              <ul className="list-disc space-y-1 pl-4">
+                {templateState?.draft_warnings?.map((warning) => <li key={warning}>{warning}</li>)}
+              </ul>
+            </Callout>
+          </div>
+        )}
 
         {/* Editor and preview share the viewport height on wide screens, so
             the code and its result stay side by side without page scroll. */}

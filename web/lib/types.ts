@@ -1714,7 +1714,18 @@ export interface StatusPageSettings {
   custom_css?: string;
   custom_head_html?: string;
   custom_footer_html?: string;
+  /**
+   * Public page Content-Security-Policy mode. '' (automatic) is compatible
+   * when the page has custom head/footer HTML or a published custom
+   * template, strict otherwise. Strict runs only scripts carrying
+   * nonce="{{cspNonce}}".
+   */
+  csp_mode?: StatusPageCSPMode;
+  /** Origins (scheme://host[:port], "*." wildcard host) allowed to frame the page. */
+  allowed_embed_origins?: string[];
 }
+
+export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';
 
 export interface StatusPage {
   id: string;
@@ -1750,6 +1761,8 @@ export interface StatusPageTemplateState {
   versions: StatusPageTemplateVersion[];
   preview_token?: string;
   max_size_bytes: number;
+  /** Non-fatal draft problems, e.g. scripts without nonce="{{cspNonce}}". */
+  draft_warnings?: string[];
 }
 
 export interface StatusPageLibraryTemplate {

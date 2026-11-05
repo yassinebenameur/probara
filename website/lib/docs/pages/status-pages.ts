@@ -113,6 +113,14 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`custom_footer_html`",
               "Trusted custom footer markup, up to 64 KiB",
             ],
+            [
+              "`csp_mode`",
+              "[Content-Security-Policy](#content-security-policy) for the public page: `strict`, `compatible`, `off`, or empty for automatic",
+            ],
+            [
+              "`allowed_embed_origins`",
+              "Up to 20 origins (`https://host[:port]`, a leading `*.` host wildcard allowed) that may [embed the page](#content-security-policy) in an iframe. `[]` clears the list",
+            ],
           ],
         },
         {
@@ -131,6 +139,56 @@ export const STATUS_PAGES_PAGE: DocPage = {
           title: "Custom HTML is trusted author content",
           text:
             "The template engine escapes ordinary data values, but custom head/footer HTML and template source are intentionally authored markup. Restrict status-page editing to trusted tenant roles and review changes before publication.",
+        },
+      ],
+    },
+    {
+      id: "content-security-policy",
+      title: "Content-Security-Policy and embedding",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every public page response carries a `Content-Security-Policy` built from the page's `csp_mode` and a fresh random nonce, plus `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. Set the mode under **Security policy** on the page's template screen, or through the `settings` object of the API.",
+        },
+        {
+          type: "table",
+          columns: ["Mode", "What runs"],
+          rows: [
+            [
+              "`strict`",
+              "Only `<script>` elements carrying `nonce=\"{{cspNonce}}\"`; styles, images (`data:` and `https:` for remote logos), connections and the push service worker from the page's own origin. No plugins, no `<base>` rewriting.",
+            ],
+            [
+              "`compatible`",
+              "Inline scripts and styles, plus scripts, styles, fonts, images, frames and connections from any `https:` origin. For pages whose custom HTML loads analytics or chat widgets.",
+            ],
+            [
+              "`off`",
+              "No resource policy. Only `frame-ancestors` is sent, because embedding is controlled separately.",
+            ],
+            [
+              "empty (automatic)",
+              "`compatible` while the page has custom head/footer HTML or a published custom template, `strict` otherwise. Existing customized pages keep working without edits.",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "In templates, `{{cspNonce}}` returns the response's nonce: put `nonce=\"{{cspNonce}}\"` on every inline `<script>` and `<style>`, as the default template does. The custom head and footer HTML settings are not template source, but the literal text `{{cspNonce}}` inside them is replaced with the nonce too. The template editor warns when a draft has a `<script>` without the nonce. A nonce changes on every response, so never cache or copy it.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Framing (`frame-ancestors`) is allowed for the page's own origin, the operator UI (`APP_BASE_URL` on the status-page service, which the template editor's preview needs) and the page's `allowed_embed_origins`. Any other site that puts the page in an iframe gets a blank frame. The draft preview route admits any ancestor while `APP_BASE_URL` is unset, because the service cannot name the editor's origin; it shows only data the live page already publishes.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Switch a customized page to strict",
+          text:
+            "Add `nonce=\"{{cspNonce}}\"` to the scripts in your template and HTML snippets, set the mode to `strict`, and check the browser console on the published page: blocked resources are reported there.",
         },
       ],
     },
@@ -393,6 +451,10 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "Number of cells in a monitor row or kiosk tile strip for a range name",
             ],
             ["`typeIcon`", "Return the display icon for a monitor type"],
+            [
+              "`cspNonce`",
+              "The response's Content-Security-Policy nonce, for `nonce=\"{{cspNonce}}\"` on inline scripts and styles ([details](#content-security-policy))",
+            ],
           ],
         },
         {
@@ -461,7 +523,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Review built-in visibility settings and treat the URL, tag, agent-metric, TLS, and latency flags as schema-reserved until the renderer explicitly supports them.",
             "Preview light and dark themes at desktop and mobile widths.",
             "Exercise unknown, suspect, degraded, down, maintenance, and incident states in a safe preview environment.",
-            "Check custom HTML/CSS for content security, accessibility, focus states, contrast, and responsive overflow.",
+            "Check custom HTML/CSS for content security, accessibility, focus states, contrast, and responsive overflow, and that the page runs under its [CSP mode](#content-security-policy) without console violations.",
             "Configure the preview secret and confirm the public status service has a reachable API/data path.",
             "Publish, open the anonymous route in a clean browser session, and verify SSE/fallback refresh behavior.",
           ],

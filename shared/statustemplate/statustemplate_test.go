@@ -101,3 +101,40 @@ func TestPreviewToken(t *testing.T) {
 		t.Fatal("malformed token must not verify")
 	}
 }
+
+func TestDefaultTemplateCarriesNonce(t *testing.T) {
+	if w := Warnings(DefaultSource); len(w) != 0 {
+		t.Fatalf("default template warnings: %v", w)
+	}
+	tmpl, err := New("default", `<script nonce="{{cspNonce}}">x()</script>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := tmpl.Execute(&b, nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := `<script nonce="` + NoncePlaceholder + `">`; !strings.Contains(b.String(), want) {
+		t.Fatalf("rendered %q, want it to contain %q", b.String(), want)
+	}
+}
+
+func TestWarnings(t *testing.T) {
+	tests := []struct {
+		source string
+		warn   bool
+	}{
+		{`<html><body>{{.Title}}</body></html>`, false},
+		{`<script nonce="{{cspNonce}}">a()</script>`, false},
+		{`<SCRIPT nonce="{{ cspNonce }}" type="module">a()</SCRIPT>`, false},
+		{`<script>a()</script>`, true},
+		{`<script src="https://cdn.example/x.js"></script>`, true},
+		{`<script nonce="{{cspNonce}}">a()</script><script>b()</script>`, true},
+	}
+	for _, tt := range tests {
+		got := Warnings(tt.source)
+		if (len(got) > 0) != tt.warn {
+			t.Errorf("Warnings(%q) = %v, want warning=%v", tt.source, got, tt.warn)
+		}
+	}
+}

@@ -70,3 +70,24 @@ func TestParseStatusPageSettings_PushNotificationsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The API writes csp_mode and allowed_embed_origins under exactly these keys
+// (api/internal/services/statuspages, TestStatusPageSettingsCSPRoundTrip);
+// this is the read half of that three-mirror round trip.
+func TestParseStatusPageSettings_CSPFields(t *testing.T) {
+	settings := parseStatusPageSettings([]byte(`{"csp_mode":"compatible","allowed_embed_origins":["https://intranet.example.com","https://*.corp.example"]}`))
+	if settings.CSPMode != "compatible" {
+		t.Fatalf("CSPMode = %q, want compatible", settings.CSPMode)
+	}
+	if len(settings.AllowedEmbedOrigins) != 2 || settings.AllowedEmbedOrigins[1] != "https://*.corp.example" {
+		t.Fatalf("AllowedEmbedOrigins = %v", settings.AllowedEmbedOrigins)
+	}
+
+	defaults := parseStatusPageSettings([]byte(`{"show_footer":false}`))
+	if defaults.CSPMode != "" || defaults.AllowedEmbedOrigins != nil {
+		t.Fatalf("absent CSP settings must read as automatic with no embed origins: %+v", defaults)
+	}
+	if got := parseStatusPageSettings([]byte(`{"csp_mode":"nonsense"}`)).CSPMode; got != "" {
+		t.Fatalf("unknown csp_mode = %q, want automatic", got)
+	}
+}

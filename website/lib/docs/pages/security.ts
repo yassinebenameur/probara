@@ -177,6 +177,10 @@ export const SECURITY_PAGE: DocPage = {
               'API',
               '`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and `Content-Security-Policy: default-src \'none\'; frame-ancestors \'none\'` on every response.',
             ],
+            [
+              'Status pages',
+              '`nosniff` and `Referrer-Policy: no-referrer` on every response; each public page adds its own `Content-Security-Policy` with a per-response script nonce, chosen by the page’s [CSP mode](/docs/status-pages/#content-security-policy), and a `frame-ancestors` list of the page’s origin, the operator UI and the page’s allowed embed origins.',
+            ],
           ],
         },
         {

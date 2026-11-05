@@ -3,6 +3,8 @@ package statuspage
 import (
 	"strings"
 	"testing"
+
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
 func customTemplateTestData() *StatusPageData {
@@ -65,7 +67,7 @@ func TestRenderStatusPageHTMLInjectsTierOneBranding(t *testing.T) {
 		t.Fatalf("renderStatusPageHTML() error = %v", err)
 	}
 	for _, want := range []string{
-		"<style>.header { color: rebeccapurple; }</style>",
+		`<style nonce="` + statustemplate.NoncePlaceholder + `">.header { color: rebeccapurple; }</style>`,
 		`<link rel="icon" href="/favicon-acme.svg">`,
 		`<div id="acme-footer">Acme Corp</div>`,
 	} {
