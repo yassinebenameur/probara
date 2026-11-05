@@ -126,12 +126,12 @@ var recordSQL = `
 	INSERT INTO alert_notification_deliveries (
 		tenant_id, alert_id, channel_id, channel_name, event_type, delivery_key,
 		attempt, path, outcome, error, recipients_total, recipients_delivered)
-	SELECT a.tenant_id, a.id, c.id, COALESCE(NULLIF($3, ''), c.name), $4, $5,
+	SELECT a.tenant_id, a.id, c.id, COALESCE(NULLIF($3::text, ''), c.name), $4::text, $5::text,
 		CASE WHEN $6::int > 0 THEN $6::int ELSE 1 + (
 			SELECT COUNT(*) FROM alert_notification_deliveries p
 			WHERE p.alert_id = a.id AND p.channel_id = c.id
-			  AND p.delivery_key = $5 AND p.path = $7) END,
-		$7, $8, $9, $10, $11
+			  AND p.delivery_key = $5::text AND p.path = $7::text)::int END,
+		$7::text, $8::text, $9::text, $10::int, $11::int
 	FROM alerts a
 	JOIN alert_channels c ON c.id = $2 AND c.tenant_id = a.tenant_id
 	WHERE a.id = $1 AND ` + tenancy.LiveTenantSQL("a.tenant_id")
