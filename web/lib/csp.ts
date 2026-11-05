@@ -15,7 +15,10 @@ export interface WebCspOptions {
   nonce: string;
   /** next dev needs eval for React's error overlays. */
   dev: boolean;
-  /** Origins the status-page preview iframe may load (frame-src). */
+  /**
+   * Status-page origins the template editor's preview iframe may load
+   * (frame-src), on top of 'self' and any https: origin.
+   */
   statusPageOrigins: string[];
   /** Absolute API origin when the browser calls the API directly. */
   apiOrigin?: string;
@@ -30,7 +33,9 @@ export function buildWebCsp({ nonce, dev, statusPageOrigins, apiOrigin }: WebCsp
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
     `connect-src ${connect.join(' ')}`,
-    `frame-src ${["'self'", ...statusPageOrigins].join(' ')}`,
+    // https: because a status page can be served from any custom domain;
+    // the configured or dev origins add plain-http hosts (localhost:8082).
+    `frame-src ${["'self'", 'https:', ...statusPageOrigins.filter((o) => !o.startsWith('https:'))].join(' ')}`,
     "frame-ancestors 'none'",
     "object-src 'none'",
     "base-uri 'self'",

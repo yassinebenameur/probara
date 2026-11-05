@@ -103,11 +103,13 @@ func StatusPage(proxies *clientip.Resolver, hstsMaxAge int) func(http.Handler) h
 
 // Status page CSP modes (the csp_mode page setting).
 const (
-	// CSPModeStrict allows only the page's own nonce-carrying inline scripts
-	// and same-origin resources (plus https: images for remote logos).
+	// CSPModeStrict allows only the page's own nonce-carrying scripts. It
+	// still admits remote stylesheets, fonts and images (see
+	// StatusPagePolicy), because those cannot run code.
 	CSPModeStrict = "strict"
-	// CSPModeCompatible allows inline scripts and https: third-party
-	// resources, for pages whose custom HTML embeds widgets or analytics.
+	// CSPModeCompatible allows inline scripts and third-party resources over
+	// http: or https:, for pages whose custom HTML or CSS embeds widgets,
+	// analytics or web fonts.
 	CSPModeCompatible = "compatible"
 	// CSPModeOff sends no resource policy; only frame-ancestors remains,
 	// because embedding is controlled separately by allowed_embed_origins.
@@ -126,10 +128,10 @@ func ParseCSPMode(raw string) (string, bool) {
 }
 
 // ResolveCSPMode returns the effective mode for a page. An explicit mode
-// wins; automatic is compatible when the page carries tenant-authored markup
-// (custom head/footer HTML or a published custom template), which may hold
-// inline or third-party scripts written before the policy existed, and
-// strict otherwise.
+// wins; automatic is compatible when the page carries tenant-authored
+// customization (custom CSS, custom head/footer HTML or a published custom
+// template), which may load inline or third-party resources written before
+// the policy existed, and strict otherwise.
 func ResolveCSPMode(stored string, customized bool) string {
 	if mode, ok := ParseCSPMode(stored); ok && mode != "" {
 		return mode
@@ -163,14 +165,17 @@ func StatusPagePolicy(mode, nonce string, frameAncestors []string) string {
 	case CSPModeOff:
 		return ancestors
 	case CSPModeCompatible:
+		// http: as well as https:: the mode exists so pages customized before
+		// the policy keep working, and on an HTTPS page the browser's own
+		// mixed-content rules still refuse active http: content.
 		return strings.Join([]string{
-			"default-src 'self' https: data:",
-			"script-src 'self' 'unsafe-inline' https:",
-			"style-src 'self' 'unsafe-inline' https:",
-			"img-src 'self' data: https:",
-			"font-src 'self' data: https:",
-			"connect-src 'self' https: wss:",
-			"frame-src https:",
+			"default-src 'self' https: http: data:",
+			"script-src 'self' 'unsafe-inline' https: http:",
+			"style-src 'self' 'unsafe-inline' https: http:",
+			"img-src 'self' data: https: http:",
+			"font-src 'self' data: https: http:",
+			"connect-src 'self' https: http: wss: ws:",
+			"frame-src https: http:",
 			"worker-src 'self'",
 			"object-src 'none'",
 			"base-uri 'self'",
@@ -180,10 +185,14 @@ func StatusPagePolicy(mode, nonce string, frameAncestors []string) string {
 		return strings.Join([]string{
 			"default-src 'self'",
 			"script-src 'nonce-" + nonce + "'",
-			"style-src 'self' 'unsafe-inline'",
-			// https: so a logo_url on another host still renders.
-			"img-src 'self' data: https:",
-			"font-src 'self' data:",
+			// Strict guards script execution. Remote stylesheets and fonts
+			// (custom CSS @import, @font-face) and remote logos cannot run
+			// code, so they stay allowed: https: for styles and fonts, and
+			// http: too for images, so a plain-http logo_url still renders
+			// (an HTTPS page's browser upgrades or blocks it on its own).
+			"style-src 'self' 'unsafe-inline' https:",
+			"img-src 'self' data: https: http:",
+			"font-src 'self' data: https:",
 			"connect-src 'self'",
 			// The push service worker (/public/status/sw.js) is a same-origin
 			// script URL, which a nonce-only script-src would refuse.

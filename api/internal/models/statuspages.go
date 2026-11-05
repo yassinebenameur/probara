@@ -33,7 +33,8 @@ type StatusPageSettings struct {
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
 	// CSPMode is the public page's Content-Security-Policy mode: "strict",
 	// "compatible", "off", or "" for automatic (compatible when the page has
-	// custom head/footer HTML or a published custom template, else strict).
+	// custom CSS, custom head/footer HTML or a published custom template,
+	// else strict).
 	// See shared/securityheaders.
 	CSPMode *string `json:"csp_mode,omitempty"`
 	// AllowedEmbedOrigins are the origins (scheme://host[:port], "*." host

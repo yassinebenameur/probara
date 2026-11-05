@@ -1778,8 +1778,8 @@ export interface StatusPageSettings {
   custom_footer_html?: string;
   /**
    * Public page Content-Security-Policy mode. '' (automatic) is compatible
-   * when the page has custom head/footer HTML or a published custom
-   * template, strict otherwise. Strict runs only scripts carrying
+   * when the page has custom CSS, custom head/footer HTML or a published
+   * custom template, strict otherwise. Strict runs only scripts carrying
    * nonce="{{cspNonce}}".
    */
   csp_mode?: StatusPageCSPMode;

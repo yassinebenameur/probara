@@ -208,8 +208,9 @@ services:
       LOCATION_WORKER_IMAGE: "${LOCATION_WORKER_IMAGE:-}"
       # Browser/edge security. HSTS max-age in seconds: 0 (off) for local
       # HTTP; it is only ever sent on HTTPS requests. Set the same value on
-      # status-page. The general rate limit is per credential (else per
-      # client IP), per api replica; 0 disables it. API_ALLOWED_ORIGINS lists
+      # status-page. The general rate limit is per validated credential (per
+      # client IP only for auth failures and unauthenticated routes), per api
+      # replica; 0 disables it. API_ALLOWED_ORIGINS lists
       # the browser origins allowed credentialed CORS (empty = same-origin).
       SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
       API_RATE_LIMIT_PER_MINUTE: "${API_RATE_LIMIT_PER_MINUTE:-600}"
@@ -409,9 +410,11 @@ services:
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
       # Same HSTS max-age as on api. APP_BASE_URL (the operator UI origin)
       # joins every page's CSP frame-ancestors so the template editor can
-      # preview pages in an iframe.
+      # preview pages in an iframe. Empty (the default) lets any site frame
+      # the draft preview route, so a UI on any host can preview; set it to
+      # lock the preview to your UI.
       SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
-      APP_BASE_URL: "${APP_BASE_URL:-http://localhost:3000}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
     ports:
       - "8082:8082"
       - "9093:9093"

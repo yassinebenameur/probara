@@ -286,10 +286,12 @@ security:
   # https from a trustedProxyCIDRs peer -- so list your ingress there.
   hstsMaxAge: ""
   # General API rate limit (API_RATE_LIMIT_PER_MINUTE / _BURST): one token
-  # bucket per credential (API key, MCP grant, session user), else per client
-  # IP, kept in memory on each api replica -- the effective cluster-wide
-  # ceiling is this times api.replicas. 0 disables it. Push heartbeats, OTLP
-  # export, discovery collectors, the alert stream and probes are exempt.
+  # bucket per validated credential (API key, MCP grant, session user); per
+  # client IP only for authentication failures and unauthenticated routes
+  # (set trustedProxyCIDRs, or every client shares the ingress's address).
+  # Kept in memory on each api replica -- the effective cluster-wide ceiling
+  # is this times api.replicas. 0 disables it. Push heartbeats, discovery
+  # collectors, probes, and validated OTLP export and alert streams are exempt.
   apiRateLimitPerMinute: 600
   apiRateLimitBurst: 120
   # Browser origins allowed credentialed cross-origin API calls
