@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -271,4 +272,25 @@ func TestLoginLockoutAndUnlock(t *testing.T) {
 	if user.LockedUntil == nil || time.Until(*user.LockedUntil) <= 0 {
 		t.Fatalf("locked_until = %v, want a future time", user.LockedUntil)
 	}
+}
+
+// Behind a proxy every user shares one client address: failures against
+// other usernames from it, however many, must not block anyone else's
+// sign-in.
+func TestFailedLoginsFromSharedAddressDoNotBlockOthers(t *testing.T) {
+	f := newMCPFixture(t)
+	f.createUser("alice", "member", nil)
+
+	for i := 0; i < 60; i++ {
+		raw, _ := json.Marshal(map[string]string{"username": "spray-" + strconv.Itoa(i), "password": "wrong-password"})
+		res, err := http.Post(f.http.URL+"/api/v1/auth/login", "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("spray attempt %d: %d, want 401", i+1, res.StatusCode)
+		}
+	}
+	f.signIn("alice")
 }

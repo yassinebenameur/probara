@@ -38,20 +38,11 @@ type Handlers struct {
 	logger  *logger.Logger
 	audit   *audit.Recorder
 	oidc    *oidcauth.Service
-	// ipThrottle blocks a client address after repeated failed logins
-	// (per replica), in front of the per-account lockout.
-	ipThrottle *adminauth.FailureThrottle
 }
 
 // NewHandlers creates a new auth handler.
 func NewHandlers(service *adminauth.Service, cfg *config.APIConfig, log *logger.Logger, auditRecorder *audit.Recorder) *Handlers {
-	return &Handlers{
-		service:    service,
-		cfg:        cfg,
-		logger:     log,
-		audit:      auditRecorder,
-		ipThrottle: adminauth.NewFailureThrottle(adminauth.IPFailureLimit, adminauth.LockoutBase, adminauth.LockoutBase, adminauth.LockoutBase),
-	}
+	return &Handlers{service: service, cfg: cfg, logger: log, audit: auditRecorder}
 }
 
 // recordAuthEvent emits an explicit auth-lifecycle audit event. The auth
@@ -85,16 +76,13 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientip.FromRequest(r)
-	if wait := h.ipThrottle.BlockedFor(ip, time.Now()); wait > 0 {
-		h.recordLoginRefusal(r, req.Username, nil, "ip_throttled")
-		writeLoginThrottled(w, wait)
-		return
-	}
-
+	// No per-address stage: with TRUSTED_PROXY_CIDRS unset (the default)
+	// every user behind the ingress or the UI proxy shares one address, and
+	// blocking it would deny sign-in to all of them. Limits are per
+	// username, in the database (adminauth lockout).
 	user, err := h.service.Authenticate(r.Context(), req.Username, req.Password)
 	if err != nil {
-		h.handleLoginFailure(w, r, req.Username, ip, err)
+		h.handleLoginFailure(w, r, req.Username, err)
 		return
 	}
 	h.recordAuthEvent(r, "auth.login", audit.OutcomeSuccess, user.Username, &user.ID)
@@ -374,9 +362,9 @@ func (h *Handlers) readAccessSession(r *http.Request) (adminID, familyID uuid.UU
 }
 
 // handleLoginFailure answers a refused login. Wrong and unknown credentials
-// share one 401; a lockout (account or client address) shares one 429. The
-// audit record carries the detail the response withholds.
-func (h *Handlers) handleLoginFailure(w http.ResponseWriter, r *http.Request, username, ip string, err error) {
+// share one 401; every lockout, real account or unknown name, shares one
+// 429. The audit record carries the detail the response withholds.
+func (h *Handlers) handleLoginFailure(w http.ResponseWriter, r *http.Request, username string, err error) {
 	var failure *adminauth.LoginFailure
 	if !stderrors.As(err, &failure) {
 		h.logger.WithError(err).Error("Admin login failed")
@@ -389,7 +377,6 @@ func (h *Handlers) handleLoginFailure(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 
-	h.ipThrottle.Fail(ip, time.Now())
 	h.recordAuthEvent(r, "auth.login", audit.OutcomeFailure, username, nil)
 	if failure.LockedNow && failure.UserID != nil {
 		h.recordLockout(r, username, *failure.UserID, failure)
@@ -433,7 +420,7 @@ func (h *Handlers) recordLockout(r *http.Request, username string, userID uuid.U
 }
 
 // writeLoginThrottled is the one 429 for every lockout, so it never tells a
-// locked account from a throttled address or an unknown username.
+// locked account from a locked unknown username.
 func writeLoginThrottled(w http.ResponseWriter, retryAfter time.Duration) {
 	if retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int((retryAfter+time.Second-1)/time.Second)))

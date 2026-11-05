@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -23,10 +24,6 @@ var ErrUserNotFound = errors.New("admin user not found")
 type Service struct {
 	db         *db.Client
 	bcryptCost int
-	// ghosts throttles failed logins for usernames that name no password
-	// account, mirroring the account lockout so a 429 does not reveal that
-	// an account exists.
-	ghosts *FailureThrottle
 
 	dummyOnce sync.Once
 	dummyHash string
@@ -34,11 +31,7 @@ type Service struct {
 
 // NewService creates a new admin auth service.
 func NewService(dbClient *db.Client, bcryptCost int) *Service {
-	return &Service{
-		db:         dbClient,
-		bcryptCost: bcryptCost,
-		ghosts:     NewFailureThrottle(LockoutThreshold, lockoutMemory, LockoutBase, LockoutMax),
-	}
+	return &Service{db: dbClient, bcryptCost: bcryptCost}
 }
 
 // burnPasswordCompare spends one bcrypt comparison at the configured cost, so
@@ -104,7 +97,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		return nil, fmt.Errorf("failed to query admin user: %w", err)
 	}
 	if noAccount {
-		return nil, s.ghostFailure(username, password)
+		return nil, s.ghostFailure(ctx, username, password)
 	}
 
 	if lockout {
@@ -148,19 +141,35 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	return &user, nil
 }
 
-// ghostFailure refuses a login for a username with no password account,
-// throttled exactly like a real account (see Service.ghosts).
-func (s *Service) ghostFailure(username, password string) error {
-	key := usernameKey(username)
-	now := time.Now()
-	if wait := s.ghosts.BlockedFor(key, now); wait > 0 {
-		return &LoginFailure{Locked: true, RetryAfter: wait}
+// ghostFailure refuses a login for a username with no password account
+// (unknown, SSO-only or disabled). Its streak is kept in the database and
+// counted exactly like a real account's, and it costs the same bcrypt
+// comparison, so neither the 401/429 pattern nor the timing tells it from a
+// real account, on any replica or after a restart.
+func (s *Service) ghostFailure(ctx context.Context, username, password string) error {
+	key := ghostKey(username)
+	count, until, locked, err := s.reserveGhost(ctx, key)
+	switch {
+	case isMissingSchema(err):
+		// Before migration 000106 unknown usernames are never locked.
+		s.burnPasswordCompare(password)
+		return &LoginFailure{}
+	case err != nil:
+		return fmt.Errorf("failed to record login attempt: %w", err)
+	case locked:
+		return &LoginFailure{Locked: true, RetryAfter: s.ghostLockedFor(ctx, key)}
 	}
+
 	s.burnPasswordCompare(password)
-	failure := &LoginFailure{}
-	if wait := s.ghosts.Fail(key, now); wait > 0 {
+	if rand.IntN(ghostPruneEvery) == 0 {
+		// Best-effort housekeeping: an error here must not change the answer,
+		// which would set unknown names apart from real accounts.
+		_, _ = PruneGhostStreaks(ctx, s.db)
+	}
+	failure := &LoginFailure{FailedAttempts: count}
+	if until != nil && until.After(time.Now()) {
 		failure.LockedNow = true
-		failure.RetryAfter = wait
+		failure.RetryAfter = time.Until(*until)
 	}
 	return failure
 }
