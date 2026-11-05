@@ -202,3 +202,88 @@ func TestDependencySuppressionFragments(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyPolicy(t *testing.T) {
+	policyID := uuid.New()
+	groupID := uuid.New()
+	tests := []struct {
+		name          string
+		counts        Counts
+		wantReachable bool
+		wantSource    string
+		wantReason    string
+	}{
+		{
+			name:          "own policy with only a reachable person target is reachable",
+			counts:        Counts{NotificationMode: "policy", PolicyID: &policyID, OwnPeople: 1},
+			wantReachable: true,
+			wantSource:    SourcePolicy,
+		},
+		{
+			name:          "own policy with an active channel target is reachable",
+			counts:        Counts{NotificationMode: "policy", PolicyID: &policyID, OwnActive: 1, OwnAssigned: 1},
+			wantReachable: true,
+			wantSource:    SourcePolicy,
+		},
+		{
+			name:          "own policy with disabled channels and unpageable people reaches nobody",
+			counts:        Counts{NotificationMode: "policy", PolicyID: &policyID, OwnAssigned: 2},
+			wantReachable: false,
+			wantSource:    SourcePolicy,
+			wantReason:    ReasonPolicyNoTargets,
+		},
+		{
+			name:          "policy mode without a policy reaches nobody",
+			counts:        Counts{NotificationMode: "policy"},
+			wantReachable: false,
+			wantSource:    SourcePolicy,
+			wantReason:    ReasonPolicyNoTargets,
+		},
+		{
+			name:          "default mode under a tenant default policy reports the policy",
+			counts:        Counts{NotificationMode: "default", PolicyID: &policyID},
+			wantReachable: false,
+			wantSource:    SourceTenantDefault,
+			wantReason:    ReasonPolicyNoTargets,
+		},
+		{
+			name: "rolled-up member is reachable through its group's person targets",
+			counts: Counts{
+				NotificationMode: "custom",
+				RollupGroupID:    &groupID,
+				RollupEnabled:    true,
+				RollupPeople:     2,
+			},
+			wantReachable: true,
+			wantSource:    SourceGroupRollup,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(tt.counts)
+			if got.Reachable != tt.wantReachable || got.Source != tt.wantSource || got.Reason != tt.wantReason {
+				t.Fatalf("Classify() = %+v, want reachable=%v source=%q reason=%q", got, tt.wantReachable, tt.wantSource, tt.wantReason)
+			}
+			if tt.counts.PolicyID != nil && (got.EscalationPolicyID == nil || *got.EscalationPolicyID != *tt.counts.PolicyID) {
+				t.Fatalf("Classify() lost the policy: %+v", got)
+			}
+		})
+	}
+}
+
+func TestPolicyFragmentsUseTheEffectivePolicy(t *testing.T) {
+	for name, frag := range map[string]string{
+		"TargetsSQL":        TargetsSQL(),
+		"TenantTargetsSQL":  TenantTargetsSQL(),
+		"ChannelCountExpr":  ChannelCountExpr("m", true),
+		"PeopleCountExpr":   PeopleCountExpr("m"),
+		"UnreachablePred":   UnreachablePredicate("m"),
+		"RoutesToChannel":   RoutesToChannelPredicate("m", "ac.id"),
+		"RollupGroupExpr":   RollupGroupExpr("m.id"),
+		"ReachCountExpr(m)": ReachCountExpr("m"),
+	} {
+		if !strings.Contains(frag, "escalation_policy") && !strings.Contains(frag, "default_escalation_policy_id") {
+			t.Errorf("%s does not consult escalation policies", name)
+		}
+	}
+}
