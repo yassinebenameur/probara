@@ -4,6 +4,7 @@ package statuspage
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,8 +20,11 @@ func insertTestMaintenanceWindow(ctx context.Context, t *testing.T, db *shareddb
 	t.Helper()
 	windowID := uuid.New()
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO maintenance_windows (id, tenant_id, title, description, starts_at, ends_at)
-		VALUES ($1, $2, $3, 'window description', $4, $5)
+		WITH w AS (
+			INSERT INTO maintenance_windows (id, tenant_id, title, description, starts_at, ends_at)
+			VALUES ($1, $2, $3, 'window description', $4, $5)
+			RETURNING id, tenant_id, starts_at, ends_at)
+		INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT * FROM w
 	`, windowID, tenantID, title, startsAt, endsAt); err != nil {
 		t.Fatalf("insert maintenance window: %v", err)
 	}
@@ -161,5 +165,56 @@ func TestStatusPageMaintenanceGroupExpansion(t *testing.T) {
 	}
 	if got := page.MaintenanceWindows[0].AffectedMonitors; len(got) != 1 || got[0] != "member" {
 		t.Errorf("affected monitors = %v, want [member] (page-scoped names)", got)
+	}
+}
+
+// A repeating window is listed once, at its earliest live occurrence, with
+// the following starts; ended occurrences and the rule's own template span
+// are not shown (S-M5).
+func TestStatusPageMaintenanceRepeatingWindow(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "status-mw-repeat")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "mw-repeat", "MW Repeat")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "nightly-target")
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
+
+	// The template (and its occurrence) ended two days ago.
+	windowID := insertTestMaintenanceWindow(ctx, t, dbClient, tenantID, "nightly backup",
+		now.Add(-49*time.Hour), now.Add(-48*time.Hour), monitorID)
+	if _, err := dbClient.ExecContext(ctx, `UPDATE maintenance_windows SET recurrence = 'daily' WHERE id = $1`, windowID); err != nil {
+		t.Fatalf("make window repeating: %v", err)
+	}
+	for day := 0; day < 5; day++ {
+		start := now.Add(time.Hour + time.Duration(day)*24*time.Hour)
+		if _, err := dbClient.ExecContext(ctx, `
+			INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) VALUES ($1, $2, $3, $4)`,
+			windowID, tenantID, start, start.Add(time.Hour)); err != nil {
+			t.Fatalf("insert occurrence: %v", err)
+		}
+	}
+
+	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient))
+	page, err := svc.GetStatusPageBySlug(ctx, "mw-repeat")
+	if err != nil {
+		t.Fatalf("GetStatusPageBySlug() error = %v", err)
+	}
+	if len(page.MaintenanceWindows) != 1 {
+		t.Fatalf("maintenance windows = %d, want the repeating window once", len(page.MaintenanceWindows))
+	}
+	w := page.MaintenanceWindows[0]
+	if !w.Repeating || w.IsActive || !w.StartsAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("listed occurrence = %+v, want the next one (in 1h), repeating, not active", w)
+	}
+	if len(w.NextStartsAt) != 3 || !w.NextStartsAt[0].Equal(now.Add(25*time.Hour)) {
+		t.Fatalf("next starts = %v, want the three following days", w.NextStartsAt)
+	}
+	if got := maintenanceRepeatText(w); !strings.HasPrefix(got, "Repeats · next: ") {
+		t.Fatalf("repeat text = %q", got)
 	}
 }

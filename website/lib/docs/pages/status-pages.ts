@@ -370,7 +370,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Public page data includes applicable ongoing and recent maintenance windows. A window is applicable when it directly covers a selected monitor or covers a selected group and its members.",
+            "Public page data includes applicable maintenance with an occurrence in progress or starting within the next 14 days. A window is applicable when it directly covers a selected monitor or covers a selected group and its members. Each window appears once, at its earliest such occurrence (times in UTC); a repeating window is labelled \"Repeats\" and lists up to three following starts. Custom templates read that line as `RepeatText` on each `MaintenanceWindows` entry, next to `TimeRangeText`.",
         },
         {
           type: "paragraph",
