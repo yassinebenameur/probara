@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,5 +151,95 @@ authorization {
 	defer shortCancel()
 	if _, err := workerJS.Consumer(shortCtx, "CHECK_JOBS", models.CheckJobConsumerForLocation(locationTwo)); err == nil {
 		t.Fatal("worker accessed another location's durable consumer")
+	}
+}
+
+// Private locations reach the broker over its websocket listener (wss:// on
+// 443 through an ingress). The listener has no authorization block of its
+// own, so websocket clients must go through the same auth callout as TCP
+// clients: a valid location credential connects, a wrong one and an
+// anonymous client are refused.
+func TestAuthorizationCalloutCoversWebsocketClients(t *testing.T) {
+	account, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, _ := account.Seed()
+	public, _ := account.PublicKey()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "nats.conf")
+	config := fmt.Sprintf(`
+port: -1
+jetstream { store_dir: %q }
+websocket { host: "127.0.0.1", port: -1, no_tls: true }
+authorization {
+  users: [{ user: "platform", password: "platform-secret" }]
+  auth_callout {
+    issuer: %q
+    auth_users: ["platform"]
+  }
+}
+`, filepath.Join(dir, "js"), public)
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts, err := server.ProcessConfigFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Start()
+	if !srv.ReadyForConnections(5 * time.Second) {
+		t.Fatal("NATS server did not start")
+	}
+	t.Cleanup(srv.Shutdown)
+
+	platform, err := nats.Connect(srv.ClientURL(), nats.UserInfo("platform", "platform-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	const location = "11111111-1111-4111-8111-111111111111"
+	authorizer, err := New(string(seed), credentialMap{location: "one"}, Options{
+		CheckJobStream: "CHECK_JOBS",
+		ResultSubject:  "check.results",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calloutService, err := authorizer.Start(platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = calloutService.Stop() })
+
+	wsURL := srv.WebsocketURL()
+	if !strings.HasPrefix(wsURL, "ws://") {
+		t.Fatalf("websocket listener not running: %q", wsURL)
+	}
+	worker, err := nats.Connect(wsURL, nats.UserInfo(location, "one"), nats.Timeout(3*time.Second))
+	if err != nil {
+		t.Fatalf("location worker over websocket: %v", err)
+	}
+	t.Cleanup(worker.Close)
+	if err := worker.Publish("check.results.loc."+location, []byte("result")); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, opt := range map[string]nats.Option{
+		"wrong credential": nats.UserInfo(location, "two"),
+		"anonymous":        func(*nats.Options) error { return nil },
+	} {
+		nc, err := nats.Connect(wsURL, opt, nats.Timeout(3*time.Second))
+		if err == nil {
+			nc.Close()
+			t.Fatalf("%s websocket client was accepted", name)
+		}
 	}
 }

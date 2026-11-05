@@ -98,7 +98,10 @@ alike. Run-now publishes without one: it is a deliberate manual trigger.
 Private-location workers use location-scoped broker credentials and encrypted
 monitor configurations. The platform validates location result provenance
 before persistence. These workers do not receive the database connection or
-the platform encryption key. See [worker authentication](location-worker-auth.md).
+the platform encryption key. They dial the broker over `tls://` on 4222 or
+`wss://` on 443 (the broker's websocket listener, port 8443 behind an HTTPS
+ingress or proxy); both listeners share the same auth callout. See
+[worker authentication](location-worker-auth.md).
 
 ## Alert lifecycle and delivery
 

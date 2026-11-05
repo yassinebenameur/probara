@@ -452,7 +452,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'list',
           items: [
-            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo.',
+            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo. The websocket listener declares no authorization of its own, so websocket clients go through the same callout as TCP clients (an anonymous or wrong-credential websocket client is refused).',
             'Keep the account issuer seed only in API. Configure only its public account key in NATS.',
             'Use a separate platform NATS user for trusted internal services. Never give it to a location worker.',
             'Location claims restrict result publication, heartbeat publication, consumer pull/ACK operations, inbox responses, and test-job subscription to that location.',

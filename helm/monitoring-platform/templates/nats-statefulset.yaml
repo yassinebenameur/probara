@@ -1,4 +1,6 @@
 {{- if .Values.nats.enabled }}
+{{- /* The config file carries auth and the websocket listener; plain flags otherwise. */}}
+{{- $natsConfig := or .Values.nats.auth.enabled .Values.nats.websocket.enabled }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -18,15 +20,22 @@ spec:
       labels:
         {{- include "monitoring-platform.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: nats
+      {{- if $natsConfig }}
+      annotations:
+        # nats-server reads nats.conf only at startup: roll the pod when it changes.
+        checksum/nats-config: {{ include (print $.Template.BasePath "/nats-configmap.yaml") . | sha256sum }}
+      {{- end }}
     spec:
       containers:
         - name: nats
           image: "{{ .Values.nats.image }}"
           imagePullPolicy: IfNotPresent
           args:
-            {{- if .Values.nats.auth.enabled }}
+            {{- if $natsConfig }}
             - "-c"
             - "/etc/nats/nats.conf"
+            {{- end }}
+            {{- if .Values.nats.auth.enabled }}
             # The platform user lives here rather than in nats.conf so the
             # password never passes through the config parser: Kubernetes
             # substitutes $(NATS_PLATFORM_PASSWORD) literally, which nats.conf's
@@ -35,7 +44,7 @@ spec:
             - {{ .Values.nats.auth.platformUser | quote }}
             - "--pass"
             - "$(NATS_PLATFORM_PASSWORD)"
-            {{- else }}
+            {{- else if not $natsConfig }}
             - "-js"
             - "-m"
             - "8222"
@@ -58,6 +67,11 @@ spec:
             - name: cluster
               containerPort: 6222
               protocol: TCP
+            {{- if .Values.nats.websocket.enabled }}
+            - name: websocket
+              containerPort: {{ .Values.nats.websocket.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -79,18 +93,18 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-            {{- if .Values.nats.auth.enabled }}
+            {{- if $natsConfig }}
             - name: config
               mountPath: /etc/nats
               readOnly: true
             {{- end }}
-      {{- if or (not .Values.nats.persistence.enabled) .Values.nats.auth.enabled }}
+      {{- if or (not .Values.nats.persistence.enabled) $natsConfig }}
       volumes:
         {{- if not .Values.nats.persistence.enabled }}
         - name: data
           emptyDir: {}
         {{- end }}
-        {{- if .Values.nats.auth.enabled }}
+        {{- if $natsConfig }}
         - name: config
           configMap:
             name: {{ include "monitoring-platform.fullname" . }}-nats-config

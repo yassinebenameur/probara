@@ -1,10 +1,14 @@
 {{- /*
-Server config for the embedded broker. It must stay free of secret material,
-so the platform user is NOT declared here: the StatefulSet passes it as
---user/--pass, with the password substituted by Kubernetes from a Secret-backed
-env var. nats-server merges those flags with this authorization block, leaving
-auth_callout active for every other user (verified: the platform user connects
-immediately, others still go through callout).
+Server config for the embedded broker, rendered when auth or the websocket
+listener needs a config file (without either, the StatefulSet passes plain
+flags). It must stay free of secret material, so the platform user is NOT
+declared here: the StatefulSet passes it as --user/--pass, with the password
+substituted by Kubernetes from a Secret-backed env var. nats-server merges
+those flags with this authorization block, leaving auth_callout active for
+every other user (verified: the platform user connects immediately, others
+still go through callout). The websocket block declares no authorization of
+its own, so websocket clients go through the same callout
+(TestAuthorizationCalloutCoversWebsocketClients).
 
 Do not move the password back into this file via nats-server's $VAR expansion.
 It re-parses the expanded token as configuration, so passwords that are purely
@@ -13,7 +17,7 @@ quoting the reference suppresses expansion entirely, silently making the
 literal "$NATS_PLATFORM_PASSWORD" the password. The issuer public key below is
 public by construction and safe to template.
 */}}
-{{- if and .Values.nats.enabled .Values.nats.auth.enabled }}
+{{- if and .Values.nats.enabled (or .Values.nats.auth.enabled .Values.nats.websocket.enabled) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,10 +31,19 @@ data:
       store_dir: /data
     }
     http_port: 8222
+    {{- if .Values.nats.websocket.enabled }}
+    # Plaintext inside the cluster; TLS terminates at the websocket ingress.
+    websocket {
+      port: {{ .Values.nats.websocket.port }}
+      no_tls: true
+    }
+    {{- end }}
+    {{- if .Values.nats.auth.enabled }}
     authorization {
       auth_callout {
         issuer: {{ required "nats.auth.locationIssuerPublicKey is required when nats.auth.enabled" .Values.nats.auth.locationIssuerPublicKey | quote }}
         auth_users: [{{ required "nats.auth.platformUser is required when nats.auth.enabled" .Values.nats.auth.platformUser | quote }}]
       }
     }
+    {{- end }}
 {{- end }}

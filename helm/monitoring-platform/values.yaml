@@ -92,6 +92,33 @@ nats:
     locationIssuerSeed: ""
     locationIssuerSeedExistingSecret: ""
     locationIssuerSeedExistingSecretKey: nats_location_auth_issuer_seed
+  # WebSocket listener for private-location workers whose network allows only
+  # outbound HTTPS: they connect to wss://<ingress host> on 443. The broker
+  # serves the listener in plaintext on `port` inside the cluster and TLS
+  # terminates at the ingress. Websocket clients go through the same auth
+  # callout as TCP clients, so the ingress requires nats.auth.enabled (the
+  # render fails otherwise). With the ingress on and api.publicNatsURL empty,
+  # the API advertises wss://<host><path> in deploy snippets.
+  websocket:
+    enabled: false
+    port: 8443
+    ingress:
+      enabled: false
+      # Empty = ingress.className.
+      className: ""
+      # Dedicated host (nats.example.com), or the app host with a path such
+      # as /nats; the worker sends the path in its upgrade request.
+      host: ""
+      path: /
+      # NATS keeps idle connections open between 2-minute pings, longer than
+      # ingress-nginx's 60s default proxy timeouts.
+      annotations:
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+      # Same shape as ingress.tls, e.g.
+      # - secretName: nats-tls
+      #   hosts: [nats.example.com]
+      tls: []
   persistence:
     enabled: true
     size: 1Gi
@@ -314,8 +341,9 @@ api:
   publicBaseURL: ""
   # NATS address reachable from remote networks, baked into private-location
   # worker deploy snippets. Requires nats.auth.enabled; expose NATS through TLS
-  # before pointing external locations at it.
-  # Example: "tls://nats.example.com:4222"
+  # before pointing external locations at it. Empty with
+  # nats.websocket.ingress.enabled = wss://<that host><path>.
+  # Example: "tls://nats.example.com:4222" or "wss://nats.example.com"
   publicNatsURL: ""
   # Image the private-location deploy snippets (docker run / Compose) tell
   # remote sites to run. Empty = "{image.repository}-worker:{image tag}", the

@@ -107,7 +107,7 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`NATS_URL`',
               '`nats://localhost:4222`',
               'API, scheduler, worker, alerter, status page updates',
-              'Scheduler and worker require NATS. API and status live-update paths degrade when it is unavailable; alerter can run synchronous dispatch without it.',
+              'Scheduler and worker require NATS. API and status live-update paths degrade when it is unavailable; alerter can run synchronous dispatch without it. Besides `nats://` and `tls://`, the check-job client accepts `ws://` and `wss://` (the broker\'s websocket listener); a path in a websocket URL (`wss://host/nats`) is sent in the upgrade request, for path-routed ingresses.',
             ],
           ],
         },
@@ -188,7 +188,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PUBLIC_NATS_URL`',
               'Empty',
-              'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected.',
+              'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected. `wss://` targets the broker\'s websocket listener behind an HTTPS ingress, so locations need only outbound 443; Helm derives it from `nats.websocket.ingress.host` (and `.path`) when `api.publicNatsURL` is empty.',
             ],
             [
               '`LOCATION_WORKER_IMAGE`',

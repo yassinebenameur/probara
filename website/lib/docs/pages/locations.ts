@@ -77,7 +77,7 @@ export const LOCATIONS_PAGE: DocPage = {
           language: "yaml",
           title: "Shape of generated worker environment",
           code:
-            "image: ghcr.io/yassinebenameur/probara-worker:<platform version>\nenvironment:\n  NATS_URL: tls://nats.example.com:4222\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
+            "image: ghcr.io/yassinebenameur/probara-worker:<platform version>\nenvironment:\n  # NATS over WebSocket (wss://): this host needs only outbound HTTPS to the broker.\n  NATS_URL: wss://<location-uuid>:<generated-secret>@nats.example.com\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
         },
         {
           type: "paragraph",
@@ -90,6 +90,11 @@ export const LOCATIONS_PAGE: DocPage = {
           title: "A public NATS URL is required",
           text:
             "Generated deployment information requires `PUBLIC_NATS_URL` to use `tls://` or `wss://`, without embedded user information. It must be reachable from the location network and terminate with the [NATS authentication callout](/docs/security/#private-locations-nats) enabled for location credentials.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Prefer `wss://` when the location's network allows only outbound HTTPS. The broker's websocket listener (port `8443`, plaintext inside the platform) sits behind an HTTPS ingress or reverse proxy on 443, and location workers authenticate through the same callout as on 4222. A URL path is honored, so the listener can share the app's host (`wss://probara.example.com/nats`) or use its own (`wss://nats.example.com`). On Helm, `nats.websocket.enabled` and `nats.websocket.ingress.*` create the listener and its Ingress and derive `PUBLIC_NATS_URL` from the ingress host; the [release Compose stack](/docs/deployment/#release-compose) publishes the listener on `127.0.0.1:8443` for your TLS proxy. Each snippet carries a one-line comment saying which egress it needs.",
         },
         {
           type: "paragraph",
@@ -116,7 +121,7 @@ export const LOCATIONS_PAGE: DocPage = {
           type: "list",
           items: [
             "Store the location credential in a Kubernetes Secret or equivalent secret store, not in a committed values file.",
-            "Use TLS or WSS for the [public NATS endpoint](/docs/configuration/#public-urls-and-private-location-auth) as required by deployment-info generation.",
+            "Use TLS or WSS for the [public NATS endpoint](/docs/configuration/#public-urls-and-private-location-auth) as required by deployment-info generation. With WSS, TLS terminates at your ingress or proxy, so the hop from it to the broker is plaintext inside your network.",
             "Limit broker network exposure and use the generated credential only for its intended location.",
             "Replace a compromised location rather than treating the display slug as a rotatable secret.",
           ],

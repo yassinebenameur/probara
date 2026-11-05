@@ -1,9 +1,18 @@
 # Location worker authentication (design)
 
-Status: **proposed** (2026-07-11). No code changes yet. Addresses the P1
-finding that private-location workers share one global, anonymous NATS
-identity, allowing cross-location job consumption and cross-tenant result
-forgery.
+Status: **implemented**, with an API-hosted NATS auth callout in place of the
+JWT account resolver recommended below
+(`api/internal/services/locationnatsauth`): per-location credentials
+(`LOCATION_CREDENTIAL`, username = location UUID), short-lived
+location-scoped user claims, location result subjects
+(`check.results.loc.<uuid>`) and signed results verified at ingest
+(`scheduler/internal/ingest`). Workers reach the broker over `tls://` or, from
+networks that allow only outbound HTTPS, `wss://` on 443 through the broker's
+websocket listener (Helm `nats.websocket.*`, release Compose); websocket
+clients go through the same callout. The rest of this document is the
+original design record (2026-07-11), which addressed the P1 finding that
+private-location workers shared one global, anonymous NATS identity, allowing
+cross-location job consumption and cross-tenant result forgery.
 
 ## Problem / threat model
 

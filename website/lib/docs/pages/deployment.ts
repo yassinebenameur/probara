@@ -380,6 +380,16 @@ kubectl -n probara get jobs`,
               'Auth-callout account seed for the API. The matching public key stays a plain ConfigMap value.',
             ],
             ['`nats.image`', '`nats:2.10-alpine`', 'Embedded broker image.'],
+            [
+              '`nats.websocket.enabled`, `.port`',
+              '`false`, `8443`',
+              'Adds a plaintext websocket listener to the embedded broker (and a `websocket` port on its Service) for private-location workers that can make only outbound HTTPS. Websocket clients authenticate through the same auth callout as TCP clients.',
+            ],
+            [
+              '`nats.websocket.ingress.enabled`, `.className`, `.host`, `.path`, `.annotations`, `.tls`',
+              '`false`, empty (`ingress.className`), empty, `/`, ingress-nginx 3600 s proxy read/send timeouts, `[]`',
+              'An Ingress terminating TLS in front of the listener, so locations dial `wss://<host><path>` on 443. The render fails without `nats.websocket.enabled`, without a `host`, or without `nats.auth.enabled` (an ingress in front of an anonymous broker would expose every job and result subject). The long timeouts keep idle NATS connections, which ping every two minutes, from being cut at ingress-nginx\'s 60 s default. A path lets the listener share the app host (`/nats`).',
+            ],
             ['`nats.persistence.enabled`', '`true`', 'Persist JetStream state.'],
             ['`nats.persistence.size`', '`1Gi`', 'NATS PVC request.'],
             ['`nats.persistence.storageClass`', 'Empty', 'Cluster default storage class.'],
@@ -464,7 +474,7 @@ kubectl -n probara get jobs`,
             [
               '`api.publicBaseURL`, `.publicNatsURL`',
               'Empty',
-              'External API origin and optional external TLS/WSS NATS endpoint.',
+              'External API origin and optional external TLS/WSS NATS endpoint. With `.publicNatsURL` empty and `nats.websocket.ingress.enabled`, the API gets `PUBLIC_NATS_URL=wss://<ingress host><path>`.',
             ],
             [
               '`api.locationWorkerImage`',
@@ -797,8 +807,28 @@ api:
             'The chart does not expose HTTP egress policy; provide `HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` through extra environment configuration, and keep any allowlist limited to networks that location is explicitly trusted to monitor.',
             'Expose the mesh echo endpoint only on private inter-location networks.',
             'For locations outside the Kubernetes cluster, use the generated container/deployment snippet rather than granting database access.',
-            'The embedded NATS Service is ClusterIP-only; an external location needs a separate TLS/WSS exposure path.',
+            'The embedded NATS Service is ClusterIP-only. For locations outside the cluster, enable the websocket listener and its Ingress (below), or provide another TLS exposure of port 4222.',
           ],
+        },
+        {
+          type: 'code',
+          language: 'yaml',
+          title: 'Private locations over 443 (wss://)',
+          code: `nats:
+  auth:
+    enabled: true
+    platformPassword: "random-url-safe-password"
+    locationIssuerPublicKey: "A..."   # nk -gen account -pubout, line 2
+    locationIssuerSeed: "SA..."       # line 1; mounted only into the API
+  websocket:
+    enabled: true
+    ingress:
+      enabled: true
+      host: nats.example.com          # or the app host with path: /nats
+      tls:
+        - secretName: nats-tls
+          hosts: [nats.example.com]
+# api.publicNatsURL stays empty: the API advertises wss://nats.example.com`,
         },
       ],
     },
@@ -915,10 +945,6 @@ api:
             [
               '`global.imageRegistry` and generic ConfigMap are unused',
               'Changing them does not alter workload behavior.',
-            ],
-            [
-              'Embedded NATS is ClusterIP-only',
-              'Private locations outside the cluster cannot connect without an additional secure exposure.',
             ],
             [
               'Local AI accuracy is measured on a controlled corpus only',

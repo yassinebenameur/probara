@@ -1,0 +1,57 @@
+{{- /*
+Exposes the embedded broker's websocket listener so private-location workers
+connect with wss:// over 443 (TLS terminates here). Only location workers use
+it, and each authenticates through the API-hosted auth callout, which is why
+the render refuses it without nats.auth.enabled: an ingress in front of an
+anonymous broker would hand every job and result subject to the internet.
+*/}}
+{{- $ws := .Values.nats.websocket }}
+{{- if $ws.ingress.enabled }}
+{{- if not .Values.nats.enabled }}
+{{- fail "nats.websocket.ingress.enabled exposes the embedded broker; it requires nats.enabled (expose an external broker yourself)" }}
+{{- end }}
+{{- if not $ws.enabled }}
+{{- fail "nats.websocket.ingress.enabled requires nats.websocket.enabled" }}
+{{- end }}
+{{- if not .Values.nats.auth.enabled }}
+{{- fail "nats.websocket.ingress.enabled requires nats.auth.enabled: location workers must authenticate through the auth callout before the broker is reachable from outside the cluster" }}
+{{- end }}
+{{- $host := required "nats.websocket.ingress.host is required when nats.websocket.ingress.enabled" $ws.ingress.host }}
+{{- $className := $ws.ingress.className | default .Values.ingress.className }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-nats-websocket
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+  {{- with $ws.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if $className }}
+  ingressClassName: {{ $className }}
+  {{- end }}
+  {{- with $ws.ingress.tls }}
+  tls:
+    {{- range . }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: {{ $ws.ingress.path | default "/" }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "monitoring-platform.fullname" . }}-nats
+                port:
+                  name: websocket
+{{- end }}

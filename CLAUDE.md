@@ -373,6 +373,14 @@ or imported groups come back empty. Any other path that creates groups through
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs).
+- **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
+  ingress/proxy) lets private locations dial `wss://` on 443. Helm
+  `nats.websocket.*` (+ Ingress, which fails the render without
+  `nats.auth.enabled`; `PUBLIC_NATS_URL` derives from its host/path via
+  `monitoring-platform.publicNatsUrl`), Compose `nats_conf`/`nats_release_conf`
+  configs. The listener has no authorization block of its own, so the auth
+  callout covers it (`TestAuthorizationCalloutCoversWebsocketClients`);
+  `shared/queue` moves a ws URL's path into `nats.ProxyPath`.
 - **`PROBARA_SECRETS_KEY`**: needed by api, scheduler (dispatch decrypt),
   worker, alerter. Compose passes it through from the shell env to all four;
   Helm renders it through `monitoring-platform.secretEnv`, guarded by

@@ -56,6 +56,34 @@ func TestProtectMonitorConfigForCredentialRekeysSecrets(t *testing.T) {
 	}
 }
 
+// A wss:// base (the broker's websocket listener behind an ingress on 443)
+// keeps its host-less default port and any ingress path; the worker's NATS
+// client sends that path in the upgrade request.
+func TestLocationWorkerNATSURLWebsocket(t *testing.T) {
+	for base, want := range map[string]string{
+		"wss://nats.example.test":          "wss://location-id:cred@nats.example.test",
+		"wss://probara.example.test/nats":  "wss://location-id:cred@probara.example.test/nats",
+		"wss://nats.example.test:8443/ws/": "wss://location-id:cred@nats.example.test:8443/ws/",
+	} {
+		got, err := locationWorkerNATSURL(base, "location-id", "cred")
+		if err != nil {
+			t.Fatalf("%s: %v", base, err)
+		}
+		if got != want {
+			t.Fatalf("locationWorkerNATSURL(%q) = %q, want %q", base, got, want)
+		}
+	}
+}
+
+func TestNATSTransportNote(t *testing.T) {
+	if note := natsTransportNote("wss://id:cred@nats.example.test"); !strings.Contains(note, "only outbound HTTPS") {
+		t.Fatalf("wss note = %q", note)
+	}
+	if note := natsTransportNote("tls://id:cred@nats.example.test:4222"); !strings.Contains(note, "TCP port") || !strings.Contains(note, "wss://") {
+		t.Fatalf("tls note = %q", note)
+	}
+}
+
 func TestLocationWorkerNATSURLRejectsUnsafeBase(t *testing.T) {
 	for _, base := range []string{
 		"nats://nats.example.test:4222",

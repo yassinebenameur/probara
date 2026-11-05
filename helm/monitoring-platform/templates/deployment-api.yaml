@@ -95,7 +95,7 @@ spec:
         - name: PUBLIC_BASE_URL
           value: {{ . | quote }}
         {{- end }}
-        {{- with .Values.api.publicNatsURL }}
+        {{- with (include "monitoring-platform.publicNatsUrl" .) }}
         - name: PUBLIC_NATS_URL
           value: {{ . | quote }}
         {{- end }}
