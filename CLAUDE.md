@@ -376,8 +376,9 @@ or imported groups come back empty. Any other path that creates groups through
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs). `docker-compose.release.yml`
-  overrides only images, ports and credentials (every one `${VAR:?}`, no
-  defaults) and never re-declares wiring: new env goes in the base file.
+  overrides only images, ports, credentials (every one `${VAR:?}`, no
+  defaults) and the client-IP chain (`edge`, fixed subnet, below), and never
+  re-declares wiring: new env goes in the base file.
   The base has no `ADMIN_JWT_SECRET` default, so every `docker compose`
   command needs it (Make falls back to `.dev-admin-jwt-secret`, CI sets a
   dummy). Validate with
@@ -440,6 +441,11 @@ or imported groups come back empty. Any other path that creates groups through
   The UI's `/api` proxy cannot append to the chain, so it drops
   `X-Forwarded-For`/`X-Real-IP` (`web/lib/proxy-headers.ts`) unless
   `API_PROXY_TRUST_FORWARDED_FOR=true`; never make it pass them by default.
+  Next.js keeps a client-sent `X-Forwarded-For`, so that flag is safe only
+  behind a proxy that overwrites it: the release Compose file sets it on a
+  frontend reachable only through its `edge` Caddy (`header_up
+  X-Forwarded-For {client_ip}`) and trusts `PROBARA_NETWORK_SUBNET` on the
+  api; never publish that frontend's port.
 - **`LOCATION_WORKER_IMAGE`** (api): the image private-location deploy
   snippets reference. Unset defaults to the worker at the api's
   `buildinfo.Version` (`:alpha` for unreleased builds) —

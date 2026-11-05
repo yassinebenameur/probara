@@ -13,9 +13,10 @@
 # development defaults. Needs Docker Compose 2.24.4 or newer (!reset,
 # !override).
 #
-# Published ports: the UI (3000) and status pages (8082). The API is reached
-# through the UI's /api proxy; PostgreSQL, NATS client/monitoring and every
-# metrics port stay on the Compose network. The NATS websocket listener is
+# Published ports: the UI (3000, through the `edge` proxy) and status pages
+# (8082). The API is reached through the UI's /api proxy; PostgreSQL, NATS
+# client/monitoring, the frontend itself and every metrics port stay on the
+# Compose network. The NATS websocket listener is
 # published on loopback only, for a TLS reverse proxy on 443 to front (see the
 # private-location docs).
 
@@ -77,6 +78,11 @@ services:
       # wss://... (or tls://...) address private-location workers dial; empty
       # disables the deploy snippets. See the private-location docs.
       PUBLIC_NATS_URL: "${PUBLIC_NATS_URL:-}"
+      # Every browser request reaches the API through the frontend's /api
+      # proxy. Trusting this network (and nothing else: the API publishes no
+      # port) lets the API read the client IP that `edge` resolved, so rate
+      # limits and the login throttle key on real clients, not the frontend.
+      TRUSTED_PROXY_CIDRS: "${PROBARA_NETWORK_SUBNET:-172.31.213.0/24}"
     ports: !reset []
 
   scheduler:
@@ -116,14 +122,16 @@ services:
     ports: !reset []
 
   # The operator UI. Its server-side /api proxy forwards to the API on the
-  # Compose network, as the chart's frontend does in-cluster.
+  # Compose network. It is reachable only through `edge`, which is why it may
+  # forward X-Forwarded-For: Next.js keeps a client-supplied X-Forwarded-For
+  # (it fills the header from the socket only when absent), so a directly
+  # published frontend with this flag would let clients pick their own IP.
   frontend:
     image: "${PROBARA_IMAGE_REPOSITORY:-ghcr.io/yassinebenameur/probara}-frontend:${PROBARA_VERSION:?PROBARA_VERSION is required}"
     container_name: probara-frontend
     environment:
       API_PROXY_TARGET: "http://api:8080"
-    ports:
-      - "${PROBARA_UI_PORT:-3000}:3000"
+      API_PROXY_TRUST_FORWARDED_FOR: "true"
     depends_on:
       api:
         condition: service_healthy
@@ -137,7 +145,52 @@ services:
       - probara-network
     restart: unless-stopped
 
+  # The one published UI entrypoint. Caddy replaces X-Forwarded-For with the
+  # client it resolves ({client_ip}): the TCP peer, or, when the peer is one
+  # of PROBARA_TRUSTED_PROXIES (space-separated CIDRs of your own TLS proxy or
+  # load balancer), the rightmost untrusted address of the incoming chain. A
+  # client-sent X-Forwarded-For or X-Real-IP never gets past it.
+  edge:
+    image: caddy:2.11.4-alpine
+    container_name: probara-edge
+    environment:
+      PROBARA_TRUSTED_PROXIES: "${PROBARA_TRUSTED_PROXIES:-}"
+    configs:
+      - source: edge_caddyfile
+        target: /etc/caddy/Caddyfile
+    ports:
+      - "${PROBARA_UI_PORT:-3000}:3000"
+    depends_on:
+      frontend:
+        condition: service_healthy
+    networks:
+      - probara-network
+    restart: unless-stopped
+
+# Fixed so the API can trust exactly this network (TRUSTED_PROXY_CIDRS above).
+# Change PROBARA_NETWORK_SUBNET if it collides with a network on the host.
+networks:
+  probara-network:
+    ipam:
+      config:
+        - subnet: "${PROBARA_NETWORK_SUBNET:-172.31.213.0/24}"
+
 configs:
+  edge_caddyfile:
+    content: |
+      {
+      	admin off
+      	servers {
+      		trusted_proxies static {$$PROBARA_TRUSTED_PROXIES:127.0.0.1/32}
+      		trusted_proxies_strict
+      	}
+      }
+      :3000 {
+      	reverse_proxy frontend:3000 {
+      		header_up X-Forwarded-For {client_ip}
+      		header_up -X-Real-IP
+      	}
+      }
   # Same listeners as the development nats_conf, plus authorization. The
   # issuer public key is public by construction; the platform password is
   # deliberately not here (see the nats service above).

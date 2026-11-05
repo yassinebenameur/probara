@@ -1050,7 +1050,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],
             ['Status cache, proxy, preview, timeout, update subject', 'Preview only; most defaults', 'Not wired'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
-            ['Trusted proxies (`TRUSTED_PROXY_CIDRS`)', 'Passed through from the shell to API and status-page', 'Top-level `trustedProxyCIDRs` rendered into API and status-page'],
+            ['Trusted proxies (`TRUSTED_PROXY_CIDRS`)', 'Passed through from the shell to API and status-page; the release override sets the API\'s to the Compose network behind its `edge` proxy', 'Top-level `trustedProxyCIDRs` rendered into API and status-page'],
             ['Arbitrary extra environment', 'Requires editing Compose', 'No `extraEnv`; requires chart template change'],
           ],
         },
