@@ -424,6 +424,8 @@ export default function MonitorForm({
           onRecoveryThresholdChange={(n) => patchForm({ recovery_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => patchForm({ notification_mode: m })}
+          escalationPolicyId={formData.escalation_policy_id}
+          onEscalationPolicyChange={(id) => patchForm({ escalation_policy_id: id })}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => patchForm({ dependency_suppression: d })}

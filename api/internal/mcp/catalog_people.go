@@ -38,8 +38,8 @@ func peopleSettingsTools() []spec {
 	}
 }
 
-// oncallTools are the on-call schedule tools. Schedules are informational:
-// nothing pages them yet.
+// oncallTools are the on-call schedule tools. Escalation policies page
+// whoever a schedule has on call (catalog_escalation.go).
 func oncallTools() []spec {
 	schedule := map[string]string{"id": "On-call schedule ID, from list_oncall_schedules."}
 	scheduleDocs := map[string]string{
@@ -60,7 +60,7 @@ func oncallTools() []spec {
 			Name:  "list_oncall_schedules",
 			Title: "List on-call schedules",
 			Description: "List the workspace's on-call schedules with who is on call now (on_call) and next. " +
-				"Schedules are informational for now: alerts do not page them yet.",
+				"An escalation policy step with a schedule target pages whoever is on call when it fires.",
 			Method: http.MethodGet, Route: "/oncall-schedules",
 		},
 		{

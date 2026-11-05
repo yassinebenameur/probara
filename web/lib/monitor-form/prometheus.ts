@@ -6,7 +6,7 @@ import {
   NotificationMode,
   PrometheusMonitorConfig,
 } from '../types';
-import { buildScheduledMonitorRequest, unmaskedCloneSecret } from './common';
+import { buildScheduledMonitorRequest, unmaskedCloneSecret, initialEscalationPolicy } from './common';
 
 // PrometheusForm's state and request. password and bearer_token are monitor
 // secrets: the stored monitor carries "***", which the form submits back
@@ -41,6 +41,7 @@ export function initialPrometheusFormState(monitor?: Monitor, initialData?: Crea
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? initialData?.consecutive_failures_threshold ?? 2,
     recovery_threshold: monitor?.recovery_threshold ?? initialData?.recovery_threshold ?? 1,
     notification_mode: (monitor?.notification_mode ?? initialData?.notification_mode ?? 'default') as NotificationMode,
+    ...initialEscalationPolicy(monitor ?? initialData),
     dependency_suppression: (monitor?.dependency_suppression ?? initialData?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? initialData?.notification_channels ?? [] as ChannelAssignment[],
     location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),

@@ -85,6 +85,9 @@ function routingSummary(monitor: Monitor): { text: ReactNode; warning: boolean }
   if (!routing.reachable) return { text: 'Nobody', warning: monitor.enabled };
   switch (routing.source) {
     case 'tenant_default':
+      if (routing.escalation_policy_id) {
+        return { text: `Workspace default policy ${routing.escalation_policy_name ?? ''}`.trim(), warning: false };
+      }
       return { text: `Workspace default, ${pluralize(routing.active_channels, 'channel')}`, warning: false };
     case 'custom':
       return { text: `Custom, ${pluralize(routing.active_channels, 'channel')}`, warning: false };
@@ -101,6 +104,15 @@ function routingSummary(monitor: Monitor): { text: ReactNode; warning: boolean }
       };
     case 'members':
       return { text: "Each member's own routing", warning: false };
+    case 'policy':
+      return {
+        text: (
+          <Link href="/escalation-policies" className={LINK_CLASS}>
+            Policy {routing.escalation_policy_name ?? ''}
+          </Link>
+        ),
+        warning: false,
+      };
     default:
       return null;
   }

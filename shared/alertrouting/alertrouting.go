@@ -9,6 +9,9 @@
 //
 //   - notification_mode = 'custom'  → the monitor's own monitor_channels rows.
 //   - notification_mode = 'default' → the tenant's tenant_default_channels.
+//   - notification_mode = 'policy' (or 'default' under a tenant default
+//     policy) → the escalation policy's channel targets, plus person targets
+//     the alerter pages itself; see policy.go.
 //   - Only channels with alert_channels.is_active deliver; dispatch skips the
 //     rest, so an assignment to a disabled channel routes nowhere.
 //   - A member of a group whose member_alert_rollup = 'group' never dispatches
@@ -95,6 +98,12 @@ type Status struct {
 	RollupGroupID *uuid.UUID `json:"rollup_group_id,omitempty"`
 	// RollupGroupName is that group's display name.
 	RollupGroupName string `json:"rollup_group_name,omitempty"`
+	// Escalation policies (policy.go): the policy that routes the monitor
+	// (its own, or the tenant default), and how many of its person targets
+	// can page somebody.
+	EscalationPolicyID   *uuid.UUID `json:"escalation_policy_id,omitempty"`
+	EscalationPolicyName string     `json:"escalation_policy_name,omitempty"`
+	ReachablePeople      int        `json:"reachable_people,omitempty"`
 }
 
 // Counts is the raw per-monitor tally a query produces, before it is turned
@@ -116,6 +125,14 @@ type Counts struct {
 	RollupActive    int
 	RollupAssigned  int
 	RollupEnabled   bool
+	// Escalation policies (policy.go): PolicyID/PolicyName is the policy
+	// that routes the monitor (EffectivePolicyExpr), nil when none does;
+	// OwnPeople / RollupPeople count the reachable person targets of the
+	// monitor's / the roll-up group's policy (PeopleCountExpr).
+	PolicyID     *uuid.UUID
+	PolicyName   string
+	OwnPeople    int
+	RollupPeople int
 }
 
 // Classify turns raw counts into the reachability an operator sees. It is the
@@ -132,7 +149,8 @@ func Classify(c Counts) Status {
 			AssignedChannels: c.RollupAssigned,
 			RollupGroupID:    c.RollupGroupID,
 			RollupGroupName:  c.RollupGroupName,
-			Reachable:        c.RollupEnabled && c.RollupActive > 0,
+			Reachable:        c.RollupEnabled && c.RollupActive+c.RollupPeople > 0,
+			ReachablePeople:  c.RollupPeople,
 		}
 		if !st.Reachable {
 			st.Reason = ReasonGroupRollupUnrouted
@@ -144,6 +162,11 @@ func Classify(c Counts) Status {
 		}
 		return st
 	}
+	// --- escalation policies (policy.go) ---
+	if c.policyRouted() {
+		return classifyPolicy(c)
+	}
+	// --- end escalation policies ---
 
 	st := Status{
 		ActiveChannels:   c.OwnActive,
@@ -195,7 +218,9 @@ func TenantTargetsSQL() string {
 	return `
 		SELECT tdc.channel_id, tdc.delay_seconds, tdc.position AS pos, tdc.notify_after_ack
 		FROM tenant_default_channels tdc
-		WHERE tdc.tenant_id = $1`
+		WHERE tdc.tenant_id = $1
+		  AND ` + tenantDefaultPolicyExpr("tdc.tenant_id") + ` IS NULL -- escalation policies (policy.go)
+		UNION ALL` + tenantPolicyRoutesSQL()
 }
 
 // RoutesToChannelPredicate returns a SQL boolean that is TRUE when the monitor
@@ -223,7 +248,9 @@ func targetsSQL(tenantExpr string, monitorMatch func(col string) string) string 
 		SELECT rtm.id, tdc.channel_id, tdc.delay_seconds, tdc.position, tdc.notify_after_ack
 		FROM tenant_default_channels tdc
 		JOIN monitors rtm ON rtm.tenant_id = tdc.tenant_id
-		WHERE tdc.tenant_id = ` + tenantExpr + ` AND ` + monitorMatch("rtm.id") + ` AND rtm.notification_mode = 'default'`
+		WHERE tdc.tenant_id = ` + tenantExpr + ` AND ` + monitorMatch("rtm.id") + ` AND rtm.notification_mode = 'default'
+		  AND ` + tenantDefaultPolicyExpr("tdc.tenant_id") + ` IS NULL -- escalation policies (policy.go)
+		UNION ALL` + policyRoutesSQL(tenantExpr, monitorMatch)
 }
 
 // ChannelCountExpr returns a SQL scalar subquery counting the channels routed
@@ -248,6 +275,8 @@ func ChannelCountExpr(monAlias string, activeOnly bool) string {
 			JOIN alert_channels ac ON ac.id = tdc.channel_id` + activePredicate + `
 			WHERE tdc.tenant_id = ` + monAlias + `.tenant_id
 			  AND ` + monAlias + `.notification_mode = 'default'
+			  AND ` + tenantDefaultPolicyExpr(monAlias+".tenant_id") + ` IS NULL -- escalation policies (policy.go)
+			UNION ALL` + policyChannelCountSQL(monAlias, activePredicate) + `
 		) routed)`
 }
 
@@ -274,7 +303,7 @@ func RollupGroupExpr(monitorIDExpr string) string {
 		WHERE mg.monitor_id = ` + monitorIDExpr + `
 		  AND g.deleted_at IS NULL
 		  AND g.member_alert_rollup = 'group'
-		ORDER BY (g.enabled AND ` + ChannelCountExpr("g", true) + ` > 0) DESC, g.id
+		ORDER BY (g.enabled AND ` + ReachCountExpr("g") + ` > 0) DESC, g.id
 		LIMIT 1)`
 }
 
@@ -451,8 +480,8 @@ func UnreachablePredicate(monAlias string) string {
 	rollup := RollupGroupExpr(monAlias + ".id")
 	return `(NOT ` + SelfSilentGroupPredicate(monAlias) + ` AND CASE
 		WHEN ` + rollup + ` IS NOT NULL THEN NOT (
-			SELECT rg.enabled AND ` + ChannelCountExpr("rg", true) + ` > 0
+			SELECT rg.enabled AND ` + ReachCountExpr("rg") + ` > 0
 			FROM monitors rg WHERE rg.id = ` + rollup + `)
-		ELSE ` + ChannelCountExpr(monAlias, true) + ` = 0
+		ELSE ` + ReachCountExpr(monAlias) + ` = 0
 	END)`
 }

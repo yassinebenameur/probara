@@ -66,6 +66,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	// Independent phases: a failing open-alert dispatch must not also stop
 	// the acknowledgements that halt a paging provider's escalation.
 	err := errors.Join(a.dispatchOpenAlerts(ctx), a.dispatchAcknowledgements(ctx))
+	// Escalation policies' person steps and the ack/resolve notices to
+	// everyone they paged (escalation.go); their channel targets went out
+	// with dispatchOpenAlerts.
+	err = errors.Join(err, a.dispatchEscalations(ctx), a.dispatchEscalationNotices(ctx))
 	// Advisory, so last and bounded: it runs on its own sub-deadline that
 	// leaves the deferred recovery sweep its full budget, and a failure here
 	// never fails the tick.

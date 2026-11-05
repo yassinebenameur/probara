@@ -1,7 +1,7 @@
 // Package oncall stores on-call schedules (rotations, members, overrides,
 // the iCal feed token) and answers who is on call through the pure resolver
-// in shared/oncall. Schedules are informational for now: nothing pages them
-// until escalation policies land.
+// in shared/oncall. Escalation policies page whoever a schedule has on call
+// (the alerter resolves it with shared/oncall.LoadAt and OnCallAt).
 package oncall
 
 import (

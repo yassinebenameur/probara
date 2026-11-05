@@ -1688,3 +1688,25 @@ export function createOnCallFeedLink(id: string) {
 export function disableOnCallFeed(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/oncall-schedules/${id}/ical-token`);
 }
+
+// Escalation policies (people layer; types in lib/escalation.ts). The
+// workspace default policy is a notification setting.
+export async function getEscalationPolicies() {
+  const res = await apiRequest<{ items: import('./escalation').EscalationPolicy[] }>('GET', '/v1/escalation-policies');
+  return res.items ?? [];
+}
+export function getEscalationPolicy(id: string) {
+  return apiRequest<import('./escalation').EscalationPolicy>('GET', `/v1/escalation-policies/${id}`);
+}
+export function createEscalationPolicy(data: import('./escalation').EscalationPolicyInput) {
+  return apiRequest<import('./escalation').EscalationPolicy>('POST', '/v1/escalation-policies', data);
+}
+export function updateEscalationPolicy(id: string, data: import('./escalation').EscalationPolicyInput) {
+  return apiRequest<import('./escalation').EscalationPolicy>('PUT', `/v1/escalation-policies/${id}`, data);
+}
+export function deleteEscalationPolicy(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/escalation-policies/${id}`);
+}
+export function convertRoutesToEscalationPolicy(data: import('./escalation').ConvertRoutesRequest) {
+  return apiRequest<import('./escalation').EscalationPolicy>('POST', '/v1/escalation-policies/convert', data);
+}

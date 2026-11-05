@@ -20,7 +20,7 @@ import {
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserStepConfig,
 } from '../types';
-import { buildScheduledMonitorRequest } from './common';
+import { buildScheduledMonitorRequest, initialEscalationPolicy } from './common';
 import {
   HTTP_CAPTURE_DEFAULT_BODY_BYTES,
   HTTP_CAPTURE_MAX_BODY_BYTES,
@@ -202,6 +202,7 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     recovery_threshold: monitor?.recovery_threshold ?? 1,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    ...initialEscalationPolicy(monitor),
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: (monitor?.notification_channels ?? []) as ChannelAssignment[],
     enabled: sourceEnabled,

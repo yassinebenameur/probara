@@ -65,6 +65,7 @@ type Monitor struct {
 	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
 	NotificationMode             string                     `json:"notification_mode"`
+	EscalationPolicyID           *uuid.UUID                 `json:"escalation_policy_id,omitempty"`
 	MemberAlertRollup            string                     `json:"member_alert_rollup"`    // 'per_monitor' | 'group'; only meaningful for group monitors
 	DependencySuppression        string                     `json:"dependency_suppression"` // 'inherit' | 'on' | 'off': page when an upstream dependency is down? 'inherit' follows the workspace setting
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
@@ -103,6 +104,7 @@ type CreateMonitorRequest struct {
 	Tags                         []string                   `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
+	EscalationPolicyID           *string                    `json:"escalation_policy_id,omitempty"` // required with notification_mode 'policy'
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
@@ -125,6 +127,7 @@ type UpdateMonitorRequest struct {
 	Tags                         *[]string                  `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
+	EscalationPolicyID           *string                    `json:"escalation_policy_id,omitempty"` // with notification_mode 'policy' (or a monitor already in it)
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`

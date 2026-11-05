@@ -164,6 +164,7 @@ export const MCP_PAGE: DocPage = {
             ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message), `list_channel_deliveries`"],
             ["Workspace", "local AI settings, `export_ai_labels`, API keys, workspace settings, audit log"],
             ["On-call", "`list_oncall_schedules`, `get_oncall_now`, `preview_oncall_schedule`, schedule create/replace/delete, `list_oncall_people`, overrides, calendar link create/turn off, `get_people_settings` / `update_people_settings` (the workspace's SMS channel for people)"],
+            ["Escalation", "`list_escalation_policies`, `get_escalation_policy`, `create_escalation_policy`, `update_escalation_policy`, `delete_escalation_policy`, `convert_routes_to_escalation_policy`; monitors take `notification_mode` `policy` with `escalation_policy_id`"],
             ["Platform", "`list_tenants`, users, SSO group mappings, `create_tenant`, `rename_tenant`, `delete_tenant` (destructive) (superadmins)"],
           ],
         },

@@ -92,6 +92,12 @@ func (r DispatchRequest) Type() string {
 func (r DispatchRequest) View() present.Message {
 	rt := CurrentRuntime()
 	opts := present.Options{AppBaseURL: rt.AppBaseURL, ChannelID: r.Channel.ID}
+	if r.Recipient != nil && r.Recipient.ContactID != "" {
+		// A person send (escalation policy page): the acknowledge link is
+		// scoped to the contact it was delivered to, so it names who acted
+		// and dies with the contact. See recipient.go.
+		opts.ChannelID = r.Recipient.ContactID
+	}
 	if !r.Test {
 		// A test send's synthetic alert does not exist, so it never
 		// carries an action link.

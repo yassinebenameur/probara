@@ -164,7 +164,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		return fmt.Errorf("unknown plugin type: %s", envelope.ChannelType)
 	}
 
-	channel, err := c.loadChannel(ctx, envelope.ChannelID)
+	channel, err := c.loadEnvelopeChannel(ctx, envelope) // person.go: channel-less person sends
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Channel was deleted while the message was in flight. Drop —
@@ -209,6 +209,13 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		entry.WithError(err).Error("Failed to load alert status")
 		return err
 	}
+	if muted && envelope.ContactID != "" {
+		// An escalation page to a person (person.go): its step claim is not
+		// handed back, the ack or snooze stopped that step.
+		entry.WithField("alert_status", alertStatus).Info("Alert acknowledged or snoozed since publish; dropping person page")
+		c.recordDrop(ctx, msg, envelope, channel.Name, deliverylog.OutcomeDroppedAck)
+		return nil
+	}
 	if muted {
 		// Held by an ack (StopOnAck) or a snooze since publish. Unlike a
 		// resolve this is temporary, so the alerter's claim on the slot is
@@ -226,7 +233,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		c.recordDrop(ctx, msg, envelope, channel.Name, deliverylog.OutcomeDroppedAck)
 		return nil
 	}
-	if superseded && envelope.EventType == "resolved" {
+	if superseded && envelope.EventType == "resolved" && envelope.ContactID == "" {
 		// Only a reopen supersedes a resolve. The alerter committed the
 		// route's claim as 'resolved' when it published, so hand the claim
 		// back under the same lock: the route counts as still paged and

@@ -620,7 +620,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             {
               term: 'Token model',
               description:
-                'Stateless and nothing stored: the token carries the workspace, alert and channel it was delivered for, its expiry (72 hours after sending) and a key version, sealed by a 128-bit truncated HMAC-SHA256. The HMAC key is derived with HKDF-SHA256 from that version of `PROBARA_SECRETS_KEY` (info `probara/alert-action/v1`), so it never equals the encryption key and needs no new secret. The API checks the signature, the expiry, that the alert belongs to the token\'s workspace, that the workspace is not deleted and that the channel still exists.',
+                'Stateless and nothing stored: the token carries the workspace, alert and channel it was delivered for, its expiry (72 hours after sending) and a key version, sealed by a 128-bit truncated HMAC-SHA256. The HMAC key is derived with HKDF-SHA256 from that version of `PROBARA_SECRETS_KEY` (info `probara/alert-action/v1`), so it never equals the encryption key and needs no new secret. The API checks the signature, the expiry, that the alert belongs to the token\'s workspace, that the workspace is not deleted and that the channel still exists. A link on an [escalation policy](/docs/alerting/#escalation) page to a person names the contact it went to instead of a channel: it is valid while that contact is verified and its user enabled and still in the workspace, and it acknowledges as that user.',
             },
             {
               term: 'Link scanners',
@@ -635,7 +635,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             {
               term: 'Revocation and rotation',
               description:
-                'Delete the channel to revoke the links it delivered, or the workspace to revoke all of its links. Links signed with a key version keep working after a [rotation](#encryption-at-rest) adds `PROBARA_SECRETS_KEY_V<n>`, and stop working when that version is removed. Every service that sends notifications and the API need the same keyring, or links minted by one fail on the other.',
+                'Delete the channel to revoke the links it delivered (the contact, for a page to a person), or the workspace to revoke all of its links. Links signed with a key version keep working after a [rotation](#encryption-at-rest) adds `PROBARA_SECRETS_KEY_V<n>`, and stop working when that version is removed. Every service that sends notifications and the API need the same keyring, or links minted by one fail on the other.',
             },
           ],
         },

@@ -769,7 +769,9 @@ export type MonitorConfig =
   | PrometheusMonitorConfig
   | DomainMonitorConfig;
 
-export type NotificationMode = 'default' | 'custom';
+// 'policy' routes through the monitor's escalation policy
+// (escalation_policy_id; see lib/escalation.ts).
+export type NotificationMode = 'default' | 'custom' | 'policy';
 
 // How a group handles alerts when its members go down:
 //   'per_monitor' — each member alerts individually; the group emits no alert.
@@ -815,6 +817,9 @@ export interface NotificationSettings {
   // Flap suppression: a monitor down again within this many seconds of its
   // availability alert auto-resolving reopens that alert (0 = off, max 86400).
   alert_reopen_cooldown_seconds: number;
+  // Escalation policies: when set, default-mode monitors route through this
+  // policy instead of default_channels. Send "" to clear it.
+  default_escalation_policy_id?: string | null;
 }
 
 export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'location_offline' | 'domain_expiry';
@@ -1039,6 +1044,7 @@ export interface Monitor {
   recovery_threshold?: number; // Passing checks a down monitor needs before it is up (1 = single-sample)
   consecutive_successes?: number; // Read-only; passes counted toward that while still down
   notification_mode: NotificationMode;
+  escalation_policy_id?: string; // notification_mode 'policy' only
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
@@ -1067,7 +1073,7 @@ export interface AlertRouting {
    * `group_rollup`: a group rolls its alerts up, so the group's routing decides.
    * `members`: it is a group that never alerts itself; members alert individually.
    */
-  source: 'custom' | 'tenant_default' | 'group_rollup' | 'members';
+  source: 'custom' | 'tenant_default' | 'group_rollup' | 'members' | 'policy';
   active_channels: number;
   /** Includes disabled channels, which never deliver. */
   assigned_channels: number;
@@ -1077,9 +1083,15 @@ export interface AlertRouting {
     | 'no_tenant_default_channels'
     | 'tenant_default_channels_disabled'
     | 'group_rollup_unrouted'
-    | 'group_rollup_paused';
+    | 'group_rollup_paused'
+    | 'policy_no_targets';
   rollup_group_id?: string;
   rollup_group_name?: string;
+  /** The escalation policy that routes it (its own, or the workspace default). */
+  escalation_policy_id?: string;
+  escalation_policy_name?: string;
+  /** Person targets of that policy that can page somebody. */
+  reachable_people?: number;
 }
 
 export interface CreateMonitorRequest {
@@ -1095,6 +1107,7 @@ export interface CreateMonitorRequest {
   consecutive_failures_threshold?: number;
   recovery_threshold?: number;
   notification_mode?: NotificationMode;
+  escalation_policy_id?: string; // with notification_mode 'policy'
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
@@ -1116,6 +1129,7 @@ export interface UpdateMonitorRequest {
   consecutive_failures_threshold?: number;
   recovery_threshold?: number;
   notification_mode?: NotificationMode;
+  escalation_policy_id?: string; // with notification_mode 'policy'
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
@@ -2679,7 +2693,8 @@ export type DeliveryOutcome =
 export interface NotificationDelivery {
   id: string;
   alert_id: string;
-  channel_id: string;
+  // Null for a person send without a channel (an escalation page by email).
+  channel_id: string | null;
   // The channel's name when the attempt was made.
   channel_name: string;
   channel_type: AlertChannelType;
@@ -2698,6 +2713,10 @@ export interface NotificationDelivery {
   // Null for alerts without a monitor (mesh edges, locations).
   monitor_name: string | null;
   created_at: string;
+  // Person sends (escalation policies): who was paged, at which masked address.
+  user_id?: string;
+  username?: string;
+  recipient?: string;
 }
 
 export interface NotificationDeliveryListResponse {

@@ -33,10 +33,14 @@ func (c *Consumer) recordDelivery(ctx context.Context, msg *queue.Message, envel
 	}
 	alertID, aerr := uuid.Parse(envelope.AlertID)
 	channelID, cerr := uuid.Parse(envelope.ChannelID)
-	if aerr != nil || cerr != nil {
+	if aerr != nil || (cerr != nil && envelope.ContactID == "") {
 		return
 	}
+	person := c.personEntry(ctx, envelope) // person.go; zero for channel sends
 	err := deliverylog.Record(ctx, c.db, deliverylog.Entry{
+		UserID:      person.UserID,
+		ContactID:   person.ContactID,
+		Recipient:   person.Recipient,
 		AlertID:     alertID,
 		ChannelID:   channelID,
 		ChannelName: channelName,

@@ -207,9 +207,9 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "callout",
           tone: "info",
-          title: "Nothing pages contacts yet",
+          title: "Escalation policies page these contacts",
           text:
-            "Verified contacts are the groundwork for escalation policies, which will page people (and on-call schedules) directly. Until then alerts reach people only through notification channels.",
+            "An [escalation policy](/docs/alerting/#escalation) step that targets you, an on-call schedule you are on, or the workspace admins pages every verified contact you have: email through the platform mailer, SMS through the workspace's SMS channel for people. Each page carries an acknowledge link that acknowledges as you, and removing a contact revokes the links it received.",
         },
         {
           type: "paragraph",

@@ -628,6 +628,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				registerWorkspaceRoutes(r, tenantSvc, cfg, auditRecorder, log)
 			})
 			peopleRoutes(r, people) // routes_people.go
+			// Escalation policies: routes_escalation.go.
+			escalationRoutes(r, dbClient, log)
 
 			// Audit log (tenant admins and superadmins)
 			auditHandlers := audithandlers.NewHandlers(auditSvc, log)

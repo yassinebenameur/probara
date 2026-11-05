@@ -208,6 +208,14 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   fragment, never re-derive a rule. `UnreachablePredicate` is the SQL twin of
   `Classify().Reachable`; change them together
   (`TestUnreachablePredicateMatchesClassify` pins the pair).
+  Escalation policies are the third mode (`policy`, and `default` under a
+  tenant `default_escalation_policy_id`), in `alertrouting/policy.go`: their
+  channel targets are plain `TargetsSQL`/`TenantTargetsSQL` rows (claim,
+  reminders, ack gate unchanged); their person targets count toward
+  reachability through `PersonTargetReachablePredicate` /
+  `PageableUserPredicate` / `DeliverableContactPredicate`, which the alerter
+  also pages by, and `ReachCountExpr` (channels + people) is what
+  `UnreachablePredicate` and `Classify` (`ReasonPolicyNoTargets`) agree on.
   `RoutesToChannelPredicate` is `TargetsSQL`'s own union correlated per row,
   for batch queries that must drop unrouted pairs before a `LIMIT`
   (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Monitor-less alerts
@@ -790,7 +798,22 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   never the address (the worker resolves it with `contacts.LoadVerified`).
   `shared/oncall` is the one answer to who is on call (`OnCallAt`/`Preview`:
   overrides win, the last active layer wins, handoffs at local wall-clock
-  time); never query rotations to work it out. Schedules page nobody yet.
+  time); never query rotations to work it out (`oncall.LoadAt` loads one for
+  the alerter). Escalation policies page people
+  (`alerter/internal/alerter/escalation.go`, rules in `shared/escalation`):
+  a step claim is a row in `alert_escalation_states` (alert, episode, repeat
+  cycle, step), taken under the alert's `FOR SHARE` lock and gated on
+  `status = 'active'` and not snoozed; each contact reached is a row in
+  `alert_escalation_pages` under `escalation.PageKey`
+  (`escalation:<pos>:<cycle>[:<episode>]`), which also drives the
+  ack/resolve notices to everyone paged. Repeat cycles are person targets
+  only. Person sends go through `sendPerson`: email via the email plugin
+  with no channel (the worker's `loadEnvelopeChannel` stands in for it),
+  SMS via `personal_sms_channel_id`; each records a delivery row with
+  `user_id`/`contact_id`/`recipient`, and its ack link is scoped to the
+  contact (`DispatchRequest.View`, checked by the alert-actions `Scope`).
+  `monitors.escalation_policy_id` is set in the same statement that enters
+  `policy` mode (a CHECK requires it; a trigger clears it on leaving).
   The on-call person picker (`oncall.Service.People`) needs write access and
   lists members plus superadmins already scheduled in the workspace (all of
   them only for a superadmin caller); never list installation-wide users to

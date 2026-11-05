@@ -229,3 +229,44 @@ func TestDefaultBody_ImpactedMonitors(t *testing.T) {
 		t.Fatalf("template variables impacted_monitors=%v impacted_count=%v", data["impacted_monitors"], data["impacted_count"])
 	}
 }
+
+// An escalation page to a person's email contact goes to that one address
+// through the platform mailer, with no channel config at all.
+func TestPlugin_SendDirectRecipient(t *testing.T) {
+	p := New()
+	if !p.Manifest().HasCapability(plugin.CapabilityDirectRecipient) {
+		t.Fatal("email must advertise CapabilityDirectRecipient")
+	}
+	m := &fakeMailer{}
+	p.SetMailer(m)
+	err := p.Send(context.Background(), plugin.DispatchRequest{
+		EventType: "created",
+		Event:     notifications.AlertEvent{Type: "created", Alert: notifications.AlertDetails{MonitorName: "API"}},
+		Recipient: &plugin.Recipient{ContactID: "c-1", Address: "oncall@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(m.gotRecipients) != 1 || m.gotRecipients[0] != "oncall@example.com" {
+		t.Fatalf("recipients = %v", m.gotRecipients)
+	}
+	if m.gotTemplates.Body != "" || m.gotTemplates.Subject != "" {
+		t.Fatalf("an alert page uses the built-in rendering, got %+v", m.gotTemplates)
+	}
+
+	// Recipient.Text is sent verbatim, never parsed as a template.
+	err = p.Send(context.Background(), plugin.DispatchRequest{
+		Recipient: &plugin.Recipient{Address: "oncall@example.com", Text: `code {{.x}} "q"`},
+	})
+	if err != nil {
+		t.Fatalf("Send text: %v", err)
+	}
+	body, rerr := renderTemplate(m.gotTemplates.Body, "", nil)
+	if rerr != nil || body != `code {{.x}} "q"` {
+		t.Fatalf("text body rendered %q (%v)", body, rerr)
+	}
+
+	if err := New().Send(context.Background(), plugin.DispatchRequest{Recipient: &plugin.Recipient{Address: "a@b.c"}}); !errors.Is(err, ErrNoMailer) {
+		t.Fatalf("no mailer: err = %v, want ErrNoMailer", err)
+	}
+}

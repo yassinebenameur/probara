@@ -697,9 +697,12 @@ func (r *PostgresRepository) GetAlertRoutingForMonitors(ctx context.Context, mon
 			`+alertrouting.SelfSilentGroupPredicate("m")+` AS self_silent,
 			g.id, g.name, COALESCE(g.enabled, FALSE) AS rollup_enabled,
 			COALESCE(`+alertrouting.ChannelCountExpr("g", true)+`, 0) AS rollup_active,
-			COALESCE(`+alertrouting.ChannelCountExpr("g", false)+`, 0) AS rollup_assigned
+			COALESCE(`+alertrouting.ChannelCountExpr("g", false)+`, 0) AS rollup_assigned,
+			ep.id, COALESCE(ep.name, ''), `+alertrouting.PeopleCountExpr("m")+` AS own_people,
+			COALESCE(`+alertrouting.PeopleCountExpr("g")+`, 0) AS rollup_people
 		FROM monitors m
 		LEFT JOIN monitors g ON g.id = `+alertrouting.RollupGroupExpr("m.id")+`
+		LEFT JOIN escalation_policies ep ON ep.id = `+alertrouting.EffectivePolicyExpr("m")+`
 		WHERE m.id = ANY($1)
 	`, pq.Array(monitorIDs))
 	if err != nil {
@@ -710,18 +713,23 @@ func (r *PostgresRepository) GetAlertRoutingForMonitors(ctx context.Context, mon
 	for rows.Next() {
 		var monitorID uuid.UUID
 		var counts alertrouting.Counts
-		var groupID uuid.NullUUID
+		var groupID, policyID uuid.NullUUID
 		var groupName sql.NullString
 		if err := rows.Scan(&monitorID, &counts.NotificationMode,
 			&counts.OwnActive, &counts.OwnAssigned, &counts.SelfSilentGroup,
 			&groupID, &groupName, &counts.RollupEnabled,
-			&counts.RollupActive, &counts.RollupAssigned); err != nil {
+			&counts.RollupActive, &counts.RollupAssigned,
+			&policyID, &counts.PolicyName, &counts.OwnPeople, &counts.RollupPeople); err != nil {
 			return nil, fmt.Errorf("failed to scan alert routing: %w", err)
 		}
 		if groupID.Valid {
 			id := groupID.UUID
 			counts.RollupGroupID = &id
 			counts.RollupGroupName = groupName.String
+		}
+		if policyID.Valid {
+			id := policyID.UUID
+			counts.PolicyID = &id
 		}
 		result[monitorID] = alertrouting.Classify(counts)
 	}

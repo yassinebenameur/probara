@@ -69,8 +69,8 @@ export const MONITORS_PAGE: DocPage = {
             ],
             [
               "`notification_mode`",
-              "Use tenant defaults or monitor-specific routes",
-              "`default` or `custom`",
+              "Use tenant defaults, monitor-specific routes, or an [escalation policy](/docs/alerting/#escalation) (`escalation_policy_id`)",
+              "`default`, `custom` or `policy`",
             ],
             [
               "`notification_channels`",

@@ -1,6 +1,6 @@
 // On-call schedules (/v1/oncall-schedules): types and the pure helpers the
-// /oncall pages use; the requests live in lib/api.ts. Schedules are
-// informational for now — nothing pages them until escalation policies.
+// /oncall pages use; the requests live in lib/api.ts. Escalation policies
+// (lib/escalation.ts) page whoever a schedule has on call.
 
 export type RotationKind = 'daily' | 'weekly';
 export type ShiftSource = 'rotation' | 'override';

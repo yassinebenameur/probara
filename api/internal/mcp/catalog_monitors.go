@@ -19,7 +19,8 @@ var monitorFieldDocs = map[string]string{
 	"tags":                           "Free-form tags; dashboards, SLAs and status filters group by them.",
 	"consecutive_failures_threshold": "Failed checks in a row before the monitor is down and alerts, 1-10.",
 	"recovery_threshold":             "Passing checks in a row a down monitor needs before it is up and its alert resolves, 1-10 (default 1).",
-	"notification_mode":              "\"default\" routes alerts to the workspace default channels (notification settings); \"custom\" uses notification_channels.",
+	"notification_mode":              "\"default\" routes alerts to the workspace default channels (notification settings); \"custom\" uses notification_channels; \"policy\" uses escalation_policy_id.",
+	"escalation_policy_id":           "Escalation policy (list_escalation_policies) for notification_mode \"policy\".",
 	"notification_channels":          "Channels for notification_mode \"custom\": channel_id (from list_alert_channels) and an optional delay_seconds before paging.",
 	"member_alert_rollup":            "Groups only: \"per_monitor\" alerts per member, \"group\" raises one alert for the group and silences members.",
 	"dependency_suppression":         "Whether alerts are suppressed while an upstream dependency is down: inherit (workspace setting), on, off.",
@@ -33,7 +34,7 @@ var monitorFieldDocs = map[string]string{
 var monitorEnums = func() map[string][]string {
 	return map[string][]string{
 		"type":                   monitorTypes(),
-		"notification_mode":      {"default", "custom"},
+		"notification_mode":      {"default", "custom", "policy"},
 		"member_alert_rollup":    {"per_monitor", "group"},
 		"dependency_suppression": {"inherit", "on", "off"},
 	}

@@ -24,6 +24,7 @@ import {
   PanelLeftOpen,
   CircleUser,
   CalendarClock,
+  GitBranch,
 } from 'lucide-react';
 import { getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
@@ -79,6 +80,7 @@ const navGroups: { key: string; items: NavItem[] }[] = [
       { name: 'Alerts', href: '/alerts', icon: AlertTriangle },
       { name: 'Incidents', href: '/incidents', icon: Siren, showOpenIncidents: true },
       { name: 'On-call', href: '/oncall', icon: CalendarClock },
+      { name: 'Escalation', href: '/escalation-policies', icon: GitBranch },
     ],
   },
   {

@@ -12,6 +12,7 @@ package alertactions
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -85,7 +86,41 @@ func (s dbScope) Live(ctx context.Context, tenantID, channelID uuid.UUID) (bool,
 	err = s.q.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM alert_channels WHERE id = $1 AND tenant_id = $2)`,
 		channelID, tenantID).Scan(&exists)
-	return exists, err
+	if err != nil || exists {
+		return exists, err
+	}
+	// An escalation-policy page is scoped to the contact it went to
+	// (plugin.DispatchRequest.View); deleting the contact, disabling its
+	// user or removing them from the workspace revokes its links.
+	owner, err := s.Owner(ctx, tenantID, channelID)
+	return owner != nil, err
+}
+
+// ContactOwner is implemented by a Scope that can name the user a
+// contact-scoped token was delivered to, so the acknowledgement is
+// attributed to them.
+type ContactOwner interface {
+	Owner(ctx context.Context, tenantID, contactID uuid.UUID) (*uuid.UUID, error)
+}
+
+// Owner returns the user whose verified contact contactID is, when that
+// user can still be paged in the workspace; nil otherwise.
+func (s dbScope) Owner(ctx context.Context, tenantID, contactID uuid.UUID) (*uuid.UUID, error) {
+	var userID uuid.UUID
+	err := s.q.QueryRowContext(ctx, `
+		SELECT u.id FROM user_contacts c
+		JOIN admin_users u ON u.id = c.user_id
+		WHERE c.id = $1 AND c.verified_at IS NOT NULL AND u.disabled_at IS NULL
+		  AND (u.platform_role = 'superadmin' OR EXISTS (
+			SELECT 1 FROM tenant_memberships m WHERE m.admin_user_id = u.id AND m.tenant_id = $2))`,
+		contactID, tenantID).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &userID, nil
 }
 
 // AuditRecorder records the acknowledge attempts.
@@ -156,8 +191,14 @@ func (h *Handlers) Acknowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	reason := ""
 	if l.state == StatePending {
-		acked, err := h.alerts.AcknowledgeAlert(r.Context(), l.claims.TenantID, l.claims.AlertID,
-			alertservice.Actor{Via: alertservice.ViaMagicLink})
+		actor := alertservice.Actor{Via: alertservice.ViaMagicLink}
+		if owners, ok := h.scope.(ContactOwner); ok {
+			// A link from an escalation page acknowledges as the person paged.
+			if uid, err := owners.Owner(r.Context(), l.claims.TenantID, l.claims.ChannelID); err == nil {
+				actor.UserID = uid
+			}
+		}
+		acked, err := h.alerts.AcknowledgeAlert(r.Context(), l.claims.TenantID, l.claims.AlertID, actor)
 		switch {
 		case err == nil:
 			l.alert, l.state = acked, StateAcknowledged

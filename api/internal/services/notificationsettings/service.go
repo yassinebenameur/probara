@@ -64,7 +64,16 @@ type Settings struct {
 	// than this many seconds ago is reopened (relapse_count+1) when its
 	// monitor goes down again, instead of a new alert opening. 0 = off.
 	AlertReopenCooldownSeconds int `json:"alert_reopen_cooldown_seconds"`
+
+	// Escalation policies: when set, default-mode monitors (and alerts
+	// without a monitor) route through this policy instead of
+	// DefaultChannels, which are kept but unused until it is cleared.
+	DefaultEscalationPolicyID *uuid.UUID `json:"default_escalation_policy_id"`
 }
+
+// ErrEscalationPolicyNotFound is returned by Update for a
+// default_escalation_policy_id that is not one of the tenant's policies.
+var ErrEscalationPolicyNotFound = errors.New("escalation policy not found")
 
 // MaxAlertReopenCooldownSeconds bounds the reopen cooldown at one day.
 const MaxAlertReopenCooldownSeconds = 86400
@@ -98,6 +107,11 @@ type UpdateRequest struct {
 	LocationOfflineAfterSeconds  *int  `json:"location_offline_after_seconds,omitempty"`
 
 	AlertReopenCooldownSeconds *int `json:"alert_reopen_cooldown_seconds,omitempty"`
+
+	// DefaultEscalationPolicyID sets the workspace default escalation
+	// policy; "" clears it (back to default_channels); absent or null keeps
+	// it.
+	DefaultEscalationPolicyID *string `json:"default_escalation_policy_id,omitempty"`
 }
 
 // Service provides workspace notification settings CRUD.
@@ -132,6 +146,11 @@ func (s *Service) Get(ctx context.Context, tenantID uuid.UUID) (*Settings, error
 		SELECT alert_reopen_cooldown_seconds FROM tenants WHERE id = $1
 	`, tenantID).Scan(&settings.AlertReopenCooldownSeconds); err != nil {
 		return nil, fmt.Errorf("load tenant reopen cooldown: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT default_escalation_policy_id FROM tenants WHERE id = $1
+	`, tenantID).Scan(&settings.DefaultEscalationPolicyID); err != nil {
+		return nil, fmt.Errorf("load tenant default escalation policy: %w", err)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -259,6 +278,27 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 			UPDATE tenants SET alert_reopen_cooldown_seconds = $2, updated_at = NOW() WHERE id = $1
 		`, tenantID, *req.AlertReopenCooldownSeconds); err != nil {
 			return nil, fmt.Errorf("update tenant reopen cooldown: %w", err)
+		}
+	}
+	if req.DefaultEscalationPolicyID != nil {
+		var policyID *uuid.UUID
+		if raw := *req.DefaultEscalationPolicyID; raw != "" {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				return nil, fmt.Errorf("default_escalation_policy_id: %w", ErrEscalationPolicyNotFound)
+			}
+			policyID = &id
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tenants SET default_escalation_policy_id = $2, updated_at = NOW()
+			WHERE id = $1 AND ($2::uuid IS NULL OR EXISTS (
+				SELECT 1 FROM escalation_policies WHERE id = $2 AND tenant_id = $1))
+		`, tenantID, policyID)
+		if err != nil {
+			return nil, fmt.Errorf("update tenant default escalation policy: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil, ErrEscalationPolicyNotFound
 		}
 	}
 	if err := tx.Commit(); err != nil {

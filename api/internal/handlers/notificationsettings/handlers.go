@@ -97,7 +97,7 @@ func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	settings, err := h.service.Update(r.Context(), tenantUUID, req)
 	if err != nil {
-		if errors.Is(err, svc.ErrChannelNotFound) {
+		if errors.Is(err, svc.ErrChannelNotFound) || errors.Is(err, svc.ErrEscalationPolicyNotFound) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
