@@ -1,10 +1,11 @@
 'use client';
 
 import { useRouter, useParams } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { AlertChannel, CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
-import { getAlertChannel, updateAlertChannel } from '@/lib/api';
+import { getAlertChannel, getAlertChannelDeliveries, updateAlertChannel } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
+import DeliveryHistory from '@/components/alerts/DeliveryHistory';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
@@ -26,6 +27,10 @@ export default function EditAlertChannelPage() {
   const [error, setError] = useState<string>('');
   const { showToast } = useToast();
   useDocumentTitle(channel?.name);
+  const loadDeliveries = useCallback(
+    (page: number, pageSize: number) => getAlertChannelDeliveries(id, { page, page_size: pageSize }),
+    [id]
+  );
 
   useEffect(() => {
     loadChannel();
@@ -135,6 +140,12 @@ export default function EditAlertChannelPage() {
           </dl>
         </Panel>
       </div>
+
+      <DeliveryHistory
+        scope="channel"
+        load={loadDeliveries}
+        subtitle="Every alert notification sent to this channel, kept 90 days. Errors are shown without URLs or credentials."
+      />
     </Page>
   );
 }

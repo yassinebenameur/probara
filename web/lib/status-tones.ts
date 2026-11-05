@@ -2,7 +2,7 @@
 // value means the same thing on every page. Text formatting lives in
 // lib/format.ts. Tone names match the Pill primitive's (components/ui/Pill.tsx).
 
-import type { AlertStatus, IncidentSeverity, IncidentState, MetricRule } from './types';
+import type { AlertStatus, DeliveryOutcome, IncidentSeverity, IncidentState, MetricRule } from './types';
 import type { MonitorDisplayStatus } from './monitor-utils';
 
 export type StatusTone = 'success' | 'danger' | 'warning' | 'info' | 'neutral';
@@ -354,6 +354,42 @@ export const AI_CONFIDENCE_TONE: Record<AIConfidence, StatusTone> = {
 
 export function aiConfidenceTone(confidence: AIConfidence | string | null | undefined): StatusTone {
   return AI_CONFIDENCE_TONE[confidence as AIConfidence] ?? 'neutral';
+}
+
+// ── Notification deliveries ──────────────────────────────────────────────
+
+export const DELIVERY_OUTCOME_LABEL: Record<DeliveryOutcome, string> = {
+  queued: 'Queued',
+  delivered: 'Delivered',
+  failed: 'Failed, retrying',
+  permanent_failure: 'Rejected',
+  dropped_superseded: 'Dropped (resolved)',
+  dropped_ack: 'Held (ack/snooze)',
+};
+
+/** Red for a rejection, amber for a retried failure; drops are neutral. */
+export function deliveryOutcomeTone(outcome: DeliveryOutcome | string | null | undefined): StatusTone {
+  switch (outcome) {
+    case 'delivered':
+      return 'success';
+    case 'failed':
+      return 'warning';
+    case 'permanent_failure':
+      return 'danger';
+    case 'queued':
+      return 'info';
+    default:
+      return 'neutral';
+  }
+}
+
+export function deliveryOutcomeLabel(outcome: DeliveryOutcome | string | null | undefined): string {
+  return DELIVERY_OUTCOME_LABEL[outcome as DeliveryOutcome] ?? (outcome || 'Unknown');
+}
+
+/** Whether a channel's last delivery failed (the channel list's error badge). */
+export function deliveryFailed(outcome: DeliveryOutcome | string | null | undefined): boolean {
+  return outcome === 'failed' || outcome === 'permanent_failure';
 }
 
 // ── Tone → classes ───────────────────────────────────────────────────────
