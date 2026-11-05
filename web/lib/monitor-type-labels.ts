@@ -29,6 +29,7 @@ export const TYPE_LABELS: Record<string, { label: string; badge: string }> = {
   mysql: { label: 'MySQL', badge: 'MYSQL' },
   websocket: { label: 'WebSocket', badge: 'WS' },
   prometheus: { label: 'Prometheus', badge: 'PROM' },
+  domain: { label: 'Domain', badge: 'DOM' },
 };
 
 /**

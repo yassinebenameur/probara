@@ -53,6 +53,11 @@ export const ALERTING_PAGE: DocPage = {
               "A renewed certificate is observed, or the threshold is removed",
             ],
             [
+              "`domain_expiry`",
+              "A [domain monitor](/docs/monitors/#domain)'s registration has fewer whole days left than `min_days_valid`, or has expired",
+              "A renewed expiry date is observed, or the threshold is removed",
+            ],
+            [
               "`location_offline`",
               "A check location that reported in the last 7 days sends no heartbeat for the workspace's `location_offline_after_seconds` ([details](/docs/locations/#heartbeats)); routed to the default channels, and its mesh paths go quiet meanwhile",
               "The location reports again, is disabled or deleted, or the workspace turns these alerts off; the closing notification says which",
@@ -494,6 +499,11 @@ export const ALERTING_PAGE: DocPage = {
           type: "paragraph",
           text:
             "An HTTPS, SIP-over-TLS or TLS-wrapped TCP monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. With `tls_check_chain: true` the measure is the earliest expiry across the certificate chain, the leaf and every intermediate certificate (never a self-signed root, whose expiry is the trust store's), so an intermediate that lapses before the leaf alerts in time. The chain is the verified one; under `tls_skip_verify`, where nothing is verified, it is the issuer path from the leaf through the certificates the server sent, ending at a self-signed certificate or an issuer it did not send, and an expired cross-sign of a root (such as a stale cross-signed root a server still sends) is left out, since clients that hold the root never use it; certificates recorded before chain capture existed fall back to the leaf. The operator UI turns it on for new monitors; monitors saved without it keep measuring the leaf. The status page and the monitor detail page show the same date the alert measures. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A [domain monitor](/docs/monitors/#domain) with `min_days_valid` opens a `domain_expiry` alert the same way: when the expiry date on its most recent lookup (within the last 48 hours) is fewer whole days away than the threshold, counted when the alerter evaluates, not when the check ran. The check stays `up` while the domain is registered, so the alert is a renewal reminder, not an outage; once the date passes, the check fails too and a regular availability alert opens beside it. Its notifications read \"Domain Expiring\" (\"Domain Expired\" in the status word once the date has passed) and \"Domain Renewed\" on resolve. The alert resolves when a later lookup shows a renewed date, or when the threshold is removed or the monitor disabled or deleted. A lookup that fails records nothing and leaves an open alert as it is. Like `tls_expiry`, it is routed like the monitor's availability alerts and stays quiet during maintenance.",
         },
         {
           type: "callout",

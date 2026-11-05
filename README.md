@@ -49,13 +49,14 @@ SLA reports come in the same install.
 
 ### Checks
 
-Probara has 18 monitor types. **Web:** HTTP (status, body, header and JSON
+Probara has 19 monitor types. **Web:** HTTP (status, body, header and JSON
 assertions, phase timings, TLS-expiry alerts), multi-step API journeys,
 headless-browser journeys, WebSocket and gRPC health. **Network:** ping, DNS,
-TCP and SIP. **Data:** Redis, PostgreSQL, MySQL, MongoDB and a message broker
-(RabbitMQ). **Other:** host agent (OpenTelemetry), Prometheus query
-thresholds, push heartbeats and groups. Checks run every 10 seconds to every
-24 hours (SIP test calls at most once a minute).
+TCP, SIP and domain registration expiry (RDAP, WHOIS). **Data:** Redis,
+PostgreSQL, MySQL, MongoDB and a message broker (RabbitMQ). **Other:** host
+agent (OpenTelemetry), Prometheus query thresholds, push heartbeats and
+groups. Checks run every 10 seconds to every 24 hours (SIP test calls at most
+once a minute, domain lookups at most once an hour).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/monitors-dark.webp">

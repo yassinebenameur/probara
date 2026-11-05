@@ -86,3 +86,19 @@ test('listSubjects', () => {
   assert.equal(listSubjects(['A', 'A', 'B']), 'A and B');
   assert.equal(listSubjects(['A', 'B', 'C', 'D']), 'A, B and 2 more');
 });
+
+test('domain expiry: days left, expired, and the resolve noun', () => {
+  assert.equal(
+    alertToast('created', alert({ kind: 'domain_expiry', monitor_name: 'example.com', metric_value: 12 }))?.message,
+    'example.com domain expires in 12d'
+  );
+  assert.equal(
+    alertToast('created', alert({ kind: 'domain_expiry', monitor_name: 'example.com', metric_value: -2 }))?.message,
+    'example.com domain registration has expired'
+  );
+  assert.equal(alertToast('created', alert({ kind: 'domain_expiry', monitor_name: 'x' }))?.type, 'warning');
+  assert.equal(
+    alertToast('resolved', alert({ kind: 'domain_expiry', monitor_name: 'example.com', status: 'resolved' }))?.message,
+    'example.com: domain expiry alert closed'
+  );
+});

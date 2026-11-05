@@ -81,6 +81,8 @@ func TypeIcon(kind string) string {
 		return "monitor-check"
 	case "redis", "postgres", "mongodb", "rabbitmq":
 		return "database"
+	case "domain":
+		return "calendar"
 	default:
 		return "activity"
 	}

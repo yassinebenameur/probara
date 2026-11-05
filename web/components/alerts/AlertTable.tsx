@@ -504,6 +504,19 @@ export default function AlertTable({
                       {alert.threshold_value != null && ` (threshold ${Math.round(alert.threshold_value)}d)`}
                     </p>
                   )}
+                  {alert.kind === 'domain_expiry' && (
+                    <KindTag title="Domain registration is inside its expiry warning window">
+                      domain
+                    </KindTag>
+                  )}
+                  {alert.kind === 'domain_expiry' && alert.metric_value != null && (
+                    <p className={DETAIL}>
+                      {alert.metric_value < 0
+                        ? `expired ${Math.round(-alert.metric_value)}d ago`
+                        : `expires in ${Math.round(alert.metric_value)}d`}
+                      {alert.threshold_value != null && ` (threshold ${Math.round(alert.threshold_value)}d)`}
+                    </p>
+                  )}
                   {alert.last_error && (
                     <p className="mt-0.5 truncate text-xs text-slate-400" title={alert.last_error}>
                       {shortFailureReason(alert.last_error) || alert.last_error}

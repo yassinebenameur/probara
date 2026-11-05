@@ -221,7 +221,8 @@ export type MonitorType =
   | "tcp"
   | "mysql"
   | "websocket"
-  | "prometheus";
+  | "prometheus"
+  | "domain";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -760,7 +761,8 @@ export type MonitorConfig =
   | RabbitMQMonitorConfig
   | MySQLMonitorConfig
   | WebSocketMonitorConfig
-  | PrometheusMonitorConfig;
+  | PrometheusMonitorConfig
+  | DomainMonitorConfig;
 
 export type NotificationMode = 'default' | 'custom';
 
@@ -807,7 +809,7 @@ export interface NotificationSettings {
   location_offline_after_seconds: number;
 }
 
-export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'location_offline';
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'location_offline' | 'domain_expiry';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
 
@@ -1891,7 +1893,8 @@ export interface CheckResult {
     | WebSocketMetricsEnvelope
     | SIPMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
-    | SyntheticBrowserMetricsEnvelope;
+    | SyntheticBrowserMetricsEnvelope
+    | DomainMetricsEnvelope;
   location_id?: string; // Absent = default fleet
   location_name?: string;
   created_at: string;
@@ -2587,4 +2590,38 @@ export interface DeleteTenantResponse {
   name: string;
   // Monitors tombstoned by the delete; the scheduler purges the data later.
   monitors: number;
+}
+
+// --- Domain (registration expiry) monitors -----------------------------------
+
+// shared/models.DomainMonitorConfig. min_days_valid opens a domain_expiry
+// alert; the check itself fails only once the domain expired or is free.
+export interface DomainMonitorConfig {
+  domain: string;
+  min_days_valid?: number;
+  // RDAP base URL (https) used instead of the IANA bootstrap registry.
+  rdap_server_override?: string;
+  // Fall back to WHOIS (TCP 43) when RDAP cannot answer; absent means true.
+  whois_fallback?: boolean;
+}
+
+// metrics_data.domain (shared/domainexpiry.Info).
+export interface DomainMetrics {
+  domain: string;
+  expires_at?: string;
+  days_until_expiry?: number;
+  registered_at?: string;
+  updated_at?: string;
+  registrar?: string;
+  statuses?: string[];
+  nameservers?: string[];
+  registered: boolean;
+  source: 'rdap' | 'whois';
+  server?: string;
+  rdap_error?: string;
+  note?: string;
+}
+
+export interface DomainMetricsEnvelope {
+  domain?: DomainMetrics;
 }
