@@ -51,14 +51,36 @@ const (
 // (api/internal/services/otlp/service.go). In-memory and per-replica, which is
 // fine: this is a spam control, not a quota.
 //
-// The unlock route (access.go) reuses it with its own rate.
+// The unlock route (access.go) reuses it with its own rate. Keys must come
+// from a bounded space (a parsed client address, a resolved page ID), never
+// from raw request text such as a slug: every new key costs an entry.
+//
+// Memory is bounded and the bound cannot be used to reset a bucket:
+//   - a key idle for refillTime has a full bucket again, so dropping it is
+//     indistinguishable from keeping it (sweep drops only those);
+//   - at maxKeys keys, all within refillTime, new keys share one overflow
+//     bucket instead of getting their own, so flooding the map neither grows
+//     it nor hands anyone a fresh allowance;
+//   - the O(n) sweep runs at most once per refillTime, not on every call.
 type pushRateLimiter struct {
-	mu        sync.Mutex
-	limiters  map[string]*rate.Limiter
-	seen      map[string]time.Time
-	perMinute float64
-	burst     int
+	mu         sync.Mutex
+	entries    map[string]*limiterEntry
+	overflow   *rate.Limiter
+	perMinute  float64
+	burst      int
+	maxKeys    int
+	refillTime time.Duration
+	lastSweep  time.Time
+	now        func() time.Time
 }
+
+type limiterEntry struct {
+	lim  *rate.Limiter
+	seen time.Time
+}
+
+// limiterMaxKeys caps the keys one limiter tracks.
+const limiterMaxKeys = 10000
 
 func newPushRateLimiter() *pushRateLimiter {
 	return newKeyedRateLimiter(pushRatePerMinute, pushRateBurst)
@@ -68,37 +90,39 @@ func newPushRateLimiter() *pushRateLimiter {
 // minute, holding at most burst.
 func newKeyedRateLimiter(perMinute float64, burst int) *pushRateLimiter {
 	return &pushRateLimiter{
-		limiters:  make(map[string]*rate.Limiter),
-		seen:      make(map[string]time.Time),
-		perMinute: perMinute,
-		burst:     burst,
+		entries:    make(map[string]*limiterEntry),
+		overflow:   rate.NewLimiter(rate.Limit(perMinute/60.0), burst),
+		perMinute:  perMinute,
+		burst:      burst,
+		maxKeys:    limiterMaxKeys,
+		refillTime: time.Duration(float64(burst) / perMinute * float64(time.Minute)),
+		now:        time.Now,
 	}
 }
 
 func (l *pushRateLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	now := l.now()
 
-	// Bound the map: without this, one host cycling source addresses would
-	// grow it without limit. Eviction is coarse on purpose -- an evicted
-	// client simply gets a fresh bucket.
-	if len(l.limiters) > 10000 {
-		cutoff := time.Now().Add(-time.Hour)
-		for k, at := range l.seen {
-			if at.Before(cutoff) {
-				delete(l.limiters, k)
-				delete(l.seen, k)
+	if e, ok := l.entries[key]; ok {
+		e.seen = now
+		return e.lim.AllowN(now, 1)
+	}
+	if len(l.entries) >= l.maxKeys && now.Sub(l.lastSweep) >= l.refillTime {
+		l.lastSweep = now
+		for k, e := range l.entries {
+			if now.Sub(e.seen) >= l.refillTime {
+				delete(l.entries, k)
 			}
 		}
 	}
-
-	lim, ok := l.limiters[key]
-	if !ok {
-		lim = rate.NewLimiter(rate.Limit(l.perMinute/60.0), l.burst)
-		l.limiters[key] = lim
+	if len(l.entries) >= l.maxKeys {
+		return l.overflow.AllowN(now, 1)
 	}
-	l.seen[key] = time.Now()
-	return lim.Allow()
+	e := &limiterEntry{lim: rate.NewLimiter(rate.Limit(l.perMinute/60.0), l.burst), seen: now}
+	l.entries[key] = e
+	return e.lim.AllowN(now, 1)
 }
 
 // pushSubscribeRequest is the W3C PushSubscriptionJSON shape, so the page can

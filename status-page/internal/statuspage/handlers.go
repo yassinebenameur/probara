@@ -441,6 +441,43 @@ func (h *Handlers) StreamStatusPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// proxyStatusPageID is the page a /_sp_api call acts on, which both the
+// access gate and the injected X-Tenant-ID use. A status-pages path names its
+// page in the path, and that is the page the API reads, so the path decides:
+// the X-Status-Page-ID header only identifies the page for calls whose path
+// names none (the monitors list). ok is false for a status-pages path whose
+// first segment is not a page ID, and for a header naming a different page
+// than the path (or a path with dot segments), so the gate can never check
+// one page while the API acts on another.
+func proxyStatusPageID(r *http.Request, upstreamPath string) (uuid.UUID, bool) {
+	var headerID uuid.UUID
+	if spIDHeader := r.Header.Get("X-Status-Page-ID"); spIDHeader != "" {
+		if parsed, err := uuid.Parse(spIDHeader); err == nil {
+			headerID = parsed
+		}
+	}
+	// A dot segment would let the upstream resolve the path somewhere other
+	// than the prefix checked here.
+	for _, seg := range strings.Split(upstreamPath, "/") {
+		if seg == "." || seg == ".." {
+			return uuid.Nil, false
+		}
+	}
+	rest, named := strings.CutPrefix(upstreamPath, "/api/v1/status-pages/")
+	if !named {
+		return headerID, true
+	}
+	first, _, _ := strings.Cut(rest, "/")
+	pathID, err := uuid.Parse(first)
+	if err != nil || pathID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	if headerID != uuid.Nil && headerID != pathID {
+		return uuid.Nil, false
+	}
+	return pathID, true
+}
+
 // HandleAPIProxy proxies a small subset of API calls to the API service.
 //
 // This exists so the public status page can host an in-page "customizer" UI while the API
@@ -487,19 +524,10 @@ func (h *Handlers) HandleAPIProxy(w http.ResponseWriter, r *http.Request) {
 
 	// If the caller includes a status page id, resolve its tenant id and inject X-Tenant-ID
 	// so admin-cookie auth (which is global) can operate tenant-scoped endpoints.
-	var statusPageID uuid.UUID
-	if spIDHeader := r.Header.Get("X-Status-Page-ID"); spIDHeader != "" {
-		if parsed, err := uuid.Parse(spIDHeader); err == nil {
-			statusPageID = parsed
-		}
-	}
-	if statusPageID == uuid.Nil && strings.HasPrefix(upstreamPath, "/api/v1/status-pages/") {
-		parts := strings.Split(strings.TrimPrefix(upstreamPath, "/api/v1/status-pages/"), "/")
-		if len(parts) > 0 {
-			if parsed, err := uuid.Parse(parts[0]); err == nil {
-				statusPageID = parsed
-			}
-		}
+	statusPageID, ok := proxyStatusPageID(r, upstreamPath)
+	if !ok {
+		http.NotFound(w, r)
+		return
 	}
 
 	if !h.authorizeProxy(w, r, statusPageID) {

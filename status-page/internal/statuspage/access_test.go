@@ -477,6 +477,133 @@ func TestAuthorizeProxy(t *testing.T) {
 	require.True(t, f.h.authorizeProxy(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/_sp_api/api/v1/monitors", nil), uuid.Nil))
 }
 
+// TestUnlock_SlugsDoNotGrowLimiters: the unlock buckets key on the resolved
+// page ID, so slugs that name no password page (random, very long, private,
+// public) mint no bucket and cannot grow the limiter maps.
+func TestUnlock_SlugsDoNotGrowLimiters(t *testing.T) {
+	f := newAccessFixture(t, testSessionSecret)
+	for i := 0; i < 200; i++ {
+		slug := uuid.NewString() + strings.Repeat("x", 4096)
+		require.Equal(t, http.StatusNotFound, postUnlock(f.h, slug, "guess", nil).Code)
+	}
+	require.Equal(t, http.StatusNotFound, postUnlock(f.h, "internal", "guess", nil).Code)
+	require.Equal(t, http.StatusSeeOther, postUnlock(f.h, "open", "guess", nil).Code)
+	require.Empty(t, f.h.access.unlockByClient.entries)
+	require.Empty(t, f.h.access.unlockByPage.entries)
+
+	require.Equal(t, http.StatusUnauthorized, postUnlock(f.h, "locked", "guess", nil).Code)
+	pageID := f.store.pages["locked"].ID.String()
+	require.Len(t, f.h.access.unlockByPage.entries, 1)
+	require.Contains(t, f.h.access.unlockByPage.entries, pageID)
+	require.Len(t, f.h.access.unlockByClient.entries, 1)
+}
+
+// TestUnlock_PerPageCeilingAcrossClients: distinct clients share the page's
+// ceiling, so a distributed guess still stops.
+func TestUnlock_PerPageCeilingAcrossClients(t *testing.T) {
+	f := newAccessFixture(t, testSessionSecret)
+	// A frozen clock: the bcrypt checks are slow enough to refill tokens.
+	frozen := time.Now()
+	f.h.access.unlockByPage.now = func() time.Time { return frozen }
+	from := func(i int) func(*http.Request) {
+		return func(r *http.Request) { r.RemoteAddr = "198.51.100." + strconv.Itoa(i) + ":1234" }
+	}
+	for i := 0; i < unlockPerPageBurst; i++ {
+		require.Equal(t, http.StatusUnauthorized, postUnlock(f.h, "locked", "guess", from(i)).Code)
+	}
+	require.Equal(t, http.StatusTooManyRequests, postUnlock(f.h, "locked", f.password, from(unlockPerPageBurst)).Code)
+}
+
+func TestKeyedRateLimiter_BoundedAndUndefeatable(t *testing.T) {
+	clock := time.Unix(1_700_000_000, 0)
+	l := newKeyedRateLimiter(6, 2) // a token every 10s, full after 20s
+	l.maxKeys = 3
+	l.now = func() time.Time { return clock }
+	require.Equal(t, 20*time.Second, l.refillTime)
+
+	// "a" spends its bucket.
+	require.True(t, l.allow("a"))
+	require.True(t, l.allow("a"))
+	require.False(t, l.allow("a"))
+	require.True(t, l.allow("b"))
+	require.True(t, l.allow("c"))
+
+	// A flood of new keys never grows the map past maxKeys and shares one
+	// overflow bucket rather than each getting a fresh allowance.
+	allowed := 0
+	for i := 0; i < 1000; i++ {
+		if l.allow("flood-" + strconv.Itoa(i)) {
+			allowed++
+		}
+	}
+	require.Len(t, l.entries, 3)
+	require.Equal(t, 2, allowed)
+	// Nor does it evict "a" and reset its bucket.
+	require.False(t, l.allow("a"))
+
+	// Once keys have been idle for refillTime their buckets are full again,
+	// so the sweep drops them and new keys get their own buckets.
+	clock = clock.Add(5 * time.Second)
+	require.False(t, l.allow("a")) // keeps "a" recent (and still throttled: half a token)
+	clock = clock.Add(16 * time.Second)
+	require.True(t, l.allow("new"))
+	require.Len(t, l.entries, 2) // "a" (seen 16s ago) and "new"; "b", "c" swept
+	require.Contains(t, l.entries, "a")
+}
+
+func TestProxyStatusPageID(t *testing.T) {
+	pub, priv := uuid.New(), uuid.New()
+	cases := []struct {
+		name, path, header string
+		want               uuid.UUID
+		ok                 bool
+	}{
+		{"monitors, no header", "/api/v1/monitors", "", uuid.Nil, true},
+		{"monitors, header names the page", "/api/v1/monitors", pub.String(), pub, true},
+		{"path names the page", "/api/v1/status-pages/" + priv.String(), "", priv, true},
+		{"path sub-resource", "/api/v1/status-pages/" + priv.String() + "/sections", "", priv, true},
+		{"header agrees with path", "/api/v1/status-pages/" + priv.String(), priv.String(), priv, true},
+		{"header names another page", "/api/v1/status-pages/" + priv.String(), pub.String(), uuid.Nil, false},
+		{"path names no page", "/api/v1/status-pages/", pub.String(), uuid.Nil, false},
+		{"empty first segment", "/api/v1/status-pages//" + priv.String(), pub.String(), uuid.Nil, false},
+		{"dot segments", "/api/v1/status-pages/" + pub.String() + "/../" + priv.String(), "", uuid.Nil, false},
+		{"dot segments outside status-pages", "/api/v1/monitors/../status-pages/" + priv.String(), pub.String(), uuid.Nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPatch, "/_sp_api", nil)
+			if tc.header != "" {
+				req.Header.Set("X-Status-Page-ID", tc.header)
+			}
+			got, ok := proxyStatusPageID(req, tc.path)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestAPIProxy_GatesThePathPage: a header naming a public page cannot carry a
+// call that acts on a gated page past the gate.
+func TestAPIProxy_GatesThePathPage(t *testing.T) {
+	f := newAccessFixture(t, testSessionSecret)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("request reached the API: %s %s", r.Method, r.URL.Path)
+	}))
+	defer upstream.Close()
+	f.h.config.APIBaseURL = upstream.URL
+
+	open, locked := f.store.pages["open"].ID, f.store.pages["internal"].ID
+	for _, header := range []string{"", open.String()} {
+		req := httptest.NewRequest(http.MethodPatch, "/_sp_api/api/v1/status-pages/"+locked.String(), strings.NewReader("{}"))
+		if header != "" {
+			req.Header.Set("X-Status-Page-ID", header)
+		}
+		rec := httptest.NewRecorder()
+		f.h.HandleAPIProxy(rec, req)
+		require.Equal(t, http.StatusNotFound, rec.Code, "header %q", header)
+	}
+}
+
 func TestSplitStatusPath(t *testing.T) {
 	cases := map[string][2]string{
 		"acme":                        {"acme", ""},

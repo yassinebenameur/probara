@@ -940,6 +940,11 @@ Login lockout).
   HTML, so they cannot disagree with it; badges exist only for rendered
   components. `writeAddon` never overwrites a `Cache-Control` set before
   dispatch (a gated page's `private, no-store` must win).
+- **Public-route throttle keys come from a bounded space** — a resolved page
+  ID, a parsed client address — never raw request text such as the slug
+  (`HandleUnlock` looks the page up first; `pushRateLimiter` in
+  `push_handlers.go` explains its bound). The `/_sp_api` proxy gates and
+  scopes the page its path names (`proxyStatusPageID`), never a header alone.
 - **`Subscriber.handleEvent` early-returns** when no SSE client is connected
   and the render cache is empty — exactly when browser notifications matter —
   so the push wake-up sits **above** that guard. Anything hooked in below it
