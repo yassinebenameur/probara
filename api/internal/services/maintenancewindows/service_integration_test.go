@@ -244,6 +244,7 @@ func windowOccurrences(ctx context.Context, t *testing.T, dbClient interface {
 	for rows.Next() {
 		var o occRow
 		require.NoError(t, rows.Scan(&o.start, &o.end))
+		o.start, o.end = o.start.UTC(), o.end.UTC()
 		out = append(out, o)
 	}
 	return out
@@ -321,8 +322,7 @@ func TestMaintenanceWindowRecurrenceEditKeepsHistory(t *testing.T) {
 	occ = windowOccurrences(ctx, t, dbClient, w.ID)
 	require.True(t, occ[0].end.Equal(start.Add(time.Hour)), "history untouched")
 	require.True(t, occ[1].start.Equal(now.Add(-30*time.Minute)))
-	require.False(t, occ[1].end.After(time.Now()), "running occurrence ends at the edit")
-	require.True(t, occ[1].end.After(now.Add(-time.Minute)))
+	require.WithinDuration(t, time.Now(), occ[1].end, 5*time.Second, "running occurrence ends at the edit")
 	require.Equal(t, 10*time.Minute, occ[2].end.Sub(occ[2].start))
 
 	// Ending the occurrence in progress keeps the rule: nothing runs now, the
@@ -377,5 +377,5 @@ func TestMaintenanceWindowEndOccurrenceKeepsRule(t *testing.T) {
 	require.True(t, ended.Occurrences[0].StartsAt.Equal(now.Add(24*time.Hour-10*time.Minute)), "next occurrence is tomorrow's")
 	occ := windowOccurrences(ctx, t, dbClient, w.ID)
 	require.True(t, occ[0].start.Equal(now.Add(-10*time.Minute)))
-	require.False(t, occ[0].end.After(time.Now()), "the running occurrence ended now, its past kept")
+	require.WithinDuration(t, time.Now(), occ[0].end, 5*time.Second, "the running occurrence ended now, its past kept")
 }
