@@ -96,6 +96,22 @@ type SLAReport struct {
 	// (web, CSV, PDF) must treat it as optional and leave such a report's
 	// output unchanged.
 	SuspectedCauses *SLAReportSuspectedCauses `json:"suspected_causes,omitempty"`
+	// BurnDown is the full-period error budget left after each local day
+	// (docs/state-semantics.md S-U8). Absent on reports computed before it
+	// existed (and on reports without days), so renderers must leave such a
+	// report's output unchanged.
+	BurnDown []SLAReportBurnPoint `json:"burn_down,omitempty"`
+}
+
+// SLAReportBurnPoint is the error budget at the end of one day of the period
+// (S-U8): ConsumedSeconds is the budget consumed from the period start to the
+// end of Date, RemainingPct what is left of the full period's allowance
+// (AllowedFullPeriodSeconds), negative once overspent and nil while nothing
+// was observed yet.
+type SLAReportBurnPoint struct {
+	Date            string   `json:"date"`
+	ConsumedSeconds float64  `json:"consumed_seconds"`
+	RemainingPct    *float64 `json:"remaining_pct"`
 }
 
 // SLAReportDefinition is the SLA as it stood when the report was computed.
@@ -152,6 +168,15 @@ type SLAReportBudget struct {
 	RemainingPct     *float64 `json:"remaining_pct"`
 	// AllowedFullPeriodSeconds = (1 - target) x the whole calendar period.
 	AllowedFullPeriodSeconds float64 `json:"allowed_full_period_seconds"`
+	// BurnRate (S-U8) = (1 - availability) / (1 - target) over the report
+	// window: 1 spends the budget exactly at the allowed pace. Nil without
+	// data and on reports computed before it existed.
+	BurnRate *float64 `json:"burn_rate,omitempty"`
+	// ProjectedExhaustionAt (S-U8) is when a running period's full-period
+	// budget runs out if consumption continues at its pace so far; nil for
+	// closed periods, when nothing was consumed, when the budget is already
+	// spent, or when it would last the period.
+	ProjectedExhaustionAt *time.Time `json:"projected_exhaustion_at,omitempty"`
 }
 
 type SLAReportDay struct {

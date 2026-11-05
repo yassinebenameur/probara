@@ -7,7 +7,7 @@ export const SLAS_PAGE: DocPage = {
   description: "Define availability targets for sets of monitors, track error budgets per calendar period, and export or freeze reports.",
   eyebrow: "Availability objectives",
   readingTime: "8 min read",
-  keywords: ["SLA", "SLO", "error budget", "availability report", "uptime report", "MTTR", "MTTA", "PDF", "CSV", "suspected cause", "root cause"],
+  keywords: ["SLA", "SLO", "error budget", "burn rate", "burn-down", "availability report", "uptime report", "MTTR", "MTTA", "PDF", "CSV", "suspected cause", "root cause"],
   sections: [
     {
       id: "define",
@@ -73,6 +73,10 @@ export const SLAS_PAGE: DocPage = {
           text: "The SLA page opens on the running period, reported to date. Step back through earlier periods, or pick a custom range of whole local days (up to 400). A report shows availability against the target and a met/breached verdict, coverage, and the error budget: the downtime the target allows so far (1 − target × eligible time), how much of it was consumed, and the allowance for the full calendar period.",
         },
         {
+          type: "paragraph",
+          text: "The error budget panel also shows the burn rate, (1 − availability) ÷ (1 − target) over the report: 1× spends the budget exactly at the allowed pace, 2× twice as fast, and a closed period meets its target exactly when its burn rate is at most 1×. Under it, a burn-down chart plots what is left of the full period's budget after each day, from 100% down, with a dashed line at 0 where the budget is spent. The chart measures against the whole period's allowance, so on a running period it falls more slowly than the headline remaining figure, which measures against the time eligible so far; the two agree on a closed, fully covered period. For a running period, projected exhaustion is when the full-period budget runs out if consumption continues at its pace so far, shown only when that falls before the period ends. Days before anything was observed have no point.",
+        },
+        {
           type: "list",
           items: [
             "Daily availability in the SLA's timezone, coloured at or above target / below target but ≥ 99% / below 99% / no data.",
@@ -85,7 +89,7 @@ export const SLAS_PAGE: DocPage = {
         },
         {
           type: "paragraph",
-          text: "Export any report as PDF (an A4 document with the headline, budget, daily strip, monitor table, suspected causes, outages and method note), CSV (summary, daily, monitor, outage and suspected-cause sections separated by blank lines, times in the SLA's timezone) or JSON (the full report document). The PDF's suspected-cause table appears under the same rule as the page's panel, only when at least one monitor outage was triaged (suspected or inconclusive), so a workspace without auto-triage never sends a table of \"Not triaged\". The CSV is the raw-data export, so its shape does not depend on AI settings: every report computed since the breakdown existed, AI on or off, gains `Cause key` and `Suspected cause` columns on its outage rows and a trailing suspected-cause section (attributed, triaged and pending outage counts, summed unplanned seconds, then one row per bucket), with Not triaged or No alert where nothing was triaged. Reports issued before the breakdown existed export exactly as they did. The monitor detail page uses the strictest target of the SLAs covering that monitor, falling back to 99.9%.",
+          text: "Export any report as PDF (an A4 document with the headline, budget, daily strip, monitor table, suspected causes, outages and method note), CSV (summary, daily, monitor, outage and suspected-cause sections separated by blank lines, times in the SLA's timezone) or JSON (the full report document). The PDF's suspected-cause table appears under the same rule as the page's panel, only when at least one monitor outage was triaged (suspected or inconclusive), so a workspace without auto-triage never sends a table of \"Not triaged\". The CSV is the raw-data export, so its shape does not depend on AI settings: every report computed since the breakdown existed, AI on or off, gains `Cause key` and `Suspected cause` columns on its outage rows and a trailing suspected-cause section (attributed, triaged and pending outage counts, summed unplanned seconds, then one row per bucket), with Not triaged or No alert where nothing was triaged. Reports issued before the breakdown existed export exactly as they did. The CSV ends with a burn section (burn rate, projected exhaustion, then each day's consumed seconds and full-period budget left), and the PDF's error budget lists the burn rate, projected exhaustion and the full-period budget left; reports issued before burn existed have neither and export unchanged. The monitor detail page uses the strictest target of the SLAs covering that monitor, falling back to 99.9%.",
         },
       ],
     },
@@ -156,7 +160,7 @@ export const SLAS_PAGE: DocPage = {
         },
         {
           type: "paragraph",
-          text: "The report document carries `suspected_causes` (`outage_count`, `triaged_outage_count`, `pending_outage_count`, `unplanned_seconds`, and `buckets` with `kind`, `key`, `title`, `outage_count`, `alert_count`, `monitor_count`, `unplanned_seconds`, `confirmed_outage_count`, `corrected_outage_count`), and each attributed monitor outage carries `cause_kind`, `cause_key` and `cause_title`. `key` is the catalogue key for suspected causes and the bucket kind otherwise. All of these are absent on reports issued before the breakdown existed; treat them as optional.",
+          text: "The report document carries `suspected_causes` (`outage_count`, `triaged_outage_count`, `pending_outage_count`, `unplanned_seconds`, and `buckets` with `kind`, `key`, `title`, `outage_count`, `alert_count`, `monitor_count`, `unplanned_seconds`, `confirmed_outage_count`, `corrected_outage_count`), and each attributed monitor outage carries `cause_kind`, `cause_key` and `cause_title`. `key` is the catalogue key for suspected causes and the bucket kind otherwise. All of these are absent on reports issued before the breakdown existed; treat them as optional. Likewise `budget.burn_rate`, `budget.projected_exhaustion_at` (running periods only) and `burn_down` (one `{date, consumed_seconds, remaining_pct}` per day, `remaining_pct` against the full period's budget and null before anything was observed) are absent on reports issued before burn existed and on reports without data.",
         },
       ],
     },

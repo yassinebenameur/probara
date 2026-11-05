@@ -116,6 +116,16 @@ func TestSLAService(t *testing.T) {
 		require.InDelta(t, 3600, *r.Response.MTTRSeconds, 1e-6)
 		require.Equal(t, 1, r.Response.AlertCount)
 		require.InDelta(t, 600, *r.Response.MTTASeconds, 1e-6)
+		// S-U8: burn rate = (1 - A) / (1 - target); burn-down against the
+		// full period's budget, its last day consuming the headline's.
+		require.NotNil(t, r.Budget.BurnRate)
+		require.InDelta(t, (1-719.0/720)/0.001, *r.Budget.BurnRate, 1e-6)
+		require.Nil(t, r.Budget.ProjectedExhaustionAt, "a closed period projects nothing")
+		require.Len(t, r.BurnDown, 30)
+		require.InDelta(t, 0, r.BurnDown[8].ConsumedSeconds, 1e-6)
+		require.InDelta(t, 3600, r.BurnDown[9].ConsumedSeconds, 1e-6)
+		require.InDelta(t, r.Budget.ConsumedSeconds, r.BurnDown[29].ConsumedSeconds, 1e-6)
+		require.InDelta(t, (2592-3600)/2592.0*100, *r.BurnDown[29].RemainingPct, 1e-6)
 
 		var csvBuf, pdfBuf bytes.Buffer
 		require.NoError(t, WriteCSV(&csvBuf, r))

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  causeShare, showSuspectedCauses, slaCausesCaveat, dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
+  burnRateTone, causeShare, formatBurnRate, showSuspectedCauses, slaCausesCaveat, dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
   DEFAULT_SLA_TARGET, type SlaInput, type SlaReport,
 } from './sla';
 
@@ -100,4 +100,15 @@ test('cause share and caveat', () => {
   assert.match(caveat, /observed symptoms, not confirmed root causes/);
   assert.match(caveat, /only at medium or high confidence/);
   assert.match(caveat, /3 of 4 monitor outages had a triaged alert\.$/);
+});
+
+test('burn rates read as a multiple of the allowed pace (S-U8)', () => {
+  assert.equal(formatBurnRate(1.38889), '1.39×');
+  assert.equal(formatBurnRate(0), '0.00×');
+  assert.equal(formatBurnRate(undefined), '—');
+  assert.equal(burnRateTone(0.5), 'good');
+  assert.equal(burnRateTone(1), 'good');
+  assert.equal(burnRateTone(1.5), 'warn');
+  assert.equal(burnRateTone(14.4), 'bad');
+  assert.equal(burnRateTone(undefined), 'none');
 });

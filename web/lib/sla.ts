@@ -164,6 +164,10 @@ export interface SlaReport {
     remaining_seconds: number;
     remaining_pct: number | null;
     allowed_full_period_seconds: number;
+    /** S-U8: (1 − availability) ÷ (1 − target); 1 spends the budget at the allowed pace. Absent without data and on older issued reports. */
+    burn_rate?: number;
+    /** Running periods only: when the full-period budget runs out at the pace so far, if before the period ends. */
+    projected_exhaustion_at?: string;
   };
   daily: SlaReportDay[];
   monitors: SlaReportMonitor[];
@@ -180,6 +184,16 @@ export interface SlaReport {
   notes: string[];
   /** Absent on reports issued before causes existed: render nothing for those. */
   suspected_causes?: SlaReportSuspectedCauses;
+  /** S-U8 burn-down, one point per day; absent on reports issued before it existed. */
+  burn_down?: SlaBurnPoint[];
+}
+
+/** Error budget at the end of one day: consumed since the period start, and what is left of the full period's allowance. */
+export interface SlaBurnPoint {
+  date: string;
+  consumed_seconds: number;
+  /** Negative once overspent; null while nothing was observed yet. */
+  remaining_pct: number | null;
 }
 
 export interface SlaReportRef {
@@ -406,4 +420,22 @@ export function slaCausesCaveat(c: Pick<SlaReportSuspectedCauses, 'outage_count'
     'Counts are monitor outages, not alerts, and downtime is summed per monitor, so it can exceed the service downtime when monitors fail together. ' +
     `${c.triaged_outage_count} of ${c.outage_count} monitor outages had a triaged alert.`
   );
+}
+
+/** A burn rate as "1.39×"; "—" without data. */
+export function formatBurnRate(rate: number | null | undefined): string {
+  if (rate === null || rate === undefined || !Number.isFinite(rate)) return '—';
+  return `${rate.toFixed(2)}×`;
+}
+
+/**
+ * Tone of a burn rate (S-U8): at or under the allowed pace is good, up to
+ * twice it warns, faster is bad. A closed period's verdict is the met pill;
+ * this colours the pace.
+ */
+export function burnRateTone(rate: number | null | undefined): SlaTone {
+  if (rate === null || rate === undefined || !Number.isFinite(rate)) return 'none';
+  if (rate <= 1 + 1e-9) return 'good';
+  if (rate <= 2) return 'warn';
+  return 'bad';
 }

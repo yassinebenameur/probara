@@ -51,7 +51,9 @@ func secondsString(s float64) string { return strconv.FormatFloat(s, 'f', 0, 64)
 // an outage was triaged, the CSV is the raw-data export: every report
 // computed since causes exist carries the same column set, AI on or off
 // ("Not triaged"/"No alert" rows), so a spreadsheet never changes shape with
-// the workspace's AI settings.
+// the workspace's AI settings. The burn section (S-U8: burn rate, projected
+// exhaustion, then the daily burn-down) comes last, only on reports computed
+// since burn existed, for the same reason.
 func WriteCSV(w io.Writer, r *models.SLAReport) error {
 	loc := reportLocation(r)
 	ts := func(t time.Time) string { return t.In(loc).Format(time.RFC3339) }
@@ -140,6 +142,21 @@ func WriteCSV(w io.Writer, r *models.SLAReport) error {
 		}
 	}
 
+	if hasBurn(r) {
+		exhaustion := ""
+		if r.Budget.ProjectedExhaustionAt != nil {
+			exhaustion = ts(*r.Budget.ProjectedExhaustionAt)
+		}
+		rows = append(rows, nil,
+			[]string{"Budget burn rate", optFloat(r.Budget.BurnRate, 4)},
+			[]string{"Projected budget exhaustion", exhaustion},
+			nil,
+			[]string{"Date", "Budget consumed seconds", "Budget remaining % (full period)"})
+		for _, p := range r.BurnDown {
+			rows = append(rows, []string{p.Date, secondsString(p.ConsumedSeconds), pctString(p.RemainingPct, 3)})
+		}
+	}
+
 	for _, row := range rows {
 		if row == nil {
 			row = []string{}
@@ -159,6 +176,25 @@ func outageCSV(scope, id string, o models.SLAReportOutage, ts func(time.Time) st
 		row = append(row, o.CauseKey, o.CauseTitle)
 	}
 	return row
+}
+
+// hasBurn reports whether the report carries the S-U8 burn figures; reports
+// computed before they existed (or without data) render without them.
+func hasBurn(r *models.SLAReport) bool { return r.Budget.BurnRate != nil || len(r.BurnDown) > 0 }
+
+func optFloat(v *float64, decimals int) string {
+	if v == nil {
+		return ""
+	}
+	return strconv.FormatFloat(*v, 'f', decimals, 64)
+}
+
+// burnRate renders a burn rate as "1.39x" ("-" without data).
+func burnRate(v *float64) string {
+	if v == nil {
+		return "-"
+	}
+	return strconv.FormatFloat(*v, 'f', 2, 64) + "x"
 }
 
 func metString(m *bool) string {
@@ -312,12 +348,24 @@ func WritePDF(w io.Writer, r *models.SLAReport) error {
 
 	// Error budget.
 	section(pdf, tr, "Error budget")
-	kv(pdf, tr, [][2]string{
+	budgetRows := [][2]string{
 		{"Allowed downtime (full period)", humanDuration(r.Budget.AllowedFullPeriodSeconds)},
 		{"Allowed so far (eligible time)", humanDuration(r.Budget.AllowedSeconds)},
 		{"Consumed", humanDuration(r.Budget.ConsumedSeconds)},
 		{"Remaining", budgetRemaining(r.Budget)},
-	})
+	}
+	// S-U8 rows only on reports computed since burn existed, so an older
+	// issued report prints exactly as it did.
+	if hasBurn(r) {
+		budgetRows = append(budgetRows, [2]string{"Burn rate (1x = on budget)", burnRate(r.Budget.BurnRate)})
+		if r.Budget.ProjectedExhaustionAt != nil {
+			budgetRows = append(budgetRows, [2]string{"Projected exhaustion at this pace", r.Budget.ProjectedExhaustionAt.In(loc).Format(dateFmt)})
+		}
+		if n := len(r.BurnDown); n > 0 && r.BurnDown[n-1].RemainingPct != nil {
+			budgetRows = append(budgetRows, [2]string{"Full-period budget left", fmt.Sprintf("%.1f%%", *r.BurnDown[n-1].RemainingPct)})
+		}
+	}
+	kv(pdf, tr, budgetRows)
 
 	// Daily strip.
 	if len(r.Daily) > 0 {
