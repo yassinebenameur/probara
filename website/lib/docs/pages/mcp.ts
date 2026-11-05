@@ -155,7 +155,7 @@ export const MCP_PAGE: DocPage = {
             ["Structure", "group members, `get_dependency_graph`, dependency add/remove, `suggest_dependencies` (local AI)"],
             ["Host agents", "`list_metric_series`, `query_metrics`, collector config and install/uninstall scripts, `get_push_info`"],
             ["Import / export", "`export_monitors`, `preview_monitor_import` (send the file's text), `import_monitors`"],
-            ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `bulk_acknowledge_alerts`, `bulk_resolve_alerts`, `label_alert_triage`, `wait_for_alert_events`"],
+            ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `bulk_acknowledge_alerts`, `bulk_resolve_alerts`, `unacknowledge_alert`, `bulk_unacknowledge_alerts`, `snooze_alert`, `unsnooze_alert`, `label_alert_triage`, `wait_for_alert_events`"],
             ["Incidents", "create, update, state transitions, timeline entries, alert/monitor links, status-page publishing, AI analysis request/read/label"],
             ["Operations", "maintenance windows, private locations and their deploy info, `get_mesh`, `get_mesh_edge_history`, `probe_mesh_edge`"],
             ["Kubernetes discovery", "`list_discovery_integrations`, `create_discovery_integration`, `update_discovery_integration` (rename, location, namespace add/remove; destructive), `get_discovery_namespaces`, `get_discovery_coverage`, `approve_discovery_suggestion`, monitor link/unlink, collector token rotation"],

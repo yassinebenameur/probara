@@ -43,7 +43,7 @@ func TestShouldSendNotification(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := shouldSendNotification(test.eventType, test.state, test.now, interval); got != test.expected {
+			if got := shouldSendNotification(test.eventType, test.state, test.now, interval, DispatchGate{}, false); got != test.expected {
 				t.Fatalf("expected %v, got %v", test.expected, got)
 			}
 		})

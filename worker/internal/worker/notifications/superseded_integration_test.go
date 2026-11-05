@@ -129,3 +129,68 @@ func TestHandle_ResolveWaitsForInFlightTrigger(t *testing.T) {
 		t.Fatalf("delivery order = %v, want [created resolved]", raceStub.order)
 	}
 }
+
+// A tier published with StopOnAck and delivered after the operator
+// acknowledged is dropped under the row lock; so is anything on a snoozed
+// alert. Runs the real query against a migrated schema.
+func TestHandle_StopOnAckDropsAfterAck(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "stop-on-ack")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	channelID, alertID := uuid.New(), uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
+		VALUES ($1, $2, 'pager', $3, '{}'::jsonb, TRUE, NOW(), NOW())
+	`, channelID, tenantID, raceStubType); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+			triggered_at, acknowledged_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, 'availability', 'acknowledged', NOW(), NOW(), 3, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
+		t.Fatalf("insert alert: %v", err)
+	}
+
+	raceStub.mu.Lock()
+	raceStub.order = nil
+	raceStub.mu.Unlock()
+	worker := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
+	deliver := func(eventType string, stopOnAck bool) {
+		t.Helper()
+		raw, _ := json.Marshal(notifications.DispatchEnvelope{
+			V: 1, ChannelID: channelID.String(), ChannelType: raceStubType,
+			AlertID: alertID.String(), EventType: eventType, StopOnAck: stopOnAck,
+			Event: notifications.AlertEvent{Type: eventType},
+		})
+		if err := worker.handle(ctx, &queue.Message{Data: raw}); err != nil {
+			t.Fatalf("handle %s: %v", eventType, err)
+		}
+	}
+	sends := func() int {
+		raceStub.mu.Lock()
+		defer raceStub.mu.Unlock()
+		return len(raceStub.order)
+	}
+
+	deliver("reminder", true)
+	if n := sends(); n != 0 {
+		t.Fatalf("StopOnAck reminder on an acknowledged alert was delivered (%d sends)", n)
+	}
+	deliver("reminder", false) // a notify_after_ack route keeps hearing
+	if n := sends(); n != 1 {
+		t.Fatalf("notify_after_ack reminder: %d sends, want 1", n)
+	}
+
+	if _, err := dbClient.ExecContext(ctx,
+		`UPDATE alerts SET snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, alertID); err != nil {
+		t.Fatalf("snooze: %v", err)
+	}
+	deliver("reminder", false)
+	if n := sends(); n != 1 {
+		t.Fatalf("reminder on a snoozed alert was delivered (%d sends)", n)
+	}
+}

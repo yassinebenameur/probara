@@ -594,10 +594,10 @@ func (r *PostgresRepository) ReplaceMonitorChannels(ctx context.Context, tenantI
 			return fmt.Errorf("invalid channel_id %q: %w", c.ChannelID, err)
 		}
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO monitor_channels (monitor_id, channel_id, delay_seconds)
-			SELECT $1, $2, $3
+			INSERT INTO monitor_channels (monitor_id, channel_id, delay_seconds, notify_after_ack)
+			SELECT $1, $2, $3, $5
 			WHERE EXISTS (SELECT 1 FROM alert_channels WHERE id = $2 AND tenant_id = $4)
-		`, monitorID, channelID, c.DelaySeconds, tenantID)
+		`, monitorID, channelID, c.DelaySeconds, tenantID, c.NotifyAfterAck)
 		if err != nil {
 			return fmt.Errorf("failed to insert monitor channel: %w", err)
 		}
@@ -633,7 +633,7 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 	}
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT mc.monitor_id, mc.channel_id, ac.name, ac.type, mc.delay_seconds
+		SELECT mc.monitor_id, mc.channel_id, ac.name, ac.type, mc.delay_seconds, mc.notify_after_ack
 		FROM monitor_channels mc
 		JOIN alert_channels ac ON ac.id = mc.channel_id
 		WHERE mc.monitor_id = ANY($1)
@@ -650,14 +650,16 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 		var channelName string
 		var channelType string
 		var delaySeconds int
-		if err := rows.Scan(&monitorID, &channelID, &channelName, &channelType, &delaySeconds); err != nil {
+		var notifyAfterAck bool
+		if err := rows.Scan(&monitorID, &channelID, &channelName, &channelType, &delaySeconds, &notifyAfterAck); err != nil {
 			return nil, fmt.Errorf("failed to scan monitor channel: %w", err)
 		}
 		result[monitorID] = append(result[monitorID], models.MonitorChannelAssignment{
-			ChannelID:    channelID.String(),
-			DelaySeconds: delaySeconds,
-			ChannelName:  channelName,
-			ChannelType:  channelType,
+			ChannelID:      channelID.String(),
+			DelaySeconds:   delaySeconds,
+			ChannelName:    channelName,
+			ChannelType:    channelType,
+			NotifyAfterAck: notifyAfterAck,
 		})
 	}
 	if err := rows.Err(); err != nil {

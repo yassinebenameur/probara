@@ -73,6 +73,22 @@ type AlertWithDetails struct {
 	// Triage is the alert's automatic AI triage (read-only). Absent when
 	// the alert has no triage row, and always absent on SSE events.
 	Triage *AlertTriage `json:"triage,omitempty"`
+	// AcknowledgedByUserID / AcknowledgedVia record who acknowledged the
+	// alert and through which surface (ui, api, mcp). Cleared on unack.
+	AcknowledgedByUserID *uuid.UUID `json:"acknowledged_by_user_id,omitempty"`
+	AcknowledgedVia      *string    `json:"acknowledged_via,omitempty"`
+	// UnacknowledgedAt is the last unacknowledge; escalation tiers and
+	// reminders count from it.
+	UnacknowledgedAt *time.Time `json:"unacknowledged_at,omitempty"`
+	// SnoozedUntil mutes every tier, reminder and suspected-cause follow-up
+	// while in the future; a past value is when the last snooze ended.
+	SnoozedUntil    *time.Time `json:"snoozed_until,omitempty"`
+	SnoozedByUserID *uuid.UUID `json:"snoozed_by_user_id,omitempty"`
+	// MutedReason says why this open alert is not paging right now:
+	// "snoozed", or "acknowledged" (the tenant stops paging on ack; routes
+	// marked notify_after_ack still hear). Computed from the predicates the
+	// alerter dispatches with (alertrouting.MutedReasonExpr).
+	MutedReason *string `json:"muted_reason,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts

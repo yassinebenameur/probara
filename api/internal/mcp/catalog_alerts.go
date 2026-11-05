@@ -55,7 +55,7 @@ func alertTools() []spec {
 		{
 			Name:  "acknowledge_alert",
 			Title: "Acknowledge alert",
-			Description: "Acknowledge an active alert: stops reminders and tells paging channels (PagerDuty, " +
+			Description: "Acknowledge an active alert: stops its reminders and unfired escalation tiers (unless the workspace turned that off) and tells paging channels (PagerDuty, " +
 				"Opsgenie) to stop escalating. Only active alerts can be acknowledged.",
 			Method: http.MethodPost, Route: "/alerts/{id}/acknowledge",
 			PathDocs: map[string]string{"id": "Alert ID."},

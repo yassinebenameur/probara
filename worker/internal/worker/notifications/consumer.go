@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -208,8 +209,9 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// A retried trigger/reminder/ack must never land after the resolve:
 		// PagerDuty and Opsgenie accept a resolve for an alert they do not
 		// have yet as a no-op, so a late trigger would open an incident that
-		// nothing ever closes.
-		entry.Info("Alert resolved since publish; dropping superseded event")
+		// nothing ever closes. A tier or reminder held by an ack (StopOnAck)
+		// or a snooze since publish is dropped the same way.
+		entry.WithField("alert_status", alertStatus).Info("Alert resolved, acknowledged or snoozed since publish; dropping superseded event")
 		return nil
 	}
 
@@ -298,12 +300,17 @@ func ackOvertaken(m plugin.Manifest, eventType, alertStatus string) bool {
 
 // eventSuperseded reports whether envelope describes an alert state the
 // alert has since left: any non-resolve event for an alert that is now
-// resolved (or deleted). JetStream redelivers failed messages on a backoff,
-// so a created/reminder/acknowledged/suspected_cause message can outlive the
-// resolve the alerter published after it; delivering it then would reopen the alert on
-// the provider side. Resolves always go through (tx is nil for them). For
-// every other event it reads the status FOR SHARE inside tx, and the caller
-// keeps tx open until the send returns.
+// resolved (or deleted), an acknowledgement of an alert unacknowledged
+// since, or an event the ack/snooze mute now holds
+// (alertrouting.MuteHolds — a tier or reminder with StopOnAck on an alert
+// acknowledged since publish, anything but an ack on a snoozed one).
+// JetStream redelivers failed messages on a backoff, so a
+// created/reminder/acknowledged/suspected_cause message can outlive the
+// resolve the alerter published after it; delivering it then would reopen
+// the alert on the provider side. Resolves always go through (tx is nil for
+// them). For every other event it reads the row FOR SHARE inside tx, and the
+// caller keeps tx open until the send returns, so an ack, snooze or resolve
+// committed after this check waits for the send.
 func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded bool, status string, err error) {
 	if envelope.EventType == "resolved" {
 		return false, "", nil
@@ -312,14 +319,24 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 	if err != nil {
 		return false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
 	}
-	err = tx.QueryRowContext(ctx, `SELECT status FROM alerts WHERE id = $1 FOR SHARE`, alertID).Scan(&status)
+	var snoozed bool
+	err = tx.QueryRowContext(ctx, `SELECT al.status, `+alertrouting.SnoozedPredicate("al")+`
+		FROM alerts al WHERE al.id = $1 FOR SHARE`, alertID).Scan(&status, &snoozed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return true, "", nil
 	}
 	if err != nil {
 		return false, "", err
 	}
-	return status == "resolved", status, nil
+	if status == "resolved" {
+		return true, status, nil
+	}
+	if envelope.EventType == "acknowledged" && status != "acknowledged" {
+		// Unacknowledged since publish: telling the provider to stop
+		// escalating would now be wrong.
+		return true, status, nil
+	}
+	return alertrouting.MuteHolds(envelope.EventType, status == "acknowledged", snoozed, envelope.StopOnAck), status, nil
 }
 
 type loadedChannel struct {

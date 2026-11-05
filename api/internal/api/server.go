@@ -489,6 +489,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				// A corrected label also stops the alert's pending
 				// suspected-cause follow-ups.
 				r.Post("/{id}/triage/label", aiLabelHdlrs.LabelAlertTriage)
+				registerPagingAlertRoutes(r, alertHandlers.WithPaging(alertSvc))
 			})
 
 			// Incidents

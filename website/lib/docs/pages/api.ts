@@ -528,7 +528,7 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET /api/v1/alerts`",
-              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`, and `q`, a case-insensitive search of the subject: the monitor name or either location of a mesh alert, or an exact alert ID, up to 200 characters), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`, and `q`, a case-insensitive search of the subject: the monitor name or either location of a mesh alert, or an exact alert ID, up to 200 characters), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies; `muted_reason` (`snoozed` or `acknowledged`) when an acknowledgement or snooze stops the paging, with `acknowledged_by_user_id`, `acknowledged_via`, `unacknowledged_at` and `snoozed_until`; and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
             ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
@@ -555,6 +555,22 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/alerts/{id}/triage/label`",
               "Write; confirm or correct a ready triage as an [AI label](#ai-labels)",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/unacknowledge`",
+              "Write; return an acknowledged alert to `active`. Paging resumes with its clocks counted from now ([acknowledgement](/docs/alerting/#model)); 404 when the alert is not acknowledged",
+            ],
+            [
+              "`POST /api/v1/alerts/bulk/unacknowledge`",
+              "Write; unacknowledge many alerts, same body and response shape as bulk acknowledge (reason `not_found`, `not_acknowledged` or `already_resolved`), one `alert.unacknowledge` audit event per alert",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/snooze`",
+              "Write; mute an open alert's tiers, reminders and suspected-cause follow-ups, body `{\"minutes\": n}` or `{\"until\": \"RFC 3339\"}` (1 minute to 7 days; 400 outside). Replaces a running snooze; opens no maintenance window",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/unsnooze`",
+              "Write; end a running snooze now (404 when not snoozed)",
             ],
             [
               "`GET /api/v1/alert-channels`",

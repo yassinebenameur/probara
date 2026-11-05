@@ -150,3 +150,33 @@ func insertTestChannel(ctx context.Context, t *testing.T, dbClient *shareddb.Cli
 	}
 	return id
 }
+
+// Stop-on-ack is on by default and round-trips, as does a route's
+// notify_after_ack opt-out.
+func TestAckStopsNotificationsSettings(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "ns-ack")
+	channelID := insertTestChannel(ctx, t, dbClient, tenantID, "status-room")
+	svc := NewService(dbClient)
+
+	settings, err := svc.Get(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !settings.AckStopsNotifications {
+		t.Fatal("ack_stops_notifications must default to true")
+	}
+	settings, err = svc.Update(ctx, tenantID, UpdateRequest{
+		AckStopsNotifications: boolPtr(false),
+		DefaultChannels:       []ChannelAssignment{{ChannelID: channelID, NotifyAfterAck: true}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if settings.AckStopsNotifications || len(settings.DefaultChannels) != 1 || !settings.DefaultChannels[0].NotifyAfterAck {
+		t.Fatalf("unexpected settings: %+v", settings)
+	}
+}

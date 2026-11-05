@@ -59,20 +59,21 @@ const bulkTargetCTE = `
 		FOR UPDATE OF al
 	)`
 
-// BulkAcknowledge acknowledges every listed alert that is still active. The
-// others are reported in Failed (not found, already acknowledged or already
-// resolved); they never fail the request. actor is accepted but not
-// persisted yet.
+// BulkAcknowledge acknowledges every listed alert that is still active,
+// recording actor as AcknowledgeAlert does. The others are reported in
+// Failed (not found, already acknowledged or already resolved); they never
+// fail the request.
 func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID, actor Actor) (*BulkResult, error) {
 	ids := dedupeIDs(alertIDs)
 	now := time.Now()
 	changed, err := collectIDs(s.db.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
-		SET status = 'acknowledged', acknowledged_at = $4, updated_at = $4
+		SET status = 'acknowledged', acknowledged_at = $4, updated_at = $4,
+			acknowledged_by_user_id = $5, acknowledged_via = $6
 		FROM target
 		WHERE a.id = target.id
 		RETURNING a.id
-	`, pq.Array(uuidStrings(ids)), tenantID, pq.Array([]string{"active"}), now))
+	`, pq.Array(uuidStrings(ids)), tenantID, pq.Array([]string{"active"}), now, actor.UserID, nullableVia(actor)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to bulk acknowledge alerts: %w", err)
 	}
@@ -97,7 +98,8 @@ func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs 
 
 	changed, err := collectIDs(tx.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
-		SET status = 'resolved', resolved_at = $4, updated_at = $4
+		SET status = 'resolved', resolved_at = $4, updated_at = $4,
+			snoozed_until = LEAST(a.snoozed_until, $4)
 		FROM target
 		WHERE a.id = target.id
 		RETURNING a.id

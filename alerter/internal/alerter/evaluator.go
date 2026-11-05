@@ -745,7 +745,8 @@ var errAlertAlreadyResolved = errors.New("alert already resolved")
 func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time) (time.Time, error) {
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1
+		SET status = 'resolved', resolved_at = $1, updated_at = $1,
+			snoozed_until = LEAST(snoozed_until, $1)
 		WHERE id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING resolved_at
 	`
@@ -1113,11 +1114,13 @@ func (a *Alerter) dispatchNotifications(
 		}
 
 		state := getNotificationState(states, alert.ID, channel.ID)
-		if !shouldSendNotification(eventType, state, now, reminderInterval) {
+		// Legacy policy channels carry no per-route notify_after_ack and
+		// the legacy loop reads no tenant flag: the gate stays open here.
+		if !shouldSendNotification(eventType, state, now, reminderInterval, DispatchGate{}, false) {
 			continue
 		}
 
-		sent, err := a.deliverNotification(ctx, eventType, binding, alert, groupInfo, channel, now, reminderInterval)
+		sent, err := a.deliverNotification(ctx, eventType, binding, alert, groupInfo, channel, now, reminderInterval, false)
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{
 				"alert_id":   alert.ID,
@@ -1141,17 +1144,22 @@ func (a *Alerter) dispatchNotifications(
 }
 
 // shouldSendNotification is the in-memory pre-filter mirroring the claim
-// predicates in claimNotificationTx. Its created/reminder cases are dueEvent's
-// rule (dispatch_due.go) minus the escalation delay, which the legacy path
-// does not apply. Keep all three in step.
-func shouldSendNotification(eventType string, state *notificationState, now time.Time, reminderInterval time.Duration) bool {
+// predicates in claimNotificationTx and the ack/snooze gate in
+// claimStatusAllows. Its created/reminder cases are dueEvent's rule
+// (dispatch_due.go) minus the escalation delay, which the legacy path does
+// not apply. stopOnAck is the route's DispatchGate.stopOnAck. Keep all of
+// them in step.
+func shouldSendNotification(eventType string, state *notificationState, now time.Time, reminderInterval time.Duration, gate DispatchGate, stopOnAck bool) bool {
+	if gateHolds(eventType, gate.Acknowledged, gate.Snoozed, stopOnAck) {
+		return false
+	}
 	switch eventType {
 	case "created":
 		return state == nil
 	case "resolved":
 		return state == nil || state.LastEventType != "resolved"
 	case "reminder":
-		return reminderDue(state, now, reminderInterval)
+		return reminderDue(state, now, reminderInterval, gate.ResumedAt)
 	case "acknowledged":
 		return state != nil && state.LastEventType != "resolved" && state.AcknowledgedSentAt == nil
 	case "suspected_cause":
@@ -1196,6 +1204,7 @@ func (a *Alerter) sendChannelNotification(
 			EventType:   eventType,
 			Event:       event,
 			DeliveryKey: deliveryKey,
+			StopOnAck:   stopOnAckFrom(ctx),
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
 		messageID := envelope.IdempotencyKey()

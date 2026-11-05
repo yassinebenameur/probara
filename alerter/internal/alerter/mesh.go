@@ -194,11 +194,12 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 }
 
 // resolveTenantDefaultChannels returns the tenant's default channel routing —
-// the only routing a monitor-less mesh alert can use — from the shared
+// the only routing a monitor-less (mesh edge, offline location) alert can
+// use — from the shared
 // alertrouting.TenantTargetsSQL definition.
 func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uuid.UUID) ([]channelTarget, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, x.delay_seconds
+		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, x.delay_seconds, x.notify_after_ack
 		FROM (`+alertrouting.TenantTargetsSQL()+`) x
 		JOIN alert_channels ac ON ac.id = x.channel_id
 		ORDER BY x.pos, ac.id
@@ -213,7 +214,7 @@ func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uui
 		var t channelTarget
 		var configBytes []byte
 		var delaySeconds int
-		if err := rows.Scan(&t.channel.ID, &t.channel.Name, &t.channel.Type, &configBytes, &t.channel.IsActive, &delaySeconds); err != nil {
+		if err := rows.Scan(&t.channel.ID, &t.channel.Name, &t.channel.Type, &configBytes, &t.channel.IsActive, &delaySeconds, &t.notifyAfterAck); err != nil {
 			return nil, fmt.Errorf("scan tenant default channel: %w", err)
 		}
 		t.channel.Config = configBytes
@@ -224,13 +225,16 @@ func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uui
 }
 
 // dispatchOpenMeshAlerts fires due escalation tiers and reminders for open
-// mesh alerts, mirroring dispatchOpenAlerts' delay/reminder contract.
+// mesh alerts, mirroring dispatchOpenAlerts' delay/reminder contract,
+// including its ack and snooze gate.
 func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.source_location_id, al.target_location_id,
 			COALESCE(sl.name, 'unknown'), COALESCE(tl.name, 'unknown'),
 			al.triggered_at, al.failure_count, al.last_error,
-			te.alert_reminder_seconds
+			te.alert_reminder_seconds,
+			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
+			al.status, `+alertrouting.AckStopsExpr("te")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
 		FROM alerts al
 		JOIN tenants te ON te.id = al.tenant_id
 		LEFT JOIN locations sl ON sl.id = al.source_location_id
@@ -241,6 +245,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 		WHERE al.kind = 'mesh_edge'
 		  AND al.status IN ('active', 'acknowledged')
 		  AND ms.current_state = 'down'
+		  AND NOT `+alertrouting.SnoozedPredicate("al")+`
 	`)
 	if err != nil {
 		return fmt.Errorf("query open mesh alerts: %w", err)
@@ -250,15 +255,22 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	type openMeshAlert struct {
 		edge            meshEdgeSubject
 		reminderSeconds int
+		eligibleSince   time.Time
+		gate            DispatchGate
 	}
 	var open []openMeshAlert
 	for rows.Next() {
 		var oa openMeshAlert
+		var status string
+		var resumedAt sql.NullTime
 		if err := rows.Scan(&oa.edge.alertID, &oa.edge.tenantID, &oa.edge.sourceID, &oa.edge.targetID,
 			&oa.edge.sourceName, &oa.edge.targetName, &oa.edge.triggeredAt, &oa.edge.failCount,
-			&oa.edge.lastError, &oa.reminderSeconds); err != nil {
+			&oa.edge.lastError, &oa.reminderSeconds, &oa.eligibleSince,
+			&status, &oa.gate.AckStops, &resumedAt); err != nil {
 			return fmt.Errorf("scan open mesh alert: %w", err)
 		}
+		oa.gate.Acknowledged = status == "acknowledged"
+		oa.gate.ResumedAt = resumedAt.Time
 		open = append(open, oa)
 	}
 	if err := rows.Err(); err != nil {
@@ -280,13 +292,13 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 
 		record := oa.edge.record(oa.edge.triggeredAt)
 		binding := oa.edge.binding()
-		alertAge := now.Sub(oa.edge.triggeredAt)
+		alertAge := now.Sub(oa.eligibleSince)
 		reminderInterval := time.Duration(oa.reminderSeconds) * time.Second
 
 		for _, target := range targets {
 			state := getNotificationState(states, oa.edge.alertID, target.channel.ID)
-			if eventType, ok := dueEvent(now, state, target, alertAge, reminderInterval, DispatchGate{}); ok {
-				a.fireChannel(ctx, eventType, binding, &record, target.channel, now, reminderInterval)
+			if eventType, ok := dueEvent(now, state, target, alertAge, reminderInterval, oa.gate); ok {
+				a.fireChannel(ctx, eventType, binding, &record, target.channel, now, reminderInterval, oa.gate.stopOnAck(target))
 			}
 		}
 	}
