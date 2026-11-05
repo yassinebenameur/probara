@@ -152,6 +152,7 @@ func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessa
 		}
 
 		headers := make(map[string]string, len(step.Request.Headers))
+		secretHeaderNames := secretReferencingHeaders(step.Request.Headers, config.SecretVariables)
 		for k, v := range step.Request.Headers {
 			resolved, err := interpolateTemplate(v, vars)
 			if err != nil {
@@ -235,6 +236,7 @@ func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessa
 			if maxRedirects >= 0 && len(via) > maxRedirects {
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
+			stripCredentialsOnRedirect(req, via, secretHeaderNames)
 			return nil
 		}
 
@@ -362,6 +364,24 @@ func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessa
 		ErrorMessage: errPtr,
 		MetricsData:  metricsData,
 	}
+}
+
+// secretReferencingHeaders names the step headers whose value references a
+// secret variable, so a redirect off the origin drops them.
+func secretReferencingHeaders(headers, secretVariables map[string]string) []string {
+	if len(secretVariables) == 0 {
+		return nil
+	}
+	var names []string
+	for name, value := range headers {
+		for _, match := range syntheticTemplateRegex.FindAllStringSubmatch(value, -1) {
+			if _, secret := secretVariables[strings.TrimSpace(match[1])]; secret {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	return names
 }
 
 func resolveSyntheticStepURL(baseURL *url.URL, raw string, vars map[string]string) (string, error) {

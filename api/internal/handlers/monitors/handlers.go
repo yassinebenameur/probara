@@ -292,6 +292,10 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 			errors.WriteForbiddenError(w, err.Error())
 			return
 		}
+		if stderrors.Is(err, monitorservice.ErrSecretConflict) {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
@@ -547,6 +551,10 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
 			errors.WriteForbiddenError(w, err.Error())
+			return
+		}
+		if stderrors.Is(err, monitorservice.ErrSecretConflict) {
+			errors.WriteValidationError(w, err.Error())
 			return
 		}
 		if err.Error() == "monitor not found" {

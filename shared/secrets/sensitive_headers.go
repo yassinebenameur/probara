@@ -54,6 +54,8 @@ var syntheticTemplateRef = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}`)
 //
 //   - http: a sensitive name in `headers` moves to `secret_headers`,
 //     replacing any same-named (case-insensitive) secret header.
+//   - grpc: the same for `metadata` and `secret_metadata` (gRPC metadata
+//     keys are case-insensitive too).
 //   - synthetic_api: a sensitive step header whose value is a literal (no
 //     {{ref}}) becomes a generated `secret_variables` entry, and the header
 //     value becomes the {{ref}}. A value that already references a variable
@@ -70,7 +72,9 @@ func NormalizeSensitiveHeaders(monitorType string, raw json.RawMessage) (json.Ra
 	}
 	switch monitorType {
 	case "http":
-		return normalizeHTTPHeaders(raw)
+		return moveSensitiveKeys(raw, "headers", "secret_headers")
+	case "grpc":
+		return moveSensitiveKeys(raw, "metadata", "secret_metadata")
 	case "synthetic_api":
 		return normalizeSyntheticAPIHeaders(raw)
 	default:
@@ -78,12 +82,14 @@ func NormalizeSensitiveHeaders(monitorType string, raw json.RawMessage) (json.Ra
 	}
 }
 
-func normalizeHTTPHeaders(raw json.RawMessage) (json.RawMessage, bool, error) {
+// moveSensitiveKeys moves credential-named entries of the plain map field into
+// its secret twin.
+func moveSensitiveKeys(raw json.RawMessage, plainField, secretField string) (json.RawMessage, bool, error) {
 	cfg, err := unmarshalConfigMap(raw)
 	if err != nil {
 		return nil, false, err
 	}
-	headers, ok := cfg["headers"].(map[string]any)
+	headers, ok := cfg[plainField].(map[string]any)
 	if !ok || len(headers) == 0 {
 		return raw, false, nil
 	}
@@ -100,7 +106,7 @@ func normalizeHTTPHeaders(raw json.RawMessage) (json.RawMessage, bool, error) {
 		return raw, false, nil
 	}
 
-	secretHeaders, _ := stringMap(cfg["secret_headers"])
+	secretHeaders, _ := stringMap(cfg[secretField])
 	if secretHeaders == nil {
 		secretHeaders = map[string]string{}
 	}
@@ -115,12 +121,12 @@ func normalizeHTTPHeaders(raw json.RawMessage) (json.RawMessage, bool, error) {
 		}
 	}
 	if len(headers) == 0 {
-		delete(cfg, "headers")
+		delete(cfg, plainField)
 	}
 	if len(secretHeaders) == 0 {
-		delete(cfg, "secret_headers")
+		delete(cfg, secretField)
 	} else {
-		cfg["secret_headers"] = secretHeaders
+		cfg[secretField] = secretHeaders
 	}
 	out, err := json.Marshal(cfg)
 	if err != nil {
@@ -226,4 +232,56 @@ func uniqueVariableName(base string, taken func(string) bool) string {
 			return candidate
 		}
 	}
+}
+
+// MoveSensitiveVariables moves credential-named entries of a synthetic
+// journey's plain `variables` (the IsSensitiveHeaderName rule: password,
+// token, secret, …) into `secret_variables` under the same name, so every
+// {{name}} reference keeps resolving while the value becomes encrypted,
+// masked and redacted. A name already in secret_variables keeps the secret
+// value (the one the worker already used) and the plain copy is dropped; an
+// empty plain value has nothing to protect and stays. Only the
+// cmd/admin/migrate_sensitive_headers backfill applies it, for monitors made
+// from the old login templates: on the write path a variable's name says too
+// little to silently reclassify it.
+func MoveSensitiveVariables(monitorType string, raw json.RawMessage) (json.RawMessage, bool, error) {
+	if (monitorType != "synthetic_api" && monitorType != "synthetic_browser") || len(raw) == 0 {
+		return raw, false, nil
+	}
+	cfg, err := unmarshalConfigMap(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	variables, ok := cfg["variables"].(map[string]any)
+	if !ok || len(variables) == 0 {
+		return raw, false, nil
+	}
+	secretVars, _ := stringMap(cfg["secret_variables"])
+	if secretVars == nil {
+		secretVars = map[string]string{}
+	}
+	changed := false
+	for name, value := range variables {
+		text, isString := value.(string)
+		if !isString || text == "" || !IsSensitiveHeaderName(name) {
+			continue
+		}
+		if _, exists := secretVars[name]; !exists {
+			secretVars[name] = text
+		}
+		delete(variables, name)
+		changed = true
+	}
+	if !changed {
+		return raw, false, nil
+	}
+	if len(variables) == 0 {
+		delete(cfg, "variables")
+	}
+	cfg["secret_variables"] = secretVars
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, false, fmt.Errorf("secrets: encode monitor config: %w", err)
+	}
+	return out, true, nil
 }

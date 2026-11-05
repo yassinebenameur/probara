@@ -154,6 +154,10 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	}
 
 	var redirectsFollowed int
+	secretHeaderNames := make([]string, 0, len(config.SecretHeaders))
+	for name := range config.SecretHeaders {
+		secretHeaderNames = append(secretHeaderNames, name)
+	}
 	client := &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -164,6 +168,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
 			redirectsFollowed = len(via)
+			stripCredentialsOnRedirect(req, via, secretHeaderNames)
 			return nil
 		},
 	}

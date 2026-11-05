@@ -69,6 +69,8 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 	cleanID := insert("http", `{"url":"https://x.test","method":"GET","headers":{"Accept":"*/*"}}`, false)
 	synthID := insert("synthetic_api", `{"steps":[{"id":"login","request":{"method":"GET","url":"https://x.test","headers":{"X-Api-Key":"literal-key"}}}]}`, false)
 	deletedID := insert("http", `{"url":"https://x.test","method":"GET","headers":{"Cookie":"sid=1"}}`, true)
+	browserID := insert("synthetic_browser", `{"start_url":"https://x.test/login","variables":{"username":"u","password":"change-me"},"steps":[{"id":"p","action":"fill","selector":"#p","value":"{{password}}"}]}`, false)
+	grpcID := insert("grpc", `{"host":"g.test","metadata":{"authorization":"Bearer g","x-tenant":"t"}}`, false)
 	wsID := insert("websocket", `{"url":"wss://x.test","headers":{"Authorization":"ws"}}`, false)
 
 	var logs []string
@@ -80,8 +82,8 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
-	if dry.Processed != 3 || dry.Updated != 2 || dry.Skipped != 1 || dry.Errored != 0 {
-		t.Fatalf("dry run stats = %+v, want processed 3 / updated 2 / skipped 1", dry)
+	if dry.Processed != 5 || dry.Updated != 4 || dry.Skipped != 1 || dry.Errored != 0 {
+		t.Fatalf("dry run stats = %+v, want processed 5 / updated 4 / skipped 1", dry)
 	}
 	if h := readConfig(httpID)["headers"].(map[string]any); h["Authorization"] != "Bearer legacy" {
 		t.Fatalf("dry run wrote the http monitor: %v", h)
@@ -91,7 +93,7 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if applied.Updated != 2 || applied.Errored != 0 {
+	if applied.Updated != 4 || applied.Errored != 0 {
 		t.Fatalf("apply stats = %+v", applied)
 	}
 
@@ -115,6 +117,29 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 		t.Fatalf("secret variable = %q (plain %q, err %v)", varCT, plain, err)
 	}
 
+	// The old login template's plain password becomes a secret variable of
+	// the same name, so {{password}} still resolves.
+	browserCfg := readConfig(browserID)
+	if vars := browserCfg["variables"].(map[string]any); len(vars) != 1 || vars["username"] != "u" {
+		t.Fatalf("browser variables = %v, want only username", vars)
+	}
+	pwCT := browserCfg["secret_variables"].(map[string]any)["password"].(string)
+	if plain, err := enc.Decrypt(pwCT); !secrets.LooksLikeEnvelope(pwCT) || err != nil || plain != "change-me" {
+		t.Fatalf("secret password = %q (plain %q, err %v)", pwCT, plain, err)
+	}
+	if browserCfg["steps"].([]any)[0].(map[string]any)["value"] != "{{password}}" {
+		t.Fatal("the {{password}} reference changed")
+	}
+
+	grpcCfg := readConfig(grpcID)
+	mdCT := grpcCfg["secret_metadata"].(map[string]any)["authorization"].(string)
+	if plain, err := enc.Decrypt(mdCT); err != nil || plain != "Bearer g" {
+		t.Fatalf("secret metadata = %q (plain %q, err %v)", mdCT, plain, err)
+	}
+	if md := grpcCfg["metadata"].(map[string]any); len(md) != 1 || md["x-tenant"] != "t" {
+		t.Fatalf("grpc metadata = %v, want only x-tenant", md)
+	}
+
 	if _, moved := readConfig(cleanID)["secret_headers"]; moved {
 		t.Fatal("a monitor without sensitive headers was rewritten")
 	}
@@ -129,12 +154,12 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
-	if again.Updated != 0 || again.Skipped != 3 {
+	if again.Updated != 0 || again.Skipped != 5 {
 		t.Fatalf("second apply stats = %+v, want nothing to do", again)
 	}
 
 	for _, line := range logs {
-		if strings.Contains(line, "legacy") || strings.Contains(line, "literal-key") {
+		if strings.Contains(line, "legacy") || strings.Contains(line, "literal-key") || strings.Contains(line, "change-me") {
 			t.Fatalf("a log line carries a secret: %q", line)
 		}
 	}

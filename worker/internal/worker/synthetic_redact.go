@@ -3,10 +3,14 @@ package worker
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"html"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 // syntheticRedactedValue replaces secret material in reported text. It is the
@@ -24,33 +28,88 @@ type secretRedactor struct {
 }
 
 // newSecretRedactor returns nil when there is nothing to redact. Besides each
-// value verbatim it matches the forms a value takes once it passes through a
-// URL (query and path escaping) or a %q-quoted message, longest first so a
-// value never leaves a fragment of a longer one behind.
+// value verbatim it matches the forms a value takes on its way into reported
+// text (secretValueForms), longest first so a value never leaves a fragment of
+// a longer one behind.
 func newSecretRedactor(secretVariables map[string]string) *secretRedactor {
 	seen := map[string]bool{}
 	var needles []string
-	add := func(s string) {
-		if s != "" && !seen[s] {
-			seen[s] = true
-			needles = append(needles, s)
-		}
-	}
 	for _, value := range secretVariables {
 		if value == "" {
 			continue
 		}
-		add(value)
-		add(url.QueryEscape(value))
-		add(url.PathEscape(value))
-		quoted := strconv.Quote(value)
-		add(quoted[1 : len(quoted)-1])
+		for _, form := range secretValueForms(value) {
+			if form != "" && !seen[form] {
+				seen[form] = true
+				needles = append(needles, form)
+			}
+		}
 	}
 	if len(needles) == 0 {
 		return nil
 	}
 	sort.SliceStable(needles, func(i, j int) bool { return len(needles[i]) > len(needles[j]) })
 	return &secretRedactor{needles: needles}
+}
+
+var percentEscape = regexp.MustCompile(`%[0-9A-F]{2}`)
+
+// secretValueForms lists the spellings of one value worth matching, a bounded
+// set (at most ~20, deduplicated by the caller): verbatim; URL query and path
+// escaping, spaces as %20 with punctuation left raw (how Chromium writes a
+// URL), each percent-encoded form again with lowercase hex; Go %q quoting;
+// JSON string escaping as Go writes it (with and without HTML escaping), with
+// every non-ASCII rune as \uXXXX, and each with "/" as "\/"; HTML escaping
+// with numeric and named quote entities.
+func secretValueForms(value string) []string {
+	forms := []string{value}
+	percent := []string{url.QueryEscape(value), url.PathEscape(value), strings.ReplaceAll(value, " ", "%20")}
+	for _, form := range percent {
+		forms = append(forms, form, percentEscape.ReplaceAllStringFunc(form, strings.ToLower))
+	}
+	quoted := strconv.Quote(value)
+	forms = append(forms, quoted[1:len(quoted)-1])
+
+	jsonForms := []string{jsonStringBody(value, true), jsonStringBody(value, false), asciiJSONStringBody(value)}
+	for _, form := range jsonForms {
+		forms = append(forms, form, strings.ReplaceAll(form, "/", `\/`))
+	}
+
+	escaped := html.EscapeString(value)
+	forms = append(forms, escaped, strings.NewReplacer("&#34;", "&quot;", "&#39;", "&#x27;").Replace(escaped))
+	return forms
+}
+
+// jsonStringBody is value encoded as a JSON string by encoding/json, without
+// the surrounding quotes.
+func jsonStringBody(value string, escapeHTML bool) string {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(escapeHTML)
+	if err := encoder.Encode(value); err != nil {
+		return ""
+	}
+	out := strings.TrimSuffix(buf.String(), "\n")
+	return out[1 : len(out)-1]
+}
+
+// asciiJSONStringBody is value as an ASCII-only JSON string (the form
+// Python's json.dumps and many loggers write): non-ASCII runes as \uXXXX,
+// surrogate pairs above the BMP.
+func asciiJSONStringBody(value string) string {
+	var b strings.Builder
+	for _, r := range jsonStringBody(value, false) {
+		switch {
+		case r < 0x80:
+			b.WriteRune(r)
+		case r > 0xFFFF:
+			hi, lo := utf16.EncodeRune(r)
+			fmt.Fprintf(&b, "\\u%04x\\u%04x", hi, lo)
+		default:
+			fmt.Fprintf(&b, "\\u%04x", r)
+		}
+	}
+	return b.String()
 }
 
 func (r *secretRedactor) redact(text string) string {

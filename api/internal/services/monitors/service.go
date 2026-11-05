@@ -77,6 +77,9 @@ func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming
 	if err != nil {
 		return nil, fmt.Errorf("normalize sensitive headers: %w", err)
 	}
+	if err := validation.ValidateMergedSecretPairs(monitorType, merged); err != nil {
+		return nil, fmt.Errorf("%w: %v (a stored secret was kept because the request omitted it; send \"\" to clear it, or leave it out of a submitted secret map)", ErrSecretConflict, err)
+	}
 	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt config secrets: %w", err)
@@ -97,6 +100,11 @@ func (s *Service) maskSecrets(monitor *models.Monitor) {
 }
 
 var ErrMonitorTypeMismatch = errors.New("test type must match the saved monitor type")
+
+// ErrSecretConflict reports a config that is only invalid once the
+// write-only merge restored a stored secret the request left out. Handlers
+// map it to 400.
+var ErrSecretConflict = errors.New("config conflicts with stored secrets")
 
 // ErrCallMonitorForbidden refuses a SIP test-call (INVITE) monitor to anyone
 // but a tenant admin's session. Each check of such a monitor places a real,

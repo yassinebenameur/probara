@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -181,5 +182,34 @@ func TestSecretRedactor(t *testing.T) {
 	bad := r.redactResult(CheckResult{MetricsData: json.RawMessage(`{not json ab`)})
 	if bad.MetricsData != nil {
 		t.Fatalf("undecodable metrics must be dropped, got %s", bad.MetricsData)
+	}
+}
+
+// TestSecretRedactor_Encodings: a secret reaches reported text in the
+// spellings URLs, JSON and HTML give it; each one must be redacted.
+func TestSecretRedactor_Encodings(t *testing.T) {
+	const secret = `p@ss wörd/<x>&"q'😀`
+	r := newSecretRedactor(map[string]string{"pw": secret})
+	forms := map[string]string{
+		"verbatim":              secret,
+		"query escaped":         `p%40ss+w%C3%B6rd%2F%3Cx%3E%26%22q%27%F0%9F%98%80`,
+		"query lowercase hex":   `p%40ss+w%c3%b6rd%2f%3cx%3e%26%22q%27%f0%9f%98%80`,
+		"chromium %20":          `p@ss%20wörd/<x>&"q'😀`,
+		"path escaped":          url.PathEscape(secret),
+		"json (html escaped)":   `p@ss wörd/<x>&\"q'😀`,
+		"json":                  `p@ss wörd/<x>&\"q'😀`,
+		"json escaped slash":    `p@ss wörd\/<x>&\"q'😀`,
+		"json ascii":            `p@ss wörd/<x>&\"q'😀`,
+		"json ascii, \\/":       `p@ss wörd\/<x>&\"q'😀`,
+		"html numeric entities": `p@ss wörd/&lt;x&gt;&amp;&#34;q&#39;😀`,
+		"html named entities":   `p@ss wörd/&lt;x&gt;&amp;&quot;q&#x27;😀`,
+	}
+	for name, form := range forms {
+		if got := r.redact("before " + form + " after"); got != "before "+syntheticRedactedValue+" after" {
+			t.Errorf("%s: redact(%q) = %q", name, form, got)
+		}
+	}
+	if n := len(secretValueForms(secret)); n > 24 {
+		t.Fatalf("%d forms per secret, want a small bounded set", n)
 	}
 }
