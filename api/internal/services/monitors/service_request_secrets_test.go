@@ -3,6 +3,8 @@ package monitors
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -58,13 +60,12 @@ func TestHTTPRequestSecretsRoundTrip(t *testing.T) {
 		t.Fatalf("read secret_headers = %v, want masked", readSecret)
 	}
 
-	// Round-trip the masked read, adding basic auth and rotating the key.
+	// Round-trip the masked read, rotating the key.
 	repo.monitors[created.ID].Config = append(json.RawMessage(nil), repo.createdConfig...)
 	if _, err := svc.UpdateMonitor(ctx, tenantID, created.ID, &models.UpdateMonitorRequest{
 		Config: json.RawMessage(`{"url":"https://api.example.test","method":"GET",
 			"headers":{"Accept":"application/json"},
-			"secret_headers":{"Authorization":"***","X-Api-Key":"key-2"},
-			"basic_auth_username":"ops","basic_auth_password":"pw"}`),
+			"secret_headers":{"Authorization":"***","X-Api-Key":"key-2"}}`),
 	}); err != nil {
 		t.Fatalf("UpdateMonitor: %v", err)
 	}
@@ -76,6 +77,19 @@ func TestHTTPRequestSecretsRoundTrip(t *testing.T) {
 	if plain, _ := enc.Decrypt(updatedSecret["X-Api-Key"].(string)); plain != "key-2" {
 		t.Fatalf("X-Api-Key not rotated: %q", plain)
 	}
+
+	// Swap the Authorization header for basic auth: the submitted map leaves
+	// it out, so it is removed.
+	repo.monitors[created.ID].Config = append(json.RawMessage(nil), repo.lastUpdateConfig...)
+	if _, err := svc.UpdateMonitor(ctx, tenantID, created.ID, &models.UpdateMonitorRequest{
+		Config: json.RawMessage(`{"url":"https://api.example.test","method":"GET",
+			"headers":{"Accept":"application/json"},
+			"secret_headers":{"X-Api-Key":"***"},
+			"basic_auth_username":"ops","basic_auth_password":"pw"}`),
+	}); err != nil {
+		t.Fatalf("UpdateMonitor (basic auth): %v", err)
+	}
+	updated = decodeConfig(t, repo.lastUpdateConfig)
 	pwCT, _ := updated["basic_auth_password"].(string)
 	if plain, err := enc.Decrypt(pwCT); !secrets.LooksLikeEnvelope(pwCT) || err != nil || plain != "pw" {
 		t.Fatalf("basic_auth_password stored as %q (plain %q, err %v)", pwCT, plain, err)
@@ -93,8 +107,8 @@ func TestHTTPRequestSecretsRoundTrip(t *testing.T) {
 	}
 	legacy := decodeConfig(t, repo.lastUpdateConfig)
 	legacySecret, _ := legacy["secret_headers"].(map[string]any)
-	if len(legacySecret) != 3 {
-		t.Fatalf("secret_headers after legacy update = %v, want Authorization, X-Api-Key and X-Auth-Token", legacySecret)
+	if len(legacySecret) != 2 || legacySecret["X-Api-Key"] == nil || legacySecret["X-Auth-Token"] == nil {
+		t.Fatalf("secret_headers after legacy update = %v, want X-Api-Key and X-Auth-Token", legacySecret)
 	}
 	if _, plainLeft := legacy["headers"]; plainLeft {
 		t.Fatalf("plain headers should be empty after the move: %v", legacy["headers"])
@@ -145,5 +159,52 @@ func TestGRPCCredentialMetadataIsEncryptedOnWrite(t *testing.T) {
 	}
 	if read := decodeConfig(t, created.Config)["secret_metadata"].(map[string]any); read["authorization"] != secrets.MaskedSecret {
 		t.Fatalf("read secret_metadata = %v, want masked", read)
+	}
+}
+
+// TestUpdateMonitor_RefusesConflictWithKeptSecret: validation sees only the
+// request, where an omitted secret_headers reads as absent; the merge then
+// restores a stored Authorization header that basic auth would silently
+// override. The service re-checks the merged config and refuses it.
+func TestUpdateMonitor_RefusesConflictWithKeptSecret(t *testing.T) {
+	enc := testEncryptor(t)
+	repo := &copyingRepo{MockRepository: NewMockRepository()}
+	svc := NewService(repo)
+	svc.ConfigureEncryption(enc)
+	ctx := context.Background()
+	tenantID := uuid.New()
+
+	created, err := svc.CreateMonitor(ctx, tenantID, &models.CreateMonitorRequest{
+		Name: "api", Type: models.MonitorTypeHTTP,
+		Config:          json.RawMessage(`{"url":"https://x.test","method":"GET","secret_headers":{"Authorization":"Bearer one"}}`),
+		IntervalSeconds: 60, TimeoutSeconds: 10,
+	})
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	repo.monitors[created.ID].Config = append(json.RawMessage(nil), repo.createdConfig...)
+
+	_, err = svc.UpdateMonitor(ctx, tenantID, created.ID, &models.UpdateMonitorRequest{
+		Config: json.RawMessage(`{"url":"https://x.test","method":"GET","basic_auth_username":"ops","basic_auth_password":"pw"}`),
+	})
+	if !errors.Is(err, ErrSecretConflict) || !strings.Contains(err.Error(), "Authorization header") {
+		t.Fatalf("err = %v, want ErrSecretConflict naming the Authorization header", err)
+	}
+
+	// The same for grpc: a plain metadata key beside a kept secret one.
+	grpcMonitor, err := svc.CreateMonitor(ctx, tenantID, &models.CreateMonitorRequest{
+		Name: "grpc", Type: models.MonitorTypeGRPC,
+		Config:          json.RawMessage(`{"host":"g.test","secret_metadata":{"x-session":"s"}}`),
+		IntervalSeconds: 60, TimeoutSeconds: 10,
+	})
+	if err != nil {
+		t.Fatalf("CreateMonitor grpc: %v", err)
+	}
+	repo.monitors[grpcMonitor.ID].Config = append(json.RawMessage(nil), repo.createdConfig...)
+	_, err = svc.UpdateMonitor(ctx, tenantID, grpcMonitor.ID, &models.UpdateMonitorRequest{
+		Config: json.RawMessage(`{"host":"g.test","metadata":{"X-Session":"plain"}}`),
+	})
+	if !errors.Is(err, ErrSecretConflict) {
+		t.Fatalf("grpc err = %v, want ErrSecretConflict", err)
 	}
 }

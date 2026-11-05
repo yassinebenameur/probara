@@ -669,6 +669,7 @@ export const MONITORS_PAGE: DocPage = {
           items: [
             "Submit `***` again to preserve the already stored value.",
             "Omit the field entirely and the stored value is preserved as well, so an update that resubmits a config read back from the API cannot destroy a credential it was never shown.",
+            "A kept value still has to fit the rest of the config. An update that omits `secret_headers` while adding basic auth, when an `Authorization` header is stored, or that adds a plain header, metadata key or variable whose name a kept secret map already holds, is refused with a 400 naming the conflict; clear the stored value with `\"\"` or leave it out of a submitted map.",
             "Submit a new value to replace and encrypt it.",
             "Submit an empty string to clear a protected field. That is the only spelling that removes a stored secret.",
             "Protected field names are exact. A config key that matches one in another case, such as `Password` or `Secret_Headers`, is refused with a 400 rather than stored unprotected.",

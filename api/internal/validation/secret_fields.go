@@ -235,3 +235,40 @@ func validateSecretKeySpelling(monitorType models.MonitorType, config json.RawMe
 	}
 	return nil
 }
+
+// ValidateMergedSecretPairs re-runs the plain/secret pair rules on a config
+// after the write-only merge has restored stored secrets. Validation proper
+// sees only the submitted config, where an omitted secret map or password
+// reads as absent; the merge then brings the stored one back, which can pair
+// it with something the request added (basic auth beside a kept Authorization
+// header, a plain header beside a kept secret one). Values may be ciphertext
+// envelopes here; the rules only read names, line breaks and presence.
+func ValidateMergedSecretPairs(monitorType models.MonitorType, config json.RawMessage) error {
+	switch monitorType {
+	case models.MonitorTypeHTTP:
+		var cfg sharedmodels.HTTPMonitorConfig
+		if err := json.Unmarshal(config, &cfg); err != nil {
+			return nil
+		}
+		return validateHTTPCredentials(cfg)
+	case models.MonitorTypeGRPC:
+		var cfg sharedmodels.GRPCMonitorConfig
+		if err := json.Unmarshal(config, &cfg); err != nil {
+			return nil
+		}
+		return validateHeaderPair("metadata", cfg.Metadata, "secret_metadata", cfg.SecretMetadata)
+	case models.MonitorTypeSyntheticAPI:
+		var cfg sharedmodels.SyntheticAPIMonitorConfig
+		if err := json.Unmarshal(config, &cfg); err != nil {
+			return nil
+		}
+		return validateSyntheticVariables(cfg.Variables, cfg.SecretVariables)
+	case models.MonitorTypeSyntheticBrowser:
+		var cfg sharedmodels.SyntheticBrowserMonitorConfig
+		if err := json.Unmarshal(config, &cfg); err != nil {
+			return nil
+		}
+		return validateSyntheticVariables(cfg.Variables, cfg.SecretVariables)
+	}
+	return nil
+}
