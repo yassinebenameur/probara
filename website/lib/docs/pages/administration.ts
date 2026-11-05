@@ -49,7 +49,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token stays valid for a 60-second reuse window so concurrent refreshes from parallel requests or multiple tabs do not end the session. Disabled users are checked against database state on authenticated requests.",
+            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token stays valid for a 60-second reuse window so concurrent refreshes from parallel requests or multiple tabs do not end the session. Disabled users are checked against database state on authenticated requests, and so is the sign-in itself: signing a session out ends its access token on the next request. See [sessions](#sessions).",
         },
       ],
     },
@@ -146,11 +146,42 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "A user with email and no password can be provisioned as SSO-only. Superadministrator-only user routes create, list, update, and delete accounts. Safeguards prevent deleting the current user or leaving the installation without an administrator.",
         },
         {
+          type: "paragraph",
+          text:
+            "Ten failed password logins in a row [lock an account](/docs/security/#login-lockout-sessions) for 15 minutes, doubling on repeat up to 4 hours. The user page shows an active lock with an **Unlock** action (`POST /api/v1/users/{id}/unlock`), and **Sign out everywhere** ends all of the user's browser sessions at once (`DELETE /api/v1/users/{id}/sessions`). Setting a user's password does both: it clears the lock and signs them out everywhere.",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Membership patches replace the list",
           text:
             "When updating memberships, send the complete intended set. Treating the field as an incremental add operation can accidentally remove tenant access.",
+        },
+      ],
+    },
+    {
+      id: "sessions",
+      title: "Your sessions",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The **Account** page (sidebar, signed-in users only) shows your profile and every browser signed in as you: device, address, sign-in method, when it signed in and when it was last active. Sign out one session, every other session, or everywhere, this browser included. A signed-out session loses access on its next request. Every role can manage its own sessions, viewers included.",
+        },
+        {
+          type: "table",
+          columns: ["Route", "Effect"],
+          rows: [
+            ["`GET /api/v1/account/sessions`", "Your active sessions; `current` marks the one making the request"],
+            ["`DELETE /api/v1/account/sessions/{id}`", "Sign one session out (your own only; the current one also clears its cookies)"],
+            ["`POST /api/v1/account/sessions/revoke-others`", "Sign out every session except the current one"],
+            ["`POST /api/v1/account/sessions/revoke-all`", "Sign out everywhere, including the current session"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "These routes accept a signed-in browser session only: API keys and MCP tokens are refused, and they are not MCP tools. Each action records `auth.session_revoke` or `auth.sessions_revoke` in the audit log. A browser signed in before session tracking (migration 000104) is listed, but is only recognised as the current session after its next token refresh, a few minutes at most.",
         },
       ],
     },

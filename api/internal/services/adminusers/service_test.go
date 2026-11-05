@@ -68,6 +68,10 @@ func (m *mockRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uu
 	return nil
 }
 
+func (m *mockRepository) AttachLockouts(ctx context.Context, users []models.AdminUser) error {
+	return nil
+}
+
 func (m *mockRepository) CountActiveAdmins(ctx context.Context) (int, error) {
 	if m.countActiveAdminsFn != nil {
 		return m.countActiveAdminsFn(ctx)

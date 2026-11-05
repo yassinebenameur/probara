@@ -64,3 +64,32 @@ func TestUpsertSuperadmin_ExistingUserIsResetPromotedAndReenabled(t *testing.T) 
 		t.Fatalf("got role=%q hash=%q disabled=%v, want superadmin/new-hash/enabled", role, hash, disabled)
 	}
 }
+
+func TestUpsertSuperadmin_ClearsLoginLockout(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_users (username, password_hash, platform_role, failed_login_count, last_failed_login_at, locked_until)
+		VALUES ('locked', 'old-hash', 'superadmin', 10, NOW(), NOW() + INTERVAL '15 minutes')
+	`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	if err := upsertSuperadmin(ctx, client, "locked", "new-hash"); err != nil {
+		t.Fatalf("upsertSuperadmin() error = %v", err)
+	}
+
+	var failures int
+	var locked, passwordChanged bool
+	if err := client.QueryRowContext(ctx, `
+		SELECT failed_login_count, locked_until IS NOT NULL, password_changed_at IS NOT NULL
+		FROM admin_users WHERE username = 'locked'
+	`).Scan(&failures, &locked, &passwordChanged); err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if failures != 0 || locked || !passwordChanged {
+		t.Fatalf("got failures=%d locked=%v password_changed=%v, want 0/false/true", failures, locked, passwordChanged)
+	}
+}

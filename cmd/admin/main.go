@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -56,7 +59,8 @@ func main() {
 }
 
 // upsertSuperadmin creates the user, or resets an existing one's password and
-// re-enables it, and in both cases makes it a platform superadmin.
+// re-enables it, and in both cases makes it a platform superadmin. It also
+// clears any login lockout on the account.
 //
 // The role must be explicit: admin_users.platform_role defaults to 'member'
 // (migration 000073), and a member with no tenant_memberships can do nothing,
@@ -76,5 +80,25 @@ func upsertSuperadmin(ctx context.Context, client *db.Client, username, password
 		              updated_at = NOW(),
 		              disabled_at = NULL
 	`, username, passwordHash, auth.PlatformRoleSuperadmin)
+	if err != nil {
+		return err
+	}
+	return clearLockout(ctx, client, username)
+}
+
+// clearLockout lifts a login lockout and records the password change, so the
+// break-glass account can sign in at once. Before migration 000103 there is
+// no lockout state, which is not an error.
+func clearLockout(ctx context.Context, client *db.Client, username string) error {
+	_, err := client.ExecContext(ctx, `
+		UPDATE admin_users
+		SET failed_login_count = 0, last_failed_login_at = NULL, locked_until = NULL,
+		    password_changed_at = NOW()
+		WHERE username = $1
+	`, username)
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && (pqErr.Code == "42P01" || pqErr.Code == "42703") {
+		return nil
+	}
 	return err
 }

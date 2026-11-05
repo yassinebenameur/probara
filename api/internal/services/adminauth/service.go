@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,21 +16,48 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
+// ErrUserNotFound is returned by user-targeted actions for an unknown id.
+var ErrUserNotFound = errors.New("admin user not found")
+
 // Service handles admin authentication.
 type Service struct {
 	db         *db.Client
 	bcryptCost int
+	// ghosts throttles failed logins for usernames that name no password
+	// account, mirroring the account lockout so a 429 does not reveal that
+	// an account exists.
+	ghosts *FailureThrottle
+
+	dummyOnce sync.Once
+	dummyHash string
 }
 
 // NewService creates a new admin auth service.
 func NewService(dbClient *db.Client, bcryptCost int) *Service {
-	return &Service{db: dbClient, bcryptCost: bcryptCost}
+	return &Service{
+		db:         dbClient,
+		bcryptCost: bcryptCost,
+		ghosts:     NewFailureThrottle(LockoutThreshold, lockoutMemory, LockoutBase, LockoutMax),
+	}
 }
 
-// Authenticate validates admin credentials.
+// burnPasswordCompare spends one bcrypt comparison at the configured cost, so
+// an unknown or SSO-only username answers as slowly as a wrong password.
+func (s *Service) burnPasswordCompare(password string) {
+	s.dummyOnce.Do(func() {
+		s.dummyHash, _ = auth.HashPassword("not-a-real-password", s.bcryptCost)
+	})
+	if s.dummyHash != "" {
+		_, _ = auth.ComparePassword(s.dummyHash, password)
+	}
+}
+
+// Authenticate validates admin credentials under the login lockout. A
+// refusal is a *LoginFailure matching ErrInvalidCredentials or
+// ErrAccountLocked; any other error is internal.
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*models.AdminUser, error) {
-	query := `
-		SELECT id, username, password_hash, created_at, updated_at, last_login_at, disabled_at
+	const query = `
+		SELECT id, username, password_hash, created_at, updated_at, last_login_at, disabled_at, locked_until
 		FROM admin_users
 		WHERE username = $1 AND disabled_at IS NULL
 		LIMIT 1
@@ -37,6 +65,8 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 
 	var user models.AdminUser
 	var passwordHash sql.NullString
+	var lockedUntil sql.NullTime
+	lockout := true
 
 	err := s.db.QueryRowContext(ctx, query, username).Scan(
 		&user.ID,
@@ -46,17 +76,66 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		&user.UpdatedAt,
 		&user.LastLoginAt,
 		&user.DisabledAt,
+		&lockedUntil,
 	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("invalid credentials")
-		}
+	if isMissingSchema(err) {
+		// Deploy-ordering tolerance: before migration 000103 there is no
+		// lockout state; the in-memory throttles still apply.
+		lockout = false
+		err = s.db.QueryRowContext(ctx, `
+			SELECT id, username, password_hash, created_at, updated_at, last_login_at, disabled_at
+			FROM admin_users
+			WHERE username = $1 AND disabled_at IS NULL
+			LIMIT 1
+		`, username).Scan(
+			&user.ID,
+			&user.Username,
+			&passwordHash,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+			&user.LastLoginAt,
+			&user.DisabledAt,
+		)
+	}
+	// OIDC-only users have no local password; they get the same treatment
+	// as an unknown username.
+	noAccount := errors.Is(err, sql.ErrNoRows) || (err == nil && (!passwordHash.Valid || passwordHash.String == ""))
+	if err != nil && !noAccount {
 		return nil, fmt.Errorf("failed to query admin user: %w", err)
 	}
+	if noAccount {
+		return nil, s.ghostFailure(username, password)
+	}
 
-	// OIDC-only users have no local password and cannot log in with one.
-	if !passwordHash.Valid || passwordHash.String == "" {
-		return nil, fmt.Errorf("invalid credentials")
+	if lockout {
+		count, until, locked, err := s.reserveAttempt(ctx, user.ID)
+		if err != nil && !isMissingSchema(err) {
+			return nil, fmt.Errorf("failed to record login attempt: %w", err)
+		}
+		if locked {
+			failure := &LoginFailure{Locked: true, UserID: &user.ID}
+			if lockedUntil.Valid {
+				failure.RetryAfter = time.Until(lockedUntil.Time)
+			}
+			return nil, failure
+		}
+
+		match, err := auth.ComparePassword(passwordHash.String, password)
+		if err != nil {
+			return nil, err
+		}
+		if !match {
+			failure := &LoginFailure{UserID: &user.ID, FailedAttempts: count}
+			if until != nil && until.After(time.Now()) {
+				failure.LockedNow = true
+				failure.RetryAfter = time.Until(*until)
+			}
+			return nil, failure
+		}
+		if _, err := s.db.ExecContext(ctx, resetFailuresQuery, user.ID); err != nil && !isMissingSchema(err) {
+			return nil, fmt.Errorf("failed to reset login failures: %w", err)
+		}
+		return &user, nil
 	}
 
 	match, err := auth.ComparePassword(passwordHash.String, password)
@@ -64,10 +143,26 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		return nil, err
 	}
 	if !match {
-		return nil, fmt.Errorf("invalid credentials")
+		return nil, &LoginFailure{UserID: &user.ID}
 	}
-
 	return &user, nil
+}
+
+// ghostFailure refuses a login for a username with no password account,
+// throttled exactly like a real account (see Service.ghosts).
+func (s *Service) ghostFailure(username, password string) error {
+	key := usernameKey(username)
+	now := time.Now()
+	if wait := s.ghosts.BlockedFor(key, now); wait > 0 {
+		return &LoginFailure{Locked: true, RetryAfter: wait}
+	}
+	s.burnPasswordCompare(password)
+	failure := &LoginFailure{}
+	if wait := s.ghosts.Fail(key, now); wait > 0 {
+		failure.LockedNow = true
+		failure.RetryAfter = wait
+	}
+	return failure
 }
 
 // GetAdminByID retrieves an admin user by ID, including identity fields.
@@ -175,76 +270,7 @@ func (s *Service) UpdateLastLogin(ctx context.Context, adminID uuid.UUID) error 
 	return nil
 }
 
-// CreateSession creates a refresh session.
-func (s *Service) CreateSession(ctx context.Context, adminID uuid.UUID, refreshTokenHash string, expiresAt time.Time, ip, userAgent string) error {
-	query := `
-		INSERT INTO admin_sessions (admin_user_id, refresh_token_hash, expires_at, ip, user_agent)
-		VALUES ($1, $2, $3, $4, $5)
-	`
-
-	_, err := s.db.ExecContext(ctx, query, adminID, refreshTokenHash, expiresAt, ip, userAgent)
-	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-	return nil
-}
-
-// refreshReuseGrace is how long a rotated (revoked) refresh token is still
-// accepted after rotation. Concurrent refreshes race: when the access token
-// expires, parallel 401 retries and other browser tabs all POST /refresh with
-// the same cookie, only one rotation can win, and without a reuse interval
-// the losers would be treated as invalid and bounce the user to the login
-// page. The trade-off is that a stolen refresh token can also be replayed
-// within this window before reuse is rejected.
-const refreshReuseGrace = 60 * time.Second
-
-// GetSessionByTokenHash returns the admin ID for a valid refresh token hash.
-// Tokens rotated less than refreshReuseGrace ago are still accepted so that
-// concurrent refreshes from the same browser don't invalidate the session.
-func (s *Service) GetSessionByTokenHash(ctx context.Context, refreshTokenHash string) (uuid.UUID, error) {
-	query := `
-		SELECT admin_user_id
-		FROM admin_sessions
-		WHERE refresh_token_hash = $1
-		  AND expires_at > NOW()
-		  AND (revoked_at IS NULL OR revoked_at > NOW() - make_interval(secs => $2))
-		LIMIT 1
-	`
-
-	var adminID uuid.UUID
-	if err := s.db.QueryRowContext(ctx, query, refreshTokenHash, refreshReuseGrace.Seconds()).Scan(&adminID); err != nil {
-		if err == sql.ErrNoRows {
-			return uuid.UUID{}, fmt.Errorf("invalid refresh token")
-		}
-		return uuid.UUID{}, fmt.Errorf("failed to query refresh token: %w", err)
-	}
-	return adminID, nil
-}
-
-// RotateSession revokes an existing refresh token hash and creates a new one.
-func (s *Service) RotateSession(ctx context.Context, oldHash, newHash string, adminID uuid.UUID, expiresAt time.Time, ip, userAgent string) error {
-	query := `
-		UPDATE admin_sessions
-		SET revoked_at = NOW(), last_used_at = NOW()
-		WHERE refresh_token_hash = $1 AND revoked_at IS NULL
-	`
-
-	if _, err := s.db.ExecContext(ctx, query, oldHash); err != nil {
-		return fmt.Errorf("failed to revoke old session: %w", err)
-	}
-
-	return s.CreateSession(ctx, adminID, newHash, expiresAt, ip, userAgent)
-}
-
-// RevokeSession revokes a refresh token hash.
-func (s *Service) RevokeSession(ctx context.Context, refreshTokenHash string) error {
-	query := `
-		UPDATE admin_sessions
-		SET revoked_at = NOW(), last_used_at = NOW()
-		WHERE refresh_token_hash = $1 AND revoked_at IS NULL
-	`
-	if _, err := s.db.ExecContext(ctx, query, refreshTokenHash); err != nil {
-		return fmt.Errorf("failed to revoke session: %w", err)
-	}
-	return nil
+// DB exposes the service's database for the package-level session helpers.
+func (s *Service) DB() Querier {
+	return s.db
 }

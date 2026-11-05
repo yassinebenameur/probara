@@ -500,6 +500,29 @@ or imported groups come back empty. Any other path that creates groups through
 - `tools/list` filtering by capability is UX; enforcement is the inner
   dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
 
+## Identity and sessions
+
+Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
+
+- **Roles are never JWT claims.** The admin access JWT carries the admin ID
+  and `sid` (its session family) only; roles and `disabled_at` are read from
+  the database per request.
+- **`admin_session_families.revoked_at` is the one authority for a
+  sign-in.** Refresh rotation stays in the family; the refresh lookup and
+  `AuthMiddleware` (`middleware/session_family.go`) both read that row, so a
+  revoke ends the refresh chain and the access JWT on the next request. End
+  sessions only through `adminauth` (`RevokeFamily`, `RevokeUserSessions`),
+  never a bare `UPDATE admin_sessions`, and give any cookie path outside the
+  middleware the same check (`readAccessSession` for `/auth/me`, `/logout`).
+- **Login lockout is DB-backed and reserved before the password compare**
+  (`adminauth/lockout.go`). Keep refusals generic (one 401, one 429) and send
+  usernames with no password account through its in-memory twin
+  (`FailureThrottle`) plus a dummy bcrypt, so no response reveals which
+  accounts exist.
+- `/account/*` is browser-session only, outside the write gate and generic
+  audit (`api/internal/api/routes_identity.go`); identity MCP tools live in
+  `catalog_identity.go`.
+
 ## Kubernetes discovery
 
 - `cmd/discovery-collector` reads only Services/Ingresses in configured namespaces

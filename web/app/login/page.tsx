@@ -141,6 +141,12 @@ function LoginPageInner() {
         return "Invalid username or password";
       }
 
+      // One answer for a locked account, a throttled address and an unknown
+      // username alike (the API never says which).
+      if (response.status === 429) {
+        return "Too many failed sign-in attempts. Try again later.";
+      }
+
       if (!response.ok) {
         return await readErrorMessage(response, "Login failed");
       }

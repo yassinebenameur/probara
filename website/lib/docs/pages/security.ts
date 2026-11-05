@@ -114,6 +114,39 @@ export const SECURITY_PAGE: DocPage = {
       ],
     },
     {
+      id: 'login-lockout-sessions',
+      title: 'Login lockout and session revocation',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Password login is protected in the database, so the limits hold across API replicas. Ten failed passwords in a row lock the account for 15 minutes; while it is locked even the correct password is refused without being checked. Each further ten failures locks it again for twice as long, up to 4 hours. A successful login resets the count, and a failure streak is forgotten after 24 hours without failures. Attempts are counted before the password is compared, so parallel guesses cannot exceed the limit.',
+        },
+        {
+          type: 'list',
+          items: [
+            'A locked account, a throttled address and an unknown username all get the same `429` with `Retry-After`; wrong and unknown credentials share one `401`. Unknown and SSO-only usernames are throttled like real accounts and cost the same bcrypt comparison, so the responses do not reveal which accounts exist.',
+            'Each API replica also blocks a client address for 15 minutes after 50 failed logins (resolved through [`TRUSTED_PROXY_CIDRS`](#audit-proxy-trust)). This layer is per replica.',
+            'Superadministrators see the lock on the user page and can lift it with **Unlock** (`POST /api/v1/users/{id}/unlock`, MCP `unlock_user`). [`go run ./cmd/admin`](/docs/operations/#database-migrations) also clears it, and so does a superadministrator setting a new password.',
+            'Audit events: `auth.login` failures and denials (with the reason), `auth.lockout` when a lock starts, `auth.unlock`.',
+            'SSO (OIDC) sign-in is not affected; the identity provider owns its own protection.',
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Every sign-in is a session family: refresh-token rotation stays inside it, and the access token names it in its `sid` claim. Signing a session out revokes the family, which ends its refresh token and its access token on their next request. Users manage their own sessions on the **Account** page (sign out one browser, every other one, or everywhere); superadministrators can sign a user out everywhere from the user page (`DELETE /api/v1/users/{id}/sessions`, MCP `revoke_user_sessions`). Logout, and a superadministrator setting a password, end sessions the same way. API keys and MCP connections are separate credentials and are not affected.',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Lockout is a denial-of-service lever',
+          text:
+            'Anyone who knows a username can keep that account locked by failing on purpose. Prefer non-obvious administrator usernames, keep at least one break-glass path (`cmd/admin` with database access), and watch for `auth.lockout` events in the audit log.',
+        },
+      ],
+    },
+    {
       id: 'passwords-api-keys-sessions',
       title: 'Passwords, API keys, and browser sessions',
       blocks: [
@@ -124,7 +157,7 @@ export const SECURITY_PAGE: DocPage = {
             [
               'Administrator password',
               'bcrypt with configurable cost, default 12',
-              'Use generated unique passwords; keep bcrypt cost within your login latency budget.',
+              'Use generated unique passwords; keep bcrypt cost within your login latency budget. Repeated failures [lock the account](#login-lockout-sessions).',
             ],
             [
               'API key',
@@ -133,13 +166,13 @@ export const SECURITY_PAGE: DocPage = {
             ],
             [
               'Access token',
-              'JWT signed by `ADMIN_JWT_SECRET`, default 15-minute TTL',
-              'A JWT secret change invalidates active access tokens across all replicas.',
+              'JWT signed by `ADMIN_JWT_SECRET`, default 15-minute TTL. Carries the user ID and the sign-in (`sid`), never roles; the API checks the sign-in on every request',
+              'A JWT secret change invalidates active access tokens across all replicas. Signing a session out rejects its access token on the next request, not at expiry.',
             ],
             [
               'Refresh token',
-              'SHA-256 hash stored in `admin_sessions`; rotated on use, with a 60-second reuse window so concurrent refreshes (parallel requests, multiple tabs) do not invalidate the session',
-              'Default lifetime is 30 days. The reuse window also means a stolen refresh token can be replayed for up to 60 seconds after rotation. Protect database backups because they contain session metadata and hashes.',
+              'SHA-256 hash stored in `admin_sessions`; rotated on use within its sign-in (session family), with a 60-second reuse window so concurrent refreshes (parallel requests, multiple tabs) do not invalidate the session',
+              'Default lifetime is 30 days. The reuse window also means a stolen refresh token can be replayed for up to 60 seconds after rotation, unless the session is signed out: that rejects every token of the sign-in at once. Protect database backups because they contain session metadata and hashes.',
             ],
             [
               'MCP OAuth tokens',
@@ -653,7 +686,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             ],
             [
               'Administrator password/session',
-              'Reset password, revoke sessions, inspect audit activity, and consider JWT rotation if token-signing material was exposed.',
+              'Reset the password (which signs the user out everywhere) or use **Sign out everywhere** on the user page, inspect audit activity, and consider JWT rotation if token-signing material was exposed.',
             ],
             [
               'JWT secret',

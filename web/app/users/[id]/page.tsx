@@ -11,8 +11,18 @@ import FormActions from '@/components/ui/FormActions';
 import Select from '@/components/ui/Select';
 import Panel from '@/components/ui/Panel';
 import Callout from '@/components/ui/Callout';
+import Button from '@/components/ui/Button';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
-import { getTenants, getUser, listOidcGroupMappings, updateUser } from '@/lib/api';
+import {
+  getTenants,
+  getUser,
+  listOidcGroupMappings,
+  revokeUserSessions,
+  unlockUser,
+  updateUser,
+} from '@/lib/api';
+import { pluralize } from '@/lib/format';
 import { formatDateTime } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import type { AdminUser, MembershipInput, PlatformRole, Tenant } from '@/lib/types';
@@ -36,6 +46,9 @@ export default function EditUserPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [unlocking, setUnlocking] = useState(false);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -91,6 +104,32 @@ export default function EditUserPage() {
       showToast(err.message || 'Failed to update user', 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleUnlock = async () => {
+    try {
+      setUnlocking(true);
+      await unlockUser(id);
+      setUser((prev) => (prev ? { ...prev, locked_until: undefined } : prev));
+      showToast('Sign-in unlocked', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to unlock', 'error');
+    } finally {
+      setUnlocking(false);
+    }
+  };
+
+  const handleSignOutEverywhere = async () => {
+    try {
+      setSigningOut(true);
+      const res = await revokeUserSessions(id);
+      showToast(`Signed out ${pluralize(res.revoked, 'session')}`, 'success');
+      setConfirmSignOut(false);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to sign out', 'error');
+    } finally {
+      setSigningOut(false);
     }
   };
 
@@ -196,33 +235,74 @@ export default function EditUserPage() {
           </form>
         </FormCard>
 
-        <Panel title="User details">
-          <dl className="space-y-3">
-            <div>
-              <dt className="text-xs text-slate-500">User ID</dt>
-              <dd className="mt-0.5 break-all font-mono text-xs text-slate-300">{user.id}</dd>
+        <div className="space-y-6">
+          <Panel title="User details">
+            <dl className="space-y-3">
+              <div>
+                <dt className="text-xs text-slate-500">User ID</dt>
+                <dd className="mt-0.5 break-all font-mono text-xs text-slate-300">{user.id}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Sign-in method</dt>
+                <dd className="mt-0.5 text-ui text-slate-300">
+                  {isOidcUser ? 'SSO (OIDC)' : 'Password'}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Created</dt>
+                <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.created_at, "-")}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Last updated</dt>
+                <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.updated_at, "-")}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Last login</dt>
+                <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.last_login_at, "-")}</dd>
+              </div>
+            </dl>
+          </Panel>
+
+          <Panel title="Sign-in">
+            <div className="space-y-4">
+              {user.locked_until ? (
+                <Callout
+                  tone="warning"
+                  action={
+                    <Button size="xs" loading={unlocking} disabled={unlocking} onClick={handleUnlock}>
+                      Unlock
+                    </Button>
+                  }
+                >
+                  Locked after repeated failed sign-ins until {formatDateTime(user.locked_until)}.
+                </Callout>
+              ) : (
+                <p className="text-ui text-slate-400">Not locked out.</p>
+              )}
+              <div>
+                <Button variant="danger" size="xs" onClick={() => setConfirmSignOut(true)}>
+                  Sign out everywhere
+                </Button>
+                <p className="mt-2 text-xs text-slate-500">
+                  Ends every browser session of this user at once. API keys and AI agent
+                  connections are not affected.
+                </p>
+              </div>
             </div>
-            <div>
-              <dt className="text-xs text-slate-500">Sign-in method</dt>
-              <dd className="mt-0.5 text-ui text-slate-300">
-                {isOidcUser ? 'SSO (OIDC)' : 'Password'}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-slate-500">Created</dt>
-              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.created_at, "-")}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-slate-500">Last updated</dt>
-              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.updated_at, "-")}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-slate-500">Last login</dt>
-              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.last_login_at, "-")}</dd>
-            </div>
-          </dl>
-        </Panel>
+          </Panel>
+        </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmSignOut}
+        title="Sign this user out everywhere?"
+        description={`${user.username} loses access in every browser immediately and must sign in again.`}
+        confirmLabel="Sign out"
+        tone="danger"
+        loading={signingOut}
+        onConfirm={handleSignOutEverywhere}
+        onCancel={() => setConfirmSignOut(false)}
+      />
     </Page>
   );
 }
