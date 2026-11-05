@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Mail, MessageSquare, Plus, Send, Trash2 } from 'lucide-react';
+import { KeyRound, Mail, MessageSquare, Plus, Send, ShieldCheck, Trash2 } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
@@ -158,11 +158,18 @@ export default function ContactsPanel() {
                       disabled={busy === c.id || !ready}
                     />
                   ) : codePending(c) ? (
-                    <Button size="xs" onClick={() => setVerifying(c)}>Enter code</Button>
+                    <IconButton
+                      icon={<KeyRound strokeWidth={1.75} />}
+                      label="Enter the verification code"
+                      onClick={() => setVerifying(c)}
+                    />
                   ) : (
-                    <Button size="xs" onClick={() => sendCode(c)} loading={busy === c.id} disabled={!ready}>
-                      Send code
-                    </Button>
+                    <IconButton
+                      icon={<ShieldCheck strokeWidth={1.75} />}
+                      label={ready ? 'Send a verification code' : transportHint(c.kind)}
+                      onClick={() => sendCode(c)}
+                      disabled={busy === c.id || !ready}
+                    />
                   )}
                   <IconButton
                     icon={<Trash2 strokeWidth={1.75} />}
