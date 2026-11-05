@@ -86,3 +86,11 @@ test('listSubjects', () => {
   assert.equal(listSubjects(['A', 'A', 'B']), 'A and B');
   assert.equal(listSubjects(['A', 'B', 'C', 'D']), 'A, B and 2 more');
 });
+
+test('a reopened alert (relapse) reads "Down again"', () => {
+  const relapse = alertToast('created', alert({ monitor_name: 'Orders API', relapse_count: 2 }));
+  assert.equal(relapse?.title, 'Down again');
+  assert.equal(relapse?.message, 'Orders API is down');
+  assert.equal(relapse?.type, 'error');
+  assert.equal(alertToast('created', alert({ monitor_name: 'Orders API', relapse_count: 0 }))?.title, 'Alert triggered');
+});

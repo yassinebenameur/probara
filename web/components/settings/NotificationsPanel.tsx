@@ -37,6 +37,23 @@ function locationOfflineOptions(current: number): { label: string; value: number
   return [...LOCATION_OFFLINE_OPTIONS, { label: `After ${current} s`, value: current }].sort((a, b) => a.value - b.value);
 }
 
+// Reopen cooldown (alert_reopen_cooldown_seconds; the API takes 0-86400 s,
+// 0 = off): a monitor down again this soon after its alert auto-resolved
+// reopens that alert as a relapse. A stored value outside the presets keeps
+// an option of its own.
+const REOPEN_COOLDOWN_OPTIONS = [
+  { label: 'Off', value: 0 },
+  { label: 'Within 2 min', value: 120 },
+  { label: 'Within 5 min', value: 300 },
+  { label: 'Within 15 min', value: 900 },
+  { label: 'Within 1 hour', value: 3600 },
+];
+
+function reopenCooldownOptions(current: number): { label: string; value: number }[] {
+  if (REOPEN_COOLDOWN_OPTIONS.some((o) => o.value === current)) return REOPEN_COOLDOWN_OPTIONS;
+  return [...REOPEN_COOLDOWN_OPTIONS, { label: `Within ${current} s`, value: current }].sort((a, b) => a.value - b.value);
+}
+
 // Latency anomaly presets — users pick a level, not a raw number. Each
 // sensitivity level bundles the statistical sigma + the minimum increase.
 // Segment labels spell their unit out ("2 min", "7 days"), as the delay and
@@ -206,6 +223,7 @@ interface Snapshot {
   ackStopsNotifications: boolean;
   locationOfflineEnabled: boolean;
   locationOfflineAfter: number;
+  reopenCooldown: number;
 }
 
 // Dirty check: channel assignments compare by channel, delay and the
@@ -266,6 +284,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
   const [ackStopsNotifications, setAckStopsNotifications] = useState(true);
   const [locationOfflineEnabled, setLocationOfflineEnabled] = useState(true);
   const [locationOfflineAfter, setLocationOfflineAfter] = useState(180);
+  const [reopenCooldown, setReopenCooldown] = useState(0);
   // What the server holds; the save bar only appears when the form differs.
   const [saved, setSaved] = useState<Snapshot | null>(null);
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
@@ -284,6 +303,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     ackStopsNotifications,
     locationOfflineEnabled,
     locationOfflineAfter,
+    reopenCooldown,
   };
   const dirty = saved !== null && comparable(current) !== comparable(saved);
 
@@ -337,6 +357,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     setAckStopsNotifications(s.ackStopsNotifications);
     setLocationOfflineEnabled(s.locationOfflineEnabled);
     setLocationOfflineAfter(s.locationOfflineAfter);
+    setReopenCooldown(s.reopenCooldown);
   };
 
   const loadSettings = async () => {
@@ -357,6 +378,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         ackStopsNotifications: s.ack_stops_notifications ?? true,
         locationOfflineEnabled: s.location_offline_alerts_enabled ?? true,
         locationOfflineAfter: s.location_offline_after_seconds ?? 180,
+        reopenCooldown: s.alert_reopen_cooldown_seconds ?? 0,
       };
       apply(loaded);
       setSaved(loaded);
@@ -389,6 +411,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         ack_stops_notifications: ackStopsNotifications,
         location_offline_alerts_enabled: locationOfflineEnabled,
         location_offline_after_seconds: locationOfflineAfter,
+        alert_reopen_cooldown_seconds: reopenCooldown,
       });
       markFocusReturn();
       setSaved(current);
@@ -491,6 +514,27 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
               label="Acknowledging stops paging"
               disabled={readOnly}
             />
+          )}
+        />
+
+        <SettingRow
+          title="Reopen recent alerts"
+          description="A monitor that goes down again this soon after its alert recovered reopens that alert as a relapse instead of opening a new one, and pages again. Alerts resolved by hand never reopen."
+          control={({ titleId, descriptionId }) => (
+            <select
+              value={reopenCooldown}
+              onChange={(e) => setReopenCooldown(Number(e.target.value))}
+              disabled={readOnly}
+              aria-labelledby={titleId}
+              aria-describedby={descriptionId}
+              className={SELECT_CLASS}
+            >
+              {reopenCooldownOptions(reopenCooldown).map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           )}
         />
 

@@ -94,7 +94,8 @@ export function alertToast(type: AlertStreamEventType, alert: Alert): AlertToast
     const severe =
       !alert.kind || alert.kind === 'availability' || alert.kind === 'mesh_edge' || alert.kind === 'location_offline';
     return {
-      title: 'Alert triggered',
+      // A reopened alert (relapse) arrives as "created" with a relapse count.
+      title: (alert.relapse_count ?? 0) > 0 ? 'Down again' : 'Alert triggered',
       message: `${subject} ${alertCondition(alert)}`,
       type: severe ? 'error' : 'warning',
       group: 'alert-created',
