@@ -14,8 +14,6 @@ import (
 	"github.com/yassinebenameur/probara/shared/config"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
-	"github.com/yassinebenameur/probara/shared/mail"
-	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -31,26 +29,8 @@ type peopleDeps struct {
 // newPeopleDeps builds the people services. Email contact codes go through
 // the platform mailer (SMTP_*); without it email contacts cannot be verified.
 func newPeopleDeps(dbClient *shareddb.Client, enc secrets.Encryptor, cfg *config.APIConfig, recorder *auditservice.Recorder, log *logger.Logger) *peopleDeps {
-	var mailer mail.Sender
-	if cfg.SMTPHost != "" && cfg.SMTPFrom != "" {
-		m, err := email.NewSMTPMailer(email.SMTPParams{
-			Host:       cfg.SMTPHost,
-			Port:       cfg.SMTPPort,
-			Username:   cfg.SMTPUsername,
-			Password:   cfg.SMTPPassword,
-			From:       cfg.SMTPFrom,
-			FromName:   cfg.SMTPFromName,
-			UseTLS:     cfg.SMTPUseTLS,
-			AppBaseURL: cfg.AppBaseURL,
-		})
-		if err != nil {
-			log.WithError(err).Warn("Failed to configure SMTP mailer; email contacts cannot be verified")
-		} else {
-			mailer = m
-		}
-	}
 	return &peopleDeps{
-		contacts: contactservice.NewService(dbClient, enc, mailer),
+		contacts: contactservice.NewService(dbClient, enc, platformMailer(cfg, log)),
 		oncall:   oncallservice.NewService(dbClient, cfg.PublicBaseURL),
 		audit:    recorder,
 		log:      log,

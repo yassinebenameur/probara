@@ -608,7 +608,8 @@ or imported groups come back empty. Any other path that creates groups through
 
 ## Identity and sessions
 
-Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
+Details in `docs/auth-and-rbac.md` (Sessions, Account lifecycle, Two-factor,
+Login lockout).
 
 - **Roles are never JWT claims.** The admin access JWT carries the admin ID
   and `sid` (its session family) only; roles and `disabled_at` are read from
@@ -630,6 +631,29 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
 - `/account/*` is browser-session only, outside the write gate and generic
   audit (`api/internal/api/routes_identity.go`); identity MCP tools live in
   `catalog_identity.go`.
+- **Account tokens** (`admin_user_tokens`, `adminauth/tokens.go`): invite
+  7 d, password_reset 1 h, email_change 24 h; SHA-256-hashed, single use
+  (one conditional `UPDATE`), a new one supersedes the user's open ones of
+  that purpose. Links put the token in the URL **fragment**
+  (`/reset-password#token=…`, `services/accountmail`) and the API takes it
+  in the body; never add a lifecycle route with a token in its path.
+  `/auth/password/forgot` always answers 202 and works in the background
+  (no enumeration by status or timing). No SMTP/`APP_BASE_URL` → the
+  superadmin routes return the link instead of mailing it.
+- **Self-service identity is local-only**: password reset/change, email
+  change and TOTP require `password_hash` set and `external_subject` NULL
+  (`adminauth.Account.Local`). Never let an IdP-linked user change the
+  email: it is what links the identity.
+- **MFA is a second login step.** `Authenticate` returns
+  `*SecondFactorRequired` as an error (fail closed) → `{mfa_required,
+  mfa_token}` (not a JWT; bound to the password hash + enrollment) →
+  `POST /auth/login/mfa`. A correct password with 2FA pending only releases
+  its own lockout reservation, never resets the streak; any new path that
+  checks a second factor must go through `CompleteSecondFactor` /
+  `VerifyCredentials` so wrong codes lock like wrong passwords.
+  `totp_last_step` is the replay guard. Superadmin `reset-2fa` and
+  `cmd/admin -reset-2fa` are the recovery paths; a password reset never
+  turns 2FA off.
 
 ## Kubernetes discovery
 

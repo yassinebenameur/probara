@@ -129,13 +129,14 @@ export const SECURITY_PAGE: DocPage = {
             'Limits are per username only. There is no per-address block: behind a proxy or NAT every user shares one client address, and blocking it would let anyone deny sign-in to all of them. Volume limits per client are the job of the API rate limiter or your ingress.',
             'Superadministrators see the lock on the user page and can lift it with **Unlock** (`POST /api/v1/users/{id}/unlock`, MCP `unlock_user`). [`go run ./cmd/admin`](/docs/operations/#database-migrations) also clears it, and so does a superadministrator setting a new password.',
             'Audit events: `auth.login` failures and denials (with the reason), `auth.lockout` when a lock starts, `auth.unlock`.',
+            'Wrong [two-factor codes](#two-factor) count toward the same lock as wrong passwords, and a correct password alone never clears a streak that wrong codes built up: only a completed sign-in does.',
             'SSO (OIDC) sign-in is not affected; the identity provider owns its own protection.',
           ],
         },
         {
           type: 'paragraph',
           text:
-            'Every sign-in is a session family: refresh-token rotation stays inside it, and the access token names it in its `sid` claim. Signing a session out revokes the family, which ends its refresh token and its access token on their next request. Users manage their own sessions on the **Account** page (sign out one browser, every other one, or everywhere); superadministrators can sign a user out everywhere from the user page (`DELETE /api/v1/users/{id}/sessions`, MCP `revoke_user_sessions`). Logout, and a superadministrator setting a password, end sessions the same way. API keys and MCP connections are separate credentials and are not affected.',
+            'Every sign-in is a session family: refresh-token rotation stays inside it, and the access token names it in its `sid` claim. Signing a session out revokes the family, which ends its refresh token and its access token on their next request. Users manage their own sessions on the **Account** page (sign out one browser, every other one, or everywhere); superadministrators can sign a user out everywhere from the user page (`DELETE /api/v1/users/{id}/sessions`, MCP `revoke_user_sessions`). Logout, a superadministrator setting a password, a [password reset](#account-recovery) (every session) and a self-service password change (every other session) end sessions the same way. API keys and MCP connections are separate credentials and are not affected.',
         },
         {
           type: 'callout',
@@ -143,6 +144,50 @@ export const SECURITY_PAGE: DocPage = {
           title: 'Lockout is a denial-of-service lever',
           text:
             'Anyone who knows a username can keep that account locked by failing on purpose. Prefer non-obvious administrator usernames, keep at least one break-glass path (`cmd/admin` with database access), and watch for `auth.lockout` events in the audit log.',
+        },
+      ],
+    },
+    {
+      id: 'two-factor',
+      title: 'Two-factor authentication',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Local password accounts can turn on TOTP two-factor authentication (RFC 6238: 6 digits, 30-second steps, any authenticator app) on the **Account** page. It is optional and per user. SSO accounts never get it here: their multi-factor policy belongs to the identity provider.',
+        },
+        {
+          type: 'list',
+          items: [
+            'Sign-in becomes two steps. A correct password answers `{"mfa_required": true, "mfa_token": "…"}` and sets no cookie; `POST /api/v1/auth/login/mfa` with that token and a code completes the sign-in. The step-one token lives 5 minutes, is signed with a key derived from `ADMIN_JWT_SECRET` and is not a JWT, so it can never be used as a session; it is bound to the current password and enrollment, so changing either voids it.',
+            'Every code is accepted once: the last accepted time step is stored and only a later step passes, on every replica. One step of clock drift either way is tolerated.',
+            'Enrollment shows ten single-use recovery codes once; the server keeps only their SHA-256 hashes. A recovery code works wherever a TOTP code does. New codes replace all old ones.',
+            'The TOTP secret is encrypted with `PROBARA_SECRETS_KEY` like other [stored secrets](#encryption-at-rest) (plaintext when the key is unset). Enrollment, turning it off and new recovery codes all ask for the current password; turning it off and new codes also need a current code.',
+            'A lost device: a superadministrator uses **Reset two-factor** on the user page (`POST /api/v1/users/{id}/reset-2fa`, MCP `reset_user_2fa`), or an operator with database access runs `go run ./cmd/admin -reset-2fa <username>`. A password reset does not turn two-factor off, so control of the mailbox alone never bypasses it.',
+            'Audit events: `auth.login` (success records `mfa: totp` or `recovery_code`; failures carry `factor: second`), `auth.mfa_enable`, `auth.mfa_disable`, `auth.mfa_recovery_codes`, `auth.mfa_reset`.',
+          ],
+        },
+      ],
+    },
+    {
+      id: 'account-recovery',
+      title: 'Invites, password reset and email change',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Invite, reset and email-change links carry a one-time token: 256 random bits, stored only as a SHA-256 hash, accepted once, and superseded when another of the same kind is issued. Invites last 7 days, resets 1 hour, email confirmations 24 hours. Links point at `APP_BASE_URL` and carry the token in the URL fragment (`/reset-password#token=…`), which browsers never send to a server, so it stays out of proxy and access logs; the page posts it to the API in a request body.',
+        },
+        {
+          type: 'list',
+          items: [
+            '**Forgot password** (`POST /api/v1/auth/password/forgot`) always answers `202`, at once, whether or not the username or email matches an account; the lookup and the email happen in the background, so neither the answer nor its timing reveals an account. One reset email per account per minute at most, and the route is limited per client address by the [API rate limiter](#edge-controls). Using the link sets the password, clears any lockout and signs the account out everywhere.',
+            'Only local password accounts can reset or change their own password and email. An account linked to an identity provider cannot: the IdP owns its credentials, and the email is what links the identity.',
+            'Changing your email needs your current password and takes effect only when the link sent to the new address is opened; the old address is then told about the change.',
+            'Without SMTP or `APP_BASE_URL`, the login page hides **Forgot password** and email changes are refused; superadministrators get the invite or reset link in the response to hand over themselves. Treat such a link like a password until it is used.',
+            'Wrong current passwords on these routes count toward the [login lockout](#login-lockout-sessions).',
+            'Audit events: `auth.invite`, `auth.invite_accept`, `auth.password_reset_request`, `auth.password_reset_issue`, `auth.password_reset`, `auth.password_change`, `auth.email_change_request`, `auth.email_change`.',
+          ],
         },
       ],
     },

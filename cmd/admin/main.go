@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -14,10 +16,33 @@ import (
 )
 
 func main() {
+	reset2FA := flag.String("reset-2fa", "", "turn off two-factor authentication for this username (lost authenticator) and exit")
+	flag.Parse()
+
 	postgresURL := os.Getenv("POSTGRES_URL")
 	if postgresURL == "" {
 		fmt.Fprintln(os.Stderr, "POSTGRES_URL is required")
 		os.Exit(1)
+	}
+
+	if *reset2FA != "" {
+		client, err := db.NewClient(postgresURL)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to connect to database:", err)
+			os.Exit(1)
+		}
+		defer client.Close()
+		wasEnabled, err := resetTwoFactor(context.Background(), client, *reset2FA)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to reset two-factor authentication:", err)
+			os.Exit(1)
+		}
+		if wasEnabled {
+			fmt.Printf("Two-factor authentication turned off for %s; they sign in with their password and can enroll again\n", *reset2FA)
+		} else {
+			fmt.Printf("%s had no two-factor authentication enabled; any pending enrollment was cleared\n", *reset2FA)
+		}
+		return
 	}
 
 	username := os.Getenv("ADMIN_USERNAME")
@@ -101,4 +126,44 @@ func clearLockout(ctx context.Context, client *db.Client, username string) error
 		return nil
 	}
 	return err
+}
+
+// errUnknownUser: -reset-2fa named no account.
+var errUnknownUser = errors.New("no such user")
+
+// resetTwoFactor is the break-glass twin of POST /users/{id}/reset-2fa
+// (adminauth.ResetMFA): it drops the TOTP secret, enrollment and recovery
+// codes of one user. Before migration 000120 there is nothing to reset.
+func resetTwoFactor(ctx context.Context, client *db.Client, username string) (bool, error) {
+	tx, err := client.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var wasEnabled bool
+	err = tx.QueryRowContext(ctx, `
+		WITH prior AS (
+			SELECT id, totp_enabled_at IS NOT NULL AS was FROM admin_users WHERE username = $1 FOR UPDATE
+		)
+		UPDATE admin_users u
+		SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = NULL, updated_at = NOW()
+		FROM prior WHERE u.id = prior.id
+		RETURNING prior.was
+	`, username).Scan(&wasEnabled)
+	var pqErr *pq.Error
+	switch {
+	case errors.As(err, &pqErr) && (pqErr.Code == "42P01" || pqErr.Code == "42703"):
+		return false, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, errUnknownUser
+	case err != nil:
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM admin_user_recovery_codes
+		WHERE admin_user_id = (SELECT id FROM admin_users WHERE username = $1)
+	`, username); err != nil {
+		return false, err
+	}
+	return wasEnabled, tx.Commit()
 }

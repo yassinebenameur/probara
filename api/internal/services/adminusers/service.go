@@ -45,6 +45,7 @@ type repository interface {
 	DeleteUser(ctx context.Context, userID uuid.UUID) error
 	AttachMemberships(ctx context.Context, users []models.AdminUser) error
 	AttachLockouts(ctx context.Context, users []models.AdminUser) error
+	AttachMFA(ctx context.Context, users []models.AdminUser) error
 }
 
 type sqlRepository struct {
@@ -88,6 +89,9 @@ func (s *Service) ListUsers(ctx context.Context, page, pageSize int) (*models.Ad
 	if err := s.repo.AttachLockouts(ctx, items); err != nil {
 		return nil, fmt.Errorf("failed to load lockouts: %w", err)
 	}
+	if err := s.repo.AttachMFA(ctx, items); err != nil {
+		return nil, fmt.Errorf("failed to load two-factor state: %w", err)
+	}
 
 	return &models.AdminUserListResponse{
 		Items:    items,
@@ -113,6 +117,9 @@ func (s *Service) GetUser(ctx context.Context, userID uuid.UUID) (*models.AdminU
 	}
 	if err := s.repo.AttachLockouts(ctx, users); err != nil {
 		return nil, fmt.Errorf("failed to load lockouts: %w", err)
+	}
+	if err := s.repo.AttachMFA(ctx, users); err != nil {
+		return nil, fmt.Errorf("failed to load two-factor state: %w", err)
 	}
 	return &users[0], nil
 }
@@ -540,6 +547,40 @@ func (r *sqlRepository) AttachLockouts(ctx context.Context, users []models.Admin
 		if i, ok := index[id]; ok {
 			lockedUntil := until
 			users[i].LockedUntil = &lockedUntil
+		}
+	}
+	return rows.Err()
+}
+
+// AttachMFA fills MFAEnabled for users with TOTP enabled. Before migration
+// 000120 nobody has it.
+func (r *sqlRepository) AttachMFA(ctx context.Context, users []models.AdminUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(users))
+	index := make(map[uuid.UUID]int, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+		index[u.ID] = i
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id FROM admin_users WHERE id = ANY($1) AND totp_enabled_at IS NOT NULL
+	`, pq.Array(ids))
+	if isMissingSchema(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			users[i].MFAEnabled = true
 		}
 	}
 	return rows.Err()

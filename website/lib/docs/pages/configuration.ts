@@ -723,7 +723,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
+            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process, and sends account mail (invites, password resets, email-change confirmations, contact verification codes). An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
         },
         {
           type: 'table',
@@ -747,7 +747,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel, and (with `PROBARA_SECRETS_KEY`) the one-click [acknowledge link](/docs/alerting/#ack-links) to triggers and reminders; both are omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one).',
+              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel, and (with `PROBARA_SECRETS_KEY`) the one-click [acknowledge link](/docs/alerting/#ack-links) to triggers and reminders; both are omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one), and builds [invite, password-reset and email-confirmation links](/docs/security/#account-recovery) on it: without it (or without `SMTP_*` on the API) the login page offers no **Forgot password**, email changes are refused, and superadministrators get those links to hand over instead.',
             ],
           ],
         },
@@ -1013,6 +1013,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`MIGRATIONS_PATH`', '`./migrations`', '`go run ./cmd/migrate`; local workflow supplies `./shared/db/migrations`.'],
             ['`ADMIN_USERNAME`', 'Required', '`go run ./cmd/admin` administrator upsert.'],
             ['`ADMIN_PASSWORD`', 'Required', '`go run ./cmd/admin`; do not expose in shell history in production.'],
+            ['`-reset-2fa <username>`', 'Flag', '`go run ./cmd/admin -reset-2fa alice` turns off that user\'s two-factor and exits; needs only `POSTGRES_URL`.'],
             ['`BOOTSTRAP_DB_USER`', '`probara`', '`scripts/bootstrap-local-db.sh`.'],
             ['`OCB_VERSION`', '`v0.159.0`', '`scripts/build-collector.sh`; pinned OpenTelemetry Collector Builder version, must match `collector/manifest.yaml`.'],
             ['`BUILD_DIR`', '`./static/collector`', 'Output directory for downloadable collector binaries and `checksums.txt`.'],

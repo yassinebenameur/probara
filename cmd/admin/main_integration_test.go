@@ -93,3 +93,43 @@ func TestUpsertSuperadmin_ClearsLoginLockout(t *testing.T) {
 		t.Fatalf("got failures=%d locked=%v password_changed=%v, want 0/false/true", failures, locked, passwordChanged)
 	}
 }
+
+func TestResetTwoFactorClearsEnrollment(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+
+	var id string
+	if err := client.QueryRowContext(ctx, `
+		INSERT INTO admin_users (username, password_hash, platform_role, totp_secret_enc, totp_enabled_at, totp_last_step)
+		VALUES ('ops', 'hash', 'member', 'sealed', NOW(), 42) RETURNING id
+	`).Scan(&id); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := client.ExecContext(ctx, `INSERT INTO admin_user_recovery_codes (admin_user_id, code_hash) VALUES ($1, 'h1'), ($1, 'h2')`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	was, err := resetTwoFactor(ctx, client, "ops")
+	if err != nil || !was {
+		t.Fatalf("resetTwoFactor = %v, %v; want true", was, err)
+	}
+	var secretSet, enabled bool
+	var codes int
+	if err := client.QueryRowContext(ctx, `
+		SELECT totp_secret_enc IS NOT NULL, totp_enabled_at IS NOT NULL,
+		       (SELECT COUNT(*) FROM admin_user_recovery_codes WHERE admin_user_id = u.id)
+		FROM admin_users u WHERE username = 'ops'
+	`).Scan(&secretSet, &enabled, &codes); err != nil {
+		t.Fatal(err)
+	}
+	if secretSet || enabled || codes != 0 {
+		t.Fatalf("after reset: secret=%v enabled=%v codes=%d", secretSet, enabled, codes)
+	}
+	if was, err := resetTwoFactor(ctx, client, "ops"); err != nil || was {
+		t.Fatalf("second reset = %v, %v; want false", was, err)
+	}
+	if _, err := resetTwoFactor(ctx, client, "nobody"); err == nil {
+		t.Fatal("unknown username accepted")
+	}
+}

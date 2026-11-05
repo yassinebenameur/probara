@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // ErrUserNotFound is returned by user-targeted actions for an unknown id.
@@ -27,6 +28,9 @@ type Service struct {
 
 	dummyOnce sync.Once
 	dummyHash string
+
+	// enc seals TOTP secrets (ConfigureEncryption; no-op by default).
+	enc secrets.Encryptor
 }
 
 // NewService creates a new admin auth service.
@@ -47,7 +51,9 @@ func (s *Service) burnPasswordCompare(password string) {
 
 // Authenticate validates admin credentials under the login lockout. A
 // refusal is a *LoginFailure matching ErrInvalidCredentials or
-// ErrAccountLocked; any other error is internal.
+// ErrAccountLocked. A correct password on an account with TOTP enabled is
+// a *SecondFactorRequired, never a user: the sign-in is not over until
+// CompleteSecondFactor. Any other error is internal.
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*models.AdminUser, error) {
 	const query = `
 		SELECT id, username, password_hash, created_at, updated_at, last_login_at, disabled_at, locked_until
@@ -125,6 +131,17 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 			}
 			return nil, failure
 		}
+		if binding, required, err := s.totpRequired(ctx, user.ID, passwordHash.String); err != nil {
+			return nil, fmt.Errorf("failed to check second factor: %w", err)
+		} else if required {
+			// Step one only: give back this attempt's reservation, keep the
+			// streak (second-factor failures count on it).
+			lockedNow := until != nil && until.After(time.Now())
+			if _, err := s.db.ExecContext(ctx, releaseReservationQuery, user.ID, lockedNow); err != nil {
+				return nil, fmt.Errorf("failed to release login attempt: %w", err)
+			}
+			return nil, &SecondFactorRequired{UserID: user.ID, Username: user.Username, Binding: binding}
+		}
 		if _, err := s.db.ExecContext(ctx, resetFailuresQuery, user.ID); err != nil && !isMissingSchema(err) {
 			return nil, fmt.Errorf("failed to reset login failures: %w", err)
 		}
@@ -138,6 +155,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	if !match {
 		return nil, &LoginFailure{UserID: &user.ID}
 	}
+	// No lockout columns means no TOTP columns either (000120 > 000103).
 	return &user, nil
 }
 
