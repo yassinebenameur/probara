@@ -943,7 +943,9 @@ Login lockout).
   `servePageAddon` (`addons.go`, suffixes in `pageAddonSuffixes`). Summary
   and badges read the `pageSummary` built in `cachedPage` with the page's
   HTML, so they cannot disagree with it; badges exist only for rendered
-  components. `writeAddon` never overwrites a `Cache-Control` set before
+  components, and uptime only where `show_global_uptime` /
+  `show_monitor_uptime` show it (hidden → `null`, uptime badge 404).
+  `writeAddon` never overwrites a `Cache-Control` set before
   dispatch (a gated page's `private, no-store` must win).
 - **Public-route throttle keys come from a bounded space** — a resolved page
   ID, a parsed client address — never raw request text such as the slug

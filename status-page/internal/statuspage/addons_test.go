@@ -20,6 +20,9 @@ func summaryTestPage() *StatusPageData {
 		ID:    "page-1",
 		Slug:  "acme",
 		Title: "Acme",
+		// The settings' defaults; the hidden case is its own test.
+		ShowGlobalUptime:  true,
+		ShowMonitorUptime: true,
 		Sections: []StatusPageSectionData{
 			{ID: "s1", Title: "Core", Monitors: []MonitorStatus{
 				{ID: "m-up", Name: "API", MonitorType: "http", Status: "up",
@@ -147,8 +150,12 @@ func TestPageStatusBadge_WorstStateWins(t *testing.T) {
 // test page, so add-on routes run without a database.
 func addonTestHandlers(t *testing.T) *Handlers {
 	t.Helper()
+	return addonTestHandlersFor(t, summaryTestPage())
+}
+
+func addonTestHandlersFor(t *testing.T, data *StatusPageData) *Handlers {
+	t.Helper()
 	cache := newRenderCache(time.Hour)
-	data := summaryTestPage()
 	if _, _, err := cache.GetPage("acme", func() (renderedPage, error) {
 		return renderedPage{html: "<html></html>", summary: buildPageSummary(data, time.Now())}, nil
 	}); err != nil {
@@ -239,6 +246,73 @@ func TestPageAddons_Badges(t *testing.T) {
 		if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "default-src 'none'") {
 			t.Errorf("%s: SVG served without a script-free CSP", tc.target)
 		}
+	}
+}
+
+// A page that hides uptime must not publish it through its add-ons: the
+// summary nulls the hidden figures (the built-in template's
+// ShowGlobalUptime / ShowMonitorUptime blocks) and the uptime badges 404,
+// while status stays available.
+func TestPageAddons_UptimeFollowsPageSettings(t *testing.T) {
+	allNull := func(u summaryUptime) bool {
+		return u.H1 == nil && u.H24 == nil && u.D7 == nil && u.D30 == nil && u.D90 == nil
+	}
+	cases := []struct {
+		name                 string
+		global, monitor      bool
+		pageBadge, compBadge int
+	}{
+		{"both shown", true, true, 200, 200},
+		{"global hidden", false, true, 404, 200},
+		{"monitor hidden", true, false, 200, 404},
+		{"both hidden", false, false, 404, 404},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := summaryTestPage()
+			data.ShowGlobalUptime = tc.global
+			data.ShowMonitorUptime = tc.monitor
+
+			s := buildPageSummary(data, time.Now())
+			if got := allNull(s.Uptime); got == tc.global {
+				t.Errorf("page uptime all-null = %v with show_global_uptime %v: %+v", got, tc.global, s.Uptime)
+			}
+			up, ok := s.component("m-up")
+			if !ok {
+				t.Fatal("m-up missing from the summary")
+			}
+			if got := allNull(up.Uptime); got == tc.monitor {
+				t.Errorf("component uptime all-null = %v with show_monitor_uptime %v: %+v", got, tc.monitor, up.Uptime)
+			}
+			if up.Status != "operational" || s.Status.Counts.Total != 3 {
+				t.Errorf("hiding uptime changed status: %+v / %+v", up, s.Status)
+			}
+
+			h := addonTestHandlersFor(t, data)
+			for target, want := range map[string]int{
+				"/public/status/acme/badge.svg?metric=uptime&range=24h":               tc.pageBadge,
+				"/public/status/acme/monitors/m-up/badge.svg?metric=uptime&range=24h": tc.compBadge,
+				"/public/status/acme/badge.svg":                                       200,
+				"/public/status/acme/monitors/m-up/badge.svg":                         200,
+			} {
+				if rec := serveAddon(h, target, nil); rec.Code != want {
+					t.Errorf("%s: status = %d, want %d", target, rec.Code, want)
+				}
+			}
+
+			rec := serveAddon(h, "/public/status/acme/summary.json", nil)
+			var raw map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("summary.json: %v", err)
+			}
+			uptime, ok := raw["uptime"].(map[string]any)
+			if !ok || len(uptime) != 5 {
+				t.Fatalf("summary.json uptime = %v, want the five ranges kept (null when hidden)", raw["uptime"])
+			}
+			if !tc.global && uptime["24h"] != nil {
+				t.Errorf("summary.json publishes hidden page uptime: %v", uptime)
+			}
+		})
 	}
 }
 

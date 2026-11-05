@@ -90,7 +90,10 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`show_monitor_url`",
               "Present in the settings schema; not currently wired into the built-in template",
             ],
-            ["`show_monitor_uptime`", "Controls per-monitor uptime in the built-in view"],
+            [
+              "`show_monitor_uptime`",
+              "Controls per-monitor uptime in the built-in view, in [`summary.json`](#summary-json) and in component [uptime badges](#badges)",
+            ],
             [
               "`show_monitor_tls`",
               "Present in the settings schema; not currently wired into the built-in template",
@@ -105,7 +108,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`show_global_uptime`",
-              "Controls the page-level uptime summary in the built-in view",
+              "Controls the page-level uptime summary in the built-in view, in [`summary.json`](#summary-json) and in the page [uptime badge](#badges)",
             ],
             ["`show_footer`", "Controls the built-in footer region"],
             ["`footer_text`", "Built-in custom footer text, up to 250 characters"],
@@ -326,11 +329,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`uptime`",
-              "Page-level availability in percent for `1h`, `24h`, `7d`, `30d` and `90d`, rounded to two decimals; `null` for a range with no data",
+              "Page-level availability in percent for `1h`, `24h`, `7d`, `30d` and `90d`, rounded to two decimals; `null` for a range with no data. Every range is `null` while `show_global_uptime` is off",
             ],
             [
               "`components[]`",
-              "Every component the page renders, in page order: `id` (the monitor ID), `name` (its public display name), `section`, `status` (`operational`, `degraded`, `down`, `maintenance` or `unknown`) and the same `uptime` object",
+              "Every component the page renders, in page order: `id` (the monitor ID), `name` (its public display name), `section`, `status` (`operational`, `degraded`, `down`, `maintenance` or `unknown`) and the same `uptime` object, all `null` while `show_monitor_uptime` is off",
             ],
             [
               "`incidents[]`",
@@ -364,7 +367,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`metric=uptime`",
-              "Availability for `range` with the page's own colors: green from 99%, amber from 95%, red below; `no data` when the range is empty",
+              "Availability for `range` with the page's own colors: green from 99%, amber from 95%, red below; `no data` when the range is empty. A page that hides uptime has no uptime badge: the page badge returns 404 while `show_global_uptime` is off, a component badge while `show_monitor_uptime` is off",
             ],
             ["`range`", "`1h`, `24h`, `7d`, `30d` (default) or `90d`; anything else is a 400"],
           ],

@@ -145,6 +145,13 @@ func (h *Handlers) handleBadge(w http.ResponseWriter, r *http.Request, slug, mon
 		return
 	}
 
+	// An uptime badge exists only where the page shows uptime: the summary
+	// nulls a hidden figure, and a badge must not read that as "no data".
+	if metric == "uptime" && ((monitorID == "" && summary.pageUptimeHidden) || (monitorID != "" && summary.componentUptimeHidden)) {
+		http.Error(w, "Uptime is not shown on this status page", http.StatusNotFound)
+		return
+	}
+
 	var label, value, color string
 	if monitorID == "" {
 		label = "status"

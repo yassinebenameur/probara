@@ -24,6 +24,14 @@ type pageSummary struct {
 	Incidents   []summaryIncident    `json:"incidents"`
 	Maintenance []summaryMaintenance `json:"maintenance"`
 	UpdatedAt   time.Time            `json:"updated_at"`
+
+	// pageUptimeHidden and componentUptimeHidden record the page's
+	// show_global_uptime / show_monitor_uptime being off. The matching
+	// uptime objects are then all null, and the uptime badges refuse rather
+	// than read those nulls as "no data": a public, cross-origin view must
+	// not publish availability the page owner chose to hide.
+	pageUptimeHidden      bool
+	componentUptimeHidden bool
 }
 
 type summaryPage struct {
@@ -199,22 +207,33 @@ func buildPageSummary(data *StatusPageData, now time.Time) *pageSummary {
 				Unknown:     view.UnknownCount,
 			},
 		},
-		Uptime:      pageSummaryUptime(data),
 		Components:  make([]summaryComponent, 0, view.MonitorCount),
 		Incidents:   make([]summaryIncident, 0),
 		Maintenance: make([]summaryMaintenance, 0, len(data.MaintenanceWindows)),
 		UpdatedAt:   now.UTC().Truncate(time.Second),
+
+		pageUptimeHidden:      !data.ShowGlobalUptime,
+		componentUptimeHidden: !data.ShowMonitorUptime,
+	}
+	// Uptime follows the page's settings, like the built-in template's
+	// {{if .ShowGlobalUptime}} / {{if $.ShowMonitorUptime}} blocks: a hidden
+	// figure stays all-null here (the contract's "no data" shape).
+	if data.ShowGlobalUptime {
+		summary.Uptime = pageSummaryUptime(data)
 	}
 
 	for _, section := range view.Sections {
 		for _, m := range section.Monitors {
-			summary.Components = append(summary.Components, summaryComponent{
+			component := summaryComponent{
 				ID:      m.ID,
 				Name:    m.Name,
 				Section: section.Title,
 				Status:  componentStatusForTone(m.ToneClass),
-				Uptime:  monitorSummaryUptime(byID[m.ID]),
-			})
+			}
+			if data.ShowMonitorUptime {
+				component.Uptime = monitorSummaryUptime(byID[m.ID])
+			}
+			summary.Components = append(summary.Components, component)
 		}
 	}
 
