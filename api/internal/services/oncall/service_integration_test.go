@@ -44,6 +44,7 @@ func setup(t *testing.T, now time.Time) *fixture {
 		{"bob", "member", f.tenant},
 		{"outsider", "member", f.other},
 		{"root", "superadmin", uuid.Nil},
+		{"ops", "superadmin", uuid.Nil},
 	} {
 		id := uuid.New()
 		if _, err := dbClient.ExecContext(ctx, `INSERT INTO admin_users (id, username, password_hash, platform_role) VALUES ($1, $2, 'x', $3)`,
@@ -62,6 +63,57 @@ func setup(t *testing.T, now time.Time) *fixture {
 }
 
 func intp(i int) *int { return &i }
+
+func (f *fixture) peopleNames(t *testing.T, tenantID uuid.UUID, allSuperadmins bool) string {
+	t.Helper()
+	people, err := f.s.People(f.ctx, tenantID, allSuperadmins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, p := range people {
+		names = append(names, p.Username+":"+p.Role)
+	}
+	return strings.Join(names, ",")
+}
+
+// The picker lists the workspace's members, never the installation's
+// superadmins wholesale: one shows up only once they are on one of the
+// workspace's schedules, or when the caller is a superadmin. Writes still
+// take any eligible user by ID.
+func TestPeopleListing(t *testing.T) {
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	f := setup(t, now)
+
+	if got := f.peopleNames(t, f.tenant, false); got != "alice:viewer,bob:viewer" {
+		t.Fatalf("members only: people = %v", got)
+	}
+	if got := f.peopleNames(t, f.tenant, true); got != "alice:viewer,bob:viewer,ops:superadmin,root:superadmin" {
+		t.Fatalf("superadmin caller: people = %v", got)
+	}
+
+	// A superadmin is still eligible by ID, though not listed.
+	sched, err := f.s.Create(f.ctx, f.tenant, ScheduleInput{
+		Name: "Primary", Timezone: "UTC",
+		Rotations: []RotationInput{{Kind: oncall.Daily, HandoffTime: "09:00",
+			StartAt: now.Add(-time.Hour), MemberIDs: []uuid.UUID{f.users["alice"]}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.CreateOverride(f.ctx, f.tenant, sched.ID, f.users["alice"], CreateOverrideRequest{
+		UserID: f.users["root"], StartsAt: now, EndsAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("superadmin override: %v", err)
+	}
+	if got := f.peopleNames(t, f.tenant, false); got != "alice:viewer,bob:viewer,root:superadmin" {
+		t.Fatalf("after override: people = %v", got)
+	}
+	// Another workspace does not see root through this one's schedules.
+	if got := f.peopleNames(t, f.other, false); got != "outsider:viewer" {
+		t.Fatalf("other workspace: people = %v", got)
+	}
+}
 
 func TestScheduleLifecycle(t *testing.T) {
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC) // Wednesday
@@ -174,16 +226,9 @@ func TestScheduleLifecycle(t *testing.T) {
 		t.Fatalf("replaced = %+v", updated)
 	}
 
-	people, err := f.s.People(f.ctx, f.tenant)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := []string{}
-	for _, p := range people {
-		names = append(names, p.Username+":"+p.Role)
-	}
-	if strings.Join(names, ",") != "alice:viewer,bob:viewer,root:superadmin" {
-		t.Fatalf("people = %v", names)
+	// root is on a rotation now, so the picker lists them; ops is not.
+	if got := f.peopleNames(t, f.tenant, false); got != "alice:viewer,bob:viewer,root:superadmin" {
+		t.Fatalf("people = %v", got)
 	}
 
 	all, err := f.s.List(f.ctx, f.tenant)

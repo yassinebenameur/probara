@@ -1142,7 +1142,7 @@ export const API_PAGE: DocPage = {
             ["`PUT /api/v1/people-settings`", "Tenant admin; set or clear (`null`) `personal_sms_channel_id`, a channel whose plugin can text one person (SMS via Twilio)"],
             ["`GET /api/v1/oncall-schedules`", "Authenticated; schedules with `on_call` (the current shift or null) and `next`"],
             ["`POST /api/v1/oncall-schedules`", "Write; create (`name`, `description`, `timezone`, `rotations[]`: `kind` `daily`/`weekly`, `handoff_time` `HH:MM`, `handoff_weekday` 0-6 for weekly, `start_at`, optional `end_at`, `member_ids` in turn order, optional `name`); at most 10 rotations of 50 members"],
-            ["`GET /api/v1/oncall-schedules/people`", "Authenticated; who can be put on call here (members and superadmins) with their verified contact count"],
+            ["`GET /api/v1/oncall-schedules/people`", "Write; the people to pick from when editing (the workspace's members, plus superadmins already on one of its schedules, or every superadmin for a superadmin caller) with their verified contact count. Any member or superadmin is accepted by ID"],
             ["`GET /api/v1/oncall-schedules/{id}`", "Authenticated; one schedule with `on_call` and `next`"],
             ["`PUT /api/v1/oncall-schedules/{id}`", "Write; replace fields and every rotation (overrides and the feed are kept)"],
             ["`DELETE /api/v1/oncall-schedules/{id}`", "Write; delete with rotations, overrides and feed"],

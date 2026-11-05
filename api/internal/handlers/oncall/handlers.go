@@ -15,6 +15,7 @@ import (
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	svc "github.com/yassinebenameur/probara/api/internal/services/oncall"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -24,8 +25,9 @@ type Handlers struct {
 	Log     *logger.Logger
 }
 
-// Routes mounts /oncall-schedules. Reads are open to every member; writes
-// go through the protected group's write gate.
+// Routes mounts /oncall-schedules. Reads are open to every member, except
+// /people (write access, see people); writes go through the protected
+// group's write gate.
 func (h *Handlers) Routes(r chi.Router) {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
@@ -159,12 +161,19 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// people serves the on-call picker. Only editing needs it, so it demands
+// write access like a mutation: viewers and read-scope keys see who is on
+// call through the schedules, never the workspace's user list.
 func (h *Handlers) people(w http.ResponseWriter, r *http.Request) {
+	if !ctxpkg.CanWrite(r.Context()) {
+		apierrors.WriteForbiddenError(w, "read-only access: listing people for on-call requires write permission")
+		return
+	}
 	t, ok := tenant(w, r)
 	if !ok {
 		return
 	}
-	items, err := h.Service.People(r.Context(), t)
+	items, err := h.Service.People(r.Context(), t, ctxpkg.IsSuperadmin(r.Context()))
 	if err != nil {
 		h.fail(w, err, "list people")
 		return
