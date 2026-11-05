@@ -75,7 +75,8 @@ family in its `sid` claim (`shared/auth.CreateAdminSessionToken`).
   `revoke_user_sessions`), a password reset or invite redeemed (all), a
   self-service password change (all but the current), and a superadmin setting a user's password
   (`adminauth.RevokeUserSessions`, which also records
-  `password_changed_at` and clears the lockout).
+  `password_changed_at` and clears the lockout). The superadmin sign-out
+  (`adminauth.RevokeUserAccess`) also cancels a pending email change.
 - An access JWT without `sid` (minted before 000104) is accepted until it
   expires; it cannot be revoked early.
 - `/account/*` takes a signed-in browser session only (no API key, no MCP
@@ -107,10 +108,20 @@ Invites, password reset and email change (`adminauth/lifecycle.go`,
   | `email_change` | 24 hours | `POST /account/email` (current password) | `POST /auth/email/confirm` |
 
   Redeeming a password token sets the password, records
-  `password_changed_at`, clears the lockout, supersedes the other open
-  invite/reset tokens and revokes every session family. A self-service
-  password change (`PATCH /account/password`) keeps only the current
-  session. TOTP survives a reset.
+  `password_changed_at`, clears the lockout (only when TOTP is off, see
+  [Two-factor](#two-factor)), retires the other open invite/reset/
+  email-change tokens and revokes every session family. A self-service
+  password change (`PATCH /account/password`) retires the same tokens and
+  keeps only the current session. TOTP survives a reset.
+- **A pending email change dies with any credential reset**: password
+  reset, password change, a superadmin setting the password, superadmin
+  sign-out everywhere and superadmin/`cmd/admin` 2FA reset all retire open
+  `email_change` tokens (`credentialResetPurposes`, `retireTokens`), and
+  `ConfirmEmailChange` also refuses a token created before
+  `password_changed_at`, so a password path that retires nothing (the
+  `cmd/admin` break-glass) still voids it. Otherwise an intruder could
+  confirm a change they started to their own mailbox after the owner
+  recovered the account, then reset the password through it.
 - **Links** are `APP_BASE_URL` + `/accept-invite`, `/reset-password` or
   `/confirm-email` with the token in the **fragment** (`#token=…`): never
   sent to a server, so never in proxy/access logs. Tokens reach the API in
@@ -154,7 +165,12 @@ SHA-256-hashed single-use codes).
   a correct password at step one only releases its own reservation
   (`releaseReservationQuery`), never resets the streak, so wrong codes
   accumulate to the same lock. Self-service routes that check password +
-  code reserve once for both (`VerifyCredentials`).
+  code reserve once for both (`VerifyCredentials`). A password reset or
+  invite redeemed on an account with TOTP on keeps the streak and any lock
+  (`RedeemPasswordToken`): a reset needs only the mailbox and repeats every
+  minute, so clearing it would hand a mailbox holder ten fresh code guesses
+  a minute. Only a completed sign-in, a superadmin unlock or a superadmin
+  password set clears it.
 - Self-service: `/account/2fa` (status), `/setup` (password → secret and
   `otpauth://` URI; the UI draws the QR in the browser, `web/lib/qr.ts`),
   `/enable` (code → recovery codes, shown once), `/disable` and
@@ -191,7 +207,7 @@ is in Postgres, so it holds across API replicas and restarts.
   limits per client belong to the general API rate limiter.
 - Unlock: superadmin `POST /users/{id}/unlock` (MCP `unlock_user`), the
   `cmd/admin` break-glass, a superadmin setting the password, or a
-  password reset/invite link.
+  password reset/invite link on an account without TOTP.
 - Second-factor failures and wrong current passwords on `/account/*`
   count on the same streak (see [Two-factor](#two-factor)).
 - Audit: `auth.login` (failure; `denied` with `reason` `locked`),

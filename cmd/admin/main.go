@@ -133,7 +133,8 @@ var errUnknownUser = errors.New("no such user")
 
 // resetTwoFactor is the break-glass twin of POST /users/{id}/reset-2fa
 // (adminauth.ResetMFA): it drops the TOTP secret, enrollment and recovery
-// codes of one user. Before migration 000118 there is nothing to reset.
+// codes of one user and cancels a pending email change. Before migration
+// 000118 there is nothing to reset.
 func resetTwoFactor(ctx context.Context, client *db.Client, username string) (bool, error) {
 	tx, err := client.BeginTx(ctx, nil)
 	if err != nil {
@@ -162,6 +163,14 @@ func resetTwoFactor(ctx context.Context, client *db.Client, username string) (bo
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM admin_user_recovery_codes
 		WHERE admin_user_id = (SELECT id FROM admin_users WHERE username = $1)
+	`, username); err != nil {
+		return false, err
+	}
+	// 000118 is in place, so 000117's admin_user_tokens is too.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE admin_user_tokens SET used_at = NOW()
+		WHERE admin_user_id = (SELECT id FROM admin_users WHERE username = $1)
+		  AND purpose = 'email_change' AND used_at IS NULL
 	`, username); err != nil {
 		return false, err
 	}

@@ -109,6 +109,12 @@ func TestResetTwoFactorClearsEnrollment(t *testing.T) {
 	if _, err := client.ExecContext(ctx, `INSERT INTO admin_user_recovery_codes (admin_user_id, code_hash) VALUES ($1, 'h1'), ($1, 'h2')`, id); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_user_tokens (admin_user_id, purpose, token_hash, new_email, expires_at)
+		VALUES ($1, 'email_change', 'th', 'new@example.com', NOW() + INTERVAL '1 day')
+	`, id); err != nil {
+		t.Fatal(err)
+	}
 
 	was, err := resetTwoFactor(ctx, client, "ops")
 	if err != nil || !was {
@@ -125,6 +131,15 @@ func TestResetTwoFactorClearsEnrollment(t *testing.T) {
 	}
 	if secretSet || enabled || codes != 0 {
 		t.Fatalf("after reset: secret=%v enabled=%v codes=%d", secretSet, enabled, codes)
+	}
+	var openChanges int
+	if err := client.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM admin_user_tokens WHERE admin_user_id = $1 AND used_at IS NULL
+	`, id).Scan(&openChanges); err != nil {
+		t.Fatal(err)
+	}
+	if openChanges != 0 {
+		t.Fatalf("pending email change survived the 2FA reset")
 	}
 	if was, err := resetTwoFactor(ctx, client, "ops"); err != nil || was {
 		t.Fatalf("second reset = %v, %v; want false", was, err)
