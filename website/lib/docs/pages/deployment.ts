@@ -114,7 +114,7 @@ openssl rand -base64 32    # PROBARA_SECRETS_KEY`,
           tone: 'warning',
           title: 'The development Compose file still has development defaults',
           text:
-            '`docker-compose.yml` has no `ADMIN_JWT_SECRET` default: every `docker compose` command fails until it is exported or in `.env` (the Make targets fall back to a per-checkout random `.dev-admin-jwt-secret`). Its other interpolated variables (`PUBLIC_BASE_URL`, `STATUS_PAGE_PREVIEW_SECRET`, `STATUS_PAGE_SESSION_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `SMTP_*`, `LOCAL_AI_*`) are optional, the database password defaults to `probara`, and `LOCAL_AI_TOKEN` falls back to a public development token. The [release override](#release-compose) makes every credential required except `STATUS_PAGE_SESSION_SECRET`, which only password and private status pages need (`scripts/install.sh` generates it anyway).',
+            '`docker-compose.yml` has no `ADMIN_JWT_SECRET` default: every `docker compose` command fails until it is exported or in `.env` (the Make targets fall back to a per-checkout random `.dev-admin-jwt-secret`). Its other interpolated variables (`PUBLIC_BASE_URL`, `STATUS_PAGE_PREVIEW_SECRET`, `STATUS_PAGE_SESSION_SECRET`, `STATUS_PAGE_VAPID_*`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `SMTP_*`, `SLACK_*`, `LOCAL_AI_*`) are optional, the database password defaults to `probara`, and `LOCAL_AI_TOKEN` falls back to a public development token. The [release override](#release-compose) makes the platform credentials required (`ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, the `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` pair, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`); the credentials of optional features stay optional: `STATUS_PAGE_SESSION_SECRET` (only password and private status pages need it; `scripts/install.sh` generates it anyway), `SMTP_PASSWORD`, `OIDC_CLIENT_SECRET` (empty there instead of the Dex development secret), `SLACK_CLIENT_SECRET` / `SLACK_SIGNING_SECRET` and `STATUS_PAGE_VAPID_PRIVATE_KEY`.',
         },
       ],
     },
@@ -249,7 +249,7 @@ docker compose down`,
       id: 'release-compose',
       title: 'Release Compose install',
       intro:
-        'For a single host without building anything: `docker-compose.release.yml` is an override of `docker-compose.yml` that swaps every build for the release image on GHCR (`${PROBARA_IMAGE_REPOSITORY:-ghcr.io/yassinebenameur/probara}-<service>:${PROBARA_VERSION}`), adds the frontend, turns NATS authentication on, and makes every credential a required variable (except `STATUS_PAGE_SESSION_SECRET`, optional because only password and private status pages need it). `scripts/install.sh` downloads both files at a release tag and writes `.env`.',
+        'For a single host without building anything: `docker-compose.release.yml` is an override of `docker-compose.yml` that swaps every build for the release image on GHCR (`${PROBARA_IMAGE_REPOSITORY:-ghcr.io/yassinebenameur/probara}-<service>:${PROBARA_VERSION}`), adds the frontend, turns NATS authentication on, and makes every platform credential a required variable; the credentials of optional features (`STATUS_PAGE_SESSION_SECRET`, `SMTP_*`, `OIDC_CLIENT_SECRET`, `SLACK_*`, `STATUS_PAGE_VAPID_*`) stay optional, as [Prepare secrets](#prepare-secrets) lists. `scripts/install.sh` downloads both files at a release tag and writes `.env`.',
       blocks: [
         {
           type: 'code',
