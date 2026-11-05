@@ -58,36 +58,61 @@ umask 077
 touch "$env_file"
 chmod 600 "$env_file"
 
-# env_value KEY prints KEY's value in .env (empty when absent).
-env_value() {
-  local line
-  line="$(grep -E "^$1=" "$env_file" | tail -n 1 || true)"
-  printf '%s' "${line#*=}"
+# .env lines are read the way Compose reads them: `KEY=v`, `KEY = v` and
+# `export KEY=v` all define KEY, a value may be quoted, and an unquoted value
+# ends at " #". Matching only the plain `KEY=` form would miss a hand-edited
+# line and append a second, freshly generated secret after it, which Compose
+# would then use: stored credentials unreadable, the database password wrong.
+# Keys are plain [A-Z0-9_] names, safe inside the regular expression.
+env_key_re() { printf '^[[:space:]]*(export[[:space:]]+)?%s[[:space:]]*=' "$1"; }
+
+# env_has KEY succeeds when .env defines KEY in any form, even as empty.
+env_has() {
+  grep -qE "$(env_key_re "$1")" "$env_file"
 }
 
-# env_set KEY VALUE writes KEY=VALUE in place of an existing KEY line, or
-# appends it.
+# env_value KEY prints KEY's value (the last definition wins, as in Compose;
+# empty when absent).
+env_value() {
+  RE="$(env_key_re "$1")" awk -v q="'" '
+    match($0, ENVIRON["RE"]) {
+      v = substr($0, RLENGTH + 1)
+      sub(/^[[:space:]]+/, "", v)
+      if (substr(v, 1, 1) == "\"" || substr(v, 1, 1) == q) {
+        c = substr(v, 1, 1); v = substr(v, 2)
+        i = index(v, c); if (i > 0) v = substr(v, 1, i - 1)
+      } else {
+        sub(/[[:space:]]+#.*$/, "", v); sub(/[[:space:]]+$/, "", v)
+      }
+      val = v
+    }
+    END { printf "%s", val }
+  ' "$env_file"
+}
+
+# env_set KEY VALUE writes KEY=VALUE in place of the first line defining KEY
+# (any form) and drops later definitions, or appends it.
 env_set() {
   local tmp
   tmp="$(mktemp "${env_file}.XXXXXX")"
-  KEY="$1" VALUE="$2" awk '
-    index($0, ENVIRON["KEY"] "=") == 1 { if (!done) print ENVIRON["KEY"] "=" ENVIRON["VALUE"]; done = 1; next }
+  RE="$(env_key_re "$1")" KEY="$1" VALUE="$2" awk '
+    match($0, ENVIRON["RE"]) { if (!done) print ENVIRON["KEY"] "=" ENVIRON["VALUE"]; done = 1; next }
     { print }
     END { if (!done) print ENVIRON["KEY"] "=" ENVIRON["VALUE"] }
   ' "$env_file" > "$tmp"
   mv "$tmp" "$env_file"
 }
 
-# env_default KEY VALUE sets KEY only when it is missing or empty (secrets:
-# an empty one is never valid).
+# env_default KEY VALUE sets KEY only when no form of it holds a value
+# (secrets: an empty one is never valid, and Compose's ${KEY:?} refuses it).
 env_default() {
   [[ -n "$(env_value "$1")" ]] || env_set "$1" "$2"
 }
 
-# env_init KEY VALUE sets KEY only when .env has no KEY line at all, so a
+# env_init KEY VALUE sets KEY only when .env does not define it at all, so a
 # setting deliberately left empty (COMPOSE_PROFILES=) stays empty.
 env_init() {
-  grep -qE "^$1=" "$env_file" || env_set "$1" "$2"
+  env_has "$1" || env_set "$1" "$2"
 }
 
 # --- version ---------------------------------------------------------------
@@ -158,7 +183,7 @@ esac
 # Off until the UI is served over HTTPS (a Secure cookie never comes back over
 # plain http). Set it to true behind TLS.
 env_init ADMIN_COOKIE_SECURE "false"
-for key in PUBLIC_BASE_URL PUBLIC_NATS_URL APP_BASE_URL SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM; do
+for key in PUBLIC_BASE_URL PUBLIC_NATS_URL PROBARA_TRUSTED_PROXIES APP_BASE_URL SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM; do
   env_init "$key" ""
 done
 
@@ -182,6 +207,8 @@ Probara $version is starting.
 
 Back up $(pwd)/$env_file: it holds every generated secret.
 Before exposing this host, put HTTPS in front of the UI, then set
-PUBLIC_BASE_URL and ADMIN_COOKIE_SECURE=true in $env_file and run
+PUBLIC_BASE_URL and ADMIN_COOKIE_SECURE=true in $env_file, and
+PROBARA_TRUSTED_PROXIES to your TLS proxy's address as the edge container
+sees it (else every client looks like that proxy), and run
 \`docker compose up -d\` again.
 EOF

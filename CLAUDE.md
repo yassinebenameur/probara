@@ -383,7 +383,9 @@ or imported groups come back empty. Any other path that creates groups through
   command needs it (Make falls back to `.dev-admin-jwt-secret`, CI sets a
   dummy). Validate with
   `docker compose -f docker-compose.yml -f docker-compose.release.yml config -q`
-  under dummy env, and keep `scripts/install.sh` generating every `:?` secret.
+  under dummy env, and keep `scripts/install.sh` generating every `:?` secret
+  (`bash scripts/test-install.sh` checks its `.env` handling: every form
+  Compose accepts, `export KEY=` and `KEY = v` included, counts as set).
 - **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
   ingress/proxy) lets private locations dial `wss://` on 443. Helm
   `nats.websocket.*` (+ Ingress, which fails the render without
