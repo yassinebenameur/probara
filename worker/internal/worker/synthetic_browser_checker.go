@@ -82,7 +82,15 @@ func NewSyntheticBrowserChecker(artifactsDir string) *SyntheticBrowserChecker {
 }
 
 // Check executes a synthetic browser journey.
+// Check runs a browser journey, then scrubs the values of its
+// secret_variables from everything the result reports (step URLs and
+// selectors, errors, screenshot metadata and warnings).
 func (c *SyntheticBrowserChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
+	result := c.check(ctx, configRaw, timeoutSeconds)
+	return newSecretRedactor(syntheticSecretVariables(configRaw)).redactResult(result)
+}
+
+func (c *SyntheticBrowserChecker) check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
 	var config models.SyntheticBrowserMonitorConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		errMsg := fmt.Sprintf("failed to unmarshal synthetic_browser config: %v", err)
@@ -103,10 +111,7 @@ func (c *SyntheticBrowserChecker) Check(ctx context.Context, configRaw json.RawM
 		failureMode = "fail_fast"
 	}
 
-	vars := make(map[string]string, len(config.Variables))
-	for key, value := range config.Variables {
-		vars[key] = value
-	}
+	vars := mergeSyntheticVariables(config.Variables, config.SecretVariables)
 
 	resolvedStartURL, err := interpolateTemplate(config.StartURL, vars)
 	if err != nil {
