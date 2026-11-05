@@ -96,9 +96,10 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 		}
 	}()
 
-	// Monitors a deleted workspace gained after its delete (a request that
-	// passed auth just before the delete committed) join the queue first.
-	tenantPhase, err := p.tombstoneDeletedTenantMonitors(ctx, conn)
+	// Monitors and credentials a deleted workspace gained after its delete
+	// (a request that passed auth just before the delete committed) are
+	// tombstoned or revoked first, so late monitors join this run's queue.
+	tenantPhase, err := p.cutOffDeletedTenants(ctx, conn)
 	if err != nil {
 		return 0, err
 	}

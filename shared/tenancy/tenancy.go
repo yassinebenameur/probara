@@ -28,6 +28,21 @@ const DefaultTenantID = "00000000-0000-0000-0000-000000000001"
 
 const deletedQuery = `SELECT deleted_at IS NOT NULL FROM tenants WHERE id = $1`
 
+// LiveTenantSQL is a SQL predicate that holds when the tenant whose ID is in
+// column exists and is not soft-deleted. Credential lookups that are not
+// tenant-scoped requests (API keys, discovery collector tokens) add it to
+// their own query, so a credential created while its workspace was being
+// deleted is refused at read time, not only once the purger revokes it.
+//
+// It reads deleted_at through to_jsonb rather than naming the column so the
+// same query also runs on a schema without it (this binary ahead of migration
+// 000105, when no workspace is deleted): these lookups run on every request
+// and must not fail during the deploy window.
+func LiveTenantSQL(column string) string {
+	return `EXISTS (SELECT 1 FROM tenants live_tenant WHERE live_tenant.id = ` + column +
+		` AND to_jsonb(live_tenant) ->> 'deleted_at' IS NULL)`
+}
+
 // IsDeleted reports whether tenantID names a soft-deleted workspace. An
 // unknown tenant is not "deleted": callers keep their own not-found handling.
 // A schema without tenants.deleted_at (this binary running ahead of the

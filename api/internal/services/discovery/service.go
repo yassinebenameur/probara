@@ -23,6 +23,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	contract "github.com/yassinebenameur/probara/shared/discovery"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 var ErrNotFound = errors.New("discovery resource not found")
@@ -174,6 +175,12 @@ func tokenPair() (string, string, error) {
 	t := base64.RawURLEncoding.EncodeToString(b)
 	return t, hash(t), nil
 }
+
+// collectorLiveTenant refuses a collector token of a deleted workspace at
+// read time, including one an integration create or token rotation wrote
+// while the workspace delete was committing.
+var collectorLiveTenant = tenancy.LiveTenantSQL("discovery_integrations.tenant_id")
+
 func hash(t string) string { s := sha256.Sum256([]byte(t)); return hex.EncodeToString(s[:]) }
 func (s *Service) Create(ctx context.Context, tenant uuid.UUID, req CreateRequest) (*Integration, error) {
 	req.Name = strings.TrimSpace(req.Name)
@@ -279,7 +286,7 @@ func (s *Service) Delete(ctx context.Context, tenant, id uuid.UUID) error {
 }
 func (s *Service) CollectorConfig(ctx context.Context, id uuid.UUID, token string) (contract.Config, error) {
 	var cfg contract.Config
-	err := s.db.QueryRowContext(ctx, `SELECT namespaces,pending_namespaces,revision FROM discovery_integrations WHERE id=$1 AND token_hash=$2`, id, hash(token)).Scan(pq.Array(&cfg.Namespaces), pq.Array(&cfg.Pending), &cfg.Revision)
+	err := s.db.QueryRowContext(ctx, `SELECT namespaces,pending_namespaces,revision FROM discovery_integrations WHERE id=$1 AND token_hash=$2 AND `+collectorLiveTenant, id, hash(token)).Scan(pq.Array(&cfg.Namespaces), pq.Array(&cfg.Pending), &cfg.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cfg, ErrNotFound
 	}
@@ -304,7 +311,7 @@ func (s *Service) retryAfterSQL() string {
 // under the integration row lock; this is only the cheap early refusal.
 func (s *Service) AuthorizeSnapshot(ctx context.Context, id uuid.UUID, token string) error {
 	var retry int
-	err := s.db.QueryRowContext(ctx, `SELECT `+s.retryAfterSQL()+` FROM discovery_integrations WHERE id=$1 AND token_hash=$2`, id, hash(token)).Scan(&retry)
+	err := s.db.QueryRowContext(ctx, `SELECT `+s.retryAfterSQL()+` FROM discovery_integrations WHERE id=$1 AND token_hash=$2 AND `+collectorLiveTenant, id, hash(token)).Scan(&retry)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -335,7 +342,7 @@ func (s *Service) Snapshot(ctx context.Context, id uuid.UUID, token string, snap
 	var revision int64
 	var retry int
 	var now time.Time
-	err = tx.QueryRowContext(ctx, `SELECT tenant_id,namespaces,pending_namespaces,pending_status,revision,`+s.retryAfterSQL()+`,NOW() FROM discovery_integrations WHERE id=$1 AND token_hash=$2 FOR UPDATE`, id, hash(token)).Scan(&tenant, pq.Array(&active), pq.Array(&pending), &statusRaw, &revision, &retry, &now)
+	err = tx.QueryRowContext(ctx, `SELECT tenant_id,namespaces,pending_namespaces,pending_status,revision,`+s.retryAfterSQL()+`,NOW() FROM discovery_integrations WHERE id=$1 AND token_hash=$2 AND `+collectorLiveTenant+` FOR UPDATE`, id, hash(token)).Scan(&tenant, pq.Array(&active), pq.Array(&pending), &statusRaw, &revision, &retry, &now)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
