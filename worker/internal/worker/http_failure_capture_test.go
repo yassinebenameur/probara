@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/yassinebenameur/probara/shared/models"
 )
 
 type capturedHTTP struct {
@@ -177,5 +179,95 @@ func TestHTTPFailureCaptureSizeBound(t *testing.T) {
 	}
 	if n := len(res.MetricsData); n >= 16*1024 {
 		t.Fatalf("metrics_data is %d bytes, want < 16 KiB", n)
+	}
+}
+
+// A NUL byte would marshal as \u0000, which PostgreSQL's jsonb rejects, so a
+// UTF-16 or binary error body would make the check result unstorable.
+func TestHTTPFailureCaptureNULBody(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_, _ = w.Write([]byte("\xff\xfee\x00r\x00r\x00"))
+	}
+	res, capture := runCaptureCheck(t, handler, map[string]any{"capture_failure_response": true})
+	if capture == nil {
+		t.Fatalf("no capture in %s", res.MetricsData)
+	}
+	if strings.Contains(string(res.MetricsData), `\u0000`) {
+		t.Fatalf("metrics_data carries \\u0000: %s", res.MetricsData)
+	}
+	if want := "\uFFFD\uFFFDe\uFFFDr\uFFFDr\uFFFD"; capture.BodyExcerpt != want || capture.BodyTruncated {
+		t.Fatalf("excerpt = %q truncated=%v, want %q", capture.BodyExcerpt, capture.BodyTruncated, want)
+	}
+
+	// The replacement is budgeted at its own encoded size.
+	if got, cut := truncateJSONString("a\x00b", 4); got != "a\uFFFD" || !cut {
+		t.Fatalf("NUL budget = %q %v", got, cut)
+	}
+}
+
+// captureLeak returns a run of n or more characters of token found in s.
+func captureLeak(s, token string, n int) string {
+	for i := 0; i+n <= len(token); i++ {
+		if strings.Contains(s, token[i:i+n]) {
+			return token[i : i+n]
+		}
+	}
+	return ""
+}
+
+// Redaction runs before the excerpt is cut: a secret straddling the budget,
+// or a copy past it that earlier matches would shift into it, never shows.
+func TestHTTPFailureCaptureRedactionAtBudget(t *testing.T) {
+	const token = "abcdefghijklmnopqrstuvwxyz0123456789abcdefgh" // 44 chars
+	const secret = "Bearer " + token
+	const budget = 2048
+	cases := map[string]string{
+		// A first match shrinks the text by 41 bytes, which pulled a second
+		// copy starting just past the budget back inside it.
+		"shifted copy": secret + strings.Repeat(".", budget+5-len(secret)) + secret + strings.Repeat(".", 100),
+		"straddling":   strings.Repeat(".", budget-20) + secret + strings.Repeat(".", 100),
+		"just past":    strings.Repeat(".", budget+1) + secret,
+		"many shifts":  strings.Repeat(secret, 60) + strings.Repeat(".", 10) + secret,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			handler := func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(500)
+				_, _ = w.Write([]byte(body))
+			}
+			_, capture := runCaptureCheck(t, handler, map[string]any{
+				"secret_headers":           map[string]string{"X-Upstream": secret},
+				"capture_failure_response": true,
+			})
+			if capture == nil {
+				t.Fatal("no capture")
+			}
+			if leak := captureLeak(capture.BodyExcerpt, token, 4); leak != "" {
+				t.Fatalf("excerpt leaks %q of the token: ...%s", leak, capture.BodyExcerpt[max(0, len(capture.BodyExcerpt)-80):])
+			}
+			if len(capture.BodyExcerpt) > budget {
+				t.Fatalf("excerpt = %d bytes", len(capture.BodyExcerpt))
+			}
+		})
+	}
+}
+
+// A read that stopped at the worker's body limit may end inside a secret;
+// that partial secret matches no form, so the tail is dropped.
+func TestHTTPFailureCaptureReadCapEndsInSecret(t *testing.T) {
+	const token = "abcdefghijklmnopqrstuvwxyz0123456789abcdefgh"
+	config := &models.HTTPMonitorConfig{SecretHeaders: map[string]string{"X-Upstream": "Bearer " + token}}
+	resp := &http.Response{Proto: "HTTP/1.1", Status: "500 Internal Server Error", Header: http.Header{}}
+
+	for _, tail := range []string{"Bearer " + token[:30], token[:12], "Bear"} {
+		capture := captureFailureResponse(resp, []byte("error: "+tail), true, config)
+		if capture.BodyExcerpt != "error: " || !capture.BodyTruncated {
+			t.Errorf("tail %q: excerpt = %q truncated=%v", tail, capture.BodyExcerpt, capture.BodyTruncated)
+		}
+	}
+	// A body that was read whole keeps its tail: nothing more could follow.
+	if capture := captureFailureResponse(resp, []byte("error: Bear"), false, config); capture.BodyExcerpt != "error: Bear" || capture.BodyTruncated {
+		t.Errorf("whole body: excerpt = %q truncated=%v", capture.BodyExcerpt, capture.BodyTruncated)
 	}
 }

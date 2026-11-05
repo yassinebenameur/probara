@@ -206,8 +206,9 @@ type execer interface {
 func insertResult(ctx context.Context, db execer, r Result) (bool, error) {
 	var metricsData interface{}
 	if len(r.MetricsData) > 0 {
-		metricsData = []byte(r.MetricsData)
+		metricsData = pgSafeJSON(r.MetricsData)
 	}
+	r.ErrorMessage = pgSafeText(r.ErrorMessage) // pgsafe.go
 
 	res, err := db.ExecContext(ctx, `
 		INSERT INTO check_results (

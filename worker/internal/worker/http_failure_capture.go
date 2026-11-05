@@ -92,18 +92,39 @@ func captureFailureResponse(resp *http.Response, body []byte, readCapped bool, c
 		used += cost
 	}
 
-	budget := config.CaptureBodyLimit()
-	// Redact a prefix long enough that a secret starting inside the excerpt
-	// is wholly inside it; JSON cost is at least one byte per input byte, so
-	// the excerpt never takes more than budget input bytes.
-	prefix := body
-	if limit := budget + redactor.longestNeedle(); len(prefix) > limit {
-		prefix = prefix[:limit]
+	// Redact the whole read body (already capped at the worker's body
+	// limit) and only then cut the excerpt. Cutting first, even with a
+	// needle's length of lookahead, leaks: every earlier match shrinks the
+	// text, pulling an unredacted partial copy from past the bound into the
+	// excerpt. A read that stopped at the limit may end inside a secret, so
+	// a tail that begins one is dropped as well.
+	text := redactor.redact(string(body))
+	tailCut := false
+	if readCapped {
+		text, tailCut = redactor.trimPartialNeedle(text)
 	}
-	excerpt, cut := truncateJSONString(redactor.redact(string(prefix)), budget)
+	excerpt, cut := truncateJSONString(text, config.CaptureBodyLimit())
 	out.BodyExcerpt = excerpt
-	out.BodyTruncated = cut || len(prefix) < len(body) || readCapped
+	out.BodyTruncated = cut || tailCut || readCapped
 	return out
+}
+
+// trimPartialNeedle drops the longest suffix of text that is a proper prefix
+// of a secret form: the start of a secret whose rest was never read.
+func (r *secretRedactor) trimPartialNeedle(text string) (string, bool) {
+	if r == nil {
+		return text, false
+	}
+	drop := 0
+	for _, needle := range r.needles {
+		for k := min(len(needle)-1, len(text)); k > drop; k-- {
+			if strings.HasSuffix(text, needle[:k]) {
+				drop = k
+				break
+			}
+		}
+	}
+	return text[:len(text)-drop], drop > 0
 }
 
 // captureRedactsHeader reports whether a response header's value is
@@ -157,24 +178,20 @@ func captureSecretValues(config *models.HTTPMonitorConfig) map[string]string {
 	return values
 }
 
-// longestNeedle is the longest form a redactor matches (0 for none).
-func (r *secretRedactor) longestNeedle() int {
-	if r == nil || len(r.needles) == 0 {
-		return 0
-	}
-	return len(r.needles[0]) // sorted longest first
-}
-
 // truncateJSONString cuts s so that its JSON string encoding (as
 // encoding/json writes it, quotes excluded) takes at most budget bytes,
-// replacing invalid UTF-8 with U+FFFD and never splitting a rune. cut
-// reports whether anything was dropped.
+// replacing invalid UTF-8 and NUL with U+FFFD and never splitting a rune.
+// cut reports whether anything was dropped.
+//
+// NUL must go: encoding/json writes it as \u0000, which PostgreSQL's jsonb
+// rejects, so one NUL in a UTF-16 or binary error body would make the whole
+// check result unstorable (monitorstate also scrubs it, as a backstop).
 func truncateJSONString(s string, budget int) (out string, cut bool) {
 	var b strings.Builder
 	used := 0
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
-		if r == utf8.RuneError && size <= 1 {
+		if r == 0 {
 			r = utf8.RuneError
 		}
 		cost := jsonRuneCost(r)
