@@ -280,6 +280,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		})
 		r.Get("/users/bootstrap/status", adminUsersHandlers.BootstrapStatus)
 		r.Post("/users/bootstrap/first", adminUsersHandlers.BootstrapFirstUser)
+		identityAccountRoutes(r, authMiddleware, authHandlers)
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -632,6 +633,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", adminUsersHandlers.GetUser)
 				r.Patch("/{id}", adminUsersHandlers.UpdateUser)
 				r.Delete("/{id}", adminUsersHandlers.DeleteUser)
+				identityUserRoutes(r, authHandlers)
 			})
 
 			// OIDC group→role mappings (superadmin only)

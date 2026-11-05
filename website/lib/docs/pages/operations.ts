@@ -348,7 +348,7 @@ go run ./cmd/admin`,
         {
           type: 'paragraph',
           text:
-            'The command always leaves a platform superadministrator behind, with no tenant memberships (a superadministrator reaches every tenant), matching the first-user form. Unlike that form it also works on a populated install: run against an existing username, it resets the password, re-enables a disabled account and promotes it to superadministrator, which makes it the break-glass recovery path for an operator with database access.',
+            'The command always leaves a platform superadministrator behind, with no tenant memberships (a superadministrator reaches every tenant), matching the first-user form. Unlike that form it also works on a populated install: run against an existing username, it resets the password, re-enables a disabled account, clears a [login lockout](/docs/security/#login-lockout-sessions) and promotes it to superadministrator, which makes it the break-glass recovery path for an operator with database access.',
         },
         {
           type: 'callout',

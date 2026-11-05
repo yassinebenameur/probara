@@ -8,7 +8,9 @@ How identity and authorization work as of the enterprise-auth rework
 Three credential types, resolved by `api/internal/middleware/auth.go`:
 
 - **Admin users** (`admin_users`) — humans. JWT access cookie (15 min) +
-  rotating opaque refresh session. Two platform roles:
+  rotating opaque refresh session, both bound to one sign-in (session
+  family, see [Sessions](#sessions)); password login sits behind the
+  [lockout](#login-lockout). Two platform roles:
   - `superadmin` — full platform access: any tenant (via `X-Tenant-ID`),
     user management, tenant list. All pre-rework admins were backfilled to
     superadmin.
@@ -49,7 +51,60 @@ Tenant roles (fixed, on `tenant_memberships.role`):
 
 Roles are resolved from the DB on every request — never stored in JWT
 claims — so downgrades and disables apply immediately (disabled users are
-rejected even with a live access token).
+rejected even with a live access token). The access JWT carries only the
+admin ID and the session family (`sid`).
+
+## Sessions
+
+Migration 000104. `admin_session_families` holds one row per sign-in
+(password or OIDC); `admin_sessions.family_id` ties every refresh token to
+its sign-in, and `RotateSession` keeps the family. The access JWT names the
+family in its `sid` claim (`shared/auth.CreateAdminSessionToken`).
+
+- **`admin_session_families.revoked_at` is the one authority** for whether a
+  sign-in is alive. The refresh lookup (`GetSessionByTokenHash`) joins it,
+  so the 60-second reuse grace of a rotated token never outlives a
+  revocation, and `AuthMiddleware` checks it on every cookie request
+  (`middleware/session_family.go`, `adminauth.SessionFamilyActive`), as do
+  `/auth/me` and `/auth/logout`. Revoking the one row therefore ends the
+  refresh chain and every access JWT of the sign-in at once, with no race
+  against a concurrent rotation.
+- Revocation paths: logout (the token's family), `/account/sessions/*`
+  (self: one, others, all), `DELETE /users/{id}/sessions` (superadmin, MCP
+  `revoke_user_sessions`), and a superadmin setting a user's password
+  (`adminauth.RevokeUserSessions`, which also records
+  `password_changed_at` and clears the lockout).
+- An access JWT without `sid` (minted before 000104) is accepted until it
+  expires; it cannot be revoked early.
+- `/account/*` takes a signed-in browser session only (no API key, no MCP
+  token), sits outside the write gate (a viewer can end their own sessions)
+  and outside generic audit; it records `auth.session_revoke` /
+  `auth.sessions_revoke`. Routes: `api/internal/api/routes_identity.go`.
+- API keys and MCP OAuth grants are separate credentials; signing out
+  never touches them.
+
+## Login lockout
+
+Migration 000103 (`admin_users.failed_login_count`, `last_failed_login_at`,
+`locked_until`, `password_changed_at`); policy constants in
+`api/internal/services/adminauth/lockout.go`.
+
+- `Authenticate` **reserves** the attempt (one `UPDATE … WHERE not locked
+  RETURNING`) before comparing the password, so concurrent guesses cannot
+  overshoot; a correct password clears the reservation. Every 10th failure
+  in a streak locks for 15 min × 2^(k−1), capped at 4 h; a streak is
+  forgotten after 24 h without failures. A locked account is refused without
+  a password comparison.
+- Anti-enumeration: wrong and unknown credentials share one 401; every
+  lockout shares one 429 + `Retry-After`. Unknown and SSO-only usernames go
+  through an in-memory twin of the lockout (`FailureThrottle`, same
+  thresholds) and a dummy bcrypt compare. Each replica also blocks a client
+  IP (`clientip.FromRequest`) for 15 min after 50 failures.
+- Unlock: superadmin `POST /users/{id}/unlock` (MCP `unlock_user`), the
+  `cmd/admin` break-glass, or a superadmin setting the password.
+- Audit: `auth.login` (failure; `denied` with `reason` `locked` /
+  `ip_throttled`), `auth.lockout` (the failure that locked), `auth.unlock`.
+- OIDC login is unaffected.
 
 ## Enforcement layers
 
@@ -83,7 +138,8 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   inherits it, and `/monitors/{id}/run` and `/monitors/test` in their
   handlers (`monitorservice.RequireCallPermission`). Editors and API keys of
   any scope get 403.
-- `RequireSuperadmin`: `/users/*`.
+- `RequireSuperadmin`: `/users/*` (including `/users/{id}/unlock` and
+  `/users/{id}/sessions`).
 
 Audit runs *outside* the write gate so denied attempts are recorded with
 `outcome=denied`.
@@ -117,8 +173,9 @@ the MCP package decides access. Rules that keep it so:
 `audit_log` table; captured two ways: the `AuditMutations` middleware
 derives `resource.verb` actions for every mutation, and explicit events
 cover auth lifecycle (`auth.login`/`auth.logout`/`auth.oidc_login` incl.
-failures) and user/key management (those subtrees are skipped by the
-generic layer). Writes go through an async batching recorder — never
+failures, `auth.lockout`/`auth.unlock`, `auth.session_revoke`/
+`auth.sessions_revoke`) and user/key management (those subtrees are skipped
+by the generic layer). Writes go through an async batching recorder — never
 blocks or fails a request; drops rows quietly during the pre-migration
 deploy window.
 
@@ -224,8 +281,11 @@ exercise mappings.
 
 The helm migrations job is post-upgrade, so new binaries briefly run on
 the old schema. All auth queries feature-detect (SQLSTATE 42P01/42703 →
-legacy behavior: everyone superadmin, keys full-access) and the audit
-writer drops rows — the API never crash-loops pre-migration. For
+legacy behavior: everyone superadmin, keys full-access, no lockout, no
+session families) and the audit writer drops rows — the API never
+crash-loops pre-migration. In the other direction, an old binary inserting
+`admin_sessions` without `family_id` after 000104 gets a family from the
+`admin_sessions_default_family` trigger. For
 zero-surprise rollouts run the migration job manually first (see
 `docs/correctness-notes.md` "Deploy ordering").
 

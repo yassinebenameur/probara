@@ -60,6 +60,10 @@ func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) f
 				claims, err := auth.ParseAdminToken(cookie.Value, jwtSecret)
 				if err == nil && claims.AdminID != "" {
 					if adminID, err := uuid.Parse(claims.AdminID); err == nil {
+						r, ok := checkSessionFamily(w, r, dbClient, log, adminID, claims.SessionID)
+						if !ok {
+							return
+						}
 						handleAdminRequest(w, r, next, dbClient, log, adminID)
 						return
 					}
