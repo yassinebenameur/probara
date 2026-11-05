@@ -71,6 +71,13 @@ type Monitor struct {
 	LocationQuorum               int                        `json:"location_quorum"`        // Down when >= this many locations are down
 	Locations                    []MonitorLocationStatus    `json:"locations,omitempty"`    // Per-location breakdown (GetMonitor only)
 	CurrentState                 string                     `json:"current_state"`
+	// RecoveryThreshold is how many consecutive passing checks a down
+	// monitor needs before it is up again (S-T7, 1-10, default 1).
+	RecoveryThreshold int `json:"recovery_threshold"`
+	// ConsecutiveSuccesses counts passes toward that confirmation while the
+	// monitor is still down; 0 otherwise. Read-only. For multi-location
+	// monitors it is the furthest-along location's count.
+	ConsecutiveSuccesses int `json:"consecutive_successes"`
 	// AlertRouting is the effective notification reachability of this
 	// monitor: nil when not resolved, otherwise says whether an alert here
 	// would notify anyone and why not. Read-only, computed per request.
@@ -101,6 +108,7 @@ type CreateMonitorRequest struct {
 	DependsOnIDs                 []string                   `json:"depends_on_ids,omitempty"`
 	LocationIDs                  []string                   `json:"location_ids,omitempty"`
 	LocationQuorum               *int                       `json:"location_quorum,omitempty"`
+	RecoveryThreshold            *int                       `json:"recovery_threshold,omitempty"`
 }
 
 // UpdateMonitorRequest represents a request to update a monitor
@@ -122,6 +130,7 @@ type UpdateMonitorRequest struct {
 	DependsOnIDs                 *[]string                  `json:"depends_on_ids,omitempty"` // nil = unchanged, empty = clear
 	LocationIDs                  *[]string                  `json:"location_ids,omitempty"`   // nil = unchanged, empty = default fleet
 	LocationQuorum               *int                       `json:"location_quorum,omitempty"`
+	RecoveryThreshold            *int                       `json:"recovery_threshold,omitempty"`
 }
 
 // MonitorListResponse represents a paginated list of monitors

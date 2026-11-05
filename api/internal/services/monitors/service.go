@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -231,6 +232,10 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	if req.DependencySuppression != nil {
 		dependencySuppression = *req.DependencySuppression
 	}
+	recoveryThreshold := monitorstate.MinRecoveryThreshold // DB default: single-sample recovery
+	if req.RecoveryThreshold != nil {
+		recoveryThreshold = *req.RecoveryThreshold
+	}
 
 	locationIDs, err := parseLocationIDs(req.LocationIDs)
 	if err != nil {
@@ -260,6 +265,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		MemberAlertRollup:            memberAlertRollup,
 		DependencySuppression:        dependencySuppression,
 		LocationQuorum:               locationQuorum,
+		RecoveryThreshold:            recoveryThreshold,
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
@@ -551,6 +557,15 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	if req.ConsecutiveFailuresThreshold != nil {
 		setParts = append(setParts, fmt.Sprintf("consecutive_failures_threshold = $%d", argIndex))
 		args = append(args, *req.ConsecutiveFailuresThreshold)
+		argIndex++
+	}
+
+	// A new recovery threshold applies from the next result (S-T7): passes
+	// already counted are kept, so lowering it below the count confirms the
+	// recovery on the next pass.
+	if req.RecoveryThreshold != nil {
+		setParts = append(setParts, fmt.Sprintf("recovery_threshold = $%d", argIndex))
+		args = append(args, *req.RecoveryThreshold)
 		argIndex++
 	}
 

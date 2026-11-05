@@ -68,6 +68,7 @@ const TARGET_FIELDS = [
   { key: 'group_members', label: 'Group Members', required: false },
   { key: 'alert_policy_names', label: 'Alert Policy Names', required: false },
   { key: 'consecutive_failures_threshold', label: 'Retries before down', required: false },
+  { key: 'recovery_threshold', label: 'Passes before up', required: false },
 ];
 
 type WizardStep = 'upload' | 'mapping' | 'review' | 'importing' | 'results';

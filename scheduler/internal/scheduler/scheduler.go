@@ -38,17 +38,22 @@ const (
 )
 
 // nextCheckDelay returns how long after now the monitor should run again.
-// Only 'suspect' (temporal, mid-confirmation) gets the fast recheck;
-// 'degraded' (spatial: some locations down, below quorum) can persist
-// indefinitely and runs at the normal interval. Side-effecting checks (SIP
-// INVITE test calls) never get the fast recheck (S-A9): their interval floor
+// Only mid-confirmation states get the fast recheck: 'suspect' (confirming an
+// outage) and 'down' with passes already counted toward recovery
+// confirmation (S-T7: consecutive_successes > 0, so the recovery is
+// confirmed in seconds rather than R intervals). 'degraded' (spatial: some
+// locations down, below quorum) can persist indefinitely and runs at the
+// normal interval, as does a 'down' monitor that has not passed yet.
+// Side-effecting checks (SIP INVITE test calls) never get the fast recheck
+// (S-A9): their interval floor
 // (models.SIPCallMinIntervalSeconds) is the call-rate limit, and a 20 s
 // recheck would also overlap a call that can run 24 s (timeout plus teardown
 // reserve). IsSIPCallConfig reads only non-secret fields, so the encrypted
 // config answers the same.
 func nextCheckDelay(m Monitor) time.Duration {
 	interval := time.Duration(m.IntervalSeconds) * time.Second
-	if m.CurrentState == "suspect" && suspectRecheckInterval < interval &&
+	confirming := m.CurrentState == "suspect" || (m.CurrentState == "down" && m.ConsecutiveSuccesses > 0)
+	if confirming && suspectRecheckInterval < interval &&
 		!models.IsSIPCallConfig(m.Type, m.Config) {
 		return suspectRecheckInterval
 	}
@@ -64,6 +69,9 @@ type Monitor struct {
 	IntervalSeconds int
 	TimeoutSeconds  int
 	CurrentState    string
+	// ConsecutiveSuccesses > 0 on a down monitor means a recovery is being
+	// confirmed (S-T7); nextCheckDelay fast-rechecks it.
+	ConsecutiveSuccesses int
 	// DueAt is the next_run_at this dispatch serves (NULL for a row that
 	// never had one): the slot behind each job's Nats-Msg-Id.
 	DueAt sql.NullTime
@@ -595,7 +603,8 @@ func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.U
 // fetchDueMonitors fetches monitors that are due to run within a transaction
 func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize int) ([]Monitor, error) {
 	query := `
-		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state, next_run_at
+		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state, next_run_at,
+			consecutive_successes
 		FROM monitors
 		WHERE enabled = true
 		  AND deleted_at IS NULL
@@ -619,6 +628,7 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 		err := rows.Scan(
 			&m.ID, &m.TenantID, &m.Type, &m.Config,
 			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState, &m.DueAt,
+			&m.ConsecutiveSuccesses,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan monitor: %w", err)

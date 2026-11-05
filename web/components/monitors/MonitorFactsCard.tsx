@@ -141,6 +141,13 @@ export default function MonitorFactsCard({
             </DetailRow>
           )
         )}
+        {!isGroup && (monitor.recovery_threshold ?? 1) > 1 && (
+          <DetailRow label="Recovers after">
+            {pluralize(monitor.recovery_threshold ?? 1, 'passing check')}
+            {monitor.current_state === 'down' && (monitor.consecutive_successes ?? 0) > 0 &&
+              ` (${monitor.consecutive_successes} so far)`}
+          </DetailRow>
+        )}
         {routing && (
           <DetailRow label="Notifies" tone={routing.warning ? 'warning' : 'default'}>
             {routing.text}

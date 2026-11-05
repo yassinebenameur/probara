@@ -26,13 +26,13 @@ func (i *Ingest) persistAtLocation(ctx context.Context, r monitorstate.Result) (
 	defer func() { _ = tx.Rollback() }()
 
 	var monitorState string
-	var threshold, quorum, intervalSeconds int
+	var threshold, recoveryThreshold, quorum, intervalSeconds int
 	err = tx.QueryRowContext(ctx, `
-		SELECT current_state, consecutive_failures_threshold, location_quorum, interval_seconds
+		SELECT current_state, consecutive_failures_threshold, recovery_threshold, location_quorum, interval_seconds
 		FROM monitors
 		WHERE id = $1
 		FOR UPDATE
-	`, r.MonitorID).Scan(&monitorState, &threshold, &quorum, &intervalSeconds)
+	`, r.MonitorID).Scan(&monitorState, &threshold, &recoveryThreshold, &quorum, &intervalSeconds)
 	if err != nil {
 		return outcome{}, fmt.Errorf("lock monitor state: %w", err)
 	}
@@ -68,14 +68,15 @@ func (i *Ingest) persistAtLocation(ctx context.Context, r monitorstate.Result) (
 		return outcome{}, nil
 	}
 
-	// Per-location temporal state machine (same rules as the global one).
+	// Per-location temporal state machine (same rules as the global one,
+	// recovery confirmation included: S-T7 runs per location stream).
 	var locSnap monitorstate.Snapshot
 	var lastStarted sql.NullTime
 	err = tx.QueryRowContext(ctx, `
-		SELECT current_state, consecutive_failures, last_result_started_at
+		SELECT current_state, consecutive_failures, consecutive_successes, last_result_started_at
 		FROM monitor_location_state
 		WHERE monitor_id = $1 AND location_id = $2
-	`, r.MonitorID, r.LocationID).Scan(&locSnap.State, &locSnap.ConsecutiveFailures, &lastStarted)
+	`, r.MonitorID, r.LocationID).Scan(&locSnap.State, &locSnap.ConsecutiveFailures, &locSnap.ConsecutiveSuccesses, &lastStarted)
 	if err == sql.ErrNoRows {
 		locSnap = monitorstate.Snapshot{State: monitorstate.StateUnknown}
 	} else if err != nil {
@@ -91,29 +92,31 @@ func (i *Ingest) persistAtLocation(ctx context.Context, r monitorstate.Result) (
 		return outcome{}, nil
 	}
 
-	locTransition := monitorstate.Apply(locSnap, monitorstate.IsFailureStatus(r.Status), threshold)
+	locTransition := monitorstate.Apply(locSnap, monitorstate.IsFailureStatus(r.Status), threshold, recoveryThreshold)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO monitor_location_state (
 			monitor_id, location_id, tenant_id, current_state,
-			consecutive_failures, last_latency_ms, last_check_at,
+			consecutive_failures, consecutive_successes, last_latency_ms, last_check_at,
 			last_result_started_at, last_state_change_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $8, CASE WHEN $7 THEN NOW() END, NOW())
+		) VALUES ($1, $2, $3, $4, $5, $9, $6, NOW(), $8, CASE WHEN $7 THEN NOW() END, NOW())
 		ON CONFLICT (monitor_id, location_id) DO UPDATE SET
 			current_state = EXCLUDED.current_state,
 			consecutive_failures = EXCLUDED.consecutive_failures,
+			consecutive_successes = EXCLUDED.consecutive_successes,
 			last_latency_ms = EXCLUDED.last_latency_ms,
 			last_check_at = NOW(),
 			last_result_started_at = EXCLUDED.last_result_started_at,
 			last_state_change_at = CASE WHEN $7 THEN NOW() ELSE monitor_location_state.last_state_change_at END,
 			updated_at = NOW()
 	`, r.MonitorID, r.LocationID, r.TenantID, string(locTransition.To),
-		locTransition.ConsecutiveFailures, r.LatencyMs, locTransition.Changed, r.StartedAt); err != nil {
+		locTransition.ConsecutiveFailures, r.LatencyMs, locTransition.Changed, r.StartedAt,
+		locTransition.ConsecutiveSuccesses); err != nil {
 		return outcome{}, fmt.Errorf("upsert location state: %w", err)
 	}
 
 	// Spatial aggregation over the currently selected, live locations with
 	// FRESH evidence (S-A10) — shared with the absence watchdog.
-	counts, maxFailures, err := monitorstate.LoadFreshLocationCounts(
+	counts, streaks, err := monitorstate.LoadFreshLocationCounts(
 		ctx, tx, r.MonitorID, monitorstate.FreshnessHorizonSeconds(intervalSeconds))
 	if err != nil {
 		return outcome{}, err
@@ -125,11 +128,12 @@ func (i *Ingest) persistAtLocation(ctx context.Context, r monitorstate.Result) (
 		UPDATE monitors
 		SET current_state = $1,
 			consecutive_failures = $2,
+			consecutive_successes = $5,
 			last_state_change_at = CASE WHEN $3 THEN NOW() ELSE last_state_change_at END,
 			last_result_at = NOW(),
 			updated_at = NOW()
 		WHERE id = $4
-	`, string(newState), maxFailures, changed, r.MonitorID); err != nil {
+	`, string(newState), streaks.MaxFailures, changed, r.MonitorID, streaks.MaxSuccesses); err != nil {
 		return outcome{}, fmt.Errorf("update monitor state: %w", err)
 	}
 	if changed {

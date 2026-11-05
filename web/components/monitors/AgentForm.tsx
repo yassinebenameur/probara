@@ -535,6 +535,8 @@ export default function AgentForm({
           intervalSeconds={formData.expected_interval_seconds}
           threshold={formData.consecutive_failures_threshold}
           onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
+          recoveryThreshold={formData.recovery_threshold}
+          onRecoveryThresholdChange={(n) => setFormData((prev) => ({ ...prev, recovery_threshold: n }))}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}

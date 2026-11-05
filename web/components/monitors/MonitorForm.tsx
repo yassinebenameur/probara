@@ -417,6 +417,8 @@ export default function MonitorForm({
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
           onThresholdChange={(n) => patchForm({ consecutive_failures_threshold: n })}
+          recoveryThreshold={formData.recovery_threshold}
+          onRecoveryThresholdChange={(n) => patchForm({ recovery_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => patchForm({ notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}

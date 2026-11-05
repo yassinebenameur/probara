@@ -252,3 +252,34 @@ func TestWatchdogSynthesizesAgentFailure(t *testing.T) {
 		t.Fatalf("synthetic failures after immediate re-run = %d, want 1 (self-debounce)", results)
 	}
 }
+
+// S-F2 + S-T7: a stale monitor mid-recovery returns to unknown with its
+// pass count cleared, so the next pass re-enters through the machine (up at
+// once from unknown) rather than resuming a stale confirmation.
+func TestWatchdogClearsRecoveryCount(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := setupRollupTestDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "watchdog-recovery")
+	id := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "recovering")
+	setMonitorEvidence(ctx, t, dbClient, id, "down", time.Now().Add(-10*time.Minute))
+	if _, err := dbClient.ExecContext(ctx,
+		`UPDATE monitors SET recovery_threshold = 3, consecutive_successes = 2 WHERE id = $1`, id); err != nil {
+		t.Fatalf("seed recovery count: %v", err)
+	}
+
+	if err := newTestScheduler(dbClient).watchdogActivePass(ctx); err != nil {
+		t.Fatalf("active pass: %v", err)
+	}
+
+	var state string
+	var successes int
+	if err := dbClient.QueryRowContext(ctx,
+		`SELECT current_state, consecutive_successes FROM monitors WHERE id = $1`, id).Scan(&state, &successes); err != nil {
+		t.Fatalf("query monitor: %v", err)
+	}
+	if state != "unknown" || successes != 0 {
+		t.Fatalf("stale recovering monitor = %s CS %d, want unknown CS 0 [S-F2, S-T7]", state, successes)
+	}
+}

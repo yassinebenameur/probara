@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
@@ -216,6 +217,9 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
 		return err
 	}
+	if err := ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
+		return err
+	}
 
 	if err := ValidateMonitorLocationFields(req.Type, req.LocationIDs, req.LocationQuorum); err != nil {
 		return err
@@ -300,6 +304,9 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 		return err
 	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
+		return err
+	}
+	if err := ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
 		return err
 	}
 
@@ -397,6 +404,20 @@ func ValidateDependencySuppression(value *string) error {
 		return nil
 	}
 	return fmt.Errorf("dependency_suppression must be 'inherit', 'on' or 'off'")
+}
+
+// ValidateRecoveryThreshold validates a monitor's recovery_threshold: the
+// consecutive passing checks a down monitor needs before it is up (S-T7,
+// docs/state-semantics.md), bounded like the column CHECK.
+func ValidateRecoveryThreshold(value *int) error {
+	if value == nil {
+		return nil
+	}
+	if *value < monitorstate.MinRecoveryThreshold || *value > monitorstate.MaxRecoveryThreshold {
+		return fmt.Errorf("recovery_threshold must be between %d and %d",
+			monitorstate.MinRecoveryThreshold, monitorstate.MaxRecoveryThreshold)
+	}
+	return nil
 }
 
 // ValidateMonitorNotificationFields validates the notification-routing fields that can be set
