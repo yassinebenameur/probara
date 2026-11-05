@@ -723,6 +723,43 @@ export const ALERTING_PAGE: DocPage = {
       ],
     },
     {
+      id: "oncall",
+      title: "On-call schedules",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The **On-call** page (sidebar, under Alerts and Incidents) answers who is on call. A schedule has a time zone and one or more rotation layers. A rotation hands off **daily** or **weekly** (on a chosen day) at a local wall-clock time in the schedule's zone, so a 09:00 handoff stays at 09:00 across daylight-saving changes and that shift is an hour shorter or longer. Its members take turns in order: the first is on call from the rotation's start to the first handoff after it, then the next, and so on. A rotation can end at a set time.",
+        },
+        {
+          type: "list",
+          items: [
+            "**Layers.** Of the rotations active at an instant, the last one in the list wins. Add a layer that starts next month to change the rotation from then on, or one with an end for a temporary arrangement; when it ends, the layer below applies again.",
+            "**Overrides** put one person on call over a window (at most 93 days), above every rotation. Of overlapping overrides the most recently created wins. Removing one lets the rotation apply again.",
+            "**Members** are users with a membership in the workspace, or superadministrators. The page flags a person on call with no [verified contact](/docs/administration/#contacts), and one who is no longer a member: the schedule keeps their turns until it is edited. Deleting a user removes their turns and overrides.",
+            "The schedule page shows who is on call now and next, the shifts of the next 14 days and the current and upcoming overrides. The list shows who is on call on every schedule.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Calendar feed.** **Create link** gives a secret iCal URL to subscribe to from Google Calendar, Outlook or Apple Calendar: one event per shift, from two weeks back to nine weeks ahead, named after the person on call. The link is shown once; **New link** revokes the previous one and **Turn off** stops the feed. Anyone holding it sees the schedule name, usernames and shifts, nothing else. The link is absolute when `PUBLIC_BASE_URL` is set on the API; otherwise the page builds it from its own origin. A feed of a deleted workspace stops at once.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Schedules do not page anyone yet",
+          text:
+            "Schedules are informational: no alert, reminder or escalation reaches the person on call through them. Route alerts to [notification channels](#routing) as before. Paging schedules and people directly comes with escalation policies.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Editors and admins manage schedules and overrides; viewers read them. Every route is in the [API](/docs/api/#people-api) and, except the calendar feed, an [MCP](/docs/mcp/) tool (`list_oncall_schedules`, `get_oncall_now`, `preview_oncall_schedule`, `create_oncall_override`, …).",
+        },
+      ],
+    },
+    {
       id: "retired-policies",
       title: "Retired alert-policy API",
       blocks: [

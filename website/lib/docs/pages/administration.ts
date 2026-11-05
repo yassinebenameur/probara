@@ -192,7 +192,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The **Contacts** panel on the **Account** page holds the addresses where Probara can reach you directly: email addresses and mobile numbers (international format, `+` and the country code). A contact counts only once verified: adding one sends a 6-digit code to the address, and you enter it on the page. Every role manages its own contacts, viewers included; nobody else, superadministrators included, sees or changes them.",
+            "The **Contacts** panel on the **Account** page holds the addresses where Probara can reach you directly: email addresses and mobile numbers (international format, `+` and the country code). A contact counts only once verified: adding one sends a 6-digit code to the address, and you enter it on the page. Every role manages its own contacts, viewers included; nobody else, superadministrators included, sees or changes them. [On-call schedules](/docs/alerting/#oncall) show how many verified contacts each member has.",
         },
         {
           type: "list",
@@ -209,7 +209,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "info",
           title: "Nothing pages contacts yet",
           text:
-            "Verified contacts are the groundwork for escalation policies, which will page people directly. Until then alerts reach people only through notification channels.",
+            "Verified contacts are the groundwork for escalation policies, which will page people (and on-call schedules) directly. Until then alerts reach people only through notification channels.",
         },
         {
           type: "paragraph",

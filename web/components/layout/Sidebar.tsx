@@ -23,6 +23,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   CircleUser,
+  CalendarClock,
 } from 'lucide-react';
 import { getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
@@ -77,6 +78,7 @@ const navGroups: { key: string; items: NavItem[] }[] = [
     items: [
       { name: 'Alerts', href: '/alerts', icon: AlertTriangle },
       { name: 'Incidents', href: '/incidents', icon: Siren, showOpenIncidents: true },
+      { name: 'On-call', href: '/oncall', icon: CalendarClock },
     ],
   },
   {

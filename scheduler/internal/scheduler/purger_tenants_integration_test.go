@@ -196,6 +196,9 @@ func TestTenantPurgeCoversEveryTenantTable(t *testing.T) {
 	} {
 		covered[table] = "tenant cascade"
 	}
+	// People layer: schedules cascade their rotations, members and
+	// overrides (bounded by schedule size and override windows).
+	covered["oncall_schedules"] = "tenant cascade"
 	// Kept on purpose: the audit trail outlives the workspace and has its
 	// own retention.
 	covered["audit_log"] = "retained"

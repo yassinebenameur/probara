@@ -732,6 +732,9 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   through a plugin with `CapabilityDirectRecipient`
   (`DispatchRequest.Recipient`), and an async envelope carries `ContactID`,
   never the address (the worker resolves it with `contacts.LoadVerified`).
+  `shared/oncall` is the one answer to who is on call (`OnCallAt`/`Preview`:
+  overrides win, the last active layer wins, handoffs at local wall-clock
+  time); never query rotations to work it out. Schedules page nobody yet.
 
 ## Status pages
 

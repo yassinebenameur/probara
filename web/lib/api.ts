@@ -1610,3 +1610,46 @@ export function getPeopleSettings() {
 export function updatePeopleSettings(data: { personal_sms_channel_id: string | null }) {
   return apiRequest<import('./contacts').PeopleSettings>('PUT', '/v1/people-settings', data);
 }
+
+// On-call schedules (informational until escalation policies). Types live in
+// lib/oncall.ts.
+export async function getOnCallSchedules() {
+  const res = await apiRequest<{ items: import('./oncall').OnCallSchedule[] }>('GET', '/v1/oncall-schedules');
+  return res.items || [];
+}
+export async function getOnCallPeople() {
+  const res = await apiRequest<{ items: import('./oncall').OnCallPerson[] }>('GET', '/v1/oncall-schedules/people');
+  return res.items || [];
+}
+export function getOnCallSchedule(id: string) {
+  return apiRequest<import('./oncall').OnCallSchedule>('GET', `/v1/oncall-schedules/${id}`);
+}
+export function createOnCallSchedule(data: import('./oncall').ScheduleInput) {
+  return apiRequest<import('./oncall').OnCallSchedule>('POST', '/v1/oncall-schedules', data);
+}
+export function updateOnCallSchedule(id: string, data: import('./oncall').ScheduleInput) {
+  return apiRequest<import('./oncall').OnCallSchedule>('PUT', `/v1/oncall-schedules/${id}`, data);
+}
+export function deleteOnCallSchedule(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oncall-schedules/${id}`);
+}
+export function previewOnCallSchedule(id: string, from: string, to: string) {
+  const q = new URLSearchParams({ from, to });
+  return apiRequest<import('./oncall').PreviewResponse>('GET', `/v1/oncall-schedules/${id}/preview?${q}`);
+}
+export async function getOnCallOverrides(id: string) {
+  const res = await apiRequest<{ items: import('./oncall').OnCallOverride[] }>('GET', `/v1/oncall-schedules/${id}/overrides`);
+  return res.items || [];
+}
+export function createOnCallOverride(id: string, data: import('./oncall').CreateOverrideRequest) {
+  return apiRequest<import('./oncall').OnCallOverride>('POST', `/v1/oncall-schedules/${id}/overrides`, data);
+}
+export function deleteOnCallOverride(id: string, overrideId: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oncall-schedules/${id}/overrides/${overrideId}`);
+}
+export function createOnCallFeedLink(id: string) {
+  return apiRequest<import('./oncall').ICalToken>('POST', `/v1/oncall-schedules/${id}/ical-token`);
+}
+export function disableOnCallFeed(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oncall-schedules/${id}/ical-token`);
+}
