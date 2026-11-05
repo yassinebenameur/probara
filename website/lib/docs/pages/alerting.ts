@@ -289,6 +289,36 @@ export const ALERTING_PAGE: DocPage = {
               "One SMS per recipient per event, the short form of the alert plus the deep link",
             ],
             [
+              "`ntfy`",
+              "HTTPS `server_url` (defaults to `https://ntfy.sh`), `topic` (stored encrypted, since on a server without access control the name is the only protection), and optionally an `access_token` or a `username` / `password` pair",
+              "Push notification through ntfy's JSON publish endpoint; priority 5 (urgent) for an outage, 4 for a degradation, 3 for a recovery, 2 for an advisory; tapping it opens the deep link",
+            ],
+            [
+              "`gotify`",
+              "HTTPS `server_url` of your Gotify server and an application `app_token` (sent in the `X-Gotify-Key` header, never the URL)",
+              "Push message at priority 8 for an outage, 5 for a degradation, 4 for a recovery, 2 for an advisory, with the deep link in the text and as the Android click action",
+            ],
+            [
+              "`pushover`",
+              "Application `app_token` and a user or delivery-group `user_key` (both 30 characters, both stored encrypted), optional comma-separated `device` names",
+              "Push message at high priority (1, sounds through quiet hours) for an outage, normal (0) for a degradation or recovery, quiet (-1) for an advisory. Emergency priority is never used, so nothing is left retrying at Pushover after a test or a recovery",
+            ],
+            [
+              "`mattermost`",
+              "HTTPS incoming `webhook_url` (`…/hooks/<id>`) on any host",
+              "Colour-coded message attachment; Markdown in alert text is escaped and `@channel`, `@all` or `@user` inside it never notifies",
+            ],
+            [
+              "`matrix`",
+              "HTTPS client-server `homeserver_url`, a bot account's `access_token` (sent as a bearer header), and a `room_id` (`!…`, not a `#alias`) the account has already joined",
+              "HTML and plain-text `m.text` message sent with an idempotent `PUT` whose transaction ID is derived from the alert, channel, event and event time, so a retried send the homeserver already accepted is not posted twice. Mentions inside alert text never notify",
+            ],
+            [
+              "`google_chat`",
+              "HTTPS space `webhook_url` on `chat.googleapis.com` (`/v1/spaces/…`)",
+              "Card message; every event of one alert replies in the same thread, so the trigger, reminders and recovery stay together",
+            ],
+            [
               "`generic_webhook`",
               "HTTPS `url`, optional `hmac_secret`, optional custom headers encoded as JSON (stored encrypted and write-only; leaving the field blank on edit keeps them, **Remove stored value** deletes them)",
               "Structured Probara event JSON",
@@ -302,7 +332,7 @@ export const ALERTING_PAGE: DocPage = {
         },
         {
           type: "table",
-          columns: ["Event", "Chat, email, SMS, webhook", "PagerDuty, Opsgenie / JSM"],
+          columns: ["Event", "Chat, push, email, SMS, webhook", "PagerDuty, Opsgenie / JSM"],
           rows: [
             ["`created`", "Message", "Trigger / create"],
             ["`reminder`", "Message at the reminder interval, until acknowledged or while snoozed", "Skipped — the provider escalates and re-notifies on its own"],
@@ -335,7 +365,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "warning",
           title: "Channel destinations are egress-guarded",
           text:
-            "Every channel dials through the [notification egress policy](/docs/security/#ssrf-network-policy): private, loopback, link-local (including cloud metadata) and reserved addresses are refused by default, checked against the resolved IP at connect time. A webhook receiver on an internal network needs its range in `NOTIFICATION_ALLOWED_CIDRS`. Slack and Discord additionally require their own HTTPS hosts; Teams and generic webhooks accept any HTTPS host.",
+            "Every channel dials through the [notification egress policy](/docs/security/#ssrf-network-policy): private, loopback, link-local (including cloud metadata) and reserved addresses are refused by default, checked against the resolved IP at connect time. A webhook receiver on an internal network needs its range in `NOTIFICATION_ALLOWED_CIDRS`, and so does a self-hosted ntfy, Gotify, Mattermost or Matrix server there. Slack, Discord and Google Chat additionally require their own HTTPS hosts, and Telegram, Twilio and Pushover only ever call their fixed provider APIs; Teams, Mattermost, Matrix, ntfy, Gotify and generic webhooks accept any HTTPS host.",
         },
         {
           type: "callout",
@@ -677,7 +707,7 @@ export const ALERTING_PAGE: DocPage = {
             ["Alert acknowledged", "Sent: the hint helps whoever is working it"],
             ["Mesh-edge alert, or triage skipped (cooldown, resolved)", "Not sent: there is no ready triage"],
             ["`LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` on the alerter", "Not sent, including from triages that were already ready"],
-            ["PagerDuty or Opsgenie / JSM channel", "Not sent (chat, email, SMS and webhook channels get it)"],
+            ["PagerDuty or Opsgenie / JSM channel", "Not sent (chat, push, email, SMS and webhook channels get it)"],
           ],
         },
         {

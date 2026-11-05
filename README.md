@@ -97,9 +97,10 @@ probe network: each vantage point is a worker you run.
 
 ### Alerting and dependencies
 
-There are nine built-in channels: email, Slack, Discord, Microsoft Teams,
-Telegram, SMS via Twilio, webhooks (optionally HMAC-signed), PagerDuty and
-Opsgenie / Jira Service Management. Acks made in Probara are sent on to
+There are fifteen built-in channels: email, Slack, Discord, Microsoft Teams,
+Mattermost, Google Chat, Matrix, Telegram, ntfy, Gotify, Pushover, SMS via
+Twilio, webhooks (optionally HMAC-signed), PagerDuty and Opsgenie / Jira
+Service Management. Acks made in Probara are sent on to
 PagerDuty and Opsgenie. Alerts can escalate in tiers, send reminders and stay
 quiet during maintenance windows. Latency anomaly detection compares response
 times with learned baselines. Every monitor shows whether its alerts reach

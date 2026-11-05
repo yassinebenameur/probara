@@ -477,7 +477,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'paragraph',
           text:
-            'Notification channels (generic webhook, Slack, Discord, Teams, PagerDuty, Opsgenie, Telegram, Twilio) have their own policy, because their destinations are tenant-supplied and the requests leave the API, alerter and worker unattended. It uses the same address table and resolve-then-validate dialer as the monitor guard, but it is on by default and configured separately, so enabling internal monitoring never opens internal notification targets.',
+            'Notification channels (generic webhook, Slack, Discord, Teams, Mattermost, Google Chat, Matrix, PagerDuty, Opsgenie, Telegram, Twilio, ntfy, Gotify, Pushover) have their own policy, because their destinations are tenant-supplied and the requests leave the API, alerter and worker unattended. It uses the same address table and resolve-then-validate dialer as the monitor guard, but it is on by default and configured separately, so enabling internal monitoring never opens internal notification targets.',
         },
         {
           type: 'table',
@@ -500,7 +500,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           items: [
             'Set both on the API (channel test), alerter (synchronous delivery) and worker (asynchronous delivery); a service that never receives the policy fails closed.',
             'Redirects are never followed, so an allowed host cannot bounce a request to a blocked one.',
-            'Transport errors are logged without the request URL, because webhook paths and Telegram bot tokens are credentials.',
+            'Transport errors are logged without the request URL, because webhook paths and Telegram bot tokens are credentials. Gotify and Matrix tokens travel in request headers, never in the URL.',
             'With an `HTTPS_PROXY` configured, the policy vets the proxy address (allow-list it) and destination control becomes the proxy\'s job.',
           ],
         },

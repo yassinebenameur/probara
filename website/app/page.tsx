@@ -169,8 +169,9 @@ export default function HomePage() {
                 <p>
                   Tune consecutive-failure and latency-anomaly sensitivity, route per
                   monitor or by workspace defaults, and mute named maintenance or quick
-                  snoozes. Deliver through email, Slack, Discord, Teams, PagerDuty,
-                  Opsgenie, Telegram, SMS, or signed HTTPS webhooks—with delays,
+                  snoozes. Deliver through email, Slack, Discord, Teams, Mattermost,
+                  Google Chat, Matrix, PagerDuty, Opsgenie, Telegram, ntfy, Gotify,
+                  Pushover, SMS, or signed HTTPS webhooks—with delays,
                   reminders, acknowledgement sync, and optional incidents.
                 </p>
                 <div className="feature-card__visual alert-stack" aria-hidden="true">
