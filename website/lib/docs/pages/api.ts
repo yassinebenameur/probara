@@ -953,7 +953,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Capability URLs are credentials",
           text:
-            "Redact push tokens from logs and tracing. [Agent installer](/docs/agents/#install) responses can embed a tenant API key supplied for installation and must be handled as secret output.",
+            "The API never records them itself: its request log replaces the token segment of `/push/{token}`, `/alert-actions/{token}` and every other route whose path parameter names a token or secret with that placeholder, and its `http_requests_total` / `http_request_duration_seconds` metrics are labelled by route pattern, never by path. Redact them in your own reverse proxies, access logs and tracing. [Agent installer](/docs/agents/#install) responses can embed a tenant API key supplied for installation and must be handled as secret output.",
         },
       ],
     },

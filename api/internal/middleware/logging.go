@@ -7,8 +7,11 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
-// LoggingMiddleware logs HTTP requests
+// LoggingMiddleware logs HTTP requests. Install it on the root router: the
+// logged path has credential segments redacted (route_redaction.go) and
+// "route" is the matched chi pattern — never log r.URL.Path raw.
 func LoggingMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
+	redactor := &pathRedactor{}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -22,7 +25,8 @@ func LoggingMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 
 			log.WithFields(map[string]interface{}{
 				"method":      r.Method,
-				"path":        r.URL.Path,
+				"path":        redactor.redact(r),
+				"route":       routeLabel(r),
 				"status_code": wrapped.statusCode,
 				"duration_ms": duration.Milliseconds(),
 				"request_id":  GetRequestID(r.Context()),

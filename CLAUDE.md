@@ -1315,6 +1315,12 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   response excerpt in `metrics_data.http.failure_response`, budgeted by
   JSON-encoded size (`TestHTTPFailureCaptureSizeBound` keeps a row < 16 KiB).
   Captured text never goes into `ErrorMessage`, which notifications quote.
+- **Path-borne credentials** (`/push/{token}`, `/alert-actions/{token}`,
+  `/oncall-feeds/{token}.ics`): the API's request log, panic log and HTTP
+  metrics never use `r.URL.Path` raw — logs redact by the router's patterns,
+  metrics label by route pattern (`api/internal/middleware/route_redaction.go`).
+  Redaction keys on the parameter NAME, so a credential in a path must be a
+  `{…token}`/`{…secret}` parameter, and a handler must not log or echo it.
 
 ## Commits and PRs
 

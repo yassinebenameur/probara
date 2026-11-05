@@ -625,7 +625,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             {
               term: 'Link scanners',
               description:
-                'Mail security gateways and chat previews fetch every URL they see. Opening a link (`GET`) therefore never acts; the confirm page acknowledges with a `POST` on a button press. Responses are `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and the confirm page is excluded from search indexing.',
+                'Mail security gateways and chat previews fetch every URL they see. Opening a link (`GET`) therefore never acts; the confirm page acknowledges with a `POST` on a button press. Responses are `Cache-Control: no-store` and `Referrer-Policy: no-referrer`, and the confirm page is excluded from search indexing. The API\'s own request log and HTTP metrics record the route as `/alert-actions/{token}`, never the token itself; a proxy or load balancer in front of it logs whatever it is configured to.',
             },
             {
               term: 'Replay and abuse',
