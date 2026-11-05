@@ -35,7 +35,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Visibility values, as stored in status_pages.visibility (migration 000116
+// Visibility values, as stored in status_pages.visibility (migration 000115
 // holds the same list in its CHECK).
 const (
 	Public   = "public"

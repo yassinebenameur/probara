@@ -155,7 +155,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	if !match {
 		return nil, &LoginFailure{UserID: &user.ID}
 	}
-	// No lockout columns means no TOTP columns either (000120 > 000103).
+	// No lockout columns means no TOTP columns either (000118 > 000103).
 	return &user, nil
 }
 

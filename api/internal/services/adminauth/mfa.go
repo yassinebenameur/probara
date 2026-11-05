@@ -16,7 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// TOTP second factor (migration 000120). Local accounts only: an SSO user's
+// TOTP second factor (migration 000118). Local accounts only: an SSO user's
 // second factor is the IdP's business. The secret is sealed with the
 // PROBARA_SECRETS_KEY encryptor (plaintext under the dev no-op encryptor,
 // like every other stored secret), totp_last_step makes each code single
@@ -63,7 +63,7 @@ func (s *Service) encryptor() secrets.Encryptor {
 
 // MFAStatus is a user's second-factor state.
 type MFAStatus struct {
-	// Available is false before migration 000120.
+	// Available is false before migration 000118.
 	Available              bool       `json:"available"`
 	Enabled                bool       `json:"enabled"`
 	EnabledAt              *time.Time `json:"enabled_at,omitempty"`
@@ -381,7 +381,7 @@ func secondFactorBinding(passwordHash, sealedSecret string) string {
 
 // totpRequired reports whether a password-verified user must pass a
 // second factor, and the binding for the step-one token. Before migration
-// 000120 nobody has a second factor.
+// 000118 nobody has a second factor.
 func (s *Service) totpRequired(ctx context.Context, userID uuid.UUID, passwordHash string) (string, bool, error) {
 	var sealed sql.NullString
 	var enabledAt sql.NullTime

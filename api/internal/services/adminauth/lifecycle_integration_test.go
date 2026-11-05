@@ -389,7 +389,7 @@ func TestSecondFactorFailuresLockTheAccount(t *testing.T) {
 	}
 }
 
-// Before migration 000120 the binary still signs people in, and reports
+// Before migration 000118 the binary still signs people in, and reports
 // 2FA as unavailable rather than failing.
 func TestMFAToleratesMissingSchema(t *testing.T) {
 	ctx, dbClient, s := setupService(t)
@@ -402,7 +402,7 @@ func TestMFAToleratesMissingSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.Authenticate(ctx, "ivan", testPassword); err != nil {
-		t.Fatalf("login before 000120: %v", err)
+		t.Fatalf("login before 000118: %v", err)
 	}
 	st, err := s.GetMFAStatus(ctx, id)
 	if err != nil || st.Available {

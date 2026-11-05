@@ -95,7 +95,7 @@ Invites, password reset and email change (`adminauth/lifecycle.go`,
   Reset, self password change, self email change and TOTP are local-only:
   for an IdP-linked account the IdP owns the credentials and the email is
   the link key, so changing it here is refused (409 `not_local_account`).
-- **One-time tokens** (`admin_user_tokens`, migration 000119): 256-bit,
+- **One-time tokens** (`admin_user_tokens`, migration 000117): 256-bit,
   stored as SHA-256, consumed by one `UPDATE … WHERE used_at IS NULL`
   (single use under concurrency), and issuing another of the same purpose
   supersedes the user's open ones.
@@ -137,7 +137,7 @@ Invites, password reset and email change (`adminauth/lifecycle.go`,
 ## Two-factor
 
 TOTP (`adminauth/totp.go`, stdlib RFC 6238: SHA-1, 6 digits, 30 s, ±1
-step) for local accounts; migration 000120 adds `totp_secret_enc`
+step) for local accounts; migration 000118 adds `totp_secret_enc`
 (PROBARA_SECRETS_KEY encryptor), `totp_enabled_at` (NULL = pending
 enrollment), `totp_last_step` and `admin_user_recovery_codes` (10
 SHA-256-hashed single-use codes).

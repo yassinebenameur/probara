@@ -133,7 +133,7 @@ var errUnknownUser = errors.New("no such user")
 
 // resetTwoFactor is the break-glass twin of POST /users/{id}/reset-2fa
 // (adminauth.ResetMFA): it drops the TOTP secret, enrollment and recovery
-// codes of one user. Before migration 000120 there is nothing to reset.
+// codes of one user. Before migration 000118 there is nothing to reset.
 func resetTwoFactor(ctx context.Context, client *db.Client, username string) (bool, error) {
 	tx, err := client.BeginTx(ctx, nil)
 	if err != nil {

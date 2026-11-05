@@ -23,7 +23,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// Config version history (monitor_config_versions, migration 000121).
+// Config version history (monitor_config_versions, migration 000119).
 //
 // Every write of a monitor's configuration records a version: CreateMonitor
 // and UpdateMonitor call recordVersion, so the HTTP handlers, the importer,

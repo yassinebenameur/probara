@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// One-time account tokens (admin_user_tokens, migration 000119). The plain
+// One-time account tokens (admin_user_tokens, migration 000117). The plain
 // token travels once, in a link; only its SHA-256 is stored. A token is
 // single use (consumed by one UPDATE ... WHERE used_at IS NULL), expires,
 // and issuing another of the same purpose for the same user supersedes the
@@ -41,7 +41,7 @@ var (
 	// superseded, or for an account that no longer qualifies. One error so
 	// the public routes never say which.
 	ErrTokenInvalid = errors.New("this link is invalid or has expired")
-	// ErrTokensUnavailable: migration 000119 has not run yet.
+	// ErrTokensUnavailable: migration 000117 has not run yet.
 	ErrTokensUnavailable = errors.New("account links are not available until the database is migrated")
 )
 
@@ -161,7 +161,7 @@ func (s *Service) InspectToken(ctx context.Context, plain, purpose string) (*Tok
 	return &rec, nil
 }
 
-// mapTokenSchema turns "migration 000119 not applied" into
+// mapTokenSchema turns "migration 000117 not applied" into
 // ErrTokensUnavailable.
 func mapTokenSchema(err error) error {
 	if isMissingSchema(err) {

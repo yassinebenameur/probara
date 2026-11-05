@@ -553,7 +553,7 @@ func (r *sqlRepository) AttachLockouts(ctx context.Context, users []models.Admin
 }
 
 // AttachMFA fills MFAEnabled for users with TOTP enabled. Before migration
-// 000120 nobody has it.
+// 000118 nobody has it.
 func (r *sqlRepository) AttachMFA(ctx context.Context, users []models.AdminUser) error {
 	if len(users) == 0 {
 		return nil
