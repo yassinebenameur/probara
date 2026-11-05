@@ -573,8 +573,12 @@ export const API_PAGE: DocPage = {
               "Write; end a running snooze now (404 when not snoozed)",
             ],
             [
+              "`GET /api/v1/alerts/{id}/deliveries`",
+              "The alert's [delivery history](/docs/alerting/#channels), newest first, paged (`page`, `page_size` up to 100); 404 for another workspace's alert",
+            ],
+            [
               "`GET /api/v1/alert-channels`",
-              "List configured channels",
+              "List configured channels; each carries `last_delivery`, its newest delivery-history row, when it has one",
             ],
             [
               "`POST /api/v1/alert-channels`",
@@ -595,6 +599,10 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/alert-channels/{id}/test`",
               "Send a real test notification",
+            ],
+            [
+              "`GET /api/v1/alert-channels/{id}/deliveries`",
+              "The channel's delivery history across alerts, newest first, paged like the alert's",
             ],
             [
               "`GET /api/v1/alert-channel-plugins`",
@@ -625,6 +633,11 @@ export const API_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Alert reads (list, detail, recent alerts, and the acknowledge and resolve responses) and the `alerts[]` of `GET /incidents/{id}` include a read-only `triage` object when the alert has a triage row. The object is omitted when there is no row, and stream events never carry it. Fields that do not apply are `null`: `id`, `status` (`pending`, `ready`, `failed`, `skipped`), `hypothesis` (catalogue key) and `title`, `confidence` (`low`, `medium`, `high`) and `summary` when ready, `skip_reason` (`resolved`, `cooldown`, `not_modeled`, `disabled`) when skipped, `error_message` (a fixed string) when failed, `created_at` (claim time), `completed_at`, `labelled`, and `labelable` (ready and at least one decision was sent to the model). Only `GET /alerts/{id}` adds `label_context`, in the same shape as an incident analysis's, when the triage is labelable.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A delivery-history row has `id`, `alert_id`, `channel_id`, `channel_name` (as it was at send time), `channel_type`, `event_type` (`created`, `reminder`, `resolved`, `acknowledged`, `suspected_cause`; treat others as new event types), `delivery_key` (tells reminder rounds apart), `attempt` (1-based), `path` (`sync`: the alerter sent it; `async`: queued for a delivery worker, whose rows follow), `outcome` (`queued`, `delivered`, `failed`, `permanent_failure`, `dropped_superseded`, `dropped_ack`), `error` (at most 512 characters, URLs cut to their host and credentials masked; `null` on success), `recipients_total` and `recipients_delivered` (SMS only, else `null`), `alert_kind`, `monitor_name` (`null` for alerts without a monitor) and `created_at`. Rows are kept 90 days.",
         },
       ],
     },

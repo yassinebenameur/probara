@@ -153,6 +153,12 @@ by one (SMS) records each accepted recipient in
 claim, so a retry on any replica or worker reaches only the rest; the
 dispatch envelope's `delivery_key` names the event (and reminder round) those
 rows belong to.
+Every attempt and every worker drop is also appended to
+`alert_notification_deliveries` (migration 000110,
+`shared/notifications/deliverylog`) from the pool: the alerter writes its
+synchronous outcome or `queued`, the worker each attempt, permanent failure,
+`dropped_superseded` and `dropped_ack`. The API reads it per alert and per
+channel; the scheduler's retention cleanup prunes it after 90 days.
 
 ## Storage and maintenance
 

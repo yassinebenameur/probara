@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 )
 
 // AlertChannelType represents the type of alert channel
@@ -25,6 +27,9 @@ type AlertChannel struct {
 	IsActive  bool             `json:"is_active"`
 	CreatedAt time.Time        `json:"created_at"`
 	UpdatedAt time.Time        `json:"updated_at"`
+	// LastDelivery is the channel's newest delivery-history row, on list
+	// responses only; absent when it has none.
+	LastDelivery *deliverylog.Delivery `json:"last_delivery,omitempty"`
 }
 
 // CreateAlertChannelRequest represents a request to create an alert channel

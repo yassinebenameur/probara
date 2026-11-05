@@ -727,6 +727,17 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   inherits the first send's recipients and reaches nobody. A multi-recipient
   plugin skips what it reports delivered and records each acceptance (the
   `plugin` doc; `twilio` does).
+- **Delivery history is append-only, one row per attempt or drop**
+  (`shared/notifications/deliverylog`, table `alert_notification_deliveries`,
+  kept `deliverylog.RetentionDays` by the scheduler's retention cleanup).
+  Written from the pool, never the claim or lock transaction, like the
+  recipient ledger: the alerter wraps `sendFunc` (`recordDeliveries`,
+  `delivery_log.go`: sync outcome, or `queued`), the worker calls
+  `recordAttempt`/`recordDrop` (its `delivery_log.go`). A new send path or drop
+  in either gets one such call; errors are stored through `SanitizeError`
+  only. `event_type` is free text, `outcome`/`path` are CHECKed. Read it via
+  `GET /alerts/{id}/deliveries`, `GET /alert-channels/{id}/deliveries` and
+  the channel list's `last_delivery`.
 
 ## Status pages
 
