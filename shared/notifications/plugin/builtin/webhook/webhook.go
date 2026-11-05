@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
@@ -138,7 +139,7 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	}
 	// Protocol headers are set last so a custom header cannot spoof them.
 	headers[eventTypeHeader] = req.Type()
-	headers[idempotencyHdr] = fmt.Sprintf("%s:%s:%s", req.Event.Alert.ID, req.Channel.ID, req.Type())
+	headers[idempotencyHdr] = notifications.IdempotencyKeyFor(req.Event.Alert.ID, req.Channel.ID, req.Type(), req.Event.Alert.RelapseCount)
 	if secret := req.Channel.String("hmac_secret"); secret != "" {
 		headers[signatureHeader] = signaturePrefix + computeSignature(secret, body)
 	}

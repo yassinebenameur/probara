@@ -677,7 +677,10 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
 - **Delivery ordering rests on row locks — keep them.** The async worker
   holds the alert row `FOR SHARE` from its status check through `Send`
   (`eventSuperseded` in `worker/internal/worker/notifications/consumer.go`),
-  so a trigger never reaches a provider after its resolve, a tier or
+  resolves included, since alerts can reopen: an envelope whose
+  `Alert.RelapseCount` is behind `alerts.relapse_count` is dropped, so a
+  stale resolve never closes a relapse. So a trigger never reaches a
+  provider after its resolve, a tier or
   reminder whose envelope carries `StopOnAck` never reaches it after an ack
   (nor anything but an ack after a snooze, `alertrouting.MuteHolds`), and
   `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff
@@ -727,6 +730,17 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   inherits the first send's recipients and reaches nobody. A multi-recipient
   plugin skips what it reports delivered and records each acceptance (the
   `plugin` doc; `twilio` does).
+- **Reopen within cooldown** (`alerter/internal/alerter/reopen.go`, tenant
+  `alert_reopen_cooldown_seconds`): an auto-resolved availability alert
+  reopens instead of a new one opening (`relapse_count`, `reopened_at`), as
+  a new paging episode. A route whose row says `resolved` is paged through
+  the claim case `reopened` (mirrored in `dueEvent`/`shouldSendNotification`),
+  sent as `created` with `Alert.RelapseCount > 0`; plugins never see
+  `reopened`, and its wording lives in `present/relapse.go`. From relapse 1
+  every per-episode key carries the episode (`notifications.IdempotencyKeyFor`,
+  `RecipientEventKeyFor`, `OvertakenAckKeyFor`); never build
+  `alert:channel:event` by hand. NULL `resolved_via` marks the alerter's own
+  resolves, the only ones that reopen, so any new manual resolve path sets it.
 
 ## Status pages
 

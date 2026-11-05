@@ -27,6 +27,7 @@ func TestDueEvent(t *testing.T) {
 	fired := func(ago time.Duration) *notificationState {
 		return &notificationState{LastEventType: "created", LastSentAt: now.Add(-ago)}
 	}
+	resolvedRoute := &notificationState{LastEventType: "resolved", LastSentAt: now.Add(-time.Hour)}
 
 	tests := []struct {
 		name     string
@@ -47,7 +48,15 @@ func TestDueEvent(t *testing.T) {
 		{"fired_reminder_due", fired(10 * time.Minute), active, time.Hour, interval, open, "reminder"},
 		{"reminder_after_reminder", &notificationState{LastEventType: "reminder", LastSentAt: now.Add(-15 * time.Minute)}, active, time.Hour, interval, open, "reminder"},
 		{"reminders_disabled", fired(time.Hour), active, time.Hour, 0, open, ""},
-		{"resolved_never_reminds", &notificationState{LastEventType: "resolved", LastSentAt: now.Add(-time.Hour)}, active, time.Hour, interval, open, ""},
+		// Only a reopen leaves an open alert with a resolved route: the
+		// relapse pages that route again on the tier delay, never as a
+		// reminder.
+		{"reopened_route_pages_again", resolvedRoute, active, time.Hour, interval, open, "reopened"},
+		{"reopened_before_delay", resolvedRoute, active, 4 * time.Minute, interval, open, ""},
+		{"reopened_without_reminders", resolvedRoute, active, time.Hour, 0, open, "reopened"},
+		{"reopened_held_by_ack", resolvedRoute, active, time.Hour, interval, acked, ""},
+		{"reopened_held_by_snooze", resolvedRoute, afterAck, time.Hour, interval, snoozed, ""},
+		{"reopened_inactive_channel", resolvedRoute, inactive, time.Hour, interval, open, ""},
 		{"ack_sent_still_reminds_while_active", &notificationState{LastEventType: "created", LastSentAt: now.Add(-time.Hour), AcknowledgedSentAt: &now}, active, time.Hour, interval, open, "reminder"},
 
 		// Ack gate: an acknowledgement stops unfired tiers and reminders.
@@ -86,7 +95,7 @@ func TestDueEvent(t *testing.T) {
 				age = now.Sub(r) // the tier clock restarts at the route's resume point
 			}
 			if tc.target.channel.IsActive && age >= tc.target.delay {
-				for _, ev := range []string{"created", "reminder"} {
+				for _, ev := range []string{"created", "reopened", "reminder"} {
 					if shouldSendNotification(ev, tc.state, now, tc.interval, tc.gate, tc.gate.stopOnAck(tc.target)) != (got == ev) {
 						t.Fatalf("shouldSendNotification(%q) disagrees with dueEvent = %q", ev, got)
 					}
@@ -106,6 +115,8 @@ func TestClaimStatusMatchesPreFilter(t *testing.T) {
 	interval := 10 * time.Minute
 	// A state on which every event except "created" is due.
 	firedLongAgo := &notificationState{LastEventType: "created", LastSentAt: now.Add(-time.Hour)}
+	// A route that heard the previous episode's resolve of a reopened alert.
+	resolvedBeforeReopen := &notificationState{LastEventType: "resolved", LastSentAt: now.Add(-time.Hour)}
 
 	for _, status := range []string{"active", "acknowledged"} {
 		for _, snoozed := range []bool{false, true} {
@@ -114,10 +125,13 @@ func TestClaimStatusMatchesPreFilter(t *testing.T) {
 					gate := DispatchGate{Acknowledged: status == "acknowledged", AckStops: ackStops, Snoozed: snoozed}
 					target := channelTarget{channel: alertChannel{IsActive: true}, notifyAfterAck: notifyAfterAck}
 					stopOnAck := gate.stopOnAck(target)
-					for _, ev := range []string{"created", "reminder", "acknowledged", "suspected_cause"} {
+					for _, ev := range []string{"created", "reopened", "reminder", "acknowledged", "suspected_cause"} {
 						state := firedLongAgo
-						if ev == "created" {
+						switch ev {
+						case "created":
 							state = nil
+						case "reopened":
+							state = resolvedBeforeReopen
 						}
 						claim := claimStatusAllows(ev, status, snoozed, stopOnAck)
 						pre := shouldSendNotification(ev, state, now, interval, gate, stopOnAck)
@@ -130,7 +144,7 @@ func TestClaimStatusMatchesPreFilter(t *testing.T) {
 							t.Fatalf("status=%s snoozed=%v ackStops=%v notifyAfterAck=%v event=%s: claim=%v pre-filter=%v",
 								status, snoozed, ackStops, notifyAfterAck, ev, claim, pre)
 						}
-						if ev == "created" || ev == "reminder" {
+						if ev == "created" || ev == "reopened" || ev == "reminder" {
 							got, ok := dueEvent(now, state, target, time.Hour, interval, gate)
 							if (ok && got == ev) != claim {
 								t.Fatalf("status=%s snoozed=%v ackStops=%v notifyAfterAck=%v event=%s: dueEvent=%q claim=%v",

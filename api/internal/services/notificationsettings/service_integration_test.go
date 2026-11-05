@@ -211,3 +211,36 @@ func TestLocationOfflineSettings(t *testing.T) {
 		t.Fatal("a threshold under 60s must be refused")
 	}
 }
+
+// The reopen cooldown is off (0) by default, round-trips, and is bounded to
+// 0..86400 (the column's CHECK agrees).
+func TestAlertReopenCooldownSettings(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "ns-reopen")
+	svc := NewService(dbClient)
+	settings, err := svc.Get(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if settings.AlertReopenCooldownSeconds != 0 {
+		t.Fatalf("default reopen cooldown = %d, want 0 (off)", settings.AlertReopenCooldownSeconds)
+	}
+	settings, err = svc.Update(ctx, tenantID, UpdateRequest{AlertReopenCooldownSeconds: intPtr(300)})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if settings.AlertReopenCooldownSeconds != 300 {
+		t.Fatalf("reopen cooldown = %d, want 300", settings.AlertReopenCooldownSeconds)
+	}
+	for _, bad := range []int{-1, MaxAlertReopenCooldownSeconds + 1} {
+		if _, err := svc.Update(ctx, tenantID, UpdateRequest{AlertReopenCooldownSeconds: intPtr(bad)}); err == nil {
+			t.Fatalf("Update(%d) accepted an out-of-range cooldown", bad)
+		}
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE tenants SET alert_reopen_cooldown_seconds = 90000 WHERE id = $1`, tenantID); err == nil {
+		t.Fatal("the column accepted a cooldown above one day")
+	}
+}

@@ -63,6 +63,12 @@ func gateHolds(eventType string, acknowledged, snoozed, stopOnAck bool) bool {
 //   - never fired for this channel: "created" once the alert has been eligible
 //     for at least the target's escalation delay, counted from the route's
 //     resume point when that is later (gate.resumedAt).
+//   - fired and resolved, on an alert that is open again: "reopened", on the
+//     same delay rule as "created". Only a reopen (an alert relapsing within
+//     the tenant's reopen cooldown) leaves an open alert with a resolved
+//     state row, and its eligibility clock restarts at reopened_at
+//     (alertrouting.DispatchEligibleSinceExpr), so the relapse walks its
+//     tiers like a new alert. deliverNotification sends it as "created".
 //   - fired and not resolved: "reminder" once reminderInterval (> 0) has
 //     elapsed since the last send and since the route's resume point.
 //
@@ -76,12 +82,16 @@ func dueEvent(now time.Time, state *notificationState, target channelTarget, ale
 	}
 	stopOnAck := gate.stopOnAck(target)
 	resumed := gate.resumedAt(stopOnAck)
-	if state == nil {
+	if state == nil || state.LastEventType == "resolved" {
+		event := "created"
+		if state != nil {
+			event = "reopened"
+		}
 		if !resumed.IsZero() && now.Sub(resumed) < alertAge {
 			alertAge = now.Sub(resumed)
 		}
-		if alertAge >= target.delay && !gateHolds("created", gate.Acknowledged, gate.Snoozed, stopOnAck) {
-			return "created", true
+		if alertAge >= target.delay && !gateHolds(event, gate.Acknowledged, gate.Snoozed, stopOnAck) {
+			return event, true
 		}
 		return "", false
 	}

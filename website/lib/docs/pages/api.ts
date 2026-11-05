@@ -542,7 +542,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/alerts/{id}/resolve`",
-              "Manually close an alert lifecycle",
+              "Manually close an alert lifecycle; records `resolved_via` (`ui`, `api` or `mcp`) and `resolved_by_user_id`, and a manually resolved alert never [reopens](/docs/alerting/#availability)",
             ],
             [
               "`POST /api/v1/alerts/bulk/acknowledge`",
@@ -606,7 +606,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/notification-settings`",
-              "Read tenant defaults (each route with `delay_seconds` and `notify_after_ack`), reminders, stop-on-ack (`ack_stops_notifications`), offline-location alerts (`location_offline_alerts_enabled`, `location_offline_after_seconds`), anomaly and auto-incident settings",
+              "Read tenant defaults (each route with `delay_seconds` and `notify_after_ack`), reminders, stop-on-ack (`ack_stops_notifications`), offline-location alerts (`location_offline_alerts_enabled`, `location_offline_after_seconds`), the reopen cooldown (`alert_reopen_cooldown_seconds`, 0-86,400, 0 = off), anomaly and auto-incident settings",
             ],
             [
               "`PUT /api/v1/notification-settings`",

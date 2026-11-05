@@ -97,6 +97,16 @@ type AlertDetails struct {
 	// ResolveReason says why a resolved alert closed when that is not its
 	// condition clearing (ResolveReason* values; empty otherwise).
 	ResolveReason string `json:"resolve_reason,omitempty"`
+
+	// RelapseCount is how many times this alert was reopened within the
+	// tenant's reopen cooldown (alerts.relapse_count; 0 for an alert that
+	// never relapsed). Every reopen is a new paging episode: its page goes
+	// out as a "created" event with RelapseCount > 0, so plugins need no new
+	// event type, and the episode keys idempotency and the delivery ledger
+	// (IdempotencyKeyFor, RecipientEventKeyFor). ReopenedAt is the last
+	// reopen.
+	RelapseCount int        `json:"relapse_count,omitempty"`
+	ReopenedAt   *time.Time `json:"reopened_at,omitempty"`
 }
 
 // Resolve reasons of a location_offline alert (alerts.resolve_reason).

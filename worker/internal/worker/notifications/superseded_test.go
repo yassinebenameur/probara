@@ -3,6 +3,7 @@ package notifications
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -35,27 +36,38 @@ func init() { plugin.Register(stub) }
 
 // A trigger that failed and was redelivered after the alert resolved must be
 // dropped: the resolve already went out, and a late trigger would open a
-// provider incident nothing ever closes.
+// provider incident nothing ever closes. Likewise anything published in an
+// earlier paging episode once the alert has reopened: a stale resolve would
+// close the relapse's provider incident while the outage is live.
 func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 	cases := []struct {
 		eventType   string
 		alertStatus string // "" = alert row gone
+		envRelapse  int    // the envelope's Alert.RelapseCount
+		rowRelapse  int    // alerts.relapse_count now
 		wantSend    bool
 	}{
-		{"created", "resolved", false},
-		{"reminder", "resolved", false},
-		{"acknowledged", "resolved", false},
-		{"created", "", false},
-		{"created", "active", true},
-		{"acknowledged", "acknowledged", true},
-		{"acknowledged", "active", false}, // unacknowledged since publish
-		{"suspected_cause", "resolved", false},
-		{"suspected_cause", "acknowledged", true},
-		{"suspected_cause", "active", true},
-		{"resolved", "resolved", true}, // resolves are never superseded
+		{"created", "resolved", 0, 0, false},
+		{"reminder", "resolved", 0, 0, false},
+		{"acknowledged", "resolved", 0, 0, false},
+		{"created", "", 0, 0, false},
+		{"created", "active", 0, 0, true},
+		{"acknowledged", "acknowledged", 0, 0, true},
+		{"acknowledged", "active", 0, 0, false}, // unacknowledged since publish
+		{"suspected_cause", "resolved", 0, 0, false},
+		{"suspected_cause", "acknowledged", 0, 0, true},
+		{"suspected_cause", "active", 0, 0, true},
+		{"resolved", "resolved", 0, 0, true},
+		{"resolved", "", 0, 0, true},          // a deleted alert's resolve still goes out
+		{"resolved", "active", 0, 1, false},   // reopened since: the relapse is live
+		{"resolved", "resolved", 1, 2, false}, // an older episode's resolve
+		{"resolved", "resolved", 1, 1, true},  // the relapse's own resolve
+		{"created", "active", 0, 1, false},    // the previous episode's trigger
+		{"reminder", "active", 0, 1, false},
+		{"created", "active", 1, 1, true}, // the relapse's page
 	}
 	for _, tc := range cases {
-		t.Run(tc.eventType+"/"+tc.alertStatus, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s/%s/%d-%d", tc.eventType, tc.alertStatus, tc.envRelapse, tc.rowRelapse), func(t *testing.T) {
 			sqlDB, mock, err := sqlmock.New()
 			if err != nil {
 				t.Fatal(err)
@@ -67,22 +79,20 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 			mock.ExpectQuery(regexp.QuoteMeta(`FROM alert_channels`)).WithArgs(channelID).
 				WillReturnRows(sqlmock.NewRows([]string{"name", "type", "config", "is_active"}).
 					AddRow("pager", supersededStubType, []byte(`{}`), true))
-			if tc.eventType != "resolved" {
-				mock.ExpectBegin()
-				q := mock.ExpectQuery(`FROM alerts al WHERE al.id = \$1 FOR SHARE`).WithArgs(alertID)
-				if tc.alertStatus == "" {
-					q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}))
-				} else {
-					q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}).AddRow(tc.alertStatus, false))
-				}
-				mock.ExpectRollback()
+			mock.ExpectBegin()
+			q := mock.ExpectQuery(`FROM alerts al WHERE al.id = \$1 FOR SHARE`).WithArgs(alertID)
+			if tc.alertStatus == "" {
+				q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}))
+			} else {
+				q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.alertStatus, false, tc.rowRelapse))
 			}
+			mock.ExpectRollback()
 
 			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
 			raw, _ := json.Marshal(notifications.DispatchEnvelope{
 				V: 1, ChannelID: channelID.String(), ChannelType: supersededStubType,
 				AlertID: alertID.String(), EventType: tc.eventType,
-				Event: notifications.AlertEvent{Type: tc.eventType},
+				Event: notifications.AlertEvent{Type: tc.eventType, Alert: notifications.AlertDetails{RelapseCount: tc.envRelapse}},
 			})
 			if err := c.handle(context.Background(), &queue.Message{Data: raw}); err != nil {
 				t.Fatalf("handle: %v", err)
@@ -143,7 +153,7 @@ func TestHandle_AcknowledgesTriggerThatLandedAfterAck(t *testing.T) {
 					AddRow("pager", tc.channelType, []byte(`{}`), true))
 			mock.ExpectBegin()
 			mock.ExpectQuery(`FROM alerts al WHERE al.id = \$1 FOR SHARE`).WithArgs(alertID).
-				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}).AddRow(tc.alertStatus, false))
+				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.alertStatus, false, 0))
 			mock.ExpectRollback()
 
 			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
@@ -209,7 +219,7 @@ func TestHandle_DropsEventsHeldByAckOrSnooze(t *testing.T) {
 					AddRow("chat", supersededStubType, []byte(`{}`), true))
 			mock.ExpectBegin()
 			mock.ExpectQuery(`FROM alerts al WHERE al.id = \$1 FOR SHARE`).WithArgs(alertID).
-				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}).AddRow(tc.status, tc.snoozed))
+				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.status, tc.snoozed, 0))
 			claimedAt := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 			if tc.wantSends == 0 {
 				// A held event releases the alerter's claim and commits.

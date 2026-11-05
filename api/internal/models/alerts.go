@@ -89,6 +89,16 @@ type AlertWithDetails struct {
 	// marked notify_after_ack still hear). Computed from the predicates the
 	// alerter dispatches with (alertrouting.MutedReasonExpr).
 	MutedReason *string `json:"muted_reason,omitempty"`
+	// RelapseCount is how many times the alert reopened within the
+	// workspace's alert_reopen_cooldown_seconds (each a new paging episode);
+	// ReopenedAt is the last reopen.
+	RelapseCount int        `json:"relapse_count"`
+	ReopenedAt   *time.Time `json:"reopened_at,omitempty"`
+	// ResolvedByUserID / ResolvedVia record a manual resolve (ui, api,
+	// mcp); both stay empty when the alerter resolved it. A manually
+	// resolved alert never reopens.
+	ResolvedByUserID *uuid.UUID `json:"resolved_by_user_id,omitempty"`
+	ResolvedVia      *string    `json:"resolved_via,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts

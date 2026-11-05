@@ -189,7 +189,7 @@ func TestDependencySuppressionFragments(t *testing.T) {
 	}
 
 	since := DispatchEligibleSinceExpr("al", "te")
-	for _, want := range []string{"GREATEST(al.triggered_at", "al.root_cause_cleared_at + make_interval(secs => te.dependency_suppression_grace_seconds)"} {
+	for _, want := range []string{"GREATEST(al.triggered_at", "al.root_cause_cleared_at + make_interval(secs => te.dependency_suppression_grace_seconds)", "al.snoozed_until", "al.reopened_at)"} {
 		if !strings.Contains(since, want) {
 			t.Fatalf("DispatchEligibleSinceExpr missing %q:\n%s", want, since)
 		}

@@ -380,6 +380,9 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		}
 		return ToneUp, "RECOVERED"
 	}
+	if tone, word, ok := relapseTone(alert, eventType, resolved); ok {
+		return tone, word
+	}
 	if eventType == EventAcknowledged {
 		return ToneInfo, "ACKNOWLEDGED"
 	}
@@ -420,6 +423,9 @@ func Label(event notifications.AlertEvent) string {
 }
 
 func labelFor(alert notifications.AlertDetails, eventType string) string {
+	if label, ok := relapseLabel(alert, eventType); ok {
+		return label
+	}
 	if eventType == EventAcknowledged {
 		return "Alert Acknowledged"
 	}
@@ -472,6 +478,9 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 }
 
 func summaryFor(alert notifications.AlertDetails, eventType string, resolved bool, outage string) string {
+	if summary, ok := relapseSummary(alert, eventType, resolved); ok {
+		return summary
+	}
 	if eventType == EventAcknowledged && !resolved {
 		if outage != "" {
 			return fmt.Sprintf("Someone is on it — acknowledged %s after it opened.", outage)
@@ -681,6 +690,7 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 	if alert.FailureCount > 0 {
 		rows = append(rows, Row{Label: "Failed checks", Value: fmt.Sprintf("%d", alert.FailureCount)})
 	}
+	rows = append(rows, relapseRows(alert)...)
 	return rows
 }
 

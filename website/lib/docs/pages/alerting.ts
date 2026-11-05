@@ -120,6 +120,11 @@ export const ALERTING_PAGE: DocPage = {
           text:
             "Location-aware availability alerts include failing-location context so operators can distinguish a regional failure from a broad outage.",
         },
+        {
+          type: "paragraph",
+          text:
+            "**Reopen within cooldown (flap suppression).** With the workspace setting `alert_reopen_cooldown_seconds` above 0 (it defaults to 0, off), a monitor that goes down again less than that long after the alerter resolved its last availability alert gets that alert back instead of a new one: the alert returns to `active`, `relapse_count` goes up by one and `reopened_at` records when. A flapping target therefore keeps one alert, and one automatic incident, for the whole flapping period. Each reopen is a new paging episode: it clears the previous episode's acknowledgement, unacknowledge and snooze (they were for the outage that recovered), escalation tiers count from `reopened_at`, and every route pages again, a route that already heard the previous recovery included. The page reads **Down again (relapse n)** and is delivered as a `created` event whose `alert.relapse_count` is above 0; reminders and the next recovery follow as usual. Only the alerter's own resolves reopen: an alert resolved by hand (`resolved_via` is `ui`, `api` or `mcp`, with `resolved_by_user_id` for an operator) never does, and only the monitor's latest availability alert is considered. Other alert kinds never reopen. Each open incident linked to the alert gets a system timeline entry when it relapses, and the Alerts page marks relapsed alerts with their count. With asynchronous dispatch, a recovery notice still waiting on the delivery worker's retry backoff when its alert reopens is dropped, as is anything else published in an earlier episode, so a late recovery can never close the provider incident of the relapse.",
+        },
       ],
     },
     {
@@ -236,6 +241,10 @@ export const ALERTING_PAGE: DocPage = {
               "`ack_stops_notifications`",
               "Defaults to true, for existing workspaces too. Acknowledging an alert stops its unfired escalation tiers and its reminders; routes with `notify_after_ack` keep them. Set false to keep paging acknowledged alerts",
             ],
+            [
+              "`alert_reopen_cooldown_seconds`",
+              "Defaults to 0 (off); 0 to 86,400. A monitor down again within this long of its availability alert auto-resolving [reopens that alert](/docs/alerting/#availability) as a relapse instead of opening a new one",
+            ],
           ],
         },
       ],
@@ -344,7 +353,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
+            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key, which is `<alert>:<channel>:<event type>`, followed by `:<n>` once the alert has [relapsed](/docs/alerting/#availability) n times, since a reopened alert sends `created` and `resolved` again under the same alert ID. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
         },
         {
           type: "list",

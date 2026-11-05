@@ -82,8 +82,8 @@ func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alert
 
 // BulkResolve resolves every listed alert that is still open (active or
 // acknowledged), recording incident recovery for each in the same
-// transaction as ResolveAlert does. The others are reported in Failed. actor
-// is accepted but not persisted yet.
+// transaction as ResolveAlert does, and records actor as the resolver as
+// ResolveAlert does. The others are reported in Failed.
 func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID, actor Actor) (*BulkResult, error) {
 	ids := dedupeIDs(alertIDs)
 	now := time.Now()
@@ -99,11 +99,12 @@ func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs 
 	changed, err := collectIDs(tx.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
 		SET status = 'resolved', resolved_at = $4, updated_at = $4,
-			snoozed_until = LEAST(a.snoozed_until, $4)
+			snoozed_until = LEAST(a.snoozed_until, $4),
+			resolved_by_user_id = $5, resolved_via = $6
 		FROM target
 		WHERE a.id = target.id
 		RETURNING a.id
-	`, pq.Array(uuidStrings(ids)), tenantID, pq.Array([]string{"active", "acknowledged"}), now))
+	`, pq.Array(uuidStrings(ids)), tenantID, pq.Array([]string{"active", "acknowledged"}), now, actor.UserID, resolvedVia(actor)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to bulk resolve alerts: %w", err)
 	}

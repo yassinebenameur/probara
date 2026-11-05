@@ -29,6 +29,11 @@ import (
 // releases the claim, so a transient channel error still retries on the next
 // cycle exactly as it did before; a plugin.Permanent error keeps the claim.
 //
+// eventType "reopened" is the page of a relapse (an alert reopened within
+// the tenant's reopen cooldown) on a route that heard the previous episode's
+// resolve. It is claimed under its own name, so it wins once per episode, and
+// sent as "created": plugins see a new trigger whose Alert.RelapseCount > 0.
+//
 // stopOnAck says whether an acknowledgement silences created/reminder on
 // this route (DispatchGate.stopOnAck); it is re-checked against the alert row
 // under the lock, together with the snooze, so an ack or snooze that commits
@@ -69,15 +74,23 @@ func (a *Alerter) deliverNotification(
 	// The same lock serializes with acknowledge, unacknowledge and snooze
 	// (each an UPDATE of this row), so the ack/snooze gate read here is the
 	// committed truth for the whole send.
+	//
+	// It also serializes with a reopen (an UPDATE of this row too): the
+	// relapse_count read here is the paging episode this send belongs to,
+	// and a resolve being sent holds the reopen back until it is out.
 	var status string
-	var resolvedAt *time.Time
+	var resolvedAt, reopenedAt *time.Time
 	var snoozed bool
 	var snoozedUntil, unacknowledgedAt sql.NullTime
+	var relapseCount int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT status, resolved_at, `+alertrouting.SnoozedPredicate("al")+`, al.snoozed_until, al.unacknowledged_at
-		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed, &snoozedUntil, &unacknowledgedAt); err != nil {
+		SELECT status, resolved_at, `+alertrouting.SnoozedPredicate("al")+`, al.snoozed_until, al.unacknowledged_at,
+			al.relapse_count, al.reopened_at
+		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed, &snoozedUntil, &unacknowledgedAt,
+		&relapseCount, &reopenedAt); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
 	}
+	alert.RelapseCount, alert.ReopenedAt = relapseCount, reopenedAt
 	// The route's reminder resume point, from the same rule as the
 	// pre-filters (DispatchGate.resumedAt).
 	var resumedAt *time.Time
@@ -101,11 +114,15 @@ func (a *Alerter) deliverNotification(
 
 	// A rolled-back claim is retried by whichever replica claims next; the
 	// key lets that retry skip the recipients this attempt already reached.
-	ctx = withRecipientKey(ctx, notifications.RecipientEventKey(eventType, round))
+	ctx = withRecipientKey(ctx, notifications.RecipientEventKeyFor(eventType, round, relapseCount))
 	// The async path re-checks the ack gate in the delivery worker, which
 	// may send long after this claim (JetStream backoff).
 	ctx = withStopOnAck(ctx, stopOnAck)
-	if err := a.sendFunc(ctx, channel, eventType, binding, alert, groupInfo, now); err != nil {
+	sendType := eventType
+	if eventType == "reopened" {
+		sendType = "created"
+	}
+	if err := a.sendFunc(ctx, channel, sendType, binding, alert, groupInfo, now); err != nil {
 		if plugin.IsPermanent(err) {
 			// The provider rejected the channel itself (revoked key, deleted
 			// webhook). Keep the claim so the next cycle does not re-send and
@@ -146,6 +163,11 @@ func claimStatusAllows(eventType, status string, snoozed, stopOnAck bool) bool {
 // after our commit sees the slot taken:
 //
 //   - created:  insert wins; any existing row means someone already fired.
+//   - reopened: update wins only while the row says resolved, i.e. this
+//     route heard the previous episode's resolve and the alert has since
+//     reopened (the tenant's reopen cooldown). It moves the row to 'reopened', so a
+//     second claimant finds it taken and reminders count from this send. The
+//     reopen itself already cleared the episode's one-shot ack column.
 //   - reminder: update wins only when the row is not resolved and
 //     last_sent_at — and resumedAt, the route's resume point after a mute
 //     (alertrouting.ResumedAt; nil if never) — is at least reminderInterval
@@ -174,6 +196,13 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 				alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at
 			) VALUES ($1, $2, $3, 'created', NOW(), NOW())
 			ON CONFLICT (alert_id, channel_id) DO NOTHING
+			RETURNING alert_id`
+	case "reopened":
+		query = `
+			UPDATE alert_notification_states
+			SET last_sent_at = $3::timestamptz, last_event_type = 'reopened', updated_at = NOW()
+			WHERE alert_id = $1 AND channel_id = $2
+			  AND last_event_type = 'resolved'
 			RETURNING alert_id`
 	case "reminder":
 		if reminderInterval <= 0 {
@@ -266,10 +295,11 @@ func withRecipientKey(ctx context.Context, key string) context.Context {
 }
 
 // recipientKey returns the key deliverNotification attached, or derives one
-// from now for a send that bypassed the claim.
-func recipientKey(ctx context.Context, eventType string, now time.Time) string {
+// from now (and the alert's paging episode) for a send that bypassed the
+// claim.
+func recipientKey(ctx context.Context, eventType string, now time.Time, relapseCount int) string {
 	if key, ok := ctx.Value(recipientKeyCtx{}).(string); ok && key != "" {
 		return key
 	}
-	return notifications.RecipientEventKey(eventType, now)
+	return notifications.RecipientEventKeyFor(eventType, now, relapseCount)
 }

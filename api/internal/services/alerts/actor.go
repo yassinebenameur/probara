@@ -19,8 +19,8 @@ const (
 )
 
 // Actor identifies who acknowledged or resolved an alert and through which
-// surface. It is threaded through the acknowledge/resolve paths but not
-// persisted yet.
+// surface. Acknowledge persists it as acknowledged_by_user_id /
+// acknowledged_via, resolve as resolved_by_user_id / resolved_via.
 type Actor struct {
 	// UserID is the operator who acted; nil for API keys and other
 	// credentials without a user.
@@ -47,4 +47,15 @@ func ActorFromContext(ctx context.Context) Actor {
 		actor.Via = ViaAPI
 	}
 	return actor
+}
+
+// resolvedVia is the resolved_via a manual resolve records. It is never
+// NULL: NULL marks the alerter's own resolves, the only ones the reopen
+// cooldown may reopen, so an actor without a surface still counts as manual
+// (ViaAPI).
+func resolvedVia(actor Actor) string {
+	if actor.Via == "" {
+		return ViaAPI
+	}
+	return actor.Via
 }
