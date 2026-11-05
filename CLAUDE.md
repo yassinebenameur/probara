@@ -636,7 +636,8 @@ or imported groups come back empty. Any other path that creates groups through
 ## Web UI conventions
 
 - **Selected tenant**: `lib/tenant.ts` owns storage +
-  `TENANT_CHANGED_EVENT`; `components/providers/TenantProvider.tsx` is the
+  `TENANT_CHANGED_EVENT` (and `TENANTS_CHANGED_EVENT`, fired after a
+  workspace create/rename/delete so `TenantSwitcher` reloads its list); `components/providers/TenantProvider.tsx` is the
   React-side source of truth (`useSelectedTenantId`) and its `TenantScope`
   keys the page subtree on the tenant, so every page's mount-time fetch
   re-runs on a switch. Pages must not add their own `tenant-changed`

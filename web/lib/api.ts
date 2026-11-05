@@ -112,6 +112,13 @@ import type {
   MetricQueryResponse,
   McpConnectionListResponse,
 } from './types';
+import type {
+  CreateTenantRequest,
+  DeleteTenantRequest,
+  DeleteTenantResponse,
+  RenameTenantRequest,
+  Tenant,
+} from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
@@ -241,8 +248,11 @@ async function apiRequest<T>(
     tenantSelectionValidated = false;
   }
 
+  // /v1/tenants is platform-level: sending the selection would get a list or
+  // workspace change refused (403) whenever the selected workspace was just
+  // deleted, which is exactly when the switcher must reload the list.
   const tenantId = getSelectedTenantId();
-  if (tenantId) {
+  if (tenantId && !isTenantsPath) {
     headers['X-Tenant-ID'] = tenantId;
   }
 
@@ -1510,4 +1520,16 @@ export function linkDiscoveryMonitor(id: string, monitor_id: string, key?: strin
 }
 export function unlinkDiscoveryMonitor(id: string, monitor: string) {
   return apiRequest<void>('DELETE', `/v1/discovery/services/${id}/links/${monitor}`);
+}
+
+// Workspace management (superadmins). Deleting is a soft delete: access stops
+// at once and the scheduler purges the data in the background.
+export function createTenant(data: CreateTenantRequest): Promise<Tenant> {
+  return apiRequest<Tenant>('POST', '/v1/tenants', data);
+}
+export function renameTenant(id: string, data: RenameTenantRequest): Promise<Tenant> {
+  return apiRequest<Tenant>('PATCH', `/v1/tenants/${id}`, data);
+}
+export function deleteTenant(id: string, data: DeleteTenantRequest): Promise<DeleteTenantResponse> {
+  return apiRequest<DeleteTenantResponse>('DELETE', `/v1/tenants/${id}`, data);
 }
