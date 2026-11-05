@@ -686,7 +686,9 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff
   (routes without `StopOnAck`). A muted drop (not a resolve) releases the
   alerter's claim in the same transaction (`releaseMutedClaim`), so the
-  event fires again once the mute lifts.
+  event fires again once the mute lifts; a resolve dropped for a reopen
+  hands its `resolved` claim back to `created`
+  (`releaseSupersededResolveClaim`), so the relapse's resolve reaches it.
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.

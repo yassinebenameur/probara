@@ -189,3 +189,63 @@ func TestHandle_MutedRelapsePageReleasesReopenedClaim(t *testing.T) {
 		t.Fatalf("held relapse page left the route at %q, want resolved", lastEvent)
 	}
 }
+
+// A resolve dropped because the alert reopened while it sat on a retry
+// backoff never reached the provider, so the route's 'resolved' claim is
+// handed back to 'created': the route still counts as paged and hears the
+// relapse's resolve. A route the 'reopened' claim has re-paged since (its
+// claim no longer carries the resolve's timestamp) is left alone.
+func TestHandle_SupersededResolveReleasesItsClaim(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "reopen-release")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	alertID := uuid.New()
+	mustExecWorker(ctx, t, dbClient, `INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+			triggered_at, relapse_count, reopened_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW() - INTERVAL '20 minutes', 1, NOW(), 3, NOW(), NOW())`,
+		alertID, tenantID, monitorID)
+	resolvedAt := time.Now().UTC().Truncate(time.Microsecond).Add(-2 * time.Minute)
+	route := func(name, lastEvent string, lastSent time.Time) uuid.UUID {
+		id := uuid.New()
+		mustExecWorker(ctx, t, dbClient, `INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, '{}'::jsonb, TRUE, NOW(), NOW())`, id, tenantID, name, reopenStubType)
+		mustExecWorker(ctx, t, dbClient, `INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, NOW(), NOW())`, alertID, id, lastSent, lastEvent)
+		return id
+	}
+	waiting := route("waiting", "resolved", resolvedAt)
+	repaged := route("repaged", "reopened", resolvedAt.Add(time.Minute))
+
+	before := len(reopenStub.delivered())
+	for _, ch := range []uuid.UUID{waiting, repaged} {
+		raw, _ := json.Marshal(notifications.DispatchEnvelope{
+			V: 1, ChannelID: ch.String(), ChannelType: reopenStubType,
+			AlertID: alertID.String(), EventType: "resolved",
+			Event: notifications.AlertEvent{Type: "resolved", Timestamp: resolvedAt, Alert: notifications.AlertDetails{RelapseCount: 0}},
+		})
+		w := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
+		if err := w.handle(ctx, &queue.Message{Data: raw}); err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+	}
+	if len(reopenStub.delivered()) != before {
+		t.Fatal("a resolve of an earlier episode was delivered after the reopen")
+	}
+	stateOf := func(ch uuid.UUID) string {
+		var lastEvent string
+		if err := dbClient.QueryRowContext(ctx, `SELECT last_event_type FROM alert_notification_states WHERE alert_id = $1 AND channel_id = $2`,
+			alertID, ch).Scan(&lastEvent); err != nil {
+			t.Fatal(err)
+		}
+		return lastEvent
+	}
+	if got := stateOf(waiting); got != "created" {
+		t.Fatalf("dropped resolve left the route at %q, want created", got)
+	}
+	if got := stateOf(repaged); got != "reopened" {
+		t.Fatalf("re-paged route moved to %q, want reopened", got)
+	}
+}

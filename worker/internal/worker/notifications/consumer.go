@@ -224,6 +224,20 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		entry.WithField("alert_status", alertStatus).Info("Alert acknowledged or snoozed since publish; dropping held event")
 		return nil
 	}
+	if superseded && envelope.EventType == "resolved" {
+		// Only a reopen supersedes a resolve. The alerter committed the
+		// route's claim as 'resolved' when it published, so hand the claim
+		// back under the same lock: the route counts as still paged and
+		// hears the relapse's reminders and resolve.
+		if err := releaseSupersededResolveClaim(ctx, tx, envelope); err != nil {
+			entry.WithError(err).Error("Failed to release a superseded resolve claim")
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			entry.WithError(err).Error("Failed to commit a released resolve claim")
+			return err
+		}
+	}
 	if superseded {
 		// A retried trigger/reminder/ack must never land after the resolve:
 		// PagerDuty and Opsgenie accept a resolve for an alert they do not
@@ -353,7 +367,9 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 	}
 	if relapseCount > envelope.Event.Alert.RelapseCount {
 		// Published in an earlier paging episode: the alert has reopened
-		// since. The relapse pages (and later resolves) on its own.
+		// since. The relapse pages (and later resolves) on its own; for a
+		// dropped resolve the caller hands the route's claim back
+		// (releaseSupersededResolveClaim) so the relapse's resolve reaches it.
 		return true, false, status, nil
 	}
 	if envelope.EventType == "resolved" {
@@ -426,6 +442,45 @@ func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.D
 			WHERE alert_id = $1 AND channel_id = $2 AND suspected_cause_sent_at = $3::timestamptz`,
 			alertID, channelID, claimedAt)
 	}
+	return err
+}
+
+// releaseSupersededResolveClaim hands back the alerter's 'resolved' claim
+// on a resolve dropped because the alert reopened since publish (the only
+// rule that supersedes a resolve), inside tx, which still holds the alert
+// row lock. The provider never heard that resolve, so its incident from the
+// earlier episode is still open. Left 'resolved', the route would only be
+// re-paged by the 'reopened' claim, which waits for the route's tier delay
+// from reopened_at and is held by an ack, snooze, suppression or
+// maintenance; a relapse that recovers first skips the route (the alerter
+// sends a resolve only to rows not already 'resolved'), and the incident
+// stays open for good. Back at 'created' the route counts as paged in the
+// relapse, as on the sync path, where a failed resolve rolls its claim back:
+// reminders resume and the relapse's resolve reaches it. The row is matched
+// on last_sent_at = the event's timestamp (the claim's `now`), so a route
+// the 'reopened' claim has since re-paged is left alone. A redelivery of a
+// resolve that did reach the provider (its ack lost, or the worker died
+// after the send) looks the same; that route then misses the relapse's
+// page but still gets its reminders and resolve, the lesser failure next
+// to an incident nothing ever closes.
+func releaseSupersededResolveClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) error {
+	alertID, err := uuid.Parse(envelope.AlertID)
+	if err != nil {
+		return fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+	}
+	channelID, err := uuid.Parse(envelope.ChannelID)
+	if err != nil {
+		return fmt.Errorf("invalid channel id %q: %w", envelope.ChannelID, err)
+	}
+	if envelope.Event.Timestamp.IsZero() {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE alert_notification_states
+		SET last_event_type = 'created', updated_at = NOW()
+		WHERE alert_id = $1 AND channel_id = $2
+		  AND last_event_type = 'resolved' AND last_sent_at = $3::timestamptz`,
+		alertID, channelID, envelope.Event.Timestamp)
 	return err
 }
 

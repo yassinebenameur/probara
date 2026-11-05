@@ -132,7 +132,9 @@ reopen is a new paging episode: it clears ack/unack/snooze, tiers count from
 previous resolve is paged through the `reopened` claim, sent as `created`
 with `relapse_count > 0`. The episode keys idempotency and the recipient
 ledger, and the delivery worker locks the alert row for resolves too, so a
-resolve published before a reopen is dropped rather than delivered after it.
+resolve published before a reopen is dropped rather than delivered after it;
+the worker then hands that route's `resolved` claim back to `created`, so the
+route counts as still paged and hears the relapse's resolve.
 
 Monitor-less alerts route to the tenant defaults through
 `alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule

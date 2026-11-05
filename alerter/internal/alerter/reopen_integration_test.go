@@ -336,3 +336,97 @@ func TestReopenIsRaceSafeAcrossReplicas(t *testing.T) {
 		t.Fatalf("alerts = %d relapse = %d, want one alert reopened once", alerts, relapse)
 	}
 }
+
+// workerReleasesSupersededResolve does what the async delivery worker does
+// (worker notifications releaseSupersededResolveClaim) when it drops a
+// resolve because the alert reopened while the resolve sat on a retry
+// backoff: it hands the route's 'resolved' claim back to 'created',
+// matching the claim by its timestamp.
+func workerReleasesSupersededResolve(ctx context.Context, t *testing.T, db *shareddb.Client, alertID, channelID uuid.UUID, claimedAt time.Time) {
+	t.Helper()
+	mustExec(ctx, t, db, `
+		UPDATE alert_notification_states
+		SET last_event_type = 'created', updated_at = NOW()
+		WHERE alert_id = $1 AND channel_id = $2
+		  AND last_event_type = 'resolved' AND last_sent_at = $3::timestamptz`, alertID, channelID, claimedAt)
+}
+
+// Async dispatch: the episode-0 resolve is published (its 'resolved' claim
+// commits) but waits on the worker's retry backoff, the alert reopens, and
+// the worker drops the stale resolve and hands the claim back. The route's
+// tier delay has not elapsed from the reopen, so it is never re-paged, and
+// the relapse recovers first: the route must still hear the relapse's
+// resolve, or the provider incident it opened in episode 0 stays open.
+func TestSupersededAsyncResolveStillResolvesTheRelapse(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "reopen-async")
+	mustExec(ctx, t, dbClient, `UPDATE tenants SET alert_reopen_cooldown_seconds = 300, alert_reminder_seconds = 0 WHERE id = $1`, tenantID)
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	route := insertDefaultRoute(ctx, t, dbClient, tenantID, "pager", 600, false)
+
+	rec := &relapseRecorder{}
+	a := newIntegrationAlerter(dbClient)
+	// Publishing succeeds; delivery is the worker's business.
+	a.sendFunc = rec.send
+	tick := func() {
+		t.Helper()
+		if err := a.runLifecycle(ctx); err != nil {
+			t.Fatalf("runLifecycle: %v", err)
+		}
+	}
+
+	setStateForTest(ctx, t, dbClient, monitorID, "down", time.Now().UTC())
+	tick()
+	ids := availabilityAlertIDs(ctx, t, dbClient, monitorID)
+	if len(ids) != 1 {
+		t.Fatalf("alerts = %d, want 1", len(ids))
+	}
+	alertID := ids[0]
+	mustExec(ctx, t, dbClient, `UPDATE alerts SET triggered_at = NOW() - INTERVAL '11 minutes' WHERE id = $1`, alertID)
+	tick()
+	if rec.count(route, "created", 0) != 1 {
+		t.Fatalf("episode 0 page after the tier delay: %+v", rec.sends)
+	}
+
+	setStateForTest(ctx, t, dbClient, monitorID, "up", time.Now().UTC())
+	tick()
+	if rec.count(route, "resolved", 0) != 1 {
+		t.Fatalf("episode 0 resolve not published: %+v", rec.sends)
+	}
+	eventType, claimedAt, ok := notificationStateFor(ctx, t, dbClient, alertID, route)
+	if !ok || eventType != "resolved" {
+		t.Fatalf("route after the published resolve = %q (%v), want resolved", eventType, ok)
+	}
+
+	// The resolve is still on the worker's backoff when the monitor goes
+	// down again: the alert reopens and the route is not due (600s from the
+	// reopen).
+	setStateForTest(ctx, t, dbClient, monitorID, "down", time.Now().UTC())
+	tick()
+	var relapse int
+	if err := dbClient.QueryRowContext(ctx, `SELECT relapse_count FROM alerts WHERE id = $1`, alertID).Scan(&relapse); err != nil {
+		t.Fatal(err)
+	}
+	if relapse != 1 {
+		t.Fatalf("relapse_count = %d, want 1", relapse)
+	}
+	if got := rec.count(route, "created", 1); got != 0 {
+		t.Fatalf("delayed route paged %d times before its delay from the reopen", got)
+	}
+
+	// The redelivered resolve(0) is dropped as superseded and its claim handed back.
+	workerReleasesSupersededResolve(ctx, t, dbClient, alertID, route, claimedAt)
+	tick()
+	if got := rec.count(route, "created", 1); got != 0 {
+		t.Fatalf("route still paged by the provider's open incident was re-paged %d times", got)
+	}
+
+	// The relapse recovers before the route's delay: its resolve reaches the route.
+	setStateForTest(ctx, t, dbClient, monitorID, "up", time.Now().UTC())
+	tick()
+	if got := rec.count(route, "resolved", 1); got != 1 {
+		t.Fatalf("relapse resolve on the route = %d, want 1 (%+v)", got, rec.sends)
+	}
+}
