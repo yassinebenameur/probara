@@ -43,11 +43,21 @@ func TestOpenTypeConstraintMigrations(t *testing.T) {
 			id, tenant, typ+"-"+id.String(), typ, interval, timeout)
 		return id, err
 	}
+	location := uuid.New()
+	if _, err := dbc.ExecContext(ctx, `
+		INSERT INTO locations (id, tenant_id, name, slug) VALUES ($1, $2, 'site', 'site')`, location, tenant); err != nil {
+		t.Fatal(err)
+	}
 	insertAlert := func(kind string) error {
+		// location_offline's subject is a location, not a monitor (000102).
+		monitorID, sourceID := &anchor, (*uuid.UUID)(nil)
+		if kind == "location_offline" {
+			monitorID, sourceID = nil, &location
+		}
 		_, err := dbc.ExecContext(ctx, `
-			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count)
-			VALUES ($1, $2, $3, $4, 'resolved', NOW(), 0)`,
-			uuid.New(), tenant, anchor, kind)
+			INSERT INTO alerts (id, tenant_id, monitor_id, source_location_id, kind, status, triggered_at, failure_count)
+			VALUES ($1, $2, $3, $4, $5, 'resolved', NOW(), 0)`,
+			uuid.New(), tenant, monitorID, sourceID, kind)
 		return err
 	}
 	expect := func(what string, err error, ok bool) {

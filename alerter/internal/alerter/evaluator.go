@@ -63,6 +63,10 @@ type alertRecord struct {
 	TargetLocationName *string
 	// SuspectedCause is set only for the "suspected_cause" follow-up.
 	SuspectedCause *notifications.SuspectedCause
+	// Offline-location subject (Kind == "location_offline"): the location
+	// rides in SourceLocationID/Name; MonitorID is the zero UUID.
+	LocationLastSeenAt   *time.Time
+	LocationMonitorCount int
 }
 
 type alertChannel struct {
@@ -1329,6 +1333,8 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			TargetLocationID:     uuidStr(alert.TargetLocationID),
 			TargetLocationName:   alert.TargetLocationName,
 			SuspectedCause:       alert.SuspectedCause,
+			LocationLastSeenAt:   alert.LocationLastSeenAt,
+			LocationMonitorCount: alert.LocationMonitorCount,
 		},
 	}
 }

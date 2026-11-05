@@ -70,7 +70,7 @@ export const MONITORS_PAGE: DocPage = {
             [
               "`notification_channels`",
               "Custom channel assignments and escalation delay",
-              "Each item has `channel_id` and non-negative `delay_seconds`",
+              "Each item has `channel_id`, non-negative `delay_seconds` and optional `notify_after_ack` (keep paging this route while the alert is acknowledged)",
             ],
             [
               "`alert_routing`",

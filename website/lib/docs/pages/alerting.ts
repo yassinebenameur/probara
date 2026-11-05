@@ -52,6 +52,11 @@ export const ALERTING_PAGE: DocPage = {
               "An HTTPS or SIP-over-TLS monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
               "A renewed certificate is observed, or the threshold is removed",
             ],
+            [
+              "`location_offline`",
+              "A check location that reported before sends no heartbeat for the workspace's `location_offline_after_seconds` ([details](/docs/locations/#heartbeats)); routed to the default channels, and its mesh paths go quiet meanwhile",
+              "The location reports again, is disabled or deleted, or the workspace turns these alerts off",
+            ],
           ],
         },
         {
@@ -127,7 +132,7 @@ export const ALERTING_PAGE: DocPage = {
             {
               term: "Tenant default routes",
               description:
-                "An ordered list of active alert channels, each with `channel_id`, display metadata, and a non-negative `delay_seconds`.",
+                "An ordered list of active alert channels, each with `channel_id`, display metadata, a non-negative `delay_seconds`, and `notify_after_ack` (keep paging this route while the alert is acknowledged).",
             },
             {
               term: "Monitor `default` mode",
@@ -222,6 +227,10 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`dependency_suppression_grace_seconds`",
               "Defaults to 120; 0 to 86,400. How long a suppressed downstream stays quiet after its upstream recovers before paging if still down",
+            ],
+            [
+              "`location_offline_alerts_enabled` / `location_offline_after_seconds`",
+              "Default true / 180 (60 to 86,400). Alert once per [offline check location](/docs/locations/#heartbeats), to the default channels",
             ],
             [
               "`ack_stops_notifications`",

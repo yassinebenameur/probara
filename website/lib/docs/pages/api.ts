@@ -606,7 +606,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/notification-settings`",
-              "Read tenant defaults, reminders, anomaly and auto-incident settings",
+              "Read tenant defaults (each route with `delay_seconds` and `notify_after_ack`), reminders, stop-on-ack (`ack_stops_notifications`), offline-location alerts (`location_offline_alerts_enabled`, `location_offline_after_seconds`), anomaly and auto-incident settings",
             ],
             [
               "`PUT /api/v1/notification-settings`",

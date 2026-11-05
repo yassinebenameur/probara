@@ -177,8 +177,11 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `RoutesToChannelPredicate` is `TargetsSQL`'s own union correlated per row,
   for batch queries that must drop unrouted pairs before a `LIMIT`
   (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Monitor-less alerts
-  (mesh edges) route through `TenantTargetsSQL`, the tenant defaults without
-  a monitor (`TestTenantTargetsSQLMatchesDefaults`). Escalation delays
+  (mesh edges, `location_offline`) route through `TenantTargetsSQL`, the
+  tenant defaults without a monitor (`TestTenantTargetsSQLMatchesDefaults`).
+  Whether a location is offline is `monitorstate.LocationOfflinePredicate`
+  (S-F6, Go twin `LocationOffline`); never re-derive it from
+  `last_seen_at`. Escalation delays
   count from `DispatchEligibleSinceExpr` (the end of a cleared root cause's
   grace period, else `triggered_at`, and never before
   `DispatchResumedAtExpr`, the last unack or snooze end). Ack and snooze
@@ -552,7 +555,8 @@ or imported groups come back empty. Any other path that creates groups through
   predicates in `claimNotificationTx` and the in-memory pre-filter
   `shouldSendNotification` encode the same due rules; change them together.
   `dueEvent` (`dispatch_due.go`) is the single created/reminder due rule
-  for the open-alert loops (`dispatchOpenAlerts`, `dispatchOpenMeshAlerts`);
+  for the open-alert loops (`dispatchOpenAlerts`, `dispatchOpenMeshAlerts`,
+  `dispatchOpenLocationOfflineAlerts`);
   `shouldSendNotification` mirrors it minus the escalation delay
   (`TestDueEvent` pins the pair). Alert-level holds (ack, snooze) go in its
   `DispatchGate`, never in a loop, and the claim re-checks them under the
@@ -588,6 +592,8 @@ or imported groups come back empty. Any other path that creates groups through
 - **Alert kinds**: `alerts_kind_check` (latest rewrite 000100) and the
   `Kind*` constants in `shared/notifications/event.go` list the same kinds;
   a new kind rewrites the CHECK in one migration and adds its constant.
+  A monitor-less kind also opens `alerts_subject_check` (latest rewrite
+  000102) and gets its own partial unique index for its `ON CONFLICT`.
 - **Transactional mail** (invites, resets, subscriber mail, reports) goes
   through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
   MIME builder; `Message.Validate` is the header-injection guard. It never

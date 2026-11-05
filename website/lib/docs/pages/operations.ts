@@ -226,6 +226,16 @@ make healthcheck`,
               'Any sustained nonzero rate.',
             ],
             [
+              'Check-job backlog',
+              '`probara_scheduler_check_jobs_pending`, sampled from the check-job stream after every schedule tick',
+              'Sustained growth: jobs wait for a worker that is not consuming. Offline private locations alert their workspace (`location_offline`); a default fleet with no worker at all shows up only here.',
+            ],
+            [
+              'Alerter fleet',
+              '`probara_alerter_locations_offline`, `probara_alerter_open_alerts{kind=…}`',
+              'Offline locations above zero (counted whether or not their workspace alerts on them); a jump in open alerts of one kind.',
+            ],
+            [
               'Result ingest',
               '`results_ingested_total`, `result_ingest_errors_total`, `result_ingest_duplicates_total`, `mesh_results_ingested_total`',
               'Publish success without ingest growth, ingest errors, or unexpectedly high duplicates.',
@@ -266,6 +276,19 @@ make healthcheck`,
               '`ready` at 0, growth in `rejected_total` (429 saturation) or `failed_total`, `admitted` pinned at queue capacity + 1, and `wedged` at 1 (the executing batch, `inflight_seconds` old, has passed `LOCAL_AI_MAX_INFERENCE_SECONDS`). Divide `inference_seconds_sum` by `completed_total` for mean batch time.',
             ],
           ],
+        },
+        {
+          type: 'code',
+          language: 'yaml',
+          title: 'Alert on a check-job backlog (Prometheus rule)',
+          code: `groups:
+  - name: probara
+    rules:
+      - alert: ProbaraCheckJobsBacklog
+        expr: min_over_time(probara_scheduler_check_jobs_pending[10m]) > 100
+        for: 5m
+        annotations:
+          summary: Check jobs are queuing with no worker consuming them`,
         },
         {
           type: 'code',

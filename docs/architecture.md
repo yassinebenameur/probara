@@ -118,6 +118,15 @@ row lock, and the async envelope carries `stop_on_ack` so the delivery
 worker drops a tier or reminder that a later ack holds. Unacknowledge and
 snooze end restart the tier and reminder clocks.
 
+Monitor-less alerts route to the tenant defaults through
+`alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
+S-F6 in [state semantics](state-semantics.md),
+`monitorstate.LocationOfflinePredicate`), one alert per check location that
+reported before and has been silent past the tenant threshold. While a
+location is offline its mesh edges stay open but do not dispatch. The
+alerter exports `locations_offline` and `open_alerts{kind}` gauges; the
+scheduler exports `check_jobs_pending`, the check-job stream backlog.
+
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.
 An empty group's old availability alert is resolved; group timeline integration

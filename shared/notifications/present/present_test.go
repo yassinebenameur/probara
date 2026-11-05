@@ -243,3 +243,46 @@ func TestBuildSuspectedCauseKeepsKindAwareIdentity(t *testing.T) {
 		t.Fatalf("first row = %+v", cpu.Rows[0])
 	}
 }
+
+func TestBuildLocationOffline(t *testing.T) {
+	ev := sample()
+	name := "factory-floor"
+	seen := time.Date(2026, 11, 5, 9, 58, 0, 0, time.UTC)
+	ev.Alert = notifications.AlertDetails{
+		ID: "a1", MonitorID: emptyUUID, MonitorName: "location: factory-floor",
+		Kind: notifications.KindLocationOffline, Status: "active",
+		TriggeredAt:          time.Date(2026, 11, 5, 10, 1, 0, 0, time.UTC),
+		SourceLocationName:   &name,
+		LocationLastSeenAt:   &seen,
+		LocationMonitorCount: 12,
+	}
+	m := Build(ev, EventCreated, "https://probara.example.com")
+	if m.Label != "Location Offline" || m.StatusWord != "OFFLINE" || m.Tone != ToneDown {
+		t.Fatalf("label=%q status=%q tone=%q", m.Label, m.StatusWord, m.Tone)
+	}
+	if !strings.Contains(m.Summary, "factory-floor has stopped reporting") ||
+		!strings.Contains(m.Summary, "5 Nov 2026, 09:58 UTC") ||
+		!strings.Contains(m.Summary, "12 monitors run from it") {
+		t.Errorf("Summary = %q", m.Summary)
+	}
+	if m.Metric == nil || m.Metric.Value != "12" {
+		t.Errorf("Metric = %+v", m.Metric)
+	}
+	if m.ActionURL != "https://probara.example.com/locations" {
+		t.Errorf("ActionURL = %q", m.ActionURL)
+	}
+
+	if r := Build(ev, EventReminder, ""); r.Label != "Location Still Offline" || r.StatusWord != "STILL OFFLINE" {
+		t.Errorf("reminder label=%q status=%q", r.Label, r.StatusWord)
+	}
+	resolvedAt := ev.Alert.TriggeredAt.Add(7 * time.Minute)
+	ev.Alert.ResolvedAt = &resolvedAt
+	ev.Alert.Status = "resolved"
+	r := Build(ev, EventResolved, "")
+	if r.Label != "Location Back Online" || r.StatusWord != "BACK ONLINE" || r.Tone != ToneUp || r.Metric != nil {
+		t.Errorf("resolved label=%q status=%q tone=%q metric=%+v", r.Label, r.StatusWord, r.Tone, r.Metric)
+	}
+	if r.Summary != "Location factory-floor is reporting again after 7m offline." {
+		t.Errorf("resolved Summary = %q", r.Summary)
+	}
+}

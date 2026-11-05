@@ -15,6 +15,7 @@ package monitorstate
 import (
 	"math/rand"
 	"testing"
+	"time"
 )
 
 // specStep is one piece of evidence arriving for a multi-location monitor,
@@ -266,5 +267,44 @@ func TestSpecProperty_AggregateInvariants(t *testing.T) {
 					c, got, worse, AggregateLocations(worse, quorum))
 			}
 		}
+	}
+}
+
+// S-F6: a location is offline when it is enabled, live, was seen at least
+// once, and has been silent for the tenant's threshold (floor 60s). Never-seen
+// and disabled locations are never offline; the connected badge is a
+// separate, shorter window.
+func TestSpecLocationOffline(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) *time.Time { ts := now.Add(-d); return &ts }
+	cases := []struct {
+		name         string
+		enabled      bool
+		deleted      bool
+		lastSeen     *time.Time
+		offlineAfter int
+		want         bool
+	}{
+		{"never_seen_is_not_offline", true, false, nil, 180, false},
+		{"recent_heartbeat", true, false, ago(30 * time.Second), 180, false},
+		{"just_under_threshold", true, false, ago(179 * time.Second), 180, false},
+		{"at_threshold", true, false, ago(180 * time.Second), 180, true},
+		{"long_silent", true, false, ago(time.Hour), 180, true},
+		{"disabled_is_not_offline", false, false, ago(time.Hour), 180, false},
+		{"deleted_is_not_offline", true, true, ago(time.Hour), 180, false},
+		{"threshold_floor_60s", true, false, ago(45 * time.Second), 10, false},
+		{"threshold_floor_reached", true, false, ago(60 * time.Second), 10, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LocationOffline(tc.enabled, tc.deleted, tc.lastSeen, tc.offlineAfter, now); got != tc.want {
+				t.Fatalf("LocationOffline = %v, want %v [rules S-F6]", got, tc.want)
+			}
+		})
+	}
+	// Connected and offline are distinct windows: between them a location
+	// is neither (disconnected badge, no alert yet).
+	if LocationConnected(ago(90*time.Second), now) || LocationOffline(true, false, ago(90*time.Second), DefaultLocationOfflineAfterSeconds, now) {
+		t.Fatal("90s silent must read disconnected but not yet offline [rules S-F6]")
 	}
 }

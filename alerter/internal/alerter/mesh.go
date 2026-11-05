@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/alertrouting"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
@@ -226,7 +227,10 @@ func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uui
 
 // dispatchOpenMeshAlerts fires due escalation tiers and reminders for open
 // mesh alerts, mirroring dispatchOpenAlerts' delay/reminder contract,
-// including its ack and snooze gate.
+// including its ack and snooze gate. An edge with an offline endpoint
+// (S-F6) stays open but quiet while its tenant alerts on offline locations:
+// that location's one alert speaks for every edge it breaks, so a dead site
+// does not page once per edge.
 func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.source_location_id, al.target_location_id,
@@ -246,6 +250,10 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 		  AND al.status IN ('active', 'acknowledged')
 		  AND ms.current_state = 'down'
 		  AND NOT `+alertrouting.SnoozedPredicate("al")+`
+		  AND NOT (te.location_offline_alerts_enabled AND EXISTS (
+			SELECT 1 FROM locations ol
+			WHERE ol.id IN (al.source_location_id, al.target_location_id)
+			  AND `+monitorstate.LocationOfflinePredicate("ol", "te")+`))
 	`)
 	if err != nil {
 		return fmt.Errorf("query open mesh alerts: %w", err)

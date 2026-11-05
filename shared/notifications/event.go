@@ -86,6 +86,13 @@ type AlertDetails struct {
 	// alert's own value (active or acknowledged): receivers branch on the
 	// event type, never on status.
 	SuspectedCause *SuspectedCause `json:"suspected_cause,omitempty"`
+
+	// Offline-location annotation: populated when Kind == "location_offline".
+	// The subject is the location in SourceLocationID/SourceLocationName
+	// (MonitorID is the zero UUID). LocationLastSeenAt is its last worker
+	// heartbeat; LocationMonitorCount how many live monitors run from it.
+	LocationLastSeenAt   *time.Time `json:"location_last_seen_at,omitempty"`
+	LocationMonitorCount int        `json:"location_monitor_count,omitempty"`
 }
 
 // SuspectedCause is a triage's named cause as a follow-up carries it.
@@ -156,6 +163,12 @@ func (d AlertDetails) IsHostMetric() bool {
 // IsMeshEdge reports whether this alert is an inter-location mesh edge outage.
 func (d AlertDetails) IsMeshEdge() bool {
 	return d.Kind == KindMeshEdge
+}
+
+// IsLocationOffline reports whether this alert is a check location that
+// stopped reporting.
+func (d AlertDetails) IsLocationOffline() bool {
+	return d.Kind == KindLocationOffline
 }
 
 // IsTLSExpiry reports whether this alert is a TLS-certificate-expiry warning.

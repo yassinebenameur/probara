@@ -49,6 +49,10 @@ export const LOCATIONS_PAGE: DocPage = {
             ],
             ["`last_seen_at`", "Most recent accepted worker heartbeat"],
             [
+              "`offline` / `open_alert_id`",
+              "Whether the location is [offline](#heartbeats) (seen before, silent past the workspace threshold), and its open `location_offline` alert",
+            ],
+            [
               "`mesh_endpoint`",
               "Optional host-and-port endpoint other locations probe for mesh health",
             ],
@@ -204,6 +208,11 @@ export const LOCATIONS_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Location workers publish lightweight core-NATS heartbeats approximately every 15 seconds with jitter. The API derives `connected` from the latest accepted heartbeat and treats a location as disconnected after about one minute without one.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A location that stays silent longer is **offline**: it is enabled, has reported at least once, and has sent no heartbeat for the workspace's `location_offline_after_seconds` (default 180, 60 to 86,400). Offline opens one `location_offline` [alert](/docs/alerting/#model) for the location, routed to the workspace's default channels, and resolves it when the location reports again or is disabled or deleted. A location that never connected is never offline: nothing was lost. The alert says how many monitors run from the location, since they go stale without fresh checks; offline never changes a monitor's own state. While a location is offline, mesh paths to or from it stay open but send nothing, so a dead site pages once instead of once per path. Turn the alert off, or change the threshold, under Settings → Notifications (`location_offline_alerts_enabled`). The API reports `offline` and `open_alert_id` on each location.",
         },
         {
           type: "callout",
