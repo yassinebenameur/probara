@@ -79,6 +79,7 @@ func (p *Plugin) Manifest() plugin.Manifest {
 		Capabilities: []plugin.Capability{
 			plugin.CapabilityTestable,
 			plugin.CapabilityFollowUp,
+			plugin.CapabilityDirectRecipient,
 		},
 		Fields: []plugin.Field{
 			{
@@ -133,17 +134,8 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 }
 
 func (cfg Config) validate() ([]string, error) {
-	if !accountSIDPattern.MatchString(cfg.AccountSID) {
-		return nil, errors.New("account_sid must be AC followed by 32 hex characters")
-	}
-	if cfg.APIKeySID != "" && !apiKeySIDPattern.MatchString(cfg.APIKeySID) {
-		return nil, errors.New("api_key_sid must be SK followed by 32 hex characters")
-	}
-	if cfg.AuthToken == "" {
-		return nil, errors.New("auth_token is required")
-	}
-	if !e164Pattern.MatchString(cfg.From) && !serviceSIDPattern.MatchString(cfg.From) {
-		return nil, errors.New("from must be an E.164 number (+15551234567) or a Messaging Service SID (MG…)")
+	if err := cfg.validateSender(); err != nil {
+		return nil, err
 	}
 	to := splitNumbers(cfg.To)
 	if len(to) == 0 {
@@ -160,6 +152,24 @@ func (cfg Config) validate() ([]string, error) {
 	return to, nil
 }
 
+// validateSender checks the credentials and sender, everything a send needs
+// besides the configured recipients.
+func (cfg Config) validateSender() error {
+	if !accountSIDPattern.MatchString(cfg.AccountSID) {
+		return errors.New("account_sid must be AC followed by 32 hex characters")
+	}
+	if cfg.APIKeySID != "" && !apiKeySIDPattern.MatchString(cfg.APIKeySID) {
+		return errors.New("api_key_sid must be SK followed by 32 hex characters")
+	}
+	if cfg.AuthToken == "" {
+		return errors.New("auth_token is required")
+	}
+	if !e164Pattern.MatchString(cfg.From) && !serviceSIDPattern.MatchString(cfg.From) {
+		return errors.New("from must be an E.164 number (+15551234567) or a Messaging Service SID (MG…)")
+	}
+	return nil
+}
+
 // Send texts every recipient.
 func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	raw, err := json.Marshal(req.Channel.Config)
@@ -170,7 +180,7 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	if err != nil {
 		return plugin.Permanent(err)
 	}
-	to, err := cfg.validate()
+	to, body, err := cfg.recipients(req)
 	if err != nil {
 		return plugin.Permanent(err)
 	}
@@ -183,9 +193,6 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 		"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+cfg.AuthToken)),
 	}
 	target := fmt.Sprintf("%s/2010-04-01/Accounts/%s/Messages.json", p.base, url.PathEscape(cfg.AccountSID))
-	// ShortWithin keeps the links whole and clips the text instead: a cut
-	// acknowledge link is worse than a shorter summary.
-	body := req.View().ShortWithin(maxBody)
 
 	// A retry of a partially delivered event texts only the recipients the
 	// provider has not accepted yet; the ledger outlives this process, so the
@@ -282,6 +289,42 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 		return plugin.RetryAfter(flat, delay)
 	}
 	return flat
+}
+
+// recipients returns who this send texts and the body: the channel's
+// configured numbers and the alert's short form, or, for a direct send
+// (plugin.CapabilityDirectRecipient), the one recipient's number and its
+// text when it carries one.
+func (cfg Config) recipients(req plugin.DispatchRequest) ([]string, string, error) {
+	if req.Recipient == nil {
+		to, err := cfg.validate()
+		if err != nil {
+			return nil, "", err
+		}
+		// ShortWithin keeps the links whole and clips the text instead: a cut
+		// acknowledge link is worse than a shorter summary.
+		return to, req.View().ShortWithin(maxBody), nil
+	}
+	if err := cfg.validateSender(); err != nil {
+		return nil, "", err
+	}
+	number := strings.Join(strings.Fields(req.Recipient.Address), "")
+	if !e164Pattern.MatchString(number) {
+		return nil, "", fmt.Errorf("recipient %s is not an E.164 number", maskNumber(number))
+	}
+	if req.Recipient.Text == "" {
+		return []string{number}, req.View().ShortWithin(maxBody), nil
+	}
+	return []string{number}, clipRunes(req.Recipient.Text, maxBody), nil
+}
+
+// clipRunes cuts s to at most n runes, never inside a UTF-8 sequence.
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 // maskNumber keeps phone numbers out of logs except the last digits.

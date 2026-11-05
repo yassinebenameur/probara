@@ -55,6 +55,10 @@ type DispatchRequest struct {
 	// each one the provider accepts. Nil means untracked (test sends):
 	// deliver to everyone.
 	Recipients RecipientLedger
+	// Recipient, when set, sends to this one person instead of the
+	// channel's configured recipients. Only plugins advertising
+	// CapabilityDirectRecipient receive it (see recipient.go).
+	Recipient *Recipient
 }
 
 // RecipientLedger remembers which recipients of one event a provider has

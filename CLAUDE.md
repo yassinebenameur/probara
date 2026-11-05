@@ -768,6 +768,14 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   only. `event_type` is free text, `outcome`/`path` are CHECKed. Read it via
   `GET /alerts/{id}/deliveries`, `GET /alert-channels/{id}/deliveries` and
   the channel list's `last_delivery`.
+- **People layer.** Contact addresses (`user_contacts`, `shared/contacts`)
+  are secrets envelopes shown only to their owner. A send to one person goes
+  through a plugin with `CapabilityDirectRecipient`
+  (`DispatchRequest.Recipient`), and an async envelope carries `ContactID`,
+  never the address (the worker resolves it with `contacts.LoadVerified`).
+  `shared/oncall` is the one answer to who is on call (`OnCallAt`/`Preview`:
+  overrides win, the last active layer wins, handoffs at local wall-clock
+  time); never query rotations to work it out. Schedules page nobody yet.
 
 ## Status pages
 

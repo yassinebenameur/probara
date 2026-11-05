@@ -250,6 +250,16 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		return err
 	}
 
+	recipient, err := c.directRecipient(ctx, p.Manifest(), envelope)
+	if errors.Is(err, errDropContact) {
+		entry.WithError(err).Warn("Direct recipient not deliverable; dropping message")
+		return nil
+	}
+	if err != nil {
+		entry.WithError(err).Error("Failed to resolve direct recipient")
+		return err
+	}
+
 	attempt := deliveryAttempt(msg)
 	alertID, alertErr := uuid.Parse(envelope.AlertID)
 	channelID, channelErr := uuid.Parse(envelope.ChannelID)
@@ -272,6 +282,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			EventType:  eventType,
 			Attempt:    attempt,
 			Recipients: recipients,
+			Recipient:  recipient,
 		})
 	}
 	ctx, tally := recipientledger.WithTally(ctx)

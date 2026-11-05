@@ -1119,6 +1119,46 @@ export const API_PAGE: DocPage = {
       ],
     },
     {
+      id: "people-api",
+      title: "Contacts and on-call endpoints",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Personal [contacts](/docs/administration/#contacts) belong to the signed-in user: the `/account/contacts` routes accept a browser session only (API keys and MCP tokens get 403), every role may use them, and they are not MCP tools. [On-call schedules](/docs/alerting/#oncall) are workspace resources: members read them, writers change them, and every route but the calendar feed is an MCP tool. Schedules are informational for now; nothing pages them.",
+        },
+        {
+          type: "table",
+          columns: ["Method and path", "Required role and purpose"],
+          rows: [
+            ["`GET /api/v1/account/contacts`", "Your contacts with their addresses, plus `transports` (`email`: SMTP configured; `sms`: the selected workspace has an SMS channel for people)"],
+            ["`POST /api/v1/account/contacts`", "Add an unverified contact (`kind` `email` or `sms`, `address`, optional `label`); at most 10; a duplicate is 409"],
+            ["`PATCH /api/v1/account/contacts/{id}`", "Rename (`label`); the address cannot change"],
+            ["`DELETE /api/v1/account/contacts/{id}`", "Remove a contact"],
+            ["`POST /api/v1/account/contacts/{id}/send-code`", "Send a 6-digit code (15 minutes, 5 guesses); 409 when verified or the transport is not set up, 429 with `Retry-After` within 60 seconds of the last code or past 10 codes and tests per hour, 502 when the provider refused it"],
+            ["`POST /api/v1/account/contacts/{id}/verify`", "Submit `code`; a wrong code is 400 `incorrect_code` with the attempts left, and the fifth wrong guess voids the code"],
+            ["`POST /api/v1/account/contacts/{id}/test`", "Send a test message to a verified contact (same limits as codes)"],
+            ["`GET /api/v1/people-settings`", "Authenticated; the workspace's `personal_sms_channel_id` and the channels that can fill it"],
+            ["`PUT /api/v1/people-settings`", "Tenant admin; set or clear (`null`) `personal_sms_channel_id`, a channel whose plugin can text one person (SMS via Twilio)"],
+            ["`GET /api/v1/oncall-schedules`", "Authenticated; schedules with `on_call` (the current shift or null) and `next`"],
+            ["`POST /api/v1/oncall-schedules`", "Write; create (`name`, `description`, `timezone`, `rotations[]`: `kind` `daily`/`weekly`, `handoff_time` `HH:MM`, `handoff_weekday` 0-6 for weekly, `start_at`, optional `end_at`, `member_ids` in turn order, optional `name`); at most 10 rotations of 50 members"],
+            ["`GET /api/v1/oncall-schedules/people`", "Authenticated; who can be put on call here (members and superadmins) with their verified contact count"],
+            ["`GET /api/v1/oncall-schedules/{id}`", "Authenticated; one schedule with `on_call` and `next`"],
+            ["`PUT /api/v1/oncall-schedules/{id}`", "Write; replace fields and every rotation (overrides and the feed are kept)"],
+            ["`DELETE /api/v1/oncall-schedules/{id}`", "Write; delete with rotations, overrides and feed"],
+            ["`GET /api/v1/oncall-schedules/{id}/on-call`", "Authenticated; who is on call at `at` (RFC 3339, default now), with the shift and the next one"],
+            ["`GET /api/v1/oncall-schedules/{id}/preview`", "Authenticated; shifts over `from`–`to` (default now plus 14 days, at most 93 days), merged per person, gaps omitted"],
+            ["`GET /api/v1/oncall-schedules/{id}/overrides`", "Authenticated; overrides ending after `from` (default now) and, with `to`, starting before it"],
+            ["`POST /api/v1/oncall-schedules/{id}/overrides`", "Write; `user_id`, `starts_at`, `ends_at` (future, at most 93 days long), optional `note`"],
+            ["`DELETE /api/v1/oncall-schedules/{id}/overrides/{overrideId}`", "Write; remove an override"],
+            ["`POST /api/v1/oncall-schedules/{id}/ical-token`", "Write; turn the calendar feed on with a new link (revoking the old one); returns `token`, `path` and, with `PUBLIC_BASE_URL` set, `url`, once"],
+            ["`DELETE /api/v1/oncall-schedules/{id}/ical-token`", "Write; turn the feed off"],
+            ["`GET /api/v1/oncall-feeds/{token}.ics`", "Public, no credential but the token; `text/calendar` with the shifts from two weeks back to nine weeks ahead; 404 for an unknown or revoked token. Covered by the anonymous rate limit"],
+          ],
+        },
+      ],
+    },
+    {
       id: "sse",
       title: "Server-sent events",
       blocks: [

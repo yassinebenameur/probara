@@ -163,6 +163,7 @@ export const MCP_PAGE: DocPage = {
             ["Status pages", "pages, sections and settings, custom template draft/publish/revert, template library"],
             ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message), `list_channel_deliveries`"],
             ["Workspace", "local AI settings, `export_ai_labels`, API keys, workspace settings, audit log"],
+            ["On-call", "`list_oncall_schedules`, `get_oncall_now`, `preview_oncall_schedule`, schedule create/replace/delete, `list_oncall_people`, overrides, calendar link create/turn off, `get_people_settings` / `update_people_settings` (the workspace's SMS channel for people)"],
             ["Platform", "`list_tenants`, users, SSO group mappings, `create_tenant`, `rename_tenant`, `delete_tenant` (destructive) (superadmins)"],
           ],
         },
@@ -189,7 +190,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); the signed [acknowledge-link](/docs/alerting/#ack-links) routes (`/alert-actions/{token}`, authorized by their token; `acknowledge_alert` covers acknowledging); and the OAuth protocol routes themselves.",
+            "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); the signed [acknowledge-link](/docs/alerting/#ack-links) routes (`/alert-actions/{token}`, authorized by their token; `acknowledge_alert` covers acknowledging); your own account's sessions and contacts (`/account/…`, browser sessions only); the public on-call calendar feed (`/oncall-feeds/{token}.ics`); and the OAuth protocol routes themselves.",
         },
       ],
     },

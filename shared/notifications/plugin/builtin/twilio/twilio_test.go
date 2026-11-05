@@ -570,3 +570,58 @@ func TestSend_RecordErrorDoesNotChangeOutcome(t *testing.T) {
 		t.Fatalf("err = %v, want permanent: a record failure is not a retryable send failure", err)
 	}
 }
+
+// A direct send texts only the one recipient, with its own text, and needs no
+// configured recipient list (the workspace's personal SMS channel).
+func TestSend_DirectRecipient(t *testing.T) {
+	var mu sync.Mutex
+	var forms []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(raw))
+		mu.Lock()
+		forms = append(forms, form)
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p := New()
+	if !p.Manifest().HasCapability(plugin.CapabilityDirectRecipient) {
+		t.Fatal("twilio must advertise CapabilityDirectRecipient")
+	}
+	p.base = srv.URL
+	err := p.Send(context.Background(), plugin.DispatchRequest{
+		Channel:   plugin.ChannelRef{Config: config(nil)},
+		Event:     sampleEvent(),
+		Recipient: &plugin.Recipient{Address: "+33 6 12 34 56 78", Text: "Your Probara code is 123456"},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(forms) != 1 || forms[0].Get("To") != "+33612345678" || forms[0].Get("Body") != "Your Probara code is 123456" {
+		t.Fatalf("forms = %+v, want one text to the direct recipient", forms)
+	}
+
+	// Without Text the alert's short form goes to the recipient.
+	forms = nil
+	if err := p.Send(context.Background(), plugin.DispatchRequest{
+		Channel:   plugin.ChannelRef{Config: config(map[string]any{"to": ""})},
+		Event:     sampleEvent(),
+		Recipient: &plugin.Recipient{Address: "+15550001111"},
+	}); err != nil {
+		t.Fatalf("Send without channel recipients: %v", err)
+	}
+	if len(forms) != 1 || !strings.HasPrefix(forms[0].Get("Body"), "DOWN · Alert Triggered: API health") {
+		t.Fatalf("forms = %+v", forms)
+	}
+
+	err = p.Send(context.Background(), plugin.DispatchRequest{
+		Channel:   plugin.ChannelRef{Config: config(nil)},
+		Event:     sampleEvent(),
+		Recipient: &plugin.Recipient{Address: "0612345678"},
+	})
+	if !plugin.IsPermanent(err) || strings.Contains(err.Error(), "0612345678") {
+		t.Fatalf("err = %v, want a permanent error that masks the number", err)
+	}
+}

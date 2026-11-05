@@ -30,7 +30,7 @@ func (a *Alerter) recordDeliveries(send channelSender) channelSender {
 			ChannelID:   channel.ID,
 			ChannelName: channel.Name,
 			EventType:   eventType,
-			DeliveryKey: recipientKey(ctx, eventType, now),
+			DeliveryKey: recipientKey(ctx, eventType, now, alert.RelapseCount),
 			Path:        deliverylog.PathSync,
 			Outcome:     deliverylog.SendOutcome(err),
 			Err:         err,

@@ -140,6 +140,12 @@ POSTs to the API's public `/api/v1/alert-actions/{token}`; the API
 acknowledges through the alerts service as a `magic_link` actor, so the
 alerter sees an ordinary acknowledgement. Nothing about the link is stored.
 
+An async envelope may carry `contact_id` instead of relying on the channel's
+own recipients: the delivery worker reads and decrypts that verified
+`user_contacts` address and hands it to a plugin advertising
+`CapabilityDirectRecipient`, so a person's address never rides on NATS. Nothing
+publishes such envelopes yet; escalation policies will.
+
 Monitor-less alerts route to the tenant defaults through
 `alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
 S-F6 in [state semantics](state-semantics.md),

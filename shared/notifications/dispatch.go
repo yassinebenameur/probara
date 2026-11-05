@@ -52,6 +52,14 @@ type DispatchEnvelope struct {
 	// the worker drops it under the alert row lock. Envelopes without it keep
 	// the older behaviour (deliver, then re-acknowledge an overtaken trigger).
 	StopOnAck bool `json:"stop_on_ack,omitempty"`
+
+	// ContactID, when set, sends this event to one user's verified contact
+	// (user_contacts) through the channel instead of the channel's
+	// configured recipients; the plugin must advertise
+	// plugin.CapabilityDirectRecipient. The envelope never carries the
+	// address: the worker resolves it (contacts.LoadVerified) and drops the
+	// message when the contact is gone or no longer verified.
+	ContactID string `json:"contact_id,omitempty"`
 }
 
 // RecipientKey returns the ledger key for this envelope's event.
