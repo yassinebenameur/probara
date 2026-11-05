@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Send } from 'lucide-react';
 import type { NotificationDelivery, NotificationDeliveryListResponse } from '@/lib/types';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
-import { deliveryOutcomeLabel, deliveryOutcomeTone } from '@/lib/status-tones';
+import { deliveryOutcomeHint, deliveryOutcomeLabel, deliveryOutcomeTone } from '@/lib/status-tones';
 import { deliveryAlertSubject, deliveryEventLabel, deliveryPathLabel, deliveryRecipients } from '@/lib/deliveries';
 import { alertFocusHref } from '@/lib/alert-links';
 import Button from '@/components/ui/Button';
@@ -160,9 +160,11 @@ function DeliveryRow({ delivery: d, scope }: { delivery: NotificationDelivery; s
       </td>
       <td className="hidden whitespace-nowrap text-ui text-slate-400 sm:table-cell">{event}</td>
       <td>
-        <Pill tone={deliveryOutcomeTone(d.outcome)} size="xs" dot>
-          {deliveryOutcomeLabel(d.outcome)}
-        </Pill>
+        <span title={deliveryOutcomeHint(d.outcome)}>
+          <Pill tone={deliveryOutcomeTone(d.outcome)} size="xs" dot>
+            {deliveryOutcomeLabel(d.outcome)}
+          </Pill>
+        </span>
         {detail && (
           <div className="mt-1 max-w-[16rem] truncate text-xs text-slate-500 md:hidden" title={detail}>
             {detail}

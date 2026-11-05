@@ -51,8 +51,10 @@ const (
 	// (plugin.Permanent); it is not retried.
 	OutcomePermanentFailure Outcome = "permanent_failure"
 	// OutcomeDroppedSuperseded: the worker dropped a queued event because
-	// the alert resolved (or was unacknowledged, for an acknowledgement)
-	// before it could be delivered.
+	// the alert moved on before it could be delivered: it resolved, was
+	// unacknowledged (for an acknowledgement), or reopened (for an event of
+	// an earlier paging episode, a recovery included). Not always a resolve,
+	// so the UI labels it "superseded".
 	OutcomeDroppedSuperseded Outcome = "dropped_superseded"
 	// OutcomeDroppedAck: the worker held back a queued event because the
 	// alert was acknowledged (on a route that stops paging on ack) or
