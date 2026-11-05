@@ -267,7 +267,9 @@ func SecretFieldChanges(beforeType models.MonitorType, before json.RawMessage, a
 		a, _ := prev[field].(map[string]any)
 		b, _ := next[field].(map[string]any)
 		for key, value := range a {
-			if other, ok := b[key]; !ok || other != value {
+			// DeepEqual: a malformed stored map could hold a non-string
+			// value, and comparing those with != would panic.
+			if other, ok := b[key]; !ok || !reflect.DeepEqual(other, value) {
 				changed[field+"."+key] = struct{}{}
 			}
 		}
