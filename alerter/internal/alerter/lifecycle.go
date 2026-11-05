@@ -569,7 +569,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
 			CASE WHEN al.kind = 'availability' THEN `+alertrouting.ImpactedMonitorsSubquery("al.monitor_id")+` END,
-			al.status, `+alertrouting.AckStopsExpr("te")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
+			al.status, `+alertrouting.AckStopsExpr("te")+`, al.snoozed_until, al.unacknowledged_at
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		JOIN tenants te ON te.id = al.tenant_id
@@ -592,7 +592,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 	for rows.Next() {
 		var oa openAlert
 		var status string
-		var resumedAt sql.NullTime
+		var snoozedUntil, unacknowledgedAt sql.NullTime
 		var lastError sql.NullString
 		var rcID uuid.NullUUID
 		var rcDownSince sql.NullTime
@@ -606,11 +606,11 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			&rcID, &rcDownSince, &rcName,
 			&baseline, &observed, &score,
 			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds,
-			&oa.eligibleSince, &impacted, &status, &oa.gate.AckStops, &resumedAt); err != nil {
+			&oa.eligibleSince, &impacted, &status, &oa.gate.AckStops, &snoozedUntil, &unacknowledgedAt); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
 		oa.gate.Acknowledged = status == "acknowledged"
-		oa.gate.ResumedAt = resumedAt.Time
+		oa.gate.SnoozedUntil, oa.gate.UnacknowledgedAt = snoozedUntil.Time, unacknowledgedAt.Time
 		if lastError.Valid {
 			oa.record.LastError = &lastError.String
 		}

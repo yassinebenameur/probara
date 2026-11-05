@@ -238,7 +238,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 			al.triggered_at, al.failure_count, al.last_error,
 			te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
-			al.status, `+alertrouting.AckStopsExpr("te")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
+			al.status, `+alertrouting.AckStopsExpr("te")+`, al.snoozed_until, al.unacknowledged_at
 		FROM alerts al
 		JOIN tenants te ON te.id = al.tenant_id
 		LEFT JOIN locations sl ON sl.id = al.source_location_id
@@ -270,15 +270,15 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	for rows.Next() {
 		var oa openMeshAlert
 		var status string
-		var resumedAt sql.NullTime
+		var snoozedUntil, unacknowledgedAt sql.NullTime
 		if err := rows.Scan(&oa.edge.alertID, &oa.edge.tenantID, &oa.edge.sourceID, &oa.edge.targetID,
 			&oa.edge.sourceName, &oa.edge.targetName, &oa.edge.triggeredAt, &oa.edge.failCount,
 			&oa.edge.lastError, &oa.reminderSeconds, &oa.eligibleSince,
-			&status, &oa.gate.AckStops, &resumedAt); err != nil {
+			&status, &oa.gate.AckStops, &snoozedUntil, &unacknowledgedAt); err != nil {
 			return fmt.Errorf("scan open mesh alert: %w", err)
 		}
 		oa.gate.Acknowledged = status == "acknowledged"
-		oa.gate.ResumedAt = resumedAt.Time
+		oa.gate.SnoozedUntil, oa.gate.UnacknowledgedAt = snoozedUntil.Time, unacknowledgedAt.Time
 		open = append(open, oa)
 	}
 	if err := rows.Err(); err != nil {

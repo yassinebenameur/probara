@@ -188,7 +188,7 @@ func (a *Alerter) dispatchOpenLocationOfflineAlerts(ctx context.Context) error {
 			`+locationMonitorCountExpr("l")+`,
 			al.triggered_at, te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
-			al.status, `+alertrouting.AckStopsExpr("te")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
+			al.status, `+alertrouting.AckStopsExpr("te")+`, al.snoozed_until, al.unacknowledged_at
 		FROM alerts al
 		JOIN tenants te ON te.id = al.tenant_id
 		JOIN locations l ON l.id = al.source_location_id
@@ -213,14 +213,14 @@ func (a *Alerter) dispatchOpenLocationOfflineAlerts(ctx context.Context) error {
 	for rows.Next() {
 		var oa openAlert
 		var status string
-		var resumedAt sql.NullTime
+		var snoozedUntil, unacknowledgedAt sql.NullTime
 		if err := rows.Scan(&oa.loc.alertID, &oa.loc.tenantID, &oa.loc.locationID, &oa.loc.name, &oa.loc.lastSeenAt,
 			&oa.loc.monitorCount, &oa.loc.triggeredAt, &oa.reminderSeconds, &oa.eligibleSince,
-			&status, &oa.gate.AckStops, &resumedAt); err != nil {
+			&status, &oa.gate.AckStops, &snoozedUntil, &unacknowledgedAt); err != nil {
 			return fmt.Errorf("scan open location offline alert: %w", err)
 		}
 		oa.gate.Acknowledged = status == "acknowledged"
-		oa.gate.ResumedAt = resumedAt.Time
+		oa.gate.SnoozedUntil, oa.gate.UnacknowledgedAt = snoozedUntil.Time, unacknowledgedAt.Time
 		open = append(open, oa)
 	}
 	if err := rows.Err(); err != nil {

@@ -109,14 +109,16 @@ group rollup, and dependency suppression determine which channels may fire.
 Escalation delays and reminders are tracked per alert/channel.
 
 Acknowledgement and snooze are per-alert mutes (`shared/alertrouting`:
-`MuteHolds`, `SnoozedPredicate`, `DispatchResumedAtExpr`). An acknowledged
+`MuteHolds`, `SnoozedPredicate`, `ResumedAt`). An acknowledged
 alert stops its unfired tiers and reminders when the tenant's
 `ack_stops_notifications` is on, except on routes marked `notify_after_ack`;
 a snoozed alert sends no tier, reminder or suspected-cause follow-up. The
 gate lives in `dueEvent` and in the claim, which re-reads it under the alert
 row lock, and the async envelope carries `stop_on_ack` so the delivery
-worker drops a tier or reminder that a later ack holds. Unacknowledge and
-snooze end restart the tier and reminder clocks.
+worker drops a tier or reminder that a later ack holds, releasing the
+alerter's claim so it fires again after the unack. A snooze end restarts the
+tier and reminder clocks on every route; an unacknowledge restarts them only
+on the routes the ack held.
 
 Monitor-less alerts route to the tenant defaults through
 `alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule

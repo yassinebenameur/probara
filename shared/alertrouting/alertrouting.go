@@ -37,7 +37,11 @@
 // still reach acked alerts. The API's muted_reason is MutedReasonExpr.
 package alertrouting
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // Routing source values reported by Classify.
 const (
@@ -331,23 +335,32 @@ func SuppressedByDependencyPredicate(alertAlias, monAlias, tenantAlias string) s
 // never had a root cause this is its triggered_at; for one whose root cause
 // cleared it is the end of the grace period, so escalation-tier delays for a
 // late-paging downstream are measured from when it became unexplained rather
-// than firing every tier at once. An unacknowledge or the end of a snooze
-// restarts the clock the same way (DispatchResumedAtExpr): unfired tiers count
-// from the resume instead of all firing at once.
+// than firing every tier at once. The end of a snooze restarts the clock the
+// same way for every route (snoozed_until; GREATEST ignores NULLs), so unfired
+// tiers count from it instead of all firing at once. An unacknowledge
+// restarts it only on the routes the ack actually held (ResumedAt), which is
+// per route and so applied by the caller.
 func DispatchEligibleSinceExpr(alertAlias, tenantAlias string) string {
 	return `GREATEST(` + alertAlias + `.triggered_at,
 		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at),
-		` + DispatchResumedAtExpr(alertAlias) + `)`
+		` + alertAlias + `.snoozed_until)`
 }
 
-// DispatchResumedAtExpr returns a SQL timestamp: when the alert aliased by
-// alertAlias last resumed paging after a mute — its unacknowledge or the end
-// of its snooze, whichever is later — or NULL when it never was muted that
-// way. Escalation tiers (DispatchEligibleSinceExpr) and reminders (the
-// alerter's reminder claim) both count from it, so lifting a mute never
-// releases a burst of overdue pages. GREATEST ignores NULLs.
-func DispatchResumedAtExpr(alertAlias string) string {
-	return `GREATEST(` + alertAlias + `.unacknowledged_at, ` + alertAlias + `.snoozed_until)`
+// ResumedAt is when paging on one route resumed after a mute: the end of the
+// alert's snooze (snoozedUntil, every route), or its last unacknowledge
+// (unacknowledgedAt) on a route the ack held, i.e. stopOnAck (the tenant's
+// ack_stops_notifications on and the route not notify_after_ack). A route the
+// ack never held keeps its clocks through an ack and unack. Zero arguments
+// mean NULL; the result is zero when the route never resumed. Escalation
+// tiers and reminders on that route count from it, so lifting a mute never
+// releases a burst of overdue pages. The alerter's claim and its pre-filters
+// both derive their resume point here.
+func ResumedAt(snoozedUntil, unacknowledgedAt time.Time, stopOnAck bool) time.Time {
+	resumed := snoozedUntil
+	if stopOnAck && unacknowledgedAt.After(resumed) {
+		resumed = unacknowledgedAt
+	}
+	return resumed
 }
 
 // SnoozedPredicate returns a SQL boolean that is TRUE while the alert aliased

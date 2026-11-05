@@ -70,12 +70,19 @@ func (a *Alerter) deliverNotification(
 	// (each an UPDATE of this row), so the ack/snooze gate read here is the
 	// committed truth for the whole send.
 	var status string
-	var resolvedAt, resumedAt *time.Time
+	var resolvedAt *time.Time
 	var snoozed bool
+	var snoozedUntil, unacknowledgedAt sql.NullTime
 	if err := tx.QueryRowContext(ctx, `
-		SELECT status, resolved_at, `+alertrouting.SnoozedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
-		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed, &resumedAt); err != nil {
+		SELECT status, resolved_at, `+alertrouting.SnoozedPredicate("al")+`, al.snoozed_until, al.unacknowledged_at
+		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed, &snoozedUntil, &unacknowledgedAt); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
+	}
+	// The route's reminder resume point, from the same rule as the
+	// pre-filters (DispatchGate.resumedAt).
+	var resumedAt *time.Time
+	if r := alertrouting.ResumedAt(snoozedUntil.Time, unacknowledgedAt.Time, stopOnAck); !r.IsZero() {
+		resumedAt = &r
 	}
 	if !claimStatusAllows(eventType, status, snoozed, stopOnAck) {
 		return false, nil
@@ -140,8 +147,9 @@ func claimStatusAllows(eventType, status string, snoozed, stopOnAck bool) bool {
 //
 //   - created:  insert wins; any existing row means someone already fired.
 //   - reminder: update wins only when the row is not resolved and
-//     last_sent_at — and resumedAt, the alert's last unacknowledge or snooze
-//     end (nil if never) — is at least reminderInterval old.
+//     last_sent_at — and resumedAt, the route's resume point after a mute
+//     (alertrouting.ResumedAt; nil if never) — is at least reminderInterval
+//     old.
 //   - resolved: insert or update wins unless the row already says resolved.
 //   - acknowledged: update wins once (acknowledged_sent_at IS NULL) on an
 //     existing, unresolved row; it leaves last_event_type alone so reminders

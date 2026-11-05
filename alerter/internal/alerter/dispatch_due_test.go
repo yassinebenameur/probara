@@ -3,6 +3,8 @@ package alerter
 import (
 	"testing"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 )
 
 func TestDueEvent(t *testing.T) {
@@ -17,8 +19,11 @@ func TestDueEvent(t *testing.T) {
 	acked := DispatchGate{Acknowledged: true, AckStops: true}
 	ackedTenantKeepsPaging := DispatchGate{Acknowledged: true, AckStops: false}
 	snoozed := DispatchGate{Snoozed: true, AckStops: true}
-	resumedRecently := DispatchGate{AckStops: true, ResumedAt: now.Add(-3 * time.Minute)}
-	resumedLongAgo := DispatchGate{AckStops: true, ResumedAt: now.Add(-30 * time.Minute)}
+	resumedRecently := DispatchGate{AckStops: true, UnacknowledgedAt: now.Add(-3 * time.Minute)}
+	resumedLongAgo := DispatchGate{AckStops: true, UnacknowledgedAt: now.Add(-30 * time.Minute)}
+	// The ack never held these routes, so the unack must not restart them.
+	unackedTenantKeepsPaging := DispatchGate{AckStops: false, UnacknowledgedAt: now.Add(-3 * time.Minute)}
+	snoozeEndedRecently := DispatchGate{AckStops: true, SnoozedUntil: now.Add(-3 * time.Minute)}
 	fired := func(ago time.Duration) *notificationState {
 		return &notificationState{LastEventType: "created", LastSentAt: now.Add(-ago)}
 	}
@@ -60,6 +65,12 @@ func TestDueEvent(t *testing.T) {
 		// Resume (unack / snooze end): reminders count from it too.
 		{"resumed_recently_holds_reminder", fired(time.Hour), active, time.Hour, interval, resumedRecently, ""},
 		{"resumed_long_ago_reminds", fired(time.Hour), active, time.Hour, interval, resumedLongAgo, "reminder"},
+		{"unack_restarts_tier_on_held_route", nil, active, time.Hour, interval, resumedRecently, ""},
+		{"unack_spares_notify_after_ack_reminder", fired(time.Hour), afterAck, time.Hour, interval, resumedRecently, "reminder"},
+		{"unack_spares_notify_after_ack_tier", nil, afterAck, time.Hour, interval, resumedRecently, "created"},
+		{"unack_spares_tenant_without_stop_on_ack", fired(time.Hour), active, time.Hour, interval, unackedTenantKeepsPaging, "reminder"},
+		{"unack_spares_tier_without_stop_on_ack", nil, active, time.Hour, interval, unackedTenantKeepsPaging, "created"},
+		{"snooze_end_restarts_every_route", fired(time.Hour), afterAck, time.Hour, interval, snoozeEndedRecently, ""},
 	}
 
 	for _, tc := range tests {
@@ -70,7 +81,11 @@ func TestDueEvent(t *testing.T) {
 			}
 			// The legacy pre-filter must agree with dueEvent whenever the
 			// escalation delay is not what holds the event back.
-			if tc.target.channel.IsActive && tc.alertAge >= tc.target.delay {
+			age := tc.alertAge
+			if r := tc.gate.resumedAt(tc.gate.stopOnAck(tc.target)); !r.IsZero() && now.Sub(r) < age {
+				age = now.Sub(r) // the tier clock restarts at the route's resume point
+			}
+			if tc.target.channel.IsActive && age >= tc.target.delay {
 				for _, ev := range []string{"created", "reminder"} {
 					if shouldSendNotification(ev, tc.state, now, tc.interval, tc.gate, tc.gate.stopOnAck(tc.target)) != (got == ev) {
 						t.Fatalf("shouldSendNotification(%q) disagrees with dueEvent = %q", ev, got)
@@ -122,6 +137,38 @@ func TestClaimStatusMatchesPreFilter(t *testing.T) {
 									status, snoozed, ackStops, notifyAfterAck, ev, got, claim)
 							}
 						}
+					}
+				}
+			}
+		}
+	}
+
+	// The reminder resume point: the claim derives it from the locked row
+	// with alertrouting.ResumedAt, the pre-filters from DispatchGate. For
+	// every mix of a recent unack / snooze end and route flags, the two
+	// must give the same point and the same reminder decision; an unack
+	// counts only where stop-on-ack held the route.
+	recent := now.Add(-3 * time.Minute)
+	for _, unack := range []time.Time{{}, recent} {
+		for _, snoozeEnd := range []time.Time{{}, recent} {
+			for _, ackStops := range []bool{false, true} {
+				for _, notifyAfterAck := range []bool{false, true} {
+					gate := DispatchGate{AckStops: ackStops, UnacknowledgedAt: unack, SnoozedUntil: snoozeEnd}
+					stopOnAck := gate.stopOnAck(channelTarget{notifyAfterAck: notifyAfterAck})
+					claimResume := alertrouting.ResumedAt(snoozeEnd, unack, stopOnAck)
+					if claimResume != gate.resumedAt(stopOnAck) {
+						t.Fatalf("resume point differs: claim %v, pre-filter %v", claimResume, gate.resumedAt(stopOnAck))
+					}
+					pre := shouldSendNotification("reminder", firedLongAgo, now, interval, gate, stopOnAck)
+					claim := reminderDue(firedLongAgo, now, interval, claimResume)
+					if pre != claim {
+						t.Fatalf("unack=%v snoozeEnd=%v ackStops=%v notifyAfterAck=%v: pre-filter=%v claim=%v",
+							!unack.IsZero(), !snoozeEnd.IsZero(), ackStops, notifyAfterAck, pre, claim)
+					}
+					wantHeld := !snoozeEnd.IsZero() || (!unack.IsZero() && ackStops && !notifyAfterAck)
+					if pre == wantHeld {
+						t.Fatalf("unack=%v snoozeEnd=%v ackStops=%v notifyAfterAck=%v: reminder due=%v, want %v",
+							!unack.IsZero(), !snoozeEnd.IsZero(), ackStops, notifyAfterAck, pre, !wantHeld)
 					}
 				}
 			}

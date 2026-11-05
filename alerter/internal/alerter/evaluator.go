@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
@@ -1112,19 +1113,30 @@ func (a *Alerter) dispatchNotifications(
 		return
 	}
 
+	// The ack/snooze gate applies to alerts on retired policies too. Policy
+	// channels carry no per-route notify_after_ack, so the tenant's
+	// ack_stops_notifications alone decides stop-on-ack.
+	var gate DispatchGate
+	if eventType == "created" || eventType == "reminder" {
+		var err error
+		if gate, err = a.loadDispatchGate(ctx, alert.ID); err != nil {
+			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": alert.ID}).Warn("Failed to load alert dispatch gate")
+			return
+		}
+	}
+	stopOnAck := gate.AckStops
+
 	for _, channel := range channels {
 		if !channel.IsActive {
 			continue
 		}
 
 		state := getNotificationState(states, alert.ID, channel.ID)
-		// Legacy policy channels carry no per-route notify_after_ack and
-		// the legacy loop reads no tenant flag: the gate stays open here.
-		if !shouldSendNotification(eventType, state, now, reminderInterval, DispatchGate{}, false) {
+		if !shouldSendNotification(eventType, state, now, reminderInterval, gate, stopOnAck) {
 			continue
 		}
 
-		sent, err := a.deliverNotification(ctx, eventType, binding, alert, groupInfo, channel, now, reminderInterval, false)
+		sent, err := a.deliverNotification(ctx, eventType, binding, alert, groupInfo, channel, now, reminderInterval, stopOnAck)
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{
 				"alert_id":   alert.ID,
@@ -1147,6 +1159,25 @@ func (a *Alerter) dispatchNotifications(
 	}
 }
 
+// loadDispatchGate reads one alert's ack/snooze gate (with its tenant's
+// ack_stops_notifications), for paths that do not select it with the alert.
+func (a *Alerter) loadDispatchGate(ctx context.Context, alertID uuid.UUID) (DispatchGate, error) {
+	var gate DispatchGate
+	var status string
+	var snoozedUntil, unacknowledgedAt sql.NullTime
+	err := a.db.QueryRowContext(ctx, `
+		SELECT al.status, `+alertrouting.AckStopsExpr("te")+`, `+alertrouting.SnoozedPredicate("al")+`,
+			al.snoozed_until, al.unacknowledged_at
+		FROM alerts al JOIN tenants te ON te.id = al.tenant_id
+		WHERE al.id = $1`, alertID).Scan(&status, &gate.AckStops, &gate.Snoozed, &snoozedUntil, &unacknowledgedAt)
+	if err != nil {
+		return DispatchGate{}, fmt.Errorf("load dispatch gate: %w", err)
+	}
+	gate.Acknowledged = status == "acknowledged"
+	gate.SnoozedUntil, gate.UnacknowledgedAt = snoozedUntil.Time, unacknowledgedAt.Time
+	return gate, nil
+}
+
 // shouldSendNotification is the in-memory pre-filter mirroring the claim
 // predicates in claimNotificationTx and the ack/snooze gate in
 // claimStatusAllows. Its created/reminder cases are dueEvent's rule
@@ -1163,7 +1194,7 @@ func shouldSendNotification(eventType string, state *notificationState, now time
 	case "resolved":
 		return state == nil || state.LastEventType != "resolved"
 	case "reminder":
-		return reminderDue(state, now, reminderInterval, gate.ResumedAt)
+		return reminderDue(state, now, reminderInterval, gate.resumedAt(stopOnAck))
 	case "acknowledged":
 		return state != nil && state.LastEventType != "resolved" && state.AcknowledgedSentAt == nil
 	case "suspected_cause":
