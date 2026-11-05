@@ -124,11 +124,11 @@ func TestService_BatchHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *testing
 	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_stats").
 		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"monitor_id", "bucket_hour", "total_checks", "success_checks",
-		}).AddRow(monitorA, bucket, int64(12), int64(10)))
+			"monitor_id", "bucket_hour", "total_checks", "success_checks", "latency_sum_ms", "latency_count",
+		}).AddRow(monitorA, bucket, int64(12), int64(10), 1500.0, int64(10)))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
-	hourly, err := svc.batchHourlyUptime(context.Background(), []uuid.UUID{monitorA}, tenantID)
+	hourly, latency, err := svc.batchHourlyUptime(context.Background(), []uuid.UUID{monitorA}, tenantID)
 	if err != nil {
 		t.Fatalf("batchHourlyUptime() error = %v", err)
 	}
@@ -144,6 +144,11 @@ func TestService_BatchHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *testing
 	}
 	if !found {
 		t.Fatalf("batchHourlyUptime() missing bucket %s in %#v", bucket.Format("15:04"), hourly[monitorA])
+	}
+	// The same pass carries the hour's latency sums for the 24h chart.
+	points := hourlyLatency(latency[monitorA])
+	if len(points) != 1 || !points[0].Timestamp.Equal(bucket) || points[0].LatencyMS != 150 {
+		t.Fatalf("hourlyLatency() = %#v, want one 150ms point at %s", points, bucket)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

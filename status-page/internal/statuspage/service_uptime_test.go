@@ -81,10 +81,10 @@ func TestGetGlobalMinuteUptime_SumsMinuteBucketsAcrossMonitors(t *testing.T) {
 
 	mock.ExpectQuery(`(?s)date_trunc\('minute', cr.created_at\).*result_source <> 'platform'.*created_at >= \$3.*created_at < \$4`).
 		WithArgs(tenantID, sqlmock.AnyArg(), wantStart, wantEnd).
-		WillReturnRows(sqlmock.NewRows([]string{"monitor_id", "bucket", "total", "successful"}).
-			AddRow(monitorA, wantStart, int64(1), int64(1)).
-			AddRow(monitorB, wantStart, int64(1), int64(0)).
-			AddRow(monitorA, time.Date(2026, 6, 2, 10, 30, 0, 0, time.UTC), int64(2), int64(2)))
+		WillReturnRows(sqlmock.NewRows([]string{"monitor_id", "bucket", "total", "successful", "latency_sum_ms", "latency_count"}).
+			AddRow(monitorA, wantStart, int64(1), int64(1), 100.0, int64(1)).
+			AddRow(monitorB, wantStart, int64(1), int64(0), 0.0, int64(0)).
+			AddRow(monitorA, time.Date(2026, 6, 2, 10, 30, 0, 0, time.UTC), int64(2), int64(2), 300.0, int64(2)))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
 	svc.now = func() time.Time { return now }
@@ -119,5 +119,28 @@ func TestMinuteUptime_EmptyCountsSpanTheHour(t *testing.T) {
 		if b.Uptime != -1 {
 			t.Fatalf("bucket %+v, want -1", b)
 		}
+	}
+}
+
+// The 1h response-time series is one point per minute with a successful
+// timed check, the mean of that minute; a group pools its members' sums.
+func TestMinuteLatency_MeanPerMinuteAndPooledSums(t *testing.T) {
+	start := time.Date(2026, 6, 2, 9, 31, 0, 0, time.UTC)
+	a := uuid.New()
+	b := uuid.New()
+	counts := map[uuid.UUID][]minuteBucketCount{
+		a: make([]minuteBucketCount, oneHourBuckets),
+		b: make([]minuteBucketCount, oneHourBuckets),
+	}
+	counts[a][0] = minuteBucketCount{Total: 2, Successful: 2, LatencySumMS: 200, LatencyCount: 2}
+	counts[b][0] = minuteBucketCount{Total: 1, Successful: 1, LatencySumMS: 400, LatencyCount: 1}
+	counts[b][59] = minuteBucketCount{Total: 1, Successful: 0}
+
+	got := minuteLatency(sumMinuteBuckets(counts, []uuid.UUID{a, b}), start)
+	if len(got) != 1 {
+		t.Fatalf("points = %+v, want one (a failed-only minute is a gap)", got)
+	}
+	if !got[0].Timestamp.Equal(start) || got[0].LatencyMS != 200 {
+		t.Fatalf("point = %+v, want 09:31 at (200+400)/3 = 200ms", got[0])
 	}
 }
