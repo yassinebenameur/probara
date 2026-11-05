@@ -130,3 +130,37 @@ func TestPaging_BulkUnacknowledge(t *testing.T) {
 	require.Equal(t, alertsvc.BulkReasonNotAcknowledged, reasons[active])
 	require.Equal(t, alertsvc.BulkReasonAlreadyResolved, reasons[resolved])
 }
+
+// Unsnooze, like every paging action, cannot touch an alert of a deleted
+// monitor (hidden from every read) or another tenant's alert.
+func TestPaging_UnsnoozeRespectsVisibility(t *testing.T) {
+	ctx := context.Background()
+	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbc, "unsnooze-visible")
+	otherTenant := testutil.InsertTenant(ctx, t, dbc, "unsnooze-other")
+	gone := testutil.InsertHTTPMonitor(ctx, t, dbc, tenantID, "gone")
+	live := testutil.InsertHTTPMonitor(ctx, t, dbc, tenantID, "live")
+	hidden := insertAlert(ctx, t, dbc, tenantID, gone, "active", time.Now())
+	visible := insertAlert(ctx, t, dbc, tenantID, live, "active", time.Now())
+	for _, id := range []uuid.UUID{hidden, visible} {
+		_, err := dbc.ExecContext(ctx, `UPDATE alerts SET snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, id)
+		require.NoError(t, err)
+	}
+	_, err := dbc.ExecContext(ctx, `UPDATE monitors SET deleted_at = NOW() WHERE id = $1`, gone)
+	require.NoError(t, err)
+
+	svc := alertsvc.NewService(dbc, nil)
+	actor := alertsvc.Actor{Via: alertsvc.ViaAPI}
+	_, err = svc.UnsnoozeAlert(ctx, tenantID, hidden, actor)
+	require.ErrorIs(t, err, alertsvc.ErrNotSnoozed)
+	var stillSnoozed bool
+	require.NoError(t, dbc.QueryRowContext(ctx, `SELECT snoozed_until > NOW() FROM alerts WHERE id = $1`, hidden).Scan(&stillSnoozed))
+	require.True(t, stillSnoozed, "an alert of a deleted monitor was unsnoozed")
+
+	_, err = svc.UnsnoozeAlert(ctx, otherTenant, visible, actor)
+	require.ErrorIs(t, err, alertsvc.ErrNotSnoozed)
+	_, err = svc.UnsnoozeAlert(ctx, tenantID, visible, actor)
+	require.NoError(t, err)
+}

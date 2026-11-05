@@ -230,3 +230,89 @@ func TestDeliverNotificationRechecksAckGateUnderLock(t *testing.T) {
 		t.Fatalf("reminder on a snoozed alert: sent=%v err=%v", sent, err)
 	}
 }
+
+// An unacknowledge restarts the clocks only on routes the ack held: a
+// notify_after_ack route, or every route of a tenant that keeps paging on
+// ack, keeps its reminder and tier schedule (through the claim's own
+// resume point, not just the pre-filter).
+func TestUnackRestartsOnlyHeldRoutes(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "unack-held")
+	mustExec(ctx, t, dbClient, `UPDATE tenants SET alert_reminder_seconds = 300 WHERE id = $1`, tenantID)
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	held := insertDefaultRoute(ctx, t, dbClient, tenantID, "held", 0, false)
+	room := insertDefaultRoute(ctx, t, dbClient, tenantID, "room", 0, true)
+	roomTier := insertDefaultRoute(ctx, t, dbClient, tenantID, "room-tier", 600, true)
+	alertID := openDownAlert(ctx, t, dbClient, tenantID, monitorID)
+
+	rec := newChannelRecorder()
+	a := newIntegrationAlerter(dbClient)
+	a.sendFunc = rec.send
+	if err := a.dispatchOpenAlerts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Opened 30 minutes ago, paged then, acked and unacked a minute ago.
+	mustExec(ctx, t, dbClient, `UPDATE alerts SET triggered_at = NOW() - INTERVAL '30 minutes',
+		unacknowledged_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, alertID)
+	mustExec(ctx, t, dbClient, `UPDATE alert_notification_states SET last_sent_at = NOW() - INTERVAL '30 minutes' WHERE alert_id = $1`, alertID)
+	if err := a.dispatchOpenAlerts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.count(held, "reminder"); got != 0 {
+		t.Fatalf("held route reminded %d times a minute after the unack", got)
+	}
+	if got := rec.count(room, "reminder"); got != 1 {
+		t.Fatalf("notify_after_ack route reminders = %d, want 1 (the ack never held it)", got)
+	}
+	if got := rec.count(roomTier, "created"); got != 1 {
+		t.Fatalf("notify_after_ack 10-minute tier = %d, want 1 (counted from the trigger)", got)
+	}
+
+	// Through the claim alone: a tenant that keeps paging on ack.
+	mustExec(ctx, t, dbClient, `UPDATE tenants SET ack_stops_notifications = FALSE WHERE id = $1`, tenantID)
+	record := alertRecord{ID: alertID, TenantID: tenantID, MonitorID: monitorID}
+	sent, err := a.deliverNotification(ctx, "reminder", policyBinding{MonitorID: monitorID, TenantID: tenantID},
+		&record, nil, alertChannel{ID: held, Type: "webhook", IsActive: true}, time.Now(), 5*time.Minute, false)
+	if err != nil || !sent {
+		t.Fatalf("reminder on a route the ack never held: sent=%v err=%v", sent, err)
+	}
+}
+
+// Alerts on retired alert policies follow the tenant's stop-on-ack too.
+func TestLegacyPolicyDispatchHonoursAck(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "legacy-ack")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	chID := insertDefaultRoute(ctx, t, dbClient, tenantID, "pager", 0, false)
+	alertID := openDownAlert(ctx, t, dbClient, tenantID, monitorID)
+	mustExec(ctx, t, dbClient, `UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW() WHERE id = $1`, alertID)
+	mustExec(ctx, t, dbClient, `
+		INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
+		VALUES ($1, $2, NOW() - INTERVAL '1 hour', 'created', NOW(), NOW())`, alertID, chID)
+
+	rec := newChannelRecorder()
+	a := newIntegrationAlerter(dbClient)
+	a.sendFunc = rec.send
+	channels := []alertChannel{{ID: chID, Type: "webhook", IsActive: true}}
+	remind := func() {
+		states, err := a.loadNotificationStates(ctx, []uuid.UUID{alertID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.dispatchNotifications(ctx, "reminder", policyBinding{MonitorID: monitorID, TenantID: tenantID},
+			&alertRecord{ID: alertID, TenantID: tenantID, MonitorID: monitorID}, channels, states, nil, false, time.Now(), 5*time.Minute)
+	}
+	remind()
+	if got := rec.count(chID, "reminder"); got != 0 {
+		t.Fatalf("legacy policy reminder on an acknowledged alert = %d, want 0", got)
+	}
+	mustExec(ctx, t, dbClient, `UPDATE tenants SET ack_stops_notifications = FALSE WHERE id = $1`, tenantID)
+	remind()
+	if got := rec.count(chID, "reminder"); got != 1 {
+		t.Fatalf("legacy policy reminder with stop-on-ack off = %d, want 1", got)
+	}
+}

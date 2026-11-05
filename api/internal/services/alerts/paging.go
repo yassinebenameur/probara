@@ -2,7 +2,6 @@ package alerts
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -44,8 +43,8 @@ func nullableVia(actor Actor) *string {
 
 // unackSQL moves acknowledged alerts in target back to active. It stamps
 // unacknowledged_at, from which the alerter counts unfired escalation tiers
-// and reminders again (alertrouting.DispatchResumedAtExpr), and clears the
-// acknowledging actor. The one-shot acknowledged_sent_at goes too, so a
+// and reminders again on the routes the ack held (alertrouting.ResumedAt),
+// and clears the acknowledging actor. The one-shot acknowledged_sent_at goes too, so a
 // re-acknowledge reaches paging channels again. Providers that were told
 // about the first ack (PagerDuty, Opsgenie) are not un-acknowledged: their
 // Events APIs have no such action.
@@ -168,21 +167,21 @@ func (s *Service) SnoozeAlert(ctx context.Context, tenantID, alertID uuid.UUID, 
 // reminders from the end of a snooze, exactly as from an unacknowledge.
 func (s *Service) UnsnoozeAlert(ctx context.Context, tenantID, alertID uuid.UUID, actor Actor) (*models.AlertWithDetails, error) {
 	_ = actor
-	now := time.Now()
-	var id uuid.UUID
-	err := s.db.QueryRowContext(ctx, `
+	// bulkTargetCTE scopes it like every other paging action: this tenant,
+	// open, and not on a deleted monitor. The database clock ends the
+	// snooze, the same clock alertrouting.SnoozedPredicate reads.
+	changed, err := collectIDs(s.db.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
-		SET snoozed_until = $3, updated_at = $3
-		WHERE a.id = $1 AND a.tenant_id = $2
-		  AND a.status IN ('active', 'acknowledged')
-		  AND a.snoozed_until > $3
+		SET snoozed_until = NOW(), updated_at = NOW()
+		FROM target
+		WHERE a.id = target.id AND a.snoozed_until > NOW()
 		RETURNING a.id
-	`, alertID, tenantID, now).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotSnoozed
-	}
+	`, pq.Array([]string{alertID.String()}), tenantID, pq.Array([]string{"active", "acknowledged"})))
 	if err != nil {
 		return nil, fmt.Errorf("failed to unsnooze alert: %w", err)
+	}
+	if len(changed) == 0 {
+		return nil, ErrNotSnoozed
 	}
 	return s.getAlert(ctx, tenantID, alertID)
 }

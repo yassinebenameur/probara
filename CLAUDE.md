@@ -203,11 +203,14 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (mesh edges, `location_offline`) route through `TenantTargetsSQL`, the
   tenant defaults without a monitor (`TestTenantTargetsSQLMatchesDefaults`).
   Whether a location is offline is `monitorstate.LocationOfflinePredicate`
-  (S-F6, Go twin `LocationOffline`); never re-derive it from
+  (S-F6, Go twin `LocationOffline`), disconnected (the mesh hold)
+  `LocationDisconnectedPredicate`; never re-derive either from
   `last_seen_at`. Escalation delays
   count from `DispatchEligibleSinceExpr` (the end of a cleared root cause's
-  grace period, else `triggered_at`, and never before
-  `DispatchResumedAtExpr`, the last unack or snooze end). Ack and snooze
+  grace period, else `triggered_at`, and never before the snooze end);
+  per route they and reminders also restart at `ResumedAt` (snooze end on
+  every route, the unack only where stop-on-ack held the route), which the
+  claim and the pre-filters both use. Ack and snooze
   mutes are `MuteHolds` (stop-on-ack per route: `ack_stops_notifications`
   and the 5th `TargetsSQL` column `notify_after_ack`), `SnoozedPredicate`
   and, for the API's `muted_reason`, `MutedReasonExpr`. Known asymmetry: member suppression
@@ -660,7 +663,9 @@ Details in `docs/auth-and-rbac.md` (Sessions, Login lockout).
   reminder whose envelope carries `StopOnAck` never reaches it after an ack
   (nor anything but an ack after a snooze, `alertrouting.MuteHolds`), and
   `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff
-  (routes without `StopOnAck`).
+  (routes without `StopOnAck`). A muted drop (not a resolve) releases the
+  alerter's claim in the same transaction (`releaseMutedClaim`), so the
+  event fires again once the mute lifts.
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.

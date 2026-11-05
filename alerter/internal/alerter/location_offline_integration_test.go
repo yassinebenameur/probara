@@ -105,6 +105,10 @@ func TestLocationOfflineLifecycle(t *testing.T) {
 	if got := locationOfflineAlerts(ctx, t, dbClient, dead, "resolved"); got != 1 {
 		t.Fatalf("resolved offline alerts = %d, want 1", got)
 	}
+	var reason string
+	if err := dbClient.QueryRowContext(ctx, `SELECT resolve_reason FROM alerts WHERE id = $1`, alertID).Scan(&reason); err != nil || reason != "recovered" {
+		t.Fatalf("recovered resolve_reason = %q (%v)", reason, err)
+	}
 	if got := counter.count("resolved"); got != 1 {
 		t.Fatalf("resolved sends = %d, want 1", got)
 	}
@@ -126,6 +130,8 @@ func TestLocationOfflineResolvesWhenNoLongerApplicable(t *testing.T) {
 		}
 	}
 
+	// A reporting location keeps the fleet alive (fleet-silence guard).
+	insertLocationSeen(ctx, t, dbClient, tenantID, "healthy", dur(5*time.Second))
 	disabledLater := insertLocationSeen(ctx, t, dbClient, tenantID, "disabled-later", dur(time.Hour))
 	deletedLater := insertLocationSeen(ctx, t, dbClient, tenantID, "deleted-later", dur(time.Hour))
 	run()
@@ -137,6 +143,22 @@ func TestLocationOfflineResolvesWhenNoLongerApplicable(t *testing.T) {
 	run()
 	if locationOfflineAlerts(ctx, t, dbClient, disabledLater, "resolved") != 1 || locationOfflineAlerts(ctx, t, dbClient, deletedLater, "resolved") != 1 {
 		t.Fatal("disabled and deleted locations must resolve their alerts")
+	}
+	resolveReason := func(locationID uuid.UUID) string {
+		t.Helper()
+		var reason *string
+		if err := dbClient.QueryRowContext(ctx, `
+			SELECT resolve_reason FROM alerts WHERE kind = 'location_offline' AND source_location_id = $1
+			ORDER BY resolved_at DESC NULLS LAST LIMIT 1`, locationID).Scan(&reason); err != nil || reason == nil {
+			t.Fatalf("resolve_reason: %v %v", reason, err)
+		}
+		return *reason
+	}
+	if got := resolveReason(disabledLater); got != "location_disabled" {
+		t.Fatalf("disabled location resolve_reason = %q", got)
+	}
+	if got := resolveReason(deletedLater); got != "location_deleted" {
+		t.Fatalf("deleted location resolve_reason = %q", got)
 	}
 
 	// Threshold: 10 minutes; a location silent for 5 is not offline yet.
@@ -156,6 +178,9 @@ func TestLocationOfflineResolvesWhenNoLongerApplicable(t *testing.T) {
 	run()
 	if locationOfflineAlerts(ctx, t, dbClient, quiet, "resolved") != 1 {
 		t.Fatal("turning the tenant's offline alerts off must resolve open ones")
+	}
+	if got := resolveReason(quiet); got != "alerts_disabled" {
+		t.Fatalf("alerts-off resolve_reason = %q", got)
 	}
 	run()
 	if locationOfflineAlerts(ctx, t, dbClient, quiet, "active") != 0 {
@@ -241,5 +266,91 @@ func TestLocationOfflinePredicateMatchesGo(t *testing.T) {
 	}
 	if seen != len(cases)+1 {
 		t.Fatalf("checked %d locations, want %d", seen, len(cases)+1)
+	}
+}
+
+// A platform fault (broker or heartbeat ingest down) silences every
+// location at once: no offline alert opens while no location has been seen
+// within the threshold, as long as the fleet has more than one location. A
+// location silent beyond the 7-day horizon never opens one (no page for
+// long-abandoned locations after an upgrade).
+func TestLocationOfflineFleetSilenceAndHorizon(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "fleet-silence")
+	a, _ := newMeshAlerter(dbClient)
+	run := func() {
+		t.Helper()
+		if err := a.evaluateLocationOffline(ctx); err != nil {
+			t.Fatalf("evaluateLocationOffline: %v", err)
+		}
+	}
+	east := insertLocationSeen(ctx, t, dbClient, tenantID, "east", dur(10*time.Minute))
+	west := insertLocationSeen(ctx, t, dbClient, tenantID, "west", dur(10*time.Minute))
+	abandoned := insertLocationSeen(ctx, t, dbClient, tenantID, "abandoned", dur(8*24*time.Hour))
+	run()
+	for name, id := range map[string]uuid.UUID{"east": east, "west": west, "abandoned": abandoned} {
+		if got := locationOfflineAlerts(ctx, t, dbClient, id, "active"); got != 0 {
+			t.Fatalf("whole fleet silent: %s opened %d alerts", name, got)
+		}
+	}
+
+	// One location reports: the platform is fine, so the silent ones are
+	// really offline — except the one beyond the horizon.
+	mustExec(ctx, t, dbClient, `UPDATE locations SET last_seen_at = NOW() WHERE id = $1`, west)
+	run()
+	if locationOfflineAlerts(ctx, t, dbClient, east, "active") != 1 {
+		t.Fatal("a silent location in a live fleet must alert")
+	}
+	if locationOfflineAlerts(ctx, t, dbClient, abandoned, "active") != 0 {
+		t.Fatal("a location silent beyond the horizon must not alert")
+	}
+
+	// A single-location fleet still alerts: one page is no storm, and a
+	// dead site looks the same as a platform fault there.
+	solo := testutil.InsertTenant(ctx, t, dbClient, "solo")
+	mustExec(ctx, t, dbClient, `UPDATE locations SET deleted_at = NOW() WHERE tenant_id = $1`, tenantID)
+	only := insertLocationSeen(ctx, t, dbClient, solo, "only", dur(10*time.Minute))
+	run()
+	if locationOfflineAlerts(ctx, t, dbClient, only, "active") != 1 {
+		t.Fatal("the only location of the fleet must alert when it goes silent")
+	}
+}
+
+// Mesh edges into a dead site go down after a few probes, before the site
+// counts as offline (180s): they must already be quiet then, while the
+// endpoint has missed its connected window.
+func TestMeshEdgeHeldBeforeOfflineThreshold(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mesh-early")
+	insertDefaultRoute(ctx, t, dbClient, tenantID, "ops", 0, false)
+	alive := insertLocationSeen(ctx, t, dbClient, tenantID, "alive", dur(5*time.Second))
+	dying := insertLocationSeen(ctx, t, dbClient, tenantID, "dying", dur(90*time.Second))
+	insertMeshEdgeState(ctx, t, dbClient, tenantID, alive, dying, "down", 3, "dial tcp: i/o timeout")
+
+	a, spy := newMeshAlerter(dbClient)
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.evaluateMeshEdges(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if locationOfflineAlerts(ctx, t, dbClient, dying, "active") != 0 {
+		t.Fatal("90s silent is not offline yet")
+	}
+	if got := len(spy.byType("created")); got != 0 {
+		t.Fatalf("edge into a disconnected location paged %d times before the offline threshold", got)
+	}
+	mustExec(ctx, t, dbClient, `UPDATE locations SET last_seen_at = NOW() WHERE id = $1`, dying)
+	if err := a.evaluateMeshEdges(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(spy.byType("created")); got != 1 {
+		t.Fatalf("edge after the location reconnected: created = %d, want 1", got)
 	}
 }

@@ -21,10 +21,19 @@ type DispatchGate struct {
 	// loops filter snoozed alerts in SQL (alertrouting.SnoozedPredicate), so
 	// they leave it false; the claim re-reads it under the row lock.
 	Snoozed bool
-	// ResumedAt is when the alert last resumed paging (unacknowledge or
-	// snooze end, alertrouting.DispatchResumedAtExpr); zero if never.
-	// Reminders count from it as well as from the last send.
-	ResumedAt time.Time
+	// SnoozedUntil and UnacknowledgedAt are the alert's columns (zero for
+	// NULL). The route's resume point (resumedAt) derives from them:
+	// tiers and reminders count from it.
+	SnoozedUntil     time.Time
+	UnacknowledgedAt time.Time
+}
+
+// resumedAt is when paging on a route with this stopOnAck resumed after a
+// mute (alertrouting.ResumedAt): the snooze end on every route, the unack
+// only where the ack held the route. The claim derives its reminder resume
+// point from the same function.
+func (g DispatchGate) resumedAt(stopOnAck bool) time.Time {
+	return alertrouting.ResumedAt(g.SnoozedUntil, g.UnacknowledgedAt, stopOnAck)
 }
 
 // stopOnAck reports whether an acknowledgement silences created/reminder on
@@ -52,9 +61,10 @@ func gateHolds(eventType string, acknowledged, snoozed, stopOnAck bool) bool {
 //   - inactive channel: nothing.
 //   - held by the gate (gateHolds): nothing.
 //   - never fired for this channel: "created" once the alert has been eligible
-//     for at least the target's escalation delay.
+//     for at least the target's escalation delay, counted from the route's
+//     resume point when that is later (gate.resumedAt).
 //   - fired and not resolved: "reminder" once reminderInterval (> 0) has
-//     elapsed since the last send and since gate.ResumedAt.
+//     elapsed since the last send and since the route's resume point.
 //
 // shouldSendNotification (the legacy loop's pre-filter) and the claim
 // predicates in claimNotificationTx / claimStatusAllows encode the same rule;
@@ -65,13 +75,17 @@ func dueEvent(now time.Time, state *notificationState, target channelTarget, ale
 		return "", false
 	}
 	stopOnAck := gate.stopOnAck(target)
+	resumed := gate.resumedAt(stopOnAck)
 	if state == nil {
+		if !resumed.IsZero() && now.Sub(resumed) < alertAge {
+			alertAge = now.Sub(resumed)
+		}
 		if alertAge >= target.delay && !gateHolds("created", gate.Acknowledged, gate.Snoozed, stopOnAck) {
 			return "created", true
 		}
 		return "", false
 	}
-	if reminderDue(state, now, reminderInterval, gate.ResumedAt) && !gateHolds("reminder", gate.Acknowledged, gate.Snoozed, stopOnAck) {
+	if reminderDue(state, now, reminderInterval, resumed) && !gateHolds("reminder", gate.Acknowledged, gate.Snoozed, stopOnAck) {
 		return "reminder", true
 	}
 	return "", false

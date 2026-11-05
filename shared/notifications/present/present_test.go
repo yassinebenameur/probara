@@ -286,3 +286,35 @@ func TestBuildLocationOffline(t *testing.T) {
 		t.Errorf("resolved Summary = %q", r.Summary)
 	}
 }
+
+// A location_offline alert closed by an operator change (location disabled
+// or deleted, alerts turned off) must not claim the location is back.
+func TestBuildLocationOfflineClosedWithoutRecovery(t *testing.T) {
+	name := "factory-floor"
+	triggered := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	resolved := triggered.Add(time.Hour)
+	for reason, want := range map[string]string{
+		notifications.ResolveReasonLocationDisabled: "Location factory-floor was disabled, so it is no longer expected to report.",
+		notifications.ResolveReasonLocationDeleted:  "Location factory-floor was deleted.",
+		notifications.ResolveReasonAlertsDisabled:   "Offline-location alerts were turned off for this workspace; factory-floor may still be offline.",
+	} {
+		ev := sample()
+		ev.Alert = notifications.AlertDetails{
+			ID: "a1", MonitorID: emptyUUID, Kind: notifications.KindLocationOffline, Status: "resolved",
+			TriggeredAt: triggered, ResolvedAt: &resolved, SourceLocationName: &name, ResolveReason: reason,
+		}
+		m := Build(ev, EventResolved, "")
+		if m.Label != "Location Alert Closed" || m.StatusWord != "CLOSED" || m.Tone != ToneInfo || m.Summary != want {
+			t.Errorf("%s: label=%q status=%q tone=%q summary=%q", reason, m.Label, m.StatusWord, m.Tone, m.Summary)
+		}
+	}
+	ev := sample()
+	ev.Alert = notifications.AlertDetails{
+		ID: "a1", MonitorID: emptyUUID, Kind: notifications.KindLocationOffline, Status: "resolved",
+		TriggeredAt: triggered, ResolvedAt: &resolved, SourceLocationName: &name,
+		ResolveReason: notifications.ResolveReasonRecovered,
+	}
+	if m := Build(ev, EventResolved, ""); m.Label != "Location Back Online" || m.StatusWord != "BACK ONLINE" {
+		t.Errorf("recovered: label=%q status=%q", m.Label, m.StatusWord)
+	}
+}

@@ -200,18 +200,33 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		}
 		defer func() { _ = tx.Rollback() }()
 	}
-	superseded, alertStatus, err := eventSuperseded(ctx, tx, envelope)
+	superseded, muted, alertStatus, err := eventSuperseded(ctx, tx, envelope)
 	if err != nil {
 		entry.WithError(err).Error("Failed to load alert status")
 		return err
+	}
+	if muted {
+		// Held by an ack (StopOnAck) or a snooze since publish. Unlike a
+		// resolve this is temporary, so the alerter's claim on the slot is
+		// released (under the same lock) and the event fires again once the
+		// mute lifts, instead of staying "sent" when it never was.
+		if err := releaseMutedClaim(ctx, tx, envelope); err != nil {
+			entry.WithError(err).Error("Failed to release a muted notification claim")
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			entry.WithError(err).Error("Failed to commit a released notification claim")
+			return err
+		}
+		entry.WithField("alert_status", alertStatus).Info("Alert acknowledged or snoozed since publish; dropping held event")
+		return nil
 	}
 	if superseded {
 		// A retried trigger/reminder/ack must never land after the resolve:
 		// PagerDuty and Opsgenie accept a resolve for an alert they do not
 		// have yet as a no-op, so a late trigger would open an incident that
-		// nothing ever closes. A tier or reminder held by an ack (StopOnAck)
-		// or a snooze since publish is dropped the same way.
-		entry.WithField("alert_status", alertStatus).Info("Alert resolved, acknowledged or snoozed since publish; dropping superseded event")
+		// nothing ever closes.
+		entry.WithField("alert_status", alertStatus).Info("Alert resolved since publish; dropping superseded event")
 		return nil
 	}
 
@@ -311,32 +326,81 @@ func ackOvertaken(m plugin.Manifest, eventType, alertStatus string) bool {
 // them). For every other event it reads the row FOR SHARE inside tx, and the
 // caller keeps tx open until the send returns, so an ack, snooze or resolve
 // committed after this check waits for the send.
-func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded bool, status string, err error) {
+//
+// muted is set (with superseded false) when the event is held only by the
+// ack/snooze mute: the caller drops it and releases its claim
+// (releaseMutedClaim), because the mute is temporary.
+func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded, muted bool, status string, err error) {
 	if envelope.EventType == "resolved" {
-		return false, "", nil
+		return false, false, "", nil
 	}
 	alertID, err := uuid.Parse(envelope.AlertID)
 	if err != nil {
-		return false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+		return false, false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
 	}
 	var snoozed bool
 	err = tx.QueryRowContext(ctx, `SELECT al.status, `+alertrouting.SnoozedPredicate("al")+`
 		FROM alerts al WHERE al.id = $1 FOR SHARE`, alertID).Scan(&status, &snoozed)
 	if errors.Is(err, sql.ErrNoRows) {
-		return true, "", nil
+		return true, false, "", nil
 	}
 	if err != nil {
-		return false, "", err
+		return false, false, "", err
 	}
 	if status == "resolved" {
-		return true, status, nil
+		return true, false, status, nil
 	}
 	if envelope.EventType == "acknowledged" && status != "acknowledged" {
 		// Unacknowledged since publish: telling the provider to stop
 		// escalating would now be wrong.
-		return true, status, nil
+		return true, false, status, nil
 	}
-	return alertrouting.MuteHolds(envelope.EventType, status == "acknowledged", snoozed, envelope.StopOnAck), status, nil
+	return false, alertrouting.MuteHolds(envelope.EventType, status == "acknowledged", snoozed, envelope.StopOnAck), status, nil
+}
+
+// releaseMutedClaim undoes the alerter's claim on an event the ack/snooze
+// mute held back, inside tx (which still holds the alert row lock), so the
+// event fires again when the mute lifts:
+//
+//   - created: the state row is deleted while it still records exactly this
+//     claim (last_event_type 'created', last_sent_at = the event's
+//     timestamp, which is the claim's `now`). Without that, dueEvent would
+//     see the channel as paged and only ever send reminders, which paging
+//     providers ignore, so the route would never be paged again.
+//   - suspected_cause: the one-shot suspected_cause_sent_at is cleared when
+//     it still records this claim.
+//   - reminder: left as claimed. Its next round counts from the later of the
+//     last send and the resume point (the unack on a stop-on-ack route, the
+//     snooze end), and both come after this claim, so restoring the earlier
+//     last_sent_at would change nothing.
+func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) error {
+	alertID, err := uuid.Parse(envelope.AlertID)
+	if err != nil {
+		return fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+	}
+	channelID, err := uuid.Parse(envelope.ChannelID)
+	if err != nil {
+		return fmt.Errorf("invalid channel id %q: %w", envelope.ChannelID, err)
+	}
+	claimedAt := envelope.Event.Timestamp
+	if claimedAt.IsZero() {
+		return nil
+	}
+	switch envelope.EventType {
+	case "created":
+		_, err = tx.ExecContext(ctx, `
+			DELETE FROM alert_notification_states
+			WHERE alert_id = $1 AND channel_id = $2
+			  AND last_event_type = 'created' AND last_sent_at = $3::timestamptz`,
+			alertID, channelID, claimedAt)
+	case "suspected_cause":
+		_, err = tx.ExecContext(ctx, `
+			UPDATE alert_notification_states
+			SET suspected_cause_sent_at = NULL, updated_at = NOW()
+			WHERE alert_id = $1 AND channel_id = $2 AND suspected_cause_sent_at = $3::timestamptz`,
+			alertID, channelID, claimedAt)
+	}
+	return err
 }
 
 type loadedChannel struct {

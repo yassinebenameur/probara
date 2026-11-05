@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
@@ -209,13 +210,27 @@ func TestHandle_DropsEventsHeldByAckOrSnooze(t *testing.T) {
 			mock.ExpectBegin()
 			mock.ExpectQuery(`FROM alerts al WHERE al.id = \$1 FOR SHARE`).WithArgs(alertID).
 				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}).AddRow(tc.status, tc.snoozed))
-			mock.ExpectRollback()
+			claimedAt := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+			if tc.wantSends == 0 {
+				// A held event releases the alerter's claim and commits.
+				switch tc.eventType {
+				case "created":
+					mock.ExpectExec(`DELETE FROM alert_notification_states`).
+						WithArgs(alertID, channelID, claimedAt).WillReturnResult(sqlmock.NewResult(0, 1))
+				case "suspected_cause":
+					mock.ExpectExec(`SET suspected_cause_sent_at = NULL`).
+						WithArgs(alertID, channelID, claimedAt).WillReturnResult(sqlmock.NewResult(0, 1))
+				}
+				mock.ExpectCommit()
+			} else {
+				mock.ExpectRollback()
+			}
 
 			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
 			raw, _ := json.Marshal(notifications.DispatchEnvelope{
 				V: 1, ChannelID: channelID.String(), ChannelType: supersededStubType,
 				AlertID: alertID.String(), EventType: tc.eventType, StopOnAck: tc.stopOnAck,
-				Event: notifications.AlertEvent{Type: tc.eventType},
+				Event: notifications.AlertEvent{Type: tc.eventType, Timestamp: claimedAt},
 			})
 			if err := c.handle(context.Background(), &queue.Message{Data: raw}); err != nil {
 				t.Fatalf("handle: %v", err)

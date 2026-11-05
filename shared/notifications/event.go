@@ -93,7 +93,24 @@ type AlertDetails struct {
 	// heartbeat; LocationMonitorCount how many live monitors run from it.
 	LocationLastSeenAt   *time.Time `json:"location_last_seen_at,omitempty"`
 	LocationMonitorCount int        `json:"location_monitor_count,omitempty"`
+
+	// ResolveReason says why a resolved alert closed when that is not its
+	// condition clearing (ResolveReason* values; empty otherwise).
+	ResolveReason string `json:"resolve_reason,omitempty"`
 }
+
+// Resolve reasons of a location_offline alert (alerts.resolve_reason).
+const (
+	// ResolveReasonRecovered: the location reports again.
+	ResolveReasonRecovered = "recovered"
+	// ResolveReasonLocationDisabled: the location was disabled.
+	ResolveReasonLocationDisabled = "location_disabled"
+	// ResolveReasonLocationDeleted: the location was deleted.
+	ResolveReasonLocationDeleted = "location_deleted"
+	// ResolveReasonAlertsDisabled: the tenant turned offline-location
+	// alerts off; the location may still be offline.
+	ResolveReasonAlertsDisabled = "alerts_disabled"
+)
 
 // SuspectedCause is a triage's named cause as a follow-up carries it.
 type SuspectedCause struct {

@@ -4,6 +4,9 @@ ALTER TABLE tenants
 
 DROP INDEX IF EXISTS idx_alerts_one_open_location_offline;
 
+ALTER TABLE alerts
+    DROP COLUMN IF EXISTS resolve_reason;
+
 -- The restored subject check would reject them.
 DELETE FROM alerts WHERE kind = 'location_offline';
 

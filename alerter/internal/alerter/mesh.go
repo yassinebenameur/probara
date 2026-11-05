@@ -227,10 +227,15 @@ func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uui
 
 // dispatchOpenMeshAlerts fires due escalation tiers and reminders for open
 // mesh alerts, mirroring dispatchOpenAlerts' delay/reminder contract,
-// including its ack and snooze gate. An edge with an offline endpoint
-// (S-F6) stays open but quiet while its tenant alerts on offline locations:
-// that location's one alert speaks for every edge it breaks, so a dead site
-// does not page once per edge.
+// including its ack and snooze gate. An edge with a disconnected endpoint
+// (S-F6: seen before, past monitorstate.LocationConnectedWindow) stays open
+// but quiet while its tenant alerts on offline locations: that location's
+// one alert speaks for every edge it breaks, so a dead site does not page
+// once per edge. The hold starts at the connected window, not the offline
+// threshold, because edges into a dead site go down after a few probes,
+// well before it counts as offline. It covers locations inside the offline
+// alert's horizon, or with one open, so it never silences an edge that no
+// location alert would speak for.
 func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.source_location_id, al.target_location_id,
@@ -238,7 +243,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 			al.triggered_at, al.failure_count, al.last_error,
 			te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
-			al.status, `+alertrouting.AckStopsExpr("te")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
+			al.status, `+alertrouting.AckStopsExpr("te")+`, al.snoozed_until, al.unacknowledged_at
 		FROM alerts al
 		JOIN tenants te ON te.id = al.tenant_id
 		LEFT JOIN locations sl ON sl.id = al.source_location_id
@@ -253,7 +258,11 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 		  AND NOT (te.location_offline_alerts_enabled AND EXISTS (
 			SELECT 1 FROM locations ol
 			WHERE ol.id IN (al.source_location_id, al.target_location_id)
-			  AND `+monitorstate.LocationOfflinePredicate("ol", "te")+`))
+			  AND `+monitorstate.LocationDisconnectedPredicate("ol")+`
+			  AND (`+monitorstate.LocationWithinOfflineHorizonPredicate("ol")+`
+				OR EXISTS (SELECT 1 FROM alerts lo
+					WHERE lo.kind = 'location_offline' AND lo.status IN ('active', 'acknowledged')
+					  AND lo.source_location_id = ol.id))))
 	`)
 	if err != nil {
 		return fmt.Errorf("query open mesh alerts: %w", err)
@@ -270,15 +279,15 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	for rows.Next() {
 		var oa openMeshAlert
 		var status string
-		var resumedAt sql.NullTime
+		var snoozedUntil, unacknowledgedAt sql.NullTime
 		if err := rows.Scan(&oa.edge.alertID, &oa.edge.tenantID, &oa.edge.sourceID, &oa.edge.targetID,
 			&oa.edge.sourceName, &oa.edge.targetName, &oa.edge.triggeredAt, &oa.edge.failCount,
 			&oa.edge.lastError, &oa.reminderSeconds, &oa.eligibleSince,
-			&status, &oa.gate.AckStops, &resumedAt); err != nil {
+			&status, &oa.gate.AckStops, &snoozedUntil, &unacknowledgedAt); err != nil {
 			return fmt.Errorf("scan open mesh alert: %w", err)
 		}
 		oa.gate.Acknowledged = status == "acknowledged"
-		oa.gate.ResumedAt = resumedAt.Time
+		oa.gate.SnoozedUntil, oa.gate.UnacknowledgedAt = snoozedUntil.Time, unacknowledgedAt.Time
 		open = append(open, oa)
 	}
 	if err := rows.Err(); err != nil {
