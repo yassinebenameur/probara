@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -361,13 +362,15 @@ func loadSnapshot(ctx context.Context, q db.Querier, tenantID, monitorID uuid.UU
 	err := q.QueryRowContext(ctx, `
 		SELECT name, type, config, interval_seconds, timeout_seconds, tags,
 			consecutive_failures_threshold, recovery_threshold, notification_mode,
-			member_alert_rollup, dependency_suppression, location_quorum
+			member_alert_rollup, dependency_suppression, location_quorum,
+			COALESCE(escalation_policy_id::text, '')
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`, monitorID, tenantID).Scan(
 		&snapshot.Name, &snapshot.Type, &config, &snapshot.IntervalSeconds, &snapshot.TimeoutSeconds, pq.Array(&tags),
 		&snapshot.ConsecutiveFailuresThreshold, &snapshot.RecoveryThreshold, &snapshot.NotificationMode,
 		&snapshot.MemberAlertRollup, &snapshot.DependencySuppression, &snapshot.LocationQuorum,
+		&snapshot.EscalationPolicyID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
@@ -759,12 +762,30 @@ func (v *VersionStore) Diff(ctx context.Context, tenantID, monitorID uuid.UUID, 
 	return resp, nil
 }
 
-// LiveReferences drops the channels, locations, dependencies and members a
-// snapshot names that no longer exist in the tenant, so a restore can apply
-// the rest. It returns the trimmed copy and the dropped references
-// ("channel:<id>", "location:<id>", "dependency:<id>", "member:<id>").
+// LiveReferences drops the channels, locations, dependencies, members and
+// escalation policy a snapshot names that no longer exist in the tenant, so
+// a restore can apply the rest. It returns the trimmed copy and the dropped
+// references ("channel:<id>", "location:<id>", "dependency:<id>",
+// "member:<id>", "escalation_policy:<id>").
+//
+// A deleted policy falls back to notification_mode 'default' rather than
+// refusing the restore: like a dropped channel it is reported, and the
+// workspace's default routing still reaches someone, where refusing would
+// make every version recorded under that policy unrestorable.
 func (v *VersionStore) LiveReferences(ctx context.Context, tenantID uuid.UUID, snapshot models.MonitorConfigSnapshot) (models.MonitorConfigSnapshot, []string, error) {
 	dropped := []string{}
+	if snapshot.NotificationMode == "policy" && snapshot.EscalationPolicyID != "" {
+		policies, err := queryStrings(ctx, v.db, `SELECT id::text FROM escalation_policies WHERE tenant_id = $1 AND id::text = $2`,
+			tenantID, snapshot.EscalationPolicyID)
+		if err != nil {
+			return snapshot, nil, err
+		}
+		if len(policies) == 0 {
+			dropped = append(dropped, "escalation_policy:"+snapshot.EscalationPolicyID)
+			snapshot.NotificationMode = "default"
+			snapshot.EscalationPolicyID = ""
+		}
+	}
 	live := func(query string, ids []string) (map[string]bool, error) {
 		out := map[string]bool{}
 		if len(ids) == 0 {
@@ -828,11 +849,21 @@ func (v *VersionStore) LiveReferences(ctx context.Context, tenantID uuid.UUID, s
 // RestoreRequest turns a snapshot into the update that re-applies it. The
 // config goes in masked, so the write-only merge keeps every secret the
 // monitor holds now ("***" keeps, an absent field keeps): a restore never
-// brings back a secret value, it cannot. Group members travel as
-// config.monitor_ids, which the handler syncs into monitor_groups like any
-// group update. The type is sent only when it differs.
-func RestoreRequest(snapshot models.MonitorConfigSnapshot, currentType models.MonitorType) (*models.UpdateMonitorRequest, error) {
+// brings back a secret value, it cannot. currentConfig is the live
+// monitor's config (masked or not, only its keys are read): secret map keys
+// added since the version are submitted as "***" too, because a present
+// secret map is edited per key and would otherwise delete them. Group
+// members travel as config.monitor_ids, which the handler syncs into
+// monitor_groups like any group update. The type is sent only when it
+// differs.
+func RestoreRequest(snapshot models.MonitorConfigSnapshot, currentType models.MonitorType, currentConfig json.RawMessage) (*models.UpdateMonitorRequest, error) {
 	config := snapshot.Config
+	if snapshot.Type == currentType {
+		var err error
+		if config, err = keepCurrentSecretKeys(string(currentType), config, currentConfig); err != nil {
+			return nil, err
+		}
+	}
 	if snapshot.Type == models.MonitorTypeGroup {
 		value, err := decodeJSONValue(config)
 		if err != nil {
@@ -878,6 +909,10 @@ func RestoreRequest(snapshot models.MonitorConfigSnapshot, currentType models.Mo
 		typ := snapshot.Type
 		req.Type = &typ
 	}
+	if mode == "policy" {
+		policy := snapshot.EscalationPolicyID
+		req.EscalationPolicyID = &policy
+	}
 	if mode == "custom" {
 		// Non-nil even when empty: the update replaces the route set.
 		req.NotificationChannels = make([]models.MonitorChannelAssignment, 0, len(snapshot.NotificationChannels))
@@ -894,6 +929,49 @@ func RestoreRequest(snapshot models.MonitorConfigSnapshot, currentType models.Mo
 		req.DependsOnIDs = &deps
 	}
 	return req, nil
+}
+
+// keepCurrentSecretKeys adds to each secret map field the snapshot carries
+// (secrets.MonitorSecretMapFields) the keys the live config holds and the
+// snapshot lacks, valued "***", so the merge keeps them. A map field absent
+// from the snapshot needs nothing: an absent map is kept whole.
+func keepCurrentSecretKeys(monitorType string, config, currentConfig json.RawMessage) (json.RawMessage, error) {
+	mapFields := secrets.MonitorSecretMapFields[monitorType]
+	if len(mapFields) == 0 || len(currentConfig) == 0 {
+		return config, nil
+	}
+	current := decodeConfigMap(currentConfig)
+	value, err := decodeJSONValue(config)
+	if err != nil {
+		return nil, fmt.Errorf("decode version config: %w", err)
+	}
+	fields, _ := value.(map[string]any)
+	if fields == nil {
+		return config, nil
+	}
+	changed := false
+	for _, field := range mapFields {
+		restored, ok := fields[field].(map[string]any)
+		if !ok {
+			continue
+		}
+		live, _ := current[field].(map[string]any)
+	liveKeys:
+		for key := range live {
+			for have := range restored {
+				// The merge matches keys case-insensitively (header names).
+				if strings.EqualFold(have, key) {
+					continue liveKeys
+				}
+			}
+			restored[key] = secrets.MaskedSecret
+			changed = true
+		}
+	}
+	if !changed {
+		return config, nil
+	}
+	return json.Marshal(fields)
 }
 
 // DiffSnapshots lists the paths that differ between two snapshots: object

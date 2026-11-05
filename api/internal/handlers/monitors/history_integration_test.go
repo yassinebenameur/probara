@@ -175,3 +175,93 @@ func TestMonitorVersionHistoryHTTP_Integration(t *testing.T) {
 	call("GET", "/monitors/"+dependent.ID.String()+"/versions/0", nil, http.StatusBadRequest)
 	call("GET", "/monitors/"+uuid.NewString()+"/versions", nil, http.StatusNotFound)
 }
+
+// TestRestoreMonitorVersionPolicyAndSecretsHTTP_Integration: a restore over
+// HTTP re-applies a version's escalation policy, keeps the secret map keys
+// added since the version, and answers 400 (not 500) for a version the
+// escalation rules refuse.
+func TestRestoreMonitorVersionPolicyAndSecretsHTTP_Integration(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, db, "history-policy-http")
+	var policyID string
+	if err := db.QueryRowContext(ctx, `INSERT INTO escalation_policies (tenant_id, name) VALUES ($1, 'oncall') RETURNING id::text`, tenant).Scan(&policyID); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := monitorservice.NewService(monitorservice.NewPostgresRepository(db))
+	h := NewHandlers(svc, groupservice.NewService(db), nil, logger.New("test", "error"), t.TempDir())
+	h.ConfigureDependencies(depservice.NewService(db))
+	h.ConfigureVersions(svc.Versions())
+	r := chi.NewRouter()
+	r.Post("/monitors", h.CreateMonitor)
+	r.Patch("/monitors/{id}", h.UpdateMonitor)
+	r.Post("/monitors/{id}/versions/{version}/restore", h.RestoreMonitorVersion)
+	requestCtx := ctxpkg.WithRole(ctxpkg.WithTenantID(ctx, tenant.String()), "admin")
+	call := func(method, path string, body any, want int) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		if body != nil {
+			_ = json.NewEncoder(&buf).Encode(body)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, &buf).WithContext(requestCtx))
+		if w.Code != want {
+			t.Fatalf("%s %s: status %d, want %d: %s", method, path, w.Code, want, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	state := func(id uuid.UUID) (string, string, map[string]any) {
+		t.Helper()
+		var mode, policy string
+		var raw json.RawMessage
+		if err := db.QueryRowContext(ctx, `SELECT notification_mode, COALESCE(escalation_policy_id::text, ''), config FROM monitors WHERE id = $1`, id).Scan(&mode, &policy, &raw); err != nil {
+			t.Fatal(err)
+		}
+		var config map[string]any
+		_ = json.Unmarshal(raw, &config)
+		headers, _ := config["secret_headers"].(map[string]any)
+		return mode, policy, headers
+	}
+
+	// v1: policy mode, one secret header.
+	var monitor models.Monitor
+	_ = json.Unmarshal(call("POST", "/monitors", map[string]any{
+		"name": "paged", "type": "http", "interval_seconds": 60, "timeout_seconds": 10,
+		"notification_mode": "policy", "escalation_policy_id": policyID,
+		"config": map[string]any{"url": "https://p.example", "method": "GET", "expected_status": 200,
+			"secret_headers": map[string]any{"Authorization": "Bearer one"}},
+	}, http.StatusCreated), &monitor)
+	base := "/monitors/" + monitor.ID.String()
+
+	// v2: default mode, a second secret header added.
+	call("PATCH", base, map[string]any{
+		"notification_mode": "default",
+		"config": map[string]any{"url": "https://p2.example", "method": "GET", "expected_status": 200,
+			"secret_headers": map[string]any{"Authorization": "***", "X-Api-Key": "key-two"}},
+	}, http.StatusOK)
+
+	var restored models.RestoreMonitorVersionResponse
+	_ = json.Unmarshal(call("POST", base+"/versions/1/restore", nil, http.StatusOK), &restored)
+	if len(restored.DroppedReferences) != 0 {
+		t.Fatalf("dropped = %v", restored.DroppedReferences)
+	}
+	mode, policy, headers := state(monitor.ID)
+	if mode != "policy" || policy != policyID {
+		t.Fatalf("after restore: %s/%s, want policy/%s", mode, policy, policyID)
+	}
+	if headers["Authorization"] == nil || headers["X-Api-Key"] == nil {
+		t.Fatalf("restore removed a current secret header: %v", headers)
+	}
+
+	// A policy-mode version without its policy id (recorded before
+	// snapshots carried it) cannot be re-applied to a default-mode monitor:
+	// 400, not 500.
+	call("PATCH", base, map[string]any{"notification_mode": "default"}, http.StatusOK)
+	if _, err := db.ExecContext(ctx, `UPDATE monitor_config_versions SET snapshot = snapshot - 'escalation_policy_id' WHERE monitor_id = $1 AND version = 1`, monitor.ID); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", base+"/versions/1/restore", nil, http.StatusBadRequest)
+}

@@ -244,8 +244,10 @@ func (h *Handlers) DiffMonitorVersion(w http.ResponseWriter, r *http.Request) {
 // It re-applies the version's snapshot through the same path as a PATCH:
 // validation, UpdateMonitor (test-call gate, write-only secret merge), then
 // the group member and dependency syncs. The snapshot is masked, so every
-// secret keeps its current value: a restore never restores a secret.
-// References that no longer exist are dropped and reported.
+// secret keeps its current value, including secret map keys added since the
+// version: a restore never restores or removes a secret. References that no
+// longer exist are dropped and reported (a deleted escalation policy falls
+// back to notification_mode 'default').
 func (h *Handlers) RestoreMonitorVersion(w http.ResponseWriter, r *http.Request) {
 	tenantUUID, existing, ok := h.historyRequest(w, r)
 	if !ok {
@@ -265,7 +267,7 @@ func (h *Handlers) RestoreMonitorVersion(w http.ResponseWriter, r *http.Request)
 		h.writeVersionError(w, err, existing.ID)
 		return
 	}
-	req, err := monitorservice.RestoreRequest(snapshot, existing.Type)
+	req, err := monitorservice.RestoreRequest(snapshot, existing.Type, existing.Config)
 	if err != nil {
 		h.writeVersionError(w, err, existing.ID)
 		return
@@ -283,7 +285,8 @@ func (h *Handlers) RestoreMonitorVersion(w http.ResponseWriter, r *http.Request)
 		switch {
 		case stderrors.Is(err, monitorservice.ErrCallMonitorForbidden):
 			errors.WriteForbiddenError(w, err.Error())
-		case stderrors.Is(err, monitorservice.ErrSecretConflict):
+		case stderrors.Is(err, monitorservice.ErrSecretConflict),
+			stderrors.Is(err, monitorservice.ErrEscalationPolicyNotFound):
 			errors.WriteValidationError(w, fmt.Sprintf("version %d cannot be restored: %s", version, err.Error()))
 		case err.Error() == "timeout_seconds must be less than interval_seconds":
 			errors.WriteValidationError(w, err.Error())
