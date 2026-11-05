@@ -48,10 +48,15 @@ test('deliveryAlertSubject prefers the monitor', () => {
 });
 
 test('person sends name who was paged and the escalation step', () => {
-  const person = { channel_name: 'Email', channel_id: null, username: 'alice', recipient: 'a***@example.com' };
+  const person = { channel_name: 'Email', channel_id: null, channel_type: 'email', username: 'alice', recipient: 'a***@example.com' };
   assert.deepEqual(deliveryTarget(person), { title: 'alice · a***@example.com', via: 'Email' });
-  assert.deepEqual(deliveryTarget({ ...person, channel_id: 'c1', channel_name: 'Twilio' }).via, 'via Twilio');
-  assert.deepEqual(deliveryTarget({ channel_name: 'Ops', channel_id: 'c1' }), { title: 'Ops', via: null });
+  assert.deepEqual(deliveryTarget({ ...person, channel_id: 'c1', channel_name: 'Twilio', channel_type: 'twilio' }).via, 'via Twilio');
+  // An SMS page that found no SMS channel is channel-less too, typed by its contact.
+  assert.deepEqual(
+    deliveryTarget({ channel_name: 'SMS', channel_id: null, channel_type: 'sms', username: 'carol', recipient: '+33•••78' }),
+    { title: 'carol · +33•••78', via: 'SMS' }
+  );
+  assert.deepEqual(deliveryTarget({ channel_name: 'Ops', channel_id: 'c1', channel_type: 'slack' }), { title: 'Ops', via: null });
   assert.equal(deliveryStepLabel('escalation:1:0'), 'Step 2');
   assert.equal(deliveryStepLabel('escalation:0:2:1'), 'Step 1, repeat 2');
   assert.equal(deliveryStepLabel('created'), null);

@@ -52,5 +52,5 @@ func (c *Consumer) personEntry(ctx context.Context, envelope notifications.Dispa
 	if addr, err := c.encryptor.Decrypt(stored); err == nil {
 		masked = contacts.Mask(contacts.Kind(kind), addr)
 	}
-	return deliverylog.Entry{UserID: userID, ContactID: id, Recipient: masked}
+	return deliverylog.Entry{UserID: userID, ContactID: id, ContactKind: kind, Recipient: masked}
 }

@@ -40,6 +40,7 @@ func (c *Consumer) recordDelivery(ctx context.Context, msg *queue.Message, envel
 	err := deliverylog.Record(ctx, c.db, deliverylog.Entry{
 		UserID:      person.UserID,
 		ContactID:   person.ContactID,
+		ContactKind: person.ContactKind,
 		Recipient:   person.Recipient,
 		AlertID:     alertID,
 		ChannelID:   channelID,

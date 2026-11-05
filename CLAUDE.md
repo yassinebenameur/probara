@@ -347,7 +347,8 @@ or imported groups come back empty. Any other path that creates groups through
   that writes `monitors` or its junction tables (members, dependencies,
   channels, locations) any other way must call `RecordVersion`, or
   `RecordVersionTx` inside its own transaction (discovery approval does,
-  beside `CreateInTx`). A multi-step write (create + member/dependency sync,
+  beside `CreateInTx`; so does `escalation.ConvertRoutes` with assign, source
+  `""` to follow the caller's credential). A multi-step write (create + member/dependency sync,
   import's second pass, restore) wraps its context in `DeferVersions` and
   `Flush`es once, or one change splits into two versions; a new non-default
   source goes through `WithVersionSource`.
@@ -874,7 +875,8 @@ Login lockout).
   only. Person sends go through `sendPerson`: email via the email plugin
   with no channel (the worker's `loadEnvelopeChannel` stands in for it),
   SMS via `personal_sms_channel_id`; each records a delivery row with
-  `user_id`/`contact_id`/`recipient`, and its ack link is scoped to the
+  `user_id`/`contact_id`/`contact_kind`/`recipient` (`contact_kind` types a
+  channel-less row: an SMS page with no SMS channel has none either), and its ack link is scoped to the
   contact (`DispatchRequest.View`, checked by the alert-actions `Scope`).
   `monitors.escalation_policy_id` is set in the same statement that enters
   `policy` mode (a CHECK requires it; a trigger clears it on leaving).

@@ -120,11 +120,15 @@ CREATE INDEX idx_alert_escalation_pages_recent ON alert_escalation_pages(sent_at
 
 -- Person sends in the delivery history: an email page has no channel (it
 -- goes through the platform mailer); an SMS page records the workspace's
--- SMS channel and the person. recipient is the masked address.
+-- SMS channel and the person. recipient is the masked address. contact_kind
+-- is the contact's kind at send time, so a channel-less row reads as what it
+-- was (an SMS page that failed for want of an SMS channel has no channel
+-- either) after the contact itself is gone.
 ALTER TABLE alert_notification_deliveries
     ALTER COLUMN channel_id DROP NOT NULL,
     ADD COLUMN user_id UUID REFERENCES admin_users(id) ON DELETE SET NULL,
     ADD COLUMN contact_id UUID REFERENCES user_contacts(id) ON DELETE SET NULL,
+    ADD COLUMN contact_kind TEXT CHECK (contact_kind IN ('email', 'sms')),
     ADD COLUMN recipient TEXT,
     ADD CONSTRAINT alert_notification_deliveries_target_check
         CHECK (channel_id IS NOT NULL OR recipient IS NOT NULL);

@@ -39,13 +39,16 @@ export function deliveryAlertSubject(d: Pick<NotificationDelivery, 'monitor_name
 /**
  * Where a delivery went: the channel, or for an escalation page the person
  * paged ("alice · a***@example.com", via the SMS channel when one carried it).
+ * A channel-less page is typed by its contact (channel_type "email" or
+ * "sms"): an SMS page that found no SMS channel has no channel either.
  */
 export function deliveryTarget(
-  d: Pick<NotificationDelivery, 'channel_name' | 'channel_id' | 'username' | 'recipient'>
+  d: Pick<NotificationDelivery, 'channel_name' | 'channel_id' | 'channel_type' | 'username' | 'recipient'>
 ): { title: string; via: string | null } {
   if (!d.recipient) return { title: d.channel_name, via: null };
   const who = d.username ?? 'Removed user';
-  return { title: `${who} · ${d.recipient}`, via: d.channel_id ? `via ${d.channel_name}` : 'Email' };
+  if (d.channel_id) return { title: `${who} · ${d.recipient}`, via: `via ${d.channel_name}` };
+  return { title: `${who} · ${d.recipient}`, via: d.channel_type === 'sms' ? 'SMS' : 'Email' };
 }
 
 /** "Step 2" (and the repeat cycle) for an escalation page's ledger key, else null. */

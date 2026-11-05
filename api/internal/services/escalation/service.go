@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	shared "github.com/yassinebenameur/probara/shared/escalation"
@@ -444,6 +445,12 @@ func (s *Service) ConvertRoutes(ctx context.Context, tenantID uuid.UUID, req Con
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return nil, ErrNotFound
+		}
+		// The switch to policy routing bypasses the monitors service, so it
+		// records its config version here, in the same transaction, under
+		// the caller's source and actor ("" follows the credential).
+		if err := monitors.RecordVersionTx(ctx, tx, tenantID, *req.MonitorID, ""); err != nil {
+			return nil, fmt.Errorf("record monitor version: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

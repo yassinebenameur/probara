@@ -108,8 +108,13 @@ type Entry struct {
 	// sends.
 	UserID    uuid.UUID
 	ContactID uuid.UUID
-	Recipient string
-	EventType string
+	// ContactKind is the contact's kind ("email", "sms") on a person send.
+	// It types a channel-less row in the history (Delivery.ChannelType):
+	// an SMS page that failed for want of a personal SMS channel has no
+	// channel either, and must not read as an email.
+	ContactKind string
+	Recipient   string
+	EventType   string
 	// DeliveryKey is the event's recipient-ledger key
 	// (notifications.RecipientEventKey): it tells reminder rounds apart.
 	DeliveryKey string
@@ -136,14 +141,15 @@ type Execer interface {
 // and writes nothing for an alert or channel deleted meanwhile or for a
 // workspace being deleted (tenancy.LiveTenantSQL).
 //
-// A person send ($12 user, $13 contact, $14 masked recipient) may have no
-// channel ($2 NULL, an email page): the channel join is then a LEFT JOIN
-// that must stay empty, and the attempt counter keys on the contact.
+// A person send ($12 user, $13 contact, $14 masked recipient, $15 contact
+// kind) may have no channel ($2 NULL, an email page): the channel join is
+// then a LEFT JOIN that must stay empty, and the attempt counter keys on the
+// contact.
 var recordSQL = `
 	INSERT INTO alert_notification_deliveries (
 		tenant_id, alert_id, channel_id, channel_name, event_type, delivery_key,
 		attempt, path, outcome, error, recipients_total, recipients_delivered,
-		user_id, contact_id, recipient)
+		user_id, contact_id, recipient, contact_kind)
 	SELECT a.tenant_id, a.id, c.id, COALESCE(NULLIF($3::text, ''), c.name, 'Email'), $4::text, $5::text,
 		CASE WHEN $6::int > 0 THEN $6::int ELSE 1 + (
 			SELECT COUNT(*) FROM alert_notification_deliveries p
@@ -151,7 +157,7 @@ var recordSQL = `
 			  AND p.contact_id IS NOT DISTINCT FROM $13::uuid
 			  AND p.delivery_key = $5::text AND p.path = $7::text)::int END,
 		$7::text, $8::text, $9::text, $10::int, $11::int,
-		u.id, $13::uuid, NULLIF($14::text, '')
+		u.id, $13::uuid, NULLIF($14::text, ''), NULLIF($15::text, '')
 	FROM alerts a
 	LEFT JOIN alert_channels c ON c.id = $2::uuid AND c.tenant_id = a.tenant_id
 	LEFT JOIN admin_users u ON u.id = $12::uuid
@@ -180,7 +186,7 @@ func Record(ctx context.Context, db Execer, e Entry) error {
 	_, err := db.ExecContext(ctx, recordSQL,
 		e.AlertID, nullUUID(e.ChannelID), e.ChannelName, e.EventType, e.DeliveryKey,
 		e.Attempt, string(e.Path), string(e.Outcome), errText, total, delivered,
-		nullUUID(e.UserID), nullUUID(e.ContactID), e.Recipient)
+		nullUUID(e.UserID), nullUUID(e.ContactID), e.Recipient, e.ContactKind)
 	if isUndefinedTable(err) {
 		// Rollout window: this binary runs ahead of the migrations job.
 		return nil
