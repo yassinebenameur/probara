@@ -913,6 +913,16 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             ['`PORT`', 'Docker image sets `3000`', 'Next.js listener port.'],
             ['`HOSTNAME`', 'Docker image sets `0.0.0.0`', 'Next.js bind address.'],
+            [
+              '`WEB_CSP_ENFORCE`',
+              '`false`',
+              'The UI’s nonce-based [Content-Security-Policy](/docs/security/#edge-controls) ships as `Content-Security-Policy-Report-Only` (violations only reported in the browser console) unless this is `true`. Read at runtime. Helm renders `security.webCspEnforce`.',
+            ],
+            [
+              '`SECURITY_HSTS_MAX_AGE`',
+              '`0`',
+              'Same variable as on the API: HSTS on pages served over HTTPS (`https:` or `X-Forwarded-Proto: https`). Read at runtime; Helm renders `security.hstsMaxAge`.',
+            ],
           ],
         },
         {

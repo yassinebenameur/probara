@@ -178,6 +178,10 @@ export const SECURITY_PAGE: DocPage = {
               '`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and `Content-Security-Policy: default-src \'none\'; frame-ancestors \'none\'` on every response.',
             ],
             [
+              'Operator UI',
+              '`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and a `Permissions-Policy` that denies camera, microphone and geolocation. A nonce-based Content-Security-Policy (`\'strict-dynamic\'`, `frame-ancestors \'none\'`, `frame-src` limited to the status-page origin) ships **report-only** for this release: violations appear in the browser console but nothing is blocked. Set `WEB_CSP_ENFORCE=true` to enforce it.',
+            ],
+            [
               'Status pages',
               '`nosniff` and `Referrer-Policy: no-referrer` on every response; each public page adds its own `Content-Security-Policy` with a per-response script nonce, chosen by the page’s [CSP mode](/docs/status-pages/#content-security-policy), and a `frame-ancestors` list of the page’s origin, the operator UI and the page’s allowed embed origins.',
             ],

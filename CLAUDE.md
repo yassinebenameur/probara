@@ -843,6 +843,10 @@ or imported groups come back empty. Any other path that creates groups through
   `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus, marks
   `#app-root` inert while open and restores focus on close; pass `onEscape`
   unless the modal handles Escape itself (`Dialog` does).
+- **No inline `<script>` without the CSP nonce**: `proxy.ts` mints one per
+  request (policy in `lib/csp.ts`, report-only until `WEB_CSP_ENFORCE=true`)
+  and `app/layout.tsx` passes `x-nonce` to its boot script. Static security
+  headers live in `next.config.js` `headers()`.
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
