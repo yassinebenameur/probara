@@ -110,7 +110,7 @@ export const MONITORS_PAGE: DocPage = {
           columns: ["Type", "What it verifies", "Scheduled active check"],
           rows: [
             ["`http`", "HTTP response, content, headers, JSON, TLS, and latency", "Yes"],
-            ["`ping`", "ICMP reachability", "Yes"],
+            ["`ping`", "ICMP echo reachability, packet loss, and round-trip time", "Yes"],
             ["`dns`", "DNS resolution and optional expected answers", "Yes"],
             ["`grpc`", "Standard gRPC health service status", "Yes"],
             ["`tcp`", "TCP connection and optional TLS handshake", "Yes"],
@@ -279,7 +279,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "Ping",
               description:
-                "Set `host` to a hostname or IP address. The worker performs an ICMP reachability check; firewalls and worker privileges can affect results independently of application health.",
+                "Set `host` to a hostname or IP address. Each check sends `count` ICMP echo requests (1–10; absent means 1, the original single-echo check, and the form starts new monitors at 3) `interval_ms` apart (200–10000, default 1000) with a `packet_size`-byte payload (24–1472, default 24). The check fails when no echo is answered, when the lost share exceeds `max_packet_loss_pct` (0 to below 100; absent means only total loss fails), or when the average round trip exceeds `max_rtt_ms`; `warn_rtt_ms` (below `max_rtt_ms`) only flags a passing check. Latency is the average round trip. The echoes must fit the timeout: `(count − 1) × interval_ms` plus 1 s for the last reply, which the API checks on save. A hostname is resolved once and every address vetted by the worker's [network policy](/docs/security/#ssrf-network-policy) like any other dial: the first allowed IPv4 address is pinged, else the first allowed IPv6 one, and a target with no allowed address is an `ssrf_blocked` error. Every answered check records `metrics_data.ping`: `host`, `ip`, `sent`, `received`, `loss_pct`, `rtt_min_ms`, `rtt_avg_ms`, `rtt_max_ms`, `rtt_stddev_ms`, `privileged` (raw sockets were used) and, when flagged, `rtt_warn_ms`. Workers send unprivileged ICMP by default (`WORKER_PING_MODE`, see [worker configuration](/docs/configuration/#worker)), which needs the `net.ipv4.ping_group_range` sysctl the Helm chart and Compose set. Firewalls that drop ICMP fail the check independently of application health.",
             },
             {
               term: "DNS",

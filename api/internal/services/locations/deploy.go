@@ -87,6 +87,7 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
 	dockerRun := fmt.Sprintf(`docker run -d \
   --name %s \
   --restart unless-stopped \
+  --sysctl net.ipv4.ping_group_range="0 2147483647" \
   -p 8080:8080 \
   -e NATS_URL=%q \
   -e WORKER_LOCATION_ID=%q \
@@ -99,6 +100,9 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
   worker-%s:
     image: %s
     restart: unless-stopped
+    # Unprivileged ICMP sockets for ping monitors (Docker 20.10+ sets it too).
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
     ports:
       # Mesh echo port — set this host's host:port as the location's Mesh endpoint.
       - "8080:8080"

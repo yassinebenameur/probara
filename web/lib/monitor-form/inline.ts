@@ -20,6 +20,7 @@ import {
   SyntheticBrowserStepConfig,
 } from '../types';
 import { buildScheduledMonitorRequest } from './common';
+import { buildPingConfig, initialPingFields, validatePingFields } from './ping';
 import { buildStatusRulesFromHTTPConfig, mapHeadersToRows, parseDNSExpectedAnswers, parseStatusRules } from './http';
 import {
   SyntheticBrowserGuidedDraft,
@@ -128,6 +129,7 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     tls_ca_pem: initialHTTPConfig?.tls_ca_pem || '',
     collect_timing: initialHTTPConfig?.collect_timing ?? false,
     host: initialPingConfig?.host || initialDNSConfig?.host || '',
+    ...initialPingFields(initialPingConfig),
     dns_record_type: initialDNSConfig?.record_type || 'A',
     dns_expected_answers: (initialDNSConfig?.expected_answers || []).join(', '),
     dns_nameserver: initialDNSConfig?.nameserver || '',
@@ -413,6 +415,7 @@ export function validateMonitorForm(
     }
   } else if (type === 'ping') {
     if (!form.host.trim()) newErrors.host = 'Host is required';
+    Object.assign(newErrors, validatePingFields(form, form.timeout_seconds));
   } else if (type === 'dns') {
     if (!form.host.trim()) newErrors.host = 'Host is required';
   } else if (type === 'synthetic_api') {
@@ -758,7 +761,7 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
 
     config = httpConfig;
   } else if (type === 'ping') {
-    config = { host: form.host.trim() };
+    config = buildPingConfig(form.host, form);
   } else if (type === 'dns') {
     const dnsExpected = parseDNSExpectedAnswers(form.dns_expected_answers);
     const dnsConfig: DNSMonitorConfig = {

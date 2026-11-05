@@ -311,6 +311,15 @@ export interface HTTPMonitorConfig {
 
 export interface PingMonitorConfig {
   host: string;
+  // Echoes per check, 1-10; absent means 1 (the form starts new monitors at 3).
+  count?: number;
+  interval_ms?: number;
+  packet_size?: number;
+  // Absent: only total loss fails.
+  max_packet_loss_pct?: number;
+  // Compared with the average round trip; warn only flags a passing check.
+  max_rtt_ms?: number;
+  warn_rtt_ms?: number;
 }
 
 export interface DNSMonitorConfig {
@@ -1950,6 +1959,27 @@ export interface TCPMetrics {
   port?: number;
   use_tls?: boolean;
   tls_version?: string;
+}
+
+// metrics_data.ping (worker ping_checker.go pingMetrics). RTTs are absent
+// when no echo was answered.
+export interface PingMetricsEnvelope {
+  ping?: PingMetrics;
+}
+
+export interface PingMetrics {
+  host?: string;
+  ip?: string;
+  sent: number;
+  received: number;
+  loss_pct: number;
+  rtt_min_ms?: number;
+  rtt_avg_ms?: number;
+  rtt_max_ms?: number;
+  rtt_stddev_ms?: number;
+  privileged?: boolean;
+  // Set when the average round trip passed warn_rtt_ms on a passing check.
+  rtt_warn_ms?: number;
 }
 
 export interface WebSocketMetricsEnvelope {

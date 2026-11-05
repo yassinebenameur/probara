@@ -290,7 +290,8 @@ or imported groups come back empty. Any other path that creates groups through
    rewrites it
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
-   through `dialGuard` (SSRF policy)
+   through `dialGuard` (SSRF policy); one with no dialer (ping) resolves once
+   and vets the IP with `netguard.Policy.Allows` (`ping_checker.go`)
 4. Secret fields → `MonitorSecretFields`
 5. UI: form component in `web/components/monitors/`, wire into
    `MonitorForm.tsx` (`MONITOR_TYPE_META` + `TYPE_FORMS` dispatch), types in
@@ -373,6 +374,11 @@ or imported groups come back empty. Any other path that creates groups through
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs).
+- **Unprivileged ping** (`WORKER_PING_MODE`, default `unprivileged`) needs
+  the `net.ipv4.ping_group_range` sysctl, set in Compose (worker `sysctls:`),
+  Helm (`worker.ping.sysctl` via the `workerPodSecurityContext` helper, for
+  the default fleet and location workers) and the location deploy snippets
+  (`api/internal/services/locations/deploy.go`). Change them together.
 - **`PROBARA_SECRETS_KEY`**: needed by api, scheduler (dispatch decrypt),
   worker, alerter. Compose passes it through from the shell env to all four;
   Helm renders it through `monitoring-platform.secretEnv`, guarded by

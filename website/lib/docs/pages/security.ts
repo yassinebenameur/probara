@@ -342,7 +342,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'paragraph',
           text:
-            '`HTTP_BLOCK_PRIVATE_IPS=true` is the recommended setting; the code default is `false`, and neither the Helm chart nor Compose sets it, so set it on every worker that runs inside a network it should not reach. Despite its historical name, the guard is shared by HTTP, browser, TCP, gRPC, PostgreSQL, MySQL, MongoDB, Redis, broker, SIP, and other worker dial paths.',
+            '`HTTP_BLOCK_PRIVATE_IPS=true` is the recommended setting; the code default is `false`, and neither the Helm chart nor Compose sets it, so set it on every worker that runs inside a network it should not reach. Despite its historical name, the guard is shared by HTTP, browser, ping, TCP, gRPC, PostgreSQL, MySQL, MongoDB, Redis, broker, SIP, and other worker dial paths (ping vets the addresses it resolves before sending any echo).',
         },
         {
           type: 'table',

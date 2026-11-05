@@ -271,6 +271,9 @@ type WorkerConfig struct {
 	HTTPBlockPrivateIPs   bool
 	HTTPAllowedCIDRs      []*net.IPNet
 	SyntheticArtifactsDir string
+	// PingMode is the ping checker's socket mode (WORKER_PING_MODE:
+	// unprivileged, the default, privileged or auto; PingMode* constants).
+	PingMode string
 
 	// SIPCallEnabled lets this worker place SIP test calls (INVITE monitors:
 	// real, possibly billed, calls). SIP_CALL_ENABLED; defaults to true on
@@ -1080,6 +1083,13 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		artifactsDir = filepath.Join(os.TempDir(), "probara", "synthetic-browser-artifacts")
 	}
 	cfg.SyntheticArtifactsDir = artifactsDir
+
+	// WORKER_PING_MODE
+	pingMode, err := loadWorkerPingMode()
+	if err != nil {
+		return nil, err
+	}
+	cfg.PingMode = pingMode
 
 	// NOTIFICATIONS_ENABLED — opt-in for the notifications consumer goroutine.
 	enabledStr := strings.TrimSpace(os.Getenv("NOTIFICATIONS_ENABLED"))

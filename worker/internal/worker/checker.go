@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	probing "github.com/prometheus-community/pro-bing"
 	"github.com/tidwall/gjson"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/netguard"
@@ -833,74 +832,6 @@ func parseFloat(s string) (float64, error) {
 
 func parseBool(s string) (bool, error) {
 	return strconv.ParseBool(strings.TrimSpace(strings.ToLower(s)))
-}
-
-// PingChecker implements Checker for ping monitors
-type PingChecker struct{}
-
-// NewPingChecker creates a new ping checker
-func NewPingChecker() *PingChecker {
-	return &PingChecker{}
-}
-
-// Check performs a ping check
-func (c *PingChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
-	var config models.PingMonitorConfig
-	if err := json.Unmarshal(configRaw, &config); err != nil {
-		errMsg := fmt.Sprintf("failed to unmarshal ping config: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Create pinger
-	pinger, err := probing.NewPinger(config.Host)
-	if err != nil {
-		errMsg := fmt.Sprintf("failed to create pinger: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Set unprivileged mode (uses UDP instead of raw ICMP)
-	pinger.SetPrivileged(false)
-
-	// Set timeout
-	pinger.Timeout = time.Duration(timeoutSeconds) * time.Second
-
-	// Set count to 1 ping
-	pinger.Count = 1
-
-	// Run ping
-	err = pinger.Run()
-	if err != nil {
-		errMsg := fmt.Sprintf("ping failed: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	stats := pinger.Statistics()
-
-	// Check if we received any packets
-	if stats.PacketsRecv == 0 {
-		errMsg := "no response received"
-		return CheckResult{
-			Status:       "failure",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Success - convert RTT to milliseconds
-	latencyMs := stats.AvgRtt.Milliseconds()
-
-	return CheckResult{
-		Status:    "success",
-		LatencyMs: &latencyMs,
-	}
 }
 
 // AgentChecker implements Checker for agent monitors

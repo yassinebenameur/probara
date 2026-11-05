@@ -272,6 +272,12 @@ services:
       AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       SIP_LOCALHOST_AS_HOST_GATEWAY: "true"
+      # Ping socket mode; unprivileged needs the sysctl below (Helm: worker.ping).
+      WORKER_PING_MODE: "unprivileged"
+    # Lets every group open unprivileged ICMP ("ping") sockets. Docker sets
+    # this by default since 20.10; it is explicit so older engines match Helm.
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
     ports:
       - "9092:9092"
     volumes:
@@ -320,6 +326,8 @@ services:
   #     NATS_CONSUMER_NAME: "worker"
   #     WORKER_LOCATION_ID: "<location-uuid-from-the-locations-page>"
   #     WORKER_CONCURRENCY: "10"
+  #   sysctls:
+  #     net.ipv4.ping_group_range: "0 2147483647"
   #   depends_on:
   #     nats:
   #       condition: service_healthy
