@@ -210,7 +210,7 @@ func buildEvent(routingKey, dedupKey, action string, m present.Message) event {
 		summary += " — " + m.Summary
 	}
 	ev.Payload = &payload{
-		Summary:       truncate(summary, maxSummary),
+		Summary:       plugin.Truncate(summary, maxSummary),
 		Source:        m.MonitorName,
 		Severity:      m.Severity(),
 		Timestamp:     m.Timestamp.UTC().Format(time.RFC3339),
@@ -224,14 +224,6 @@ func buildEvent(routingKey, dedupKey, action string, m present.Message) event {
 		ev.Links = []link{{Href: m.ActionURL, Text: m.ActionLabel}}
 	}
 	return ev
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "…"
 }
 
 func parseConfig(raw json.RawMessage) (Config, error) {

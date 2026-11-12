@@ -125,7 +125,7 @@ func buildBlockKit(m present.Message) slackPayload {
 	header := fmt.Sprintf("%s %s", emojiFor(m.Tone), m.Title)
 
 	blocks := []slackBlock{
-		{Type: "header", Text: &slackText{Type: "plain_text", Text: truncate(header, maxHeaderLen)}},
+		{Type: "header", Text: &slackText{Type: "plain_text", Text: plugin.Truncate(header, maxHeaderLen)}},
 		{Type: "section", Text: &slackText{Type: "mrkdwn", Text: escapeTruncate(m.Summary, maxSectionLen)}},
 	}
 
@@ -204,14 +204,6 @@ func escapeTruncate(s string, n int) string {
 		used += w
 	}
 	return b.String() + "…"
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "…"
 }
 
 func parseConfig(raw json.RawMessage) (Config, error) {
