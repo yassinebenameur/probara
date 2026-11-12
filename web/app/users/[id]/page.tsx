@@ -16,6 +16,7 @@ import { getTenants, getUser, listOidcGroupMappings, updateUser } from '@/lib/ap
 import { formatDateTime } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import type { AdminUser, MembershipInput, PlatformRole, Tenant } from '@/lib/types';
+import { errorMessage } from '@/lib/errors';
 
 export default function EditUserPage() {
   const router = useRouter();
@@ -57,8 +58,8 @@ export default function EditUserPage() {
           (data.memberships || []).map((m) => ({ tenant_id: m.tenant_id, role: m.role }))
         );
         setTenants(tenantsResponse.items || []);
-      } catch (err: any) {
-        setError(err.message || 'Failed to load user');
+      } catch (err) {
+        setError(errorMessage(err, 'Failed to load user'));
       } finally {
         setLoading(false);
       }
@@ -87,8 +88,8 @@ export default function EditUserPage() {
       );
       setPassword('');
       showToast('User updated successfully', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to update user', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to update user'), 'error');
     } finally {
       setSaving(false);
     }

@@ -794,12 +794,22 @@ or imported groups come back empty. Any other path that creates groups through
   code) for JSON error bodies; show failures with `errorMessage(err,
   fallback)` and branch on `errorCode(err)`. Never throw a plain object from
   the client, and don't write another message-extracting helper.
+- **Client layout and shared plumbing**: API calls live per domain in
+  `lib/api/` (request plumbing in `core.ts`, query strings via `withQuery`)
+  and wire types in `lib/types/`; `lib/api.ts` and `lib/types.ts` are
+  barrels, so add to the domain file and never `fetch('/api/…')` from a
+  component. A mount-time fetch is `lib/useAsyncData.ts` (`useLiveRefresh`
+  when it must stay fresh), paging is `components/ui/Pagination.tsx`,
+  copy-to-clipboard is `lib/useClipboard.ts`, a form's config "Test" is
+  `components/monitors/useConfigTest.ts`, and the route-handler proxies
+  share `lib/api-proxy.ts`. `any` is a lint error
+  (`@typescript-eslint/no-explicit-any`); a `catch` binding stays untyped.
 - **`/monitors` deep links** (`?status=`, repeatable `?tag=`,
   `?routing=unrouted`, `?sort=status|name|success|latency|last_check` with
   `?dir=asc|desc`, defaults left out per `MONITOR_SORT_DEFAULT_DIR`) are
   parsed and written only by `parseMonitorListParams`/
   `formatMonitorListParams` in `lib/monitor-list.ts`; link to the filtered
-  list rather than adding page-local query handling. The list order is
+  list with `monitorsListHref` rather than a hand-written query string. The list order is
   `sortMonitorList`: groups and monitors sort together, a group ranking by
   its worst member under status. Tags match ANY selected tag
   (`matchesAnyTag`), and every dashboard endpoint's `tag` scope is the same

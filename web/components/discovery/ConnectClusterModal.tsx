@@ -19,6 +19,7 @@ import {
 } from '@/lib/discovery';
 import { errorMessage } from '@/lib/errors';
 import type { Location } from '@/lib/types';
+import { useClipboard } from '@/lib/useClipboard';
 
 // Per-viewer convenience only: the origin and image are not secrets and are
 // re-entered on every install otherwise. Storage can be unavailable.
@@ -211,15 +212,12 @@ export function Steps({ step, items = ['Cluster', 'Install collector'] }: { step
 }
 
 export function CommandBlock({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch { /* clipboard unavailable */ }
-  };
+  const { copied, copy } = useClipboard();
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-ui font-medium text-slate-300">{label}</span>
-        <Button variant="subtle" size="xs" icon={copied ? <Check strokeWidth={2} /> : <Copy strokeWidth={1.75} />} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</Button>
+        <Button variant="subtle" size="xs" icon={copied ? <Check strokeWidth={2} /> : <Copy strokeWidth={1.75} />} onClick={() => void copy(value)}>{copied ? 'Copied' : 'Copy'}</Button>
       </div>
       <pre className="glass-well overflow-x-auto whitespace-pre-wrap break-all px-3 py-2.5 font-mono text-xs text-slate-200">{value}</pre>
     </div>

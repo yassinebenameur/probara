@@ -8,6 +8,7 @@ import {
   parseMonitorListParams,
   sortMonitorList,
   sortMonitorsByName,
+  monitorsListHref,
 } from './monitor-list';
 import { getEffectiveMonitorStatus } from './monitor-utils';
 import type { CheckResult, Monitor, MonitorListResponse } from './types';
@@ -284,4 +285,11 @@ test('success, latency and last-check sorts follow the displayed values, missing
     names(sortMonitorList([monitors.member1, monitors.member3], { key: 'status', dir: 'asc' }, ctx)),
     ['Member three', 'Member one']
   );
+});
+
+test('monitorsListHref writes only the non-default filters', () => {
+  assert.equal(monitorsListHref({}), '/monitors');
+  assert.equal(monitorsListHref({ status: 'down' }), '/monitors?status=down');
+  assert.equal(monitorsListHref({ unroutedOnly: true }), '/monitors?routing=unrouted');
+  assert.equal(monitorsListHref({ status: 'down', tags: ['demo', 'team a'] }), '/monitors?status=down&tag=demo&tag=team+a');
 });

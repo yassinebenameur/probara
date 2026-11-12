@@ -38,7 +38,7 @@ export default function ConnectPage() {
       
       // Redirect to dashboard
       router.push('/');
-    } catch (err) {
+    } catch {
       setError('Failed to connect. Please check your API key and try again.');
       setLoading(false);
     }

@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback } from 'react';
 import { Copy } from 'lucide-react';
 import { getLocationDeployInfo } from '@/lib/api';
 import type { Location, LocationDeployInfo } from '@/lib/types';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Dialog from '@/components/ui/Dialog';
+import { useAsyncData } from '@/lib/useAsyncData';
+import { useClipboard } from '@/lib/useClipboard';
 
 interface LocationDeployModalProps {
   location: Location;
@@ -14,38 +16,13 @@ interface LocationDeployModalProps {
 }
 
 export function LocationDeployModal({ location, onClose }: LocationDeployModalProps) {
-  const [info, setInfo] = useState<LocationDeployInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [copiedField, setCopiedField] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError('');
-    getLocationDeployInfo(location.id)
-      .then((data) => {
-        if (!cancelled) setInfo(data);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load deploy instructions');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [location.id]);
-
-  const copyToClipboard = (value: string, field: string) => {
-    if (!value) return;
-    navigator.clipboard.writeText(value);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(''), 2000);
-  };
+  const loadInfo = useCallback(() => getLocationDeployInfo(location.id), [location.id]);
+  const { data: info, loading, error } = useAsyncData<LocationDeployInfo | null>(
+    loadInfo,
+    null,
+    'Failed to load deploy instructions'
+  );
+  const clipboard = useClipboard();
 
   const envEntries = info ? Object.entries(info.env) : [];
 
@@ -75,9 +52,9 @@ export function LocationDeployModal({ location, onClose }: LocationDeployModalPr
                 variant="subtle"
                 size="xs"
                 icon={<Copy strokeWidth={1.75} />}
-                onClick={() => copyToClipboard(info.docker_run_command, 'run')}
+                onClick={() => void clipboard.copy(info.docker_run_command, 'run')}
               >
-                {copiedField === 'run' ? 'Copied' : 'Copy'}
+                {clipboard.copiedKey === 'run' ? 'Copied' : 'Copy'}
               </Button>
             </div>
             <pre className="glass-well overflow-x-auto whitespace-pre-wrap break-all px-3 py-2.5 font-mono text-xs text-slate-200">
@@ -92,9 +69,9 @@ export function LocationDeployModal({ location, onClose }: LocationDeployModalPr
                 variant="subtle"
                 size="xs"
                 icon={<Copy strokeWidth={1.75} />}
-                onClick={() => copyToClipboard(info.docker_compose_yaml, 'compose')}
+                onClick={() => void clipboard.copy(info.docker_compose_yaml, 'compose')}
               >
-                {copiedField === 'compose' ? 'Copied' : 'Copy'}
+                {clipboard.copiedKey === 'compose' ? 'Copied' : 'Copy'}
               </Button>
             </div>
             <pre className="glass-well overflow-x-auto px-3 py-2.5 font-mono text-xs text-slate-200">

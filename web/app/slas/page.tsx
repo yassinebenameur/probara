@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Pencil, Plus, Target, Trash2 } from 'lucide-react';
 import { deleteSla, getSlas } from '@/lib/api';
@@ -23,6 +23,8 @@ import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { SlaFormModal } from '@/components/slas/SlaFormModal';
 import { BudgetBar, SlaStatusPill } from '@/components/slas/SlaVisuals';
+import { errorMessage } from '@/lib/errors';
+import { useAsyncData } from '@/lib/useAsyncData';
 
 // Below this much tracked time a period's availability is thin evidence; say
 // so next to the figure so a near-empty period never reads as an outage.
@@ -45,31 +47,17 @@ const SORT_VALUE: Record<SlaSortKey, (sla: Sla) => SortValue> = {
 export default function SlasPage() {
   const { showToast } = useToast();
   const canWrite = useCanWrite();
-  const [slas, setSlas] = useState<Sla[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { data: slas, setData: setSlas, loading, error, reload: load } = useAsyncData<Sla[]>(
+    getSlas,
+    [],
+    'Failed to load SLAs'
+  );
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Sla | undefined>(undefined);
   const [pendingDelete, setPendingDelete] = useState<Sla | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [sort, setSort] = useUrlSort(SORT_KEYS, DEFAULT_SORT, DEFAULT_DIR);
   const sorted = useMemo(() => sortRows(slas, SORT_VALUE[sort.key], sort.dir, (sla) => sla.name), [slas, sort]);
-
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      setSlas(await getSlas());
-    } catch (err: any) {
-      setError(err.message || 'Failed to load SLAs');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   const handleDelete = async () => {
     if (!pendingDelete) return;
@@ -79,8 +67,8 @@ export default function SlasPage() {
       setSlas((prev) => prev.filter((s) => s.id !== pendingDelete.id));
       showToast('SLA deleted', 'success');
       setPendingDelete(null);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete SLA', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete SLA'), 'error');
     } finally {
       setDeleting(false);
     }

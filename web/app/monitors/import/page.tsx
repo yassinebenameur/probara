@@ -23,6 +23,7 @@ import type {
   ImportSkippedRow
 } from '@/lib/types';
 import { IMPORT_SCHEMA_PORTABLE, IMPORT_SCHEMA_UPTIME_KUMA } from '@/lib/types';
+import { SELECTED_SEGMENT } from '@/components/ui/roving';
 
 // Recognized schemas arrive pre-translated: every field is already mapped, so
 // the mapping step is informational rather than something to fill in.
@@ -118,7 +119,7 @@ function StepIndicator({ currentStep }: { currentStep: WizardStep }) {
             index < currentIndex
               ? 'bg-emerald-500/[0.14] text-emerald-300'
               : index === currentIndex
-              ? 'bg-cyan-500 text-onaccent'
+              ? SELECTED_SEGMENT
               : 'bg-well-hover text-slate-500'
           }`}>
             {index < currentIndex ? (

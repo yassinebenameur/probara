@@ -53,7 +53,7 @@ import {
   problemMonitorStatus,
   sortNeedsAttention,
 } from '@/lib/dashboard-view-model';
-import { formatLatency, formatUptime, RANGES, rangeStart } from '@/lib/format';
+import { formatLatency, formatUptime, RANGES, rangeStart, formatPercent } from '@/lib/format';
 import { shortFailureReason } from '@/lib/monitor-utils';
 import {
   MONITOR_STATUS_DOT,
@@ -68,7 +68,7 @@ import { flashStyle, useRowFlash } from '@/lib/useRowFlash';
 import { useDocumentTitle } from '@/lib/useDocumentTitle';
 import CheckTrace from '@/components/monitors/CheckTrace';
 import { getTagColor } from '@/components/monitors/TagPill';
-import { CHART_GRID, LATENCY_COLOR } from '@/components/monitors/metric-chart';
+import { CHART_AXIS_TICK, CHART_GRID, CHART_TOOLTIP_CLASS, LATENCY_COLOR } from '@/components/monitors/metric-chart';
 import ServiceGroupsPanel from '@/components/dashboard/ServiceGroupsPanel';
 import { NotificationNudge } from '@/components/layout/NotificationNudge';
 
@@ -312,25 +312,26 @@ function ProblemMonitorItem({
 
 // ─── Chart Tooltip ─────────────────────────────────────────────────────────────
 
-const TOOLTIP_STYLE: React.CSSProperties = {
-  background: 'var(--glass-fill-strong)',
-  border: '1px solid var(--glass-edge-strong)',
-  borderRadius: 12,
-  boxShadow: 'var(--glass-shadow-overlay)',
-  color: 'var(--text-primary)',
-};
-
-const AXIS_TICK = { fill: 'var(--text-muted)', fontSize: 11 };
-
 const UPTIME_TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 25];
 
-function CustomTooltip({ active, payload, label, uptimeColor }: any) {
+// Recharts clones this element and fills in active/payload/label.
+function CustomTooltip({
+  active,
+  payload,
+  label,
+  uptimeColor,
+}: {
+  active?: boolean;
+  payload?: Array<{ name?: string; value?: number | string | null }>;
+  label?: string;
+  uptimeColor: string;
+}) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="px-3.5 py-2.5" style={TOOLTIP_STYLE}>
+    <div className={CHART_TOOLTIP_CLASS}>
       <p className="mb-1.5 text-xs font-medium text-slate-400">{label}</p>
       <div className="space-y-1">
-        {payload.map((entry: any, idx: number) => {
+        {payload.map((entry, idx) => {
           const isLatency = entry.name === 'responseTime';
           return (
             <div key={idx} className="flex items-center justify-between gap-4">
@@ -576,7 +577,7 @@ function UptimeResponseChart({
                   </linearGradient>
                 </defs>
                 <CartesianGrid {...CHART_GRID} />
-                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={AXIS_TICK} minTickGap={24} />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={CHART_AXIS_TICK} minTickGap={24} />
                 <YAxis
                   yAxisId="uptime"
                   domain={uptimeAxis.domain}
@@ -585,8 +586,8 @@ function UptimeResponseChart({
                   width={58}
                   axisLine={false}
                   tickLine={false}
-                  tick={AXIS_TICK}
-                  tickFormatter={(v) => `${Number(v).toFixed(1).replace(/\.0$/, '')}%`}
+                  tick={CHART_AXIS_TICK}
+                  tickFormatter={(v) => formatPercent(Number(v), { trim: true })}
                 />
                 <YAxis
                   yAxisId="latency"
@@ -595,7 +596,7 @@ function UptimeResponseChart({
                   width={60}
                   axisLine={false}
                   tickLine={false}
-                  tick={AXIS_TICK}
+                  tick={CHART_AXIS_TICK}
                   tickFormatter={(v) => formatLatency(Number(v))}
                 />
                 <Tooltip

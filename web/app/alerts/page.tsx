@@ -26,6 +26,7 @@ import {
 import AlertBulkBar from '@/components/alerts/AlertBulkBar';
 import { useAlertSelection } from '@/components/alerts/useAlertSelection';
 import Button from '@/components/ui/Button';
+import Pagination from '@/components/ui/Pagination';
 import Callout from '@/components/ui/Callout';
 import ChipGroup from '@/components/ui/ChipGroup';
 import FilterChip from '@/components/ui/FilterChip';
@@ -36,6 +37,7 @@ import Select from '@/components/ui/Select';
 import { readSortParams, writeSortParams, type SortState } from '@/lib/sort';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { useRowFlash } from '@/lib/useRowFlash';
+import { errorMessage } from '@/lib/errors';
 
 // 'open' (active + acknowledged) is the default: the queue an operator works.
 type StatusFilter = AlertStatusFilter;
@@ -222,9 +224,9 @@ function AlertsView() {
         setRows(items);
         setError('');
         return true;
-      } catch (err: any) {
+      } catch (err) {
         if (request !== requestRef.current) return true;
-        if (!silent) setError(err.message || 'Failed to load alerts');
+        if (!silent) setError(errorMessage(err, 'Failed to load alerts'));
         return false;
       }
     },
@@ -476,29 +478,7 @@ function AlertsView() {
 
       <AlertBulkBar selected={selectedAlerts} onApplied={handleBulkApplied} onClear={selection.clear} />
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setPage(p => Math.max(1, p - 1))}
-            disabled={page === 1}
-          >
-            Previous
-          </Button>
-          <span className="text-ui tabular-nums text-slate-400">
-            Page {page} of {totalPages}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-          >
-            Next
-          </Button>
-        </div>
-      )}
+      <Pagination page={page} totalPages={totalPages} onPageChange={(next) => setPage(() => next)} />
     </Page>
   );
 }

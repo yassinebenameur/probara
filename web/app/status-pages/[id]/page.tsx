@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useParams } from 'next/navigation';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { ArrowUpRight, Paintbrush } from 'lucide-react';
 import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
@@ -14,35 +14,23 @@ import Callout from '@/components/ui/Callout';
 import { useToast } from '@/components/ui/ToastProvider';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import { RelativeTime } from '@/components/ui/RelativeTime';
+import { errorMessage } from '@/lib/errors';
+import { useAsyncData } from '@/lib/useAsyncData';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
   const params = useParams();
   const id = params.id as string;
 
-  const [statusPage, setStatusPage] = useState<StatusPage | null>(null);
+  const loadStatusPage = useCallback(() => getStatusPage(id), [id]);
+  const { data: statusPage, setData: setStatusPage, loading, error } = useAsyncData<StatusPage | null>(
+    loadStatusPage,
+    null,
+    'Failed to load status page'
+  );
   useDocumentTitle(statusPage?.title);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>('');
   const { showToast } = useToast();
-
-  const loadStatusPage = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const data = await getStatusPage(id);
-      setStatusPage(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load status page');
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    loadStatusPage();
-  }, [loadStatusPage]);
 
   const handleSubmit = async (data: UpdateStatusPageRequest) => {
     try {
@@ -50,8 +38,8 @@ export default function EditStatusPagePage() {
       const updated = await updateStatusPage(id, data);
       setStatusPage(updated);
       showToast('Status page updated', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to update', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to update'), 'error');
     } finally {
       setSaving(false);
     }

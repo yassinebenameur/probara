@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Check, Trash2 } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Pill from '@/components/ui/Pill';
 import Button from '@/components/ui/Button';
@@ -280,15 +280,13 @@ export function OidcGroupMappingsPanel() {
                       </td>
                       <td className="py-3 text-right">
                         {confirmDeleteId === m.id ? (
-                          <Button
-                            variant="subtle"
-                            size="xs"
+                          <IconButton
+                            icon={<Check strokeWidth={2} />}
+                            label={`Confirm deleting mapping for ${m.group_name}`}
                             onClick={() => handleDelete(m.id)}
-                            className="!text-rose-300 hover:!bg-rose-500/10"
-                            aria-label={`Confirm deleting mapping for ${m.group_name}`}
-                          >
-                            Delete?
-                          </Button>
+                            danger
+                            className="!text-rose-300"
+                          />
                         ) : (
                           <IconButton
                             icon={<Trash2 strokeWidth={1.75} />}

@@ -44,6 +44,7 @@ import { strictestTarget, type Sla } from '@/lib/sla';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 import { formatBytes } from '@/lib/metrics';
 import { latestSIPMetrics, sipFacts, sipMediaOutdatedWorkersHint } from '@/lib/sip-metrics';
+import { errorMessage } from '@/lib/errors';
 
 const TAB_IDS = ['overview', 'history', 'settings', 'json'] as const;
 
@@ -373,8 +374,8 @@ export default function EditMonitorPage() {
       setError('');
       const data = await getMonitor(id);
       setMonitor(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load monitor');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to load monitor'));
     } finally {
       setLoading(false);
     }
@@ -418,7 +419,7 @@ export default function EditMonitorPage() {
         resultsRef.current = nextPayload;
         setResults(nextPayload);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to load monitor results:', err);
     } finally {
       if (!opts?.silent) {
@@ -433,7 +434,7 @@ export default function EditMonitorPage() {
       const cutoffISO = new Date(Date.now() - HISTORY_WINDOW_MS).toISOString();
       const data = await getMonitorResults(id, { since: cutoffISO });
       setHistoryResults(data);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to load monitor history results:', err);
       setHistoryResults(null);
     } finally {
@@ -589,8 +590,8 @@ export default function EditMonitorPage() {
       setMonitor(updated);
       showToast('Monitor updated successfully', 'success');
       loadResults();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to update monitor', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to update monitor'), 'error');
     } finally {
       setSaving(false);
     }
@@ -602,8 +603,8 @@ export default function EditMonitorPage() {
       await deleteMonitor(id);
       showToast('Monitor deleted', 'success');
       setTimeout(() => router.push('/monitors'), 1000);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete'), 'error');
       setDeleting(false);
     }
   };
@@ -657,8 +658,8 @@ export default function EditMonitorPage() {
         message: 'It will appear under Latest checks when the worker reports.',
         type: 'info',
       });
-    } catch (err: any) {
-      settle({ title: 'Check not run', message: err.message || 'Failed to run the check', type: 'error' });
+    } catch (err) {
+      settle({ title: 'Check not run', message: errorMessage(err, 'Failed to run the check'), type: 'error' });
     } finally {
       if (mountedRef.current) setRunningCheck(false);
     }
@@ -674,8 +675,8 @@ export default function EditMonitorPage() {
       // response may not embed.
       setMonitor((prev) => (prev ? { ...prev, enabled: updated.enabled ?? next } : updated));
       showToast(next ? 'Monitor resumed' : 'Monitor paused', 'success');
-    } catch (err: any) {
-      showToast(err.message || `Failed to ${next ? 'resume' : 'pause'} the monitor`, 'error');
+    } catch (err) {
+      showToast(errorMessage(err, `Failed to ${next ? 'resume' : 'pause'} the monitor`), 'error');
     } finally {
       setTogglingEnabled(false);
     }
@@ -714,8 +715,8 @@ export default function EditMonitorPage() {
           : 'Monitor history cleared', 'success');
       setIsHistoryResetModalOpen(false);
       setHistoryResetConfirmation('');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to clear monitor history', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to clear monitor history'), 'error');
     } finally {
       setClearingHistory(false);
     }

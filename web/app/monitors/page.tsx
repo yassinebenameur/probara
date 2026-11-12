@@ -63,6 +63,7 @@ import {
   sortMonitorsByName,
 } from '@/lib/monitor-list';
 import { fetchResultsBatches, resultsBatchError } from '@/lib/monitor-results';
+import { errorMessage } from '@/lib/errors';
 import { useSyntheticScreenshot } from '@/lib/useSyntheticScreenshot';
 import { useCanWrite, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import { isSipCall } from '@/lib/sip-config';
@@ -912,8 +913,8 @@ function DetailPanel({
 }) {
 
   const getSyntheticBrowserScreenshotPath = (result?: CheckResult): string | null => {
-    const md = result?.metrics_data as any;
-    return md?.synthetic_browser?.artifacts?.screenshot_path || null;
+    const metrics = result?.metrics_data as { synthetic_browser?: { artifacts?: { screenshot_path?: string } } } | undefined;
+    return metrics?.synthetic_browser?.artifacts?.screenshot_path || null;
   };
 
   const latestSyntheticBrowserResult = monitor?.type === 'synthetic_browser'
@@ -1593,8 +1594,8 @@ export default function MonitorsPage() {
       link.remove();
       window.URL.revokeObjectURL(url);
       showToast('Monitor export downloaded', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to export monitors', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to export monitors'), 'error');
     } finally {
       setExporting(false);
     }
@@ -1617,8 +1618,8 @@ export default function MonitorsPage() {
       }
       showToast('Monitor deleted', 'success');
       setPendingDelete(null);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete'), 'error');
     } finally {
       setDeleting(false);
     }
@@ -1634,8 +1635,8 @@ export default function MonitorsPage() {
         group: `toggle-${updated.id}`,
         action: { label: 'Undo', onClick: () => void handleToggleEnabled(updated) },
       });
-    } catch (err: any) {
-      showToast(err.message || 'Failed to update monitor', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to update monitor'), 'error');
     }
   };
 
@@ -1645,8 +1646,8 @@ export default function MonitorsPage() {
       const updated: Monitor = { ...monitor, in_maintenance: true, maintenance_until: window.ends_at };
       setMonitors((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       showToast(`Alerts snoozed until ${formatDateTime(window.ends_at)}`, 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to snooze monitor', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to snooze monitor'), 'error');
     }
   };
 
@@ -1850,7 +1851,6 @@ export default function MonitorsPage() {
     .sort((a, b) => a.name.localeCompare(b.name));
   const allFilteredSelected = filteredMonitors.length > 0 && filteredMonitors.every((m) => selectedMonitorIds.has(m.id));
   const someFilteredSelected = !allFilteredSelected && filteredMonitors.some((m) => selectedMonitorIds.has(m.id));
-  const canDeleteSelected = selectedMonitorIds.size > 0;
   const canCreateGroup = selectedMonitorIds.size > 0 && groupNameInput.trim().length > 0;
   const canMoveToGroup = targetGroupId.length > 0 && selectedMonitors.length > 0;
 
@@ -1887,8 +1887,8 @@ export default function MonitorsPage() {
       setSelectedMonitorIds(new Set());
       showToast('Selected monitors deleted', 'success');
       setConfirmBulkDelete(false);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete selected monitors', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete selected monitors'), 'error');
     } finally {
       setDeleting(false);
     }
@@ -1918,8 +1918,8 @@ export default function MonitorsPage() {
       setSelectedMonitorIds(new Set());
       await reloadAll();
       showToast('Group created', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create group', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to create group'), 'error');
     }
   };
 
@@ -2011,8 +2011,8 @@ export default function MonitorsPage() {
       showToast(isNoGroupDestination
           ? `Removed ${selectedMonitors.length} item(s) from all groups`
           : `Moved ${selectedMonitors.length} item(s) to ${targetGroup?.name}`, 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to move monitors', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to move monitors'), 'error');
     }
   };
 

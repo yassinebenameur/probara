@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getMonitorResults, runMonitorNow } from '@/lib/api';
 import { CheckResult, MonitorType } from '@/lib/types';
 import { SyntheticTestPhase, SyntheticTestState } from '@/lib/monitor-form/synthetic';
+import { errorMessage } from '@/lib/errors';
 
 const MAX_POLL_ATTEMPTS = 30;
 const POLL_INTERVAL_MS = 2000;
@@ -125,11 +126,11 @@ export function useSyntheticLiveTest({
         result: matchedResult,
         message: matchedResult.error_message || (finalPhase === 'success' ? 'Run completed successfully.' : 'Run failed.'),
       });
-    } catch (err: any) {
+    } catch (err) {
       if (stale()) return;
       setState({
         phase: 'error',
-        message: err?.message || 'Failed to run monitor on demand.',
+        message: errorMessage(err, 'Failed to run monitor on demand.'),
       });
     }
   };

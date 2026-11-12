@@ -27,6 +27,7 @@ import Callout from '@/components/ui/Callout';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import EmptyState from '@/components/ui/EmptyState';
 import RangePicker from '@/components/ui/RangePicker';
+import { formatPercent } from '@/lib/format';
 import {
   ChartRow,
   ChartSeries,
@@ -157,7 +158,7 @@ function CircularProgress({
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
           <span className="text-lg font-semibold tabular-nums text-white">
-            {displayValue ?? `${normalizedValue.toFixed(0)}%`}
+            {displayValue ?? formatPercent(normalizedValue, { digits: 0 })}
           </span>
         </div>
       </div>
@@ -464,8 +465,8 @@ export default function AgentMetricsView({
   const staleAfterSec = Math.max(3 * safeInterval, 120);
   const isStale = timeSinceReportSec > staleAfterSec;
 
-  const percentTick = (value: number) => `${value.toFixed(0)}%`;
-  const percentValue = (value: number) => `${value.toFixed(1)}%`;
+  const percentTick = (value: number) => formatPercent(value, { digits: 0 });
+  const percentValue = (value: number) => formatPercent(value);
 
   // Threshold ReferenceLines from the monitor's metric_rules: rules whose
   // metric matches the panel and whose filters fit the panel's series.
@@ -548,7 +549,7 @@ export default function AgentMetricsView({
             label={coreCount !== null && coreCount > 0 ? `CPU (${Math.round(coreCount)} cores)` : 'CPU'}
             tone={cpuTone}
             caption={ruleCaption('system.cpu.utilization', cpuSeries?.attributes, rules)}
-            displayValue={cpuAvailable ? `${cpuPercent.toFixed(0)}%` : '—'}
+            displayValue={cpuAvailable ? formatPercent(cpuPercent, { digits: 0 }) : '—'}
           />
           <CircularProgress
             value={memoryPercent}
@@ -625,7 +626,7 @@ export default function AgentMetricsView({
           // One column while the overview has its side column; two from 3xl,
           // where the capped detail page leaves ~1200px for the main column.
           <div className="grid gap-4 3xl:grid-cols-2 3xl:[&>*:last-child:nth-child(odd)]:col-span-2">
-            <ChartTile title="CPU usage" headline={cpuAvailable ? `${cpuPercent.toFixed(1)}%` : '—'}>
+            <ChartTile title="CPU usage" headline={cpuAvailable ? formatPercent(cpuPercent) : '—'}>
               <MetricChart
                 data={chartRows}
                 series={[{ key: 'cpu', name: 'CPU', color: SERIES_COLORS[0] }]}
@@ -642,7 +643,7 @@ export default function AgentMetricsView({
               title="Memory & swap"
               headline={
                 memoryAvailable
-                  ? `${memoryPercent.toFixed(1)}%${swapAvailable ? `, swap ${swapPercent.toFixed(1)}%` : ''}`
+                  ? `${formatPercent(memoryPercent)}${swapAvailable ? `, swap ${formatPercent(swapPercent)}` : ''}`
                   : '—'
               }
               legend={swapAvailable ? memSwapSeries : undefined}
@@ -661,7 +662,7 @@ export default function AgentMetricsView({
 
             <ChartTile
               title="Disk usage"
-              headline={worstMountPercent > 0 ? `${worstMountPercent.toFixed(1)}%` : '—'}
+              headline={worstMountPercent > 0 ? formatPercent(worstMountPercent) : '—'}
               legend={mountSeries.map((mount) => ({ key: mount.key, name: mount.label, color: mount.color }))}
             >
               <MetricChart

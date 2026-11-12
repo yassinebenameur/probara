@@ -2,12 +2,12 @@
 
 import { Monitor, MonitorAnalyticsResponse } from '@/lib/types';
 import { formatDateTime, formatDateTimeFull, RANGES } from '@/lib/format';
-import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import { DetailList, DetailRow } from './MonitorFactsCard';
 import { ASIDE_STACK, DETAIL_COLUMNS } from './MonitorAnalyticsOverview';
+import { useClipboard } from '@/lib/useClipboard';
 
 interface MonitorDetailJsonProps {
   monitor: Monitor;
@@ -16,20 +16,10 @@ interface MonitorDetailJsonProps {
 }
 
 export default function MonitorDetailJson({ monitor, analytics }: MonitorDetailJsonProps) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    const jsonString = JSON.stringify(monitor, null, 2);
-    try {
-      await navigator.clipboard.writeText(jsonString);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy JSON:', err);
-    }
-  };
+  const { copied, copy } = useClipboard();
 
   const jsonString = JSON.stringify(monitor, null, 2);
+  const handleCopy = () => void copy(jsonString);
 
   // Where the Overview's numbers come from: pipeline detail that has no
   // place next to the headline but matters when a number looks wrong.

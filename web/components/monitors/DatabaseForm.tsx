@@ -8,7 +8,7 @@ import {
   DBQueryValueOp,
   Location,
 } from '@/lib/types';
-import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
+import { useConfigTest } from './useConfigTest';
 import {
   ConnectionMode,
   DB_TYPE_META,
@@ -137,12 +137,6 @@ function SecretInput({
   );
 }
 
-type TestState =
-  | { phase: 'idle' }
-  | { phase: 'running' }
-  | { phase: 'done'; result: TestMonitorConfigResponse }
-  | { phase: 'request_failed'; message: string };
-
 interface DatabaseFormProps {
   type: DatabaseMonitorType;
   monitor?: Monitor;
@@ -196,12 +190,14 @@ export default function DatabaseForm({
     formData.collect_cpu,
   ].filter(Boolean).length;
   const [clusterChecksOpen, setClusterChecksOpen] = useState(clusterChecksEnabled > 0);
-  const [test, setTest] = useState<TestState>({ phase: 'idle' });
+  const configTest = useConfigTest({
+    monitorId: isEditMode && monitor ? monitor.id : undefined,
+    locationIds: formData.location_ids,
+  });
+  const test = configTest.state;
   // List shared by the Locations section (via onLocationsLoaded) so the
   // test-from picker can resolve location names.
   const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
-  // '' = default fleet.
-  const [testLocationId, setTestLocationId] = useState('');
 
   const usingConnString = formData.connection_mode === 'connection_string';
   // PEM material only makes sense when the connection can use TLS.
@@ -300,22 +296,11 @@ export default function DatabaseForm({
     setErrors(connectionErrors);
     if (Object.keys(connectionErrors).length > 0) return;
 
-    // Ignore a stale pick if the location was deselected since.
-    const chosenLocationId = formData.location_ids.includes(testLocationId) ? testLocationId : '';
-
-    setTest({ phase: 'running' });
-    try {
-      const result = await testMonitorConfig({
-        type,
-        config: buildConfig(),
-        timeout_seconds: Math.min(formData.timeout_seconds || 10, 30),
-        ...(isEditMode && monitor ? { monitor_id: monitor.id } : {}),
-        ...(chosenLocationId ? { location_id: chosenLocationId } : {}),
-      });
-      setTest({ phase: 'done', result });
-    } catch (err) {
-      setTest({ phase: 'request_failed', message: err instanceof Error ? err.message : 'Test request failed' });
-    }
+    await configTest.run({
+      type,
+      config: buildConfig(),
+      timeout_seconds: Math.min(formData.timeout_seconds || 10, 30),
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -759,8 +744,8 @@ export default function DatabaseForm({
           {formData.location_ids.length > 0 && (
             <select
               aria-label="Test from location"
-              value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
-              onChange={(e) => setTestLocationId(e.target.value)}
+              value={configTest.locationId}
+              onChange={(e) => configTest.setLocationId(e.target.value)}
               className="input input-sm !w-auto"
             >
               <option value="">Test from: default fleet</option>

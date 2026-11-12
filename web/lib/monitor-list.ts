@@ -133,6 +133,12 @@ export function formatMonitorListParams(
   return next.toString();
 }
 
+/** A /monitors deep link: the list's defaults plus `overrides`. Never hand-write the query string. */
+export function monitorsListHref(overrides: Partial<MonitorListParams>): string {
+  const query = formatMonitorListParams({ ...parseMonitorListParams(''), ...overrides });
+  return query ? `/monitors?${query}` : '/monitors';
+}
+
 // ── List order ───────────────────────────────────────────────────────────
 //
 // One sort over groups and standalone monitors together, for every key and

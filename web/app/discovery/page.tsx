@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpDown, Download, KeyRound, Pencil, Plus, Radar, RefreshCw, Search, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import Pagination from '@/components/ui/Pagination';
 import IconButton from '@/components/ui/IconButton';
 import LiveStatus from '@/components/ui/LiveStatus';
 import Page from '@/components/ui/Page';
@@ -421,13 +422,13 @@ export default function DiscoveryPage() {
                     rowFlash={(service) => ({ className: rowFlash.flashClass(service.id), style: flashStyle(coverageTone(service)) })}
                   />
                   {coverage.total > (coverage.page_size || DISCOVERY_PAGE_SIZE) && (
-                    <div className="flex items-center justify-between gap-3 border-t border-divider px-4 py-3 text-xs text-slate-500">
-                      <span className="tabular-nums">Page {page} of {pageCount} ({pluralize(coverage.total, 'service')})</span>
-                      <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="xs" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Button>
-                        <Button variant="ghost" size="xs" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next</Button>
-                      </div>
-                    </div>
+                    <Pagination
+                      variant="footer"
+                      page={page}
+                      totalPages={pageCount}
+                      onPageChange={setPage}
+                      summary={`Page ${page} of ${pageCount} (${pluralize(coverage.total, 'service')})`}
+                    />
                   )}
                 </div>
               )}

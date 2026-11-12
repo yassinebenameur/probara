@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, PhoneCall, PlugZap, XCircle } from 'lucide-react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMediaExpect, SIPMonitorConfig, Location } from '@/lib/types';
-import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
+import { useConfigTest } from './useConfigTest';
 import {
   buildSipConfig,
   isSipCall,
@@ -45,12 +45,6 @@ interface SipFormProps {
   onCancel?: () => void;
   loading?: boolean;
 }
-
-type TestState =
-  | { phase: 'idle' }
-  | { phase: 'running' }
-  | { phase: 'done'; result: TestMonitorConfigResponse }
-  | { phase: 'request_failed'; message: string };
 
 // Errors cleared by edits to another field (useClearErrorsOnEdit): the call
 // schedule bounds follow the method and the hold, the hold follows the
@@ -180,12 +174,15 @@ export default function SipForm({
   const callLocked = isCall && !isTenantAdmin;
   const showCallLockedNotice = callLocked && !userLoading;
 
-  const [test, setTest] = useState<TestState>({ phase: 'idle' });
+  const configTest = useConfigTest({
+    monitorId: isEditMode && monitor ? monitor.id : undefined,
+    locationIds: formData.location_ids,
+  });
+  const test = configTest.state;
   const [confirmTestCall, setConfirmTestCall] = useState(false);
   // Shared by the Locations section (onLocationsLoaded) so the test-from
   // picker can name the monitor's locations. '' = default fleet.
   const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
-  const [testLocationId, setTestLocationId] = useState('');
   const canTest = isCall ? isTenantAdmin : !userLoading && (!isEditMode || canWrite);
 
   // One check per location per interval; the default fleet runs it once.
@@ -286,21 +283,11 @@ export default function SipForm({
 
   const runTest = async () => {
     setConfirmTestCall(false);
-    // Ignore a stale pick if the location was deselected since.
-    const chosenLocationId = formData.location_ids.includes(testLocationId) ? testLocationId : '';
-    setTest({ phase: 'running' });
-    try {
-      const result = await testMonitorConfig({
-        type: 'sip',
-        config: buildConfig(),
-        timeout_seconds: Math.min(formData.timeout_seconds || 10, isCall ? SIP_CALL_MAX_TIMEOUT_SECONDS : 30),
-        ...(isEditMode && monitor ? { monitor_id: monitor.id } : {}),
-        ...(chosenLocationId ? { location_id: chosenLocationId } : {}),
-      });
-      setTest({ phase: 'done', result });
-    } catch (err) {
-      setTest({ phase: 'request_failed', message: err instanceof Error ? err.message : 'Test request failed' });
-    }
+    await configTest.run({
+      type: 'sip',
+      config: buildConfig(),
+      timeout_seconds: Math.min(formData.timeout_seconds || 10, isCall ? SIP_CALL_MAX_TIMEOUT_SECONDS : 30),
+    });
   };
 
   const handleTest = () => {
@@ -604,8 +591,8 @@ export default function SipForm({
             {formData.location_ids.length > 0 && (
               <select
                 aria-label="Test from location"
-                value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
-                onChange={(e) => setTestLocationId(e.target.value)}
+                value={configTest.locationId}
+                onChange={(e) => configTest.setLocationId(e.target.value)}
                 className="input input-sm !w-auto"
               >
                 <option value="">Test from: default fleet</option>

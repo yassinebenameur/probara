@@ -1,81 +1,18 @@
 import { NextRequest } from 'next/server';
-
-const API_PROXY_TARGET = process.env.API_PROXY_TARGET || 'http://localhost:8080';
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-  'host',
-  'content-length',
-]);
+import {
+  badGateway,
+  buildTargetUrl,
+  copyHeaders,
+  copyResponseHeaders,
+  type ProxyRouteContext as RouteContext,
+} from '@/lib/api-proxy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type RouteContext = {
-  params: Promise<{ path: string[] }>;
-};
-
-function buildTargetUrl(requestUrl: string, path: string[]): string {
-  const incoming = new URL(requestUrl);
-  const targetPath = path.join('/');
-  const query = incoming.search || '';
-  return `${API_PROXY_TARGET}/api/${targetPath}${query}`;
-}
-
-function copyHeaders(requestHeaders: Headers): Headers {
-  const headers = new Headers();
-  requestHeaders.forEach((value, key) => {
-    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
-      headers.set(key, value);
-    }
-  });
-  return headers;
-}
-
-function copyResponseHeaders(upstream: Response): Headers {
-  const headers = new Headers();
-  upstream.headers.forEach((value, key) => {
-    const lower = key.toLowerCase();
-    if (lower === 'content-length' || lower === 'set-cookie') {
-      return;
-    }
-    headers.append(key, value);
-  });
-
-  // Preserve each cookie header independently. Collapsing them into one
-  // header can break parsing and cause immediate auth logout.
-  const getSetCookie = (upstream.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie;
-  let setCookies = typeof getSetCookie === 'function' ? getSetCookie.call(upstream.headers) : [];
-
-  // Fallback for environments where getSetCookie is unavailable.
-  if (setCookies.length === 0) {
-    const combined = upstream.headers.get('set-cookie');
-    if (combined) {
-      // Cookies emitted by this API use Max-Age (no Expires), so splitting
-      // on ", " between cookie name-value pairs is safe here.
-      setCookies = combined
-        .split(/,\s*(?=[^;,=\s]+=[^;,]+)/g)
-        .map((v) => v.trim())
-        .filter(Boolean);
-    }
-  }
-
-  for (const cookie of setCookies) {
-    headers.append('set-cookie', cookie);
-  }
-
-  return headers;
-}
-
 async function proxyRequest(req: NextRequest, ctx: RouteContext): Promise<Response> {
   const { path } = await ctx.params;
-  const targetUrl = buildTargetUrl(req.url, path);
+  const targetUrl = buildTargetUrl(req.url, 'api', path);
   const headers = copyHeaders(req.headers);
   // The API builds absolute URLs (MCP OAuth metadata and redirects) from
   // the origin the client used; the Host header is dropped above, so pass it
@@ -107,10 +44,7 @@ async function proxyRequest(req: NextRequest, ctx: RouteContext): Promise<Respon
       headers: responseHeaders,
     });
   } catch {
-    return Response.json(
-      { error: 'bad_gateway', message: 'Failed to reach API upstream' },
-      { status: 502 },
-    );
+    return badGateway();
   }
 }
 

@@ -24,6 +24,7 @@ import { deleteLocation, getLocations } from '@/lib/api';
 import { pluralize } from '@/lib/format';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
+import { errorMessage } from '@/lib/errors';
 
 const REFRESH_MS = 30_000;
 
@@ -122,9 +123,9 @@ export default function LocationsPage() {
       setLocations(response.items || []);
       setError('');
       return true;
-    } catch (err: any) {
+    } catch (err) {
       if (!silent || !initialLoadDone.current) {
-        setError(err.message || 'Failed to load locations');
+        setError(errorMessage(err, 'Failed to load locations'));
       }
       return false;
     } finally {
@@ -167,8 +168,8 @@ export default function LocationsPage() {
         'success'
       );
       setPendingDelete(null);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete location', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete location'), 'error');
     } finally {
       setDeleting(false);
     }

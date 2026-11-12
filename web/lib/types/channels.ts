@@ -7,7 +7,7 @@ export interface AlertChannel {
   tenant_id: string;
   name: string;
   type: AlertChannelType;
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -16,13 +16,13 @@ export interface AlertChannel {
 export interface CreateAlertChannelRequest {
   name: string;
   type: AlertChannelType;
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   is_active?: boolean;
 }
 
 export interface UpdateAlertChannelRequest {
   name?: string;
-  config?: Record<string, any>;
+  config?: Record<string, unknown>;
   is_active?: boolean;
 }
 

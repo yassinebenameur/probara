@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useParams } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useCallback, useState } from 'react';
 import { AlertChannel, CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
 import { getAlertChannel, updateAlertChannel } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
@@ -14,36 +14,23 @@ import Callout from '@/components/ui/Callout';
 import Page from '@/components/ui/Page';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
+import { errorMessage } from '@/lib/errors';
+import { useAsyncData } from '@/lib/useAsyncData';
 
 export default function EditAlertChannelPage() {
   const router = useRouter();
   const params = useParams();
   const id = params.id as string;
 
-  const [channel, setChannel] = useState<AlertChannel | null>(null);
-  const [loading, setLoading] = useState(true);
+  const loadChannel = useCallback(() => getAlertChannel(id), [id]);
+  const { data: channel, setData: setChannel, loading, error } = useAsyncData<AlertChannel | null>(
+    loadChannel,
+    null,
+    'Failed to load alert channel'
+  );
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>('');
   const { showToast } = useToast();
   useDocumentTitle(channel?.name);
-
-  useEffect(() => {
-    loadChannel();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
-  const loadChannel = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const data = await getAlertChannel(id);
-      setChannel(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load alert channel');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleSubmit = async (data: CreateAlertChannelRequest | UpdateAlertChannelRequest) => {
     const payload: UpdateAlertChannelRequest = {
@@ -57,8 +44,8 @@ export default function EditAlertChannelPage() {
       const updated = await updateAlertChannel(id, payload);
       setChannel(updated);
       showToast('Alert channel updated successfully', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to update alert channel', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to update alert channel'), 'error');
     } finally {
       setSaving(false);
     }

@@ -30,6 +30,8 @@ import { SETTINGS_COLUMNS, SETTINGS_COLUMNS_WIDE } from '@/components/settings/l
 import AlertChannelList from '@/components/alert-channels/AlertChannelList';
 import Tabs, { TabPanel, useUrlTab } from '@/components/ui/Tabs';
 import { RelativeTime } from '@/components/ui/RelativeTime';
+import { errorMessage } from '@/lib/errors';
+import { useClipboard } from '@/lib/useClipboard';
 
 const RETENTION_PRESETS: Array<{ label: string; value: string }> = [
   { label: 'Keep forever', value: '' },
@@ -113,7 +115,7 @@ export default function SettingsPage() {
   const [newKeyScope, setNewKeyScope] = useState<ApiKeyScope>('write');
   const [newKeyExpiry, setNewKeyExpiry] = useState('');
   const [createdKey, setCreatedKey] = useState<ApiKey | null>(null);
-  const [copiedField, setCopiedField] = useState('');
+  const clipboard = useClipboard();
   const [pendingRevoke, setPendingRevoke] = useState<ApiKey | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [browserKeyPresent, setBrowserKeyPresent] = useState(false);
@@ -133,8 +135,8 @@ export default function SettingsPage() {
       setError('');
       const response = await getApiKeys({ page_size: 100 });
       setApiKeys(response.items || []);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load API keys');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to load API keys'));
       setApiKeys([]);
     } finally {
       setLoading(false);
@@ -151,8 +153,8 @@ export default function SettingsPage() {
       setRetentionInput(value === 0 ? '' : String(value));
       setCustomRetention(!RETENTION_PRESETS.some((preset) => preset.value === (value === 0 ? '' : String(value))));
       setGroupTags(settings.dashboard_group_tags || []);
-    } catch (err: any) {
-      setRetentionError(err.message || 'Failed to load data retention settings');
+    } catch (err) {
+      setRetentionError(errorMessage(err, 'Failed to load data retention settings'));
     } finally {
       setRetentionLoading(false);
     }
@@ -189,18 +191,11 @@ export default function SettingsPage() {
       setRetentionInput(saved === 0 ? '' : String(saved));
       setCustomRetention(!RETENTION_PRESETS.some((preset) => preset.value === (saved === 0 ? '' : String(saved))));
       showToast(saved === 0 ? 'Mesh and host-metric history kept forever' : `Retention set to ${saved} days`, 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to update retention', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to update retention'), 'error');
     } finally {
       setSavingRetention(false);
     }
-  };
-
-  const copyToClipboard = (value: string, field: string) => {
-    if (!value) return;
-    navigator.clipboard.writeText(value);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(''), 2000);
   };
 
   const handleCreate = async (event: React.FormEvent) => {
@@ -236,8 +231,8 @@ export default function SettingsPage() {
       }
       setNewKeyName('');
       showToast('API key created', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create API key', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to create API key'), 'error');
     } finally {
       setCreating(false);
     }
@@ -256,8 +251,8 @@ export default function SettingsPage() {
       removeStoredApiKey(pendingRevoke.id);
       showToast('API key revoked', 'success');
       setPendingRevoke(null);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to revoke API key', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to revoke API key'), 'error');
     } finally {
       setRevoking(false);
     }
@@ -488,9 +483,9 @@ export default function SettingsPage() {
                         variant="ghost"
                         size="sm"
                         icon={<Copy strokeWidth={1.75} />}
-                        onClick={() => copyToClipboard(createdKey.key || '', 'new-key')}
+                        onClick={() => void clipboard.copy(createdKey.key || '', 'new-key')}
                       >
-                        {copiedField === 'new-key' ? 'Copied' : 'Copy'}
+                        {clipboard.copiedKey === 'new-key' ? 'Copied' : 'Copy'}
                       </Button>
                     </div>
                   </Callout>

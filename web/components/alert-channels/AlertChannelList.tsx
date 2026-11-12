@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { LayoutGrid, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { AlertChannel } from '@/lib/types';
@@ -15,36 +15,27 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { usePluginNames } from './usePluginNames';
+import { errorMessage } from '@/lib/errors';
+import { useAsyncData } from '@/lib/useAsyncData';
 
 // The workspace's alert channels, shown on the Notifications tab of Settings
 // under the default routing.
+async function fetchChannels(): Promise<AlertChannel[]> {
+  const response = await getAlertChannels({ page_size: 100 });
+  return response?.items || [];
+}
+
 export default function AlertChannelList() {
   const { showToast } = useToast();
   const canWrite = useCanWrite();
   const pluginName = usePluginNames();
-  const [channels, setChannels] = useState<AlertChannel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>('');
+  const { data: channels, setData: setChannels, loading, error, reload: loadChannels } = useAsyncData<AlertChannel[]>(
+    fetchChannels,
+    [],
+    'Failed to load alert channels'
+  );
   const [pendingDelete, setPendingDelete] = useState<AlertChannel | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  useEffect(() => {
-    loadChannels();
-  }, []);
-
-  const loadChannels = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const response = await getAlertChannels({ page_size: 100 });
-      setChannels(response?.items || []);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load alert channels');
-      setChannels([]);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleDelete = async () => {
     if (!pendingDelete) return;
@@ -54,8 +45,8 @@ export default function AlertChannelList() {
       setChannels((channels || []).filter((c) => c.id !== pendingDelete.id));
       showToast('Alert channel deleted successfully', 'success');
       setPendingDelete(null);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete alert channel', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete alert channel'), 'error');
     } finally {
       setDeleting(false);
     }
@@ -65,8 +56,8 @@ export default function AlertChannelList() {
     try {
       await testAlertChannel(id);
       showToast('Test notification sent', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to send test notification', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to send test notification'), 'error');
     }
   };
 
