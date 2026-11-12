@@ -120,6 +120,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- API routes are registered by the `mount*Routes` functions in
+  `api/internal/api/routes_*.go`; `NewServer` (`server.go`) builds the
+  services and handlers and calls them in order.
 - API handlers take their plumbing from `api/internal/httpx` (`TenantID`,
   `WriteJSON`, `Page`/`PageWithLimits`); services clamp with
   `api/internal/pagination`. No private copies. The plaintext protocol
