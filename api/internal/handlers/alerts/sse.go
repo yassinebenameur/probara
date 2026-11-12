@@ -5,37 +5,22 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 )
 
 // StreamAlerts handles GET /api/v1/alerts/stream - SSE endpoint for real-time alerts
 func (h *Handlers) StreamAlerts(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error": err.Error(),
-		}).Error("SSE: tenant ID not found")
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error":     err.Error(),
-			"tenant_id": tenantID,
-		}).Error("SSE: invalid tenant ID")
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	// Check if hub is initialized
 	if h.hub == nil {
 		h.logger.Error("SSE: hub is nil")
-		errors.WriteInternalError(w, "SSE hub not initialized")
+		apierrors.WriteInternalError(w, "SSE hub not initialized")
 		return
 	}
 
@@ -43,7 +28,7 @@ func (h *Handlers) StreamAlerts(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		h.logger.Error("SSE: streaming not supported")
-		errors.WriteInternalError(w, "streaming not supported")
+		apierrors.WriteInternalError(w, "streaming not supported")
 		return
 	}
 

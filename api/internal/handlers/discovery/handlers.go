@@ -13,7 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	svc "github.com/yassinebenameur/probara/api/internal/services/discovery"
 	contract "github.com/yassinebenameur/probara/shared/discovery"
@@ -93,9 +93,7 @@ func write(w http.ResponseWriter, status int, v any) {
 		w.WriteHeader(status)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, status, v)
 }
 func (h *Handlers) fail(w http.ResponseWriter, err error) {
 	var bad svc.Invalid
@@ -121,19 +119,6 @@ func (h *Handlers) fail(w http.ResponseWriter, err error) {
 		h.Log.WithError(err).Error("Discovery request failed")
 		apierrors.WriteInternalError(w, "discovery request failed")
 	}
-}
-func tenant(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	s, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant required")
-		return uuid.Nil, false
-	}
-	id, err := uuid.Parse(s)
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "invalid tenant")
-		return uuid.Nil, false
-	}
-	return id, true
 }
 func id(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
 	v, e := uuid.Parse(chi.URLParam(r, name))
@@ -168,7 +153,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any, strict bool) bool
 	return true
 }
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -180,7 +165,7 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, v)
 }
 func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -197,7 +182,7 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	write(w, 201, v)
 }
 func (h *Handlers) update(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -230,7 +215,7 @@ func nonNil(s []string) []string {
 	return s
 }
 func (h *Handlers) namespaces(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -246,7 +231,7 @@ func (h *Handlers) namespaces(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, v)
 }
 func (h *Handlers) remove(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -262,7 +247,7 @@ func (h *Handlers) remove(w http.ResponseWriter, r *http.Request) {
 	write(w, 204, nil)
 }
 func (h *Handlers) rotate(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -279,7 +264,7 @@ func (h *Handlers) rotate(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]string{"token": v})
 }
 func (h *Handlers) coverage(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -315,7 +300,7 @@ func (h *Handlers) coverage(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, v)
 }
 func (h *Handlers) approve(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -342,7 +327,7 @@ func (h *Handlers) approve(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"monitor_id": v, "created": created})
 }
 func (h *Handlers) link(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -362,7 +347,7 @@ func (h *Handlers) link(w http.ResponseWriter, r *http.Request) {
 	write(w, 204, nil)
 }
 func (h *Handlers) unlink(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}

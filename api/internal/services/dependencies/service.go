@@ -13,13 +13,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
 var (
 	ErrDependencyCycle = errors.New("dependency would create a cycle")
-	ErrMonitorNotFound = errors.New("monitor not found")
+	ErrMonitorNotFound = apperr.ErrMonitorNotFound
 )
 
 // Service handles monitor dependency business logic.

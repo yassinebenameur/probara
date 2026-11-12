@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	svc "github.com/yassinebenameur/probara/api/internal/services/slas"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
@@ -41,11 +41,11 @@ func (h *Handlers) ReportRoutes(r chi.Router) {
 	r.Get("/{id}", h.issuedReport)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+// writeJSONNoStore is httpx.WriteJSON plus Cache-Control: no-store, which every
+// response of this package carries.
+func writeJSONNoStore(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, status, v)
 }
 
 func (h *Handlers) fail(w http.ResponseWriter, err error, action string) {
@@ -62,20 +62,6 @@ func (h *Handlers) fail(w http.ResponseWriter, err error, action string) {
 		h.Log.WithError(err).Error("Failed to " + action)
 		apierrors.WriteInternalError(w, "failed to "+action)
 	}
-}
-
-func tenant(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	s, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
-		return uuid.Nil, false
-	}
-	id, err := uuid.Parse(s)
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "invalid tenant ID")
-		return uuid.Nil, false
-	}
-	return id, true
 }
 
 func pathID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -103,7 +89,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -124,11 +110,11 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	if slas == nil {
 		slas = []models.SLA{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": slas})
+	writeJSONNoStore(w, http.StatusOK, map[string]any{"items": slas})
 }
 
 func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -141,11 +127,11 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err, "create SLA")
 		return
 	}
-	writeJSON(w, http.StatusCreated, sla)
+	writeJSONNoStore(w, http.StatusCreated, sla)
 }
 
 func (h *Handlers) get(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -158,11 +144,11 @@ func (h *Handlers) get(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err, "get SLA")
 		return
 	}
-	writeJSON(w, http.StatusOK, sla)
+	writeJSONNoStore(w, http.StatusOK, sla)
 }
 
 func (h *Handlers) update(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -179,11 +165,11 @@ func (h *Handlers) update(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err, "update SLA")
 		return
 	}
-	writeJSON(w, http.StatusOK, sla)
+	writeJSONNoStore(w, http.StatusOK, sla)
 }
 
 func (h *Handlers) remove(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -200,7 +186,7 @@ func (h *Handlers) remove(w http.ResponseWriter, r *http.Request) {
 
 // report handles GET /slas/{id}/report?period=|from=&to=[&format=].
 func (h *Handlers) report(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -222,7 +208,7 @@ func (h *Handlers) report(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) listReports(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -235,11 +221,11 @@ func (h *Handlers) listReports(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err, "list SLA reports")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": reports})
+	writeJSONNoStore(w, http.StatusOK, map[string]any{"items": reports})
 }
 
 func (h *Handlers) issue(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -256,11 +242,11 @@ func (h *Handlers) issue(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err, "issue SLA report")
 		return
 	}
-	writeJSON(w, http.StatusCreated, report)
+	writeJSONNoStore(w, http.StatusCreated, report)
 }
 
 func (h *Handlers) issuedReport(w http.ResponseWriter, r *http.Request) {
-	t, ok := tenant(w, r)
+	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -305,7 +291,7 @@ func parseFormat(w http.ResponseWriter, r *http.Request) (string, bool) {
 
 func (h *Handlers) render(w http.ResponseWriter, report *models.SLAReport, format string) {
 	if format == "" {
-		writeJSON(w, http.StatusOK, report)
+		writeJSONNoStore(w, http.StatusOK, report)
 		return
 	}
 	// Render fully before writing headers so a failure is still a clean 500.

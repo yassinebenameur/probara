@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,13 +12,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/services/triageview"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/incidentrecovery"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
+
+// ErrIncidentNotFound: the incident does not exist in the tenant.
+var ErrIncidentNotFound = errors.New("incident not found")
 
 type incidentRowScanner interface {
 	Scan(dest ...interface{}) error
@@ -157,8 +163,8 @@ func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUI
 		&detail.ID, &detail.TenantID, &detail.Title, &summary, &detail.State, &severity, &ownerUserID, &ownerUsername,
 		&resolvedAt, &detail.IsAutoCreated, &autoMonitorID, &detail.CreatedAt, &detail.UpdatedAt,
 	); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("incident not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrIncidentNotFound
 		}
 		return nil, fmt.Errorf("get incident: %w", err)
 	}
@@ -216,17 +222,9 @@ func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUI
 
 // ListIncidents lists incidents with pagination.
 func (s *Service) ListIncidents(ctx context.Context, tenantID uuid.UUID, page, pageSize int) (*models.IncidentListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.DefaultSize, pagination.MaxSize)
 
-	offset := (page - 1) * pageSize
+	offset := pagination.Offset(page, pageSize)
 
 	var total, openTotal int
 	if err := s.db.QueryRowContext(ctx, `
@@ -362,7 +360,7 @@ func (s *Service) UpdateIncident(ctx context.Context, tenantID, incidentID uuid.
 		return nil, fmt.Errorf("update incident: %w", err)
 	}
 	if rows, err := res.RowsAffected(); err == nil && rows == 0 {
-		return nil, fmt.Errorf("incident not found")
+		return nil, ErrIncidentNotFound
 	}
 
 	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Incident updated", nil); err != nil {
@@ -397,8 +395,8 @@ func (s *Service) TransitionIncidentState(ctx context.Context, tenantID, inciden
 		WHERE id = $1 AND tenant_id = $2
 		FOR UPDATE
 	`, incidentID, tenantID).Scan(&currentState); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("incident not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrIncidentNotFound
 		}
 		return nil, fmt.Errorf("load incident state: %w", err)
 	}
@@ -1020,8 +1018,8 @@ func (s *Service) ensureIncidentBelongsToTenant(ctx context.Context, tx *sql.Tx,
 		WHERE id = $1 AND tenant_id = $2
 		FOR UPDATE
 	`, incidentID, tenantID).Scan(new(int)); err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("incident not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrIncidentNotFound
 		}
 		return fmt.Errorf("load incident: %w", err)
 	}
@@ -1035,8 +1033,8 @@ func (s *Service) ensureAlertBelongsToTenant(ctx context.Context, tx *sql.Tx, te
 		FROM alerts
 		WHERE id = $1 AND tenant_id = $2
 	`, alertID, tenantID).Scan(new(int)); err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("alert not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return apperr.ErrAlertNotFound
 		}
 		return fmt.Errorf("load alert: %w", err)
 	}
@@ -1050,8 +1048,8 @@ func (s *Service) ensureMonitorBelongsToTenant(ctx context.Context, tx *sql.Tx, 
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`, monitorID, tenantID).Scan(new(int)); err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("monitor not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return apperr.ErrMonitorNotFound
 		}
 		return fmt.Errorf("load monitor: %w", err)
 	}
@@ -1065,8 +1063,8 @@ func (s *Service) ensureStatusPageBelongsToTenant(ctx context.Context, tx *sql.T
 		FROM status_pages
 		WHERE id = $1 AND tenant_id = $2
 	`, statusPageID, tenantID).Scan(new(int)); err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("status page not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return apperr.ErrStatusPageNotFound
 		}
 		return fmt.Errorf("load status page: %w", err)
 	}

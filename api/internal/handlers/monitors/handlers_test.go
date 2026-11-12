@@ -16,6 +16,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
+	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -64,7 +66,7 @@ func (m *MockMonitorService) ResolveTestConfig(ctx context.Context, tenantID uui
 func (m *MockMonitorService) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Monitor, error) {
 	monitor, ok := m.monitors[monitorID]
 	if !ok {
-		return nil, &mockNotFoundError{}
+		return nil, monitorservice.ErrMonitorNotFound
 	}
 	return monitor, nil
 }
@@ -87,7 +89,7 @@ func (m *MockMonitorService) ListMonitors(ctx context.Context, tenantID uuid.UUI
 func (m *MockMonitorService) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, req *models.UpdateMonitorRequest) (*models.Monitor, error) {
 	monitor, ok := m.monitors[monitorID]
 	if !ok {
-		return nil, &mockNotFoundError{}
+		return nil, monitorservice.ErrMonitorNotFound
 	}
 	if req.Name != nil {
 		monitor.Name = *req.Name
@@ -98,7 +100,7 @@ func (m *MockMonitorService) UpdateMonitor(ctx context.Context, tenantID, monito
 
 func (m *MockMonitorService) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error {
 	if _, ok := m.monitors[monitorID]; !ok {
-		return &mockNotFoundError{}
+		return monitorservice.ErrMonitorNotFound
 	}
 	delete(m.monitors, monitorID)
 	return nil
@@ -109,7 +111,7 @@ func (m *MockMonitorService) DeleteMonitorHistory(ctx context.Context, tenantID,
 		return m.deleteHistoryErr
 	}
 	if _, ok := m.monitors[monitorID]; !ok {
-		return &mockNotFoundError{}
+		return monitorservice.ErrMonitorNotFound
 	}
 	m.deletedHistoryCalls = append(m.deletedHistoryCalls, monitorID)
 	return nil
@@ -137,12 +139,6 @@ func (m *MockMonitorService) BulkUpdateAlerting(
 	channels []models.MonitorChannelAssignment,
 ) (int, error) {
 	return len(monitorIDs), nil
-}
-
-type mockNotFoundError struct{}
-
-func (e *mockNotFoundError) Error() string {
-	return "monitor not found"
 }
 
 // MockGroupService implements the handler group membership dependency for testing.
@@ -915,4 +911,74 @@ func TestHandlers_GetMonitorResultsBatch(t *testing.T) {
 			t.Fatalf("status = %d, want 401", w.Code)
 		}
 	})
+}
+
+// failingGroupService refuses every membership change with err.
+type failingGroupService struct {
+	MockGroupService
+	err error
+}
+
+func (f *failingGroupService) AddMonitorsToGroup(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error {
+	return f.err
+}
+
+func TestHandlers_GroupMembershipErrorsMapToStatus(t *testing.T) {
+	member := uuid.New()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"group not found", monitorservice.ErrMonitorNotFound, http.StatusNotFound},
+		{"member not found", fmt.Errorf("monitor %s: %w", member, monitorservice.ErrMonitorNotFound), http.StatusNotFound},
+		{"not a group", groupservice.ErrNotGroup, http.StatusNotFound},
+		{"cycle", fmt.Errorf("%w: cannot add group", groupservice.ErrGroupCycleDetected), http.StatusBadRequest},
+		{"other error", fmt.Errorf("database is down"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handlers := NewHandlers(NewMockMonitorService(), &failingGroupService{err: tc.err}, &MockResultsService{}, logger.New("test", "error"), t.TempDir())
+			r := chi.NewRouter()
+			r.Post("/{id}/members", handlers.AddMonitorsToGroup)
+
+			req := httptest.NewRequest(http.MethodPost, "/"+uuid.NewString()+"/members", strings.NewReader(`{"monitor_ids":["`+member.String()+`"]}`))
+			req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.NewString()))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandlers_ListMonitors_TenantAndPageSize(t *testing.T) {
+	handlers := NewHandlers(NewMockMonitorService(), &MockGroupService{}, &MockResultsService{}, logger.New("test", "error"), t.TempDir())
+
+	req := httptest.NewRequest(http.MethodGet, "/?page=2&page_size=5000", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.NewString()))
+	w := httptest.NewRecorder()
+	handlers.ListMonitors(w, req)
+	var list models.MonitorListResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("status = %d, decode error = %v: %s", w.Code, err, w.Body.String())
+	}
+	if list.Page != 2 || list.PageSize != 100 {
+		t.Fatalf("page, page_size = %d, %d; want 2 and the 100 maximum", list.Page, list.PageSize)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), "not-a-uuid"))
+	w = httptest.NewRecorder()
+	handlers.ListMonitors(w, req)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"error":"validation_error"`) || !strings.Contains(w.Body.String(), `"message":"invalid tenant ID"`) {
+		t.Fatalf("malformed tenant: status = %d body = %s; want 400 validation_error", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	handlers.ListMonitors(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing tenant: status = %d, want 401", w.Code)
+	}
 }

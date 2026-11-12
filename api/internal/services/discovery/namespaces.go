@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	contract "github.com/yassinebenameur/probara/shared/discovery"
 )
 
@@ -161,8 +162,7 @@ func (s *Service) Update(ctx context.Context, tenant, id uuid.UUID, req UpdateRe
 	_, err = tx.ExecContext(ctx, `UPDATE discovery_integrations SET name=$3,location_id=$4,namespaces=$5,pending_namespaces=$6,pending_status=$7::jsonb WHERE tenant_id=$1 AND id=$2`,
 		tenant, id, next.Name, next.LocationID, pq.Array(next.Namespaces), pq.Array(next.PendingNamespaces), string(statusJSON))
 	if err != nil {
-		var pe *pq.Error
-		if errors.As(err, &pe) && pe.Code == "23505" {
+		if pgerr.IsUniqueViolation(err) {
 			return nil, changes, invalid("an integration with this name already exists")
 		}
 		return nil, changes, err

@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,10 +11,23 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/services/triageview"
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
+)
+
+// Errors the handlers map to a status with errors.Is. The text reaches API
+// clients, so it is part of the API.
+var (
+	// ErrAlertNotFound: the alert does not exist in the tenant.
+	ErrAlertNotFound = apperr.ErrAlertNotFound
+	// ErrAlertNotActive: acknowledge found no active alert with that ID.
+	ErrAlertNotActive = errors.New("alert not found or not active")
+	// ErrAlertAlreadyResolved: resolve found no open alert with that ID.
+	ErrAlertAlreadyResolved = errors.New("alert not found or already resolved")
 )
 
 type incidentAutomation interface {
@@ -119,17 +133,9 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 // ListAlerts lists alerts with filtering, sorting (ListSort; the zero value
 // is newest first) and pagination.
 func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *models.AlertListParams, sort ListSort) (*models.AlertListResponse, error) {
-	if params.Page < 1 {
-		params.Page = 1
-	}
-	if params.PageSize < 1 {
-		params.PageSize = 20
-	}
-	if params.PageSize > 100 {
-		params.PageSize = 100
-	}
+	params.Page, params.PageSize = pagination.Normalize(params.Page, params.PageSize, pagination.DefaultSize, pagination.MaxSize)
 
-	offset := (params.Page - 1) * params.PageSize
+	offset := pagination.Offset(params.Page, params.PageSize)
 
 	// Build WHERE clause
 	whereParts := []string{"a.tenant_id = $1"}
@@ -254,8 +260,8 @@ func (s *Service) getAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 	row := s.db.QueryRowContext(ctx, query, alertID, tenantID)
 	alert, err := scanAlertWithDetails(row.Scan)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("alert not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAlertNotFound
 		}
 		return nil, fmt.Errorf("failed to get alert: %w", err)
 	}
@@ -356,8 +362,8 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 	var id uuid.UUID
 	err := s.db.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("alert not found or not active")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAlertNotActive
 		}
 		return nil, fmt.Errorf("failed to acknowledge alert: %w", err)
 	}
@@ -386,8 +392,8 @@ func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID)
 	var id uuid.UUID
 	err = tx.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("alert not found or already resolved")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAlertAlreadyResolved
 		}
 		return nil, fmt.Errorf("failed to resolve alert: %w", err)
 	}
@@ -429,7 +435,7 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil // No active alert
 		}
 		return nil, fmt.Errorf("failed to get active alert: %w", err)

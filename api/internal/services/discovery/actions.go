@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	contract "github.com/yassinebenameur/probara/shared/discovery"
 )
 
@@ -236,8 +237,7 @@ func (s *Service) Link(ctx context.Context, tenant, service, monitor uuid.UUID, 
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO discovery_monitor_links(tenant_id,service_id,monitor_id,suggestion_key) VALUES($1,$2,$3,$4) ON CONFLICT(service_id,monitor_id) DO UPDATE SET suggestion_key=COALESCE(EXCLUDED.suggestion_key,discovery_monitor_links.suggestion_key)`, tenant, service, monitor, key)
 	if err != nil {
-		var pe *pq.Error
-		if errors.As(err, &pe) && pe.Code == "23505" {
+		if pgerr.IsUniqueViolation(err) {
 			return invalid("this suggestion is already linked to another monitor; unlink it first")
 		}
 		return err

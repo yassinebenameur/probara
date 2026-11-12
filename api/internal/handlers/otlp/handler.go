@@ -21,7 +21,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
 
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
-	"github.com/yassinebenameur/probara/shared/context"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -52,7 +52,7 @@ func NewHandler(service *otlpservice.Service, log *logger.Logger) *Handler {
 func (h *Handler) HandleExportMetrics(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	tenantIDStr, ok := context.GetTenantID(ctx)
+	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

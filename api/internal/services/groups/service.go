@@ -9,11 +9,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
 var ErrGroupCycleDetected = errors.New("group nesting would create a cycle")
+
+// ErrNotGroup: the monitor named as a group is some other monitor type.
+var ErrNotGroup = errors.New("monitor is not a group")
 
 // Service handles group business logic
 type Service struct {
@@ -33,7 +37,7 @@ func (s *Service) AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid
 		return err
 	}
 	if group.Type != models.MonitorTypeGroup {
-		return fmt.Errorf("monitor is not a group")
+		return ErrNotGroup
 	}
 
 	// Verify all monitors exist and belong to the tenant.
@@ -78,7 +82,7 @@ func (s *Service) RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID
 		return err
 	}
 	if group.Type != models.MonitorTypeGroup {
-		return fmt.Errorf("monitor is not a group")
+		return ErrNotGroup
 	}
 
 	// Remove from monitor_groups
@@ -101,7 +105,7 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 		return nil, err
 	}
 	if group.Type != models.MonitorTypeGroup {
-		return nil, fmt.Errorf("monitor is not a group")
+		return nil, ErrNotGroup
 	}
 
 	query := `
@@ -154,7 +158,7 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 		return nil, err
 	}
 	if group.Type != models.MonitorTypeGroup {
-		return nil, fmt.Errorf("monitor is not a group")
+		return nil, ErrNotGroup
 	}
 
 	query := `
@@ -291,7 +295,7 @@ func (s *Service) GetGroupStatus(ctx context.Context, tenantID, groupID uuid.UUI
 		var status string
 		err := s.db.QueryRowContext(ctx, query, member.ID, tenantID).Scan(&status)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				// No results for this monitor yet, skip it
 				continue
 			}
@@ -387,8 +391,8 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("monitor not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, apperr.ErrMonitorNotFound
 		}
 		return nil, fmt.Errorf("failed to get monitor: %w", err)
 	}

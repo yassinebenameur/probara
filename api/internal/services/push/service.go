@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -41,7 +42,7 @@ func (s *Service) ProcessPush(ctx context.Context, token string, payload PushPay
 		 WHERE push_token = $1 AND type = 'push' AND deleted_at IS NULL`,
 		token,
 	).Scan(&monitorID, &tenantID, &enabled)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("push monitor not found for token: %s", token)
 	}
 	if err != nil {
@@ -140,7 +141,7 @@ func (s *Service) GetMonitorByPushToken(ctx context.Context, token string) (*mod
 		&monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		&monitor.Tags, &nextRunAt, &agentID, &pushToken, &monitor.CreatedAt, &monitor.UpdatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("push monitor not found")
 	}
 	if err != nil {
@@ -178,7 +179,7 @@ func (s *Service) GetPushInfo(ctx context.Context, monitorID, tenantID uuid.UUID
 		 WHERE id = $1 AND tenant_id = $2 AND type = 'push' AND deleted_at IS NULL`,
 		monitorID, tenantID,
 	).Scan(&pushToken, &intervalSeconds, &config)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("push monitor not found")
 	}
 	if err != nil {

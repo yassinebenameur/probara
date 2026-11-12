@@ -14,13 +14,13 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	"golang.org/x/oauth2"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -408,13 +408,13 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 }
 
 func isUsernameCollision(err error) bool {
-	var pqErr *pq.Error
-	return errors.As(err, &pqErr) && pqErr.Code == "23505" && !strings.Contains(pqErr.Constraint, "email") && !strings.Contains(pqErr.Constraint, "external")
+	pqErr, ok := pgerr.As(err)
+	return ok && pgerr.IsUniqueViolation(err) && !strings.Contains(pqErr.Constraint, "email") && !strings.Contains(pqErr.Constraint, "external")
 }
 
 func isIdentityOrEmailCollision(err error) bool {
-	var pqErr *pq.Error
-	return errors.As(err, &pqErr) && pqErr.Code == "23505" &&
+	pqErr, ok := pgerr.As(err)
+	return ok && pgerr.IsUniqueViolation(err) &&
 		(strings.Contains(pqErr.Constraint, "external") || strings.Contains(pqErr.Constraint, "email"))
 }
 

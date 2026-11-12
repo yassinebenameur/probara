@@ -22,8 +22,8 @@ var ErrInvalidTemplate = errors.New("invalid template")
 func (s *Service) ensureStatusPage(ctx context.Context, q statusPageDBTX, tenantID, pageID uuid.UUID) error {
 	var one int
 	if err := q.QueryRowContext(ctx, `SELECT 1 FROM status_pages WHERE id = $1 AND tenant_id = $2`, pageID, tenantID).Scan(&one); err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("status page not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrStatusPageNotFound
 		}
 		return fmt.Errorf("failed to check status page: %w", err)
 	}
@@ -85,7 +85,7 @@ func (s *Service) GetTemplateState(ctx context.Context, tenantID, pageID uuid.UU
 	switch {
 	case err == nil:
 		state.DraftSource = &draftSource
-	case err != sql.ErrNoRows:
+	case !errors.Is(err, sql.ErrNoRows):
 		return nil, fmt.Errorf("failed to get draft source: %w", err)
 	}
 
@@ -103,8 +103,8 @@ func (s *Service) GetTemplateVersionSource(ctx context.Context, tenantID, pageID
 		WHERE status_page_id = $1 AND version = $2
 	`, pageID, version).Scan(&source)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", fmt.Errorf("template version not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrTemplateVersionNotFound
 		}
 		return "", fmt.Errorf("failed to get template version: %w", err)
 	}
@@ -167,8 +167,8 @@ func (s *Service) PublishTemplateDraft(ctx context.Context, tenantID, pageID uui
 		FOR UPDATE
 	`, pageID).Scan(&draftID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("no draft template to publish")
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNoDraftTemplate
 		}
 		return fmt.Errorf("failed to get draft template: %w", err)
 	}
@@ -204,13 +204,13 @@ func (s *Service) RevertTemplate(ctx context.Context, tenantID, pageID uuid.UUID
 		FOR UPDATE
 	`, pageID, version).Scan(&source, &status)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("template version not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrTemplateVersionNotFound
 		}
 		return fmt.Errorf("failed to get template version: %w", err)
 	}
 	if status == "published" {
-		return fmt.Errorf("version %d is already published", version)
+		return fmt.Errorf("version %d %w", version, ErrAlreadyPublished)
 	}
 
 	if _, err := tx.ExecContext(ctx, `

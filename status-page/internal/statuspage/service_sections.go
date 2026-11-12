@@ -6,9 +6,10 @@ package statuspage
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -42,7 +43,7 @@ func (s *Service) loadStatusPageSectionSkeletons(ctx context.Context, statusPage
 		ORDER BY position ASC, created_at ASC, id ASC
 	`, statusPageID)
 	if err != nil {
-		if !isUndefinedTableError(err) {
+		if !pgerr.IsUndefinedTable(err) {
 			return nil, fmt.Errorf("failed to query status page sections: %w", err)
 		}
 		return s.loadLegacyStatusPageSections(ctx, statusPageID, tenantID)
@@ -57,7 +58,7 @@ func (s *Service) loadStatusPageSectionSkeletons(ctx context.Context, statusPage
 		}
 		monitors, err := s.getStatusPageSectionMonitors(ctx, row.ID, tenantID)
 		if err != nil {
-			if isUndefinedTableError(err) {
+			if pgerr.IsUndefinedTable(err) {
 				return s.loadLegacyStatusPageSections(ctx, statusPageID, tenantID)
 			}
 			return nil, err
@@ -182,7 +183,7 @@ func (s *Service) listStatusPageMonitorIDs(ctx context.Context, statusPageID uui
 		ORDER BY sps.position ASC, spsm.position ASC, spsm.monitor_id ASC
 	`, statusPageID)
 	if err != nil {
-		if !isUndefinedTableError(err) {
+		if !pgerr.IsUndefinedTable(err) {
 			return nil, fmt.Errorf("failed to list section monitor ids: %w", err)
 		}
 		return s.listLegacyStatusPageMonitorIDs(ctx, statusPageID)
@@ -230,14 +231,6 @@ func (s *Service) listLegacyStatusPageMonitorIDs(ctx context.Context, statusPage
 		return nil, fmt.Errorf("error iterating legacy status page monitor ids: %w", err)
 	}
 	return dedupeMonitorIDs(monitorIDs), nil
-}
-
-func isUndefinedTableError(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
-		return false
-	}
-	return pqErr.Code == "42P01"
 }
 
 func (s *Service) monitorPresenter(monitorType string) monitorPresenter {

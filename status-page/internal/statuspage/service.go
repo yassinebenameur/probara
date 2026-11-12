@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
 
 // ErrStatusPageNotFound is returned when a slug or ID resolves to no status
@@ -266,7 +267,7 @@ func (s *Service) getPublishedTemplate(ctx context.Context, pageID uuid.UUID) (s
 		WHERE status_page_id = $1 AND status = 'published'
 	`, pageID).Scan(&source, &version)
 	if err != nil {
-		if err == sql.ErrNoRows || isUndefinedTableError(err) {
+		if err == sql.ErrNoRows || pgerr.IsUndefinedTable(err) {
 			return "", 0, nil
 		}
 		return "", 0, err
@@ -289,7 +290,7 @@ func (s *Service) GetDraftTemplateBySlug(ctx context.Context, slug string) (page
 		if err == sql.ErrNoRows {
 			return uuid.Nil, "", false, ErrStatusPageNotFound
 		}
-		if isUndefinedTableError(err) {
+		if pgerr.IsUndefinedTable(err) {
 			// Templates table missing: resolve the page alone so previews
 			// degrade to the live render instead of erroring.
 			if err := s.db.QueryRowContext(ctx, `SELECT id FROM status_pages WHERE slug = $1`, slug).Scan(&pageID); err != nil {

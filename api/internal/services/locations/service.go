@@ -20,7 +20,9 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/secrets"
@@ -94,7 +96,7 @@ func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.Cr
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, id, tenantID, name, slugify(name), req.Description, meshEndpoint, encryptedCredential)
 	if err != nil {
-		if strings.Contains(err.Error(), "idx_locations_tenant_name") {
+		if pgerr.IsUniqueViolationOf(err, "idx_locations_tenant_name") {
 			return nil, fmt.Errorf("a location named %q already exists", name)
 		}
 		return nil, fmt.Errorf("failed to create location: %w", err)
@@ -228,15 +230,7 @@ func (s *Service) Get(ctx context.Context, tenantID, locationID uuid.UUID) (*mod
 
 // List returns the tenant's locations.
 func (s *Service) List(ctx context.Context, tenantID uuid.UUID, page, pageSize int) (*models.LocationListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 50
-	}
-	if pageSize > 200 {
-		pageSize = 200
-	}
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.LargeDefaultSize, pagination.LargeMaxSize)
 
 	var total int
 	if err := s.db.QueryRowContext(ctx,
@@ -318,7 +312,7 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID uuid.UUID, re
 		WHERE id = $6 AND tenant_id = $7 AND deleted_at IS NULL
 	`, name, slug, description, enabled, meshEndpoint, locationID, tenantID)
 	if err != nil {
-		if strings.Contains(err.Error(), "idx_locations_tenant_name") {
+		if pgerr.IsUniqueViolationOf(err, "idx_locations_tenant_name") {
 			return nil, fmt.Errorf("a location named %q already exists", name)
 		}
 		return nil, fmt.Errorf("failed to update location: %w", err)

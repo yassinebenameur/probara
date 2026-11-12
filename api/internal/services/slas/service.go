@@ -23,6 +23,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
 
 var (
@@ -394,8 +395,7 @@ func replaceMonitorsTx(ctx context.Context, tx *sql.Tx, slaID uuid.UUID, ids []u
 }
 
 func mapUniqueViolation(err error, message string) error {
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+	if pgerr.IsUniqueViolation(err) {
 		return Conflict{Message: message}
 	}
 	return fmt.Errorf("write SLA: %w", err)
@@ -591,8 +591,7 @@ func (s *Service) IssueReport(ctx context.Context, tenantID, slaID uuid.UUID, pe
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`, id, tenantID, slaID, period.Key, period.Start.UTC(), period.End.UTC(), report.Summary.AvailabilityPct,
 		sla.TargetPct, report.Summary.Met, nullUUID(by.AdminID), nullUUID(by.APIKeyID), data); err != nil {
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		if pgerr.IsUniqueViolation(err) {
 			return nil, Conflict{Message: fmt.Sprintf("a report for %s was already issued", period.Key)}
 		}
 		return nil, fmt.Errorf("store SLA report: %w", err)

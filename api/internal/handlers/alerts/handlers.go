@@ -1,7 +1,7 @@
 package alerts
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,8 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -46,35 +46,15 @@ func (h *Handlers) GetHub() *alertservice.Hub {
 
 // ListAlerts handles GET /api/v1/alerts
 func (h *Handlers) ListAlerts(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	params := &models.AlertListParams{
-		Page:     1,
-		PageSize: 20,
-	}
+	tenantID := tenantUUID.String()
 
 	// Parse query parameters
-	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			params.Page = p
-		}
-	}
-
-	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
-		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
-			params.PageSize = ps
-		}
-	}
+	params := &models.AlertListParams{}
+	params.Page, params.PageSize = httpx.Page(r)
 
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		status := models.AlertStatus(statusStr)
@@ -108,7 +88,7 @@ func (h *Handlers) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	// so pickers can reach alerts beyond the newest page.
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
 		if utf8.RuneCountInString(q) > maxAlertQueryLength {
-			errors.WriteValidationError(w, fmt.Sprintf("q must be at most %d characters", maxAlertQueryLength))
+			apierrors.WriteValidationError(w, fmt.Sprintf("q must be at most %d characters", maxAlertQueryLength))
 			return
 		}
 		params.Query = q
@@ -118,7 +98,7 @@ func (h *Handlers) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	// in the service; anything else is a 400, not a silent default).
 	sort, err := alertservice.ParseListSort(r.URL.Query().Get("sort"), r.URL.Query().Get("dir"))
 	if err != nil {
-		errors.WriteValidationError(w, err.Error())
+		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
 
@@ -128,39 +108,32 @@ func (h *Handlers) ListAlerts(w http.ResponseWriter, r *http.Request) {
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Failed to list alerts")
-		errors.WriteInternalError(w, "failed to list alerts")
+		apierrors.WriteInternalError(w, "failed to list alerts")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // GetAlert handles GET /api/v1/alerts/{id}
 func (h *Handlers) GetAlert(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	alertIDStr := chi.URLParam(r, "id")
 	alertID, err := uuid.Parse(alertIDStr)
 	if err != nil {
-		errors.WriteValidationError(w, "invalid alert ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteValidationError(w, "invalid alert ID")
 		return
 	}
 
 	alert, err := h.service.GetAlert(r.Context(), tenantUUID, alertID)
 	if err != nil {
-		if err.Error() == "alert not found" {
-			errors.WriteNotFoundError(w, "alert not found")
+		if errors.Is(err, alertservice.ErrAlertNotFound) {
+			apierrors.WriteNotFoundError(w, "alert not found")
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -168,27 +141,20 @@ func (h *Handlers) GetAlert(w http.ResponseWriter, r *http.Request) {
 			"tenant_id": tenantID,
 			"alert_id":  alertID,
 		}).Error("Failed to get alert")
-		errors.WriteInternalError(w, "failed to get alert")
+		apierrors.WriteInternalError(w, "failed to get alert")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(alert)
+	httpx.WriteJSON(w, http.StatusOK, alert)
 }
 
 // GetRecentAlerts handles GET /api/v1/alerts/recent
 func (h *Handlers) GetRecentAlerts(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	limit := 10
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
@@ -203,39 +169,32 @@ func (h *Handlers) GetRecentAlerts(w http.ResponseWriter, r *http.Request) {
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Failed to get recent alerts")
-		errors.WriteInternalError(w, "failed to get recent alerts")
+		apierrors.WriteInternalError(w, "failed to get recent alerts")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(alerts)
+	httpx.WriteJSON(w, http.StatusOK, alerts)
 }
 
 // AcknowledgeAlert handles POST /api/v1/alerts/{id}/acknowledge
 func (h *Handlers) AcknowledgeAlert(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	alertIDStr := chi.URLParam(r, "id")
 	alertID, err := uuid.Parse(alertIDStr)
 	if err != nil {
-		errors.WriteValidationError(w, "invalid alert ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteValidationError(w, "invalid alert ID")
 		return
 	}
 
 	alert, err := h.service.AcknowledgeAlert(r.Context(), tenantUUID, alertID)
 	if err != nil {
-		if err.Error() == "alert not found or not active" {
-			errors.WriteNotFoundError(w, err.Error())
+		if errors.Is(err, alertservice.ErrAlertNotActive) {
+			apierrors.WriteNotFoundError(w, err.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -243,42 +202,35 @@ func (h *Handlers) AcknowledgeAlert(w http.ResponseWriter, r *http.Request) {
 			"tenant_id": tenantID,
 			"alert_id":  alertID,
 		}).Error("Failed to acknowledge alert")
-		errors.WriteInternalError(w, "failed to acknowledge alert")
+		apierrors.WriteInternalError(w, "failed to acknowledge alert")
 		return
 	}
 
 	// Broadcast via SSE
 	h.hub.BroadcastAlertAcknowledged(tenantUUID, alert)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(alert)
+	httpx.WriteJSON(w, http.StatusOK, alert)
 }
 
 // ResolveAlert handles POST /api/v1/alerts/{id}/resolve
 func (h *Handlers) ResolveAlert(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	alertIDStr := chi.URLParam(r, "id")
 	alertID, err := uuid.Parse(alertIDStr)
 	if err != nil {
-		errors.WriteValidationError(w, "invalid alert ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteValidationError(w, "invalid alert ID")
 		return
 	}
 
 	alert, err := h.service.ResolveAlert(r.Context(), tenantUUID, alertID)
 	if err != nil {
-		if err.Error() == "alert not found or already resolved" {
-			errors.WriteNotFoundError(w, err.Error())
+		if errors.Is(err, alertservice.ErrAlertAlreadyResolved) {
+			apierrors.WriteNotFoundError(w, err.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -286,13 +238,12 @@ func (h *Handlers) ResolveAlert(w http.ResponseWriter, r *http.Request) {
 			"tenant_id": tenantID,
 			"alert_id":  alertID,
 		}).Error("Failed to resolve alert")
-		errors.WriteInternalError(w, "failed to resolve alert")
+		apierrors.WriteInternalError(w, "failed to resolve alert")
 		return
 	}
 
 	// Broadcast via SSE
 	h.hub.BroadcastAlertResolved(tenantUUID, alert)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(alert)
+	httpx.WriteJSON(w, http.StatusOK, alert)
 }

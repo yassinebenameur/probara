@@ -11,11 +11,15 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
+
+// ErrAlertChannelNotFound: the channel does not exist in the tenant.
+var ErrAlertChannelNotFound = errors.New("alert channel not found")
 
 // Service handles alert channel business logic. It is the encryption boundary
 // for sensitive plugin config fields: secrets are encrypted before INSERT/UPDATE
@@ -111,7 +115,7 @@ func (s *Service) fetchAlertChannelRaw(ctx context.Context, tenantID, channelID 
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("alert channel not found")
+			return nil, ErrAlertChannelNotFound
 		}
 		return nil, fmt.Errorf("failed to fetch alert channel: %w", err)
 	}
@@ -120,13 +124,8 @@ func (s *Service) fetchAlertChannelRaw(ctx context.Context, tenantID, channelID 
 
 // ListAlertChannels returns a paginated list with secret fields masked.
 func (s *Service) ListAlertChannels(ctx context.Context, tenantID uuid.UUID, page, pageSize int) (*models.AlertChannelListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-	offset := (page - 1) * pageSize
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.DefaultSize, pagination.MaxSize)
+	offset := pagination.Offset(page, pageSize)
 
 	countQuery := `SELECT COUNT(*) FROM alert_channels WHERE tenant_id = $1`
 	var total int
@@ -247,7 +246,7 @@ func (s *Service) DeleteAlertChannel(ctx context.Context, tenantID, channelID uu
 		return fmt.Errorf("failed to get affected rows: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("alert channel not found")
+		return ErrAlertChannelNotFound
 	}
 	return nil
 }

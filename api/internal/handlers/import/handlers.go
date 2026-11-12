@@ -6,10 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -34,25 +32,25 @@ func NewHandlers(service importservice.ImportService, log *logger.Logger) *Handl
 // Preview handles POST /api/v1/monitors/import/preview
 // Accepts multipart form file upload
 func (h *Handlers) Preview(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	// Limit upload size
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 
 	// Parse multipart form
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		errors.WriteValidationError(w, "file too large (max 10MB)")
+		apierrors.WriteValidationError(w, "file too large (max 10MB)")
 		return
 	}
 
 	// Get the file from the form
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		errors.WriteValidationError(w, "no file provided")
+		apierrors.WriteValidationError(w, "no file provided")
 		return
 	}
 	defer file.Close()
@@ -60,14 +58,14 @@ func (h *Handlers) Preview(w http.ResponseWriter, r *http.Request) {
 	// Read file content
 	data, err := io.ReadAll(file)
 	if err != nil {
-		errors.WriteInternalError(w, "failed to read file")
+		apierrors.WriteInternalError(w, "failed to read file")
 		return
 	}
 
 	// Parse and preview
 	result, err := h.service.ParseFile(data, header.Filename)
 	if err != nil {
-		errors.WriteValidationError(w, err.Error())
+		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
 
@@ -78,33 +76,26 @@ func (h *Handlers) Preview(w http.ResponseWriter, r *http.Request) {
 		"rows":      result.TotalRows,
 	}).Info("Import preview generated")
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // Execute handles POST /api/v1/monitors/import
 // Accepts JSON body with rows and mapping
 func (h *Handlers) Execute(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	var req models.ImportExecuteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 
 	if len(req.Rows) == 0 {
-		errors.WriteValidationError(w, "no rows to import")
+		apierrors.WriteValidationError(w, "no rows to import")
 		return
 	}
 
@@ -115,7 +106,7 @@ func (h *Handlers) Execute(w http.ResponseWriter, r *http.Request) {
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Import execution failed")
-		errors.WriteInternalError(w, "import failed: "+err.Error())
+		apierrors.WriteInternalError(w, "import failed: "+err.Error())
 		return
 	}
 
@@ -127,23 +118,16 @@ func (h *Handlers) Execute(w http.ResponseWriter, r *http.Request) {
 		"skipped_count": result.SkippedCount,
 	}).Info("Import executed")
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // Export handles GET /api/v1/monitors/export
 func (h *Handlers) Export(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	data, err := h.service.ExportMonitors(r.Context(), tenantUUID)
 	if err != nil {
@@ -151,7 +135,7 @@ func (h *Handlers) Export(w http.ResponseWriter, r *http.Request) {
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Monitor export failed")
-		errors.WriteInternalError(w, "failed to export monitors")
+		apierrors.WriteInternalError(w, "failed to export monitors")
 		return
 	}
 

@@ -3,7 +3,6 @@ package monitors
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -140,17 +139,6 @@ func (m *MockRepository) GetLocationIDsForMonitors(ctx context.Context, monitorI
 
 func (m *MockRepository) GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error) {
 	return nil, nil
-}
-
-// ErrMonitorNotFound is returned when a monitor is not found
-var ErrMonitorNotFound = &NotFoundError{msg: "monitor not found"}
-
-type NotFoundError struct {
-	msg string
-}
-
-func (e *NotFoundError) Error() string {
-	return e.msg
 }
 
 func TestService_CreateMonitor(t *testing.T) {
@@ -418,7 +406,7 @@ func TestService_BulkDeleteMonitors_RejectsEmpty(t *testing.T) {
 
 func TestService_BulkDeleteMonitors_VerifyFailsBlocks(t *testing.T) {
 	repo := NewMockRepository()
-	repo.verifyMonitorsErr = fmt.Errorf("one or more monitors not found or do not belong to tenant")
+	repo.verifyMonitorsErr = ErrMonitorsNotInTenant
 	svc := NewService(repo)
 
 	_, err := svc.BulkDeleteMonitors(context.Background(), uuid.New(),

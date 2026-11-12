@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -431,8 +433,8 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("monitor not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, apperr.ErrMonitorNotFound
 		}
 		return nil, fmt.Errorf("failed to get monitor: %w", err)
 	}

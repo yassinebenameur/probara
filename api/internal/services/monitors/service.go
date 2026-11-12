@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
@@ -307,15 +308,7 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 
 // ListMonitors lists monitors with optional filters and pagination
 func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *string, enabled *bool, page, pageSize int) (*models.MonitorListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.DefaultSize, pagination.MaxSize)
 
 	monitors, total, err := s.repo.List(ctx, tenantID, tag, enabled, page, pageSize)
 	if err != nil {
@@ -430,7 +423,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	// the agent form has always written timeout == interval, which made every
 	// UI edit of an agent monitor fail here.
 	if validation.IsActiveCheckType(effectiveType) && timeoutSeconds >= intervalSeconds {
-		return nil, fmt.Errorf("timeout_seconds must be less than interval_seconds")
+		return nil, ErrTimeoutNotBelowInterval
 	}
 
 	// Enabled is handled by repo.SetEnabled below, not the dynamic UPDATE: a

@@ -4,14 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -30,7 +30,7 @@ func NewHandlers(service maintenancewindowservice.MaintenanceWindowService, log 
 
 // CreateMaintenanceWindow handles POST /api/v1/maintenance-windows
 func (h *Handlers) CreateMaintenanceWindow(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenant(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -47,14 +47,12 @@ func (h *Handlers) CreateMaintenanceWindow(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(window)
+	httpx.WriteJSON(w, http.StatusCreated, window)
 }
 
 // ListMaintenanceWindows handles GET /api/v1/maintenance-windows
 func (h *Handlers) ListMaintenanceWindows(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenant(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -70,18 +68,7 @@ func (h *Handlers) ListMaintenanceWindows(w http.ResponseWriter, r *http.Request
 		monitorID = id
 	}
 
-	page := 1
-	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			page = p
-		}
-	}
-	pageSize := 20
-	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
-		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
-			pageSize = ps
-		}
-	}
+	page, pageSize := httpx.Page(r)
 
 	result, err := h.service.List(r.Context(), tenantUUID, status, monitorID, page, pageSize)
 	if err != nil {
@@ -89,13 +76,12 @@ func (h *Handlers) ListMaintenanceWindows(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // GetMaintenanceWindow handles GET /api/v1/maintenance-windows/{id}
 func (h *Handlers) GetMaintenanceWindow(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenant(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -110,13 +96,12 @@ func (h *Handlers) GetMaintenanceWindow(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(window)
+	httpx.WriteJSON(w, http.StatusOK, window)
 }
 
 // UpdateMaintenanceWindow handles PATCH /api/v1/maintenance-windows/{id}
 func (h *Handlers) UpdateMaintenanceWindow(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenant(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -137,13 +122,12 @@ func (h *Handlers) UpdateMaintenanceWindow(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(window)
+	httpx.WriteJSON(w, http.StatusOK, window)
 }
 
 // DeleteMaintenanceWindow handles DELETE /api/v1/maintenance-windows/{id}
 func (h *Handlers) DeleteMaintenanceWindow(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenant(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -161,7 +145,7 @@ func (h *Handlers) DeleteMaintenanceWindow(w http.ResponseWriter, r *http.Reques
 
 // SnoozeMonitor handles POST /api/v1/monitors/{id}/snooze
 func (h *Handlers) SnoozeMonitor(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenant(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -202,23 +186,7 @@ func (h *Handlers) SnoozeMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(window)
-}
-
-func (h *Handlers) tenant(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
-		return uuid.Nil, false
-	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
-		return uuid.Nil, false
-	}
-	return tenantUUID, true
+	httpx.WriteJSON(w, http.StatusCreated, window)
 }
 
 func (h *Handlers) windowID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -237,13 +205,18 @@ func (h *Handlers) writeServiceError(w http.ResponseWriter, r *http.Request, err
 		apierrors.WriteNotFoundError(w, "maintenance window not found")
 		return
 	}
+	if errors.Is(err, apperr.ErrMonitorNotFound) {
+		apierrors.WriteValidationError(w, err.Error())
+		return
+	}
+	// The remaining 400s are still matched by message: the service returns
+	// them as untyped errors.
 	switch err.Error() {
 	case "title is required",
 		"ends_at must be after starts_at",
 		"ends_at must be in the future",
 		"at least one monitor is required",
 		"one or more monitors not found",
-		"monitor not found",
 		"snooze end time must be in the future":
 		apierrors.WriteValidationError(w, err.Error())
 		return

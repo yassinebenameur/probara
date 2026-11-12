@@ -10,11 +10,26 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
+)
+
+// Errors the handlers map to a status with errors.Is. The text reaches API
+// clients, so it is part of the API.
+var (
+	// ErrMonitorNotFound: the monitor does not exist in the tenant (404).
+	ErrMonitorNotFound = apperr.ErrMonitorNotFound
+	// ErrMonitorsNotInTenant: a bulk request named a monitor that does not
+	// exist in the tenant.
+	ErrMonitorsNotInTenant = errors.New("one or more monitors not found or do not belong to tenant")
+	// ErrTimeoutNotBelowInterval: an update would leave an active check with
+	// a timeout that is not shorter than its interval (400).
+	ErrTimeoutNotBelowInterval = errors.New("timeout_seconds must be less than interval_seconds")
 )
 
 // Repository defines the interface for monitor data access
@@ -143,8 +158,8 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("monitor not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrMonitorNotFound
 		}
 		return nil, fmt.Errorf("failed to get monitor: %w", err)
 	}
@@ -155,7 +170,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 
 // List retrieves monitors with optional filters and pagination
 func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *string, enabled *bool, page, pageSize int) ([]models.Monitor, int, error) {
-	offset := (page - 1) * pageSize
+	offset := pagination.Offset(page, pageSize)
 
 	// Build query with filters
 	whereClause := "WHERE tenant_id = $1 AND deleted_at IS NULL"
@@ -279,8 +294,8 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("monitor not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrMonitorNotFound
 		}
 		return fmt.Errorf("failed to update monitor: %w", err)
 	}
@@ -303,7 +318,7 @@ func (r *PostgresRepository) Delete(ctx context.Context, tenantID, monitorID uui
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("monitor not found")
+		return ErrMonitorNotFound
 	}
 	return nil
 }
@@ -395,7 +410,7 @@ func (r *PostgresRepository) VerifyMonitorsBelongToTenant(ctx context.Context, t
 		return fmt.Errorf("failed to verify monitors: %w", err)
 	}
 	if count != len(monitorIDs) {
-		return fmt.Errorf("one or more monitors not found or do not belong to tenant")
+		return ErrMonitorsNotInTenant
 	}
 	return nil
 }
@@ -637,7 +652,7 @@ func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitor
 		SELECT current_state FROM monitors WHERE id = $1 AND tenant_id = $2 FOR UPDATE
 	`, monitorID, tenantID).Scan(&prevState); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("monitor not found")
+			return ErrMonitorNotFound
 		}
 		return fmt.Errorf("failed to lock monitor: %w", err)
 	}
@@ -715,7 +730,7 @@ func (r *PostgresRepository) SetEnabled(ctx context.Context, tenantID, monitorID
 		SELECT enabled, type FROM monitors WHERE id = $1 AND tenant_id = $2 FOR UPDATE
 	`, monitorID, tenantID).Scan(&current, &monitorType); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("monitor not found")
+			return ErrMonitorNotFound
 		}
 		return fmt.Errorf("failed to lock monitor: %w", err)
 	}

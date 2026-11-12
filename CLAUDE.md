@@ -120,6 +120,15 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- API handlers take their plumbing from `api/internal/httpx` (`TenantID`,
+  `WriteJSON`, `Page`/`PageWithLimits`); services clamp with
+  `api/internal/pagination`. No private copies. The plaintext protocol
+  handlers (`agent`, `push`, `otlp`, `metricsquery`) keep their own response
+  bodies.
+- Services return exported sentinel errors (shared ones in
+  `api/internal/apperr`) and handlers map them with `errors.Is` — never
+  compare error text, and keep a sentinel's message stable: it reaches API
+  clients. Postgres error codes go through `shared/db/pgerr`.
 
 ## Single sources of truth — never duplicate these lists
 

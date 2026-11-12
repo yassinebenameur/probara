@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
@@ -280,7 +281,7 @@ func (r statusPageSlugResolver) Resolve(ctx context.Context, event statusupdates
 	}
 
 	slugs, err := r.resolveSlugs(ctx, statusPageSlugQuery, tenantID, monitorID)
-	if err != nil && isUndefinedTableError(err) {
+	if err != nil && pgerr.IsUndefinedTable(err) {
 		return r.resolveSlugs(ctx, legacyStatusPageSlugQuery, tenantID, monitorID)
 	}
 	return slugs, err

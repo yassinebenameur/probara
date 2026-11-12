@@ -13,11 +13,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/shared/metricstore"
 )
 
 // ErrMonitorNotFound maps to 404 (also covers cross-tenant probing).
-var ErrMonitorNotFound = errors.New("monitor not found")
+var ErrMonitorNotFound = apperr.ErrMonitorNotFound
 
 const (
 	maxQueriesPerRequest = 12
