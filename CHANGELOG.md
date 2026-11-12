@@ -1,3 +1,23 @@
+# [2.0.0-alpha.11](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.10...v2.0.0-alpha.11) (2026-11-12)
+
+
+### Bug Fixes
+
+* **alerter:** describe auto-created incidents without the retired policy wording ([798d011](https://github.com/yassinebenameur/probara/commit/798d01120ed329eae5c9725bf173763d3148203c))
+* **api:** stop reading and writing the retired alert-policy tables ([891f8cf](https://github.com/yassinebenameur/probara/commit/891f8cf4619b9c7de4023a5bde4a8338f9fe2bb9))
+* **compose:** drop the worker scaling target the fixed container name never allowed ([6c2b227](https://github.com/yassinebenameur/probara/commit/6c2b227a1c902c96b5835f17815821c1123bdd9a))
+* **compose:** let the worker scale and bring Makefile targets back in line ([bf1d11a](https://github.com/yassinebenameur/probara/commit/bf1d11a4d77b02994ea89eda1f023cb65d825fe9))
+* **helm:** set secure session cookies on https installs and wire the preview secret into api and status-page ([e5ee28a](https://github.com/yassinebenameur/probara/commit/e5ee28ad60fb62ba3a1c0d25ecc5b7158b16d10d))
+* share one service bootstrap so probes, shutdown and consumer supervision cannot drift between mains ([5388c0d](https://github.com/yassinebenameur/probara/commit/5388c0d030e4e2c9f38b54198347ebfd4f47f5e7))
+* **web:** surface API error messages through one error contract ([580e259](https://github.com/yassinebenameur/probara/commit/580e259a73736cfbe28ddf788f2bea093afc0827))
+* **worker:** cut SIP and MongoDB error text on character boundaries ([fa3b95b](https://github.com/yassinebenameur/probara/commit/fa3b95b9a626f1c056b31b81cf2baa1a865d1e19))
+* **worker:** dial HTTP and gRPC checks through the shared SSRF guard ([a51fd34](https://github.com/yassinebenameur/probara/commit/a51fd342ea95548e2061c6d5f396384459f3b1c9))
+
+
+### Features
+
+* **monitorstate:** derive group state once, with an alert view and a display view ([64d95a9](https://github.com/yassinebenameur/probara/commit/64d95a9717e2d5c0e1a41cfe39a8cd8fc02a888e))
+
 # [2.0.0-alpha.10](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.9...v2.0.0-alpha.10) (2026-11-02)
 
 
