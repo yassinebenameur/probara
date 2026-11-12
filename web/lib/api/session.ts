@@ -12,7 +12,8 @@ export async function getSession(): Promise<{ authenticated: boolean; user: Admi
   if (!response.ok) {
     return { authenticated: false, user: null };
   }
-  const data = await response.json();
+  // A 2xx is a live session even if the body cannot be read.
+  const data = await response.json().catch(() => null);
   return { authenticated: true, user: (data?.user as AdminUser) ?? null };
 }
 
