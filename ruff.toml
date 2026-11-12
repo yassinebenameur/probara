@@ -1,0 +1,7 @@
+# Python lint for ai-service/, scripts/ and the CI helper scripts. Only the
+# rules that find real defects (pyflakes, syntax errors) are on; the code's
+# dense one-line style is deliberate and not policed here.
+target-version = "py313"
+
+[lint]
+select = ["F", "E9"]

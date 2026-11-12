@@ -857,6 +857,9 @@ or imported groups come back empty. Any other path that creates groups through
 - Web/website: CI runs `npm run lint`, `npx tsc --noEmit` and `npm run build`
   in both (`website/` lint allows no warnings), plus `npm test` in `web/`.
   Run the same in whichever one you touched.
+- Python (`ai-service/`, `scripts/*.py`, CI helper scripts): CI runs
+  `ruff check` with the pyflakes rules in `ruff.toml`; run it before pushing
+  Python changes (`pip install ruff==0.8.4`).
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).
   After touching local AI values, templates, Compose, the Makefile or the
