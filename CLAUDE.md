@@ -129,9 +129,13 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   handlers (`agent`, `push`, `otlp`, `metricsquery`) keep their own response
   bodies.
 - Services return exported sentinel errors (shared ones in
-  `api/internal/apperr`) and handlers map them with `errors.Is` — never
-  compare error text, and keep a sentinel's message stable: it reaches API
-  clients. Postgres error codes go through `shared/db/pgerr`.
+  `api/internal/apperr`) and handlers map them with `errors.Is` — never add
+  a comparison on error text, and keep a sentinel's message stable: it
+  reaches API clients. Three validation-message switches predate this and
+  are the remaining debt (`handlers/incidents`, `handlers/maintenancewindows`,
+  plus the plaintext `handlers/push`); convert them to typed validation
+  errors rather than adding a fourth. Postgres error codes go through
+  `shared/db/pgerr`.
 
 ## Single sources of truth — never duplicate these lists
 
@@ -206,7 +210,7 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `api/internal/services/statuspages/service.go`
   (`statusPageSettingsStored`/`applyPatch`/`toAPI` — the **write** path), and
   `status-page/internal/statuspage/service_settings.go` (the **read** path the public
-  renderer uses). Plus `web/lib/types.ts` for the UI. The API's stored struct
+  renderer uses). Plus `web/lib/types/status-pages.ts` for the UI. The API's stored struct
   re-serializes only the fields it knows, so a setting added to the model but
   not to `applyPatch`/`toAPI` is accepted by the endpoint, silently dropped on
   write, and never reaches the page — no error anywhere.
@@ -309,7 +313,7 @@ or imported groups come back empty. Any other path that creates groups through
 4. Secret fields → `MonitorSecretFields`
 5. UI: form component in `web/components/monitors/`, wire into
    `MonitorForm.tsx` (`MONITOR_TYPE_META` + `TYPE_FORMS` dispatch), types in
-   `web/lib/types.ts`;
+   `web/lib/types/monitors.ts` (re-exported by `web/lib/types.ts`);
    its hydration and request builder in `web/lib/monitor-form/`, with exact
    payload tests (create, filled, an edit round trip that sets every field
    the form hydrates, clone, secret clears) in `web/lib/monitor-form-*.test.ts`
