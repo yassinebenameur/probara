@@ -814,7 +814,10 @@ or imported groups come back empty. Any other path that creates groups through
   its worst member under status. Tags match ANY selected tag
   (`matchesAnyTag`), and every dashboard endpoint's `tag` scope is the same
   rule (`tags && $n`, never `@>`) so a dashboard count and the list it links
-  to agree.
+  to agree. The list page (`app/monitors/page.tsx`) is wiring only: rows,
+  panel, toolbar, bulk bar and its hooks live in `components/monitors/list/`,
+  and the filter and group-tree rules (`monitorMatchesFilters`,
+  `groupHasMatchingMember`, `groupContainsGroup`) in `lib/monitor-list.ts`.
   Likewise the one-alert `/alerts?alert=<id>&tenant=<id>` link notifications
   carry (built in `present.suspectedCauseAction`) is parsed only by
   `lib/alert-links.ts`.
