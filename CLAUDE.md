@@ -833,6 +833,11 @@ or imported groups come back empty. Any other path that creates groups through
   `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus, marks
   `#app-root` inert while open and restores focus on close; pass `onEscape`
   unless the modal handles Escape itself (`Dialog` does).
+- **Pages are wiring; their pieces sit with the domain**: the monitor page
+  (`app/monitors/[id]/page.tsx`) reads `useMonitorDetail` (data, run-now,
+  pause, delete, history reset) and renders header, aside and tab
+  components from `components/monitors/detail/`; its Server panel facts are
+  `lib/monitor-server-facts.ts` (database, TCP) and `lib/sip-metrics.ts`.
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type

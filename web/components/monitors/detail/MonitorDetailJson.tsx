@@ -5,8 +5,8 @@ import { formatDateTime, formatDateTimeFull, RANGES } from '@/lib/format';
 import { Check, Copy } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
-import { DetailList, DetailRow } from './MonitorFactsCard';
-import { ASIDE_STACK, DETAIL_COLUMNS } from './MonitorAnalyticsOverview';
+import { DetailList, DetailRow } from '../MonitorFactsCard';
+import { ASIDE_STACK, DETAIL_COLUMNS } from '../MonitorAnalyticsOverview';
 import { useClipboard } from '@/lib/useClipboard';
 
 interface MonitorDetailJsonProps {

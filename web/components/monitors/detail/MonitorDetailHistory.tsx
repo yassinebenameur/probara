@@ -9,7 +9,7 @@ import { checkResultLabel, checkResultTone, failedChecksTone, UPTIME_TONE_TEXT, 
 import Pill from '@/components/ui/Pill';
 import EmptyState from '@/components/ui/EmptyState';
 import TableSkeleton from '@/components/ui/TableSkeleton';
-import { bucketFailedChecks, Stat, StatStrip, UptimeTrace } from './MonitorAnalyticsOverview';
+import { bucketFailedChecks, Stat, StatStrip, UptimeTrace } from '../MonitorAnalyticsOverview';
 
 interface MonitorDetailHistoryProps {
   /** Raw results of the last 7 days. */

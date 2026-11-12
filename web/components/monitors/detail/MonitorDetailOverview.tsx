@@ -3,12 +3,12 @@
 import { ReactNode } from 'react';
 import { CheckResult, Monitor, MonitorAnalyticsResponse, MonitorAnalyticsRange, AgentMonitorConfig } from '@/lib/types';
 import type { Sla } from '@/lib/sla';
-import AgentMetricsView from './AgentMetricsView';
-import MetricExplorer from './MetricExplorer';
-import type { TimeRange as AgentTimeRange } from './metric-chart';
-import MonitorAnalyticsOverview, { ASIDE_STACK, DETAIL_COLUMNS } from './MonitorAnalyticsOverview';
-import MongoClusterPanels from './MongoClusterPanels';
-import SipCallPanels from './SipCallPanels';
+import AgentMetricsView from '../AgentMetricsView';
+import MetricExplorer from '../MetricExplorer';
+import type { TimeRange as AgentTimeRange } from '../metric-chart';
+import MonitorAnalyticsOverview, { ASIDE_STACK, DETAIL_COLUMNS } from '../MonitorAnalyticsOverview';
+import MongoClusterPanels from '../MongoClusterPanels';
+import SipCallPanels from '../SipCallPanels';
 import { isSipCall } from '@/lib/sip-config';
 
 interface MonitorDetailOverviewProps {
