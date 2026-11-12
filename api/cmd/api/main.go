@@ -1,24 +1,18 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
-	"time"
 
 	"github.com/yassinebenameur/probara/api/internal/api"
+	"github.com/yassinebenameur/probara/shared/bootstrap"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
-	"github.com/yassinebenameur/probara/shared/netguard"
-	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
-	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 )
 
 func main() {
@@ -51,40 +45,14 @@ func main() {
 	}
 	log.Info("Database migrations completed")
 
-	// Process-level plugin runtime: deep-link origin and the egress (SSRF)
-	// policy every notification channel dials through.
-	plugin.Configure(plugin.Runtime{
-		AppBaseURL: cfg.AppBaseURL,
-		Egress: netguard.Policy{
-			BlockPrivate: cfg.NotificationBlockPrivateIPs,
-			AllowedCIDRs: cfg.NotificationAllowedCIDRs,
-		},
+	// Notification runtime. The API never dispatches real alerts — that is
+	// the alerter's job — but POST /alert-channels/{id}/test invokes the same
+	// plugin Send path, so without a mailer here every email channel test
+	// fails with "mailer not configured" even when delivery works end to end.
+	bootstrap.ConfigureNotifications(log, cfg.SMTPConfig, cfg.NotificationEgressConfig, bootstrap.NotificationOptions{
+		Mailer:  true,
+		Purpose: "email channel tests",
 	})
-
-	// Wire the SMTP backend into the email plugin. The API never dispatches
-	// real alerts — that is the alerter's job — but POST
-	// /alert-channels/{id}/test invokes the same plugin Send path, so without a
-	// mailer here every email channel test fails with "mailer not configured"
-	// even when delivery works end to end.
-	if cfg.SMTPHost != "" && cfg.SMTPFrom != "" {
-		smtpMailer, err := email.NewSMTPMailer(email.SMTPParams{
-			Host:       cfg.SMTPHost,
-			Port:       cfg.SMTPPort,
-			Username:   cfg.SMTPUsername,
-			Password:   cfg.SMTPPassword,
-			From:       cfg.SMTPFrom,
-			FromName:   cfg.SMTPFromName,
-			UseTLS:     cfg.SMTPUseTLS,
-			AppBaseURL: cfg.AppBaseURL,
-		})
-		if err != nil {
-			log.WithError(err).Warn("Failed to configure SMTP mailer; email channel tests will fail")
-		} else {
-			email.SetMailer(smtpMailer)
-		}
-	} else {
-		log.Warn("SMTP not configured; email channel tests will report mailer not configured")
-	}
 
 	// Initialize metrics
 	metricsRegistry := metrics.NewRegistry(cfg.ServiceName)
@@ -99,15 +67,10 @@ func main() {
 		}
 	}()
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
-
+	bootstrap.WaitForShutdownSignal()
 	log.Info("Shutting down server...")
 
-	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := bootstrap.ShutdownContext()
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {

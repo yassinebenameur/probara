@@ -74,12 +74,12 @@ import (
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
+	"github.com/yassinebenameur/probara/shared/bootstrap"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/queue"
-	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -147,12 +147,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Encryption for sensitive alert channel config fields. Falls back to a
 	// no-op encryptor in dev when PROBARA_SECRETS_KEY is not set — existing
 	// plaintext rows still serve, but new writes will be stored unencrypted.
-	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
-	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
-		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
-	} else if kerr != secrets.ErrKeyNotConfigured {
-		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
-	} else {
+	secretsEncryptor, keyConfigured, err := bootstrap.PlatformEncryptor()
+	if err != nil {
+		log.WithError(err).Fatal("Invalid PROBARA_SECRETS_KEY")
+	}
+	if !keyConfigured {
 		log.Warn("PROBARA_SECRETS_KEY not set; alert channel secrets will be stored unencrypted")
 	}
 

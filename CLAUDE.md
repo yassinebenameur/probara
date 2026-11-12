@@ -107,7 +107,13 @@ when a boundary or messaging contract moves. The rules that are easy to break:
 - Session advisory locks are acquired and released on one pinned connection
   (see `scheduler/internal/scheduler/maintenance_lock.go`), never through
   separate pool calls.
-- Every service keeps `/healthz`, `/readyz` and `/metrics`; keep them intact
+- Every service keeps `/healthz`, `/readyz` and `/metrics`. The Go mains get
+  them, the shutdown-signal wait, the at-rest encryptor and the notification
+  runtime from `shared/bootstrap`; add shared startup mechanics there, never
+  as another copy in a main (the copies had drifted: one liveness probe
+  ignored a dead NATS connection). Worker side consumers (notifications,
+  AI-RCA, triage) run under `airca.RunWithRestart` so one that dies restarts
+  instead of leaving a healthy-looking pod. Keep the probes intact
   when touching startup or server wiring (ai-service's `/readyz` needs the
   bearer token, so the chart's readiness probe is an exec; its `/healthz`
   turns 503 once a batch outruns `LOCAL_AI_MAX_INFERENCE_SECONDS`, which is
@@ -383,8 +389,9 @@ or imported groups come back empty. Any other path that creates groups through
 - **Notification egress**: the same three workloads read
   `NOTIFICATION_BLOCK_PRIVATE_IPS` (default **true**) /
   `NOTIFICATION_ALLOWED_CIDRS` (`loadNotificationEgressConfig`); each main
-  passes both to `plugin.Configure` next to `email.SetMailer`. A binary that
-  skips `plugin.Configure` fails closed (private egress blocked, no links).
+  hands both to `bootstrap.ConfigureNotifications`, which calls
+  `plugin.Configure` and installs the SMTP mailer. A binary that skips it
+  fails closed (private egress blocked, no links).
   This policy is independent of the worker's `HTTP_BLOCK_PRIVATE_IPS`
   (default false); both use `shared/netguard`, the single SSRF range table
   and resolve-then-dial guard (the worker's `dialGuard` is an alias of it).
