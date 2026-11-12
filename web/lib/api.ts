@@ -1,4 +1,5 @@
 import { getApiKey, clearApiKey } from './auth';
+import { apiErrorFromBody } from './errors';
 import { slaReportQueryString } from './sla';
 import { parseExportCount } from './ai-labels';
 import { coverageQueryString } from './discovery';
@@ -50,7 +51,6 @@ import type {
   RemoveMonitorsFromGroupRequest,
   AgentInstallCommand,
   PushInfo,
-  ApiError,
   ImportPreviewResponse,
   ImportExecuteRequest,
   ImportExecuteResponse,
@@ -161,10 +161,7 @@ async function handleResponse<T>(response: Response, hasApiKey: boolean): Promis
   const data = await response.json();
 
   if (!response.ok) {
-    const error: ApiError = data.error
-      ? { error: data.error, message: data.message || data.error }
-      : { error: 'unknown_error', message: data.message || 'An error occurred' };
-    throw error;
+    throw apiErrorFromBody(data);
   }
 
   return data;
@@ -263,10 +260,10 @@ async function apiRequest<T>(
       const refreshed = await refreshSession();
       if (refreshed) {
         const retryResponse = await fetch(getApiUrl(path), options);
-        return handleResponse<T>(retryResponse, Boolean(apiKey));
+        return await handleResponse<T>(retryResponse, Boolean(apiKey));
       }
     }
-    return handleResponse<T>(response, Boolean(apiKey));
+    return await handleResponse<T>(response, Boolean(apiKey));
   } catch (error) {
     if (error instanceof Error) {
       throw error;
@@ -1317,10 +1314,7 @@ export async function previewImport(file: File): Promise<ImportPreviewResponse> 
   }
 
   if (!response.ok) {
-    const error: ApiError = data.error
-      ? { error: data.error, message: data.message || data.error }
-      : { error: 'unknown_error', message: data.message || 'An error occurred' };
-    throw error;
+    throw apiErrorFromBody(data);
   }
 
   return data;
@@ -1417,10 +1411,7 @@ async function apiDownload(
     const contentType = response.headers.get('content-type');
     if (contentType && contentType.includes('application/json')) {
       const data = await response.json();
-      const error: ApiError = data.error
-        ? { error: data.error, message: data.message || data.error }
-        : { error: 'unknown_error', message: data.message || 'An error occurred' };
-      throw error;
+      throw apiErrorFromBody(data);
     }
 
     throw new Error(`Download failed with status ${response.status}`);

@@ -28,10 +28,11 @@ import ApproveModal from '@/components/discovery/ApproveModal';
 import LinkMonitorModal from '@/components/discovery/LinkMonitorModal';
 import { deleteDiscoveryIntegration, getAlertChannels, getDiscoveryCoverage, getDiscoveryIntegrations, getDiscoveryNamespaces, getLocations, rotateDiscoveryToken, unlinkDiscoveryMonitor } from '@/lib/api';
 import {
-  accessManifestCommands, collectorAccessManifest, collectorHealth, DISCOVERY_PAGE_SIZE, errorMessage, gapInfo, installCommands, isNotFound,
+  accessManifestCommands, collectorAccessManifest, collectorHealth, DISCOVERY_PAGE_SIZE, gapInfo, installCommands, isNotFound,
   namespacePill, namespaceRows, pageAfterShrink, pendingReasonInfo,
   type DiscoveryCoverage, type DiscoveryIntegration, type DiscoveryNamespace, type DiscoveryMonitor, type DiscoveryService, type DiscoverySort, type DiscoverySuggestion,
 } from '@/lib/discovery';
+import { errorMessage } from '@/lib/errors';
 import { pluralize } from '@/lib/format';
 import type { SortDir, SortState } from '@/lib/sort';
 import { TONE_TEXT, type StatusTone } from '@/lib/status-tones';

@@ -745,6 +745,11 @@ or imported groups come back empty. Any other path that creates groups through
   Per-check `metrics_data` charts on the detail page (`MongoClusterPanels`,
   `SipCallPanels`) fetch through `lib/useMetricsSnapshots.ts` and pick and
   grid their points with `lib/metric-snapshots.ts`; a new panel does the same.
+- **API failures**: `lib/errors.ts` is the one error contract. The client
+  throws `ApiRequestError` (a real `Error` carrying the server's `error`
+  code) for JSON error bodies; show failures with `errorMessage(err,
+  fallback)` and branch on `errorCode(err)`. Never throw a plain object from
+  the client, and don't write another message-extracting helper.
 - **`/monitors` deep links** (`?status=`, repeatable `?tag=`,
   `?routing=unrouted`, `?sort=status|name|success|latency|last_check` with
   `?dir=asc|desc`, defaults left out per `MONITOR_SORT_DEFAULT_DIR`) are

@@ -14,9 +14,10 @@ import NamespaceChipsInput from '@/components/discovery/NamespaceChipsInput';
 import { saveDownload } from '@/components/slas/SlaVisuals';
 import { createDiscoveryIntegration } from '@/lib/api';
 import {
-  collectorManifest, configuredNamespaces, errorMessage, initialCollectorImage, installCommands, manifestInputErrors, MAX_NAMESPACES, namespaceFieldError,
+  collectorManifest, configuredNamespaces, initialCollectorImage, installCommands, manifestInputErrors, MAX_NAMESPACES, namespaceFieldError,
   parseNamespaces, validNamespace, type DiscoveryIntegration,
 } from '@/lib/discovery';
+import { errorMessage } from '@/lib/errors';
 import type { Location } from '@/lib/types';
 
 // Per-viewer convenience only: the origin and image are not secrets and are

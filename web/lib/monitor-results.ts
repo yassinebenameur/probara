@@ -1,5 +1,6 @@
 import { getMonitorResultsBatch, MONITOR_RESULTS_BATCH_MAX_IDS } from './api';
 import type { CheckResult, MonitorResultsBatchResponse } from './types';
+import { errorMessage } from './errors';
 
 // Recent results for many monitors through GET /monitors/results/batch, the
 // monitors list's one round trip (first load and live ticks).
@@ -56,16 +57,9 @@ export async function fetchResultsBatches(
  */
 export function resultsBatchError(batch: ResultsBatch, requested: number): Error | null {
   if (batch.failed.size === 0) return null;
-  const reason = errorMessage(batch.error);
+  const reason = errorMessage(batch.error, '');
   const scope =
     batch.failed.size >= requested ? 'Recent checks failed to load' : `Recent checks failed to load for ${batch.failed.size} of ${requested} monitors`;
   return new Error(reason ? `${scope}: ${reason}` : scope);
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-    return error.message;
-  }
-  return '';
-}

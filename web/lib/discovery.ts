@@ -1,6 +1,7 @@
 import { pluralize } from './format';
 import type { StatusTone } from './status-tones';
 import type { MonitorState } from './types';
+import { errorCode, errorMessage } from './errors';
 
 /** Why the collector skipped a pending namespace on its last scan. */
 export type PendingReason = 'forbidden' | 'too_large' | 'inventory_limit' | 'deadline' | 'error';
@@ -415,14 +416,8 @@ export function collectorManifest(integration: DiscoveryIntegration, origin: str
   return yamlDocuments(documents);
 }
 
-/** apiRequest throws `{ error, message }` objects for API errors and Error for transport failures. */
-export function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string') return (e as { message: string }).message;
-  return 'The request failed. Please retry.';
-}
 export function isNotFound(e: unknown): boolean {
-  return Boolean(e && typeof e === 'object' && (e as { error?: unknown }).error === 'not_found');
+  return errorCode(e) === 'not_found';
 }
 export function isDuplicateTarget(e: unknown): boolean {
   return /existing monitor checks this target/i.test(errorMessage(e));

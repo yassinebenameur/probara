@@ -26,6 +26,7 @@ import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { SlaFormModal } from '@/components/slas/SlaFormModal';
 import { SlaReportView } from '@/components/slas/SlaReportView';
 import { SlaStatusPill, TONE_TEXT, saveDownload } from '@/components/slas/SlaVisuals';
+import { errorMessage } from '@/lib/errors';
 
 const TAB_IDS = ['report', 'issued'] as const;
 type TabId = (typeof TAB_IDS)[number];
@@ -50,11 +51,6 @@ const ISSUED_SORT_VALUE: Record<IssuedSortKey, (r: SlaReportRef) => SortValue> =
   availability: (r) => r.availability_pct,
   issued: (r) => Date.parse(r.issued_at),
 };
-
-function errorText(err: unknown, fallback: string): string {
-  if (err instanceof Error) return err.message;
-  return (err as { message?: string })?.message || fallback;
-}
 
 export default function SlaDetailPage() {
   const params = useParams<{ id: string }>();
@@ -99,7 +95,7 @@ export default function SlaDetailPage() {
         const loaded = await getSla(slaId);
         if (!cancelled) setSla(loaded);
       } catch (err) {
-        if (!cancelled) setError(errorText(err, 'Failed to load SLA'));
+        if (!cancelled) setError(errorMessage(err, 'Failed to load SLA'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -122,7 +118,7 @@ export default function SlaDetailPage() {
           setError('');
         }
       } catch (err) {
-        if (!cancelled) setError(errorText(err, 'Failed to build report'));
+        if (!cancelled) setError(errorMessage(err, 'Failed to build report'));
       } finally {
         if (!cancelled) setReportLoading(false);
       }
@@ -138,7 +134,7 @@ export default function SlaDetailPage() {
     try {
       saveDownload(reportId ? await downloadIssuedSlaReport(reportId, format) : await downloadSlaReport(slaId, query, format));
     } catch (err) {
-      showToast(errorText(err, 'Download failed'), 'error');
+      showToast(errorMessage(err, 'Download failed'), 'error');
     } finally {
       setDownloading(null);
     }
@@ -166,7 +162,7 @@ export default function SlaDetailPage() {
       await loadIssued();
       setTab('issued');
     } catch (err) {
-      showToast(errorText(err, 'Failed to issue report'), 'error');
+      showToast(errorMessage(err, 'Failed to issue report'), 'error');
     } finally {
       setIssuing(false);
     }

@@ -17,9 +17,10 @@ import { revealFirstError, useClearErrorsOnEdit } from '@/components/monitors/fo
 import { approveDiscoverySuggestion } from '@/lib/api';
 import { formatDuration } from '@/lib/format';
 import {
-  approveFormErrors, errorMessage, isDuplicateTarget, parseExpectedStatus, suggestionTarget,
+  approveFormErrors, isDuplicateTarget, parseExpectedStatus, suggestionTarget,
   type ApproveFormValues, type DiscoveryMonitor, type DiscoveryService, type DiscoverySuggestion,
 } from '@/lib/discovery';
+import { errorMessage } from '@/lib/errors';
 import { TONE_TEXT } from '@/lib/status-tones';
 import type { AlertChannel, Location } from '@/lib/types';
 import { INLINE_LINK } from './styles';

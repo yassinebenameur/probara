@@ -16,21 +16,13 @@ import { pollAnalysis } from '@/lib/analysis-polling';
 import { evidenceRefLabel, withMonitorNames } from '@/lib/ai-evidence';
 import { formatDateTime } from '@/lib/format';
 import { aiConfidenceTone } from '@/lib/status-tones';
+import { errorMessage } from '@/lib/errors';
 
 const POLL_INTERVAL_MS = 2500;
 
 interface AIRootCausePanelProps {
   incidentId: string;
   initial?: IncidentAIAnalysis | null;
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    const m = (err as { message?: unknown }).message;
-    if (typeof m === 'string' && m) return m;
-  }
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
 }
 
 const SECTION_LABEL = 'mb-1.5 text-xs font-medium text-slate-400';

@@ -22,13 +22,6 @@ export const NODE_WIDTH = 216;
 export const NODE_HEIGHT = 64;
 export const GROUP_NODE_HEIGHT = 52;
 
-export function apiErrorMessage(err: unknown): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    return String((err as { message?: unknown }).message || 'Something went wrong');
-  }
-  return err instanceof Error ? err.message : 'Something went wrong';
-}
-
 // Same icon-per-type vocabulary as MONITOR_TYPE_META in MonitorForm, so the
 // map reads like the rest of the app.
 export const TYPE_ICONS: Record<string, LucideIcon> = {

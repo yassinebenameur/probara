@@ -36,6 +36,7 @@ import {
   type AlertSortKey,
 } from '@/lib/alert-list';
 import { flashStyle } from '@/lib/useRowFlash';
+import { errorMessage } from '@/lib/errors';
 
 // The row's one primary action (Acknowledge or Resolve) sits in a fixed
 // slot so it lines up down the column; an icon square below sm.
@@ -118,10 +119,6 @@ function KindTag({ title, children }: { title: string; children: ReactNode }) {
       <Pill size="xs">{children}</Pill>
     </span>
   );
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback;
 }
 
 export default function AlertTable({

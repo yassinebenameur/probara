@@ -14,6 +14,7 @@ import { TRIAGE_SETTING_RANGES, parseSettingInput, triageSettingsForSave } from 
 import type { TriageSettingsErrors, TriageSettingsValues } from '@/lib/ai-triage';
 import type { AISettings, AITestResult } from '@/lib/types';
 import { SETTINGS_PANEL_COLUMNS } from './layout';
+import { errorMessage } from '@/lib/errors';
 
 // Number inputs hold text so a field can be cleared while typing; the values
 // are parsed and range-checked on save (skipped while the controls are locked).
@@ -40,15 +41,6 @@ const TRIAGE_FIELDS: { key: keyof TriageSettingsValues; label: string }[] = [
 const TRIAGE_FIELDS_GRID =
   'grid items-end gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,max(calc((100%_-_1.5rem)/3),calc((28rem_-_100%)*999))),1fr))]';
 
-// API errors are thrown as plain `{error, message}` objects, not Error instances.
-function errorText(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    const m = (err as { message?: unknown }).message;
-    if (typeof m === 'string' && m) return m;
-  }
-  return fallback;
-}
-
 export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const { showToast } = useToast();
   const [settings, setSettings] = useState<AISettings | null>(null);
@@ -73,7 +65,7 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   }, []);
   const load = useCallback(async () => {
     try { apply(await getAISettings()); }
-    catch (err) { setError(errorText(err, 'Could not load AI settings')); }
+    catch (err) { setError(errorMessage(err, 'Could not load AI settings')); }
   }, [apply]);
   useEffect(() => { void load(); }, [load]);
   // Triage needs AI on for the workspace; the toggle above is the draft value.
@@ -94,13 +86,13 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
       apply(await updateAISettings({ enabled, ...payload }));
       showToast('AI settings saved', 'success');
     }
-    catch (err) { setError(errorText(err, 'Could not save AI settings')); }
+    catch (err) { setError(errorMessage(err, 'Could not save AI settings')); }
     finally { setSaving(false); }
   };
   const test = async () => {
     setTesting(true);
     try { const p = await testAISettings(); setProbe(p); setSettings((s) => s ? { ...s, available: p.ok, model: p.model, message: p.message } : s); }
-    catch (err) { setProbe({ ok: false, message: errorText(err, 'Local service unavailable') }); }
+    catch (err) { setProbe({ ok: false, message: errorMessage(err, 'Local service unavailable') }); }
     finally { setTesting(false); }
   };
   // Same download path as the monitor export (app/monitors/page.tsx).

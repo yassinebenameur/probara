@@ -3,11 +3,12 @@ import test from 'node:test';
 import {
   accessCleanupCommand, accessManifestCommands, ADDED_NAMESPACE_TEXT, collectorAccessManifest, configuredNamespaces, installCommands,
   integrationEditErrors, integrationPatch, namespaceDelta, namespacePill, namespaceRows, pendingReasonInfo, removeButtonIndex, removedNamespaceText, withHomeLocked,
-  approveFormErrors, COLLECTOR_IMAGE_PREFILL, COLLECTOR_IMAGE_REPOSITORY, collectorHealth, collectorManifest, coverageGaps, coverageQueryString, errorMessage, gapInfo,
+  approveFormErrors, COLLECTOR_IMAGE_PREFILL, COLLECTOR_IMAGE_REPOSITORY, collectorHealth, collectorManifest, coverageGaps, coverageQueryString, gapInfo,
   initialCollectorImage, isDuplicateTarget, isNotFound, linkBlocked, manifestInputErrors, MAX_NAMESPACES, namespaceFieldError, pageAfterShrink, parseExpectedStatus,
   parseNamespaces, pendingSuggestionCount, serviceSuggestions, suggestionCover, suggestionTarget, validNamespace,
   type ApproveFormValues, type DiscoveryIntegration, type DiscoveryMonitor, type DiscoveryService,
 } from './discovery';
+import { errorMessage } from './errors';
 
 const integration: DiscoveryIntegration = {
   id: 'c952c53e-d8c8-4e16-8e94-a9ec57690c11', name: 'Production',

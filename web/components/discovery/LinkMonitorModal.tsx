@@ -12,10 +12,11 @@ import TableSkeleton from '@/components/ui/TableSkeleton';
 import TypeBadge from '@/components/ui/TypeBadge';
 import { linkDiscoveryMonitor } from '@/lib/api';
 import { getAllMonitors } from '@/lib/monitor-list';
-import { errorMessage, linkBlocked, suggestionTarget, type DiscoveryMonitor, type DiscoveryService, type DiscoverySuggestion } from '@/lib/discovery';
+import { linkBlocked, suggestionTarget, type DiscoveryMonitor, type DiscoveryService, type DiscoverySuggestion } from '@/lib/discovery';
 import { displayStatusFromState, monitorTarget } from '@/lib/monitor-utils';
 import { MONITOR_STATUS_DOT } from '@/lib/status-tones';
 import type { Monitor, MonitorState } from '@/lib/types';
+import { errorMessage } from '@/lib/errors';
 
 const MAX_ROWS = 100;
 
