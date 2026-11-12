@@ -24,7 +24,7 @@ func TestBuildAlerterAutoIncidentNarrative(t *testing.T) {
 	if title != "api-e incident" {
 		t.Fatalf("title = %q, want %q", title, "api-e incident")
 	}
-	if summary != "Automatically created from a firing alert policy." {
+	if summary != "Automatically created from a firing alert." {
 		t.Fatalf("summary = %q", summary)
 	}
 	if title, _ := buildAlerterAutoIncidentNarrative(" "); title != "Auto-created incident" {

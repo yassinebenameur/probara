@@ -138,7 +138,7 @@ func buildAlerterAutoIncidentNarrative(monitorName string) (string, string) {
 		title = fmt.Sprintf("%s incident", monitorName)
 	}
 
-	return title, "Automatically created from a firing alert policy."
+	return title, "Automatically created from a firing alert."
 }
 
 func alerterMutationChanged(result sql.Result) bool {
