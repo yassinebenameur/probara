@@ -9,28 +9,19 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
-func TestBuildAlertEvent_StatusAndTemplates(t *testing.T) {
+func TestBuildAlertEvent_Status(t *testing.T) {
 	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
 	resolvedAt := now.Add(-1 * time.Minute)
-	subjectTemplate := "subject"
-	bodyTemplate := "body"
 
-	binding := policyBinding{
-		MonitorID:            uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
-		TenantID:             uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
-		MonitorName:          "api-e",
-		PolicyID:             uuid.MustParse("11111111-2222-3333-4444-555555555555"),
-		PolicyName:           "Critical",
-		FailureThreshold:     2,
-		FailureWindowSeconds: 300,
-		EmailSubjectTemplate: &subjectTemplate,
-		EmailBodyTemplate:    &bodyTemplate,
+	binding := alertSubject{
+		MonitorID:   uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+		TenantID:    uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+		MonitorName: "api-e",
 	}
 
 	alert := &alertRecord{
 		ID:           uuid.MustParse("99999999-9999-9999-9999-999999999999"),
 		MonitorID:    binding.MonitorID,
-		PolicyID:     binding.PolicyID,
 		TriggeredAt:  now.Add(-10 * time.Minute),
 		FailureCount: 3,
 	}
@@ -42,17 +33,18 @@ func TestBuildAlertEvent_StatusAndTemplates(t *testing.T) {
 	if event.Alert.ResolvedAt == nil || !event.Alert.ResolvedAt.Equal(resolvedAt) {
 		t.Fatalf("expected resolvedAt %v, got %v", resolvedAt, event.Alert.ResolvedAt)
 	}
-	if event.Alert.EmailSubjectTemplate == nil || *event.Alert.EmailSubjectTemplate != subjectTemplate {
-		t.Fatalf("expected subject template %q, got %v", subjectTemplate, event.Alert.EmailSubjectTemplate)
+	if event.Alert.MonitorID != binding.MonitorID.String() || event.TenantID != binding.TenantID.String() {
+		t.Fatalf("event subject = monitor %s tenant %s, want the binding's", event.Alert.MonitorID, event.TenantID)
 	}
-	if event.Alert.EmailBodyTemplate == nil || *event.Alert.EmailBodyTemplate != bodyTemplate {
-		t.Fatalf("expected body template %q, got %v", bodyTemplate, event.Alert.EmailBodyTemplate)
+	// Monitor alerts carry no "Alert rule" name; only channel test sends do.
+	if event.Alert.PolicyName != "" {
+		t.Fatalf("PolicyName = %q, want empty", event.Alert.PolicyName)
 	}
 }
 
 func TestBuildAlertEvent_RootCause(t *testing.T) {
 	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
-	binding := policyBinding{
+	binding := alertSubject{
 		MonitorID: uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
 		TenantID:  uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
 	}
@@ -89,7 +81,7 @@ func TestBuildAlertEvent_RootCause(t *testing.T) {
 // A follow-up keeps the alert's own status and carries the hint.
 func TestBuildAlertEvent_SuspectedCause(t *testing.T) {
 	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
-	binding := policyBinding{MonitorID: uuid.New(), TenantID: uuid.New(), MonitorName: "api"}
+	binding := alertSubject{MonitorID: uuid.New(), TenantID: uuid.New(), MonitorName: "api"}
 	sc := &notifications.SuspectedCause{TriageID: "t", Key: "dns_failure", Title: "DNS resolution failure", Confidence: "high"}
 	for _, status := range []string{"active", "acknowledged"} {
 		alert := &alertRecord{ID: uuid.New(), Status: status, TriggeredAt: now.Add(-time.Hour), SuspectedCause: sc}

@@ -176,7 +176,7 @@ Concretely:
   migration (e.g. `error_checks`) return errors during the window; this
   self-heals once the migration job completes.
 - **Alerter notification state**: `loadNotificationStates`
-  (`alerter/internal/alerter/evaluator.go`) reads every
+  (`alerter/internal/alerter/alert_event.go`) reads every
   `alert_notification_states` column, including `acknowledged_sent_at`
   (000089) and `suspected_cause_sent_at` (000095). Until the migration lands,
   the evaluate, dispatch and mesh paths fail with SQLSTATE 42703 on every tick

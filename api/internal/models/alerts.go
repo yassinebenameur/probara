@@ -22,7 +22,6 @@ type Alert struct {
 	// MonitorID is nil for mesh_edge alerts, whose subject is a directed
 	// location pair instead of a monitor.
 	MonitorID      *uuid.UUID  `json:"monitor_id,omitempty"`
-	AlertPolicyID  *uuid.UUID  `json:"alert_policy_id,omitempty"`
 	Status         AlertStatus `json:"status"`
 	TriggeredAt    time.Time   `json:"triggered_at"`
 	AcknowledgedAt *time.Time  `json:"acknowledged_at,omitempty"`
@@ -57,7 +56,6 @@ type Alert struct {
 type AlertWithDetails struct {
 	Alert
 	MonitorName          *string `json:"monitor_name,omitempty"`
-	PolicyName           *string `json:"policy_name,omitempty"`
 	RootCauseMonitorName *string `json:"root_cause_monitor_name,omitempty"`
 	SourceLocationName   *string `json:"source_location_name,omitempty"`
 	TargetLocationName   *string `json:"target_location_name,omitempty"`

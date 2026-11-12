@@ -29,7 +29,7 @@ func newSendCounter(hold time.Duration) *sendCounter {
 	return &sendCounter{hold: hold, byEv: map[string]int{}}
 }
 
-func (c *sendCounter) send(_ context.Context, _ alertChannel, eventType string, _ policyBinding, _ *alertRecord, _ *groupDetail, _ time.Time) error {
+func (c *sendCounter) send(_ context.Context, _ alertChannel, eventType string, _ alertSubject, _ *alertRecord, _ *groupDetail, _ time.Time) error {
 	if c.fail.Load() {
 		return errors.New("channel unreachable")
 	}
@@ -87,7 +87,7 @@ func openDownAlert(ctx context.Context, t *testing.T, dbClient *shareddb.Client,
 	t.Helper()
 	// Open the alert without dispatching so the dispatch race is isolated.
 	a := newIntegrationAlerter(dbClient)
-	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+	a.sendFunc = func(context.Context, alertChannel, string, alertSubject, *alertRecord, *groupDetail, time.Time) error {
 		t.Fatalf("no channel should be routed while opening the alert")
 		return nil
 	}

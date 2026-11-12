@@ -21,12 +21,11 @@ func TestServiceResolveAlertInvokesIncidentRecoveryAutomation(t *testing.T) {
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerts")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
-	policyID := insertAlertServiceTestPolicy(ctx, t, dbClient, tenantID, true)
 	alertID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'active', NOW(), 2, NOW(), NOW())
-	`, alertID, tenantID, monitorID, policyID); err != nil {
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active', NOW(), 2, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
 		t.Fatalf("insert alert: %v", err)
 	}
 
@@ -71,12 +70,11 @@ func TestServiceResolveAlertRollsBackWhenIncidentAutomationFails(t *testing.T) {
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerts")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
-	policyID := insertAlertServiceTestPolicy(ctx, t, dbClient, tenantID, true)
 	alertID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'active', NOW(), 2, NOW(), NOW())
-	`, alertID, tenantID, monitorID, policyID); err != nil {
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active', NOW(), 2, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
 		t.Fatalf("insert alert: %v", err)
 	}
 
@@ -90,19 +88,6 @@ func TestServiceResolveAlertRollsBackWhenIncidentAutomationFails(t *testing.T) {
 	if status := loadAlertStatus(ctx, t, dbClient, alertID); status != "active" {
 		t.Fatalf("alert status after failed resolve = %q, want active", status)
 	}
-}
-
-func insertAlertServiceTestPolicy(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID uuid.UUID, createIncidentOnFire bool) uuid.UUID {
-	t.Helper()
-
-	policyID := uuid.New()
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, create_incident_on_fire, created_at, updated_at)
-		VALUES ($1, $2, 'policy', 1, 60, $3, NOW(), NOW())
-	`, policyID, tenantID, createIncidentOnFire); err != nil {
-		t.Fatalf("insert alert policy: %v", err)
-	}
-	return policyID
 }
 
 type fakeIncidentAutomation struct {

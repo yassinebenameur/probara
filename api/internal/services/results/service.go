@@ -415,7 +415,7 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Monitor, error) {
 	query := `
 		SELECT id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, next_run_at, created_at, updated_at
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
@@ -426,8 +426,7 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 
 	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-		&monitor.AlertPolicyID, &monitor.Enabled,
+		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
 	)
 

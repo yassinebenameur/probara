@@ -135,8 +135,8 @@ func TestPurger_PartialUniqueIndexAllowsReimport(t *testing.T) {
 	token := "tok-abc"
 	_, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitors (id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
-		    alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at)
-		VALUES ($1, $2, 'first', 'push', '{}'::jsonb, 60, 30, NULL, TRUE, ARRAY[]::text[],
+		    enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at)
+		VALUES ($1, $2, 'first', 'push', '{}'::jsonb, 60, 30, TRUE, ARRAY[]::text[],
 		    NULL, $3, NULL, NOW(), NOW())
 	`, id, tenantID, token)
 	require.NoError(t, err)
@@ -151,8 +151,8 @@ func TestPurger_PartialUniqueIndexAllowsReimport(t *testing.T) {
 	newID := uuid.New()
 	_, err = dbClient.ExecContext(ctx, `
 		INSERT INTO monitors (id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
-		    alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at)
-		VALUES ($1, $2, 'second', 'push', '{}'::jsonb, 60, 30, NULL, TRUE, ARRAY[]::text[],
+		    enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at)
+		VALUES ($1, $2, 'second', 'push', '{}'::jsonb, 60, 30, TRUE, ARRAY[]::text[],
 		    NULL, $3, NULL, NOW(), NOW())
 	`, newID, tenantID, token)
 	require.NoError(t, err, "reimporting with the same push_token must succeed while old row is tombstoned but not yet purged")
@@ -170,18 +170,11 @@ func TestPurger_DetachesAutoIncidentsBeforeDelete(t *testing.T) {
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "")
 
-	policyID := uuid.New()
-	_, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
-		VALUES ($1, $2, 'p', 1, 60, NOW(), NOW())
-	`, policyID, tenantID)
-	require.NoError(t, err)
-
 	incidentID := uuid.New()
-	_, err = dbClient.ExecContext(ctx, `
-		INSERT INTO incidents (id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, auto_alert_policy_id, created_at, updated_at)
-		VALUES ($1, $2, 'auto', '', 'investigating', TRUE, $3, $4, NOW(), NOW())
-	`, incidentID, tenantID, monitorID, policyID)
+	_, err := dbClient.ExecContext(ctx, `
+		INSERT INTO incidents (id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, created_at, updated_at)
+		VALUES ($1, $2, 'auto', '', 'investigating', TRUE, $3, NOW(), NOW())
+	`, incidentID, tenantID, monitorID)
 	require.NoError(t, err)
 
 	_, err = dbClient.ExecContext(ctx,
@@ -197,15 +190,13 @@ func TestPurger_DetachesAutoIncidentsBeforeDelete(t *testing.T) {
 	var (
 		isAuto      bool
 		autoMonitor *uuid.UUID
-		autoPolicy  *uuid.UUID
 	)
 	require.NoError(t, dbClient.QueryRowContext(ctx,
-		`SELECT is_auto_created, auto_monitor_id, auto_alert_policy_id FROM incidents WHERE id = $1`,
+		`SELECT is_auto_created, auto_monitor_id FROM incidents WHERE id = $1`,
 		incidentID,
-	).Scan(&isAuto, &autoMonitor, &autoPolicy))
+	).Scan(&isAuto, &autoMonitor))
 	require.False(t, isAuto, "incident should be demoted to manual")
 	require.Nil(t, autoMonitor, "auto_monitor_id should be cleared")
-	require.Nil(t, autoPolicy, "auto_alert_policy_id should be cleared")
 }
 
 func testLogger(t testing.TB) *logger.Logger {

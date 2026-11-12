@@ -37,12 +37,6 @@ type AlertService interface {
 
 	// GetActiveAlertForMonitor gets the active alert for a monitor if one exists
 	GetActiveAlertForMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Alert, error)
-
-	// GetAlertCountsByPolicy gets alert counts grouped by policy
-	GetAlertCountsByPolicy(ctx context.Context, tenantID uuid.UUID) (map[uuid.UUID]int, error)
-
-	// GetMonitorCountsByPolicy gets monitor counts grouped by policy
-	GetMonitorCountsByPolicy(ctx context.Context, tenantID uuid.UUID) (map[uuid.UUID]int, error)
 }
 
 // Ensure Service implements AlertService

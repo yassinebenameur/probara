@@ -32,7 +32,7 @@ import (
 func (a *Alerter) deliverNotification(
 	ctx context.Context,
 	eventType string,
-	binding policyBinding,
+	binding alertSubject,
 	alert *alertRecord,
 	groupInfo *groupDetail,
 	channel alertChannel,

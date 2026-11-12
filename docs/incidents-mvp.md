@@ -7,7 +7,7 @@ An incident in Probara is a human-owned operational and communication object. Al
 - First-class `incident` object in the API and database, tenant-scoped and distinct from alerts.
 - Two creation modes only:
   - manual creation from a dedicated `Incidents` area
-  - automatic creation from alert events when an alert policy explicitly opts in
+  - automatic creation from alert events when the workspace opts in
 - Minimal state model:
   - `investigating`
   - `identified`
@@ -41,14 +41,14 @@ An incident in Probara is a human-owned operational and communication object. Al
 ## Core product decisions
 - Auto-created incidents are included in MVP.
 - Auto-create is driven from alert events, not directly from raw monitor failures.
-- Auto-create is controlled by one alert-policy flag: `create_incident_on_fire`.
+- Auto-create is controlled by one workspace toggle, `auto_create_incident` in notification settings (originally an alert-policy flag, `create_incident_on_fire`; alert policies are retired).
 - `acknowledged` is not an incident state.
 - `detected` is not needed; auto incidents start in `investigating`.
 - `closed` is not part of v1.
 - Manual incidents may exist without any linked monitor.
 - Multiple alerts may attach to a single incident, but auto-grouping is intentionally narrow:
-  - reuse one open auto-created incident only when `(tenant_id, monitor_id, alert_policy_id)` matches
-  - do not auto-group across different monitors or policies
+  - reuse one open auto-created incident only when `(tenant_id, monitor_id)` matches
+  - do not auto-group across different monitors
 - Auto-created incidents are not auto-published.
 - Incidents are not auto-resolved in v1.
 - Incidents do not send their own internal notifications in v1; alert channels remain the responder-notification mechanism.

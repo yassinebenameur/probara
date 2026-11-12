@@ -17,12 +17,10 @@ import (
 type MockRepository struct {
 	monitors          map[uuid.UUID]*models.Monitor
 	members           map[uuid.UUID][]uuid.UUID
-	policies          map[uuid.UUID][]uuid.UUID
 	deletedHistoryIDs []uuid.UUID
 
-	// Controllable error/return fields for bulk alert policy tests.
-	verifyAlertPolicyErr error
-	verifyMonitorsErr    error
+	// Controllable error for the tenant-ownership check.
+	verifyMonitorsErr error
 
 	// Soft-delete tracking.
 	bulkSoftDeleted   []uuid.UUID
@@ -35,7 +33,6 @@ func NewMockRepository() *MockRepository {
 	return &MockRepository{
 		monitors: make(map[uuid.UUID]*models.Monitor),
 		members:  make(map[uuid.UUID][]uuid.UUID),
-		policies: make(map[uuid.UUID][]uuid.UUID),
 	}
 }
 
@@ -101,29 +98,8 @@ func (m *MockRepository) HardDelete(ctx context.Context, monitorID uuid.UUID) er
 	return nil
 }
 
-func (m *MockRepository) VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error {
-	return m.verifyAlertPolicyErr
-}
-
 func (m *MockRepository) VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
 	return m.verifyMonitorsErr
-}
-
-func (m *MockRepository) SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error {
-	m.policies[monitorID] = policyIDs
-	return nil
-}
-
-func (m *MockRepository) GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error) {
-	return m.policies[monitorID], nil
-}
-
-func (m *MockRepository) GetAlertPolicyIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
-	result := make(map[uuid.UUID][]uuid.UUID)
-	for _, monitorID := range monitorIDs {
-		result[monitorID] = m.policies[monitorID]
-	}
-	return result, nil
 }
 
 func (m *MockRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {

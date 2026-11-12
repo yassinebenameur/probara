@@ -394,10 +394,10 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 
 	var alertID uuid.UUID
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
 			triggered_at, failure_count, last_error, root_cause_monitor_id, root_cause_down_since,
 			failing_locations, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW(), $4, $5, $6, $7, $8, NOW(), NOW())
+		VALUES ($1, $2, $3, 'availability', 'active', NOW(), $4, $5, $6, $7, $8, NOW(), NOW())
 		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id
 	`, uuid.New(), dm.tenantID, dm.id, dm.failCount, lastError, rootCauseID, rootCauseDownSince, failingLocations).Scan(&alertID)
@@ -415,7 +415,7 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 	}
 	if autoIncident {
 		record := alertRecord{ID: alertID, TenantID: dm.tenantID, MonitorID: dm.id, FailureCount: dm.failCount, LastError: lastError}
-		binding := policyBinding{MonitorID: dm.id, TenantID: dm.tenantID, MonitorName: dm.name, CreateIncidentOnFire: true}
+		binding := alertSubject{MonitorID: dm.id, TenantID: dm.tenantID, MonitorName: dm.name, CreateIncidentOnFire: true}
 		if err := a.ensureAutoIncidentForAlertTx(ctx, tx, binding, &record); err != nil {
 			return err
 		}
@@ -431,7 +431,7 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 		RootCauseMonitorID: rootCauseID, RootCauseMonitorName: rootCauseName, RootCauseDownSince: rootCauseDownSince,
 		FailingLocations: parseFailingLocations(dm.failingLocations),
 	}
-	binding := policyBinding{MonitorID: dm.id, TenantID: dm.tenantID, MonitorName: dm.name}
+	binding := alertSubject{MonitorID: dm.id, TenantID: dm.tenantID, MonitorName: dm.name}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
 	return nil
 }
@@ -492,7 +492,7 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": oa.record.ID}).Error("Failed to resolve alert")
 			continue
 		}
-		binding := policyBinding{MonitorID: oa.record.MonitorID, TenantID: oa.record.TenantID, MonitorName: oa.monitorName}
+		binding := alertSubject{MonitorID: oa.record.MonitorID, TenantID: oa.record.TenantID, MonitorName: oa.monitorName}
 		a.publishAlertEvent(ctx, "resolved", binding, &oa.record, &resolvedAt)
 		a.notifyFiredChannels(ctx, "resolved", binding, &oa.record)
 	}
@@ -616,7 +616,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": oa.record.ID}).Error("Failed to load notification states")
 			continue
 		}
-		binding := policyBinding{MonitorID: oa.record.MonitorID, TenantID: oa.record.TenantID, MonitorName: oa.monitorName}
+		binding := alertSubject{MonitorID: oa.record.MonitorID, TenantID: oa.record.TenantID, MonitorName: oa.monitorName}
 		// Escalation delays count from when the alert became eligible to
 		// dispatch, not from when it opened: a downstream released from
 		// dependency suppression walks its tiers in order instead of firing
@@ -674,7 +674,7 @@ func (a *Alerter) dispatchAcknowledgements(ctx context.Context) error {
 	defer rows.Close()
 
 	type pending struct {
-		binding policyBinding
+		binding alertSubject
 		record  alertRecord
 		channel alertChannel
 	}
@@ -712,7 +712,7 @@ func (a *Alerter) dispatchAcknowledgements(ctx context.Context) error {
 // fireChannel sends one event through the atomic claim in deliverNotification.
 // The in-memory state the caller read is only a pre-filter: the claim is what
 // decides, so a sibling replica racing on the same alert silently loses here.
-func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, channel alertChannel, now time.Time, reminderInterval time.Duration) {
+func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding alertSubject, alert *alertRecord, channel alertChannel, now time.Time, reminderInterval time.Duration) {
 	fields := map[string]interface{}{
 		"alert_id": alert.ID, "channel_id": channel.ID, "event_type": eventType,
 	}
@@ -728,7 +728,7 @@ func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding pol
 
 // notifyFiredChannels sends an event (e.g. resolved) to every channel that
 // already fired for this alert.
-func (a *Alerter) notifyFiredChannels(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord) {
+func (a *Alerter) notifyFiredChannels(ctx context.Context, eventType string, binding alertSubject, alert *alertRecord) {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, ans.last_event_type
 		FROM alert_notification_states ans

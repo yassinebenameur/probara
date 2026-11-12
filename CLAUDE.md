@@ -991,7 +991,12 @@ or imported groups come back empty. Any other path that creates groups through
   post-result linger; keep them there. The 2xx ACK repeats the INVITE's
   credentials; CANCEL and the non-2xx ACK carry none.
 - `alert_policies` are retired (API returns 410); workspace alert config
-  lives on tenants via `/notification-settings`.
+  lives on tenants via `/notification-settings`. No Go code names the
+  retired tables (`alert_policies`, `alert_policy_channels`,
+  `monitor_alert_policies`) or columns (`monitors.alert_policy_id`,
+  `alerts.alert_policy_id`, `incidents.auto_alert_policy_id`) any more; the
+  migration that drops them is pending for the next release (old pods still
+  select them during a rolling deploy), so do not reintroduce a reference.
 - **AI analysis timing**: the worker's stale-pending sweep
   (`worker/internal/airca/sweep.go`, 20 min, 30 min lock ceiling) must outlast
   one delivery (`LOCAL_AI_TIMEOUT_SECONDS` max 300 s + 30 s) and the

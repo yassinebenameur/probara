@@ -473,8 +473,6 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/", alertHandlers.ListAlerts)
 				r.Get("/recent", alertHandlers.GetRecentAlerts)
 				r.Get("/stream", alertHandlers.StreamAlerts)
-				r.Get("/counts/by-policy", alertHandlers.GetAlertCountsByPolicy)
-				r.Get("/counts/monitors-by-policy", alertHandlers.GetMonitorCountsByPolicy)
 				r.Get("/{id}", alertHandlers.GetAlert)
 				r.Post("/{id}/acknowledge", alertHandlers.AcknowledgeAlert)
 				r.Post("/{id}/resolve", alertHandlers.ResolveAlert)

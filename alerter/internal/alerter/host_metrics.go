@@ -256,10 +256,10 @@ func (a *Alerter) loadHostMetricConfigs(ctx context.Context) ([]hostMetricConfig
 func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, b breachingSeries) error {
 	var alertID uuid.UUID
 	err := a.db.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
 			triggered_at, failure_count, metric_name, metric_value, threshold_value,
 			created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 'host_metric', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
+		VALUES ($1, $2, $3, 'host_metric', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
 		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id
 	`, uuid.New(), c.tenantID, c.monitorID, b.seriesKey, b.value, b.threshold).Scan(&alertID)
@@ -278,7 +278,7 @@ func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, b
 		Kind: notifications.KindHostMetric, TriggeredAt: time.Now(),
 		MetricName: &seriesKey, MetricValue: &value, ThresholdValue: &threshold,
 	}
-	binding := policyBinding{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
+	binding := alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
 	return nil
 }
@@ -388,7 +388,7 @@ func (a *Alerter) resolveHostMetricAlert(ctx context.Context, alertID, tenantID,
 		t := threshold.Float64
 		record.ThresholdValue = &t
 	}
-	binding := policyBinding{MonitorID: monitorID, TenantID: tenantID, MonitorName: monitorName}
+	binding := alertSubject{MonitorID: monitorID, TenantID: tenantID, MonitorName: monitorName}
 	a.publishAlertEvent(ctx, "resolved", binding, &record, &resolvedAt)
 	a.notifyFiredChannels(ctx, "resolved", binding, &record)
 }

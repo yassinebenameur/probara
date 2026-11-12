@@ -24,9 +24,9 @@ func insertAlertAndChannel(ctx context.Context, t *testing.T, db *shareddb.Clien
 		t.Fatalf("insert channel: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
 			triggered_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW(), 3, NOW(), NOW())
+		VALUES ($1, $2, $3, 'availability', 'active', NOW(), 3, NOW(), NOW())
 	`, alertID, tenantID, monitorID); err != nil {
 		t.Fatalf("insert alert: %v", err)
 	}

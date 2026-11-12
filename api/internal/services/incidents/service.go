@@ -140,7 +140,7 @@ func (s *Service) CreateIncident(ctx context.Context, tenantID uuid.UUID, req *m
 func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentDetail, error) {
 	query := `
 		SELECT i.id, i.tenant_id, i.title, i.summary, i.state, i.severity, i.owner_user_id, au.username,
-			i.resolved_at, i.is_auto_created, i.auto_monitor_id, i.auto_alert_policy_id, i.created_at, i.updated_at
+			i.resolved_at, i.is_auto_created, i.auto_monitor_id, i.created_at, i.updated_at
 		FROM incidents i
 		LEFT JOIN admin_users au ON au.id = i.owner_user_id
 		WHERE i.id = $1 AND i.tenant_id = $2
@@ -153,10 +153,9 @@ func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUI
 	var ownerUsername sql.NullString
 	var resolvedAt sql.NullTime
 	var autoMonitorID uuid.NullUUID
-	var autoAlertPolicyID uuid.NullUUID
 	if err := s.db.QueryRowContext(ctx, query, incidentID, tenantID).Scan(
 		&detail.ID, &detail.TenantID, &detail.Title, &summary, &detail.State, &severity, &ownerUserID, &ownerUsername,
-		&resolvedAt, &detail.IsAutoCreated, &autoMonitorID, &autoAlertPolicyID, &detail.CreatedAt, &detail.UpdatedAt,
+		&resolvedAt, &detail.IsAutoCreated, &autoMonitorID, &detail.CreatedAt, &detail.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("incident not found")
@@ -182,10 +181,6 @@ func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUI
 	if autoMonitorID.Valid {
 		monitorID := autoMonitorID.UUID
 		detail.AutoMonitorID = &monitorID
-	}
-	if autoAlertPolicyID.Valid {
-		policyID := autoAlertPolicyID.UUID
-		detail.AutoAlertPolicyID = &policyID
 	}
 
 	timeline, err := s.loadIncidentTimeline(ctx, tenantID, incidentID)
@@ -892,14 +887,13 @@ func (s *Service) loadIncidentTimeline(ctx context.Context, tenantID, incidentID
 
 func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID uuid.UUID) ([]models.IncidentAlertSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT a.id, a.monitor_id, a.alert_policy_id, a.status, a.triggered_at,
+		SELECT a.id, a.monitor_id, a.status, a.triggered_at,
 			a.acknowledged_at, a.resolved_at, a.failure_count, a.last_error, a.created_at, a.updated_at,
-			m.name, ap.name,
+			m.name,
 			`+triageview.Columns+`
 		FROM incident_alerts ia
 		JOIN alerts a ON a.id = ia.alert_id
 		JOIN monitors m ON m.id = a.monitor_id
-		LEFT JOIN alert_policies ap ON ap.id = a.alert_policy_id
 		`+triageview.Join+`
 		WHERE ia.incident_id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC, a.id DESC
@@ -915,12 +909,11 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 		var acknowledgedAt sql.NullTime
 		var resolvedAt sql.NullTime
 		var lastError sql.NullString
-		var policyName sql.NullString
 		var triage triageview.Scan
 		if err := rows.Scan(append([]any{
-			&item.ID, &item.MonitorID, &item.AlertPolicyID, &item.Status, &item.TriggeredAt,
+			&item.ID, &item.MonitorID, &item.Status, &item.TriggeredAt,
 			&acknowledgedAt, &resolvedAt, &item.FailureCount, &lastError, &item.CreatedAt, &item.UpdatedAt,
-			&item.MonitorName, &policyName,
+			&item.MonitorName,
 		}, triage.Dest()...)...); err != nil {
 			return nil, fmt.Errorf("scan incident alert: %w", err)
 		}
@@ -935,9 +928,6 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 		if lastError.Valid {
 			value := lastError.String
 			item.LastError = &value
-		}
-		if policyName.Valid {
-			item.PolicyName = &policyName.String
 		}
 		item.Triage = triage.Build()
 		alerts = append(alerts, item)

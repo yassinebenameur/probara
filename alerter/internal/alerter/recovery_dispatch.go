@@ -60,7 +60,7 @@ func (a *Alerter) dispatchPendingRecoveries(ctx context.Context) error {
 	}
 	type pending struct {
 		record  alertRecord
-		binding policyBinding
+		binding alertSubject
 	}
 	batch := make([]pending, 0, batchSize)
 	for rows.Next() {

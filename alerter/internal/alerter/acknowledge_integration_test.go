@@ -129,7 +129,7 @@ func TestDeliverNotificationKeepsClaimOnPermanentFailure(t *testing.T) {
 
 	attempts := 0
 	a := newIntegrationAlerter(dbClient)
-	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+	a.sendFunc = func(context.Context, alertChannel, string, alertSubject, *alertRecord, *groupDetail, time.Time) error {
 		attempts++
 		return errors.New("connection reset")
 	}
@@ -146,7 +146,7 @@ func TestDeliverNotificationKeepsClaimOnPermanentFailure(t *testing.T) {
 	}
 
 	attempts = 0
-	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+	a.sendFunc = func(context.Context, alertChannel, string, alertSubject, *alertRecord, *groupDetail, time.Time) error {
 		attempts++
 		return plugin.Permanent(errors.New("slack webhook returned status 404: no_service"))
 	}
@@ -187,7 +187,7 @@ func TestDeliverNotificationDoesNotWaitOnInFlightWorkerSend(t *testing.T) {
 
 	sent := 0
 	a := newIntegrationAlerter(dbClient)
-	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+	a.sendFunc = func(context.Context, alertChannel, string, alertSubject, *alertRecord, *groupDetail, time.Time) error {
 		sent++
 		return nil
 	}

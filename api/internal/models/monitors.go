@@ -53,8 +53,6 @@ type Monitor struct {
 	Config                       json.RawMessage            `json:"config"`
 	IntervalSeconds              int                        `json:"interval_seconds"`
 	TimeoutSeconds               int                        `json:"timeout_seconds"`
-	AlertPolicyID                *uuid.UUID                 `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs               []uuid.UUID                `json:"alert_policy_ids,omitempty"`
 	Enabled                      bool                       `json:"enabled"`
 	Tags                         []string                   `json:"tags,omitempty"`
 	NextRunAt                    *time.Time                 `json:"next_run_at,omitempty"`
@@ -89,8 +87,6 @@ type CreateMonitorRequest struct {
 	Config                       json.RawMessage            `json:"config"`
 	IntervalSeconds              int                        `json:"interval_seconds"`
 	TimeoutSeconds               int                        `json:"timeout_seconds"`
-	AlertPolicyID                *string                    `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs               []string                   `json:"alert_policy_ids,omitempty"`
 	Enabled                      *bool                      `json:"enabled,omitempty"`
 	Tags                         []string                   `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
@@ -110,8 +106,6 @@ type UpdateMonitorRequest struct {
 	Config                       json.RawMessage            `json:"config,omitempty"`
 	IntervalSeconds              *int                       `json:"interval_seconds,omitempty"`
 	TimeoutSeconds               *int                       `json:"timeout_seconds,omitempty"`
-	AlertPolicyID                *string                    `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs               *[]string                  `json:"alert_policy_ids,omitempty"`
 	Enabled                      *bool                      `json:"enabled,omitempty"`
 	Tags                         *[]string                  `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,25 +18,20 @@ import (
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-type policyBinding struct {
+// alertSubject is what an alert is about: the monitor (or, for mesh edges, just
+// the tenant) it fired for, plus whether firing may open an auto incident.
+type alertSubject struct {
 	MonitorID            uuid.UUID
 	TenantID             uuid.UUID
 	MonitorName          string
 	MonitorType          string
-	PolicyID             uuid.UUID
-	PolicyName           string
-	FailureThreshold     int
-	FailureWindowSeconds int
 	CreateIncidentOnFire bool
-	EmailSubjectTemplate *string
-	EmailBodyTemplate    *string
 }
 
 type alertRecord struct {
 	ID                   uuid.UUID
 	TenantID             uuid.UUID
 	MonitorID            uuid.UUID
-	PolicyID             uuid.UUID
 	Kind                 string
 	Status               string
 	TriggeredAt          time.Time
@@ -168,150 +162,7 @@ func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.
 	return resolvedAt, nil
 }
 
-func (a *Alerter) ensureAutoIncidentForAlertTx(ctx context.Context, tx *sql.Tx, binding policyBinding, alert *alertRecord) error {
-	if !binding.CreateIncidentOnFire {
-		return nil
-	}
-
-	if err := a.lockAutoIncidentKeyTx(ctx, tx, binding.TenantID, binding.MonitorID, binding.PolicyID); err != nil {
-		return err
-	}
-
-	incidentID, created, err := a.findOrCreateAutoIncidentTx(ctx, tx, binding)
-	if err != nil {
-		return err
-	}
-
-	alertAttached, err := a.ensureIncidentAlertLinkTx(ctx, tx, incidentID, alert.ID)
-	if err != nil {
-		return err
-	}
-	monitorAttached, err := a.ensureIncidentMonitorLinkTx(ctx, tx, incidentID, binding.MonitorID)
-	if err != nil {
-		return err
-	}
-
-	if created || alertAttached || monitorAttached {
-		message := "Alert auto-linked to existing incident"
-		if created {
-			message = "Incident auto-created from firing alert"
-		}
-		metadata := map[string]interface{}{
-			"alert_id":   alert.ID.String(),
-			"monitor_id": binding.MonitorID.String(),
-		}
-		if binding.PolicyID != uuid.Nil {
-			metadata["alert_policy_id"] = binding.PolicyID.String()
-		}
-		if err := incidentrecovery.InsertTimelineEntryTx(ctx, tx, binding.TenantID, incidentID, incidentrecovery.SystemEntryType, message, metadata); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (a *Alerter) findOrCreateAutoIncidentTx(ctx context.Context, tx *sql.Tx, binding policyBinding) (uuid.UUID, bool, error) {
-	// policyParam is nil (SQL NULL) when there is no policy (lifecycle alerts),
-	// or the policy UUID when called from the policy-based createAlert path.
-	// IS NOT DISTINCT FROM handles both NULL and non-NULL equality correctly.
-	var policyParam interface{}
-	if binding.PolicyID != uuid.Nil {
-		policyParam = binding.PolicyID
-	}
-
-	var incidentID uuid.UUID
-	err := tx.QueryRowContext(ctx, `
-		SELECT id
-		FROM incidents
-		WHERE tenant_id = $1
-			AND is_auto_created = TRUE
-			AND auto_monitor_id = $2
-			AND auto_alert_policy_id IS NOT DISTINCT FROM $3
-			AND state <> 'resolved'
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-		FOR UPDATE
-	`, binding.TenantID, binding.MonitorID, policyParam).Scan(&incidentID)
-	if err == nil {
-		return incidentID, false, nil
-	}
-	if err != sql.ErrNoRows {
-		return uuid.Nil, false, fmt.Errorf("load auto incident: %w", err)
-	}
-
-	incidentID = uuid.New()
-	title, summary := buildAlerterAutoIncidentNarrative(binding.MonitorName, binding.PolicyName)
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO incidents (
-			id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, auto_alert_policy_id, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, 'investigating', TRUE, $5, $6, NOW(), NOW())
-	`, incidentID, binding.TenantID, title, summary, binding.MonitorID, policyParam); err != nil {
-		return uuid.Nil, false, fmt.Errorf("create auto incident: %w", err)
-	}
-
-	return incidentID, true, nil
-}
-
-func (a *Alerter) lockAutoIncidentKeyTx(ctx context.Context, tx *sql.Tx, tenantID, monitorID, policyID uuid.UUID) error {
-	lockKey := fmt.Sprintf("%s:%s:%s", tenantID, monitorID, policyID)
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
-		return fmt.Errorf("lock auto incident key: %w", err)
-	}
-	return nil
-}
-
-func (a *Alerter) ensureIncidentAlertLinkTx(ctx context.Context, tx *sql.Tx, incidentID, alertID uuid.UUID) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (incident_id, alert_id) DO NOTHING
-	`, incidentID, alertID)
-	if err != nil {
-		return false, fmt.Errorf("attach incident alert: %w", err)
-	}
-	return alerterMutationChanged(result), nil
-}
-
-func (a *Alerter) ensureIncidentMonitorLinkTx(ctx context.Context, tx *sql.Tx, incidentID, monitorID uuid.UUID) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO incident_monitors (incident_id, monitor_id, created_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (incident_id, monitor_id) DO NOTHING
-	`, incidentID, monitorID)
-	if err != nil {
-		return false, fmt.Errorf("attach incident monitor: %w", err)
-	}
-	return alerterMutationChanged(result), nil
-}
-
-func buildAlerterAutoIncidentNarrative(monitorName, policyName string) (string, string) {
-	monitorName = strings.TrimSpace(monitorName)
-	policyName = strings.TrimSpace(policyName)
-
-	title := "Auto-created incident"
-	if monitorName != "" {
-		title = fmt.Sprintf("%s incident", monitorName)
-	}
-
-	summary := "Automatically created from a firing alert policy."
-	if policyName != "" {
-		summary = fmt.Sprintf("Automatically created from alert policy %s.", policyName)
-	}
-
-	return title, summary
-}
-
-func alerterMutationChanged(result sql.Result) bool {
-	if result == nil {
-		return false
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	return err == nil && rowsAffected > 0
-}
-
-func (a *Alerter) publishAlertEvent(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, resolvedAt *time.Time) {
+func (a *Alerter) publishAlertEvent(ctx context.Context, eventType string, binding alertSubject, alert *alertRecord, resolvedAt *time.Time) {
 	if a.nats == nil {
 		return
 	}
@@ -328,7 +179,7 @@ func (a *Alerter) sendChannelNotification(
 	ctx context.Context,
 	channel alertChannel,
 	eventType string,
-	binding policyBinding,
+	binding alertSubject,
 	alert *alertRecord,
 	groupInfo *groupDetail,
 	now time.Time,
@@ -410,7 +261,7 @@ func getNotificationState(states map[uuid.UUID]map[uuid.UUID]*notificationState,
 	return nil
 }
 
-func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord, resolvedAt *time.Time, timestamp time.Time) notifications.AlertEvent {
+func buildAlertEvent(eventType string, binding alertSubject, alert *alertRecord, resolvedAt *time.Time, timestamp time.Time) notifications.AlertEvent {
 	status := "active"
 	switch eventType {
 	case "resolved":
@@ -452,16 +303,12 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			ID:                   alert.ID.String(),
 			MonitorID:            binding.MonitorID.String(),
 			MonitorName:          binding.MonitorName,
-			AlertPolicyID:        binding.PolicyID.String(),
-			PolicyName:           binding.PolicyName,
 			Kind:                 kind,
 			Status:               status,
 			TriggeredAt:          alert.TriggeredAt,
 			ResolvedAt:           resolvedAt,
 			FailureCount:         alert.FailureCount,
 			LastError:            alert.LastError,
-			EmailSubjectTemplate: binding.EmailSubjectTemplate,
-			EmailBodyTemplate:    binding.EmailBodyTemplate,
 			RootCauseMonitorID:   rootCauseID,
 			RootCauseMonitorName: alert.RootCauseMonitorName,
 			RootCauseDownSince:   alert.RootCauseDownSince,

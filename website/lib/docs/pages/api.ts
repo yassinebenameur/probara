@@ -603,7 +603,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Alert policies are gone",
           text:
-            "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints under `/alerts/counts/...` should not be used as a supported policy-management model. See [retired alert policies](/docs/alerting/#retired-policies).",
+            "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints (`/alerts/counts/by-policy`, `/alerts/counts/monitors-by-policy`) are removed and return `404`, and monitor, alert and incident responses no longer carry alert-policy fields. See [retired alert policies](/docs/alerting/#retired-policies).",
         },
         {
           type: "paragraph",

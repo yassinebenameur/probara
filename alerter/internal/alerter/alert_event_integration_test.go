@@ -31,7 +31,7 @@ func TestAlerterFiringAlertCreatesAndReusesAutoIncident(t *testing.T) {
 	now := time.Now().UTC()
 	alerter := newIntegrationAlerter(dbClient)
 
-	binding := policyBinding{
+	binding := alertSubject{
 		MonitorID:            monitorID,
 		TenantID:             tenantID,
 		MonitorName:          "API",
@@ -84,7 +84,7 @@ func TestAlerterResolveAlertRecordsRecoveryTimeline(t *testing.T) {
 	now := time.Now().UTC()
 	alerter := newIntegrationAlerter(dbClient)
 
-	binding := policyBinding{
+	binding := alertSubject{
 		MonitorID:            monitorID,
 		TenantID:             tenantID,
 		MonitorName:          "API",
@@ -142,7 +142,7 @@ func TestAlerterResolveAlertSerializesConcurrentFinalResolutions(t *testing.T) {
 	now := time.Now().UTC()
 	alerter := newIntegrationAlerter(dbClient)
 
-	binding := policyBinding{
+	binding := alertSubject{
 		MonitorID:            monitorID,
 		TenantID:             tenantID,
 		MonitorName:          "API",
@@ -217,7 +217,7 @@ func TestAlerterResolveAlertSkipsDuplicateAfterLaterNonRecoveryEntry(t *testing.
 	now := time.Now().UTC()
 	alerter := newIntegrationAlerter(dbClient)
 
-	binding := policyBinding{
+	binding := alertSubject{
 		MonitorID:            monitorID,
 		TenantID:             tenantID,
 		MonitorName:          "API",
@@ -262,7 +262,7 @@ func newIntegrationAlerter(dbClient *shareddb.Client) *Alerter {
 		logger: logger.New("alerter-test", "error"),
 		db:     dbClient,
 	}
-	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+	a.sendFunc = func(context.Context, alertChannel, string, alertSubject, *alertRecord, *groupDetail, time.Time) error {
 		return nil
 	}
 	return a
@@ -367,7 +367,7 @@ func insertAlerterSecondAlertAndLink(ctx context.Context, t *testing.T, dbClient
 
 // fireTestAlert opens an alert the way the lifecycle does: insert the alert
 // and, in the same transaction, create or reuse the monitor's auto-incident.
-func fireTestAlert(ctx context.Context, a *Alerter, binding policyBinding, failureCount int, now time.Time) (*alertRecord, error) {
+func fireTestAlert(ctx context.Context, a *Alerter, binding alertSubject, failureCount int, now time.Time) (*alertRecord, error) {
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

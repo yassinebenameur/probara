@@ -50,7 +50,7 @@ type causeRecorder struct {
 	sends []causeSend
 }
 
-func (r *causeRecorder) send(_ context.Context, ch alertChannel, eventType string, _ policyBinding, alert *alertRecord, _ *groupDetail, _ time.Time) error {
+func (r *causeRecorder) send(_ context.Context, ch alertChannel, eventType string, _ alertSubject, alert *alertRecord, _ *groupDetail, _ time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sends = append(r.sends, causeSend{eventType: eventType, channelID: ch.ID, record: *alert})
@@ -383,7 +383,7 @@ func TestSuspectedCauseOnAcknowledgedAlert(t *testing.T) {
 		sc.Confidence != "high" || len(sc.Actions) != len(actions) || sc.TriageID != c.triageID.String() {
 		t.Fatalf("record = status %q cause %+v", got.record.Status, sc)
 	}
-	event := buildAlertEvent("suspected_cause", policyBinding{MonitorID: c.monitorID, TenantID: c.tenantID}, &got.record, nil, time.Now())
+	event := buildAlertEvent("suspected_cause", alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID}, &got.record, nil, time.Now())
 	if event.Type != "suspected_cause" || event.Alert.Status != "acknowledged" || event.Alert.SuspectedCause == nil {
 		t.Fatalf("event = %+v", event)
 	}
@@ -403,14 +403,14 @@ func TestSuspectedCauseResolveRace(t *testing.T) {
 	c := newCauseCase(ctx, t, db, followUpStubType)
 	sends := 0
 	a := newIntegrationAlerter(db)
-	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+	a.sendFunc = func(context.Context, alertChannel, string, alertSubject, *alertRecord, *groupDetail, time.Time) error {
 		sends++
 		return nil
 	}
 	mustExec(ctx, t, db, `UPDATE alerts SET status = 'resolved', resolved_at = NOW() WHERE id = $1`, c.alertID)
 	record := alertRecord{ID: c.alertID, TenantID: c.tenantID, MonitorID: c.monitorID, Status: "active"}
 	channel := alertChannel{ID: c.channelID, Type: followUpStubType, IsActive: true}
-	sent, err := a.deliverNotification(ctx, "suspected_cause", policyBinding{MonitorID: c.monitorID, TenantID: c.tenantID},
+	sent, err := a.deliverNotification(ctx, "suspected_cause", alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID},
 		&record, nil, channel, time.Now(), 0)
 	if err != nil || sent || sends != 0 {
 		t.Fatalf("resolved alert: sent=%v err=%v sends=%d", sent, err, sends)
@@ -423,7 +423,7 @@ func TestSuspectedCauseResolveRace(t *testing.T) {
 	c2 := newCauseCase(ctx, t, db, followUpStubType)
 	inSend, release := make(chan struct{}), make(chan struct{})
 	var inFlight atomic.Int32
-	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+	a.sendFunc = func(context.Context, alertChannel, string, alertSubject, *alertRecord, *groupDetail, time.Time) error {
 		inFlight.Add(1)
 		close(inSend)
 		<-release
@@ -545,7 +545,7 @@ func TestSuspectedCausesLeaveRecoveryBudget(t *testing.T) {
 	a := newIntegrationAlerter(db)
 	a.recoveryBudget = 5 * time.Second
 	a.suspectedCauseBudget = time.Minute // larger than the tick: only the reserve bounds it
-	a.sendFunc = func(ctx context.Context, _ alertChannel, eventType string, _ policyBinding, _ *alertRecord, _ *groupDetail, _ time.Time) error {
+	a.sendFunc = func(ctx context.Context, _ alertChannel, eventType string, _ alertSubject, _ *alertRecord, _ *groupDetail, _ time.Time) error {
 		switch eventType {
 		case "suspected_cause":
 			followUps.Add(1)
@@ -709,7 +709,7 @@ func TestSuspectedCausesRotatePastAHangingProvider(t *testing.T) {
 	delivered := map[uuid.UUID]int{}
 	a := newIntegrationAlerter(db)
 	a.suspectedCauseBudget = 500 * time.Millisecond
-	a.sendFunc = func(ctx context.Context, _ alertChannel, eventType string, _ policyBinding, alert *alertRecord, _ *groupDetail, _ time.Time) error {
+	a.sendFunc = func(ctx context.Context, _ alertChannel, eventType string, _ alertSubject, alert *alertRecord, _ *groupDetail, _ time.Time) error {
 		mu.Lock()
 		if hanging == uuid.Nil {
 			hanging = alert.ID // whichever pair the batch tries first

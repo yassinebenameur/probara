@@ -27,10 +27,10 @@ func insertTLSMonitor(ctx context.Context, t *testing.T, dbClient *shareddb.Clie
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
-			alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
+			enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $5, $4::jsonb, 60, 30,
-			NULL, TRUE, ARRAY[]::text[], NULL, NULL, NULL, NOW(), NOW()
+			TRUE, ARRAY[]::text[], NULL, NULL, NULL, NOW(), NOW()
 		)
 	`, id, tenantID, name, configJSON, monitorType); err != nil {
 		t.Fatalf("insert %s monitor: %v", monitorType, err)

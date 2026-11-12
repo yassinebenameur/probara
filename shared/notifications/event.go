@@ -21,11 +21,14 @@ type AlertEvent struct {
 
 // AlertDetails carries the alert payload for a single alert event.
 type AlertDetails struct {
-	ID            string `json:"id"`
-	MonitorID     string `json:"monitor_id"`
-	MonitorName   string `json:"monitor_name"`
-	AlertPolicyID string `json:"alert_policy_id"`
-	PolicyName    string `json:"policy_name"`
+	ID          string `json:"id"`
+	MonitorID   string `json:"monitor_id"`
+	MonitorName string `json:"monitor_name"`
+	// PolicyName is the "Alert rule" row of a notification. Monitor alerts
+	// leave it empty; channel test sends set it to the channel name. The wire
+	// name predates the retirement of alert policies and stays, because the
+	// alerter and the async worker roll out independently.
+	PolicyName string `json:"policy_name"`
 	// Kind distinguishes an availability outage ("availability") from a latency
 	// degradation ("latency_anomaly"). Empty is treated as "availability".
 	Kind                 string     `json:"kind,omitempty"`

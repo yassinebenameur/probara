@@ -2,7 +2,6 @@ package importservice
 
 import (
 	"context"
-	"database/sql/driver"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -154,8 +153,13 @@ monitors:
 	if preview.SuggestedMapping.Config != "config" {
 		t.Fatalf("Config mapping = %q, want config", preview.SuggestedMapping.Config)
 	}
-	if preview.SuggestedMapping.AlertPolicyNames != "alert_policy_names" {
-		t.Fatalf("AlertPolicyNames mapping = %q, want alert_policy_names", preview.SuggestedMapping.AlertPolicyNames)
+	// alert_policy_names is a retired field that older exports still carry:
+	// the file must parse, and nothing maps the field.
+	if len(preview.Rows) != 1 {
+		t.Fatalf("len(Rows) = %d, want 1", len(preview.Rows))
+	}
+	if _, ok := preview.Rows[0].Fields["alert_policy_names"]; ok {
+		t.Fatalf("retired alert_policy_names field leaked into the parsed row: %+v", preview.Rows[0].Fields)
 	}
 	if preview.SuggestedMapping.GroupMembers != "" {
 		t.Fatalf("GroupMembers mapping = %q, want empty for non-group payload", preview.SuggestedMapping.GroupMembers)
@@ -172,7 +176,6 @@ monitors:
 
 func TestExportMonitors_PortableBundle(t *testing.T) {
 	tenantID := uuid.New()
-	policyID := uuid.New()
 	httpID := uuid.New()
 	pushID := uuid.New()
 	groupID := uuid.New()
@@ -211,7 +214,6 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 				Config:          json.RawMessage(`{"url":"https://example.com/health","method":"GET","expected_status":200}`),
 				IntervalSeconds: 60,
 				TimeoutSeconds:  30,
-				AlertPolicyIDs:  []uuid.UUID{policyID},
 				Enabled:         true,
 				CreatedAt:       time.Unix(10, 0),
 				UpdatedAt:       time.Unix(10, 0),
@@ -234,10 +236,8 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	sqlMock.ExpectQuery(`(?s)SELECT id, name\s+FROM alert_policies`).
-		WithArgs(tenantID, anyArrayArg{}).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(policyID, "Primary"))
-
+	// No expectations: an export reads monitors through the monitor service
+	// and must not query the database itself.
 	groupSvc := &groupMembershipMock{}
 	svc := NewService(&db.Client{DB: sqlDB}, monitorSvc, groupSvc)
 	data, err := svc.ExportMonitors(context.Background(), tenantID)
@@ -259,8 +259,8 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 	if bundle.Monitors[2].Type != models.MonitorTypeGroup {
 		t.Fatalf("expected group monitor to be exported last, got %s", bundle.Monitors[2].Type)
 	}
-	if !strings.Contains(string(data), "alert_policy_names") {
-		t.Fatalf("export missing alert_policy_names: %s", string(data))
+	if strings.Contains(string(data), "alert_policy_names") {
+		t.Fatalf("export still writes the retired alert_policy_names field: %s", string(data))
 	}
 	if strings.Contains(string(data), "tenant_id:") || strings.Contains(string(data), "created_at:") {
 		t.Fatalf("export leaked runtime metadata: %s", string(data))
@@ -279,7 +279,6 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 
 func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 	tenantID := uuid.New()
-	policyID := uuid.New()
 	monitorSvc := &portableMonitorServiceMock{}
 
 	sqlDB, sqlMock, err := sqlmock.New()
@@ -288,43 +287,38 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	sqlMock.ExpectQuery(`(?s)SELECT id\s+FROM alert_policies\s+WHERE tenant_id = \$1 AND name = \$2`).
-		WithArgs(tenantID, "Primary").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(policyID))
-
 	groupSvc := &groupMembershipMock{}
 	svc := NewService(&db.Client{DB: sqlDB}, monitorSvc, groupSvc)
 
 	req := &models.ImportExecuteRequest{
 		Rows: []models.ImportRow{
-			rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com/health", "method": "GET"}, []string{"Primary"}, nil, 60, 30),
-			rowWithConfig(1, "Ping", "ping", map[string]interface{}{"host": "example.com"}, nil, nil, 60, 30),
-			rowWithConfig(2, "DNS", "dns", map[string]interface{}{"host": "example.com", "record_type": "A"}, nil, nil, 60, 30),
-			rowWithConfig(3, "gRPC", "grpc", map[string]interface{}{"host": "grpc.example.com", "port": 443, "use_tls": true}, nil, nil, 60, 30),
-			rowWithConfig(4, "SIP", "sip", map[string]interface{}{"host": "sip.example.com", "port": 5060, "transport": "udp"}, nil, nil, 60, 30),
-			rowWithConfig(5, "Agent", "agent", map[string]interface{}{"agent_id": "legacy-agent", "expected_interval_seconds": 60}, nil, nil, 60, 0),
-			rowWithConfig(6, "Push", "push", map[string]interface{}{"push_token": "legacy-token", "expected_interval_seconds": 60, "grace_period_seconds": 5}, nil, nil, 60, 0),
-			rowWithConfig(7, "Synthetic API", "synthetic_api", map[string]interface{}{"steps": []interface{}{map[string]interface{}{"id": "health", "request": map[string]interface{}{"method": "GET", "url": "https://example.com/health"}}}}, nil, nil, 60, 30),
-			rowWithConfig(8, "Synthetic Browser", "synthetic_browser", map[string]interface{}{"start_url": "https://example.com", "steps": []interface{}{map[string]interface{}{"id": "open", "action": "goto", "url": "https://example.com"}}}, nil, nil, 60, 30),
-			rowWithConfig(9, "TCP", "tcp", map[string]interface{}{"host": "tcp.example.com", "port": 9000}, nil, nil, 60, 30),
-			rowWithConfig(10, "Redis", "redis", map[string]interface{}{"host": "redis.example.com", "port": 6379}, nil, nil, 60, 30),
-			rowWithConfig(11, "Postgres", "postgres", map[string]interface{}{"host": "pg.example.com", "port": 5432, "username": "probe"}, nil, nil, 60, 30),
-			rowWithConfig(12, "MySQL", "mysql", map[string]interface{}{"host": "mysql.example.com", "port": 3306, "username": "probe"}, nil, nil, 60, 30),
-			rowWithConfig(13, "MongoDB", "mongodb", map[string]interface{}{"connection_string": "mongodb://mongo.example.com:27017"}, nil, nil, 60, 30),
-			rowWithConfig(14, "RabbitMQ", "rabbitmq", map[string]interface{}{"host": "mq.example.com", "port": 5672, "username": "guest"}, nil, nil, 60, 30),
-			rowWithConfig(15, "WebSocket", "websocket", map[string]interface{}{"url": "wss://ws.example.com/socket"}, nil, nil, 60, 30),
-			rowWithConfig(16, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, nil, []string{"API", "Push"}, 60, 0),
+			rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com/health", "method": "GET"}, nil, 60, 30),
+			rowWithConfig(1, "Ping", "ping", map[string]interface{}{"host": "example.com"}, nil, 60, 30),
+			rowWithConfig(2, "DNS", "dns", map[string]interface{}{"host": "example.com", "record_type": "A"}, nil, 60, 30),
+			rowWithConfig(3, "gRPC", "grpc", map[string]interface{}{"host": "grpc.example.com", "port": 443, "use_tls": true}, nil, 60, 30),
+			rowWithConfig(4, "SIP", "sip", map[string]interface{}{"host": "sip.example.com", "port": 5060, "transport": "udp"}, nil, 60, 30),
+			rowWithConfig(5, "Agent", "agent", map[string]interface{}{"agent_id": "legacy-agent", "expected_interval_seconds": 60}, nil, 60, 0),
+			rowWithConfig(6, "Push", "push", map[string]interface{}{"push_token": "legacy-token", "expected_interval_seconds": 60, "grace_period_seconds": 5}, nil, 60, 0),
+			rowWithConfig(7, "Synthetic API", "synthetic_api", map[string]interface{}{"steps": []interface{}{map[string]interface{}{"id": "health", "request": map[string]interface{}{"method": "GET", "url": "https://example.com/health"}}}}, nil, 60, 30),
+			rowWithConfig(8, "Synthetic Browser", "synthetic_browser", map[string]interface{}{"start_url": "https://example.com", "steps": []interface{}{map[string]interface{}{"id": "open", "action": "goto", "url": "https://example.com"}}}, nil, 60, 30),
+			rowWithConfig(9, "TCP", "tcp", map[string]interface{}{"host": "tcp.example.com", "port": 9000}, nil, 60, 30),
+			rowWithConfig(10, "Redis", "redis", map[string]interface{}{"host": "redis.example.com", "port": 6379}, nil, 60, 30),
+			rowWithConfig(11, "Postgres", "postgres", map[string]interface{}{"host": "pg.example.com", "port": 5432, "username": "probe"}, nil, 60, 30),
+			rowWithConfig(12, "MySQL", "mysql", map[string]interface{}{"host": "mysql.example.com", "port": 3306, "username": "probe"}, nil, 60, 30),
+			rowWithConfig(13, "MongoDB", "mongodb", map[string]interface{}{"connection_string": "mongodb://mongo.example.com:27017"}, nil, 60, 30),
+			rowWithConfig(14, "RabbitMQ", "rabbitmq", map[string]interface{}{"host": "mq.example.com", "port": 5672, "username": "guest"}, nil, 60, 30),
+			rowWithConfig(15, "WebSocket", "websocket", map[string]interface{}{"url": "wss://ws.example.com/socket"}, nil, 60, 30),
+			rowWithConfig(16, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, []string{"API", "Push"}, 60, 0),
 		},
 		Mapping: models.FieldMapping{
-			Name:             "name",
-			Type:             "type",
-			Config:           "config",
-			IntervalSeconds:  "interval_seconds",
-			TimeoutSeconds:   "timeout_seconds",
-			Enabled:          "enabled",
-			Tags:             "tags",
-			AlertPolicyNames: "alert_policy_names",
-			GroupMembers:     "group_members",
+			Name:            "name",
+			Type:            "type",
+			Config:          "config",
+			IntervalSeconds: "interval_seconds",
+			TimeoutSeconds:  "timeout_seconds",
+			Enabled:         "enabled",
+			Tags:            "tags",
+			GroupMembers:    "group_members",
 		},
 	}
 
@@ -359,10 +353,6 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 		t.Fatalf("agent_id should be stripped from imported agent config: %+v", agentConfig)
 	}
 
-	if got := monitorSvc.createRequests[0].AlertPolicyIDs; len(got) != 1 || got[0] != policyID.String() {
-		t.Fatalf("alert policy IDs = %+v, want [%s]", got, policyID)
-	}
-
 	groupConfig := decodeConfig(t, monitorSvc.createRequests[16].Config)
 	memberIDs, ok := groupConfig["monitor_ids"].([]interface{})
 	if !ok || len(memberIDs) != 2 {
@@ -394,6 +384,54 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 	}
 }
 
+// Alert policies are retired, but exports written before that still carry
+// alert_policy_names on each monitor, and an older UI still sends the mapping
+// key. Both must be accepted and ignored: the row imports, and nothing is
+// looked up (the service has no database here, so a lookup would panic).
+func TestExecuteImport_IgnoresRetiredAlertPolicyNames(t *testing.T) {
+	tenantID := uuid.New()
+	monitorSvc := &portableMonitorServiceMock{}
+	svc := NewService(nil, monitorSvc, &groupMembershipMock{})
+
+	var req models.ImportExecuteRequest
+	if err := json.Unmarshal([]byte(`{
+		"rows": [{
+			"index": 0,
+			"fields": {
+				"name": "API",
+				"type": "http",
+				"interval_seconds": 60,
+				"timeout_seconds": 30,
+				"enabled": true,
+				"alert_policy_names": ["Missing"],
+				"config": {"url": "https://example.com/health", "method": "GET"}
+			}
+		}],
+		"mapping": {
+			"name": "name",
+			"type": "type",
+			"config": "config",
+			"interval_seconds": "interval_seconds",
+			"timeout_seconds": "timeout_seconds",
+			"enabled": "enabled",
+			"alert_policy_names": "alert_policy_names"
+		}
+	}`), &req); err != nil {
+		t.Fatalf("decode import request carrying alert_policy_names: %v", err)
+	}
+
+	result, err := svc.ExecuteImport(context.Background(), tenantID, &req)
+	if err != nil {
+		t.Fatalf("ExecuteImport() error = %v", err)
+	}
+	if result.SuccessCount != 1 || result.FailedCount != 0 || result.SkippedCount != 0 {
+		t.Fatalf("unexpected import counts: %+v (results %+v)", result, result.Results)
+	}
+	if len(monitorSvc.createRequests) != 1 || monitorSvc.createRequests[0].Name != "API" {
+		t.Fatalf("createRequests = %+v, want the one API monitor", monitorSvc.createRequests)
+	}
+}
+
 func TestExecuteImport_SkipsAlreadyImportedMonitors(t *testing.T) {
 	tenantID := uuid.New()
 	existingAPIID := uuid.New()
@@ -412,9 +450,9 @@ func TestExecuteImport_SkipsAlreadyImportedMonitors(t *testing.T) {
 	svc := NewService(nil, monitorSvc, groupSvc)
 	result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
 		Rows: []models.ImportRow{
-			rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com/health", "method": "GET"}, nil, nil, 60, 30),
-			rowWithConfig(1, "Ping", "ping", map[string]interface{}{"host": "example.com"}, nil, nil, 60, 30),
-			rowWithConfig(2, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, nil, []string{"API", "Ping"}, 60, 0),
+			rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com/health", "method": "GET"}, nil, 60, 30),
+			rowWithConfig(1, "Ping", "ping", map[string]interface{}{"host": "example.com"}, nil, 60, 30),
+			rowWithConfig(2, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, []string{"API", "Ping"}, 60, 0),
 		},
 		Mapping: models.FieldMapping{
 			Name:            "name",
@@ -451,46 +489,6 @@ func TestExecuteImport_SkipsAlreadyImportedMonitors(t *testing.T) {
 }
 
 func TestExecuteImport_PortableBundleRowFailures(t *testing.T) {
-	t.Run("missing alert policy fails row", func(t *testing.T) {
-		tenantID := uuid.New()
-		monitorSvc := &portableMonitorServiceMock{}
-
-		sqlDB, sqlMock, err := sqlmock.New()
-		if err != nil {
-			t.Fatalf("sqlmock.New() error = %v", err)
-		}
-		defer sqlDB.Close()
-
-		sqlMock.ExpectQuery(`(?s)SELECT id\s+FROM alert_policies\s+WHERE tenant_id = \$1 AND name = \$2`).
-			WithArgs(tenantID, "Missing").
-			WillReturnRows(sqlmock.NewRows([]string{"id"}))
-
-		groupSvc := &groupMembershipMock{}
-		svc := NewService(&db.Client{DB: sqlDB}, monitorSvc, groupSvc)
-		result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
-			Rows: []models.ImportRow{
-				rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com", "method": "GET"}, []string{"Missing"}, nil, 60, 30),
-			},
-			Mapping: models.FieldMapping{
-				Name:             "name",
-				Type:             "type",
-				Config:           "config",
-				IntervalSeconds:  "interval_seconds",
-				TimeoutSeconds:   "timeout_seconds",
-				AlertPolicyNames: "alert_policy_names",
-			},
-		})
-		if err != nil {
-			t.Fatalf("ExecuteImport() error = %v", err)
-		}
-		if result.FailedCount != 1 || !strings.Contains(result.Results[0].Error, "not found") {
-			t.Fatalf("unexpected failure result: %+v", result.Results[0])
-		}
-		if err := sqlMock.ExpectationsWereMet(); err != nil {
-			t.Fatalf("unmet SQL expectations: %v", err)
-		}
-	})
-
 	t.Run("missing group member name fails row", func(t *testing.T) {
 		tenantID := uuid.New()
 		monitorSvc := &portableMonitorServiceMock{}
@@ -499,7 +497,7 @@ func TestExecuteImport_PortableBundleRowFailures(t *testing.T) {
 
 		result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
 			Rows: []models.ImportRow{
-				rowWithConfig(0, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, nil, []string{"missing"}, 60, 0),
+				rowWithConfig(0, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, []string{"missing"}, 60, 0),
 			},
 			Mapping: models.FieldMapping{
 				Name:            "name",
@@ -525,9 +523,9 @@ func TestExecuteImport_PortableBundleRowFailures(t *testing.T) {
 
 		result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
 			Rows: []models.ImportRow{
-				rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com", "method": "GET"}, nil, nil, 60, 30),
-				rowWithConfig(1, "API", "ping", map[string]interface{}{"host": "example.com"}, nil, nil, 60, 30),
-				rowWithConfig(2, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, nil, []string{"API"}, 60, 0),
+				rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com", "method": "GET"}, nil, 60, 30),
+				rowWithConfig(1, "API", "ping", map[string]interface{}{"host": "example.com"}, nil, 60, 30),
+				rowWithConfig(2, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, []string{"API"}, 60, 0),
 			},
 			Mapping: models.FieldMapping{
 				Name:            "name",
@@ -550,14 +548,7 @@ func TestExecuteImport_PortableBundleRowFailures(t *testing.T) {
 	})
 }
 
-type anyArrayArg struct{}
-
-func (anyArrayArg) Match(v driver.Value) bool {
-	_, ok := v.(string)
-	return ok
-}
-
-func rowWithConfig(index int, name, monitorType string, config map[string]interface{}, alertPolicyNames []string, groupMembers []string, intervalSeconds, timeoutSeconds int) models.ImportRow {
+func rowWithConfig(index int, name, monitorType string, config map[string]interface{}, groupMembers []string, intervalSeconds, timeoutSeconds int) models.ImportRow {
 	fields := map[string]interface{}{
 		"name":             name,
 		"type":             monitorType,
@@ -565,9 +556,6 @@ func rowWithConfig(index int, name, monitorType string, config map[string]interf
 		"interval_seconds": intervalSeconds,
 		"timeout_seconds":  timeoutSeconds,
 		"enabled":          true,
-	}
-	if len(alertPolicyNames) > 0 {
-		fields["alert_policy_names"] = alertPolicyNames
 	}
 	if len(groupMembers) > 0 {
 		fields["group_members"] = groupMembers

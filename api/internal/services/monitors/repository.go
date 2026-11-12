@@ -27,11 +27,7 @@ type Repository interface {
 	BulkSoftDelete(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) (int64, error)
 	DeleteHistory(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
 	HardDelete(ctx context.Context, monitorID uuid.UUID) error
-	VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error
 	VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
-	SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error
-	GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
-	GetAlertPolicyIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
 	GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
 	GetDependsOnIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
 	// monitor_channels management
@@ -79,12 +75,12 @@ func (r *PostgresRepository) CreateInTx(ctx context.Context, tx *sql.Tx, monitor
 	query := `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
 			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, $16, $17, $18, $19, $20)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, $15, $16, $17, $18, $19)
 		RETURNING id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
 			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state
 	`
@@ -93,14 +89,13 @@ func (r *PostgresRepository) CreateInTx(ctx context.Context, tx *sql.Tx, monitor
 
 	err := tx.QueryRowContext(ctx, query,
 		monitor.ID, monitor.TenantID, monitor.Name, monitor.Type, monitor.Config,
-		monitor.IntervalSeconds, monitor.TimeoutSeconds, monitor.AlertPolicyID,
+		monitor.IntervalSeconds, monitor.TimeoutSeconds,
 		monitor.Enabled, pq.Array(monitor.Tags), monitor.AgentID, monitor.PushToken, monitor.NextRunAt,
 		monitor.CreatedAt, monitor.UpdatedAt,
 		monitor.ConsecutiveFailuresThreshold, monitor.NotificationMode, monitor.MemberAlertRollup, monitor.DependencySuppression, monitor.LocationQuorum,
 	).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-		&monitor.AlertPolicyID, &monitor.Enabled,
+		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
 	)
@@ -127,7 +122,7 @@ func (r *PostgresRepository) CreateInTx(ctx context.Context, tx *sql.Tx, monitor
 func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Monitor, error) {
 	query := `
 		SELECT id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
 			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state,
 			` + maintenance.InMaintenancePredicate("monitors") + ` AS in_maintenance,
@@ -141,8 +136,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 
 	err := r.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-		&monitor.AlertPolicyID, &monitor.Enabled,
+		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
 		&monitor.InMaintenance, &monitor.MaintenanceUntil,
@@ -195,7 +189,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 	// pages (and another on none).
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
 			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state,
 			%s AS in_maintenance,
@@ -221,8 +215,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 
 		err := rows.Scan(
 			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-			&monitor.AlertPolicyID, &monitor.Enabled,
+			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
 			&monitor.InMaintenance, &monitor.MaintenanceUntil,
@@ -271,7 +264,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		SET %s
 		WHERE id = $%d AND tenant_id = $%d AND deleted_at IS NULL
 		RETURNING id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
 			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state
 	`, setClause, whereArgIndex, whereArgIndex+1)
@@ -280,8 +273,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 
 	err := r.db.QueryRowContext(ctx, query, args...).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-		&monitor.AlertPolicyID, &monitor.Enabled,
+		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
 	)
@@ -389,20 +381,6 @@ func (r *PostgresRepository) DeleteHistory(ctx context.Context, tenantID uuid.UU
 	return nil
 }
 
-// VerifyAlertPolicy checks if an alert policy exists and belongs to the tenant
-func (r *PostgresRepository) VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error {
-	var id uuid.UUID
-	query := `SELECT id FROM alert_policies WHERE id = $1 AND tenant_id = $2`
-	err := r.db.QueryRowContext(ctx, query, policyID, tenantID).Scan(&id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("alert policy not found or does not belong to tenant")
-		}
-		return fmt.Errorf("failed to verify alert policy: %w", err)
-	}
-	return nil
-}
-
 // VerifyMonitorsBelongToTenant returns nil only if every provided monitor ID
 // exists and belongs to the tenant. Otherwise it returns a descriptive error
 // whose message contains "not found or do not belong to tenant".
@@ -420,96 +398,6 @@ func (r *PostgresRepository) VerifyMonitorsBelongToTenant(ctx context.Context, t
 		return fmt.Errorf("one or more monitors not found or do not belong to tenant")
 	}
 	return nil
-}
-
-// SetAlertPolicies replaces the alert policies for a monitor
-func (r *PostgresRepository) SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_alert_policies WHERE monitor_id = $1`, monitorID); err != nil {
-		return fmt.Errorf("failed to clear monitor alert policies: %w", err)
-	}
-
-	if len(policyIDs) > 0 {
-		query := `
-			INSERT INTO monitor_alert_policies (monitor_id, alert_policy_id, created_at)
-			VALUES ($1, $2, NOW())
-			ON CONFLICT (monitor_id, alert_policy_id) DO NOTHING
-		`
-		for _, policyID := range policyIDs {
-			if _, err := tx.ExecContext(ctx, query, monitorID, policyID); err != nil {
-				return fmt.Errorf("failed to add monitor alert policy: %w", err)
-			}
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit monitor alert policies: %w", err)
-	}
-
-	return nil
-}
-
-// GetAlertPolicyIDs retrieves alert policy IDs for a monitor
-func (r *PostgresRepository) GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT alert_policy_id FROM monitor_alert_policies WHERE monitor_id = $1 ORDER BY created_at`, monitorID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get monitor alert policies: %w", err)
-	}
-	defer rows.Close()
-
-	var policyIDs []uuid.UUID
-	for rows.Next() {
-		var policyID uuid.UUID
-		if err := rows.Scan(&policyID); err != nil {
-			return nil, fmt.Errorf("failed to scan monitor alert policy: %w", err)
-		}
-		policyIDs = append(policyIDs, policyID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating monitor alert policies: %w", err)
-	}
-	return policyIDs, nil
-}
-
-// GetAlertPolicyIDsForMonitors retrieves alert policy IDs for a set of monitors
-func (r *PostgresRepository) GetAlertPolicyIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
-	result := make(map[uuid.UUID][]uuid.UUID)
-	if len(monitorIDs) == 0 {
-		return result, nil
-	}
-
-	query := `
-		SELECT monitor_id, alert_policy_id
-		FROM monitor_alert_policies
-		WHERE monitor_id = ANY($1)
-		ORDER BY created_at
-	`
-	rows, err := r.db.QueryContext(ctx, query, pq.Array(monitorIDs))
-	if err != nil {
-		return nil, fmt.Errorf("failed to list monitor alert policies: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var monitorID uuid.UUID
-		var policyID uuid.UUID
-		if err := rows.Scan(&monitorID, &policyID); err != nil {
-			return nil, fmt.Errorf("failed to scan monitor alert policy: %w", err)
-		}
-		result[monitorID] = append(result[monitorID], policyID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating monitor alert policies: %w", err)
-	}
-
-	return result, nil
 }
 
 // GetMemberIDs retrieves all member IDs for a group monitor, excluding tombstoned members.

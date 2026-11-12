@@ -252,10 +252,10 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 
 	var alertID uuid.UUID
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
 			triggered_at, failure_count, baseline_latency_ms, observed_latency_ms, anomaly_score,
 			created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 'latency_anomaly', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
+		VALUES ($1, $2, $3, 'latency_anomaly', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
 		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id
 	`, uuid.New(), c.tenantID, c.monitorID, baseline, observed, score).Scan(&alertID)
@@ -273,7 +273,7 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 	}
 	if autoIncident {
 		record := alertRecord{ID: alertID, TenantID: c.tenantID, MonitorID: c.monitorID, Kind: notifications.KindLatencyAnomaly}
-		binding := policyBinding{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName, CreateIncidentOnFire: true}
+		binding := alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName, CreateIncidentOnFire: true}
 		if err := a.ensureAutoIncidentForAlertTx(ctx, tx, binding, &record); err != nil {
 			return err
 		}
@@ -288,7 +288,7 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 		Kind: notifications.KindLatencyAnomaly, TriggeredAt: time.Now(),
 		BaselineLatencyMs: &baseline, ObservedLatencyMs: &observed, AnomalyScore: &score,
 	}
-	binding := policyBinding{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
+	binding := alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
 	return nil
 }
@@ -314,7 +314,7 @@ func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, ten
 		return err
 	}
 	record := alertRecord{ID: alertID, TenantID: tenantID, MonitorID: monitorID, Kind: notifications.KindLatencyAnomaly, TriggeredAt: triggeredAt}
-	binding := policyBinding{MonitorID: monitorID, TenantID: tenantID, MonitorName: monitorName}
+	binding := alertSubject{MonitorID: monitorID, TenantID: tenantID, MonitorName: monitorName}
 	a.publishAlertEvent(ctx, "resolved", binding, &record, &resolvedAt)
 	a.notifyFiredChannels(ctx, "resolved", binding, &record)
 	return nil
@@ -366,7 +366,7 @@ func (a *Alerter) resolveOrphanLatencyAlerts(ctx context.Context, keep []uuid.UU
 			continue
 		}
 		record := alertRecord{ID: o.id, TenantID: o.tenantID, MonitorID: o.monitorID, Kind: notifications.KindLatencyAnomaly, TriggeredAt: o.triggeredAt}
-		binding := policyBinding{MonitorID: o.monitorID, TenantID: o.tenantID, MonitorName: o.monitorName}
+		binding := alertSubject{MonitorID: o.monitorID, TenantID: o.tenantID, MonitorName: o.monitorName}
 		a.publishAlertEvent(ctx, "resolved", binding, &record, &resolvedAt)
 		a.notifyFiredChannels(ctx, "resolved", binding, &record)
 	}

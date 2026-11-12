@@ -136,11 +136,11 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	`)).
 		WithArgs(uuid.Nil, 10).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
+			"id", "tenant_id", "monitor_id", "status",
 			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
 			"last_error", "kind", "baseline_latency_ms", "observed_latency_ms", "anomaly_score",
 			"metric_name", "metric_value", "threshold_value",
-			"created_at", "updated_at", "monitor_name", "policy_name",
+			"created_at", "updated_at", "monitor_name",
 			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
 			"source_location_id", "target_location_id", "source_location_name", "target_location_name",
 		}))
@@ -178,11 +178,11 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	`)).
 		WithArgs(uuid.Nil, sqlmock.AnyArg(), 10).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
+			"id", "tenant_id", "monitor_id", "status",
 			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
 			"last_error", "kind", "baseline_latency_ms", "observed_latency_ms", "anomaly_score",
 			"metric_name", "metric_value", "threshold_value",
-			"created_at", "updated_at", "monitor_name", "policy_name",
+			"created_at", "updated_at", "monitor_name",
 			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
 			"source_location_id", "target_location_id", "source_location_name", "target_location_name",
 		}))

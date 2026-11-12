@@ -36,12 +36,12 @@ func NewService(db *db.Client, incidents incidentAutomation) *Service {
 // a directed location pair (sl → tl). The trailing triage columns and join
 // come from triageview (read-only; triage never changes paging).
 var alertDetailSelect = `
-	SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
+	SELECT a.id, a.tenant_id, a.monitor_id, a.status,
 		a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 		a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
 		a.metric_name, a.metric_value, a.threshold_value,
 		a.created_at, a.updated_at,
-		m.name as monitor_name, ap.name as policy_name,
+		m.name as monitor_name,
 		a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name,
 		a.source_location_id, a.target_location_id, sl.name, tl.name,
 		CASE WHEN ` + alertSuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonDependency + `' END,
@@ -51,7 +51,6 @@ var alertDetailSelect = `
 	FROM alerts a
 	LEFT JOIN monitors m ON a.monitor_id = m.id
 	LEFT JOIN tenants te ON te.id = a.tenant_id
-	LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 	LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 	LEFT JOIN locations sl ON sl.id = a.source_location_id
 	LEFT JOIN locations tl ON tl.id = a.target_location_id
@@ -100,12 +99,12 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 	var alert models.AlertWithDetails
 	var triage triageview.Scan
 	err := scan(append([]any{
-		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
+		&alert.ID, &alert.TenantID, &alert.MonitorID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
 		&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
 		&alert.CreatedAt, &alert.UpdatedAt,
-		&alert.MonitorName, &alert.PolicyName,
+		&alert.MonitorName,
 		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		&alert.SourceLocationID, &alert.TargetLocationID, &alert.SourceLocationName, &alert.TargetLocationName,
 		&alert.SuppressionReason, &alert.ImpactedCount,
@@ -408,7 +407,7 @@ func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID)
 // GetActiveAlertForMonitor gets the active alert for a monitor if one exists
 func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Alert, error) {
 	query := `
-		SELECT id, tenant_id, monitor_id, alert_policy_id, status,
+		SELECT id, tenant_id, monitor_id, status,
 			triggered_at, acknowledged_at, resolved_at, failure_count,
 			last_error, kind, baseline_latency_ms, observed_latency_ms, anomaly_score,
 			metric_name, metric_value, threshold_value,
@@ -421,7 +420,7 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 
 	var alert models.Alert
 	err := s.db.QueryRowContext(ctx, query, tenantID, monitorID).Scan(
-		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
+		&alert.ID, &alert.TenantID, &alert.MonitorID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
 		&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
@@ -437,60 +436,4 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 	}
 
 	return &alert, nil
-}
-
-// GetAlertCountsByPolicy gets active alert counts grouped by policy
-func (s *Service) GetAlertCountsByPolicy(ctx context.Context, tenantID uuid.UUID) (map[uuid.UUID]int, error) {
-	query := `
-		SELECT alert_policy_id, COUNT(*) as count
-		FROM alerts
-		WHERE tenant_id = $1 AND status = 'active'
-		GROUP BY alert_policy_id
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get alert counts: %w", err)
-	}
-	defer rows.Close()
-
-	counts := make(map[uuid.UUID]int)
-	for rows.Next() {
-		var policyID uuid.UUID
-		var count int
-		if err := rows.Scan(&policyID, &count); err != nil {
-			return nil, fmt.Errorf("failed to scan count: %w", err)
-		}
-		counts[policyID] = count
-	}
-
-	return counts, nil
-}
-
-// GetMonitorCountsByPolicy gets monitor counts grouped by policy
-func (s *Service) GetMonitorCountsByPolicy(ctx context.Context, tenantID uuid.UUID) (map[uuid.UUID]int, error) {
-	query := `
-		SELECT alert_policy_id, COUNT(*) as count
-		FROM monitors
-		WHERE tenant_id = $1 AND alert_policy_id IS NOT NULL AND deleted_at IS NULL
-		GROUP BY alert_policy_id
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get monitor counts: %w", err)
-	}
-	defer rows.Close()
-
-	counts := make(map[uuid.UUID]int)
-	for rows.Next() {
-		var policyID uuid.UUID
-		var count int
-		if err := rows.Scan(&policyID, &count); err != nil {
-			return nil, fmt.Errorf("failed to scan count: %w", err)
-		}
-		counts[policyID] = count
-	}
-
-	return counts, nil
 }

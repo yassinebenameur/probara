@@ -39,7 +39,7 @@ type Alerter struct {
 	// sendFunc dispatches one channel notification. It defaults to
 	// sendChannelNotification and is swapped in tests so the lifecycle can be
 	// exercised without hitting real channel plugins.
-	sendFunc func(ctx context.Context, channel alertChannel, eventType string, binding policyBinding, alert *alertRecord, groupInfo *groupDetail, now time.Time) error
+	sendFunc func(ctx context.Context, channel alertChannel, eventType string, binding alertSubject, alert *alertRecord, groupInfo *groupDetail, now time.Time) error
 }
 
 // NewAlerter creates a new alerter instance. A nil encryptor is treated as a

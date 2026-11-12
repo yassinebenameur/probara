@@ -271,6 +271,54 @@ func TestHandlers_CreateMonitor(t *testing.T) {
 	}
 }
 
+// Alert policies are retired, but API clients written before that still send
+// alert_policy_id / alert_policy_ids. The handlers decode leniently, so both
+// must keep being accepted and ignored rather than rejected.
+func TestHandlers_CreateAndUpdateMonitor_IgnoreRetiredAlertPolicyFields(t *testing.T) {
+	log := logger.New("test", "debug")
+	monitorSvc := NewMockMonitorService()
+	handlers := NewHandlers(monitorSvc, &MockGroupService{}, &MockResultsService{}, log, t.TempDir())
+	tenantID := uuid.New()
+	policyID := uuid.New().String()
+
+	createBody := `{
+		"name": "Legacy Client Monitor",
+		"type": "http",
+		"config": {"url": "https://example.com", "method": "GET"},
+		"interval_seconds": 60,
+		"timeout_seconds": 30,
+		"alert_policy_id": "` + policyID + `",
+		"alert_policy_ids": ["` + policyID + `"]
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/monitors", bytes.NewBufferString(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+	w := httptest.NewRecorder()
+	handlers.CreateMonitor(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create with alert_policy_id: status %d, want %d: %s", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "alert_policy") {
+		t.Fatalf("create response still carries a retired alert-policy field: %s", w.Body.String())
+	}
+	var created models.Monitor
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	r := chi.NewRouter()
+	r.Patch("/{id}", handlers.UpdateMonitor)
+	updateBody := `{"name": "Renamed", "alert_policy_id": "` + policyID + `", "alert_policy_ids": []}`
+	req = httptest.NewRequest(http.MethodPatch, "/"+created.ID.String(), bytes.NewBufferString(updateBody))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update with alert_policy_id: status %d, want %d: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
 func TestHandlers_CreateMonitor_GroupSyncsMembersViaGroupService(t *testing.T) {
 	log := logger.New("test", "debug")
 	monitorSvc := NewMockMonitorService()

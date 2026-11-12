@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	"gopkg.in/yaml.v3"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -277,9 +276,6 @@ func (s *Service) parsePortableExport(data []byte) ([]models.ImportRow, bool, er
 		}
 		if len(monitor.Tags) > 0 {
 			fields["tags"] = monitor.Tags
-		}
-		if len(monitor.AlertPolicyNames) > 0 {
-			fields["alert_policy_names"] = monitor.AlertPolicyNames
 		}
 		if len(monitor.GroupMembers) > 0 {
 			fields["group_members"] = monitor.GroupMembers
@@ -553,13 +549,6 @@ func (s *Service) suggestMapping(fields []string) models.FieldMapping {
 	for _, candidate := range []string{"members", "group_members", "monitors", "monitor_ids"} {
 		if original, ok := fieldMap[candidate]; ok {
 			mapping.GroupMembers = original
-			break
-		}
-	}
-
-	for _, candidate := range []string{"alert_policy_names", "alert_policies", "policies"} {
-		if original, ok := fieldMap[candidate]; ok {
-			mapping.AlertPolicyNames = original
 			break
 		}
 	}
@@ -983,11 +972,6 @@ func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUI
 		return nil, err
 	}
 
-	alertPolicyIDs, err := s.resolveAlertPolicyIDs(ctx, tenantID, s.extractStrings(row.Fields, mapping.AlertPolicyNames))
-	if err != nil {
-		return nil, err
-	}
-
 	// The import path bypasses the HTTP handler, so validate here: otherwise a
 	// bad translation surfaces as an opaque database error instead of naming
 	// the offending field.
@@ -1006,7 +990,6 @@ func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUI
 		Config:                       config,
 		IntervalSeconds:              intervalSeconds,
 		TimeoutSeconds:               timeoutSeconds,
-		AlertPolicyIDs:               alertPolicyIDs,
 		Enabled:                      &enabled,
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
@@ -1164,11 +1147,6 @@ func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uui
 		return nil, err
 	}
 
-	alertPolicyIDs, err := s.resolveAlertPolicyIDs(ctx, tenantID, s.extractStrings(row.Fields, mapping.AlertPolicyNames))
-	if err != nil {
-		return nil, err
-	}
-
 	if err := validation.DefaultRegistry.Validate(models.MonitorTypeGroup, config); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
@@ -1179,7 +1157,6 @@ func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uui
 		Config:                       config,
 		IntervalSeconds:              intervalSeconds,
 		TimeoutSeconds:               0,
-		AlertPolicyIDs:               alertPolicyIDs,
 		Enabled:                      &enabled,
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
@@ -1500,46 +1477,6 @@ func (s *Service) marshalSanitizedConfig(value interface{}, monitorType models.M
 	return raw, nil
 }
 
-func (s *Service) resolveAlertPolicyIDs(ctx context.Context, tenantID uuid.UUID, names []string) ([]string, error) {
-	if len(names) == 0 {
-		return nil, nil
-	}
-
-	ids := make([]string, 0, len(names))
-	for _, name := range names {
-		rows, err := s.db.QueryContext(ctx, `
-			SELECT id
-			FROM alert_policies
-			WHERE tenant_id = $1 AND name = $2
-		`, tenantID, name)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve alert policy '%s': %w", name, err)
-		}
-
-		matches := make([]uuid.UUID, 0, 2)
-		for rows.Next() {
-			var id uuid.UUID
-			if scanErr := rows.Scan(&id); scanErr != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("failed to resolve alert policy '%s': %w", name, scanErr)
-			}
-			matches = append(matches, id)
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("failed to resolve alert policy '%s': %w", name, err)
-		}
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("alert policy '%s' was not found", name)
-		}
-		if len(matches) > 1 {
-			return nil, fmt.Errorf("alert policy '%s' is ambiguous", name)
-		}
-		ids = append(ids, matches[0].String())
-	}
-
-	return ids, nil
-}
-
 func (s *Service) extractStrings(fields map[string]interface{}, fieldName string) []string {
 	if fieldName == "" {
 		return nil
@@ -1617,11 +1554,6 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byt
 		return nil, err
 	}
 
-	alertPolicyNames, err := s.loadAlertPolicyNames(ctx, tenantID, monitors)
-	if err != nil {
-		return nil, err
-	}
-
 	nameByMonitorID := make(map[uuid.UUID]string, len(monitors))
 	for _, monitor := range monitors {
 		nameByMonitorID[monitor.ID] = monitor.Name
@@ -1651,14 +1583,6 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byt
 			}
 		}
 
-		alertNames := make([]string, 0, len(monitor.AlertPolicyIDs))
-		for _, policyID := range monitor.AlertPolicyIDs {
-			if name, ok := alertPolicyNames[policyID]; ok {
-				alertNames = append(alertNames, name)
-			}
-		}
-		sort.Strings(alertNames)
-
 		exported = append(exported, models.PortableExportMonitor{
 			Name:                         monitor.Name,
 			Type:                         monitor.Type,
@@ -1667,7 +1591,6 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byt
 			Enabled:                      monitor.Enabled,
 			Tags:                         monitor.Tags,
 			Config:                       configValue,
-			AlertPolicyNames:             alertNames,
 			GroupMembers:                 groupMembers,
 			ConsecutiveFailuresThreshold: monitor.ConsecutiveFailuresThreshold,
 		})
@@ -1707,48 +1630,6 @@ func (s *Service) loadAllMonitors(ctx context.Context, tenantID uuid.UUID) ([]mo
 	}
 
 	return all, nil
-}
-
-func (s *Service) loadAlertPolicyNames(ctx context.Context, tenantID uuid.UUID, monitors []models.Monitor) (map[uuid.UUID]string, error) {
-	unique := make(map[uuid.UUID]struct{})
-	for _, monitor := range monitors {
-		for _, policyID := range monitor.AlertPolicyIDs {
-			unique[policyID] = struct{}{}
-		}
-	}
-	if len(unique) == 0 {
-		return map[uuid.UUID]string{}, nil
-	}
-
-	ids := make([]uuid.UUID, 0, len(unique))
-	for id := range unique {
-		ids = append(ids, id)
-	}
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name
-		FROM alert_policies
-		WHERE tenant_id = $1 AND id = ANY($2)
-	`, tenantID, pq.Array(ids))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load alert policies: %w", err)
-	}
-	defer rows.Close()
-
-	names := make(map[uuid.UUID]string, len(ids))
-	for rows.Next() {
-		var id uuid.UUID
-		var name string
-		if err := rows.Scan(&id, &name); err != nil {
-			return nil, fmt.Errorf("failed to scan alert policy: %w", err)
-		}
-		names[id] = name
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to load alert policies: %w", err)
-	}
-
-	return names, nil
 }
 
 func decodeRawJSON(raw json.RawMessage) (interface{}, error) {

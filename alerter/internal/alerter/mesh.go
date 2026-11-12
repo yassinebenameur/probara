@@ -49,8 +49,8 @@ func (s meshEdgeSubject) record(kindTriggeredAt time.Time) alertRecord {
 	return record
 }
 
-func (s meshEdgeSubject) binding() policyBinding {
-	return policyBinding{TenantID: s.tenantID, MonitorName: s.meshLabel()}
+func (s meshEdgeSubject) binding() alertSubject {
+	return alertSubject{TenantID: s.tenantID, MonitorName: s.meshLabel()}
 }
 
 // evaluateMeshEdges opens alerts for down mesh edges, resolves alerts whose
@@ -119,10 +119,10 @@ func (a *Alerter) openMeshEdgeAlert(ctx context.Context, e meshEdgeSubject) erro
 	}
 
 	err := a.db.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
 			triggered_at, failure_count, last_error, source_location_id, target_location_id,
 			created_at, updated_at)
-		VALUES ($1, $2, NULL, NULL, 'mesh_edge', 'active', NOW(), $3, $4, $5, $6, NOW(), NOW())
+		VALUES ($1, $2, NULL, 'mesh_edge', 'active', NOW(), $3, $4, $5, $6, NOW(), NOW())
 		ON CONFLICT (source_location_id, target_location_id)
 			WHERE kind = 'mesh_edge' AND status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id

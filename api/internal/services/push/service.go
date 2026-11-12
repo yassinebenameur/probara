@@ -125,20 +125,19 @@ func (s *Service) publishStatusUpdate(monitorID, tenantID uuid.UUID) {
 // GetMonitorByPushToken retrieves a monitor by its push token
 func (s *Service) GetMonitorByPushToken(ctx context.Context, token string) (*models.Monitor, error) {
 	var monitor models.Monitor
-	var alertPolicyID sql.NullString
 	var agentID sql.NullString
 	var pushToken sql.NullString
 	var nextRunAt sql.NullTime
 
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
-		        alert_policy_id, enabled, tags, next_run_at, agent_id, push_token, created_at, updated_at
+		        enabled, tags, next_run_at, agent_id, push_token, created_at, updated_at
 		 FROM monitors
 		 WHERE push_token = $1 AND type = 'push' AND deleted_at IS NULL`,
 		token,
 	).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type, &monitor.Config,
-		&monitor.IntervalSeconds, &monitor.TimeoutSeconds, &alertPolicyID, &monitor.Enabled,
+		&monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		&monitor.Tags, &nextRunAt, &agentID, &pushToken, &monitor.CreatedAt, &monitor.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -148,10 +147,6 @@ func (s *Service) GetMonitorByPushToken(ctx context.Context, token string) (*mod
 		return nil, fmt.Errorf("failed to get push monitor: %w", err)
 	}
 
-	if alertPolicyID.Valid {
-		id, _ := uuid.Parse(alertPolicyID.String)
-		monitor.AlertPolicyID = &id
-	}
 	if agentID.Valid {
 		monitor.AgentID = &agentID.String
 	}

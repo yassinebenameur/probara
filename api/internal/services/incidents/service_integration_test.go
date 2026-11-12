@@ -196,18 +196,11 @@ func TestServiceListIncidentsReturnsSummaryFields(t *testing.T) {
 	}
 
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "incident-monitor")
-	policyID := uuid.New()
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
-		VALUES ($1, $2, 'incident-policy', 1, 60, NOW(), NOW())
-	`, policyID, tenantID); err != nil {
-		t.Fatalf("insert alert policy: %v", err)
-	}
 	alertID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'active', NOW(), 1, NOW(), NOW())
-	`, alertID, tenantID, monitorID, policyID); err != nil {
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active', NOW(), 1, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
 		t.Fatalf("insert alert: %v", err)
 	}
 	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "incident-page", "Incident Page")
@@ -244,10 +237,10 @@ func TestServiceListIncidentsReturnsSummaryFields(t *testing.T) {
 	autoUpdatedAt := time.Date(2026, time.March, 26, 20, 0, 0, 0, time.UTC)
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO incidents (
-			id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, auto_alert_policy_id,
+			id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id,
 			created_at, updated_at
-		) VALUES ($1, $2, 'Auto incident', 'Created from alert policy.', 'investigating', TRUE, $3, $4, NOW(), $5)
-	`, autoIncidentID, tenantID, monitorID, policyID, autoUpdatedAt); err != nil {
+		) VALUES ($1, $2, 'Auto incident', 'Created from a firing alert.', 'investigating', TRUE, $3, NOW(), $4)
+	`, autoIncidentID, tenantID, monitorID, autoUpdatedAt); err != nil {
 		t.Fatalf("insert auto incident: %v", err)
 	}
 
@@ -930,15 +923,14 @@ func TestServiceRecordAlertRecoveryIfNeededAppendsTimelineAfterFinalResolution(t
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	monitor2ID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API2")
-	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
 	svc := NewService(dbClient, nil)
 
-	firstAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	firstAlertID := insertIncidentTestAlert(ctx, t, dbClient, tenantID, monitorID)
 	incidentID := insertAutoIncidentForAlert(ctx, t, dbClient, tenantID, monitorID, firstAlertID)
 
 	// Insert a second alert on a different monitor and link it directly to the
 	// same incident, simulating a multi-monitor incident under the new schema.
-	secondAlertID := insertIncidentSecondAlertAndLink(ctx, t, dbClient, tenantID, monitor2ID, policyID, incidentID)
+	secondAlertID := insertIncidentSecondAlertAndLink(ctx, t, dbClient, tenantID, monitor2ID, incidentID)
 	if _, err := dbClient.ExecContext(ctx, `UPDATE alerts SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1`, firstAlertID); err != nil {
 		t.Fatalf("resolve first alert: %v", err)
 	}
@@ -986,15 +978,14 @@ func TestServiceRecordAlertRecoveryIfNeededSerializesConcurrentFinalResolutions(
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	monitor2ID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API2")
-	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
 	svc := NewService(dbClient, nil)
 
-	firstAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	firstAlertID := insertIncidentTestAlert(ctx, t, dbClient, tenantID, monitorID)
 	incidentID := insertAutoIncidentForAlert(ctx, t, dbClient, tenantID, monitorID, firstAlertID)
 
 	// Insert a second alert on a different monitor and link it directly to the
 	// same incident, simulating a multi-monitor incident under the new schema.
-	secondAlertID := insertIncidentSecondAlertAndLink(ctx, t, dbClient, tenantID, monitor2ID, policyID, incidentID)
+	secondAlertID := insertIncidentSecondAlertAndLink(ctx, t, dbClient, tenantID, monitor2ID, incidentID)
 
 	tx1, err := dbClient.BeginTx(ctx, nil)
 	if err != nil {
@@ -1062,10 +1053,9 @@ func TestServiceRecordAlertRecoveryIfNeededSkipsDuplicateAfterLaterNonRecoveryEn
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
-	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
 	svc := NewService(dbClient, nil)
 
-	alertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	alertID := insertIncidentTestAlert(ctx, t, dbClient, tenantID, monitorID)
 	incidentID := insertAutoIncidentForAlert(ctx, t, dbClient, tenantID, monitorID, alertID)
 	if _, err := dbClient.ExecContext(ctx, `
 		UPDATE alerts
@@ -1191,34 +1181,11 @@ type incidentPublicationRecord struct {
 func insertIncidentTestAlert(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID uuid.UUID) uuid.UUID {
 	t.Helper()
 
-	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "incident-policy", false)
-
-	return insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
-}
-
-func insertIncidentTestPolicy(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID uuid.UUID, name string, createIncidentOnFire bool) uuid.UUID {
-	t.Helper()
-
-	policyID := uuid.New()
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alert_policies (
-			id, tenant_id, name, failure_threshold, failure_window_seconds, create_incident_on_fire, created_at, updated_at
-		) VALUES ($1, $2, $3, 1, 60, $4, NOW(), NOW())
-	`, policyID, tenantID, name, createIncidentOnFire); err != nil {
-		t.Fatalf("insert alert policy: %v", err)
-	}
-
-	return policyID
-}
-
-func insertIncidentTestAlertWithPolicy(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID, policyID uuid.UUID) uuid.UUID {
-	t.Helper()
-
 	alertID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'active', NOW(), 1, NOW(), NOW())
-	`, alertID, tenantID, monitorID, policyID); err != nil {
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active', NOW(), 1, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
 		t.Fatalf("insert alert: %v", err)
 	}
 
@@ -1231,14 +1198,14 @@ func insertIncidentTestAlertWithPolicy(ctx context.Context, t *testing.T, dbClie
 // bypasses the auto-incident lookup keyed on auto_monitor_id so that two concurrent active alerts can exist for
 // different monitors but share the same incident — needed for tests that verify
 // multi-alert recovery logic under the one-open-alert-per-monitor invariant.
-func insertIncidentSecondAlertAndLink(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID, policyID, incidentID uuid.UUID) uuid.UUID {
+func insertIncidentSecondAlertAndLink(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID, incidentID uuid.UUID) uuid.UUID {
 	t.Helper()
 
 	alertID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'active', NOW(), 1, NOW(), NOW())
-	`, alertID, tenantID, monitorID, policyID); err != nil {
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active', NOW(), 1, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
 		t.Fatalf("insert second alert: %v", err)
 	}
 	if _, err := dbClient.ExecContext(ctx, `
@@ -1306,34 +1273,34 @@ func countIncidentAlertLinks(ctx context.Context, t *testing.T, dbClient testuti
 	return count
 }
 
-// TestIncidentDetailIncludesNullPolicyAlert is a regression test for the bug
-// where loadIncidentAlerts INNER JOINed alert_policies, silently dropping any
-// alert whose alert_policy_id is NULL (lifecycle alerts).
-func TestIncidentDetailIncludesNullPolicyAlert(t *testing.T) {
+// TestIncidentDetailIncludesLinkedLifecycleAlert pins that an alert as the
+// alerter writes it — a bare row with no optional references — shows up in the
+// incident detail. An INNER JOIN on an optional reference once dropped these.
+func TestIncidentDetailIncludesLinkedLifecycleAlert(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "null-policy-monitor")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "lifecycle-monitor")
 	svc := NewService(dbClient, nil)
 
 	// Create a manual incident.
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "Lifecycle alert incident",
-		Summary: "Alert fired without a policy.",
+		Summary: "Alert fired by the monitor lifecycle.",
 	})
 	if err != nil {
 		t.Fatalf("CreateIncident() error = %v", err)
 	}
 
-	// Insert an alert with alert_policy_id = NULL and link it to the incident.
+	// Insert the row shape the alerter writes and link it to the incident.
 	alertID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 'active', NOW(), 1, NOW(), NOW())
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active', NOW(), 1, NOW(), NOW())
 	`, alertID, tenantID, monitorID); err != nil {
-		t.Fatalf("insert NULL-policy alert: %v", err)
+		t.Fatalf("insert lifecycle alert: %v", err)
 	}
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
@@ -1342,13 +1309,13 @@ func TestIncidentDetailIncludesNullPolicyAlert(t *testing.T) {
 		t.Fatalf("link alert to incident: %v", err)
 	}
 
-	// GetIncident must surface the NULL-policy alert in detail.Alerts.
+	// GetIncident must surface the lifecycle alert in detail.Alerts.
 	detail, err := svc.GetIncident(ctx, tenantID, incident.ID)
 	if err != nil {
 		t.Fatalf("GetIncident() error = %v", err)
 	}
 	if len(detail.Alerts) != 1 {
-		t.Fatalf("GetIncident().Alerts len = %d, want 1 (NULL-policy alert must be visible)", len(detail.Alerts))
+		t.Fatalf("GetIncident().Alerts len = %d, want 1 (lifecycle alert must be visible)", len(detail.Alerts))
 	}
 	if detail.Alerts[0].ID != alertID {
 		t.Fatalf("GetIncident().Alerts[0].ID = %s, want %s", detail.Alerts[0].ID, alertID)

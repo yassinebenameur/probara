@@ -683,7 +683,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "warning",
           title: "Remove policy automation",
           text:
-            "Older integrations that create or attach alert-policy records must be migrated. Compatibility-shaped fields or count endpoints should not be treated as a supported policy-management workflow.",
+            "Older integrations that create or attach alert-policy records must be migrated. Monitor writes that still send `alert_policy_id` or `alert_policy_ids` are accepted and the fields ignored; monitor, alert and incident API responses no longer carry `alert_policy_id`, `alert_policy_ids`, `policy_name` or `auto_alert_policy_id`, exports no longer write `alert_policy_names`, webhook payloads no longer carry `alert.alert_policy_id` (`alert.policy_name` stays, empty for monitor alerts and the channel name on a test send), and the `/alerts/counts/by-policy` and `/alerts/counts/monitors-by-policy` endpoints are removed. The email template variable `policy_id` is kept and always empty.",
         },
       ],
     },

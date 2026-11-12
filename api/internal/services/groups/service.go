@@ -106,7 +106,7 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 
 	query := `
 		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
-			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
+			m.interval_seconds, m.timeout_seconds, m.enabled, m.tags,
 			m.next_run_at, m.created_at, m.updated_at, m.current_state
 		FROM monitors m
 		INNER JOIN monitor_groups mg ON m.id = mg.monitor_id
@@ -127,8 +127,7 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 
 		err := rows.Scan(
 			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-			&monitor.AlertPolicyID, &monitor.Enabled,
+			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 			pq.Array(&tags), &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
 			&monitor.CurrentState,
 		)
@@ -175,7 +174,7 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 			  AND child.deleted_at IS NULL
 		)
 		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
-			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
+			m.interval_seconds, m.timeout_seconds, m.enabled, m.tags,
 			m.next_run_at, m.created_at, m.updated_at
 		FROM monitors m
 		JOIN member_tree mt ON mt.monitor_id = m.id
@@ -196,8 +195,7 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 
 		err := rows.Scan(
 			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-			&monitor.AlertPolicyID, &monitor.Enabled,
+			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 			pq.Array(&tags), &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
 		)
 		if err != nil {
@@ -225,7 +223,7 @@ func (s *Service) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid
 
 	query := `
 		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
-			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
+			m.interval_seconds, m.timeout_seconds, m.enabled, m.tags,
 			m.next_run_at, m.created_at, m.updated_at
 		FROM monitors m
 		INNER JOIN monitor_groups mg ON m.id = mg.group_id
@@ -246,8 +244,7 @@ func (s *Service) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid
 
 		err := rows.Scan(
 			&group.ID, &group.TenantID, &group.Name, &group.Type,
-			&group.Config, &group.IntervalSeconds, &group.TimeoutSeconds,
-			&group.AlertPolicyID, &group.Enabled,
+			&group.Config, &group.IntervalSeconds, &group.TimeoutSeconds, &group.Enabled,
 			pq.Array(&tags), &group.NextRunAt, &group.CreatedAt, &group.UpdatedAt,
 		)
 		if err != nil {
@@ -374,7 +371,7 @@ func (s *Service) wouldCreateCycle(ctx context.Context, tenantID, parentGroupID,
 func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Monitor, error) {
 	query := `
 		SELECT id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, next_run_at, created_at, updated_at
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
@@ -385,8 +382,7 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 
 	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-		&monitor.AlertPolicyID, &monitor.Enabled,
+		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
 	)
 
