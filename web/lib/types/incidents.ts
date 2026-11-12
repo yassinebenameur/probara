@@ -24,7 +24,6 @@ export interface IncidentTimelineEntry {
 export interface IncidentAlertSummary {
   id: string;
   monitor_id: string;
-  alert_policy_id?: string;
   status: AlertStatus;
   triggered_at: string;
   acknowledged_at?: string;
@@ -34,7 +33,6 @@ export interface IncidentAlertSummary {
   created_at: string;
   updated_at: string;
   monitor_name: string;
-  policy_name?: string;
   /** Compact automatic triage (never carries label_context here). */
   triage?: AlertTriage;
 }
@@ -86,7 +84,6 @@ export interface IncidentDetail {
   resolved_at?: string;
   is_auto_created: boolean;
   auto_monitor_id?: string;
-  auto_alert_policy_id?: string;
   created_at: string;
   updated_at: string;
   alerts: IncidentAlertSummary[];

@@ -25,7 +25,6 @@ export interface FieldMapping {
   tags?: string;
   enabled?: string;
   group_members?: string;
-  alert_policy_names?: string;
   consecutive_failures_threshold?: string;
 }
 

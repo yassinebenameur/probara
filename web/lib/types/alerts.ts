@@ -9,7 +9,6 @@ export interface Alert {
   tenant_id: string;
   // Absent for mesh_edge alerts (their subject is a location pair).
   monitor_id?: string;
-  alert_policy_id?: string;
   status: AlertStatus;
   triggered_at: string;
   acknowledged_at?: string;
@@ -31,7 +30,6 @@ export interface Alert {
   created_at: string;
   updated_at: string;
   monitor_name?: string;
-  policy_name?: string;
   root_cause_monitor_name?: string;
   source_location_name?: string;
   target_location_name?: string;

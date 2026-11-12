@@ -48,8 +48,6 @@ export interface Monitor {
   config?: MonitorConfig; // Optional for backward compatibility
   interval_seconds: number;
   timeout_seconds: number;
-  alert_policy_id?: string;
-  alert_policy_ids?: string[];
   enabled: boolean;
   tags?: string[];
   next_run_at?: string;
@@ -106,8 +104,6 @@ export interface CreateMonitorRequest {
   config: MonitorConfig;
   interval_seconds: number;
   timeout_seconds: number;
-  alert_policy_id?: string;
-  alert_policy_ids?: string[];
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
@@ -126,8 +122,6 @@ export interface UpdateMonitorRequest {
   config?: MonitorConfig;
   interval_seconds?: number;
   timeout_seconds?: number;
-  alert_policy_id?: string;
-  alert_policy_ids?: string[];
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;

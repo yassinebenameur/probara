@@ -380,7 +380,7 @@ function alertTitle(alert: Alert): string {
   if (alert.source_location_name && alert.target_location_name) {
     return `${alert.source_location_name} to ${alert.target_location_name}`;
   }
-  return alert.policy_name || 'Alert';
+  return 'Alert';
 }
 
 const time = (value: string) => new Date(value).getTime();
