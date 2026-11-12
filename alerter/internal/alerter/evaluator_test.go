@@ -9,47 +9,6 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
-func TestShouldSendNotification(t *testing.T) {
-	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
-	interval := 10 * time.Minute
-
-	tests := []struct {
-		name      string
-		eventType string
-		state     *notificationState
-		now       time.Time
-		expected  bool
-	}{
-		{"created_no_state", "created", nil, now, true},
-		{"created_with_state", "created", &notificationState{LastEventType: "created"}, now, false},
-		{"resolved_no_state", "resolved", nil, now, true},
-		{"resolved_after_resolved", "resolved", &notificationState{LastEventType: "resolved"}, now, false},
-		{"resolved_after_created", "resolved", &notificationState{LastEventType: "created"}, now, true},
-		{"reminder_no_state", "reminder", nil, now, false},
-		{"reminder_recent", "reminder", &notificationState{LastEventType: "created", LastSentAt: now.Add(-5 * time.Minute)}, now, false},
-		{"reminder_overdue", "reminder", &notificationState{LastEventType: "created", LastSentAt: now.Add(-15 * time.Minute)}, now, true},
-		{"reminder_after_resolved", "reminder", &notificationState{LastEventType: "resolved", LastSentAt: now.Add(-15 * time.Minute)}, now, false},
-		{"acknowledged_never_paged", "acknowledged", nil, now, false},
-		{"acknowledged_after_created", "acknowledged", &notificationState{LastEventType: "created"}, now, true},
-		{"acknowledged_after_reminder", "acknowledged", &notificationState{LastEventType: "reminder"}, now, true},
-		{"acknowledged_twice", "acknowledged", &notificationState{LastEventType: "created", AcknowledgedSentAt: &now}, now, false},
-		{"acknowledged_after_resolved", "acknowledged", &notificationState{LastEventType: "resolved"}, now, false},
-		{"suspected_cause_never_paged", "suspected_cause", nil, now, false},
-		{"suspected_cause_after_created", "suspected_cause", &notificationState{LastEventType: "created"}, now, true},
-		{"suspected_cause_after_ack_sent", "suspected_cause", &notificationState{LastEventType: "reminder", AcknowledgedSentAt: &now}, now, true},
-		{"suspected_cause_twice", "suspected_cause", &notificationState{LastEventType: "created", SuspectedCauseSentAt: &now}, now, false},
-		{"suspected_cause_after_resolved", "suspected_cause", &notificationState{LastEventType: "resolved"}, now, false},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := shouldSendNotification(test.eventType, test.state, test.now, interval); got != test.expected {
-				t.Fatalf("expected %v, got %v", test.expected, got)
-			}
-		})
-	}
-}
-
 func TestBuildAlertEvent_StatusAndTemplates(t *testing.T) {
 	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
 	resolvedAt := now.Add(-1 * time.Minute)
@@ -141,5 +100,40 @@ func TestBuildAlertEvent_SuspectedCause(t *testing.T) {
 	}
 	if event := buildAlertEvent("created", binding, &alertRecord{ID: uuid.New()}, nil, now); event.Alert.SuspectedCause != nil {
 		t.Fatal("a page must not carry a suspected cause")
+	}
+}
+
+// openAlertEventDue must agree with the created/reminder predicates of
+// claimNotificationTx: created only before any send and once the escalation
+// delay has passed; reminder only on an unresolved slot whose last send is at
+// least one interval old, and never with reminders off.
+func TestOpenAlertEventDue(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	interval := 10 * time.Minute
+	sent := func(event string, ago time.Duration) *notificationState {
+		return &notificationState{LastEventType: event, LastSentAt: now.Add(-ago)}
+	}
+	tests := []struct {
+		name     string
+		state    *notificationState
+		alertAge time.Duration
+		delay    time.Duration
+		interval time.Duration
+		want     string
+	}{
+		{"first send, no delay", nil, 0, 0, interval, "created"},
+		{"first send, delay not reached", nil, 4 * time.Minute, 5 * time.Minute, interval, ""},
+		{"first send, delay reached", nil, 5 * time.Minute, 5 * time.Minute, interval, "created"},
+		{"reminder before interval", sent("created", 9*time.Minute), time.Hour, 0, interval, ""},
+		{"reminder at interval", sent("created", 10*time.Minute), time.Hour, 0, interval, "reminder"},
+		{"reminder after a reminder", sent("reminder", 11*time.Minute), time.Hour, 0, interval, "reminder"},
+		{"reminders off", sent("created", time.Hour), time.Hour, 0, 0, ""},
+		{"resolved slot never reminds", sent("resolved", time.Hour), time.Hour, 0, interval, ""},
+		{"sent slot never re-creates", sent("created", time.Minute), time.Hour, 0, interval, ""},
+	}
+	for _, tt := range tests {
+		if got := openAlertEventDue(tt.state, tt.alertAge, tt.delay, now, tt.interval); got != tt.want {
+			t.Errorf("%s: openAlertEventDue = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }

@@ -513,7 +513,8 @@ or imported groups come back empty. Any other path that creates groups through
   `alert_notification_states` is what makes `alerter.replicas: 2` safe
   without leader election. The claim
   predicates in `claimNotificationTx` and the in-memory pre-filter
-  `shouldSendNotification` encode the same due rules; change them together.
+  `openAlertEventDue` (same file; used by the lifecycle and mesh dispatch)
+  encode the same due rules; change them together.
   The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
   never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser

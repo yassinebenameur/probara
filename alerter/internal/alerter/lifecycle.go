@@ -17,7 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
-// runLifecycle is the transition-driven replacement for evaluateAlerts (spec §6):
+// runLifecycle is the transition-driven alert lifecycle (spec §6):
 // refresh group states, open alerts for down monitors, resolve alerts for
 // recovered monitors, dispatch notifications by escalation delay + reminders.
 func (a *Alerter) runLifecycle(ctx context.Context) error {
@@ -629,12 +629,8 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 				continue
 			}
 			state := getNotificationState(states, oa.record.ID, target.channel.ID)
-			switch {
-			case state == nil && alertAge >= target.delay:
-				a.fireChannel(ctx, "created", binding, &oa.record, target.channel, now, reminderInterval)
-			case state != nil && state.LastEventType != "resolved" && reminderInterval > 0 &&
-				now.Sub(state.LastSentAt) >= reminderInterval:
-				a.fireChannel(ctx, "reminder", binding, &oa.record, target.channel, now, reminderInterval)
+			if event := openAlertEventDue(state, alertAge, target.delay, now, reminderInterval); event != "" {
+				a.fireChannel(ctx, event, binding, &oa.record, target.channel, now, reminderInterval)
 			}
 		}
 	}

@@ -185,7 +185,7 @@ Concretely:
   once the column exists; since the API migrates at startup before it serves,
   the window is usually seconds. Do not add a fallback query without the
   column: it would duplicate the due rules in `claimNotificationTx` and
-  `shouldSendNotification`.
+  `openAlertEventDue`.
 - **Per-recipient delivery ledger**: until migration 000097 creates
   `alert_notification_recipient_deliveries`, `recipientledger` reads report
   nothing delivered (SQLSTATE 42P01 — exact, since nothing could have been

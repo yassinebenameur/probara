@@ -287,12 +287,8 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 				continue
 			}
 			state := getNotificationState(states, oa.edge.alertID, target.channel.ID)
-			switch {
-			case state == nil && alertAge >= target.delay:
-				a.fireChannel(ctx, "created", binding, &record, target.channel, now, reminderInterval)
-			case state != nil && state.LastEventType != "resolved" && reminderInterval > 0 &&
-				now.Sub(state.LastSentAt) >= reminderInterval:
-				a.fireChannel(ctx, "reminder", binding, &record, target.channel, now, reminderInterval)
+			if event := openAlertEventDue(state, alertAge, target.delay, now, reminderInterval); event != "" {
+				a.fireChannel(ctx, event, binding, &record, target.channel, now, reminderInterval)
 			}
 		}
 	}
