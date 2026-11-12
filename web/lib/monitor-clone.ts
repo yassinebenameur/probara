@@ -32,25 +32,7 @@ function buildClonedHTTPConfig(monitor: Monitor): HTTPMonitorConfig {
     return cloneObject(monitor.config as HTTPMonitorConfig);
   }
 
-  const fallback: HTTPMonitorConfig = {
-    url: monitor.url || '',
-    method: monitor.method || 'GET',
-  };
-
-  if (monitor.headers && Object.keys(monitor.headers).length > 0) {
-    fallback.headers = { ...monitor.headers };
-  }
-  if (monitor.body) {
-    fallback.body = monitor.body;
-  }
-  if (monitor.expected_status !== undefined) {
-    fallback.expected_status = monitor.expected_status;
-  }
-  if (monitor.expected_body_substring) {
-    fallback.expected_body_substring = monitor.expected_body_substring;
-  }
-
-  return fallback;
+  return { url: '', method: 'GET' };
 }
 
 function buildClonedConfig(monitor: Monitor): MonitorConfig {

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/Button';
 import BrandMark from '@/components/ui/BrandMark';
 import Callout from '@/components/ui/Callout';
+import { validateApiKey } from '@/lib/api';
 import { setApiKey } from '@/lib/auth';
 
 export default function ConnectPage() {
@@ -26,20 +27,10 @@ export default function ConnectPage() {
 
     // Test the API key by making a simple request
     try {
-      const response = await fetch('/api/v1/monitors?page_size=1', {
-        headers: {
-          Authorization: `Bearer ${apiKey.trim()}`,
-        },
-      });
-
-      if (response.status === 401) {
+      if (!(await validateApiKey(apiKey.trim()))) {
         setError('Invalid API key. Please check your key and try again.');
         setLoading(false);
         return;
-      }
-
-      if (!response.ok) {
-        throw new Error('Failed to validate API key');
       }
 
       // Save the API key

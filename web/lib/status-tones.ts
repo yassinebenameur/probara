@@ -62,13 +62,6 @@ export const UPTIME_TONE_VAR: Record<UptimeTone, string> = {
   none: 'var(--text-muted)',
 };
 
-export const UPTIME_TONE_PILL: Record<UptimeTone, StatusTone> = {
-  good: 'success',
-  warn: 'warning',
-  bad: 'danger',
-  none: 'neutral',
-};
-
 // ── Check buckets ────────────────────────────────────────────────────────
 
 /**

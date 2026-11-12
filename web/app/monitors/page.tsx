@@ -41,7 +41,6 @@ import {
   createMonitor,
   addMonitorsToGroup,
   removeMonitorsFromGroup,
-  getSyntheticBrowserScreenshotUrl,
   toggleMonitorEnabled,
   exportMonitors,
   snoozeMonitor,
@@ -64,7 +63,7 @@ import {
   sortMonitorsByName,
 } from '@/lib/monitor-list';
 import { fetchResultsBatches, resultsBatchError } from '@/lib/monitor-results';
-import { getApiKey } from '@/lib/auth';
+import { useSyntheticScreenshot } from '@/lib/useSyntheticScreenshot';
 import { useCanWrite, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import { isSipCall } from '@/lib/sip-config';
 import {
@@ -911,8 +910,6 @@ function DetailPanel({
   onSelectMember?: (id: string) => void;
   onClose?: () => void;
 }) {
-  const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
-  const [screenshotLoading, setScreenshotLoading] = useState(false);
 
   const getSyntheticBrowserScreenshotPath = (result?: CheckResult): string | null => {
     const md = result?.metrics_data as any;
@@ -923,73 +920,11 @@ function DetailPanel({
     ? results.find((result) => Boolean(getSyntheticBrowserScreenshotPath(result)))
     : undefined;
   const latestSyntheticBrowserScreenshotPath = getSyntheticBrowserScreenshotPath(latestSyntheticBrowserResult);
-  const syntheticBrowserScreenshotURL = monitor && latestSyntheticBrowserScreenshotPath
-    ? getSyntheticBrowserScreenshotUrl(monitor.id, monitor.tenant_id, latestSyntheticBrowserScreenshotPath)
-    : null;
-
-  useEffect(() => {
-    let cancelled = false;
-    let objectURL: string | null = null;
-
-    if (!syntheticBrowserScreenshotURL) {
-      setScreenshotBlobURL((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return null;
-      });
-      setScreenshotLoading(false);
-      return;
-    }
-
-    const loadScreenshot = async () => {
-      setScreenshotLoading(true);
-      try {
-        const headers: HeadersInit = {};
-        const apiKey = getApiKey();
-        if (apiKey) {
-          headers.Authorization = `Bearer ${apiKey}`;
-        }
-
-        const response = await fetch(syntheticBrowserScreenshotURL, {
-          method: 'GET',
-          headers,
-          credentials: 'include',
-        });
-        if (!response.ok) {
-          throw new Error(`screenshot request failed: ${response.status}`);
-        }
-
-        const blob = await response.blob();
-        objectURL = URL.createObjectURL(blob);
-        if (!cancelled) {
-          setScreenshotBlobURL((prev) => {
-            if (prev) URL.revokeObjectURL(prev);
-            return objectURL;
-          });
-        }
-      } catch (err) {
-        console.error('Failed to load synthetic browser screenshot:', err);
-        if (!cancelled) {
-          setScreenshotBlobURL((prev) => {
-            if (prev) URL.revokeObjectURL(prev);
-            return null;
-          });
-        }
-      } finally {
-        if (!cancelled) {
-          setScreenshotLoading(false);
-        }
-      }
-    };
-
-    loadScreenshot();
-
-    return () => {
-      cancelled = true;
-      if (objectURL) {
-        URL.revokeObjectURL(objectURL);
-      }
-    };
-  }, [syntheticBrowserScreenshotURL]);
+  const { blobUrl: screenshotBlobURL, loading: screenshotLoading } = useSyntheticScreenshot(
+    monitor?.id,
+    monitor?.tenant_id,
+    latestSyntheticBrowserScreenshotPath
+  );
 
   if (!monitor) {
     return (

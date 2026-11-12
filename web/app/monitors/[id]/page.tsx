@@ -6,8 +6,8 @@ import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import Image from 'next/image';
 import { AlertTriangle, Eraser, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react';
 import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope, SIPMonitorConfig } from '@/lib/types';
-import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings, getSlas, runMonitorNow, toggleMonitorEnabled } from '@/lib/api';
-import { getApiKey } from '@/lib/auth';
+import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getTenantSettings, getSlas, runMonitorNow, toggleMonitorEnabled } from '@/lib/api';
+import { useSyntheticScreenshot } from '@/lib/useSyntheticScreenshot';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import { AlertRoutingNotice } from '@/components/monitors/AlertRoutingBadge';
@@ -340,8 +340,6 @@ export default function EditMonitorPage() {
   const [activeTab, setActiveTab] = useUrlTab(TAB_IDS);
   const [agentTimeRange, setAgentTimeRange] = useState<AgentTimeRange>('24h');
   const [overviewRange, setOverviewRange] = useState<OverviewTimeRange>('24h');
-  const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
-  const [screenshotLoading, setScreenshotLoading] = useState(false);
   const [runningCheck, setRunningCheck] = useState(false);
   const [confirmRunCall, setConfirmRunCall] = useState(false);
   const [togglingEnabled, setTogglingEnabled] = useState(false);
@@ -733,73 +731,11 @@ export default function EditMonitorPage() {
     ? (results?.results || []).find((result) => Boolean(getSyntheticBrowserScreenshotPath(result)))
     : undefined;
   const latestSyntheticBrowserScreenshotPath = getSyntheticBrowserScreenshotPath(latestSyntheticBrowserResult);
-  const syntheticBrowserScreenshotURL = monitor && latestSyntheticBrowserScreenshotPath
-    ? getSyntheticBrowserScreenshotUrl(monitor.id, monitor.tenant_id, latestSyntheticBrowserScreenshotPath)
-    : null;
-
-  useEffect(() => {
-    let cancelled = false;
-    let objectURL: string | null = null;
-
-    if (!syntheticBrowserScreenshotURL) {
-      setScreenshotBlobURL((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return null;
-      });
-      setScreenshotLoading(false);
-      return;
-    }
-
-    const loadScreenshot = async () => {
-      setScreenshotLoading(true);
-      try {
-        const headers: HeadersInit = {};
-        const apiKey = getApiKey();
-        if (apiKey) {
-          headers.Authorization = `Bearer ${apiKey}`;
-        }
-
-        const response = await fetch(syntheticBrowserScreenshotURL, {
-          method: 'GET',
-          headers,
-          credentials: 'include',
-        });
-        if (!response.ok) {
-          throw new Error(`screenshot request failed: ${response.status}`);
-        }
-
-        const blob = await response.blob();
-        objectURL = URL.createObjectURL(blob);
-        if (!cancelled) {
-          setScreenshotBlobURL((prev) => {
-            if (prev) URL.revokeObjectURL(prev);
-            return objectURL;
-          });
-        }
-      } catch (err) {
-        console.error('Failed to load synthetic browser screenshot:', err);
-        if (!cancelled) {
-          setScreenshotBlobURL((prev) => {
-            if (prev) URL.revokeObjectURL(prev);
-            return null;
-          });
-        }
-      } finally {
-        if (!cancelled) {
-          setScreenshotLoading(false);
-        }
-      }
-    };
-
-    loadScreenshot();
-
-    return () => {
-      cancelled = true;
-      if (objectURL) {
-        URL.revokeObjectURL(objectURL);
-      }
-    };
-  }, [syntheticBrowserScreenshotURL]);
+  const { blobUrl: screenshotBlobURL, loading: screenshotLoading } = useSyntheticScreenshot(
+    monitor?.id,
+    monitor?.tenant_id,
+    latestSyntheticBrowserScreenshotPath
+  );
 
   if (loading) {
     // The header's shape, so the page does not jump when the monitor lands;
