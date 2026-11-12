@@ -161,65 +161,10 @@ func grpcErrorReason(err error) string {
 	}
 }
 
+// safeDialContext adapts the shared SSRF dial guard to gRPC's dialer shape.
 func (c *GRPCChecker) safeDialContext(timeout time.Duration) func(context.Context, string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
-
+	guard := newDialGuard(c.blockPrivateIPs, c.allowedCIDRs, timeout)
 	return func(ctx context.Context, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, err
-		}
-
-		if ip := net.ParseIP(host); ip != nil {
-			if !c.isIPAllowed(ip) {
-				return nil, fmt.Errorf("ssrf_blocked: ip %s not allowed", host)
-			}
-			return dialer.DialContext(ctx, "tcp", address)
-		}
-
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-
-		var lastErr error
-		for _, ipAddr := range ips {
-			ipStr := ipAddr.IP.String()
-			if !c.isIPAllowed(ipAddr.IP) {
-				lastErr = fmt.Errorf("ssrf_blocked: resolved %s -> %s", host, ipStr)
-				continue
-			}
-
-			conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ipStr, port))
-			if err == nil {
-				return conn, nil
-			}
-			lastErr = err
-		}
-
-		if lastErr == nil {
-			lastErr = fmt.Errorf("no resolved IPs")
-		}
-		return nil, lastErr
+		return guard.DialContext(ctx, "tcp", address)
 	}
-}
-
-func (c *GRPCChecker) isIPAllowed(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-
-	for _, cidr := range c.allowedCIDRs {
-		if cidr != nil && cidr.Contains(ip) {
-			return true
-		}
-	}
-
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
-		return false
-	}
-	if isPrivateOrReservedIP(ip) {
-		return false
-	}
-	return true
 }

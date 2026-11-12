@@ -96,7 +96,7 @@ func (c *MeshChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		// A blocked connection is a checker-policy problem (error), not a
 		// statement about the edge's health (failure).
 		status := "failure"
-		if strings.Contains(err.Error(), "ssrf_blocked") {
+		if isSSRFBlocked(err) {
 			status = "error"
 		}
 		return CheckResult{Status: status, ErrorMessage: &errMsg, LatencyMs: &latencyMs}

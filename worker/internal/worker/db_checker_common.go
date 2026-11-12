@@ -99,7 +99,7 @@ func pemValue(v *string) string {
 func classifyDBError(err error) string {
 	errStr := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(errStr, "ssrf_blocked"):
+	case isSSRFBlocked(err):
 		return "ssrf_blocked"
 	case strings.Contains(errStr, "timeout"), strings.Contains(errStr, "deadline"):
 		return "timeout"

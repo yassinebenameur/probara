@@ -95,7 +95,7 @@ func (c *WebSocketChecker) Check(ctx context.Context, configRaw json.RawMessage,
 		// A blocked connection is a checker-policy problem (error), not a
 		// statement about the target's health (failure).
 		status := "failure"
-		if strings.Contains(err.Error(), "ssrf_blocked") {
+		if isSSRFBlocked(err) {
 			status = "error"
 		}
 		return CheckResult{Status: status, ErrorMessage: &errMsg, LatencyMs: &latencyMs}
@@ -162,7 +162,7 @@ func (c *WebSocketChecker) Check(ctx context.Context, configRaw json.RawMessage,
 func wsErrorReason(err error) string {
 	errStr := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(errStr, "ssrf_blocked"):
+	case isSSRFBlocked(err):
 		return "ssrf_blocked"
 	case strings.Contains(errStr, "timeout"), strings.Contains(errStr, "deadline"):
 		return "timeout"

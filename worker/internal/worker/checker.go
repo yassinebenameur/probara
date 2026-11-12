@@ -20,7 +20,6 @@ import (
 	probing "github.com/prometheus-community/pro-bing"
 	"github.com/tidwall/gjson"
 	"github.com/yassinebenameur/probara/shared/models"
-	"github.com/yassinebenameur/probara/shared/netguard"
 	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
@@ -200,51 +199,10 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		TLSHandshakeTimeout: timeout,
 	}
 
-	// SSRF protection: block private/link-local/etc IPs if enabled (can be overridden by HTTP_ALLOWED_CIDRS).
+	// SSRF protection: with HTTP_BLOCK_PRIVATE_IPS on, dial through the shared
+	// guard (resolve, validate every candidate, dial only an allowed IP).
 	if c.blockPrivateIPs {
-		dialer := &net.Dialer{
-			Timeout:   timeout,
-			KeepAlive: 30 * time.Second,
-		}
-		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(address)
-			if err != nil {
-				return nil, err
-			}
-
-			// If host is already an IP literal, validate directly.
-			if ip := net.ParseIP(host); ip != nil {
-				if !c.isIPAllowed(ip) {
-					return nil, fmt.Errorf("ssrf_blocked: ip %s not allowed", host)
-				}
-				return dialer.DialContext(ctx, network, address)
-			}
-
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-
-			var lastErr error
-			for _, ipAddr := range ips {
-				ipStr := ipAddr.IP.String()
-				if !c.isIPAllowed(ipAddr.IP) {
-					lastErr = fmt.Errorf("ssrf_blocked: resolved %s -> %s", host, ipStr)
-					continue
-				}
-
-				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ipStr, port))
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-			}
-
-			if lastErr == nil {
-				lastErr = errors.New("no resolved IPs")
-			}
-			return nil, lastErr
-		}
+		transport.DialContext = newDialGuard(c.blockPrivateIPs, c.allowedCIDRs, timeout).DialContext
 	}
 
 	client.Transport = transport
@@ -512,34 +470,6 @@ func (c *HTTPChecker) evaluateStatusCode(statusCode int, config *models.HTTPMoni
 		}
 	}
 	return false
-}
-
-func (c *HTTPChecker) isIPAllowed(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-
-	// Always allow explicitly configured CIDRs (operator override).
-	for _, cidr := range c.allowedCIDRs {
-		if cidr != nil && cidr.Contains(ip) {
-			return true
-		}
-	}
-
-	// Block common private / loopback / link-local / CGNAT ranges.
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
-		return false
-	}
-	if isPrivateOrReservedIP(ip) {
-		return false
-	}
-	return true
-}
-
-// isPrivateOrReservedIP delegates to the shared SSRF range table so the
-// worker and notification egress refuse exactly the same addresses.
-func isPrivateOrReservedIP(ip net.IP) bool {
-	return netguard.IsPrivateOrReserved(ip)
 }
 
 func evaluateHeaderAssertions(headers http.Header, assertions []models.HTTPHeaderAssertion) []string {
