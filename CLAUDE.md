@@ -906,11 +906,15 @@ or imported groups come back empty. Any other path that creates groups through
   provider settings are retired.
 - The start script refuses any Go except the minor on `go.mod`'s `go` line
   (1.26.x). With a newer local Go, prefix the command:
-  `GOTOOLCHAIN=go1.26.7 make start-all-local`.
+  `GOTOOLCHAIN=go1.26.5 make start-all-local` (the `toolchain` line in
+  `go.mod`).
 - Start env config from `.env.example`. If Postgres rejects the `probara`
   credentials after old experiments, `docker compose down -v` deletes the
   repo's volumes (all local data) so the database reinitializes.
-- Credentials: `admin` / `change-me`; default tenant ID
+- There are no default credentials: the first visit to the login page
+  creates the first administrator. The helper tools (`scripts/verify-auth.sh`,
+  `seed-demo`) assume `admin` / `change-me` unless `ADMIN_USER`/`ADMIN_PASS`
+  say otherwise, so create that user on a dev stack. Default tenant ID
   `00000000-0000-0000-0000-000000000001`.
 - API auth is cookie-based: POST `/api/v1/auth/login`, keep a cookie jar, and
   pass `tenant_id` as a query param on tenant-scoped routes.
@@ -1059,7 +1063,7 @@ or imported groups come back empty. Any other path that creates groups through
   change one and it is a new version.
 - **Git LFS covers only `ai-service/artifacts/*/head.safetensors`**
   (`.gitattributes`). Every CI checkout uses `lfs: false`; only the
-  `local-ai` job in `build-test.yml` (every head, cached) and an approved
+  `ai-checkpoint` job in `build-test.yml` (every head, cached) and an approved
   local-ai image build in `docker-build.yml` (tags) / `local-ai-pr.yml` (the
   shipped checkpoint's head only) run `git lfs pull --include` (bandwidth is
   metered). Keep new LFS patterns and pulls equally narrow.

@@ -156,13 +156,6 @@ make stop-all-local`,
             },
           ],
         },
-        {
-          type: 'callout',
-          tone: 'warning',
-          title: 'An older helper is incomplete',
-          text:
-            '`scripts/run-api.sh` does not supply the now-required `ADMIN_JWT_SECRET`. Prefer the Make workflow or export all required variables yourself.',
-        },
       ],
     },
     {

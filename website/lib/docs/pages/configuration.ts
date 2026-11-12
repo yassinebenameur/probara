@@ -978,11 +978,6 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`VERIFY_SSO`', '`0`', 'Enable SSO checks in the auth verification helper.'],
             ['`API_URL`', '`http://localhost:8080`', 'Dependency-graph seed helper.'],
             ['`TENANT_ID`', 'Auto-select first tenant when supported', 'Seed/test helpers.'],
-            [
-              '`API_KEY`',
-              'Placeholder in `scripts/test-group-creation.sh`',
-              'Test helper credential only; never use a production key in a disposable script shell history.',
-            ],
             ['`WRITE_PREVIEW`', 'Empty', 'Test-only flag that writes rendered status preview HTML.'],
           ],
         },
