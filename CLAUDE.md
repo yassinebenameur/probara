@@ -838,6 +838,9 @@ or imported groups come back empty. Any other path that creates groups through
   pause, delete, history reset) and renders header, aside and tab
   components from `components/monitors/detail/`; its Server panel facts are
   `lib/monitor-server-facts.ts` (database, TCP) and `lib/sip-metrics.ts`.
+  The dashboard (`app/page.tsx`) reads `useDashboardData` and
+  `useProblemTraces` and lays out the cards in `components/dashboard/`
+  (grid cells and list limits in its `layout.ts`).
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
