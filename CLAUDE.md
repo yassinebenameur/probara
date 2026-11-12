@@ -814,8 +814,9 @@ or imported groups come back empty. Any other path that creates groups through
   its worst member under status. Tags match ANY selected tag
   (`matchesAnyTag`), and every dashboard endpoint's `tag` scope is the same
   rule (`tags && $n`, never `@>`) so a dashboard count and the list it links
-  to agree. The list page (`app/monitors/page.tsx`) is wiring only: rows,
-  panel, toolbar, bulk bar and its hooks live in `components/monitors/list/`,
+  to agree. The list page (`app/monitors/page.tsx`) keeps the row actions
+  (delete, pause, snooze, export) and the filter wiring; rows, panel,
+  toolbar, bulk bar and its hooks live in `components/monitors/list/`,
   and the filter and group-tree rules (`monitorMatchesFilters`,
   `groupHasMatchingMember`, `groupContainsGroup`) in `lib/monitor-list.ts`.
   Likewise the one-alert `/alerts?alert=<id>&tenant=<id>` link notifications
@@ -833,7 +834,7 @@ or imported groups come back empty. Any other path that creates groups through
   `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus, marks
   `#app-root` inert while open and restores focus on close; pass `onEscape`
   unless the modal handles Escape itself (`Dialog` does).
-- **Pages are wiring; their pieces sit with the domain**: the monitor page
+- **Large pages keep composition; their pieces sit with the domain**: the monitor page
   (`app/monitors/[id]/page.tsx`) reads `useMonitorDetail` (data, run-now,
   pause, delete, history reset) and renders header, aside and tab
   components from `components/monitors/detail/`; its Server panel facts are
