@@ -1,52 +1,15 @@
 import { MarkerType, type Edge } from '@xyflow/react';
-import {
-  Code,
-  Database,
-  Folder,
-  Globe,
-  Leaf,
-  MessageSquare,
-  MousePointer2,
-  Network,
-  Phone,
-  Radio,
-  Search,
-  Server,
-  Webhook,
-  Zap,
-  type LucideIcon,
-} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { MONITOR_TYPE_ICONS } from '@/components/monitors/monitor-type-icons';
 import { MonitorState } from '@/lib/types';
 
 export const NODE_WIDTH = 216;
 export const NODE_HEIGHT = 64;
 export const GROUP_NODE_HEIGHT = 52;
 
-export function apiErrorMessage(err: unknown): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    return String((err as { message?: unknown }).message || 'Something went wrong');
-  }
-  return err instanceof Error ? err.message : 'Something went wrong';
-}
-
-// Same icon-per-type vocabulary as MONITOR_TYPE_META in MonitorForm, so the
-// map reads like the rest of the app.
-export const TYPE_ICONS: Record<string, LucideIcon> = {
-  http: Globe,
-  synthetic_api: Code,
-  synthetic_browser: MousePointer2,
-  ping: Radio,
-  dns: Search,
-  grpc: Network,
-  sip: Phone,
-  postgres: Database,
-  redis: Zap,
-  mongodb: Leaf,
-  rabbitmq: MessageSquare,
-  agent: Server,
-  push: Webhook,
-  group: Folder,
-};
+// Monitor type icons, shared with the type picker. Keyed by string because
+// graph nodes carry the type as the API sent it.
+export const TYPE_ICONS: Record<string, LucideIcon> = MONITOR_TYPE_ICONS;
 
 // Per-state visual treatment for node cards: icon tile, dot, state label,
 // and the border a failing node wears on the map.

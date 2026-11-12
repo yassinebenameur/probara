@@ -2,16 +2,13 @@
 package depsuggest
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/google/uuid"
-
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	svc "github.com/yassinebenameur/probara/api/internal/services/depsuggest"
 	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -30,14 +27,8 @@ func NewHandlers(service *svc.Service, log *logger.Logger) *Handlers {
 
 // Suggest handles POST /api/v1/monitors/dependency-suggestions.
 func (h *Handlers) Suggest(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
 
@@ -47,8 +38,7 @@ func (h *Handlers) Suggest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // unavailableRetryAfter is the Retry-After sent when the local AI answered

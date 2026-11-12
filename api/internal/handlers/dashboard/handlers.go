@@ -1,14 +1,11 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
-	"github.com/google/uuid"
-
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -30,7 +27,7 @@ func NewHandlers(service dashboardservice.DashboardService, log *logger.Logger) 
 
 // GetOverview handles GET /api/v1/dashboard/overview.
 func (h *Handlers) GetOverview(w http.ResponseWriter, r *http.Request) {
-	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -40,19 +37,18 @@ func (h *Handlers) GetOverview(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
-			"tenant_id": tenantID,
+			"tenant_id": tenantUUID.String(),
 		}).Error("Failed to get dashboard overview")
-		errors.WriteInternalError(w, "failed to get dashboard overview")
+		apierrors.WriteInternalError(w, "failed to get dashboard overview")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(overview)
+	httpx.WriteJSON(w, http.StatusOK, overview)
 }
 
 // GetSummary handles GET /api/v1/dashboard/summary.
 func (h *Handlers) GetSummary(w http.ResponseWriter, r *http.Request) {
-	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -61,19 +57,18 @@ func (h *Handlers) GetSummary(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
-			"tenant_id": tenantID,
+			"tenant_id": tenantUUID.String(),
 		}).Error("Failed to get dashboard summary")
-		errors.WriteInternalError(w, "failed to get dashboard summary")
+		apierrors.WriteInternalError(w, "failed to get dashboard summary")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(summary)
+	httpx.WriteJSON(w, http.StatusOK, summary)
 }
 
 // GetProblemMonitors handles GET /api/v1/dashboard/problem-monitors.
 func (h *Handlers) GetProblemMonitors(w http.ResponseWriter, r *http.Request) {
-	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -82,19 +77,18 @@ func (h *Handlers) GetProblemMonitors(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
-			"tenant_id": tenantID,
+			"tenant_id": tenantUUID.String(),
 		}).Error("Failed to get dashboard problem monitors")
-		errors.WriteInternalError(w, "failed to get dashboard problem monitors")
+		apierrors.WriteInternalError(w, "failed to get dashboard problem monitors")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	httpx.WriteJSON(w, http.StatusOK, response)
 }
 
 // GetRecentFailures handles GET /api/v1/dashboard/recent-failures.
 func (h *Handlers) GetRecentFailures(w http.ResponseWriter, r *http.Request) {
-	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -103,19 +97,18 @@ func (h *Handlers) GetRecentFailures(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
-			"tenant_id": tenantID,
+			"tenant_id": tenantUUID.String(),
 		}).Error("Failed to get dashboard recent failures")
-		errors.WriteInternalError(w, "failed to get dashboard recent failures")
+		apierrors.WriteInternalError(w, "failed to get dashboard recent failures")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	httpx.WriteJSON(w, http.StatusOK, response)
 }
 
 // GetRecentAlerts handles GET /api/v1/dashboard/recent-alerts.
 func (h *Handlers) GetRecentAlerts(w http.ResponseWriter, r *http.Request) {
-	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -124,14 +117,13 @@ func (h *Handlers) GetRecentAlerts(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
-			"tenant_id": tenantID,
+			"tenant_id": tenantUUID.String(),
 		}).Error("Failed to get dashboard recent alerts")
-		errors.WriteInternalError(w, "failed to get dashboard recent alerts")
+		apierrors.WriteInternalError(w, "failed to get dashboard recent alerts")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	httpx.WriteJSON(w, http.StatusOK, response)
 }
 
 // GetGroupSparkline handles GET /api/v1/dashboard/group-sparkline.
@@ -140,7 +132,7 @@ func (h *Handlers) GetRecentAlerts(w http.ResponseWriter, r *http.Request) {
 //	&range=<1h|24h|7d|30d|90d|365d>
 //	&tag=<a>&tag=<b>  top-level dashboard tag filter, any of them (repeated query param, like other dashboard endpoints)
 func (h *Handlers) GetGroupSparkline(w http.ResponseWriter, r *http.Request) {
-	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -162,30 +154,13 @@ func (h *Handlers) GetGroupSparkline(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
-			"tenant_id": tenantID,
+			"tenant_id": tenantUUID.String(),
 		}).Error("Failed to get dashboard group sparkline")
-		errors.WriteInternalError(w, "failed to get dashboard group sparkline")
+		apierrors.WriteInternalError(w, "failed to get dashboard group sparkline")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func tenantFromRequest(w http.ResponseWriter, r *http.Request) (string, uuid.UUID, bool) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return "", uuid.UUID{}, false
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return "", uuid.UUID{}, false
-	}
-
-	return tenantID, tenantUUID, true
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 func parseSummaryParams(r *http.Request) *models.DashboardOverviewQuery {

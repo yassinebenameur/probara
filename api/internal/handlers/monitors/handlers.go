@@ -3,23 +3,20 @@ package monitors
 import (
 	"context"
 	"encoding/json"
-	stderrors "errors"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
-	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	"github.com/yassinebenameur/probara/api/internal/validation"
@@ -87,7 +84,7 @@ func NewHandlers(service monitorservice.MonitorService, groupSvc groupMembership
 		service:       service,
 		groupService:  groupSvc,
 		resultService: resultSvc,
-		checkSubject:  "check.jobs",
+		checkSubject:  sharedmodels.CheckJobSubject,
 		artifactsDir:  baseDir,
 		logger:        log,
 	}
@@ -104,199 +101,36 @@ func (h *Handlers) ConfigureCheckJobs(publisher checkJobPublisher, subject strin
 	}
 }
 
-// TestMonitorConfigRequest is the body for POST /api/v1/monitors/test.
-// RunMonitorNowRequest is the optional body of POST /monitors/{id}/run.
-type RunMonitorNowRequest struct {
-	LocationID *string `json:"location_id,omitempty"`
-}
-
-type TestMonitorConfigRequest struct {
-	Type           models.MonitorType `json:"type"`
-	Config         json.RawMessage    `json:"config"`
-	TimeoutSeconds int                `json:"timeout_seconds"`
-	// MonitorID resolves write-only secret placeholders ("***") against the
-	// stored monitor when testing an edit.
-	MonitorID *string `json:"monitor_id,omitempty"`
-	// LocationID routes the test to that private location's workers so it
-	// runs from the same vantage point as the scheduled checks. Empty =
-	// default platform fleet.
-	LocationID *string `json:"location_id,omitempty"`
-}
-
-// TestMonitorConfig handles POST /api/v1/monitors/test — runs one ephemeral
-// check via a worker (NATS request-reply) so a config can be validated before
-// saving. Nothing is persisted.
-func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	if h.jobRequester == nil {
-		errors.WriteInternalError(w, "test checks are not available (queue not configured)")
-		return
-	}
-
-	var req TestMonitorConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
-		return
-	}
-
-	if !validation.DefaultRegistry.Has(req.Type) {
-		errors.WriteValidationError(w, "unknown monitor type: "+string(req.Type))
-		return
-	}
-	if len(req.Config) == 0 {
-		errors.WriteValidationError(w, "config is required")
-		return
-	}
-	if err := validation.DefaultRegistry.Validate(req.Type, req.Config); err != nil {
-		errors.WriteValidationError(w, err.Error())
-		return
-	}
-	// A test of a test-call config places a real call.
-	if err := monitorservice.RequireCallPermission(r.Context(), req.Type, req.Config); err != nil {
-		errors.WriteForbiddenError(w, err.Error())
-		return
-	}
-	if containsEncryptedTestSecret(req.Type, req.Config) {
-		errors.WriteValidationError(w, "encrypted credentials cannot be supplied in test requests; use saved secret placeholders")
-		return
-	}
-	if req.TimeoutSeconds <= 0 {
-		req.TimeoutSeconds = 10
-	}
-	if req.TimeoutSeconds > 60 {
-		req.TimeoutSeconds = 60
-	}
-
-	var monitorID *uuid.UUID
-	if req.MonitorID != nil && *req.MonitorID != "" {
-		parsed, err := uuid.Parse(*req.MonitorID)
-		if err != nil {
-			errors.WriteValidationError(w, "invalid monitor_id")
-			return
-		}
-		monitorID = &parsed
-	}
-
-	// Custom destinations must not turn a read-only test into an oracle for
-	// saved credentials. Tests using only caller-supplied credentials remain safe.
-	if monitorID != nil && secrets.HasMonitorSecrets(string(req.Type)) && !ctxpkg.CanWrite(r.Context()) {
-		errors.WriteForbiddenError(w, "testing with saved credentials requires write permission")
-		return
-	}
-	config, err := h.service.ResolveTestConfig(r.Context(), tenantUUID, monitorID, req.Type, req.Config)
-	if err != nil {
-		if stderrors.Is(err, monitorservice.ErrMonitorTypeMismatch) {
-			errors.WriteValidationError(w, err.Error())
-			return
-		}
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "tenant_id": tenantID}).Error("Failed to resolve test config")
-		errors.WriteInternalError(w, "failed to resolve config")
-		return
-	}
-
-	testSubject := sharedmodels.TestCheckSubject
-	if req.LocationID != nil && *req.LocationID != "" {
-		locationID, err := uuid.Parse(*req.LocationID)
-		if err != nil {
-			errors.WriteValidationError(w, "invalid location_id")
-			return
-		}
-		if h.locationProtector == nil {
-			errors.WriteInternalError(w, "private location security is unavailable")
-			return
-		}
-		config, err = h.locationProtector.ProtectMonitorConfigForWorker(r.Context(), tenantUUID, locationID, string(req.Type), config)
-		if err != nil {
-			h.logger.WithError(err).Warn("Failed to protect private-location test config")
-			errors.WriteInternalError(w, "failed to protect test config")
-			return
-		}
-		testSubject = sharedmodels.TestCheckSubjectForLocation(locationID.String())
-	}
-
-	payload, err := json.Marshal(sharedmodels.CheckJobPayload{
-		Type:           string(req.Type),
-		Config:         config,
-		TimeoutSeconds: req.TimeoutSeconds,
-	})
-	if err != nil {
-		errors.WriteInternalError(w, "failed to encode test payload")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutSeconds+10)*time.Second)
-	defer cancel()
-	reply, err := h.jobRequester.Request(ctx, testSubject, payload)
-	if err != nil {
-		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "type": req.Type, "subject": testSubject}).Warn("Test check request failed")
-		if testSubject != sharedmodels.TestCheckSubject {
-			errors.WriteInternalError(w, "no worker answered at this location — is its worker running and connected?")
-			return
-		}
-		errors.WriteInternalError(w, "no worker answered the test request — is a worker running?")
-		return
-	}
-
-	var response sharedmodels.TestCheckResponse
-	if err := json.Unmarshal(reply, &response); err != nil {
-		errors.WriteInternalError(w, "invalid worker response")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
 // CreateMonitor handles POST /api/v1/monitors
 func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	var req models.CreateMonitorRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 
 	if err := validation.ValidateMonitor(&req); err != nil {
-		errors.WriteValidationError(w, err.Error())
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
 
 	monitor, err := h.service.CreateMonitor(r.Context(), tenantUUID, &req)
 	if err != nil {
-		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
-			errors.WriteForbiddenError(w, err.Error())
+		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
+			apierrors.WriteForbiddenError(w, err.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Failed to create monitor")
-		errors.WriteInternalError(w, "failed to create monitor")
+		apierrors.WriteInternalError(w, "failed to create monitor")
 		return
 	}
 
@@ -353,36 +187,28 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 		"name":       monitor.Name,
 	}).Info("Monitor created")
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(monitor)
+	httpx.WriteJSON(w, http.StatusCreated, monitor)
 }
 
 // GetMonitor handles GET /api/v1/monitors/{id}
 func (h *Handlers) GetMonitor(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
 	monitor, err := h.service.GetMonitor(r.Context(), tenantUUID, monitorID)
 	if err != nil {
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
+		if errors.Is(err, monitorservice.ErrMonitorNotFound) {
+			apierrors.WriteNotFoundError(w, "monitor not found")
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -390,12 +216,11 @@ func (h *Handlers) GetMonitor(w http.ResponseWriter, r *http.Request) {
 			"tenant_id":  tenantID,
 			"monitor_id": monitorID,
 		}).Error("Failed to get monitor")
-		errors.WriteInternalError(w, "failed to get monitor")
+		apierrors.WriteInternalError(w, "failed to get monitor")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(monitorForResponse(r.Context(), *monitor))
+	httpx.WriteJSON(w, http.StatusOK, monitorForResponse(r.Context(), *monitor))
 }
 
 // monitorForResponse copies the model so redaction never changes stored state.
@@ -417,40 +242,13 @@ func monitorForResponse(ctx context.Context, monitor models.Monitor) models.Moni
 	return monitor
 }
 
-func containsEncryptedTestSecret(monitorType models.MonitorType, config json.RawMessage) bool {
-	var fields map[string]any
-	if json.Unmarshal(config, &fields) != nil {
-		return false // The type validator reports malformed config separately.
-	}
-	for _, field := range secrets.MonitorSecretFields[string(monitorType)] {
-		if value, ok := fields[field].(string); ok && secrets.LooksLikeEnvelope(value) {
-			return true
-		}
-	}
-	for _, field := range secrets.MonitorSecretMapFields[string(monitorType)] {
-		values, _ := fields[field].(map[string]any)
-		for _, raw := range values {
-			if value, ok := raw.(string); ok && secrets.LooksLikeEnvelope(value) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // ListMonitors handles GET /api/v1/monitors
 func (h *Handlers) ListMonitors(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	// Parse query parameters
 	var tag *string
@@ -464,19 +262,7 @@ func (h *Handlers) ListMonitors(w http.ResponseWriter, r *http.Request) {
 		enabled = &enabledVal
 	}
 
-	page := 1
-	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			page = p
-		}
-	}
-
-	pageSize := 20
-	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
-		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
-			pageSize = ps
-		}
-	}
+	page, pageSize := httpx.Page(r)
 
 	result, err := h.service.ListMonitors(r.Context(), tenantUUID, tag, enabled, page, pageSize)
 	if err != nil {
@@ -484,43 +270,36 @@ func (h *Handlers) ListMonitors(w http.ResponseWriter, r *http.Request) {
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Failed to list monitors")
-		errors.WriteInternalError(w, "failed to list monitors")
+		apierrors.WriteInternalError(w, "failed to list monitors")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	for i := range result.Items {
 		result.Items[i] = monitorForResponse(r.Context(), result.Items[i])
 	}
-	json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // UpdateMonitor handles PATCH /api/v1/monitors/{id}
 func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
 	// Get existing monitor for validation
 	existingMonitor, err := h.service.GetMonitor(r.Context(), tenantUUID, monitorID)
 	if err != nil {
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
+		if errors.Is(err, monitorservice.ErrMonitorNotFound) {
+			apierrors.WriteNotFoundError(w, "monitor not found")
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -528,33 +307,33 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 			"tenant_id":  tenantID,
 			"monitor_id": monitorID,
 		}).Error("Failed to get monitor")
-		errors.WriteInternalError(w, "failed to get monitor")
+		apierrors.WriteInternalError(w, "failed to get monitor")
 		return
 	}
 
 	var req models.UpdateMonitorRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 
 	if err := validation.ValidateMonitorUpdate(&req, existingMonitor); err != nil {
-		errors.WriteValidationError(w, err.Error())
+		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
 
 	monitor, err := h.service.UpdateMonitor(r.Context(), tenantUUID, monitorID, &req)
 	if err != nil {
-		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
-			errors.WriteForbiddenError(w, err.Error())
+		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
+			apierrors.WriteForbiddenError(w, err.Error())
 			return
 		}
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
+		if errors.Is(err, monitorservice.ErrMonitorNotFound) {
+			apierrors.WriteNotFoundError(w, "monitor not found")
 			return
 		}
-		if err.Error() == "timeout_seconds must be less than interval_seconds" {
-			errors.WriteValidationError(w, err.Error())
+		if errors.Is(err, monitorservice.ErrTimeoutNotBelowInterval) {
+			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -562,7 +341,7 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 			"tenant_id":  tenantID,
 			"monitor_id": monitorID,
 		}).Error("Failed to update monitor")
-		errors.WriteInternalError(w, "failed to update monitor")
+		apierrors.WriteInternalError(w, "failed to update monitor")
 		return
 	}
 
@@ -650,35 +429,28 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		"name":       monitor.Name,
 	}).Info("Monitor updated")
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(monitor)
+	httpx.WriteJSON(w, http.StatusOK, monitor)
 }
 
 // DeleteMonitor handles DELETE /api/v1/monitors/{id}
 func (h *Handlers) DeleteMonitor(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
 	err = h.service.DeleteMonitor(r.Context(), tenantUUID, monitorID)
 	if err != nil {
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
+		if errors.Is(err, monitorservice.ErrMonitorNotFound) {
+			apierrors.WriteNotFoundError(w, "monitor not found")
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -686,7 +458,7 @@ func (h *Handlers) DeleteMonitor(w http.ResponseWriter, r *http.Request) {
 			"tenant_id":  tenantID,
 			"monitor_id": monitorID,
 		}).Error("Failed to delete monitor")
-		errors.WriteInternalError(w, "failed to delete monitor")
+		apierrors.WriteInternalError(w, "failed to delete monitor")
 		return
 	}
 
@@ -701,24 +473,19 @@ func (h *Handlers) DeleteMonitor(w http.ResponseWriter, r *http.Request) {
 // BulkDeleteMonitors handles POST /api/v1/monitors/bulk/delete.
 // Soft-deletes the listed monitors; child rows are purged asynchronously.
 func (h *Handlers) BulkDeleteMonitors(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	var req models.BulkDeleteMonitorsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 	if len(req.MonitorIDs) == 0 {
-		errors.WriteValidationError(w, "monitor_ids is required and cannot be empty")
+		apierrors.WriteValidationError(w, "monitor_ids is required and cannot be empty")
 		return
 	}
 
@@ -726,7 +493,7 @@ func (h *Handlers) BulkDeleteMonitors(w http.ResponseWriter, r *http.Request) {
 	for i, idStr := range req.MonitorIDs {
 		monitorID, err := uuid.Parse(idStr)
 		if err != nil {
-			errors.WriteValidationError(w, fmt.Sprintf("invalid monitor ID: %s", idStr))
+			apierrors.WriteValidationError(w, fmt.Sprintf("invalid monitor ID: %s", idStr))
 			return
 		}
 		monitorIDs[i] = monitorID
@@ -734,15 +501,15 @@ func (h *Handlers) BulkDeleteMonitors(w http.ResponseWriter, r *http.Request) {
 
 	deleted, err := h.service.BulkDeleteMonitors(r.Context(), tenantUUID, monitorIDs)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found or do not belong to tenant") {
-			errors.WriteValidationError(w, err.Error())
+		if errors.Is(err, monitorservice.ErrMonitorsNotInTenant) {
+			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Failed to bulk delete monitors")
-		errors.WriteInternalError(w, "failed to bulk delete monitors")
+		apierrors.WriteInternalError(w, "failed to bulk delete monitors")
 		return
 	}
 
@@ -752,36 +519,29 @@ func (h *Handlers) BulkDeleteMonitors(w http.ResponseWriter, r *http.Request) {
 		"monitor_ids": req.MonitorIDs,
 	}).Info("Monitors bulk-deleted")
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(models.BulkDeleteMonitorsResponse{Deleted: deleted})
+	httpx.WriteJSON(w, http.StatusOK, models.BulkDeleteMonitorsResponse{Deleted: deleted})
 }
 
 // DeleteMonitorHistory handles DELETE /api/v1/monitors/{id}/history
 func (h *Handlers) DeleteMonitorHistory(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
 	err = h.service.DeleteMonitorHistory(r.Context(), tenantUUID, monitorID)
 	if err != nil {
 		switch {
-		case err.Error() == "monitor not found":
-			errors.WriteNotFoundError(w, "monitor not found")
+		case errors.Is(err, monitorservice.ErrMonitorNotFound):
+			apierrors.WriteNotFoundError(w, "monitor not found")
 			return
 		}
 
@@ -790,7 +550,7 @@ func (h *Handlers) DeleteMonitorHistory(w http.ResponseWriter, r *http.Request) 
 			"tenant_id":  tenantID,
 			"monitor_id": monitorID,
 		}).Error("Failed to delete monitor history")
-		errors.WriteInternalError(w, "failed to delete monitor history")
+		apierrors.WriteInternalError(w, "failed to delete monitor history")
 		return
 	}
 
@@ -800,701 +560,4 @@ func (h *Handlers) DeleteMonitorHistory(w http.ResponseWriter, r *http.Request) 
 	}).Info("Monitor history deleted")
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// GetMonitorResults handles GET /api/v1/monitors/{id}/results
-func (h *Handlers) GetMonitorResults(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-
-	monitorIDStr := chi.URLParam(r, "id")
-	monitorID, err := uuid.Parse(monitorIDStr)
-	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	// Parse query parameters
-	limit := 0
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			limit = l
-		}
-	}
-
-	var since *time.Time
-	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
-		if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
-			since = &t
-		}
-	}
-
-	results, err := h.resultService.GetMonitorResults(r.Context(), tenantUUID, monitorID, limit, since)
-	if err != nil {
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID,
-		}).Error("Failed to get monitor results")
-		errors.WriteInternalError(w, "failed to get monitor results")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
-}
-
-// GetMonitorResultsBatch handles GET /api/v1/monitors/results/batch: the
-// newest ?limit= (default 20, max 100) results for each of up to 100
-// monitors, named by ?ids= (comma-separated, repeatable). It is a GET so
-// viewers and read-scope keys reach it without a postReadPaths entry.
-func (h *Handlers) GetMonitorResultsBatch(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	query := r.URL.Query()
-	var monitorIDs []uuid.UUID
-	for _, value := range query["ids"] {
-		for _, raw := range strings.Split(value, ",") {
-			raw = strings.TrimSpace(raw)
-			if raw == "" {
-				continue
-			}
-			id, err := uuid.Parse(raw)
-			if err != nil {
-				errors.WriteValidationError(w, fmt.Sprintf("invalid monitor ID %q", raw))
-				return
-			}
-			monitorIDs = append(monitorIDs, id)
-		}
-	}
-
-	limit := 0
-	if limitStr := query.Get("limit"); limitStr != "" {
-		limit, err = strconv.Atoi(limitStr)
-		if err != nil || limit < 1 {
-			errors.WriteValidationError(w, fmt.Sprintf("limit must be an integer between 1 and %d", resultservice.MaxBatchResultsLimit))
-			return
-		}
-	}
-
-	response, err := h.resultService.GetMonitorResultsBatch(r.Context(), tenantUUID, monitorIDs, limit)
-	if err != nil {
-		if stderrors.Is(err, resultservice.ErrInvalidBatchRequest) {
-			errors.WriteValidationError(w, err.Error())
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":         err.Error(),
-			"tenant_id":     tenantID,
-			"monitor_count": len(monitorIDs),
-		}).Error("Failed to get batch monitor results")
-		errors.WriteInternalError(w, "failed to get monitor results")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-// GetMonitorAnalytics handles GET /api/v1/monitors/{id}/analytics
-func (h *Handlers) GetMonitorAnalytics(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-
-	monitorIDStr := chi.URLParam(r, "id")
-	monitorID, err := uuid.Parse(monitorIDStr)
-	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	rangeValue := parseAnalyticsRange(r)
-
-	response, err := h.resultService.GetMonitorAnalytics(r.Context(), tenantUUID, monitorID, rangeValue)
-	if err != nil {
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID,
-			"range":      rangeValue,
-		}).Error("Failed to get monitor analytics")
-		errors.WriteInternalError(w, "failed to get monitor analytics")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-// parseAnalyticsRange reads ?range=, defaulting unknown values to 24h.
-func parseAnalyticsRange(r *http.Request) models.MonitorAnalyticsRange {
-	switch value := models.MonitorAnalyticsRange(r.URL.Query().Get("range")); value {
-	case models.MonitorAnalyticsRange1h,
-		models.MonitorAnalyticsRange6h,
-		models.MonitorAnalyticsRange24h,
-		models.MonitorAnalyticsRange7d,
-		models.MonitorAnalyticsRange30d,
-		models.MonitorAnalyticsRange90d,
-		models.MonitorAnalyticsRange365d:
-		return value
-	}
-	return models.MonitorAnalyticsRange24h
-}
-
-// GetMonitorMetricsSnapshots handles GET /api/v1/monitors/{id}/metrics-snapshots
-func (h *Handlers) GetMonitorMetricsSnapshots(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-
-	monitorID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	rangeValue := parseAnalyticsRange(r)
-	response, err := h.resultService.GetMonitorMetricsSnapshots(r.Context(), tenantUUID, monitorID, rangeValue)
-	if err != nil {
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID,
-			"range":      rangeValue,
-		}).Error("Failed to get monitor metrics snapshots")
-		errors.WriteInternalError(w, "failed to get monitor metrics snapshots")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-// RunMonitorNow handles POST /api/v1/monitors/{id}/run
-func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-
-	if h.jobPublisher == nil {
-		errors.WriteInternalError(w, "on-demand monitor runs are unavailable")
-		return
-	}
-
-	monitorIDStr := chi.URLParam(r, "id")
-	monitorID, err := uuid.Parse(monitorIDStr)
-	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	monitor, err := h.service.GetMonitor(r.Context(), tenantUUID, monitorID)
-	if err != nil {
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID.String(),
-		}).Error("Failed to fetch monitor for on-demand run")
-		errors.WriteInternalError(w, "failed to fetch monitor")
-		return
-	}
-
-	if sharedmodels.IsPassiveMonitorType(string(monitor.Type)) {
-		errors.WriteValidationError(w, fmt.Sprintf("%s monitors cannot be run on-demand", monitor.Type))
-		return
-	}
-	// Running a test-call monitor places a real call from every selected
-	// location.
-	if err := monitorservice.RequireCallPermission(r.Context(), monitor.Type, monitor.Config); err != nil {
-		errors.WriteForbiddenError(w, err.Error())
-		return
-	}
-
-	// Optional body: {"location_id": "..."} narrows the run to one of the
-	// monitor's locations. Default: fan out exactly like the scheduler (all
-	// selected locations, or the default fleet when none).
-	var runReq RunMonitorNowRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&runReq) // empty body is fine
-	}
-
-	locationIDs := []string{""}
-	if len(monitor.LocationIDs) > 0 {
-		locationIDs = locationIDs[:0]
-		for _, id := range monitor.LocationIDs {
-			locationIDs = append(locationIDs, id.String())
-		}
-	}
-	if runReq.LocationID != nil && *runReq.LocationID != "" {
-		requested, err := uuid.Parse(*runReq.LocationID)
-		if err != nil {
-			errors.WriteValidationError(w, "invalid location_id")
-			return
-		}
-		found := false
-		for _, id := range monitor.LocationIDs {
-			if id == requested {
-				found = true
-				break
-			}
-		}
-		if !found {
-			errors.WriteValidationError(w, "location is not selected on this monitor")
-			return
-		}
-		locationIDs = []string{requested.String()}
-	}
-
-	// GetMonitor masks secret config fields ("***") for API responses; resolve
-	// the placeholders back to the stored (still encrypted) values so the
-	// worker can actually authenticate.
-	checkConfig, err := h.service.ResolveTestConfig(r.Context(), tenantUUID, &monitorID, monitor.Type, monitor.Config)
-	if err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID.String(),
-		}).Error("Failed to resolve monitor config for on-demand run")
-		errors.WriteInternalError(w, "failed to queue monitor run")
-		return
-	}
-
-	now := time.Now()
-	timeoutSeconds := monitor.TimeoutSeconds
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 30
-	}
-	deadline := now.Add(time.Duration(2*timeoutSeconds) * time.Second)
-
-	var jobID string
-	for _, locationID := range locationIDs {
-		locationConfig := checkConfig
-		if locationID != "" {
-			if h.locationProtector == nil {
-				errors.WriteInternalError(w, "private location security is unavailable")
-				return
-			}
-			parsedLocationID, err := uuid.Parse(locationID)
-			if err != nil {
-				errors.WriteInternalError(w, "invalid stored location ID")
-				return
-			}
-			locationConfig, err = h.locationProtector.ProtectMonitorConfigForWorker(
-				r.Context(), tenantUUID, parsedLocationID, string(monitor.Type), checkConfig,
-			)
-			if err != nil {
-				h.logger.WithFields(map[string]interface{}{"error": err.Error(), "location_id": locationID}).Error("Failed to protect private-location monitor config")
-				errors.WriteInternalError(w, "failed to protect monitor config")
-				return
-			}
-		}
-		payload := sharedmodels.CheckJobPayload{
-			MonitorID:      monitor.ID.String(),
-			Type:           string(monitor.Type),
-			Config:         locationConfig,
-			TimeoutSeconds: timeoutSeconds,
-			LocationID:     locationID,
-		}
-
-		payloadJSON, err := json.Marshal(payload)
-		if err != nil {
-			h.logger.WithFields(map[string]interface{}{
-				"error":      err.Error(),
-				"tenant_id":  tenantID,
-				"monitor_id": monitorID.String(),
-			}).Error("Failed to marshal check payload")
-			errors.WriteInternalError(w, "failed to queue monitor run")
-			return
-		}
-
-		subject := sharedmodels.CheckJobSubjectDefault(h.checkSubject)
-		if locationID != "" {
-			subject = sharedmodels.CheckJobSubjectForLocation(h.checkSubject, locationID)
-		}
-
-		jobID = uuid.New().String()
-		job := sharedmodels.NewJob(jobID, tenantUUID.String(), sharedmodels.JobTypeCheck, "v1", payloadJSON).WithDeadline(deadline)
-
-		if err := h.jobPublisher.PublishJSON(r.Context(), subject, job, nil); err != nil {
-			h.logger.WithFields(map[string]interface{}{
-				"error":      err.Error(),
-				"tenant_id":  tenantID,
-				"monitor_id": monitorID.String(),
-				"subject":    subject,
-			}).Error("Failed to publish on-demand monitor run job")
-			errors.WriteInternalError(w, "failed to queue monitor run")
-			return
-		}
-	}
-
-	resp := models.RunMonitorNowResponse{
-		JobID:     jobID,
-		MonitorID: monitor.ID,
-		QueuedAt:  now,
-		Deadline:  deadline,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(resp)
-}
-
-// GetSyntheticBrowserScreenshot handles GET /api/v1/monitors/{id}/artifacts/screenshot?path=<relative-path>[&tenant_id=<uuid>]
-func (h *Handlers) GetSyntheticBrowserScreenshot(w http.ResponseWriter, r *http.Request) {
-	monitorIDStr := chi.URLParam(r, "id")
-	monitorID, err := uuid.Parse(monitorIDStr)
-	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
-		return
-	}
-
-	tenantUUID, err := getTenantIDForArtifactRequest(r)
-	if err != nil {
-		errors.WriteUnauthorizedError(w, err.Error())
-		return
-	}
-
-	monitor, err := h.service.GetMonitor(r.Context(), tenantUUID, monitorID)
-	if err != nil {
-		if err.Error() == "monitor not found" {
-			errors.WriteNotFoundError(w, "monitor not found")
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantUUID.String(),
-			"monitor_id": monitorID.String(),
-		}).Error("Failed to get monitor for artifact request")
-		errors.WriteInternalError(w, "failed to get monitor")
-		return
-	}
-
-	if monitor.Type != models.MonitorTypeSyntheticBrowser {
-		errors.WriteValidationError(w, "artifacts are only available for synthetic_browser monitors")
-		return
-	}
-
-	rawPath := r.URL.Query().Get("path")
-	if strings.TrimSpace(rawPath) == "" {
-		errors.WriteValidationError(w, "artifact path is required")
-		return
-	}
-
-	artifactPath, err := sanitizeArtifactPath(rawPath, monitorID)
-	if err != nil {
-		errors.WriteValidationError(w, err.Error())
-		return
-	}
-
-	fullPath := filepath.Join(h.artifactsDir, artifactPath)
-	fullPath = filepath.Clean(fullPath)
-	basePath := filepath.Clean(h.artifactsDir)
-	if fullPath != basePath && !strings.HasPrefix(fullPath, basePath+string(filepath.Separator)) {
-		errors.WriteValidationError(w, "invalid artifact path")
-		return
-	}
-
-	if _, err := os.Stat(fullPath); err != nil {
-		if os.IsNotExist(err) {
-			errors.WriteNotFoundError(w, "artifact not found")
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantUUID.String(),
-			"monitor_id": monitorID.String(),
-			"path":       fullPath,
-		}).Error("Failed to stat synthetic browser artifact")
-		errors.WriteInternalError(w, "failed to read artifact")
-		return
-	}
-
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "image/png")
-	http.ServeFile(w, r, fullPath)
-}
-
-func getTenantIDForArtifactRequest(r *http.Request) (uuid.UUID, error) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err == nil {
-		tenantUUID, parseErr := uuid.Parse(tenantID)
-		if parseErr != nil {
-			return uuid.Nil, fmt.Errorf("invalid tenant ID")
-		}
-		return tenantUUID, nil
-	}
-
-	fallback := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	if fallback == "" {
-		return uuid.Nil, fmt.Errorf("tenant ID not found")
-	}
-
-	tenantUUID, parseErr := uuid.Parse(fallback)
-	if parseErr != nil {
-		return uuid.Nil, fmt.Errorf("invalid tenant ID")
-	}
-	return tenantUUID, nil
-}
-
-func sanitizeArtifactPath(raw string, monitorID uuid.UUID) (string, error) {
-	path := strings.TrimSpace(raw)
-	if path == "" {
-		return "", fmt.Errorf("artifact path is required")
-	}
-
-	clean := filepath.Clean(path)
-	if clean == "." || clean == string(filepath.Separator) || filepath.IsAbs(clean) {
-		return "", fmt.Errorf("invalid artifact path")
-	}
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("invalid artifact path")
-	}
-
-	normalized := filepath.ToSlash(clean)
-	expectedPrefix := monitorID.String() + "/"
-	if !strings.HasPrefix(normalized, expectedPrefix) {
-		return "", fmt.Errorf("artifact path must belong to the requested monitor")
-	}
-
-	return clean, nil
-}
-
-// AddMonitorsToGroup handles POST /api/v1/monitors/{id}/members
-func (h *Handlers) AddMonitorsToGroup(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-
-	groupIDStr := chi.URLParam(r, "id")
-	groupID, err := uuid.Parse(groupIDStr)
-	if err != nil {
-		errors.WriteValidationError(w, "invalid group ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	var req models.AddMonitorsToGroupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
-		return
-	}
-
-	if len(req.MonitorIDs) == 0 {
-		errors.WriteValidationError(w, "monitor_ids is required and cannot be empty")
-		return
-	}
-
-	// Convert string IDs to UUIDs
-	monitorIDs := make([]uuid.UUID, len(req.MonitorIDs))
-	for i, idStr := range req.MonitorIDs {
-		monitorID, err := uuid.Parse(idStr)
-		if err != nil {
-			errors.WriteValidationError(w, fmt.Sprintf("invalid monitor ID: %s", idStr))
-			return
-		}
-		monitorIDs[i] = monitorID
-	}
-
-	err = h.groupService.AddMonitorsToGroup(r.Context(), tenantUUID, groupID, monitorIDs)
-	if err != nil {
-		if err.Error() == "monitor not found" || err.Error() == "monitor is not a group" {
-			errors.WriteNotFoundError(w, err.Error())
-			return
-		}
-		if stderrors.Is(err, groupservice.ErrGroupCycleDetected) {
-			errors.WriteValidationError(w, err.Error())
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":     err.Error(),
-			"tenant_id": tenantID,
-			"group_id":  groupID,
-		}).Error("Failed to add monitors to group")
-		errors.WriteInternalError(w, err.Error())
-		return
-	}
-
-	h.logger.WithFields(map[string]interface{}{
-		"tenant_id":   tenantID,
-		"group_id":    groupID,
-		"monitor_ids": req.MonitorIDs,
-	}).Info("Monitors added to group")
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// RemoveMonitorsFromGroup handles DELETE /api/v1/monitors/{id}/members
-func (h *Handlers) RemoveMonitorsFromGroup(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-
-	groupIDStr := chi.URLParam(r, "id")
-	groupID, err := uuid.Parse(groupIDStr)
-	if err != nil {
-		errors.WriteValidationError(w, "invalid group ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	var req models.RemoveMonitorsFromGroupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
-		return
-	}
-
-	if len(req.MonitorIDs) == 0 {
-		errors.WriteValidationError(w, "monitor_ids is required and cannot be empty")
-		return
-	}
-
-	// Convert string IDs to UUIDs
-	monitorIDs := make([]uuid.UUID, len(req.MonitorIDs))
-	for i, idStr := range req.MonitorIDs {
-		monitorID, err := uuid.Parse(idStr)
-		if err != nil {
-			errors.WriteValidationError(w, fmt.Sprintf("invalid monitor ID: %s", idStr))
-			return
-		}
-		monitorIDs[i] = monitorID
-	}
-
-	err = h.groupService.RemoveMonitorsFromGroup(r.Context(), tenantUUID, groupID, monitorIDs)
-	if err != nil {
-		if err.Error() == "monitor not found" || err.Error() == "monitor is not a group" {
-			errors.WriteNotFoundError(w, err.Error())
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":     err.Error(),
-			"tenant_id": tenantID,
-			"group_id":  groupID,
-		}).Error("Failed to remove monitors from group")
-		errors.WriteInternalError(w, "failed to remove monitors from group")
-		return
-	}
-
-	h.logger.WithFields(map[string]interface{}{
-		"tenant_id":   tenantID,
-		"group_id":    groupID,
-		"monitor_ids": req.MonitorIDs,
-	}).Info("Monitors removed from group")
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// GetGroupMembers handles GET /api/v1/monitors/{id}/members
-func (h *Handlers) GetGroupMembers(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-
-	groupIDStr := chi.URLParam(r, "id")
-	groupID, err := uuid.Parse(groupIDStr)
-	if err != nil {
-		errors.WriteValidationError(w, "invalid group ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	members, err := h.groupService.GetGroupMembers(r.Context(), tenantUUID, groupID)
-	if err != nil {
-		if err.Error() == "monitor not found" || err.Error() == "monitor is not a group" {
-			errors.WriteNotFoundError(w, err.Error())
-			return
-		}
-		h.logger.WithFields(map[string]interface{}{
-			"error":     err.Error(),
-			"tenant_id": tenantID,
-			"group_id":  groupID,
-		}).Error("Failed to get group members")
-		errors.WriteInternalError(w, "failed to get group members")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	for i := range members {
-		members[i] = monitorForResponse(r.Context(), members[i])
-	}
-	json.NewEncoder(w).Encode(members)
 }

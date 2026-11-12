@@ -14,3 +14,10 @@ docs
 *.log
 
 ai-service
+
+# Local credentials: `COPY . .` must never carry them into a build layer.
+.env
+.env.*
+!.env.example
+.dev-secrets.key*
+.dev-local-ai-token*

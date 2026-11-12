@@ -32,7 +32,7 @@ import (
 func (a *Alerter) deliverNotification(
 	ctx context.Context,
 	eventType string,
-	binding policyBinding,
+	binding alertSubject,
 	alert *alertRecord,
 	groupInfo *groupDetail,
 	channel alertChannel,
@@ -99,6 +99,28 @@ func (a *Alerter) deliverNotification(
 		return false, fmt.Errorf("commit notification claim: %w", err)
 	}
 	return true, nil
+}
+
+// openAlertEventDue is the in-memory pre-filter for an open alert's channel:
+// which event, if any, is due now. It mirrors the created and reminder
+// predicates of claimNotificationTx, which stays the authority (a second
+// replica can pass this filter and still lose the claim); change them
+// together. alertAge counts from when the alert became eligible to dispatch,
+// delay is the channel's escalation delay.
+//
+//   - no state yet and the delay has passed          -> "created"
+//   - already sent, not resolved, interval elapsed   -> "reminder"
+//   - otherwise                                      -> ""
+func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, now time.Time, reminderInterval time.Duration) string {
+	switch {
+	case state == nil:
+		if alertAge >= delay {
+			return "created"
+		}
+	case state.LastEventType != "resolved" && reminderInterval > 0 && now.Sub(state.LastSentAt) >= reminderInterval:
+		return "reminder"
+	}
+	return ""
 }
 
 // claimNotificationTx reserves the right to send eventType for one

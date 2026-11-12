@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/services/mcpoauth"
 	"github.com/yassinebenameur/probara/shared/auth"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -127,7 +127,7 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	err := dbClient.QueryRowContext(r.Context(), identityQuery, adminID, tenantUUID).
 		Scan(&platformRole, &disabledAt, &membershipRole)
 	switch {
-	case isMissingSchema(err):
+	case pgerr.IsMissingSchema(err):
 		// Deploy-ordering tolerance: migrations run as a post-upgrade job, so
 		// this binary may briefly see the old schema. Pre-migration every
 		// admin is a global superuser, so legacy behavior is correct here.
@@ -235,16 +235,6 @@ func touchAPIKeyLastUsed(dbClient *db.Client, keyID string) {
 		// Best-effort; ignores errors (including pre-migration missing column).
 		_, _ = dbClient.ExecContext(ctx, `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`, keyID)
 	}()
-}
-
-// isMissingSchema reports whether err is Postgres undefined_table (42P01) or
-// undefined_column (42703) — i.e. this binary is ahead of the migrations job.
-func isMissingSchema(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
-		return false
-	}
-	return pqErr.Code == "42P01" || pqErr.Code == "42703"
 }
 
 func applyCORSHeaders(w http.ResponseWriter, r *http.Request) {

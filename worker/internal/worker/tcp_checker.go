@@ -74,7 +74,7 @@ func (c *TCPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		// A blocked connection is a checker-policy problem (error), not a
 		// statement about the target's health (failure).
 		status := "failure"
-		if strings.HasPrefix(err.Error(), "ssrf_blocked") {
+		if isSSRFBlocked(err) {
 			status = "error"
 		}
 		return CheckResult{Status: status, ErrorMessage: &errMsg, LatencyMs: &latencyMs}

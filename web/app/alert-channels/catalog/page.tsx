@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, BookOpen, Plus } from 'lucide-react';
 import type { PluginManifest } from '@/lib/types';
@@ -12,6 +11,7 @@ import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import { FOCUS_RING } from '@/components/ui/focus';
+import { useAsyncData } from '@/lib/useAsyncData';
 
 const CAPABILITY_LABELS: Record<string, string> = {
   testable: 'Test from UI',
@@ -19,23 +19,16 @@ const CAPABILITY_LABELS: Record<string, string> = {
   follow_up: 'AI follow-ups',
 };
 
-export default function AlertChannelCatalogPage() {
-  const [plugins, setPlugins] = useState<PluginManifest[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+async function fetchPlugins(): Promise<PluginManifest[]> {
+  return (await getAlertChannelPlugins()) ?? [];
+}
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const items = await getAlertChannelPlugins();
-        setPlugins(items ?? []);
-      } catch (err: any) {
-        setError(err?.message || 'Failed to load plugin catalog');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
+export default function AlertChannelCatalogPage() {
+  const { data: plugins, loading, error } = useAsyncData<PluginManifest[]>(
+    fetchPlugins,
+    [],
+    'Failed to load plugin catalog'
+  );
 
   return (
     <Page width="data">

@@ -203,6 +203,20 @@ Partially implemented — see each rule's status. Current sample-count semantics
 | S-U6 | A serial composite (SLA `aggregation: serial`) is down whenever any member is in unplanned down; otherwise excluded whenever any member is planned-down, paused, unknown or untracked; otherwise available. A mean composite is the unweighted mean of member availabilities (the D2 convention). Groups contribute their leaf members, never themselves. | ✅ `TimelineResult.Serial` (multirange unions in one query), `summarize` in `api/internal/services/slas/report.go`. Tests `TestIntegrateTimeline_BreakdownSerialAndMaintenanceUnion`, `TestSLAService` |
 | S-U7 | Reporting periods are calendar weeks (ISO, Monday start), months or quarters in an IANA timezone; a running period is reported to date. Day buckets follow the local calendar (a DST day is 23 or 25 hours). | ✅ `shared/analytics/period.go`. Tests `TestPeriods_DSTMonthsFollowTheLocalCalendar`, `TestPeriods_KeysAndStepping` |
 
+## S-G — Group monitors
+
+A group has no checks of its own; its state is derived from its leaf members.
+
+| ID | Rule | Status |
+|----|------|--------|
+| S-G1 | A group's members are its enabled, non-deleted, non-group descendants, deduplicated across nested membership paths; a disabled monitor or sub-group hides everything beneath it. The input is each member's monitor-level `current_state` (so quorum, thresholds and absence are already applied) — never a member's check rows. | ✅ `LoadGroupSummaries` / `GroupSummary` in `shared/monitorstate/group.go`; the alerter's set-based refresh aggregates the same members. Test `TestGroupAlertStateSQLMatchesSummary` |
+| S-G2 | **Alert view** (what the alerter stores in the group's `current_state` and alerts on): `down` if any member is down; `up` if there is at least one member and every member is up, suspect or degraded; otherwise `unknown` (including an empty group). A group is never `degraded` in this view. | ✅ `GroupSummary.AlertState` and its SQL twin `GroupAlertStateSQL` (used by `refreshGroupStates`). Tests `TestGroupSummaryViews`, `TestGroupAlertStateSQLMatchesSummary`, `TestGroupStatesRefreshNestedLeavesInOneTick` |
+| S-G3 | **Display view** (operator UI group status, batch results, public status pages): members with no verdict are left out while at least one member has one; all of those down is `down`, any of them down or degraded is `degraded`, otherwise `up`; no member with a verdict is `unknown`. A partial outage therefore reads `degraded` while the alert view (S-G2) is already `down`. | ✅ `GroupSummary.DisplayState` / `DisplayCheckStatus`; `api/internal/services/groups` (`GetGroupStatus`), `api/internal/services/results` (batch), `status-page` (`GetGroupAggregatedStatus`). Tests `TestGroupSummaryViews`, `TestGroupStatusFollowsMemberStatesNotCheckRows`, `TestService_GetGroupStatus_EmptyIsUnknownAndMixedIsDegraded`, `TestService_GetMonitorResultsBatch_MatchesPerMonitorResults` |
+
+Still outside the rules: group uptime, latency and history on display
+surfaces are aggregated from member check rows (sampled), and groups write no
+state intervals (S-U4).
+
 ## S-D — Display conventions
 
 | ID | Rule | Status |
@@ -236,7 +250,6 @@ stage is not done while its rules still read ⏳.
 - Behavior changes to anything specified here update this file in the same
   commit (rule status, or a new rule) — same policy as `CLAUDE.md` for docs.
 - New aggregation surfaces (groups, mesh, future roll-ups) must cite which
-  S-A/S-F rules they satisfy rather than inventing parallel semantics. Known
-  pre-existing divergence: group state is derived three more times outside
-  this spec (alerter SQL, status-page, API groups service) — unification is
-  tracked separately.
+  S-A/S-F rules they satisfy rather than inventing parallel semantics. Group
+  state has one derivation with two views (S-G); a new surface showing a
+  group reads `monitorstate.LoadGroupSummaries`, never member check rows.

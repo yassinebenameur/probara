@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/auth"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -36,17 +37,9 @@ func NewService(dbClient *db.Client) *Service {
 
 // ListAPIKeys returns API keys for a tenant with pagination.
 func (s *Service) ListAPIKeys(ctx context.Context, tenantID uuid.UUID, page, pageSize int) (*models.ApiKeyListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.DefaultSize, pagination.MaxSize)
 
-	offset := (page - 1) * pageSize
+	offset := pagination.Offset(page, pageSize)
 
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {

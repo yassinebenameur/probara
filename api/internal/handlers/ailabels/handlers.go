@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	svc "github.com/yassinebenameur/probara/api/internal/services/ailabels"
@@ -39,7 +40,7 @@ func NewHandlers(service *svc.Service, log *logger.Logger) *Handlers {
 
 // LabelIncidentAnalysis handles POST /api/v1/incidents/{id}/ai-analysis/label.
 func (h *Handlers) LabelIncidentAnalysis(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenantFromContext(w, r)
+	tenantID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -57,12 +58,12 @@ func (h *Handlers) LabelIncidentAnalysis(w http.ResponseWriter, r *http.Request)
 		h.writeError(w, err, "failed to save the analysis label")
 		return
 	}
-	writeJSON(w, label)
+	httpx.WriteJSON(w, http.StatusOK, label)
 }
 
 // LabelAlertTriage handles POST /api/v1/alerts/{id}/triage/label.
 func (h *Handlers) LabelAlertTriage(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenantFromContext(w, r)
+	tenantID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -80,13 +81,13 @@ func (h *Handlers) LabelAlertTriage(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err, "failed to save the triage label")
 		return
 	}
-	writeJSON(w, label)
+	httpx.WriteJSON(w, http.StatusOK, label)
 }
 
 // LabelDependencySuggestion handles POST
 // /api/v1/monitors/dependency-suggestions/label.
 func (h *Handlers) LabelDependencySuggestion(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenantFromContext(w, r)
+	tenantID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -99,13 +100,13 @@ func (h *Handlers) LabelDependencySuggestion(w http.ResponseWriter, r *http.Requ
 		h.writeError(w, err, "failed to save the suggestion label")
 		return
 	}
-	writeJSON(w, label)
+	httpx.WriteJSON(w, http.StatusOK, label)
 }
 
 // Export handles POST /api/v1/ai-labels/export (tenant admins). The body is
 // buffered so the row counts can go in headers.
 func (h *Handlers) Export(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenantFromContext(w, r)
+	tenantID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -174,20 +175,6 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any, allowEmpty bool
 	return true
 }
 
-func tenantFromContext(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
-		return uuid.Nil, false
-	}
-	id, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
-		return uuid.Nil, false
-	}
-	return id, true
-}
-
 // labeledBy is the signed-in user, or nil for API keys.
 func labeledBy(r *http.Request) *uuid.UUID {
 	adminID, err := middleware.GetAdminID(r.Context())
@@ -199,9 +186,4 @@ func labeledBy(r *http.Request) *uuid.UUID {
 		return nil
 	}
 	return &id
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
 }

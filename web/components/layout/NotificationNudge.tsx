@@ -8,6 +8,7 @@ import { getSelectedTenantId } from '@/lib/tenant';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
+import { monitorsListHref } from '@/lib/monitor-list';
 
 const DISMISS_KEY = 'notification-nudge-dismissed';
 const UNROUTED_DISMISS_KEY = 'unrouted-nudge-dismissed';
@@ -84,7 +85,7 @@ export function NotificationNudge({ unroutedMonitors = 0 }: { unroutedMonitors?:
         }
       >
         No active channel routes {unroutedMonitors === 1 ? 'it' : 'them'}, so an outage would go unnoticed.{' '}
-        <Link href="/monitors?routing=unrouted" className={INLINE_LINK}>
+        <Link href={monitorsListHref({ unroutedOnly: true })} className={INLINE_LINK}>
           Review routing
         </Link>
         {noDefaultChannels && (

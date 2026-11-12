@@ -219,7 +219,7 @@ func (s *Service) lookupMonitor(ctx context.Context, agentID string, tenantID uu
 		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent' AND deleted_at IS NULL`,
 		agentID, tenantID,
 	).Scan(&monitorID, &enabled)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, false, fmt.Errorf("%w: %s", ErrUnknownAgent, agentID)
 	}
 	if err != nil {

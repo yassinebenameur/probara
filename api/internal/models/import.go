@@ -34,23 +34,22 @@ type ImportSkippedRow struct {
 
 // FieldMapping represents the mapping from source field to target field
 type FieldMapping struct {
-	Name             string `json:"name,omitempty"`
-	Type             string `json:"type,omitempty"`
-	Config           string `json:"config,omitempty"`
-	URL              string `json:"url,omitempty"`
-	Method           string `json:"method,omitempty"`
-	ExpectedStatus   string `json:"expected_status,omitempty"`
-	ExpectedBody     string `json:"expected_body,omitempty"`
-	Host             string `json:"host,omitempty"`
-	Port             string `json:"port,omitempty"`
-	Service          string `json:"service,omitempty"`
-	UseTLS           string `json:"use_tls,omitempty"`
-	IntervalSeconds  string `json:"interval_seconds,omitempty"`
-	TimeoutSeconds   string `json:"timeout_seconds,omitempty"`
-	Tags             string `json:"tags,omitempty"`
-	Enabled          string `json:"enabled,omitempty"`
-	GroupMembers     string `json:"group_members,omitempty"` // For group type - comma-separated monitor names
-	AlertPolicyNames string `json:"alert_policy_names,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Type            string `json:"type,omitempty"`
+	Config          string `json:"config,omitempty"`
+	URL             string `json:"url,omitempty"`
+	Method          string `json:"method,omitempty"`
+	ExpectedStatus  string `json:"expected_status,omitempty"`
+	ExpectedBody    string `json:"expected_body,omitempty"`
+	Host            string `json:"host,omitempty"`
+	Port            string `json:"port,omitempty"`
+	Service         string `json:"service,omitempty"`
+	UseTLS          string `json:"use_tls,omitempty"`
+	IntervalSeconds string `json:"interval_seconds,omitempty"`
+	TimeoutSeconds  string `json:"timeout_seconds,omitempty"`
+	Tags            string `json:"tags,omitempty"`
+	Enabled         string `json:"enabled,omitempty"`
+	GroupMembers    string `json:"group_members,omitempty"` // For group type - comma-separated monitor names
 	// ConsecutiveFailuresThreshold is the retry tolerance before a monitor is
 	// considered down. Clamped to [1,10] on import to match the column check.
 	ConsecutiveFailuresThreshold string `json:"consecutive_failures_threshold,omitempty"`
@@ -113,7 +112,6 @@ type PortableExportMonitor struct {
 	Enabled                      bool        `json:"enabled" yaml:"enabled"`
 	Tags                         []string    `json:"tags,omitempty" yaml:"tags,omitempty"`
 	Config                       interface{} `json:"config" yaml:"config"`
-	AlertPolicyNames             []string    `json:"alert_policy_names,omitempty" yaml:"alert_policy_names,omitempty"`
 	GroupMembers                 []string    `json:"group_members,omitempty" yaml:"group_members,omitempty"`
 	ConsecutiveFailuresThreshold int         `json:"consecutive_failures_threshold,omitempty" yaml:"consecutive_failures_threshold,omitempty"`
 }

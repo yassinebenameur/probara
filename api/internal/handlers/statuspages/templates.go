@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
@@ -31,16 +31,11 @@ const previewTokenTTL = time.Hour
 const maxTemplateUploadBytes = statustemplate.MaxSourceSize + 64*1024
 
 func (h *Handlers) templateRequestScope(w http.ResponseWriter, r *http.Request) (tenantID, pageID uuid.UUID, ok bool) {
-	tenantIDStr, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantID, ok = httpx.TenantID(w, r)
+	if !ok {
 		return uuid.Nil, uuid.Nil, false
 	}
-	tenantID, err = uuid.Parse(tenantIDStr)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
-		return uuid.Nil, uuid.Nil, false
-	}
+	var err error
 	pageID, err = uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		apierrors.WriteValidationError(w, "invalid status page ID")
@@ -51,11 +46,11 @@ func (h *Handlers) templateRequestScope(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handlers) writeTemplateError(w http.ResponseWriter, r *http.Request, err error, action string, tenantID, pageID uuid.UUID) {
 	switch {
-	case err.Error() == "status page not found" || err.Error() == "template version not found":
+	case errors.Is(err, statuspageservice.ErrStatusPageNotFound) || errors.Is(err, statuspageservice.ErrTemplateVersionNotFound):
 		apierrors.WriteNotFoundError(w, err.Error())
 	case errors.Is(err, statuspageservice.ErrInvalidTemplate),
-		err.Error() == "no draft template to publish",
-		strings.HasSuffix(err.Error(), "is already published"):
+		errors.Is(err, statuspageservice.ErrNoDraftTemplate),
+		errors.Is(err, statuspageservice.ErrAlreadyPublished):
 		apierrors.WriteValidationError(w, err.Error())
 	default:
 		h.logger.WithFields(map[string]interface{}{
@@ -79,8 +74,7 @@ func (h *Handlers) writeTemplateState(w http.ResponseWriter, r *http.Request, te
 	if secret := strings.TrimSpace(os.Getenv(previewSecretEnvVar)); secret != "" {
 		state.PreviewToken = statustemplate.MintPreviewToken(secret, pageID.String(), time.Now().Add(previewTokenTTL))
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(state)
+	httpx.WriteJSON(w, http.StatusOK, state)
 }
 
 // GetTemplateState handles GET /api/v1/status-pages/{id}/template

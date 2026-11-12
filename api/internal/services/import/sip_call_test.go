@@ -38,8 +38,8 @@ func TestExecuteImport_SIPCallRowRefusedForNonAdmin(t *testing.T) {
 	call := map[string]interface{}{"host": "trunk.example.com", "method": "invite", "call": map[string]interface{}{"number": "+33123456789"}}
 	probe := map[string]interface{}{"host": "trunk.example.com", "method": "options"}
 	rows := []models.ImportRow{
-		rowWithConfig(0, "Call", "sip", call, nil, nil, 60, 15),
-		rowWithConfig(1, "Probe", "sip", probe, nil, nil, 60, 15),
+		rowWithConfig(0, "Call", "sip", call, nil, 60, 15),
+		rowWithConfig(1, "Probe", "sip", probe, nil, 60, 15),
 	}
 
 	user := ctxpkg.WithAdminID(context.Background(), uuid.NewString())
@@ -69,7 +69,7 @@ func TestExecuteImport_SIPCallScheduleValidated(t *testing.T) {
 	call := map[string]interface{}{"host": "trunk.example.com", "method": "invite", "call": map[string]interface{}{"number": "100"}}
 	admin := ctxpkg.WithRole(ctxpkg.WithAdminID(context.Background(), uuid.NewString()), "admin")
 	result, err := NewService(nil, &gatedMonitorServiceMock{}, &groupMembershipMock{}).ExecuteImport(admin, uuid.New(), &models.ImportExecuteRequest{
-		Rows:    []models.ImportRow{rowWithConfig(0, "Call", "sip", call, nil, nil, 30, 10)},
+		Rows:    []models.ImportRow{rowWithConfig(0, "Call", "sip", call, nil, 30, 10)},
 		Mapping: sipCallImportMapping(),
 	})
 	if err != nil {

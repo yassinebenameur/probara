@@ -14,12 +14,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
@@ -72,7 +72,7 @@ func (l *ledger) Delivered(ctx context.Context, recipients []string) (map[string
 		  AND recipient_hash = ANY($4)`,
 		l.alertID, l.channelID, l.eventKey, pq.Array(hashes))
 	if err != nil {
-		if isUndefinedTable(err) {
+		if pgerr.IsUndefinedTable(err) {
 			// Rollout window before migration 000097: with no table nothing
 			// can have been recorded, so "none delivered" is exact.
 			return done, nil
@@ -111,9 +111,4 @@ func (l *ledger) Record(ctx context.Context, recipient string) error {
 func hash(recipient string) string {
 	sum := sha256.Sum256([]byte(recipient))
 	return hex.EncodeToString(sum[:])
-}
-
-func isUndefinedTable(err error) bool {
-	var pqErr *pq.Error
-	return errors.As(err, &pqErr) && pqErr.Code == "42P01"
 }

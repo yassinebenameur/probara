@@ -48,15 +48,3 @@ func (c *seriesCache) put(monitorID uuid.UUID, attrHash []byte, id int64) {
 	}
 	c.items[key] = id
 }
-
-// forgetMonitor drops a monitor's entries (after its series rows were purged
-// or its cardinality state changed server-side).
-func (c *seriesCache) forgetMonitor(monitorID uuid.UUID) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for k := range c.items {
-		if k.monitorID == monitorID {
-			delete(c.items, k)
-		}
-	}
-}

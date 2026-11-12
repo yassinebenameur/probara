@@ -196,7 +196,7 @@ func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uui
 	// tables — see shared/db/migrations/000035_create_monitor_rollups.up.sql:13,
 	// :26, :39 and 000041_create_monitor_hourly_rollups.up.sql) use ctid for
 	// batching. Small bounded tables (monitor_downtime_open: at most one row per
-	// monitor; monitor_alert_policies; monitor_groups; status_page_monitors;
+	// monitor; monitor_groups; status_page_monitors;
 	// incident_monitors) are drained in one shot via the monitor row's ON DELETE
 	// CASCADE when we issue the final `DELETE FROM monitors` below.
 	deletes := []batchedDelete{
@@ -297,7 +297,7 @@ func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uui
 	// first, otherwise the DELETE below trips the CHECK and the monitor stays
 	// stuck at the head of the purge queue forever.
 	if _, execErr := conn.ExecContext(ctx,
-		`UPDATE incidents SET is_auto_created = FALSE, auto_monitor_id = NULL, auto_alert_policy_id = NULL, updated_at = NOW()
+		`UPDATE incidents SET is_auto_created = FALSE, auto_monitor_id = NULL, updated_at = NOW()
 		 WHERE auto_monitor_id = $1`, monitorID,
 	); execErr != nil {
 		return spent, false, fmt.Errorf("detach auto incidents: %w", execErr)
@@ -305,7 +305,7 @@ func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uui
 
 	// Child tables fully drained. Drop the monitor row itself. Remaining
 	// children with small bounded fan-out (monitor_downtime_open: 1 row per
-	// monitor; monitor_groups, monitor_alert_policies, status_page_monitors,
+	// monitor; monitor_groups, status_page_monitors,
 	// status_page_section_monitors, incident_monitors) are cleaned up via
 	// their existing ON DELETE CASCADE FKs.
 	if _, execErr := conn.ExecContext(ctx,

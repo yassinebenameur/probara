@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/mcpoauth"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
@@ -83,7 +84,7 @@ func (h *Handlers) ResourceMetadataURL(r *http.Request) string {
 // ProtectedResourceMetadata serves RFC 9728 metadata for the MCP endpoint.
 func (h *Handlers) ProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
 	base := h.BaseURL(r)
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSONNoStore(w, http.StatusOK, map[string]any{
 		"resource":                 base + resourcePath,
 		"authorization_servers":    []string{base + issuerPath},
 		"scopes_supported":         []string{"read", "write"},
@@ -99,7 +100,7 @@ func (h *Handlers) ProtectedResourceMetadata(w http.ResponseWriter, r *http.Requ
 func (h *Handlers) AuthorizationServerMetadata(w http.ResponseWriter, r *http.Request) {
 	base := h.BaseURL(r)
 	issuer := base + issuerPath
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSONNoStore(w, http.StatusOK, map[string]any{
 		"issuer":                                     issuer,
 		"authorization_endpoint":                     issuer + "/authorize",
 		"token_endpoint":                             issuer + "/token",
@@ -137,7 +138,7 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, http.StatusInternalServerError, "server_error", "registration failed")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
+	writeJSONNoStore(w, http.StatusCreated, map[string]any{
 		"client_id":                  client.ID.String(),
 		"client_id_issued_at":        client.CreatedAt.Unix(),
 		"client_name":                client.Name,
@@ -201,7 +202,7 @@ func (h *Handlers) AuthorizationRequest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	redirect, _ := url.Parse(req.RedirectURI)
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSONNoStore(w, http.StatusOK, map[string]any{
 		"client_id":       req.Client.ID,
 		"client_name":     req.Client.Name,
 		"redirect_uri":    req.RedirectURI,
@@ -247,7 +248,7 @@ func (h *Handlers) Decide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !body.Approve {
-		writeJSON(w, http.StatusOK, map[string]string{"redirect_to": errorRedirect(req, "access_denied", "the user declined")})
+		writeJSONNoStore(w, http.StatusOK, map[string]string{"redirect_to": errorRedirect(req, "access_denied", "the user declined")})
 		return
 	}
 
@@ -280,7 +281,7 @@ func (h *Handlers) Decide(w http.ResponseWriter, r *http.Request) {
 	if req.State != "" {
 		q2.Set("state", req.State)
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"redirect_to": appendQuery(req.RedirectURI, q2)})
+	writeJSONNoStore(w, http.StatusOK, map[string]string{"redirect_to": appendQuery(req.RedirectURI, q2)})
 }
 
 // sameOrigin rejects a consent POST whose Origin is neither the API's nor
@@ -340,7 +341,7 @@ func (h *Handlers) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Pragma", "no-cache")
-	writeJSON(w, http.StatusOK, pair)
+	writeJSONNoStore(w, http.StatusOK, pair)
 }
 
 // Revoke is RFC 7009 revocation: possession of a token is the credential,
@@ -371,7 +372,7 @@ func (h *Handlers) ListGrants(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteInternalError(w, "failed to list connections")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": grants})
+	writeJSONNoStore(w, http.StatusOK, map[string]any{"items": grants})
 }
 
 // RevokeGrant disconnects one of the signed-in user's MCP connections.
@@ -453,12 +454,12 @@ func PublicCORS(next http.Handler) http.Handler {
 
 func oauthError(w http.ResponseWriter, status int, code, description string) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, status, map[string]string{"error": code, "error_description": description})
+	writeJSONNoStore(w, status, map[string]string{"error": code, "error_description": description})
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+// writeJSONNoStore is httpx.WriteJSON plus Cache-Control: no-store, which every
+// response of this package carries.
+func writeJSONNoStore(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, status, v)
 }

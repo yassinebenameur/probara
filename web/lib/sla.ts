@@ -305,6 +305,7 @@ export function slaReportQueryString(query: SlaReportQuery, format?: SlaExportFo
 }
 
 /** Availability with enough precision to tell 99.9 from 99.95; "—" without data. */
+// Three decimals on purpose: it mirrors the Go SLA export, so this stays here rather than in lib/format.ts.
 export function formatSlaPct(value: number | null | undefined, digits = 3): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   return `${value.toFixed(digits)}%`;

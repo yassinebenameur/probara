@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 import { MetricQueryRefResult, MetricQuerySpec, MetricRule } from '@/lib/types';
 import { queryMonitorMetrics } from '@/lib/api';
 import { UPTIME_TONE_VAR, utilizationTone } from '@/lib/status-tones';
+import { formatPercent } from '@/lib/format';
 
 // The newest value per series within the window, one bucket per series.
 const GLANCE_QUERIES: MetricQuerySpec[] = [
@@ -61,7 +62,7 @@ function Meter({
       <div className="flex items-center justify-between">
         <span className="text-xs text-slate-400">{label}</span>
         <span className="text-xs font-medium tabular-nums text-white">
-          {reading ? `${percent.toFixed(1)}%` : '—'}
+          {reading ? formatPercent(percent) : '—'}
         </span>
       </div>
       <div className="mt-2 h-1 overflow-hidden rounded-full bg-well-hover">

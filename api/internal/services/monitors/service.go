@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
@@ -159,32 +160,6 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	// Set next_run_at to now
 	nextRunAt := now
 
-	var alertPolicyID *uuid.UUID
-	alertPolicyIDs, err := parseAlertPolicyIDs(req.AlertPolicyIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	if req.AlertPolicyID != nil && *req.AlertPolicyID != "" {
-		parsedID, err := uuid.Parse(*req.AlertPolicyID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid alert_policy_id: %w", err)
-		}
-		alertPolicyID = &parsedID
-		alertPolicyIDs = mergeAlertPolicyIDs(alertPolicyIDs, parsedID)
-	}
-
-	for _, policyID := range alertPolicyIDs {
-		if err := s.repo.VerifyAlertPolicy(ctx, tenantID, policyID); err != nil {
-			return nil, err
-		}
-	}
-
-	if alertPolicyID == nil && len(alertPolicyIDs) > 0 {
-		first := alertPolicyIDs[0]
-		alertPolicyID = &first
-	}
-
 	// Generate agent_id for agent monitors
 	var agentID *string
 	if req.Type == models.MonitorTypeAgent {
@@ -231,8 +206,6 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		Config:                       config,
 		IntervalSeconds:              req.IntervalSeconds,
 		TimeoutSeconds:               req.TimeoutSeconds,
-		AlertPolicyID:                alertPolicyID,
-		AlertPolicyIDs:               alertPolicyIDs,
 		Enabled:                      enabled,
 		Tags:                         req.Tags,
 		AgentID:                      agentID,
@@ -248,10 +221,6 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
-		return nil, err
-	}
-
-	if err := s.repo.SetAlertPolicies(ctx, monitorID, alertPolicyIDs); err != nil {
 		return nil, err
 	}
 
@@ -290,10 +259,6 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 	monitor, err := s.repo.GetByID(ctx, tenantID, monitorID)
 	if err != nil {
 		return nil, err
-	}
-
-	if policyIDs, err := s.repo.GetAlertPolicyIDs(ctx, monitorID); err == nil {
-		monitor.AlertPolicyIDs = mergeAlertPolicyIDs(policyIDs, derefUUID(monitor.AlertPolicyID))
 	}
 
 	// If this is a group monitor, populate member IDs
@@ -343,15 +308,7 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 
 // ListMonitors lists monitors with optional filters and pagination
 func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *string, enabled *bool, page, pageSize int) (*models.MonitorListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.DefaultSize, pagination.MaxSize)
 
 	monitors, total, err := s.repo.List(ctx, tenantID, tag, enabled, page, pageSize)
 	if err != nil {
@@ -361,12 +318,6 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 	monitorIDs := make([]uuid.UUID, 0, len(monitors))
 	for i := range monitors {
 		monitorIDs = append(monitorIDs, monitors[i].ID)
-	}
-	if policyMap, err := s.repo.GetAlertPolicyIDsForMonitors(ctx, monitorIDs); err == nil {
-		for i := range monitors {
-			policies := policyMap[monitors[i].ID]
-			monitors[i].AlertPolicyIDs = mergeAlertPolicyIDs(policies, derefUUID(monitors[i].AlertPolicyID))
-		}
 	}
 
 	// Attach notification channels for all monitors
@@ -472,55 +423,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	// the agent form has always written timeout == interval, which made every
 	// UI edit of an agent monitor fail here.
 	if validation.IsActiveCheckType(effectiveType) && timeoutSeconds >= intervalSeconds {
-		return nil, fmt.Errorf("timeout_seconds must be less than interval_seconds")
-	}
-
-	alertPolicyIDs := []uuid.UUID{}
-	updatePolicies := false
-	if req.AlertPolicyIDs != nil {
-		parsed, err := parseAlertPolicyIDs(*req.AlertPolicyIDs)
-		if err != nil {
-			return nil, err
-		}
-		alertPolicyIDs = parsed
-		updatePolicies = true
-	}
-
-	if req.AlertPolicyID != nil {
-		var alertPolicyID *uuid.UUID
-		if *req.AlertPolicyID != "" {
-			parsedID, err := uuid.Parse(*req.AlertPolicyID)
-			if err != nil {
-				return nil, fmt.Errorf("invalid alert_policy_id: %w", err)
-			}
-			if err := s.repo.VerifyAlertPolicy(ctx, tenantID, parsedID); err != nil {
-				return nil, err
-			}
-			alertPolicyID = &parsedID
-			alertPolicyIDs = mergeAlertPolicyIDs(alertPolicyIDs, parsedID)
-		}
-		setParts = append(setParts, fmt.Sprintf("alert_policy_id = $%d", argIndex))
-		args = append(args, alertPolicyID)
-		argIndex++
-		updatePolicies = true
-	}
-
-	if req.AlertPolicyIDs != nil {
-		for _, policyID := range alertPolicyIDs {
-			if err := s.repo.VerifyAlertPolicy(ctx, tenantID, policyID); err != nil {
-				return nil, err
-			}
-		}
-		if req.AlertPolicyID == nil {
-			if len(alertPolicyIDs) > 0 {
-				first := alertPolicyIDs[0]
-				setParts = append(setParts, fmt.Sprintf("alert_policy_id = $%d", argIndex))
-				args = append(args, &first)
-				argIndex++
-			} else {
-				setParts = append(setParts, "alert_policy_id = NULL")
-			}
-		}
+		return nil, ErrTimeoutNotBelowInterval
 	}
 
 	// Enabled is handled by repo.SetEnabled below, not the dynamic UPDATE: a
@@ -649,15 +552,6 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		}
 	}
 
-	if updatePolicies {
-		if err := s.repo.SetAlertPolicies(ctx, monitorID, alertPolicyIDs); err != nil {
-			return nil, err
-		}
-		monitor.AlertPolicyIDs = alertPolicyIDs
-	} else if policies, err := s.repo.GetAlertPolicyIDs(ctx, monitorID); err == nil {
-		monitor.AlertPolicyIDs = mergeAlertPolicyIDs(policies, derefUUID(monitor.AlertPolicyID))
-	}
-
 	if req.LocationIDs != nil {
 		if err := s.repo.SetLocations(ctx, tenantID, monitorID, newLocationIDs); err != nil {
 			return nil, err
@@ -706,63 +600,6 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	}
 
 	return monitor, nil
-}
-
-func parseAlertPolicyIDs(ids []string) ([]uuid.UUID, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-
-	unique := make(map[uuid.UUID]struct{}, len(ids))
-	result := make([]uuid.UUID, 0, len(ids))
-	for _, raw := range ids {
-		if raw == "" {
-			continue
-		}
-		parsed, err := uuid.Parse(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid alert_policy_id: %w", err)
-		}
-		if _, ok := unique[parsed]; ok {
-			continue
-		}
-		unique[parsed] = struct{}{}
-		result = append(result, parsed)
-	}
-	return result, nil
-}
-
-func mergeAlertPolicyIDs(ids []uuid.UUID, extra ...uuid.UUID) []uuid.UUID {
-	unique := make(map[uuid.UUID]struct{}, len(ids)+len(extra))
-	result := make([]uuid.UUID, 0, len(ids)+len(extra))
-	for _, id := range ids {
-		if id == uuid.Nil {
-			continue
-		}
-		if _, ok := unique[id]; ok {
-			continue
-		}
-		unique[id] = struct{}{}
-		result = append(result, id)
-	}
-	for _, id := range extra {
-		if id == uuid.Nil {
-			continue
-		}
-		if _, ok := unique[id]; ok {
-			continue
-		}
-		unique[id] = struct{}{}
-		result = append(result, id)
-	}
-	return result
-}
-
-func derefUUID(id *uuid.UUID) uuid.UUID {
-	if id == nil {
-		return uuid.Nil
-	}
-	return *id
 }
 
 func parseLocationIDs(ids []string) ([]uuid.UUID, error) {

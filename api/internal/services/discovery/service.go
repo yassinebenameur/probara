@@ -21,6 +21,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	contract "github.com/yassinebenameur/probara/shared/discovery"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
@@ -224,8 +225,7 @@ func (s *Service) Create(ctx context.Context, tenant uuid.UUID, req CreateReques
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO discovery_integrations(id,tenant_id,name,namespaces,home_namespace,location_id,token_hash) VALUES($1,$2,$3,$4,$5,$6,$7)`, out.ID, tenant, out.Name, pq.Array(out.Namespaces), out.HomeNamespace, out.LocationID, digest)
 	if err != nil {
-		var pe *pq.Error
-		if errors.As(err, &pe) && pe.Code == "23505" {
+		if pgerr.IsUniqueViolation(err) {
 			return nil, invalid("an integration with this name already exists")
 		}
 		return nil, err

@@ -22,7 +22,7 @@ import { DependencyMonitor } from '@/lib/types';
 import { addMonitorDependency, removeMonitorDependency } from '@/lib/api';
 import { useToast } from '@/components/ui/ToastProvider';
 import Button from '@/components/ui/Button';
-import { apiErrorMessage, EDGE_COLORS, LEGEND, stateStyle, styleEdge } from './graphTheme';
+import { EDGE_COLORS, LEGEND, stateStyle, styleEdge } from './graphTheme';
 import { isGroupId, type AppNode, type MonitorNodeData } from './graphModel';
 import { MonitorNode } from './MonitorNode';
 import { GroupNode } from './GroupNode';
@@ -30,6 +30,7 @@ import { DependencyEdge } from './DependencyEdge';
 import { AddMonitorPicker } from './AddMonitorPicker';
 import { setHover } from './hoverStore';
 import { useThemeName } from '@/components/ui/useThemeName';
+import { errorMessage } from '@/lib/errors';
 
 const nodeTypes = { monitor: MonitorNode, depGroup: GroupNode };
 const edgeTypes = { dependency: DependencyEdge };
@@ -152,7 +153,7 @@ export function GraphCanvas({
         })
         .catch((err) => {
           setRfEdges((es) => es.filter((e) => e.id !== edge.id));
-          showToast(apiErrorMessage(err), 'error');
+          showToast(errorMessage(err, 'Something went wrong'), 'error');
         });
     },
     [canWrite, isValidConnection, rfNodes, showToast, onEdgePersisted]
@@ -170,7 +171,7 @@ export function GraphCanvas({
           })
           .catch((err) => {
             setRfEdges((es) => (es.some((e) => e.id === edge.id) ? es : [...es, edge]));
-            showToast(apiErrorMessage(err), 'error');
+            showToast(errorMessage(err, 'Something went wrong'), 'error');
           });
       }
     },

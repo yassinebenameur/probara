@@ -53,7 +53,7 @@ func TestLifecycleAnnotatesRootCauseAtCreation(t *testing.T) {
 
 	a := newIntegrationAlerter(dbClient)
 	dispatched := map[uuid.UUID]alertRecord{}
-	a.sendFunc = func(_ context.Context, _ alertChannel, _ string, _ policyBinding, alert *alertRecord, _ *groupDetail, _ time.Time) error {
+	a.sendFunc = func(_ context.Context, _ alertChannel, _ string, _ alertSubject, alert *alertRecord, _ *groupDetail, _ time.Time) error {
 		dispatched[alert.MonitorID] = *alert
 		return nil
 	}

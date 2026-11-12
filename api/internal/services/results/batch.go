@@ -14,6 +14,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // Batch results: the monitors list ranks every row by its last few results,
@@ -231,30 +232,12 @@ func (s *Service) GetMonitorResultsBatch(ctx context.Context, tenantID uuid.UUID
 		}
 	}
 
-	// A group's status row rolls up each leaf's latest non-platform result,
-	// as groups.GetGroupStatus does (idx_check_results_monitor_non_platform_created_at).
-	latestByLeaf := map[uuid.UUID]string{}
-	if len(leafIDs) > 0 {
-		if err := s.queryRows(ctx, func(rows *sql.Rows) error {
-			var monitorID uuid.UUID
-			var status string
-			if err := rows.Scan(&monitorID, &status); err != nil {
-				return err
-			}
-			latestByLeaf[monitorID] = status
-			return nil
-		}, `
-			SELECT req.monitor_id, latest.status
-			FROM unnest($1::uuid[]) AS req(monitor_id)
-			CROSS JOIN LATERAL (
-				SELECT c.status FROM check_results c
-				WHERE c.monitor_id = req.monitor_id AND c.tenant_id = $2 AND c.result_source <> 'platform'
-				ORDER BY c.created_at DESC
-				LIMIT 1
-			) latest
-		`, pq.Array(leafIDs), tenantID); err != nil {
-			return nil, fmt.Errorf("failed to query group member status: %w", err)
-		}
+	// A group's status row is the display view of its members' monitor-level
+	// states (S-G3), the same rule groups.GetGroupStatus and the public status
+	// pages apply; it is never rolled up from check rows.
+	summaries, err := monitorstate.LoadGroupSummaries(ctx, s.db, tenantID, groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get group status: %w", err)
 	}
 
 	for _, id := range regular {
@@ -266,14 +249,7 @@ func (s *Service) GetMonitorResultsBatch(ctx context.Context, tenantID uuid.UUID
 	}
 	now := time.Now()
 	for _, groupID := range groups {
-		leaves := leavesByGroup[groupID]
-		statuses := make([]string, 0, len(leaves))
-		for _, leafID := range leaves {
-			if status, ok := latestByLeaf[leafID]; ok {
-				statuses = append(statuses, status)
-			}
-		}
-		response.Results[groupID] = groupBatchResults(leaves, rowsByMonitor, limit, rollUpLeafStatuses(len(leaves), statuses), now)
+		response.Results[groupID] = groupBatchResults(leavesByGroup[groupID], rowsByMonitor, limit, summaries[groupID].DisplayCheckStatus(), now)
 	}
 	return response, nil
 }
@@ -309,34 +285,6 @@ func groupBatchResults(leaves []uuid.UUID, rowsByMonitor map[uuid.UUID][]models.
 		}}, merged...)
 	}
 	return merged
-}
-
-// rollUpLeafStatuses is groups.GetGroupStatus's rule over already-fetched
-// latest statuses: no leaves or none checked → unknown, all success →
-// success, all failure/error → failure, otherwise degraded.
-func rollUpLeafStatuses(leafCount int, statuses []string) string {
-	if leafCount == 0 {
-		return "unknown"
-	}
-	var success, failed int
-	for _, status := range statuses {
-		switch status {
-		case "success":
-			success++
-		case "failure", "error":
-			failed++
-		}
-	}
-	switch total := success + failed; {
-	case total == 0:
-		return "unknown"
-	case success == total:
-		return "success"
-	case failed == total:
-		return "failure"
-	default:
-		return "degraded"
-	}
 }
 
 func scanLightBatchResult(rows *sql.Rows, monitorID *uuid.UUID) (models.CheckResult, error) {

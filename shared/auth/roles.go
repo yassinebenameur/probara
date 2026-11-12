@@ -33,8 +33,3 @@ func ValidPlatformRole(role string) bool {
 func ValidScope(scope string) bool {
 	return scope == ScopeRead || scope == ScopeWrite
 }
-
-// RoleAllowsWrite reports whether a tenant role permits mutations.
-func RoleAllowsWrite(role string) bool {
-	return role == RoleAdmin || role == RoleEditor
-}

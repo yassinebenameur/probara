@@ -116,15 +116,3 @@ func (h *Hub) ClientCount(tenantID uuid.UUID) int {
 	}
 	return 0
 }
-
-// TotalClientCount returns the total number of connected clients across all tenants
-func (h *Hub) TotalClientCount() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	total := 0
-	for _, tenantClients := range h.clients {
-		total += len(tenantClients)
-	}
-	return total
-}

@@ -10,8 +10,8 @@ import {
   type MonitorStates,
   groupAttentionCount,
   groupMemberStatus,
-  monitorsListHref,
 } from '@/lib/dashboard-view-model';
+import { monitorsListHref } from '@/lib/monitor-list';
 import {
   MONITOR_STATUS_DOT,
   MONITOR_STATUS_LABEL,

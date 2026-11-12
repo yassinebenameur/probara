@@ -9,11 +9,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 var ErrGroupCycleDetected = errors.New("group nesting would create a cycle")
+
+// ErrNotGroup: the monitor named as a group is some other monitor type.
+var ErrNotGroup = errors.New("monitor is not a group")
 
 // Service handles group business logic
 type Service struct {
@@ -33,7 +38,7 @@ func (s *Service) AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid
 		return err
 	}
 	if group.Type != models.MonitorTypeGroup {
-		return fmt.Errorf("monitor is not a group")
+		return ErrNotGroup
 	}
 
 	// Verify all monitors exist and belong to the tenant.
@@ -78,7 +83,7 @@ func (s *Service) RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID
 		return err
 	}
 	if group.Type != models.MonitorTypeGroup {
-		return fmt.Errorf("monitor is not a group")
+		return ErrNotGroup
 	}
 
 	// Remove from monitor_groups
@@ -101,12 +106,12 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 		return nil, err
 	}
 	if group.Type != models.MonitorTypeGroup {
-		return nil, fmt.Errorf("monitor is not a group")
+		return nil, ErrNotGroup
 	}
 
 	query := `
 		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
-			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
+			m.interval_seconds, m.timeout_seconds, m.enabled, m.tags,
 			m.next_run_at, m.created_at, m.updated_at, m.current_state
 		FROM monitors m
 		INNER JOIN monitor_groups mg ON m.id = mg.monitor_id
@@ -127,8 +132,7 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 
 		err := rows.Scan(
 			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-			&monitor.AlertPolicyID, &monitor.Enabled,
+			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 			pq.Array(&tags), &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
 			&monitor.CurrentState,
 		)
@@ -155,7 +159,7 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 		return nil, err
 	}
 	if group.Type != models.MonitorTypeGroup {
-		return nil, fmt.Errorf("monitor is not a group")
+		return nil, ErrNotGroup
 	}
 
 	query := `
@@ -175,7 +179,7 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 			  AND child.deleted_at IS NULL
 		)
 		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
-			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
+			m.interval_seconds, m.timeout_seconds, m.enabled, m.tags,
 			m.next_run_at, m.created_at, m.updated_at
 		FROM monitors m
 		JOIN member_tree mt ON mt.monitor_id = m.id
@@ -196,8 +200,7 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 
 		err := rows.Scan(
 			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-			&monitor.AlertPolicyID, &monitor.Enabled,
+			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 			pq.Array(&tags), &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
 		)
 		if err != nil {
@@ -225,7 +228,7 @@ func (s *Service) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid
 
 	query := `
 		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
-			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
+			m.interval_seconds, m.timeout_seconds, m.enabled, m.tags,
 			m.next_run_at, m.created_at, m.updated_at
 		FROM monitors m
 		INNER JOIN monitor_groups mg ON m.id = mg.group_id
@@ -246,8 +249,7 @@ func (s *Service) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid
 
 		err := rows.Scan(
 			&group.ID, &group.TenantID, &group.Name, &group.Type,
-			&group.Config, &group.IntervalSeconds, &group.TimeoutSeconds,
-			&group.AlertPolicyID, &group.Enabled,
+			&group.Config, &group.IntervalSeconds, &group.TimeoutSeconds, &group.Enabled,
 			pq.Array(&tags), &group.NextRunAt, &group.CreatedAt, &group.UpdatedAt,
 		)
 		if err != nil {
@@ -265,66 +267,19 @@ func (s *Service) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid
 	return groups, nil
 }
 
-// GetGroupStatus calculates the aggregated status for a group
+// GetGroupStatus returns a group's displayed status in check-result
+// vocabulary: "success", "failure", "degraded" or "unknown".
+//
+// It is monitorstate's display view of the group (S-G3) over the members'
+// monitor-level states — the same rule public status pages use — so it
+// honours location quorum, failure thresholds and paused members. It is not
+// derived from the members' newest check rows.
 func (s *Service) GetGroupStatus(ctx context.Context, tenantID, groupID uuid.UUID) (string, error) {
-	// Get all non-group member monitors recursively
-	members, err := s.GetGroupLeafMembers(ctx, tenantID, groupID)
+	summaries, err := monitorstate.LoadGroupSummaries(ctx, s.db, tenantID, []uuid.UUID{groupID})
 	if err != nil {
 		return "", err
 	}
-
-	if len(members) == 0 {
-		return "unknown", nil
-	}
-
-	// Query the latest check result for each member monitor
-	successCount := 0
-	failureCount := 0
-	errorCount := 0
-
-	for _, member := range members {
-		query := `
-			SELECT status
-			FROM check_results
-			WHERE monitor_id = $1 AND tenant_id = $2 AND result_source <> 'platform'
-			ORDER BY created_at DESC
-			LIMIT 1
-		`
-
-		var status string
-		err := s.db.QueryRowContext(ctx, query, member.ID, tenantID).Scan(&status)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				// No results for this monitor yet, skip it
-				continue
-			}
-			return "", fmt.Errorf("failed to get monitor status: %w", err)
-		}
-
-		switch status {
-		case "success":
-			successCount++
-		case "failure":
-			failureCount++
-		case "error":
-			errorCount++
-		}
-	}
-
-	totalChecked := successCount + failureCount + errorCount
-
-	if totalChecked == 0 {
-		return "unknown", nil
-	}
-
-	// Apply status logic: all up = UP, all down = DOWN, otherwise = DEGRADED
-	if successCount == totalChecked {
-		return "success", nil
-	}
-	if failureCount+errorCount == totalChecked {
-		return "failure", nil
-	}
-	return "degraded", nil
+	return summaries[groupID].DisplayCheckStatus(), nil
 }
 
 func (s *Service) wouldCreateCycle(ctx context.Context, tenantID, parentGroupID, candidateMemberID uuid.UUID) (bool, error) {
@@ -374,7 +329,7 @@ func (s *Service) wouldCreateCycle(ctx context.Context, tenantID, parentGroupID,
 func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Monitor, error) {
 	query := `
 		SELECT id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, next_run_at, created_at, updated_at
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
@@ -385,14 +340,13 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 
 	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-		&monitor.AlertPolicyID, &monitor.Enabled,
+		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("monitor not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, apperr.ErrMonitorNotFound
 		}
 		return nil, fmt.Errorf("failed to get monitor: %w", err)
 	}

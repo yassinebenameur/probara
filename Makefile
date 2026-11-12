@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build build-collector-static kuma-export seed-demo seed-demo-targets seed-demo-stop seed-demo-teardown clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
+.PHONY: help up down restart logs build build-collector-static kuma-export seed-demo seed-demo-targets seed-demo-stop seed-demo-teardown clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop logs-api logs-scheduler logs-worker logs-status rebuild db-shell db-backup db-restore
 
 # Local AI runs beside the platform, never in its way: its image build fails on
 # purpose for an artifact that is not release-approved, and Compose aborts a
@@ -41,7 +41,6 @@ help:
 	@echo "  make ps          - Show running services"
 	@echo "  make healthcheck - Check health of all services"
 	@echo "  make migrate     - Run database migrations"
-	@echo "  make scale-workers N=3 - Scale worker service to N instances"
 	@echo "  make start-all-local - Start infra + local AI in Docker and app services locally"
 	@echo "  make stop-all-local - Stop local app services, local AI, UI, and infra"
 	@echo "  make restart-all-local - Restart local app services, UI, and infra"
@@ -54,7 +53,7 @@ help:
 	@echo "  make test-unit   - Run the fast suite without external services"
 	@echo "  make test-cover  - Run tests and open coverage report in browser"
 	@echo "  make lint        - Run go vet and fmt checks"
-	@echo "  make fmt         - Format Go code"
+	@echo "  make fmt         - Check Go formatting (gofmt -l; does not rewrite)"
 	@echo "  make vet         - Run go vet"
 	@echo ""
 	@echo "Service-specific logs:"
@@ -165,18 +164,15 @@ healthcheck:
 	@echo "Status Page:"
 	@curl -s -o /dev/null -w "  Status: %{http_code}\n" http://localhost:9093/healthz || echo "  Status: Not responding"
 	@echo ""
+	@echo "Alerter:"
+	@curl -s -o /dev/null -w "  Status: %{http_code}\n" http://localhost:9094/healthz || echo "  Status: Not responding"
+	@echo ""
 	@echo "NATS:"
 	@curl -s -o /dev/null -w "  Status: %{http_code}\n" http://localhost:8222/healthz || echo "  Status: Not responding"
 
 # Run migrations
 migrate:
 	docker compose run --rm migrations
-
-# Scale workers
-scale-workers:
-	@if [ -z "$(N)" ]; then echo "Usage: make scale-workers N=3"; exit 1; fi
-	services="$(PLATFORM_SERVICES)" && docker compose up -d --scale worker=$(N) $$services
-	@$(call local_ai,up -d,start)
 
 # Database commands
 db-shell:

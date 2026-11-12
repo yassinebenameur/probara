@@ -92,14 +92,7 @@ interface ToastContextType {
   /** Change a toast in place (a run-now "Running…" toast becoming its result). */
   updateToast: (id: string, patch: ToastOptions) => void;
   dismissToast: (id: string) => void;
-  /** Alias of dismissToast, kept for existing callers. */
-  removeToast: (id: string) => void;
   dismissAll: () => void;
-  /**
-   * @deprecated The alert stream builds its own toasts (lib/alert-toast.ts).
-   * Kept so older callers still compile.
-   */
-  showAlertToast: (alertName: string, monitorName: string, eventType: 'created' | 'acknowledged' | 'resolved') => void;
 }
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
@@ -280,20 +273,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [announce, commit]
   );
 
-  const showAlertToast = useCallback(
-    (_alertName: string, monitorName: string, eventType: 'created' | 'acknowledged' | 'resolved') => {
-      if (eventType === 'acknowledged') return;
-      showToast({
-        title: eventType === 'created' ? 'Alert triggered' : 'Alert resolved',
-        message: eventType === 'created' ? `${monitorName} is down` : monitorName,
-        type: eventType === 'created' ? 'error' : 'success',
-        group: `alert-${eventType}`,
-        politeness: 'polite',
-      });
-    },
-    [showToast]
-  );
-
   useEffect(() => {
     const onVisibility = () => setHidden(document.visibilityState === 'hidden');
     onVisibility();
@@ -326,8 +305,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   };
 
   const value = useMemo(
-    () => ({ toasts, showToast, updateToast, dismissToast, removeToast: dismissToast, dismissAll, showAlertToast }),
-    [toasts, showToast, updateToast, dismissToast, dismissAll, showAlertToast]
+    () => ({ toasts, showToast, updateToast, dismissToast, dismissAll }),
+    [toasts, showToast, updateToast, dismissToast, dismissAll]
   );
 
   return (

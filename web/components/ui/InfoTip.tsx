@@ -10,6 +10,24 @@ export interface InfoTipEntry {
   value: ReactNode;
 }
 
+/** What a `titleInfoTip` / `infoTip` prop accepts: free content, or a titled list of entries. */
+export type InfoTipContent = ReactNode | { title?: string; entries?: InfoTipEntry[] };
+
+function isInfoTipShape(value: unknown): value is { title?: string; entries?: InfoTipEntry[] } {
+  if (typeof value !== 'object' || value === null) return false;
+  if ('type' in value) return false;
+  return 'title' in value || 'entries' in value;
+}
+
+/** Renders an InfoTipContent prop (PageHeader titles, FormField labels). */
+export function InfoTipFor({ content, inLabel }: { content?: InfoTipContent; inLabel?: boolean }) {
+  if (!content) return null;
+  if (isInfoTipShape(content)) {
+    return <InfoTip title={content.title} entries={content.entries} inLabel={inLabel} />;
+  }
+  return <InfoTip inLabel={inLabel}>{content as ReactNode}</InfoTip>;
+}
+
 interface InfoTipProps {
   title?: string;
   entries?: InfoTipEntry[];

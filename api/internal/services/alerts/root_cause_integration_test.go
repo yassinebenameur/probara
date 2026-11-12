@@ -30,10 +30,10 @@ func TestAlertReadPathsReturnRootCause(t *testing.T) {
 	downSince := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Millisecond)
 	alertID := uuid.New()
 	_, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status,
+		INSERT INTO alerts (id, tenant_id, monitor_id, status,
 			triggered_at, failure_count, root_cause_monitor_id, root_cause_down_since,
 			created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 'active', NOW(), 1, $4, $5, NOW(), NOW())
+		VALUES ($1, $2, $3, 'active', NOW(), 1, $4, $5, NOW(), NOW())
 	`, alertID, tenantID, monitorID, upstreamID, downSince)
 	require.NoError(t, err)
 

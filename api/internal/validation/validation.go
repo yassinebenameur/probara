@@ -421,36 +421,6 @@ func ValidateMonitorNotificationFields(threshold *int, mode *string, rollup *str
 	return nil
 }
 
-// ValidateAlertPolicy validates a CreateAlertPolicyRequest
-func ValidateAlertPolicy(req *models.CreateAlertPolicyRequest) error {
-	if req.Name == "" {
-		return fmt.Errorf("name is required")
-	}
-
-	if req.FailureThreshold <= 0 {
-		return fmt.Errorf("failure_threshold must be greater than 0")
-	}
-
-	if req.FailureWindowSeconds <= 0 {
-		return fmt.Errorf("failure_window_seconds must be greater than 0")
-	}
-
-	return nil
-}
-
-// ValidateAlertPolicyUpdate validates an UpdateAlertPolicyRequest
-func ValidateAlertPolicyUpdate(req *models.UpdateAlertPolicyRequest) error {
-	if req.FailureThreshold != nil && *req.FailureThreshold <= 0 {
-		return fmt.Errorf("failure_threshold must be greater than 0")
-	}
-
-	if req.FailureWindowSeconds != nil && *req.FailureWindowSeconds <= 0 {
-		return fmt.Errorf("failure_window_seconds must be greater than 0")
-	}
-
-	return nil
-}
-
 // ValidateStatusPage validates a CreateStatusPageRequest
 func ValidateStatusPage(req *models.CreateStatusPageRequest) error {
 	if req.Slug == "" {

@@ -15,7 +15,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
 	"github.com/yassinebenameur/probara/shared/ai"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -308,15 +310,7 @@ func (m *mockIncidentService) UnpublishIncidentFromStatusPage(ctx context.Contex
 	return nil, nil
 }
 
-func (m *mockIncidentService) EnsureIncidentForAlert(context.Context, uuid.UUID, *models.AlertWithDetails) error {
-	return nil
-}
-
 func (m *mockIncidentService) RecordAlertRecoveryIfNeeded(context.Context, uuid.UUID, uuid.UUID) error {
-	return nil
-}
-
-func (m *mockIncidentService) EnsureIncidentForAlertTx(context.Context, *sql.Tx, uuid.UUID, *models.AlertWithDetails) error {
 	return nil
 }
 
@@ -552,7 +546,7 @@ func TestHandlers_AttachIncidentAlert_NotFound(t *testing.T) {
 	log := logger.New("test", "debug")
 	h := NewHandlers(&mockIncidentService{
 		attachAlertFn: func(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error) {
-			return nil, errors.New("alert not found")
+			return nil, apperr.ErrAlertNotFound
 		},
 	}, log)
 
@@ -674,7 +668,7 @@ func TestHandlers_AttachIncidentMonitor_NotFound(t *testing.T) {
 	log := logger.New("test", "debug")
 	h := NewHandlers(&mockIncidentService{
 		attachMonitorFn: func(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error) {
-			return nil, errors.New("monitor not found")
+			return nil, apperr.ErrMonitorNotFound
 		},
 	}, log)
 
@@ -980,7 +974,7 @@ func TestHandlers_PublishIncidentToStatusPage_NotFound(t *testing.T) {
 	log := logger.New("test", "debug")
 	h := NewHandlers(&mockIncidentService{
 		publishFn: func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error) {
-			return nil, errors.New("status page not found")
+			return nil, apperr.ErrStatusPageNotFound
 		},
 	}, log)
 
@@ -1009,7 +1003,7 @@ func TestHandlers_UnpublishIncidentFromStatusPage_NotFound(t *testing.T) {
 	log := logger.New("test", "debug")
 	h := NewHandlers(&mockIncidentService{
 		unpublishFn: func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error) {
-			return nil, errors.New("status page not found")
+			return nil, apperr.ErrStatusPageNotFound
 		},
 	}, log)
 
@@ -1198,7 +1192,7 @@ func TestHandlers_GetIncident_NotFound(t *testing.T) {
 	log := logger.New("test", "debug")
 	h := NewHandlers(&mockIncidentService{
 		getFn: func(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentDetail, error) {
-			return nil, errors.New("incident not found")
+			return nil, incidentservice.ErrIncidentNotFound
 		},
 	}, log)
 
@@ -1314,7 +1308,7 @@ func TestHandlers_UpdateIncident_NotFound(t *testing.T) {
 	incidentID := uuid.New()
 	h := NewHandlers(&mockIncidentService{
 		updateFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.UpdateIncidentRequest) (*models.IncidentDetail, error) {
-			return nil, errors.New("incident not found")
+			return nil, incidentservice.ErrIncidentNotFound
 		},
 	}, log)
 
@@ -1406,7 +1400,7 @@ func TestHandlers_TransitionIncidentState_NotFound(t *testing.T) {
 	incidentID := uuid.New()
 	h := NewHandlers(&mockIncidentService{
 		transitionFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.TransitionIncidentStateRequest) (*models.IncidentDetail, error) {
-			return nil, errors.New("incident not found")
+			return nil, incidentservice.ErrIncidentNotFound
 		},
 	}, log)
 
@@ -1597,7 +1591,7 @@ func TestHandlers_CreateTimelineEntry_NotFound(t *testing.T) {
 	incidentID := uuid.New()
 	h := NewHandlers(&mockIncidentService{
 		createTimelineFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error) {
-			return nil, errors.New("incident not found")
+			return nil, incidentservice.ErrIncidentNotFound
 		},
 	}, log)
 

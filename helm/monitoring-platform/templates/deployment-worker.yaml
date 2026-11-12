@@ -69,8 +69,6 @@ spec:
         env:
         {{- include "monitoring-platform.localAIEnv" . | nindent 8 }}
         {{- include "monitoring-platform.aiTriageEnv" . | nindent 8 }}
-        - name: SERVICE_NAME
-          value: "worker"
         - name: HTTP_PORT
           value: "{{ .Values.worker.httpPort }}"
         - name: METRICS_PORT

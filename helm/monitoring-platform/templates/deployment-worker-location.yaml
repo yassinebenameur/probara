@@ -50,8 +50,6 @@ spec:
           containerPort: {{ $.Values.worker.httpPort }}
           protocol: TCP
         env:
-        - name: SERVICE_NAME
-          value: "worker"
         - name: HTTP_PORT
           value: "{{ $.Values.worker.httpPort }}"
         - name: METRICS_PORT

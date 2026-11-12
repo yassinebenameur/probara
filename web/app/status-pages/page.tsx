@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { ArrowUpRight, Globe, Pencil, Plus, Trash2 } from 'lucide-react';
 import { StatusPage } from '@/lib/types';
@@ -20,6 +20,8 @@ import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { errorMessage } from '@/lib/errors';
+import { useAsyncData } from '@/lib/useAsyncData';
 
 const GRID = 'sm:grid-cols-2 lg:grid-cols-3 3xl:grid-cols-4 4xl:grid-cols-5';
 
@@ -43,12 +45,17 @@ const SORT_VALUE: Record<StatusPageSortKey, (page: StatusPage) => SortValue> = {
   updated: (page) => Date.parse(page.updated_at),
 };
 
+async function fetchStatusPages(): Promise<StatusPage[]> {
+  const response = await getStatusPages({ page_size: 100 });
+  return response?.items || [];
+}
+
 export default function StatusPagesPage() {
   const { showToast } = useToast();
   const canWrite = useCanWrite();
-  const [statusPages, setStatusPages] = useState<StatusPage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>('');
+  const { data: statusPages, setData: setStatusPages, loading, error, reload: loadStatusPages } = useAsyncData<
+    StatusPage[]
+  >(fetchStatusPages, [], 'Failed to load status pages');
   const [pendingDelete, setPendingDelete] = useState<StatusPage | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [sort, setSort] = useUrlSort(SORT_KEYS, DEFAULT_SORT, DEFAULT_DIR);
@@ -56,23 +63,6 @@ export default function StatusPagesPage() {
     () => sortRows(statusPages, SORT_VALUE[sort.key], sort.dir, (page) => page.title),
     [statusPages, sort]
   );
-
-  useEffect(() => {
-    loadStatusPages();
-  }, []);
-
-  const loadStatusPages = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const response = await getStatusPages({ page_size: 100 });
-      setStatusPages(response?.items || []);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load status pages');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleDelete = async () => {
     if (!pendingDelete) return;
@@ -82,8 +72,8 @@ export default function StatusPagesPage() {
       setStatusPages(statusPages.filter((p) => p.id !== pendingDelete.id));
       showToast('Status page deleted', 'success');
       setPendingDelete(null);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete'), 'error');
     } finally {
       setDeleting(false);
     }

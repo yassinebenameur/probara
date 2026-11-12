@@ -16,7 +16,6 @@ import re
 import sys
 import urllib.request
 
-from packaging.tags import parse_tag
 from packaging.utils import canonicalize_name, parse_wheel_filename
 
 ROOT = Path(__file__).resolve().parents[1]

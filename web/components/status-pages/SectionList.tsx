@@ -410,7 +410,7 @@ function MonitorRow({
       ? memberCount === undefined
         ? ''
         : `${memberCount} member${memberCount === 1 ? '' : 's'}`
-      : monitor.url || '';
+      : '';
 
   // The dot is what a visitor sees now; a paused monitor says so too.
   const statusTitle = status

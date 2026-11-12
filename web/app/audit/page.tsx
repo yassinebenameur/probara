@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { ChevronDown, ChevronRight, RefreshCw, ScrollText } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Pagination from '@/components/ui/Pagination';
 import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
@@ -18,6 +19,7 @@ import { getAuditActions, getAuditLog, getUsers } from '@/lib/api';
 import { formatDateTimeFull, formatTimestamp, timezoneLabel } from '@/lib/format';
 import { auditActor, auditIp, knownActorLabels } from '@/lib/audit';
 import type { AuditEvent, AuditOutcome, AuditSortColumn } from '@/lib/types';
+import { errorMessage } from '@/lib/errors';
 
 const PAGE_SIZE = 50;
 
@@ -100,9 +102,9 @@ export default function AuditLogPage() {
         setTotal(response.total || 0);
         setPage(response.page || targetPage);
         setLoaded(true);
-      } catch (err: any) {
+      } catch (err) {
         if (request !== requestRef.current) return;
-        setError(err.message || 'Failed to load audit log');
+        setError(errorMessage(err, 'Failed to load audit log'));
       } finally {
         if (request === requestRef.current) setLoading(false);
       }
@@ -377,29 +379,14 @@ export default function AuditLogPage() {
             </table>
           </div>
 
-          <div className="flex items-center justify-between gap-3 border-t border-divider px-4 py-3 text-xs text-slate-500">
-            <span className="tabular-nums">
-              Page {page} of {totalPages} ({total} events)
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={page <= 1}
-                onClick={() => loadEvents(page - 1)}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={page >= totalPages}
-                onClick={() => loadEvents(page + 1)}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            variant="footer"
+            page={page}
+            totalPages={totalPages}
+            onPageChange={loadEvents}
+            summary={`Page ${page} of ${totalPages} (${total} events)`}
+            singlePageControls
+          />
         </div>
       )}
     </Page>

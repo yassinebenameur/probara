@@ -33,18 +33,6 @@ func alertTools() []spec {
 			Query: []param{{Name: "limit", Type: "integer", Description: "Maximum, 1-50 (default 10)."}},
 		},
 		{
-			Name:        "get_alert_counts_by_policy",
-			Title:       "Get alert counts by policy (legacy)",
-			Description: "Legacy: active alert counts per retired alert policy. Prefer list_alerts.",
-			Method:      http.MethodGet, Route: "/alerts/counts/by-policy",
-		},
-		{
-			Name:        "get_monitor_counts_by_policy",
-			Title:       "Get monitor counts by policy (legacy)",
-			Description: "Legacy: monitor counts per retired alert policy.",
-			Method:      http.MethodGet, Route: "/alerts/counts/monitors-by-policy",
-		},
-		{
 			Name:  "get_alert",
 			Title: "Get alert",
 			Description: "One alert in full, including its AI triage (suspected cause, evidence) when the local " +

@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/services/agent"
-	"github.com/yassinebenameur/probara/shared/context"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -62,7 +62,7 @@ func (h *Handler) resolveBackendURL(r *http.Request) string {
 // "monitor deleted" and runs its uninstall command, which is the cleanup it
 // needs anyway. The warn log is the operator's straggler finder.
 func (h *Handler) HandleLegacyMetricsGone(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := context.GetTenantID(r.Context())
+	tenantID, _ := ctxpkg.GetTenantID(r.Context())
 	h.log.WithFields(map[string]interface{}{
 		"tenant_id":  tenantID,
 		"user_agent": r.UserAgent(),
@@ -79,7 +79,7 @@ func (h *Handler) HandleGetInstallCommand(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 
 	// Get tenant ID from context
-	tenantIDStr, ok := context.GetTenantID(ctx)
+	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -124,7 +124,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 
 	// Get tenant ID from context
-	tenantIDStr, ok := context.GetTenantID(ctx)
+	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -169,7 +169,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	tenantIDStr, ok := context.GetTenantID(ctx)
+	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -212,7 +212,7 @@ func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.R
 func (h *Handler) HandleGetCollectorConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	tenantIDStr, ok := context.GetTenantID(ctx)
+	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -246,7 +246,7 @@ func (h *Handler) HandleGetCollectorConfig(w http.ResponseWriter, r *http.Reques
 func (h *Handler) HandleGetUninstallScript(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	tenantIDStr, ok := context.GetTenantID(ctx)
+	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -287,7 +287,7 @@ func (h *Handler) HandleGetUninstallScript(w http.ResponseWriter, r *http.Reques
 func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	tenantIDStr, ok := context.GetTenantID(ctx)
+	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -332,10 +332,10 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 // collector it installed would have every export rejected. Those callers get
 // a script with an empty key, which the installer refuses up front.
 func embeddableAPIKey(r *http.Request) string {
-	if actor, ok := context.GetActorType(r.Context()); !ok || actor != context.ActorTypeAPIKey {
+	if actor, ok := ctxpkg.GetActorType(r.Context()); !ok || actor != ctxpkg.ActorTypeAPIKey {
 		return ""
 	}
-	if scope, ok := context.GetAuthScope(r.Context()); !ok || scope != "write" {
+	if scope, ok := ctxpkg.GetAuthScope(r.Context()); !ok || scope != "write" {
 		return ""
 	}
 	authHeader := r.Header.Get("Authorization")

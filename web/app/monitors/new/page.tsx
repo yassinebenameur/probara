@@ -9,6 +9,7 @@ import MonitorForm from '@/components/monitors/MonitorForm';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import { useToast } from '@/components/ui/ToastProvider';
+import { errorMessage } from '@/lib/errors';
 
 export default function NewMonitorPage() {
   const router = useRouter();
@@ -36,11 +37,11 @@ export default function NewMonitorPage() {
         if (cancelled) return;
         setCloneSourceName(sourceMonitor.name);
         setInitialData(buildClonedMonitorInitialData(sourceMonitor));
-      } catch (err: any) {
+      } catch (err) {
         if (cancelled) return;
         setInitialData(null);
         setCloneSourceName('');
-        showToast(err?.message || 'Failed to load monitor to clone. Starting with an empty form.', 'error');
+        showToast(errorMessage(err, 'Failed to load monitor to clone. Starting with an empty form.'), 'error');
       } finally {
         if (!cancelled) {
           setCloneLoading(false);
@@ -64,8 +65,8 @@ export default function NewMonitorPage() {
       // no need to hold the form on "Saving…" first. `loading` stays on until
       // the detail page replaces this one.
       router.push(`/monitors/${created.id}`);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create monitor', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to create monitor'), 'error');
       setLoading(false);
     }
   };

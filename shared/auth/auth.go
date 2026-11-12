@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
 
 const (
@@ -117,7 +117,7 @@ func ValidateAPIKey(ctx context.Context, dbClient *db.Client, key string) (*APIK
 
 	err := dbClient.QueryRowContext(ctx, query, keyPrefix).
 		Scan(&identity.KeyID, &identity.TenantID, &identity.Name, &storedHash, &identity.Scope, &identity.ExpiresAt)
-	if isMissingColumn(err) {
+	if pgerr.IsUndefinedColumn(err) {
 		// Deploy-ordering tolerance: this binary may run before the scope
 		// migration (post-upgrade job). Legacy keys behave as full-access.
 		legacy := `
@@ -148,13 +148,4 @@ func ValidateAPIKey(ctx context.Context, dbClient *db.Client, key string) (*APIK
 	}
 
 	return identity, nil
-}
-
-// isMissingColumn reports Postgres undefined_column (42703).
-func isMissingColumn(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
-		return false
-	}
-	return pqErr.Code == "42703"
 }

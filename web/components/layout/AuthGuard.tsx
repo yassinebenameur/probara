@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { getSession } from '@/lib/api';
 import { hasApiKey } from '@/lib/auth';
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -28,10 +29,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     }
 
     // Admin session mode
-    fetch('/api/v1/auth/me', { credentials: 'include' })
-      .then((response) => {
+    getSession()
+      .then((session) => {
         if (!isMounted) return;
-        if (response.ok) {
+        if (session.authenticated) {
           setAuthed(true);
         } else {
           router.push('/login');

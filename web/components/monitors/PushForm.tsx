@@ -13,7 +13,8 @@ import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { IntervalField } from './ScheduleSection';
 import DependenciesField from './DependenciesField';
 import { formatDuration } from '@/lib/format';
-import { FieldHint, FormPanel, LabelsSection, NumberInput, PlanSummary, ToggleRow, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
+import { FieldHint, FormPanel, LabelsSection, NumberInput, PlanSummary, ToggleRow, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
+import { useClipboard } from '@/lib/useClipboard';
 
 interface PushFormProps {
   monitor?: Monitor;
@@ -37,7 +38,7 @@ export default function PushForm({
   const [showWebhookInfo, setShowWebhookInfo] = useState(false);
   const [pushInfo, setPushInfo] = useState<PushInfo | null>(null);
   const [loadingPushInfo, setLoadingPushInfo] = useState(false);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const clipboard = useClipboard();
   const isEditMode = Boolean(monitor);
   const initialPushConfig =
     !isEditMode && initialData?.type === 'push' ? (initialData.config as PushMonitorConfig) : undefined;
@@ -96,12 +97,6 @@ export default function PushForm({
     return () => { cancelled = true; };
   }, [monitor?.id, showWebhookInfo, canViewCredentials]);
 
-  const copyToClipboard = (text: string, field: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
-  };
-
   if (canViewCredentials && isEditMode && monitor && showWebhookInfo) {
     return (
       <div data-form-stack className="space-y-5">
@@ -119,9 +114,9 @@ export default function PushForm({
                     variant="ghost"
                     size="xs"
                     type="button"
-                    onClick={() => copyToClipboard(pushInfo.webhook_url, 'webhook_url')}
+                    onClick={() => void clipboard.copy(pushInfo.webhook_url, 'webhook_url')}
                   >
-                    {copiedField === 'webhook_url' ? 'Copied' : 'Copy'}
+                    {clipboard.copiedKey === 'webhook_url' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
               </FormField>
@@ -135,9 +130,9 @@ export default function PushForm({
                     variant="ghost"
                     size="xs"
                     type="button"
-                    onClick={() => copyToClipboard(pushInfo.push_token, 'push_token')}
+                    onClick={() => void clipboard.copy(pushInfo.push_token, 'push_token')}
                   >
-                    {copiedField === 'push_token' ? 'Copied' : 'Copy'}
+                    {clipboard.copiedKey === 'push_token' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
               </FormField>
@@ -151,9 +146,9 @@ export default function PushForm({
                     variant="ghost"
                     size="xs"
                     type="button"
-                    onClick={() => copyToClipboard(pushInfo.example_curl, 'example')}
+                    onClick={() => void clipboard.copy(pushInfo.example_curl, 'example')}
                   >
-                    {copiedField === 'example' ? 'Copied' : 'Copy examples'}
+                    {clipboard.copiedKey === 'example' ? 'Copied' : 'Copy examples'}
                   </Button>
                 </div>
               </FormField>

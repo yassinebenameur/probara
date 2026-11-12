@@ -12,7 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/api/internal/errors"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
@@ -63,20 +64,20 @@ func (h *Handlers) recordAuthEvent(r *http.Request, action, outcome, label strin
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	var req models.AdminLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
 	if req.Username == "" || req.Password == "" {
-		errors.WriteValidationError(w, "username and password are required")
+		apierrors.WriteValidationError(w, "username and password are required")
 		return
 	}
 
 	user, err := h.service.Authenticate(r.Context(), req.Username, req.Password)
 	if err != nil {
 		h.recordAuthEvent(r, "auth.login", audit.OutcomeFailure, req.Username, nil)
-		errors.WriteUnauthorizedError(w, "invalid username or password")
+		apierrors.WriteUnauthorizedError(w, "invalid username or password")
 		return
 	}
 	h.recordAuthEvent(r, "auth.login", audit.OutcomeSuccess, user.Username, &user.ID)
@@ -87,46 +88,45 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.issueSession(w, r, user.ID); err != nil {
 		h.logger.WithError(err).Error("Failed to issue admin session")
-		errors.WriteInternalError(w, "failed to create session")
+		apierrors.WriteInternalError(w, "failed to create session")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models.AdminAuthResponse{User: *user})
+	httpx.WriteJSON(w, http.StatusOK, models.AdminAuthResponse{User: *user})
 }
 
 // Refresh handles POST /api/v1/auth/refresh
 func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	refreshToken, err := h.readRefreshToken(r)
 	if err != nil {
-		errors.WriteUnauthorizedError(w, "missing refresh token")
+		apierrors.WriteUnauthorizedError(w, "missing refresh token")
 		return
 	}
 
 	oldHash := hashToken(refreshToken)
 	adminID, err := h.service.GetSessionByTokenHash(r.Context(), oldHash)
 	if err != nil {
-		errors.WriteUnauthorizedError(w, "invalid refresh token")
+		apierrors.WriteUnauthorizedError(w, "invalid refresh token")
 		return
 	}
 
 	newToken, newHash, err := generateRefreshToken()
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to generate refresh token")
-		errors.WriteInternalError(w, "failed to create session")
+		apierrors.WriteInternalError(w, "failed to create session")
 		return
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
 	if err := h.service.RotateSession(r.Context(), oldHash, newHash, adminID, time.Now().Add(refreshTTL), clientIP(r), r.UserAgent()); err != nil {
 		h.logger.WithError(err).Error("Failed to rotate refresh token")
-		errors.WriteInternalError(w, "failed to refresh session")
+		apierrors.WriteInternalError(w, "failed to refresh session")
 		return
 	}
 
 	if err := h.setAccessCookie(w, adminID); err != nil {
 		h.logger.WithError(err).Error("Failed to issue access token")
-		errors.WriteInternalError(w, "failed to refresh session")
+		apierrors.WriteInternalError(w, "failed to refresh session")
 		return
 	}
 
@@ -137,11 +137,11 @@ func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		h.logger.WithError(err).Warn("Failed to load admin user")
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	if user != nil {
-		json.NewEncoder(w).Encode(models.AdminAuthResponse{User: *user})
+		httpx.WriteJSON(w, http.StatusOK, models.AdminAuthResponse{User: *user})
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -164,13 +164,13 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) Me(w http.ResponseWriter, r *http.Request) {
 	adminID, err := h.readAdminIDFromAccessCookie(r)
 	if err != nil {
-		errors.WriteUnauthorizedError(w, "invalid session")
+		apierrors.WriteUnauthorizedError(w, "invalid session")
 		return
 	}
 
 	user, err := h.service.GetAdminByID(r.Context(), adminID)
 	if err != nil {
-		errors.WriteUnauthorizedError(w, "invalid session")
+		apierrors.WriteUnauthorizedError(w, "invalid session")
 		return
 	}
 
@@ -181,8 +181,7 @@ func (h *Handlers) Me(w http.ResponseWriter, r *http.Request) {
 		user.Memberships = memberships
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models.AdminAuthResponse{User: *user})
+	httpx.WriteJSON(w, http.StatusOK, models.AdminAuthResponse{User: *user})
 }
 
 // AuthContext handles GET /api/v1/auth-context (authenticated subrouter).
@@ -214,8 +213,7 @@ func (h *Handlers) AuthContext(w http.ResponseWriter, r *http.Request) {
 		resp.Scope = &scope
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID) error {

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 )
@@ -34,8 +35,7 @@ func (h *Handlers) OIDCStatus(w http.ResponseWriter, r *http.Request) {
 	if enabled {
 		resp["label"] = h.oidc.ProviderLabel()
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 // OIDCStart handles GET /api/v1/auth/oidc/start: sets the signed flow cookie

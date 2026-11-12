@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/google/uuid"
-
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	svc "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
@@ -27,17 +25,11 @@ func NewHandlers(service *svc.Service, log *logger.Logger) *Handlers {
 
 // GetSettings handles GET /api/v1/notification-settings.
 func (h *Handlers) GetSettings(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	settings, err := h.service.Get(r.Context(), tenantUUID)
 	if err != nil {
@@ -49,23 +41,16 @@ func (h *Handlers) GetSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(settings)
+	httpx.WriteJSON(w, http.StatusOK, settings)
 }
 
 // UpdateSettings handles PUT /api/v1/notification-settings.
 func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	var req svc.UpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -96,6 +81,5 @@ func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(settings)
+	httpx.WriteJSON(w, http.StatusOK, settings)
 }

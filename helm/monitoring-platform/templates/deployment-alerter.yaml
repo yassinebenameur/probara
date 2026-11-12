@@ -64,8 +64,6 @@ spec:
           containerPort: {{ .Values.alerter.metricsPort }}
           protocol: TCP
         env:
-        - name: SERVICE_NAME
-          value: "alerter"
         - name: HTTP_PORT
           value: "{{ .Values.alerter.metricsPort }}"
         - name: METRICS_PORT

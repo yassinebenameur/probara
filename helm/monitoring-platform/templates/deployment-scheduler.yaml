@@ -64,8 +64,6 @@ spec:
           containerPort: {{ .Values.scheduler.metricsPort }}
           protocol: TCP
         env:
-        - name: SERVICE_NAME
-          value: "scheduler"
         - name: HTTP_PORT
           value: "{{ .Values.scheduler.metricsPort }}"
         - name: METRICS_PORT

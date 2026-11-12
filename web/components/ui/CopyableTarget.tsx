@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback } from 'react';
 import { Check, Copy, ExternalLink } from 'lucide-react';
 import { FOCUS_RING } from './focus';
+import { useClipboard } from '@/lib/useClipboard';
 
 export type CopyableTargetSize = 'xs' | 'sm';
 
@@ -44,31 +45,6 @@ export function openableHref(value: string): string | null {
   return /^https?:\/\/\S+$/i.test(trimmed) ? trimmed : null;
 }
 
-async function writeClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    /* falls back below — clipboard API is unavailable on non-secure origins */
-  }
-  try {
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.setAttribute('readonly', '');
-    textarea.style.position = 'fixed';
-    textarea.style.opacity = '0';
-    document.body.appendChild(textarea);
-    textarea.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(textarea);
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * An endpoint rendered as a one-click-to-copy chip with an optional
  * open-in-new-tab action. Safe inside clickable rows: every interaction
@@ -84,25 +60,18 @@ export default function CopyableTarget({
   textClassName = '',
   focusable = true,
 }: CopyableTargetProps) {
-  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { copy, copied, failed } = useClipboard();
+  const state = copied ? 'copied' : failed ? 'failed' : 'idle';
   const link = href === undefined ? openableHref(value) : href;
   const dims = SIZE[size];
 
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
-
   const handleCopy = useCallback(
-    async (event: React.MouseEvent) => {
+    (event: React.MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      const ok = await writeClipboard(value);
-      setState(ok ? 'copied' : 'failed');
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setState('idle'), 1800);
+      void copy(value);
     },
-    [value]
+    [copy, value]
   );
 
   const actionClasses = [

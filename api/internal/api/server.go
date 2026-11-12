@@ -74,12 +74,12 @@ import (
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
+	"github.com/yassinebenameur/probara/shared/bootstrap"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/queue"
-	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -147,12 +147,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Encryption for sensitive alert channel config fields. Falls back to a
 	// no-op encryptor in dev when PROBARA_SECRETS_KEY is not set — existing
 	// plaintext rows still serve, but new writes will be stored unencrypted.
-	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
-	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
-		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
-	} else if kerr != secrets.ErrKeyNotConfigured {
-		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
-	} else {
+	secretsEncryptor, keyConfigured, err := bootstrap.PlatformEncryptor()
+	if err != nil {
+		log.WithError(err).Fatal("Invalid PROBARA_SECRETS_KEY")
+	}
+	if !keyConfigured {
 		log.Warn("PROBARA_SECRETS_KEY not set; alert channel secrets will be stored unencrypted")
 	}
 
@@ -200,24 +199,14 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	auditSvc := auditservice.NewService(dbClient)
 
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
-	r.Route("/api/v1/push", func(r chi.Router) {
-		r.Get("/{token}", pushHandlers.HandlePushGet)
-		r.Post("/{token}", pushHandlers.HandlePushPost)
-	})
+	mountPushWebhookRoutes(r, pushHandlers)
 
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
 	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret)
 	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL)
 	mcpHandler := mcpserver.NewHandler(log, oauthHandlers.ResourceMetadataURL)
-	r.Group(func(r chi.Router) {
-		r.Use(oauthhandlers.PublicCORS)
-		r.Get("/.well-known/oauth-protected-resource", oauthHandlers.ProtectedResourceMetadata)
-		r.Get("/.well-known/oauth-protected-resource/*", oauthHandlers.ProtectedResourceMetadata)
-		r.Get("/.well-known/oauth-authorization-server", oauthHandlers.AuthorizationServerMetadata)
-		r.Get("/.well-known/oauth-authorization-server/*", oauthHandlers.AuthorizationServerMetadata)
-		r.Get("/.well-known/openid-configuration/*", oauthHandlers.AuthorizationServerMetadata)
-	})
+	mountOAuthDiscoveryRoutes(r, oauthHandlers)
 
 	// Kubernetes discovery collector config and snapshot upload: no session
 	// or API key, authenticated by the integration-scoped collector token.
@@ -233,28 +222,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.With(oauthhandlers.PublicCORS).Handle("/mcp", mcpHandler.Protect(authMiddleware))
 
 		// MCP OAuth authorization server.
-		r.Route("/oauth", func(r chi.Router) {
-			r.Group(func(r chi.Router) {
-				r.Use(oauthhandlers.PublicCORS)
-				r.Get("/.well-known/oauth-authorization-server", oauthHandlers.AuthorizationServerMetadata)
-				r.Get("/.well-known/openid-configuration", oauthHandlers.AuthorizationServerMetadata)
-				r.Post("/register", oauthHandlers.Register)
-				r.Get("/authorize", oauthHandlers.Authorize)
-				r.Post("/token", oauthHandlers.Token)
-				r.Post("/revoke", oauthHandlers.Revoke)
-			})
-			// Consent and connection management for the operator UI: a
-			// signed-in user session only, outside the write gate (a viewer
-			// may connect a read-only agent and revoke their own
-			// connections) and outside generic audit (they record their own).
-			r.Group(func(r chi.Router) {
-				r.Use(authMiddleware)
-				r.Get("/authorize/request", oauthHandlers.AuthorizationRequest)
-				r.Post("/authorize/decision", oauthHandlers.Decide)
-				r.Get("/grants", oauthHandlers.ListGrants)
-				r.Delete("/grants/{id}", oauthHandlers.RevokeGrant)
-			})
-		})
+		mountOAuthRoutes(r, oauthHandlers, authMiddleware)
 
 		adminUsersSvc := adminusersservice.NewService(dbClient, cfg.AdminBcryptCost)
 		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder)
@@ -263,19 +231,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		authService := adminauthservice.NewService(dbClient, cfg.AdminBcryptCost)
 		oidcService := oidcauthservice.NewService(cfg.OIDC, dbClient, log)
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
-		r.Route("/auth", func(r chi.Router) {
-			r.Post("/login", authHandlers.Login)
-			r.Post("/refresh", authHandlers.Refresh)
-			r.Post("/logout", authHandlers.Logout)
-			r.Get("/me", authHandlers.Me)
-			r.Route("/oidc", func(r chi.Router) {
-				r.Get("/status", authHandlers.OIDCStatus)
-				r.Get("/start", authHandlers.OIDCStart)
-				r.Get("/callback", authHandlers.OIDCCallback)
-			})
-		})
-		r.Get("/users/bootstrap/status", adminUsersHandlers.BootstrapStatus)
-		r.Post("/users/bootstrap/first", adminUsersHandlers.BootstrapFirstUser)
+		mountAuthRoutes(r, authHandlers, adminUsersHandlers)
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -314,11 +270,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// their training export. No model call, so local AI may be off.
 			aiLabelHdlrs := ailabelshandlers.NewHandlers(ailabelsservice.NewService(dbClient, depSuggestSvc), log)
 			aiSettingsHdlrs := aisettingshandlers.NewHandlers(aiSettingsSvc, log)
-			r.Route("/ai-settings", func(r chi.Router) {
-				r.Get("/", aiSettingsHdlrs.GetSettings)
-				r.Put("/", aiSettingsHdlrs.UpdateSettings)
-				r.Post("/test", aiSettingsHdlrs.TestConnection)
-			})
+			mountAISettingsRoutes(r, aiSettingsHdlrs)
 
 			// Incident service and handlers
 			incidentService := incidentservice.NewService(dbClient, statusPublisher)
@@ -356,14 +308,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Private locations (remote worker deployments)
 			locationHandlers := locationhandlers.NewHandlers(locationSvc, cfg.PublicNATSURL, log)
-			r.Route("/locations", func(r chi.Router) {
-				r.Post("/", locationHandlers.CreateLocation)
-				r.Get("/", locationHandlers.ListLocations)
-				r.Get("/{id}", locationHandlers.GetLocation)
-				r.Patch("/{id}", locationHandlers.UpdateLocation)
-				r.Delete("/{id}", locationHandlers.DeleteLocation)
-				r.Get("/{id}/deploy", locationHandlers.GetDeployInfo)
-			})
+			mountLocationRoutes(r, locationHandlers)
 
 			// Inter-location connectivity mesh
 			meshSvc := meshservice.NewService(dbClient, cfg.MeshProbeIntervalSeconds)
@@ -371,11 +316,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			if checkJobQueue != nil {
 				meshHdlrs = meshhandlers.NewHandlers(meshSvc, checkJobQueue, cfg.MeshProbeTimeoutSeconds, log)
 			}
-			r.Route("/mesh", func(r chi.Router) {
-				r.Get("/", meshHdlrs.GetMesh)
-				r.Get("/history", meshHdlrs.GetEdgeHistory)
-				r.Post("/probe", meshHdlrs.ProbeNow)
-			})
+			mountMeshRoutes(r, meshHdlrs)
 
 			// Kubernetes discovery, operator side: integrations, coverage,
 			// approval and links. The collector side is mounted outside auth
@@ -390,64 +331,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Maintenance windows
 			maintenanceService := maintenancewindowservice.NewService(dbClient)
 			maintenanceHandlers := maintenancewindowhandlers.NewHandlers(maintenanceService, log)
-			r.Route("/maintenance-windows", func(r chi.Router) {
-				r.Post("/", maintenanceHandlers.CreateMaintenanceWindow)
-				r.Get("/", maintenanceHandlers.ListMaintenanceWindows)
-				r.Get("/{id}", maintenanceHandlers.GetMaintenanceWindow)
-				r.Patch("/{id}", maintenanceHandlers.UpdateMaintenanceWindow)
-				r.Delete("/{id}", maintenanceHandlers.DeleteMaintenanceWindow)
-			})
+			mountMaintenanceWindowRoutes(r, maintenanceHandlers)
 
-			r.Route("/monitors", func(r chi.Router) {
-				r.Post("/", monitorHandlers.CreateMonitor)
-				r.Get("/", monitorHandlers.ListMonitors)
-				r.Post("/test", monitorHandlers.TestMonitorConfig)
-				// Import endpoints (must be before /{id} to avoid conflicts)
-				r.Get("/export", importHdlrs.Export)
-				r.Post("/import/preview", importHdlrs.Preview)
-				r.Post("/import", importHdlrs.Execute)
-				// Bulk operations (must be before /{id} to avoid conflicts)
-				r.Post("/bulk/alerting", monitorHandlers.BulkUpdateAlerting)
-				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
-				// Dependency graph (must be before /{id} to avoid conflicts)
-				r.Get("/dependency-graph", monitorHandlers.GetDependencyGraph)
-				// Recent results for many monitors (the list's one round trip)
-				r.Get("/results/batch", monitorHandlers.GetMonitorResultsBatch)
-				r.Post("/dependency-suggestions", depSuggestHdlrs.Suggest)
-				r.Post("/dependency-suggestions/label", aiLabelHdlrs.LabelDependencySuggestion)
-				r.Get("/{id}", monitorHandlers.GetMonitor)
-				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
-				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
-				r.Get("/{id}/metrics-snapshots", monitorHandlers.GetMonitorMetricsSnapshots)
-				r.Delete("/{id}/history", monitorHandlers.DeleteMonitorHistory)
-				r.Post("/{id}/run", monitorHandlers.RunMonitorNow)
-				r.Get("/{id}/artifacts/screenshot", monitorHandlers.GetSyntheticBrowserScreenshot)
-				r.Patch("/{id}", monitorHandlers.UpdateMonitor)
-				r.Delete("/{id}", monitorHandlers.DeleteMonitor)
-				// Group membership endpoints
-				r.Get("/{id}/members", monitorHandlers.GetGroupMembers)
-				r.Post("/{id}/members", monitorHandlers.AddMonitorsToGroup)
-				r.Delete("/{id}/members", monitorHandlers.RemoveMonitorsFromGroup)
-				// Dependency endpoints
-				r.Get("/{id}/dependencies", monitorHandlers.GetMonitorDependencies)
-				r.Post("/{id}/dependencies", monitorHandlers.AddMonitorDependency)
-				r.Delete("/{id}/dependencies/{dependsOnId}", monitorHandlers.RemoveMonitorDependency)
-				r.Get("/{id}/dependents", monitorHandlers.GetMonitorDependents)
-				// Metric store (agent monitors' OTel metrics)
-				r.Get("/{id}/metrics/series", metricsQueryHandlers.HandleListSeries)
-				r.Post("/{id}/metrics/query", metricsQueryHandlers.HandleQuery)
-				// Agent install endpoints
-				r.Get("/{id}/agent/install", agentHandlers.HandleGetInstallCommand)
-				r.Get("/{id}/agent/config.yaml", agentHandlers.HandleGetCollectorConfig)
-				r.Get("/{id}/agent/install/script.sh", agentHandlers.HandleGetInstallScript)
-				r.Get("/{id}/agent/install/script.ps1", agentHandlers.HandleGetWindowsInstallScript)
-				r.Get("/{id}/agent/uninstall/script.sh", agentHandlers.HandleGetUninstallScript)
-				r.Get("/{id}/agent/uninstall/script.ps1", agentHandlers.HandleGetWindowsUninstallScript)
-				// Push info endpoint
-				r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
-				// Snooze: quick single-monitor maintenance window
-				r.Post("/{id}/snooze", maintenanceHandlers.SnoozeMonitor)
-			})
+			mountMonitorRoutes(r, monitorHandlers, importHdlrs, depSuggestHdlrs, aiLabelHdlrs, metricsQueryHandlers, agentHandlers, pushHandlers, maintenanceHandlers)
 
 			// Legacy custom-agent push — retired 2026-11-18, superseded by
 			// OTLP below. A 410 tombstone that names the successor.
@@ -459,186 +345,55 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			r.Post("/otlp/v1/metrics", otlpHandlers.HandleExportMetrics)
 
 			// Dashboard
-			r.Route("/dashboard", func(r chi.Router) {
-				r.Get("/overview", dashboardHandlers.GetOverview)
-				r.Get("/summary", dashboardHandlers.GetSummary)
-				r.Get("/problem-monitors", dashboardHandlers.GetProblemMonitors)
-				r.Get("/recent-failures", dashboardHandlers.GetRecentFailures)
-				r.Get("/recent-alerts", dashboardHandlers.GetRecentAlerts)
-				r.Get("/group-sparkline", dashboardHandlers.GetGroupSparkline)
-			})
+			mountDashboardRoutes(r, dashboardHandlers)
 
 			// Alerts
-			r.Route("/alerts", func(r chi.Router) {
-				r.Get("/", alertHandlers.ListAlerts)
-				r.Get("/recent", alertHandlers.GetRecentAlerts)
-				r.Get("/stream", alertHandlers.StreamAlerts)
-				r.Get("/counts/by-policy", alertHandlers.GetAlertCountsByPolicy)
-				r.Get("/counts/monitors-by-policy", alertHandlers.GetMonitorCountsByPolicy)
-				r.Get("/{id}", alertHandlers.GetAlert)
-				r.Post("/{id}/acknowledge", alertHandlers.AcknowledgeAlert)
-				r.Post("/{id}/resolve", alertHandlers.ResolveAlert)
-				// Bulk triage: per-alert results and one audit event per alert.
-				r.Post("/bulk/acknowledge", alertHandlers.BulkAcknowledgeAlerts)
-				r.Post("/bulk/resolve", alertHandlers.BulkResolveAlerts)
-				// Triage training label (audited write; not in postReadPaths).
-				// A corrected label also stops the alert's pending
-				// suspected-cause follow-ups.
-				r.Post("/{id}/triage/label", aiLabelHdlrs.LabelAlertTriage)
-			})
+			mountAlertRoutes(r, alertHandlers, aiLabelHdlrs)
 
 			// Incidents
-			r.Route("/incidents", func(r chi.Router) {
-				r.Get("/", incidentHandlers.ListIncidents)
-				r.Post("/", incidentHandlers.CreateIncident)
-				r.Get("/{id}", incidentHandlers.GetIncident)
-				r.Patch("/{id}", incidentHandlers.UpdateIncident)
-				r.Post("/{id}/state", incidentHandlers.TransitionIncidentState)
-				r.Post("/{id}/timeline", incidentHandlers.CreateTimelineEntry)
-				r.Post("/{id}/alerts", incidentHandlers.AttachIncidentAlert)
-				r.Delete("/{id}/alerts/{alertId}", incidentHandlers.DetachIncidentAlert)
-				r.Post("/{id}/monitors", incidentHandlers.AttachIncidentMonitor)
-				r.Delete("/{id}/monitors/{monitorId}", incidentHandlers.DetachIncidentMonitor)
-				r.Put("/{id}/status-pages/{statusPageId}", incidentHandlers.PublishIncidentToStatusPage)
-				r.Delete("/{id}/status-pages/{statusPageId}", incidentHandlers.UnpublishIncidentFromStatusPage)
-				r.Post("/{id}/ai-analysis", incidentHandlers.RequestIncidentAIAnalysis)
-				r.Get("/{id}/ai-analysis", incidentHandlers.GetIncidentAIAnalysis)
-				r.Post("/{id}/ai-analysis/label", aiLabelHdlrs.LabelIncidentAnalysis)
-			})
+			mountIncidentRoutes(r, incidentHandlers, aiLabelHdlrs)
 
 			// AI label training export (tenant admins and superadmins only).
-			r.Route("/ai-labels", func(r chi.Router) {
-				r.Use(apimiddleware.RequireTenantAdmin)
-				r.Post("/export", aiLabelHdlrs.Export)
-			})
+			mountAILabelRoutes(r, aiLabelHdlrs)
 
 			// Alert policies — retired; all endpoints return 410 Gone.
 			// Use /notification-settings instead.
-			r.Route("/alert-policies", func(r chi.Router) {
-				gone := func(w http.ResponseWriter, r *http.Request) {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusGone)
-					_, _ = w.Write([]byte(`{"error":"alert policies were replaced by notification settings; see /notification-settings"}`))
-				}
-				r.Post("/", gone)
-				r.Get("/", gone)
-				r.Get("/{id}", gone)
-				r.Patch("/{id}", gone)
-				r.Delete("/{id}", gone)
-			})
+			mountRetiredAlertPolicyRoutes(r)
 
 			// Alert channels
 			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor)
 			alertChannelHandlers := alertchannelhandlers.NewHandlers(alertChannelService, log)
-			r.Route("/alert-channels", func(r chi.Router) {
-				r.Post("/", alertChannelHandlers.CreateAlertChannel)
-				r.Get("/", alertChannelHandlers.ListAlertChannels)
-				r.Get("/{id}", alertChannelHandlers.GetAlertChannel)
-				r.Patch("/{id}", alertChannelHandlers.UpdateAlertChannel)
-				r.Delete("/{id}", alertChannelHandlers.DeleteAlertChannel)
-				r.Post("/{id}/test", alertChannelHandlers.TestAlertChannel)
-			})
-
-			// Alert channel plugin catalog (manifests driving the UI form).
-			r.Route("/alert-channel-plugins", func(r chi.Router) {
-				r.Get("/", alertChannelHandlers.ListPlugins)
-				r.Get("/{type}", alertChannelHandlers.GetPlugin)
-			})
+			mountAlertChannelRoutes(r, alertChannelHandlers)
 
 			// Notification settings (workspace default routing, reminders, auto-incident)
 			notificationSettingsSvc := notificationsettingsservice.NewService(dbClient)
 			notificationSettingsHdlrs := notificationsettingshandlers.NewHandlers(notificationSettingsSvc, log)
-			r.Route("/notification-settings", func(r chi.Router) {
-				r.Get("/", notificationSettingsHdlrs.GetSettings)
-				r.Put("/", notificationSettingsHdlrs.UpdateSettings)
-			})
+			mountNotificationSettingsRoutes(r, notificationSettingsHdlrs)
 
 			// API keys
 			apiKeyService := apikeyservice.NewService(dbClient)
 			apiKeyHandlers := apikeyhandlers.NewHandlers(apiKeyService, log).WithAudit(auditRecorder)
-			r.Route("/api-keys", func(r chi.Router) {
-				r.Get("/", apiKeyHandlers.ListAPIKeys)
-				// Key management is a tenant-admin capability: a viewer or
-				// editor must not be able to mint themselves a write key.
-				r.Group(func(r chi.Router) {
-					r.Use(apimiddleware.RequireTenantAdmin)
-					r.Post("/", apiKeyHandlers.CreateAPIKey)
-					r.Delete("/{id}", apiKeyHandlers.RevokeAPIKey)
-				})
-			})
+			mountAPIKeyRoutes(r, apiKeyHandlers)
 
 			// Status pages
 			statusPageService := statuspageservice.NewService(dbClient, statusPublisher)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
-			r.Route("/status-pages", func(r chi.Router) {
-				r.Post("/", statusPageHandlers.CreateStatusPage)
-				r.Get("/", statusPageHandlers.ListStatusPages)
-				r.Get("/{id}", statusPageHandlers.GetStatusPage)
-				r.Patch("/{id}", statusPageHandlers.UpdateStatusPage)
-				r.Delete("/{id}", statusPageHandlers.DeleteStatusPage)
-
-				// Custom UI template lifecycle: export default, draft, publish,
-				// revert, reset. Sources are validated against the shared
-				// template contract before they are stored.
-				r.Route("/{id}/template", func(r chi.Router) {
-					r.Get("/", statusPageHandlers.GetTemplateState)
-					r.Delete("/", statusPageHandlers.ResetTemplate)
-					r.Get("/default", statusPageHandlers.GetDefaultTemplate)
-					r.Get("/versions/{version}/source", statusPageHandlers.GetTemplateVersionSource)
-					r.Put("/draft", statusPageHandlers.SaveTemplateDraft)
-					r.Delete("/draft", statusPageHandlers.DiscardTemplateDraft)
-					r.Post("/publish", statusPageHandlers.PublishTemplate)
-					r.Post("/revert", statusPageHandlers.RevertTemplate)
-				})
-			})
-
-			// Tenant-level library of reusable status page templates.
-			r.Route("/status-page-templates", func(r chi.Router) {
-				r.Get("/", statusPageHandlers.ListLibraryTemplates)
-				r.Post("/", statusPageHandlers.CreateLibraryTemplate)
-				r.Get("/{templateId}", statusPageHandlers.GetLibraryTemplate)
-				r.Get("/{templateId}/source", statusPageHandlers.GetLibraryTemplateSource)
-				r.Patch("/{templateId}", statusPageHandlers.UpdateLibraryTemplate)
-				r.Delete("/{templateId}", statusPageHandlers.DeleteLibraryTemplate)
-			})
+			mountStatusPageRoutes(r, statusPageHandlers)
 
 			// Tenants (membership-filtered for members, all for superadmins)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
-			r.Route("/tenant-settings", func(r chi.Router) {
-				r.Get("/", tenantHandlers.GetTenantSettings)
-				r.With(apimiddleware.RequireTenantAdmin).Patch("/", tenantHandlers.UpdateTenantSettings)
-			})
-			r.Route("/tenants", func(r chi.Router) {
-				r.Get("/", tenantHandlers.ListTenants)
-			})
+			mountTenantRoutes(r, tenantHandlers)
 
 			// Audit log (tenant admins and superadmins)
 			auditHandlers := audithandlers.NewHandlers(auditSvc, log)
-			r.Route("/audit-log", func(r chi.Router) {
-				r.Use(apimiddleware.RequireTenantAdmin)
-				r.Get("/", auditHandlers.List)
-				r.Get("/actions", auditHandlers.Actions)
-			})
+			mountAuditLogRoutes(r, auditHandlers)
 
 			// Users (superadmin only)
-			r.Route("/users", func(r chi.Router) {
-				r.Use(apimiddleware.RequireSuperadmin)
-				r.Get("/", adminUsersHandlers.ListUsers)
-				r.Post("/", adminUsersHandlers.CreateUser)
-				r.Get("/{id}", adminUsersHandlers.GetUser)
-				r.Patch("/{id}", adminUsersHandlers.UpdateUser)
-				r.Delete("/{id}", adminUsersHandlers.DeleteUser)
-			})
+			mountUserRoutes(r, adminUsersHandlers)
 
 			// OIDC group→role mappings (superadmin only)
 			oidcMappingHandlers := oidcmappinghandlers.NewHandlers(oidcmappingsservice.NewService(dbClient), cfg.OIDC, log)
-			r.Route("/oidc-group-mappings", func(r chi.Router) {
-				r.Use(apimiddleware.RequireSuperadmin)
-				r.Get("/", oidcMappingHandlers.List)
-				r.Post("/", oidcMappingHandlers.Create)
-				r.Patch("/{id}", oidcMappingHandlers.Update)
-				r.Delete("/{id}", oidcMappingHandlers.Delete)
-			})
+			mountOIDCMappingRoutes(r, oidcMappingHandlers)
 		})
 	})
 

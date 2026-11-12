@@ -271,7 +271,7 @@ type actionRequest struct {
 }
 
 func note(text string) actionRequest {
-	return actionRequest{Source: "Probara", Note: truncate(text, 25000)}
+	return actionRequest{Source: "Probara", Note: plugin.Truncate(text, 25000)}
 }
 
 // Alert API field limits.
@@ -304,9 +304,9 @@ func buildCreate(alias, outagePriority string, m present.Message) createRequest 
 	}
 
 	return createRequest{
-		Message:     truncate(m.Title, maxMessage),
+		Message:     plugin.Truncate(m.Title, maxMessage),
 		Alias:       alias,
-		Description: truncate(desc.String(), maxDescription),
+		Description: plugin.Truncate(desc.String(), maxDescription),
 		Tags:        []string{"probara", strings.ToLower(m.StatusWord)},
 		Details:     details,
 		Entity:      m.MonitorName,
@@ -333,14 +333,6 @@ func priorityFor(t present.Tone, outage string) string {
 	default:
 		return "P5"
 	}
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "…"
 }
 
 func parseConfig(raw json.RawMessage) (Config, error) {

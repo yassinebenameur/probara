@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, RefreshCw, Trash2, Users as UsersIcon } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Pagination from '@/components/ui/Pagination';
 import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
@@ -23,6 +24,7 @@ import { deleteUser, getUsers } from '@/lib/api';
 import { pluralize } from '@/lib/format';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import type { AdminUser } from '@/lib/types';
+import { errorMessage } from '@/lib/errors';
 
 const PAGE_SIZE = 50;
 // The API caps page_size at 100; the page reads every account (a platform
@@ -75,8 +77,8 @@ export default function UsersPage() {
       setError('');
       setUsers(await fetchAllUsers());
       setLoaded(true);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load users');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to load users'));
     } finally {
       setLoading(false);
     }
@@ -113,8 +115,8 @@ export default function UsersPage() {
       await loadUsers();
       showToast('User deleted', 'success');
       setPendingDelete(null);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete user', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete user'), 'error');
     } finally {
       setDeleting(false);
     }
@@ -288,32 +290,13 @@ export default function UsersPage() {
             </table>
           </div>
 
-          <div className="flex items-center justify-between gap-3 border-t border-divider px-4 py-3 text-xs text-slate-500">
-            <span className="tabular-nums">
-              {totalPages > 1 ? `Page ${currentPage} of ${totalPages} · ` : ''}
-              {pluralize(sorted.length, 'user')}
-            </span>
-            {totalPages > 1 && (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={currentPage <= 1}
-                  onClick={() => setPage(currentPage - 1)}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={currentPage >= totalPages}
-                  onClick={() => setPage(currentPage + 1)}
-                >
-                  Next
-                </Button>
-              </div>
-            )}
-          </div>
+          <Pagination
+            variant="footer"
+            page={currentPage}
+            totalPages={totalPages}
+            onPageChange={setPage}
+            summary={`${totalPages > 1 ? `Page ${currentPage} of ${totalPages} · ` : ''}${pluralize(sorted.length, 'user')}`}
+          />
         </div>
       )}
 

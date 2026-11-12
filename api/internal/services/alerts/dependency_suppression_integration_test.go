@@ -36,9 +36,9 @@ func TestAlertReadPathsReportDependencySuppression(t *testing.T) {
 	insertOpenAlert := func(monitorID uuid.UUID, rootCause *uuid.UUID) uuid.UUID {
 		id := uuid.New()
 		_, err := dbClient.ExecContext(ctx, `
-			INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
 				triggered_at, failure_count, root_cause_monitor_id, created_at, updated_at)
-			VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW(), 1, $4, NOW(), NOW())
+			VALUES ($1, $2, $3, 'availability', 'active', NOW(), 1, $4, NOW(), NOW())
 		`, id, tenantID, monitorID, rootCause)
 		require.NoError(t, err)
 		return id

@@ -46,20 +46,19 @@ const (
 
 // Incident represents the core incident record.
 type Incident struct {
-	ID                uuid.UUID        `json:"id"`
-	TenantID          uuid.UUID        `json:"tenant_id"`
-	Title             string           `json:"title"`
-	Summary           string           `json:"summary"`
-	State             IncidentState    `json:"state"`
-	Severity          IncidentSeverity `json:"severity"`
-	OwnerUserID       *uuid.UUID       `json:"owner_user_id,omitempty"`
-	OwnerUsername     string           `json:"owner_username,omitempty"`
-	ResolvedAt        *time.Time       `json:"resolved_at,omitempty"`
-	IsAutoCreated     bool             `json:"is_auto_created"`
-	AutoMonitorID     *uuid.UUID       `json:"auto_monitor_id,omitempty"`
-	AutoAlertPolicyID *uuid.UUID       `json:"auto_alert_policy_id,omitempty"`
-	CreatedAt         time.Time        `json:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at"`
+	ID            uuid.UUID        `json:"id"`
+	TenantID      uuid.UUID        `json:"tenant_id"`
+	Title         string           `json:"title"`
+	Summary       string           `json:"summary"`
+	State         IncidentState    `json:"state"`
+	Severity      IncidentSeverity `json:"severity"`
+	OwnerUserID   *uuid.UUID       `json:"owner_user_id,omitempty"`
+	OwnerUsername string           `json:"owner_username,omitempty"`
+	ResolvedAt    *time.Time       `json:"resolved_at,omitempty"`
+	IsAutoCreated bool             `json:"is_auto_created"`
+	AutoMonitorID *uuid.UUID       `json:"auto_monitor_id,omitempty"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
 }
 
 // IncidentTimelineEntry represents a single timeline event for an incident.
@@ -77,7 +76,6 @@ type IncidentTimelineEntry struct {
 type IncidentAlertSummary struct {
 	ID             uuid.UUID  `json:"id"`
 	MonitorID      uuid.UUID  `json:"monitor_id"`
-	AlertPolicyID  *uuid.UUID `json:"alert_policy_id,omitempty"`
 	Status         string     `json:"status"`
 	TriggeredAt    time.Time  `json:"triggered_at"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
@@ -87,7 +85,6 @@ type IncidentAlertSummary struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	MonitorName    string     `json:"monitor_name"`
-	PolicyName     *string    `json:"policy_name,omitempty"`
 	// Triage is the alert's read-only AI triage (no label_context here).
 	Triage *AlertTriage `json:"triage,omitempty"`
 }

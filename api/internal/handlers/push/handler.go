@@ -10,7 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/services/push"
-	"github.com/yassinebenameur/probara/shared/context"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -172,13 +172,13 @@ func (h *Handler) HandlePushPost(w http.ResponseWriter, r *http.Request) {
 // Returns webhook URL and usage instructions (requires authentication)
 func (h *Handler) HandleGetPushInfo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !context.CanWrite(ctx) {
+	if !ctxpkg.CanWrite(ctx) {
 		http.Error(w, "push credentials require write permission", http.StatusForbidden)
 		return
 	}
 
 	// Get tenant ID from context (set by auth middleware)
-	tenantIDStr, ok := context.GetTenantID(ctx)
+	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

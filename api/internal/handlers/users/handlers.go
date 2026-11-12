@@ -6,13 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	adminusers "github.com/yassinebenameur/probara/api/internal/services/adminusers"
@@ -78,19 +78,7 @@ func (h *Handlers) recordUserEvent(r *http.Request, action, outcome string, targ
 
 // ListUsers handles GET /api/v1/users.
 func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
-	page := 1
-	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			page = p
-		}
-	}
-
-	pageSize := 20
-	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
-		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
-			pageSize = ps
-		}
-	}
+	page, pageSize := httpx.Page(r)
 
 	resp, err := h.service.ListUsers(r.Context(), page, pageSize)
 	if err != nil {
@@ -99,8 +87,7 @@ func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 // GetUser handles GET /api/v1/users/{id}.
@@ -126,8 +113,7 @@ func (h *Handlers) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
+	httpx.WriteJSON(w, http.StatusOK, user)
 }
 
 // CreateUser handles POST /api/v1/users.
@@ -161,9 +147,7 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		"memberships":   len(user.Memberships),
 	})
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(user)
+	httpx.WriteJSON(w, http.StatusCreated, user)
 }
 
 // BootstrapStatus handles GET /api/v1/users/bootstrap/status.
@@ -175,8 +159,7 @@ func (h *Handlers) BootstrapStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models.AdminBootstrapStatusResponse{
+	httpx.WriteJSON(w, http.StatusOK, models.AdminBootstrapStatusResponse{
 		HasAdminUsers: hasAdminUsers,
 	})
 }
@@ -210,9 +193,7 @@ func (h *Handlers) BootstrapFirstUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(user)
+	httpx.WriteJSON(w, http.StatusCreated, user)
 }
 
 // UpdateUser handles PATCH /api/v1/users/{id}.
@@ -277,8 +258,7 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		"changed":  changed,
 	})
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
+	httpx.WriteJSON(w, http.StatusOK, user)
 }
 
 // DeleteUser handles DELETE /api/v1/users/{id}.

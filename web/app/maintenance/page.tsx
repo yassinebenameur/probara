@@ -21,6 +21,7 @@ import { RelativeTime } from '@/components/ui/RelativeTime';
 import SortableHeader, { useUrlSort } from '@/components/ui/SortableHeader';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { MaintenanceWindowModal } from '@/components/maintenance/MaintenanceWindowModal';
+import { errorMessage } from '@/lib/errors';
 
 type Tab = MaintenanceWindowStatus;
 
@@ -133,8 +134,8 @@ export default function MaintenancePage() {
         tabChosen.current = true;
         setTab(TAB_ORDER.find((status) => counts[status] > 0) ?? 'active');
       }
-    } catch (err: any) {
-      setError(err.message || 'Failed to load maintenance windows');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to load maintenance windows'));
     } finally {
       setLoading(false);
     }
@@ -157,8 +158,8 @@ export default function MaintenancePage() {
       showToast('Maintenance window deleted', 'success');
       setPendingDelete(null);
       loadWindows();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete maintenance window', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete maintenance window'), 'error');
     } finally {
       setDeleting(false);
     }
@@ -169,8 +170,8 @@ export default function MaintenancePage() {
       await updateMaintenanceWindow(window.id, { ends_at: new Date().toISOString() });
       showToast('Maintenance window ended', 'success');
       loadWindows();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to end maintenance window', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to end maintenance window'), 'error');
     }
   };
 

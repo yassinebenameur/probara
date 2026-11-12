@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	apikeysservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
@@ -55,31 +54,13 @@ func (h *Handlers) recordKeyEvent(r *http.Request, action string, keyID string, 
 
 // ListAPIKeys handles GET /api/v1/api-keys
 func (h *Handlers) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	page := 1
-	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			page = p
-		}
-	}
-
-	pageSize := 20
-	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
-		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
-			pageSize = ps
-		}
-	}
+	page, pageSize := httpx.Page(r)
 
 	result, err := h.service.ListAPIKeys(r.Context(), tenantUUID, page, pageSize)
 	if err != nil {
@@ -91,17 +72,16 @@ func (h *Handlers) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // CreateAPIKey handles POST /api/v1/api-keys
 func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	var req models.CreateApiKeyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -111,12 +91,6 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	if strings.TrimSpace(req.Name) == "" {
 		apierrors.WriteValidationError(w, "name is required")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
 		return
 	}
 
@@ -140,29 +114,21 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	h.recordKeyEvent(r, "apikey.create", apiKey.ID.String(), details)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(apiKey)
+	httpx.WriteJSON(w, http.StatusCreated, apiKey)
 }
 
 // RevokeAPIKey handles DELETE /api/v1/api-keys/{id}
 func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
+	tenantID := tenantUUID.String()
 
 	keyIDStr := chi.URLParam(r, "id")
 	keyID, err := uuid.Parse(keyIDStr)
 	if err != nil {
 		apierrors.WriteValidationError(w, "invalid api key ID")
-		return
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
 		return
 	}
 

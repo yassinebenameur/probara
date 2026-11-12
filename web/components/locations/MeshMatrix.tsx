@@ -15,6 +15,7 @@ import { MeshEdge, MeshLocation, MeshResponse } from '@/lib/types';
 import { getMesh, probeMeshEdge } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/monitor-utils';
 import { formatLatency } from '@/lib/format';
+import { errorMessage } from '@/lib/errors';
 
 function edgeKey(sourceId: string, targetId: string) {
   return `${sourceId}→${targetId}`;
@@ -77,10 +78,10 @@ export default function MeshMatrix() {
       const response = await getMesh();
       setMesh(response);
       setError('');
-    } catch (err: any) {
+    } catch (err) {
       // Background refreshes keep showing the last good matrix on failure.
       if (showSpinner || !initialLoadDone.current) {
-        setError(err.message || 'Failed to load mesh');
+        setError(errorMessage(err, 'Failed to load mesh'));
       }
     } finally {
       initialLoadDone.current = true;
@@ -111,8 +112,8 @@ export default function MeshMatrix() {
         );
       }
       await loadMesh(false);
-    } catch (err: any) {
-      showToast(err.message || 'Probe failed', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Probe failed'), 'error');
     } finally {
       setProbing(null);
     }

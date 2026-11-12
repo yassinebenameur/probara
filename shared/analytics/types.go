@@ -2,7 +2,6 @@ package analytics
 
 import (
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -185,15 +184,6 @@ func percentile(sortedValues []float64, p float64) *float64 {
 	frac := idx - float64(lower)
 	value := sortedValues[lower] + frac*(sortedValues[upper]-sortedValues[lower])
 	return PtrFloat64(value)
-}
-
-func median(values []float64) *float64 {
-	if len(values) == 0 {
-		return nil
-	}
-	sorted := append([]float64(nil), values...)
-	sort.Float64s(sorted)
-	return percentile(sorted, 0.5)
 }
 
 func aggregateStatus(statuses []string) *string {

@@ -107,13 +107,35 @@ when a boundary or messaging contract moves. The rules that are easy to break:
 - Session advisory locks are acquired and released on one pinned connection
   (see `scheduler/internal/scheduler/maintenance_lock.go`), never through
   separate pool calls.
-- Every service keeps `/healthz`, `/readyz` and `/metrics`; keep them intact
+- Every service keeps `/healthz`, `/readyz` and `/metrics`. The Go mains get
+  them, the shutdown-signal wait, the at-rest encryptor and the notification
+  runtime from `shared/bootstrap`; add shared startup mechanics there, never
+  as another copy in a main (the copies had drifted: one liveness probe
+  ignored a dead NATS connection). Worker side consumers (notifications,
+  AI-RCA, triage) run under `airca.RunWithRestart` so one that dies restarts
+  instead of leaving a healthy-looking pod. Keep the probes intact
   when touching startup or server wiring (ai-service's `/readyz` needs the
   bearer token, so the chart's readiness probe is an exec; its `/healthz`
   turns 503 once a batch outruns `LOCAL_AI_MAX_INFERENCE_SECONDS`, which is
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- API routes are registered by the `mount*Routes` functions in
+  `api/internal/api/routes_*.go`; `NewServer` (`server.go`) builds the
+  services and handlers and calls them in order.
+- API handlers take their plumbing from `api/internal/httpx` (`TenantID`,
+  `WriteJSON`, `Page`/`PageWithLimits`); services clamp with
+  `api/internal/pagination`. No private copies. The plaintext protocol
+  handlers (`agent`, `push`, `otlp`, `metricsquery`) keep their own response
+  bodies.
+- Services return exported sentinel errors (shared ones in
+  `api/internal/apperr`) and handlers map them with `errors.Is` — never add
+  a comparison on error text, and keep a sentinel's message stable: it
+  reaches API clients. Three validation-message switches predate this and
+  are the remaining debt (`handlers/incidents`, `handlers/maintenancewindows`,
+  plus the plaintext `handlers/push`); convert them to typed validation
+  errors rather than adding a fourth. Postgres error codes go through
+  `shared/db/pgerr`.
 
 ## Single sources of truth — never duplicate these lists
 
@@ -187,8 +209,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `api/internal/models/statuspages.go` (`StatusPageSettings`, the wire type),
   `api/internal/services/statuspages/service.go`
   (`statusPageSettingsStored`/`applyPatch`/`toAPI` — the **write** path), and
-  `status-page/internal/statuspage/service.go` (the **read** path the public
-  renderer uses). Plus `web/lib/types.ts` for the UI. The API's stored struct
+  `status-page/internal/statuspage/service_settings.go` (the **read** path the public
+  renderer uses). Plus `web/lib/types/status-pages.ts` for the UI. The API's stored struct
   re-serializes only the fields it knows, so a setting added to the model but
   not to `applyPatch`/`toAPI` is accepted by the endpoint, silently dropped on
   write, and never reaches the page — no error anywhere.
@@ -197,7 +219,11 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   pause/maintenance handling, or uptime accounting must update the rule
   table in the same commit; tests cite rule IDs
   (`shared/monitorstate/spec_test.go`). New aggregation surfaces delegate to
-  `shared/monitorstate`, never invent parallel state rules.
+  `shared/monitorstate`, never invent parallel state rules. Group state is
+  `GroupSummary` (`group.go`, rules S-G): the alerter's SQL uses
+  `GroupAlertStateSQL` (pinned by `TestGroupAlertStateSQLMatchesSummary`),
+  every display surface `LoadGroupSummaries` + `DisplayState`; never roll a
+  group up from member check rows.
 - **Interval availability**: `IntegrateTimeline` (`shared/analytics/timeline.go`)
   is the one integration of `monitor_state_intervals` (+ maintenance union,
   paused/unknown/untracked split, serial composite). The monitor headline
@@ -242,9 +268,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
 
 ## Monitor import
 
-`api/internal/services/import/service.go` parses a source into `parsedSource`
-(rows + schema + warnings + skipped rows), then `ExecuteImport` creates
-monitors. Two paths, chosen by whether `FieldMapping.Config` is set:
+`api/internal/services/import/` parses a source into `parsedSource` (rows +
+schema + warnings + skipped rows; `parse.go`), then `ExecuteImport`
+(`execute.go`) creates monitors. Two paths, chosen by whether `FieldMapping.Config` is set:
 
 - **Raw path** (`useRawConfig`): rows carry an already-typed nested `config`
   object. Supports every registry type, resolves group members by name in a
@@ -271,7 +297,10 @@ or imported groups come back empty. Any other path that creates groups through
 
 ## Adding a monitor type (checklist)
 
-1. `MonitorType` constant in `api/internal/models/monitors.go`; config struct in
+1. `MonitorType` constant + `AllMonitorTypes` entry in
+   `shared/models/monitor_types.go` (the one Go list of types; aliased in
+   `api/internal/models/monitors.go`). Parity tests then fail in every Go
+   mirror that has not been taught the type; config struct in
    `shared/models/` (one file per newer type, e.g. `prometheus.go`; older types
    sit in `check_job_payload.go`). The API validator and the worker both consume
    the shared struct, so put `Validate()` on it rather than duplicating rules
@@ -284,15 +313,18 @@ or imported groups come back empty. Any other path that creates groups through
 4. Secret fields → `MonitorSecretFields`
 5. UI: form component in `web/components/monitors/`, wire into
    `MonitorForm.tsx` (`MONITOR_TYPE_META` + `TYPE_FORMS` dispatch), types in
-   `web/lib/types.ts`;
+   `web/lib/types/monitors.ts` (re-exported by `web/lib/types.ts`);
    its hydration and request builder in `web/lib/monitor-form/`, with exact
    payload tests (create, filled, an edit round trip that sets every field
    the form hydrates, clone, secret clears) in `web/lib/monitor-form-*.test.ts`
 6. Docs: `website/lib/docs/pages/monitors.ts` (type table + protocol passage +
    secrets coverage) — import/export support is automatic via the registry
-7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
-   in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
-   `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
+7. Display-only mirrors that the registry cannot drive: `typeLabels`/`typeBadges`
+   in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars) and
+   `typeIcons` in `shared/statustemplate/statustemplate.go` (both pinned to
+   `AllMonitorTypes` by tests), `MONITOR_TYPE_ICONS` in
+   `web/components/monitors/monitor-type-icons.ts` (typed against
+   `MonitorType`, so a missing icon does not compile), `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
    `badge`), and the type count + `monitorGroups` on the
    landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
@@ -314,7 +346,9 @@ or imported groups come back empty. Any other path that creates groups through
   the alerter against the store with a freshness bound.
 - **Check-job queue**: `CHECK_JOB_STREAM`/`CHECK_JOB_SUBJECT` must be identical
   on API (run-now publisher), scheduler, and workers. Code defaults
-  `CHECK_JOBS`/`check.jobs`; Compose and Helm ship `check-jobs`/`check.job` on
+  `CHECK_JOBS`/`check.jobs` (constants in `shared/models`, read for all three
+  by `loadCheckQueueConfig` in `shared/config` — never read a `CHECK_*` queue
+  variable anywhere else); Compose and Helm ship `check-jobs`/`check.job` on
   all three. Changing one service alone silently breaks run-now.
 - **Check-job delivery**: the worker heartbeats `InProgress` every 10 s while
   a check runs (`checkProgressInterval`, `worker.go`; keep it well under the
@@ -377,8 +411,9 @@ or imported groups come back empty. Any other path that creates groups through
 - **Notification egress**: the same three workloads read
   `NOTIFICATION_BLOCK_PRIVATE_IPS` (default **true**) /
   `NOTIFICATION_ALLOWED_CIDRS` (`loadNotificationEgressConfig`); each main
-  passes both to `plugin.Configure` next to `email.SetMailer`. A binary that
-  skips `plugin.Configure` fails closed (private egress blocked, no links).
+  hands both to `bootstrap.ConfigureNotifications`, which calls
+  `plugin.Configure` and installs the SMTP mailer. A binary that skips it
+  fails closed (private egress blocked, no links).
   This policy is independent of the worker's `HTTP_BLOCK_PRIVATE_IPS`
   (default false); both use `shared/netguard`, the single SSRF range table
   and resolve-then-dial guard (the worker's `dialGuard` is an alias of it).
@@ -417,8 +452,13 @@ or imported groups come back empty. Any other path that creates groups through
   as a literal `value:` in a PodSpec and never hardcode the Secret name — the
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
-  `oidc_client_secret`, `local_ai_token`) are the contract external secret
-  managers fill.
+  `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
+  `status_page_preview_secret`) are the contract external secret managers
+  fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
+  (the api signs preview tokens, status-page verifies them) and is `optional`
+  in the Secret. `ADMIN_COOKIE_SECURE` comes from the
+  `monitoring-platform.adminCookieSecure` helper: `api.cookieSecure` if set,
+  else true exactly when `api.publicBaseURL` is https.
   Helm cannot read Secrets, so anything the chart *composes* from a
   credential (the Postgres DSN, the embedded NATS URL) needs the composed
   value externalized too — hence the paired `fail`s in `secret.yaml`.
@@ -507,11 +547,19 @@ or imported groups come back empty. Any other path that creates groups through
   `alert_notification_states` is what makes `alerter.replicas: 2` safe
   without leader election. The claim
   predicates in `claimNotificationTx` and the in-memory pre-filter
-  `shouldSendNotification` encode the same due rules; change them together.
+  `openAlertEventDue` (same file; used by the lifecycle and mesh dispatch)
+  encode the same due rules; change them together.
   The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
   never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
   skips notifications, so it is not an error to log.
+- **Incident recovery entries have one writer**: `shared/incidentrecovery`.
+  The alerter (monitor recovered) and the API (operator resolved an alert)
+  both call it in the transaction that resolves the alert; its advisory lock
+  on the incident is what serializes the two services, so never write the
+  "All linked alerts recovered" entry, or take that lock, anywhere else.
+  Auto-incident creation is alerter-only (`ensureAutoIncidentForAlertTx`,
+  gated by the tenant's `auto_create_incident`).
 - **Delivery ordering rests on row locks — keep them.** The async worker
   holds the alert row `FOR SHARE` from its status check through `Send`
   (`eventSuperseded` in `worker/internal/worker/notifications/consumer.go`),
@@ -552,7 +600,7 @@ or imported groups come back empty. Any other path that creates groups through
 ## Status pages
 
 - **status-page is read-only except for push.** The `Service` takes a
-  `db.Querier` and `service.go` stubs `ExecContext` into a refusal so stray
+  `db.Querier` and `service_agent_metrics.go` stubs `ExecContext` into a refusal so stray
   writes cannot compile. `pushStore` (`push_store.go`) is the single
   deliberate exception and the only holder of a `*sql.DB` in the package; it
   is constructed only when VAPID keys are set, so an unconfigured deployment
@@ -745,17 +793,36 @@ or imported groups come back empty. Any other path that creates groups through
   Per-check `metrics_data` charts on the detail page (`MongoClusterPanels`,
   `SipCallPanels`) fetch through `lib/useMetricsSnapshots.ts` and pick and
   grid their points with `lib/metric-snapshots.ts`; a new panel does the same.
+- **API failures**: `lib/errors.ts` is the one error contract. The client
+  throws `ApiRequestError` (a real `Error` carrying the server's `error`
+  code) for JSON error bodies; show failures with `errorMessage(err,
+  fallback)` and branch on `errorCode(err)`. Never throw a plain object from
+  the client, and don't write another message-extracting helper.
+- **Client layout and shared plumbing**: API calls live per domain in
+  `lib/api/` (request plumbing in `core.ts`, query strings via `withQuery`)
+  and wire types in `lib/types/`; `lib/api.ts` and `lib/types.ts` are
+  barrels, so add to the domain file and never `fetch('/api/…')` from a
+  component. A mount-time fetch is `lib/useAsyncData.ts` (`useLiveRefresh`
+  when it must stay fresh), paging is `components/ui/Pagination.tsx`,
+  copy-to-clipboard is `lib/useClipboard.ts`, a form's config "Test" is
+  `components/monitors/useConfigTest.ts`, and the route-handler proxies
+  share `lib/api-proxy.ts`. `any` is a lint error
+  (`@typescript-eslint/no-explicit-any`); a `catch` binding stays untyped.
 - **`/monitors` deep links** (`?status=`, repeatable `?tag=`,
   `?routing=unrouted`, `?sort=status|name|success|latency|last_check` with
   `?dir=asc|desc`, defaults left out per `MONITOR_SORT_DEFAULT_DIR`) are
   parsed and written only by `parseMonitorListParams`/
   `formatMonitorListParams` in `lib/monitor-list.ts`; link to the filtered
-  list rather than adding page-local query handling. The list order is
+  list with `monitorsListHref` rather than a hand-written query string. The list order is
   `sortMonitorList`: groups and monitors sort together, a group ranking by
   its worst member under status. Tags match ANY selected tag
   (`matchesAnyTag`), and every dashboard endpoint's `tag` scope is the same
   rule (`tags && $n`, never `@>`) so a dashboard count and the list it links
-  to agree.
+  to agree. The list page (`app/monitors/page.tsx`) keeps the row actions
+  (delete, pause, snooze, export) and the filter wiring; rows, panel,
+  toolbar, bulk bar and its hooks live in `components/monitors/list/`,
+  and the filter and group-tree rules (`monitorMatchesFilters`,
+  `groupHasMatchingMember`, `groupContainsGroup`) in `lib/monitor-list.ts`.
   Likewise the one-alert `/alerts?alert=<id>&tenant=<id>` link notifications
   carry (built in `present.suspectedCauseAction`) is parsed only by
   `lib/alert-links.ts`.
@@ -771,6 +838,18 @@ or imported groups come back empty. Any other path that creates groups through
   `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus, marks
   `#app-root` inert while open and restores focus on close; pass `onEscape`
   unless the modal handles Escape itself (`Dialog` does).
+- **Large pages keep composition; their pieces sit with the domain**: the monitor page
+  (`app/monitors/[id]/page.tsx`) reads `useMonitorDetail` (data, run-now,
+  pause, delete, history reset) and renders header, aside and tab
+  components from `components/monitors/detail/`; its Server panel facts are
+  `lib/monitor-server-facts.ts` (database, TCP) and `lib/sip-metrics.ts`.
+  The dashboard (`app/page.tsx`) reads `useDashboardData` and
+  `useProblemTraces` and lays out the cards in `components/dashboard/`
+  (grid cells and list limits in its `layout.ts`).
+  Settings tabs are panels in `components/settings/`; state that must
+  survive a tab switch (a just-created API key, the retention draft) is a
+  hook the page calls (`useApiKeys`, `useRetentionSettings`), never state
+  inside a panel that unmounts with its tab.
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
@@ -778,7 +857,10 @@ or imported groups come back empty. Any other path that creates groups through
   submit of the types it edits inline (http, ping, dns, synthetic) and draws
   their fields through field-only editors (`HttpMonitorForm`, `DnsEditor`,
   `SyntheticApiEditor`, `SyntheticBrowserEditor`); synthetic "Test now" is
-  `useSyntheticLiveTest`. Labelled fields in a type form are
+  `useSyntheticLiveTest`. A large type form keeps state, validation and
+  submit in its own file and draws its panels from a folder beside it
+  (`components/monitors/sip/`, `components/monitors/database/`); the
+  panels hold no form state. Labelled fields in a type form are
   `components/ui/FormField`; form-kit's `FormInput`/`FormSelect`/
   `FormTextarea` are only for those inline editors. Form layout is form-kit
   too: sections are `FormPanel`, settings are
@@ -833,6 +915,9 @@ or imported groups come back empty. Any other path that creates groups through
 - Web/website: CI runs `npm run lint`, `npx tsc --noEmit` and `npm run build`
   in both (`website/` lint allows no warnings), plus `npm test` in `web/`.
   Run the same in whichever one you touched.
+- Python (`ai-service/`, `scripts/*.py`, CI helper scripts): CI runs
+  `ruff check` with the pyflakes rules in `ruff.toml`; run it before pushing
+  Python changes (`pip install ruff==0.8.4`).
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).
   After touching local AI values, templates, Compose, the Makefile or the
@@ -882,11 +967,15 @@ or imported groups come back empty. Any other path that creates groups through
   provider settings are retired.
 - The start script refuses any Go except the minor on `go.mod`'s `go` line
   (1.26.x). With a newer local Go, prefix the command:
-  `GOTOOLCHAIN=go1.26.7 make start-all-local`.
+  `GOTOOLCHAIN=go1.26.5 make start-all-local` (the `toolchain` line in
+  `go.mod`).
 - Start env config from `.env.example`. If Postgres rejects the `probara`
   credentials after old experiments, `docker compose down -v` deletes the
   repo's volumes (all local data) so the database reinitializes.
-- Credentials: `admin` / `change-me`; default tenant ID
+- There are no default credentials: the first visit to the login page
+  creates the first administrator. The helper tools (`scripts/verify-auth.sh`,
+  `seed-demo`) assume `admin` / `change-me` unless `ADMIN_USER`/`ADMIN_PASS`
+  say otherwise, so create that user on a dev stack. Default tenant ID
   `00000000-0000-0000-0000-000000000001`.
 - API auth is cookie-based: POST `/api/v1/auth/login`, keep a cookie jar, and
   pass `tenant_id` as a query param on tenant-scoped routes.
@@ -972,7 +1061,12 @@ or imported groups come back empty. Any other path that creates groups through
   post-result linger; keep them there. The 2xx ACK repeats the INVITE's
   credentials; CANCEL and the non-2xx ACK carry none.
 - `alert_policies` are retired (API returns 410); workspace alert config
-  lives on tenants via `/notification-settings`.
+  lives on tenants via `/notification-settings`. No Go code names the
+  retired tables (`alert_policies`, `alert_policy_channels`,
+  `monitor_alert_policies`) or columns (`monitors.alert_policy_id`,
+  `alerts.alert_policy_id`, `incidents.auto_alert_policy_id`) any more; the
+  migration that drops them is pending for the next release (old pods still
+  select them during a rolling deploy), so do not reintroduce a reference.
 - **AI analysis timing**: the worker's stale-pending sweep
   (`worker/internal/airca/sweep.go`, 20 min, 30 min lock ceiling) must outlast
   one delivery (`LOCAL_AI_TIMEOUT_SECONDS` max 300 s + 30 s) and the
@@ -1030,7 +1124,7 @@ or imported groups come back empty. Any other path that creates groups through
   change one and it is a new version.
 - **Git LFS covers only `ai-service/artifacts/*/head.safetensors`**
   (`.gitattributes`). Every CI checkout uses `lfs: false`; only the
-  `local-ai` job in `build-test.yml` (every head, cached) and an approved
+  `ai-checkpoint` job in `build-test.yml` (every head, cached) and an approved
   local-ai image build in `docker-build.yml` (tags) / `local-ai-pr.yml` (the
   shipped checkpoint's head only) run `git lfs pull --include` (bandwidth is
   metered). Keep new LFS patterns and pulls equally narrow.

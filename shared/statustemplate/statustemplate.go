@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"html/template"
 	"strings"
+
+	"github.com/yassinebenameur/probara/shared/models"
 )
 
 // DefaultSource is the built-in public status page template. It is the
@@ -54,35 +56,36 @@ const (
 	ShortRangeExpandedStripCells = 60
 )
 
-// TypeIcon maps a monitor type to the feather-style icon name used by the
-// default template.
+// typeIcons maps each monitor type to a feather icon name. It must cover
+// models.AllMonitorTypes (TestTypeIconCoversEveryMonitorType).
+var typeIcons = map[models.MonitorType]string{
+	models.MonitorTypeHTTP:             "globe",
+	models.MonitorTypePing:             "wifi",
+	models.MonitorTypeDNS:              "search",
+	models.MonitorTypeGRPC:             "cpu",
+	models.MonitorTypeGroup:            "layers",
+	models.MonitorTypeAgent:            "monitor",
+	models.MonitorTypePush:             "upload-cloud",
+	models.MonitorTypeSIP:              "phone",
+	models.MonitorTypeSyntheticAPI:     "code",
+	models.MonitorTypeSyntheticBrowser: "monitor-check",
+	models.MonitorTypeRedis:            "database",
+	models.MonitorTypePostgres:         "database",
+	models.MonitorTypeMySQL:            "database",
+	models.MonitorTypeMongoDB:          "database",
+	models.MonitorTypeRabbitMQ:         "database",
+	models.MonitorTypeTCP:              "link",
+	models.MonitorTypeWebSocket:        "repeat",
+	models.MonitorTypePrometheus:       "bar-chart-2",
+}
+
+// TypeIcon maps a monitor type to the feather-style icon name templates get
+// from the typeIcon function. Unknown types get the generic "activity".
 func TypeIcon(kind string) string {
-	switch kind {
-	case "http":
-		return "globe"
-	case "ping":
-		return "wifi"
-	case "dns":
-		return "search"
-	case "grpc":
-		return "cpu"
-	case "group":
-		return "layers"
-	case "agent":
-		return "monitor"
-	case "push":
-		return "upload-cloud"
-	case "sip":
-		return "phone"
-	case "synthetic_api":
-		return "code"
-	case "synthetic_browser":
-		return "monitor-check"
-	case "redis", "postgres", "mongodb", "rabbitmq":
-		return "database"
-	default:
-		return "activity"
+	if icon, ok := typeIcons[models.MonitorType(kind)]; ok {
+		return icon
 	}
+	return "activity"
 }
 
 // GlobalStripCells returns the number of cells in the page-level uptime strip

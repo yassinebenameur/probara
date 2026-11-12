@@ -621,7 +621,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A `group` monitor stores member monitor IDs instead of executing a check. It is down when any enabled, non-deleted member is down. It is up when all effective member states are up, suspect, or degraded; otherwise it is unknown.",
+            "A `group` monitor stores member monitor IDs instead of executing a check. Its state is derived from its enabled, non-deleted leaf members' own states (a paused member or sub-group takes no part), in two views. For alerting, the group is down when any member is down, up when every member is up, suspect, or degraded, and unknown otherwise. For display in the operator UI and on status pages, a partial outage reads degraded: the group shows down only when every member with a verdict is down, degraded when some are down or degraded, and up otherwise. So a group can be alerting as down while it displays degraded.",
         },
         {
           type: "definitions",

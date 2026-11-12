@@ -1,53 +1,17 @@
-const API_PROXY_TARGET = process.env.API_PROXY_TARGET || 'http://localhost:8080';
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-  'host',
-  'content-length',
-]);
+import {
+  badGateway,
+  buildTargetUrl,
+  copyHeaders,
+  copyResponseHeaders,
+  type ProxyRouteContext as RouteContext,
+} from '@/lib/api-proxy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type RouteContext = {
-  params: Promise<{ path: string[] }>;
-};
-
-function buildTargetUrl(requestUrl: string, path: string[]): string {
-  const incoming = new URL(requestUrl);
-  const targetPath = path.join('/');
-  return `${API_PROXY_TARGET}/static/collector/${targetPath}${incoming.search || ''}`;
-}
-
-function copyHeaders(requestHeaders: Headers): Headers {
-  const headers = new Headers();
-  requestHeaders.forEach((value, key) => {
-    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
-      headers.set(key, value);
-    }
-  });
-  return headers;
-}
-
-function copyResponseHeaders(upstream: Response): Headers {
-  const headers = new Headers();
-  upstream.headers.forEach((value, key) => {
-    if (key.toLowerCase() !== 'content-length') {
-      headers.append(key, value);
-    }
-  });
-  return headers;
-}
-
 async function proxyCollectorStatic(req: Request, ctx: RouteContext): Promise<Response> {
   const { path } = await ctx.params;
-  const targetUrl = buildTargetUrl(req.url, path);
+  const targetUrl = buildTargetUrl(req.url, 'static/collector', path);
 
   try {
     const upstream = await fetch(targetUrl, {
@@ -63,10 +27,7 @@ async function proxyCollectorStatic(req: Request, ctx: RouteContext): Promise<Re
       headers: copyResponseHeaders(upstream),
     });
   } catch {
-    return Response.json(
-      { error: 'bad_gateway', message: 'Failed to reach API upstream' },
-      { status: 502 },
-    );
+    return badGateway();
   }
 }
 

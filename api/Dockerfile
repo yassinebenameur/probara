@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # Build the API application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/api ./api/cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/api ./api/cmd/api
 
 # Build probara-collector binaries for distribution (minimal OTel Collector,
 # OCB manifest in collector/manifest.yaml; scripts/build-collector.sh is the
@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/api ./api/cm
 RUN BUILD_DIR=/app/static/collector sh scripts/build-collector.sh
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.24
 
 RUN apk --no-cache add ca-certificates tzdata
 

@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
@@ -168,5 +171,25 @@ func TestHandlers_UpdateTenantSettings_DashboardGroupTags_RejectsDuplicates(t *t
 	}
 	if mockSvc.lastReq != nil {
 		t.Fatal("service should not be called for invalid dashboard_group_tags")
+	}
+}
+
+func TestHandlers_TenantNotFoundAndMalformedTenant(t *testing.T) {
+	notFound := &Handlers{service: &mockTenantService{err: fmt.Errorf("load settings: %w", tenantservice.ErrTenantNotFound)}, logger: logger.New("test", "error")}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenant-settings", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.NewString()))
+	w := httptest.NewRecorder()
+	notFound.GetTenantSettings(w, req)
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), `"message":"tenant not found"`) {
+		t.Fatalf("status = %d body = %s; want 404 tenant not found", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/tenant-settings", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), "not-a-uuid"))
+	w = httptest.NewRecorder()
+	notFound.GetTenantSettings(w, req)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"error":"validation_error"`) {
+		t.Fatalf("status = %d body = %s; want 400 validation_error", w.Code, w.Body.String())
 	}
 }

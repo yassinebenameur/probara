@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	oidcmappingssvc "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
 	"github.com/yassinebenameur/probara/shared/config"
@@ -53,8 +54,7 @@ func (h *Handlers) List(w http.ResponseWriter, r *http.Request) {
 		GroupsClaim:          h.oidcCfg.GroupsClaim,
 		GroupsScopeRequested: slices.Contains(h.oidcCfg.Scopes, "groups"),
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 // Create handles POST /api/v1/oidc-group-mappings.
@@ -71,9 +71,7 @@ func (h *Handlers) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(mapping)
+	httpx.WriteJSON(w, http.StatusCreated, mapping)
 }
 
 // Update handles PATCH /api/v1/oidc-group-mappings/{id}.
@@ -96,8 +94,7 @@ func (h *Handlers) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(mapping)
+	httpx.WriteJSON(w, http.StatusOK, mapping)
 }
 
 // Delete handles DELETE /api/v1/oidc-group-mappings/{id}.

@@ -18,17 +18,11 @@ import Dialog from '@/components/ui/Dialog';
 import { FOCUS_RING_INSET } from '@/components/ui/focus';
 import { MonitorMultiSelect } from './MonitorMultiSelect';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import { errorMessage } from '@/lib/errors';
 
 interface MonitorDependenciesCardProps {
   monitorId: string;
   monitorType?: string;
-}
-
-function apiErrorMessage(err: unknown): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    return String((err as { message?: unknown }).message || 'Something went wrong');
-  }
-  return err instanceof Error ? err.message : 'Something went wrong';
 }
 
 function DependencyRow({ item }: { item: DependencyMonitor }) {
@@ -81,7 +75,7 @@ function EditDependenciesModal({
       onSaved();
       onClose();
     } catch (err) {
-      setError(apiErrorMessage(err));
+      setError(errorMessage(err, 'Something went wrong'));
     } finally {
       setSaving(false);
     }

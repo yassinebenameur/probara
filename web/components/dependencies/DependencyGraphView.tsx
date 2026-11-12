@@ -9,7 +9,6 @@ import { useToast } from '@/components/ui/ToastProvider';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import { ICON_BUTTON_CLASS } from '@/components/ui/IconButton';
-import { apiErrorMessage } from './graphTheme';
 import {
   buildAdjacency,
   buildFlowGraph,
@@ -23,6 +22,7 @@ import { GraphCanvas } from './GraphCanvas';
 import { ServiceRail } from './ServiceRail';
 import { AddMonitorPicker } from './AddMonitorPicker';
 import { setMatches } from './hoverStore';
+import { errorMessage } from '@/lib/errors';
 
 interface DependencyGraphViewProps {
   refreshToken?: number;
@@ -56,7 +56,7 @@ export default function DependencyGraphView({ refreshToken = 0, canWrite = true,
       const data = await getDependencyGraph();
       setGraph(data);
     } catch (err) {
-      setError(apiErrorMessage(err));
+      setError(errorMessage(err, 'Something went wrong'));
     } finally {
       setLoading(false);
     }

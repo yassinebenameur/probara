@@ -135,20 +135,13 @@ func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, now.Add(-36*time.Hour), "failure", "monitor", nil)
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorC, now.Add(-12*time.Hour), "success", "monitor", testutil.IntPtr(120))
 
-	policyID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
-		VALUES ($1, $2, 'default-policy', 2, 300, NOW(), NOW())
-	`, policyID, tenantID); err != nil {
-		t.Fatalf("insert alert policy: %v", err)
-	}
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
 		VALUES
-			($1, $4, $5, $7, 'active', NOW(), 3, NOW(), NOW()),
-			($2, $4, $6, $7, 'acknowledged', NOW(), 2, NOW(), NOW()),
-			($3, $4, $5, $7, 'resolved', NOW(), 1, NOW(), NOW())
-	`, uuid.New(), uuid.New(), uuid.New(), tenantID, monitorA, monitorB, policyID); err != nil {
+			($1, $4, $5, 'active', NOW(), 3, NOW(), NOW()),
+			($2, $4, $6, 'acknowledged', NOW(), 2, NOW(), NOW()),
+			($3, $4, $5, 'resolved', NOW(), 1, NOW(), NOW())
+	`, uuid.New(), uuid.New(), uuid.New(), tenantID, monitorA, monitorB); err != nil {
 		t.Fatalf("insert alerts: %v", err)
 	}
 
@@ -449,20 +442,13 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorD, now.Add(-30*time.Minute), "failure", "monitor", nil)
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorD, now.Add(-6*time.Hour), "failure", "monitor", nil)
 
-	policyID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
-		VALUES ($1, $2, 'default-policy', 2, 300, NOW(), NOW())
-	`, policyID, tenantID); err != nil {
-		t.Fatalf("insert alert policy: %v", err)
-	}
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
 		VALUES
-			($1, $4, $5, $8, 'active', NOW(), 3, NOW(), NOW()),
-			($2, $4, $6, $8, 'acknowledged', NOW(), 2, NOW(), NOW()),
-			($3, $4, $7, $8, 'active', NOW(), 2, NOW(), NOW())
-	`, uuid.New(), uuid.New(), uuid.New(), tenantID, monitorA, monitorC, monitorD, policyID); err != nil {
+			($1, $4, $5, 'active', NOW(), 3, NOW(), NOW()),
+			($2, $4, $6, 'acknowledged', NOW(), 2, NOW(), NOW()),
+			($3, $4, $7, 'active', NOW(), 2, NOW(), NOW())
+	`, uuid.New(), uuid.New(), uuid.New(), tenantID, monitorA, monitorC, monitorD); err != nil {
 		t.Fatalf("insert alerts: %v", err)
 	}
 

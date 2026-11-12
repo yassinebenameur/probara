@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
 
 var (
@@ -161,7 +162,7 @@ func (s *Service) Create(ctx context.Context, req *models.CreateOIDCGroupMapping
 	`, groupName, label, tenantID, req.Role)
 	mapping, err := scanMapping(row)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if pgerr.IsUniqueViolation(err) {
 			return nil, ErrDuplicate
 		}
 		if isForeignKeyViolation(err) {
@@ -252,11 +253,6 @@ func (s *Service) get(ctx context.Context, id uuid.UUID) (*models.OIDCGroupMappi
 		return nil, fmt.Errorf("failed to get OIDC group mapping: %w", err)
 	}
 	return mapping, nil
-}
-
-func isUniqueViolation(err error) bool {
-	var pqErr *pq.Error
-	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
 func isForeignKeyViolation(err error) bool {

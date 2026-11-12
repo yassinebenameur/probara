@@ -4,16 +4,16 @@ package locations
 
 import (
 	"encoding/json"
-	stderrors "errors"
+	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -32,24 +32,10 @@ func NewHandlers(service *locationservice.Service, publicNATSURL string, log *lo
 	return &Handlers{service: service, publicNATSURL: publicNATSURL, logger: log}
 }
 
-func (h *Handlers) tenantUUID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return uuid.Nil, false
-	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return uuid.Nil, false
-	}
-	return tenantUUID, true
-}
-
 func locationID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		errors.WriteValidationError(w, "invalid location ID")
+		apierrors.WriteValidationError(w, "invalid location ID")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -57,20 +43,20 @@ func locationID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 
 // CreateLocation handles POST /api/v1/locations.
 func (h *Handlers) CreateLocation(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenantUUID(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
 
 	var req models.CreateLocationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 
 	location, err := h.service.Create(r.Context(), tenantUUID, &req)
 	if err != nil {
-		errors.WriteValidationError(w, err.Error())
+		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
 
@@ -80,41 +66,31 @@ func (h *Handlers) CreateLocation(w http.ResponseWriter, r *http.Request) {
 		"name":        location.Name,
 	}).Info("Location created")
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(location)
+	httpx.WriteJSON(w, http.StatusCreated, location)
 }
 
 // ListLocations handles GET /api/v1/locations.
 func (h *Handlers) ListLocations(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenantUUID(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
 
-	page := 1
-	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
-		page = v
-	}
-	pageSize := 50
-	if v, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && v > 0 {
-		pageSize = v
-	}
+	page, pageSize := httpx.PageWithLimits(r, pagination.LargeDefaultSize, pagination.LargeMaxSize)
 
 	result, err := h.service.List(r.Context(), tenantUUID, page, pageSize)
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "tenant_id": tenantUUID}).Error("Failed to list locations")
-		errors.WriteInternalError(w, "failed to list locations")
+		apierrors.WriteInternalError(w, "failed to list locations")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // GetLocation handles GET /api/v1/locations/{id}.
 func (h *Handlers) GetLocation(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenantUUID(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -125,22 +101,21 @@ func (h *Handlers) GetLocation(w http.ResponseWriter, r *http.Request) {
 
 	location, err := h.service.Get(r.Context(), tenantUUID, id)
 	if err != nil {
-		if stderrors.Is(err, locationservice.ErrNotFound) {
-			errors.WriteNotFoundError(w, "location not found")
+		if errors.Is(err, locationservice.ErrNotFound) {
+			apierrors.WriteNotFoundError(w, "location not found")
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "location_id": id}).Error("Failed to get location")
-		errors.WriteInternalError(w, "failed to get location")
+		apierrors.WriteInternalError(w, "failed to get location")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(location)
+	httpx.WriteJSON(w, http.StatusOK, location)
 }
 
 // UpdateLocation handles PATCH /api/v1/locations/{id}.
 func (h *Handlers) UpdateLocation(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenantUUID(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -151,28 +126,27 @@ func (h *Handlers) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 
 	var req models.UpdateLocationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 
 	location, err := h.service.Update(r.Context(), tenantUUID, id, &req)
 	if err != nil {
-		if stderrors.Is(err, locationservice.ErrNotFound) {
-			errors.WriteNotFoundError(w, "location not found")
+		if errors.Is(err, locationservice.ErrNotFound) {
+			apierrors.WriteNotFoundError(w, "location not found")
 			return
 		}
-		errors.WriteValidationError(w, err.Error())
+		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(location)
+	httpx.WriteJSON(w, http.StatusOK, location)
 }
 
 // DeleteLocation handles DELETE /api/v1/locations/{id}. Monitors using the
 // location are detached (quorum clamped); the response reports how many.
 func (h *Handlers) DeleteLocation(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := h.tenantUUID(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -183,12 +157,12 @@ func (h *Handlers) DeleteLocation(w http.ResponseWriter, r *http.Request) {
 
 	affected, err := h.service.Delete(r.Context(), tenantUUID, id)
 	if err != nil {
-		if stderrors.Is(err, locationservice.ErrNotFound) {
-			errors.WriteNotFoundError(w, "location not found")
+		if errors.Is(err, locationservice.ErrNotFound) {
+			apierrors.WriteNotFoundError(w, "location not found")
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "location_id": id}).Error("Failed to delete location")
-		errors.WriteInternalError(w, "failed to delete location")
+		apierrors.WriteInternalError(w, "failed to delete location")
 		return
 	}
 
@@ -198,17 +172,16 @@ func (h *Handlers) DeleteLocation(w http.ResponseWriter, r *http.Request) {
 		"monitors_detached": affected,
 	}).Info("Location deleted")
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]int{"monitors_detached": affected})
+	httpx.WriteJSON(w, http.StatusOK, map[string]int{"monitors_detached": affected})
 }
 
 // GetDeployInfo handles GET /api/v1/locations/{id}/deploy.
 func (h *Handlers) GetDeployInfo(w http.ResponseWriter, r *http.Request) {
 	if !ctxpkg.CanWrite(r.Context()) {
-		errors.WriteForbiddenError(w, "worker credentials require write permission")
+		apierrors.WriteForbiddenError(w, "worker credentials require write permission")
 		return
 	}
-	tenantUUID, ok := h.tenantUUID(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -219,15 +192,14 @@ func (h *Handlers) GetDeployInfo(w http.ResponseWriter, r *http.Request) {
 
 	info, err := h.service.GenerateDeployInfo(r.Context(), tenantUUID, id, h.publicNATSURL)
 	if err != nil {
-		if stderrors.Is(err, locationservice.ErrNotFound) {
-			errors.WriteNotFoundError(w, "location not found")
+		if errors.Is(err, locationservice.ErrNotFound) {
+			apierrors.WriteNotFoundError(w, "location not found")
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "location_id": id}).Error("Failed to build deploy info")
-		errors.WriteInternalError(w, "failed to build deploy info")
+		apierrors.WriteInternalError(w, "failed to build deploy info")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(info)
+	httpx.WriteJSON(w, http.StatusOK, info)
 }

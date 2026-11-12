@@ -137,7 +137,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "For an administrator cookie, send `X-Tenant-ID: <tenant-id>` to select an allowed membership. A supported `tenant_id` query fallback can select context where middleware permits it. API keys ignore caller-selected tenant values and remain pinned to one tenant.",
+            "For an administrator cookie, send `X-Tenant-ID: <tenant-id>` to select an allowed membership. A supported `tenant_id` query fallback can select context where middleware permits it. API keys ignore caller-selected tenant values and remain pinned to one tenant. A malformed `X-Tenant-ID` or `tenant_id` is rejected with HTTP 400 (`bad_request`) before the route runs. Tenant-scoped routes apply the same rule to the tenant context they are handed: `400 validation_error` when it is not a UUID, `401 unauthorized` when there is none.",
         },
         {
           type: "code",
@@ -186,7 +186,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Collection APIs generally accept 1-based `page` and `page_size`. The common maximum is 100; locations allow up to 200, and dashboard recent-item limits are capped at 50. Use returned total/page metadata where provided rather than inferring completion from a short page.",
+            "Collection APIs generally accept 1-based `page` and `page_size`. The default page size is 20 and the maximum 100; locations and the audit log default to 50 and allow up to 200, and dashboard recent-item limits are capped at 50. A `page_size` above the maximum is clamped to the maximum (the response's `page_size` shows the size used); a missing, non-numeric or non-positive `page` or `page_size` takes the default. Use returned total/page metadata where provided rather than inferring completion from a short page.",
         },
         {
           type: "table",
@@ -603,7 +603,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Alert policies are gone",
           text:
-            "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints under `/alerts/counts/...` should not be used as a supported policy-management model. See [retired alert policies](/docs/alerting/#retired-policies).",
+            "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints (`/alerts/counts/by-policy`, `/alerts/counts/monitors-by-policy`) are removed and return `404`, and monitor, alert and incident responses no longer carry alert-policy fields. See [retired alert policies](/docs/alerting/#retired-policies).",
         },
         {
           type: "paragraph",

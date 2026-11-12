@@ -22,7 +22,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
-import { getIncidents } from '@/lib/api';
+import { getIncidents, logout } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { TENANT_CHANGED_EVENT, clearSelectedTenantId } from '@/lib/tenant';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
@@ -257,10 +257,7 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
       return;
     }
 
-    fetch('/api/v1/auth/logout', {
-      method: 'POST',
-      credentials: 'include',
-    }).finally(() => {
+    logout().finally(() => {
       clearSelectedTenantId();
       router.push('/login');
     });

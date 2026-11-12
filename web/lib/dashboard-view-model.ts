@@ -8,7 +8,7 @@ import type {
 } from './types';
 import { STATUS_RANK, type MonitorDisplayStatus } from './monitor-utils';
 import { formatDurationBetween, formatLatency, formatUptime, pluralize } from './format';
-import { formatMonitorListParams, parseMonitorListParams, type MonitorListParams } from './monitor-list';
+import { monitorsListHref } from './monitor-list';
 import { MONITOR_STATUS_LABEL, MONITOR_STATUS_TONE, StatusTone, uptimeTone } from './status-tones';
 
 export type OperationalTone = 'critical' | 'attention' | 'stable' | 'clean';
@@ -37,24 +37,15 @@ export type OperationalSummary = {
   }>;
 };
 
-/** The monitors list filtered to down monitors (app/monitors/page.tsx reads ?status). */
-export const DOWN_MONITORS_HREF = '/monitors?status=down';
-
 /**
  * The down-monitors link for a dashboard scoped to `tags`: the count on the
  * link is the tag-scoped down_monitors, so the list it opens carries the same
  * scope.
  */
 export function downMonitorsHref(tags: readonly string[] = []): string {
-  if (tags.length === 0) return DOWN_MONITORS_HREF;
   return monitorsListHref({ status: 'down', tags: [...tags] });
 }
 
-/** A /monitors deep link: the list's defaults plus `overrides`, written by formatMonitorListParams. */
-export function monitorsListHref(overrides: Partial<MonitorListParams>): string {
-  const query = formatMonitorListParams({ ...parseMonitorListParams(''), ...overrides });
-  return query ? `/monitors?${query}` : '/monitors';
-}
 /** Same target as OPEN_ALERTS_HREF in components/layout/FleetHealth.tsx (kept here so lib tests stay React-free). */
 export const OPEN_ALERTS_HREF = '/alerts?status=active';
 
@@ -389,7 +380,7 @@ function alertTitle(alert: Alert): string {
   if (alert.source_location_name && alert.target_location_name) {
     return `${alert.source_location_name} to ${alert.target_location_name}`;
   }
-  return alert.policy_name || 'Alert';
+  return 'Alert';
 }
 
 const time = (value: string) => new Date(value).getTime();

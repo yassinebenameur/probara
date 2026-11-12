@@ -13,6 +13,7 @@ import Radio from '@/components/ui/Radio';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
 import { createUser, getTenants } from '@/lib/api';
 import type { MembershipInput, PlatformRole, Tenant } from '@/lib/types';
+import { errorMessage } from '@/lib/errors';
 
 type SignInMethod = 'password' | 'oidc';
 
@@ -62,8 +63,8 @@ export default function NewUserPage() {
       setTimeout(() => {
         router.push('/users');
       }, 900);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create user', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to create user'), 'error');
       setLoading(false);
     }
   };

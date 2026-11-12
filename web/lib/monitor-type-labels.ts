@@ -36,7 +36,7 @@ export const TYPE_LABELS: Record<string, { label: string; badge: string }> = {
  * now returns the same label: one name per type everywhere. Use
  * `monitorTypeBadge` (or the TypeBadge component) for a width-bound tag.
  */
-export function monitorTypeLabel(type: string, _variant: 'label' | 'short' = 'label'): string {
+export function monitorTypeLabel(type: string): string {
   return TYPE_LABELS[type]?.label ?? type.replace(/_/g, ' ');
 }
 

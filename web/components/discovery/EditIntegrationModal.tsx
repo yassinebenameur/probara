@@ -13,10 +13,10 @@ import NamespaceChipsInput from '@/components/discovery/NamespaceChipsInput';
 import { CommandBlock, Steps } from '@/components/discovery/ConnectClusterModal';
 import { getDiscoveryNamespaces, updateDiscoveryIntegration } from '@/lib/api';
 import {
-  accessCleanupCommand, accessManifestCommands, ADDED_NAMESPACE_TEXT, collectorAccessManifest, configuredNamespaces, errorMessage,
-  integrationEditErrors, integrationPatch, MAX_NAMESPACES, namespaceDelta, namespaceFieldError, parseNamespaces, removedNamespaceText,
+  accessCleanupCommand, accessManifestCommands, ADDED_NAMESPACE_TEXT, collectorAccessManifest, configuredNamespaces, integrationEditErrors, integrationPatch, MAX_NAMESPACES, namespaceDelta, namespaceFieldError, parseNamespaces, removedNamespaceText,
   withHomeLocked, type DiscoveryIntegration, type DiscoveryNamespace,
 } from '@/lib/discovery';
+import { errorMessage } from '@/lib/errors';
 import { TONE_TEXT } from '@/lib/status-tones';
 import type { Location } from '@/lib/types';
 

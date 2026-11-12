@@ -9,22 +9,17 @@ import (
 	"github.com/google/uuid"
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 )
 
 func (h *Handlers) libraryRequestScope(w http.ResponseWriter, r *http.Request, withID bool) (tenantID, templateID uuid.UUID, ok bool) {
-	tenantIDStr, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantID, ok = httpx.TenantID(w, r)
+	if !ok {
 		return uuid.Nil, uuid.Nil, false
 	}
-	tenantID, err = uuid.Parse(tenantIDStr)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
-		return uuid.Nil, uuid.Nil, false
-	}
+	var err error
 	if withID {
 		templateID, err = uuid.Parse(chi.URLParam(r, "templateId"))
 		if err != nil {
@@ -37,10 +32,10 @@ func (h *Handlers) libraryRequestScope(w http.ResponseWriter, r *http.Request, w
 
 func (h *Handlers) writeLibraryError(w http.ResponseWriter, err error, action string, tenantID uuid.UUID) {
 	switch {
-	case err.Error() == "library template not found":
+	case errors.Is(err, statuspageservice.ErrLibraryTemplateNotFound):
 		apierrors.WriteNotFoundError(w, err.Error())
 	case errors.Is(err, statuspageservice.ErrInvalidTemplate),
-		err.Error() == "template name already exists":
+		errors.Is(err, statuspageservice.ErrTemplateNameExists):
 		apierrors.WriteValidationError(w, err.Error())
 	default:
 		h.logger.WithFields(map[string]interface{}{
@@ -62,8 +57,7 @@ func (h *Handlers) ListLibraryTemplates(w http.ResponseWriter, r *http.Request) 
 		h.writeLibraryError(w, err, "list library templates", tenantID)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // CreateLibraryTemplate handles POST /api/v1/status-page-templates
@@ -83,9 +77,7 @@ func (h *Handlers) CreateLibraryTemplate(w http.ResponseWriter, r *http.Request)
 		h.writeLibraryError(w, err, "create library template", tenantID)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(item)
+	httpx.WriteJSON(w, http.StatusCreated, item)
 }
 
 // GetLibraryTemplate handles GET /api/v1/status-page-templates/{templateId}
@@ -99,8 +91,7 @@ func (h *Handlers) GetLibraryTemplate(w http.ResponseWriter, r *http.Request) {
 		h.writeLibraryError(w, err, "get library template", tenantID)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(item)
+	httpx.WriteJSON(w, http.StatusOK, item)
 }
 
 // GetLibraryTemplateSource handles GET /api/v1/status-page-templates/{templateId}/source
@@ -136,8 +127,7 @@ func (h *Handlers) UpdateLibraryTemplate(w http.ResponseWriter, r *http.Request)
 		h.writeLibraryError(w, err, "update library template", tenantID)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(item)
+	httpx.WriteJSON(w, http.StatusOK, item)
 }
 
 // DeleteLibraryTemplate handles DELETE /api/v1/status-page-templates/{templateId}

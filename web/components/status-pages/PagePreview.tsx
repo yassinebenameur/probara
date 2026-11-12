@@ -10,6 +10,7 @@ import {
 } from '@/lib/status-page-status';
 import IconButton from '@/components/ui/IconButton';
 import { DEFAULT_PRIMARY, DEFAULT_SECONDARY, type Basics, type EditableSection } from './useStatusPageFormState';
+import { useClipboard } from '@/lib/useClipboard';
 
 interface PagePreviewProps {
   basics: Basics;
@@ -95,7 +96,7 @@ export default function PagePreview({
   const secondary = safeHex(basics.secondary_color, DEFAULT_SECONDARY);
   const displayUrl = publicUrl.split('?')[0];
 
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useClipboard();
   const [logoBroken, setLogoBroken] = useState(false);
   useEffect(() => setLogoBroken(false), [basics.logo_url]);
 
@@ -119,15 +120,7 @@ export default function PagePreview({
         ? null
         : pageHeadline(allStatuses as ComponentStatus[]);
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(displayUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // clipboard unavailable — ignore
-    }
-  };
+  const handleCopy = () => void copy(displayUrl);
 
   const showLogo = /^https?:\/\//.test(basics.logo_url.trim()) && !logoBroken;
   const shownSections = sections.length > 0 ? sections : [{ id: 'placeholder', title: '', monitors: [] }];

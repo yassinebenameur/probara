@@ -103,15 +103,8 @@ func seedMonitorHistory(ctx context.Context, t *testing.T, db *shareddb.Client, 
 	testutil.InsertDowntimePeriod(ctx, t, db, tenantID, monitorID, now.Add(-2*time.Hour), now.Add(-90*time.Minute))
 	testutil.InsertOpenDowntime(ctx, t, db, tenantID, monitorID, now.Add(-15*time.Minute), now.Add(-5*time.Minute))
 
-	policyID := uuid.New()
 	alertID := uuid.New()
 	channelID := uuid.New()
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO alert_policies (id, tenant_id, name, description, failure_threshold, failure_window_seconds, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 3, 300, NOW(), NOW())
-	`, policyID, tenantID, "policy-"+monitorID.String()); err != nil {
-		t.Fatalf("insert alert policy: %v", err)
-	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
 		VALUES ($1, $2, $3, 'email', '{"to":["ops@example.com"]}'::jsonb, TRUE, NOW(), NOW())
@@ -119,9 +112,9 @@ func seedMonitorHistory(ctx context.Context, t *testing.T, db *shareddb.Client, 
 		t.Fatalf("insert alert channel: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'active', NOW(), 3, NOW(), NOW())
-	`, alertID, tenantID, monitorID, policyID); err != nil {
+		INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'active', NOW(), 3, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
 		t.Fatalf("insert alert: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `

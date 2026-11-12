@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { getIncidents, getUsers } from '@/lib/api';
-import type { AdminUser, IncidentDetail } from '@/lib/types';
+import type { AdminUser } from '@/lib/types';
 import IncidentQuickCreateButton from '@/components/incidents/IncidentQuickCreateButton';
 import IncidentList, {
   INCIDENT_SORT_DEFAULT_DIR,
@@ -19,6 +19,7 @@ import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
+import Pagination from '@/components/ui/Pagination';
 import Callout from '@/components/ui/Callout';
 import ChipGroup from '@/components/ui/ChipGroup';
 import FilterChip from '@/components/ui/FilterChip';
@@ -150,7 +151,7 @@ function IncidentsView() {
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
 
-  const handleCreated = async (_incident: IncidentDetail) => {
+  const handleCreated = async () => {
     await loadIncidents();
     showToast('Incident created', 'success');
   };
@@ -257,29 +258,7 @@ function IncidentsView() {
         </p>
       )}
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page === 1}
-          >
-            Previous
-          </Button>
-          <span className="text-ui tabular-nums text-slate-400">
-            Page {page} of {totalPages}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-          >
-            Next
-          </Button>
-        </div>
-      )}
+      <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
     </Page>
   );
 }

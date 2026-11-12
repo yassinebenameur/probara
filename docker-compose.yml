@@ -72,7 +72,7 @@ services:
   # The build fails on purpose for any artifact that is not release-approved on
   # CPU, and Compose builds every missing image before starting anything, so
   # one failed local-ai build aborts a whole `docker compose up`/`build`. The
-  # Makefile targets (up, build, rebuild, scale-workers, start-all,
+  # Makefile targets (up, build, rebuild, start-all,
   # start-all-local) therefore start the platform first and local-ai on its
   # own, tolerating its failure. With plain Compose and no pullable approved
   # image, name the services or set LOCAL_AI_IMAGE to an image you have.
@@ -301,6 +301,7 @@ services:
   #     CHECK_JOB_SUBJECT: "check.job"
   #     NATS_CONSUMER_NAME: "worker"
   #     WORKER_LOCATION_ID: "<location-uuid-from-the-locations-page>"
+  #     LOCATION_CREDENTIAL: "<credential-issued-with-the-location>"
   #     WORKER_CONCURRENCY: "10"
   #   depends_on:
   #     nats:

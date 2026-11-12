@@ -1,7 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { Download, Plus, Trash2, Pencil, FileCode, Upload } from 'lucide-react';
 import { StatusPageLibraryTemplate } from '@/lib/types';
 import {
@@ -11,28 +10,31 @@ import {
   deleteLibraryTemplate,
   getLibraryTemplateSource,
 } from '@/lib/api';
-import { formatDateTime, formatDateTimeFull } from '@/lib/format';
+import { formatDateTime, formatDateTimeFull, formatFileSize } from '@/lib/format';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import FormField from '@/components/ui/FormField';
 import Callout from '@/components/ui/Callout';
+import Dialog from '@/components/ui/Dialog';
 import EmptyState from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/ToastProvider';
+import { errorMessage } from '@/lib/errors';
+import { useAsyncData } from '@/lib/useAsyncData';
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
+async function fetchLibraryTemplates(): Promise<StatusPageLibraryTemplate[]> {
+  return (await listLibraryTemplates()).items;
 }
 
 export default function StatusPageTemplateLibraryPage() {
-  const router = useRouter();
   const { showToast } = useToast();
 
-  const [items, setItems] = useState<StatusPageLibraryTemplate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { data: items, loading, error, reload: load } = useAsyncData<StatusPageLibraryTemplate[]>(
+    fetchLibraryTemplates,
+    [],
+    'Failed to load templates'
+  );
   const [busy, setBusy] = useState(false);
 
   const [showCreate, setShowCreate] = useState(false);
@@ -40,23 +42,9 @@ export default function StatusPageTemplateLibraryPage() {
   const [description, setDescription] = useState('');
   const [source, setSource] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [renaming, setRenaming] = useState<StatusPageLibraryTemplate | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const result = await listLibraryTemplates();
-      setItems(result.items);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load templates');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   const handleCreate = async () => {
     try {
@@ -72,8 +60,8 @@ export default function StatusPageTemplateLibraryPage() {
       setDescription('');
       setSource('');
       await load();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create template', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to create template'), 'error');
     } finally {
       setBusy(false);
     }
@@ -90,16 +78,27 @@ export default function StatusPageTemplateLibraryPage() {
     showToast(`Loaded ${file.name}`, 'success');
   };
 
-  const handleRename = async (item: StatusPageLibraryTemplate) => {
-    const next = window.prompt('Rename template', item.name);
-    if (!next || next.trim() === item.name) return;
+  const openRename = (item: StatusPageLibraryTemplate) => {
+    setRenaming(item);
+    setRenameValue(item.name);
+  };
+
+  const handleRename = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const next = renameValue.trim();
+    if (!renaming || !next) return;
+    if (next === renaming.name) {
+      setRenaming(null);
+      return;
+    }
     try {
       setBusy(true);
-      await updateLibraryTemplate(item.id, { name: next });
+      await updateLibraryTemplate(renaming.id, { name: next });
       showToast('Template renamed', 'success');
+      setRenaming(null);
       await load();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to rename template', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to rename template'), 'error');
     } finally {
       setBusy(false);
     }
@@ -118,8 +117,8 @@ export default function StatusPageTemplateLibraryPage() {
       await deleteLibraryTemplate(item.id);
       showToast('Template deleted', 'success');
       await load();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete template', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to delete template'), 'error');
     } finally {
       setBusy(false);
     }
@@ -135,8 +134,8 @@ export default function StatusPageTemplateLibraryPage() {
       link.download = `${item.name}.gohtml`;
       link.click();
       URL.revokeObjectURL(url);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to download template', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to download template'), 'error');
     }
   };
 
@@ -252,7 +251,7 @@ export default function StatusPageTemplateLibraryPage() {
                 <div className="flex items-center gap-2">
                   <FileCode className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
                   <span className="min-w-0 truncate text-sm font-medium text-white">{item.name}</span>
-                  <span className="shrink-0 text-xs text-slate-500">{formatBytes(item.size_bytes)}</span>
+                  <span className="shrink-0 text-xs text-slate-500">{formatFileSize(item.size_bytes)}</span>
                 </div>
                 <div className="mt-0.5 flex min-w-0 gap-x-3 pl-6 text-xs text-slate-500">
                   {item.description && <span className="min-w-0 truncate">{item.description}</span>}
@@ -265,7 +264,7 @@ export default function StatusPageTemplateLibraryPage() {
                 <IconButton
                   icon={<Pencil strokeWidth={1.75} />}
                   label="Rename"
-                  onClick={() => handleRename(item)}
+                  onClick={() => openRename(item)}
                   disabled={busy}
                 />
                 <IconButton
@@ -298,6 +297,43 @@ export default function StatusPageTemplateLibraryPage() {
         className="hidden"
         onChange={handleUpload}
       />
+
+      {renaming && (
+        <Dialog
+          onClose={() => setRenaming(null)}
+          title="Rename template"
+          size="sm"
+          busy={busy}
+          footer={
+            <>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setRenaming(null)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                form="rename-template-form"
+                variant="accent"
+                size="sm"
+                loading={busy}
+                disabled={!renameValue.trim()}
+              >
+                Rename
+              </Button>
+            </>
+          }
+        >
+          <form id="rename-template-form" onSubmit={handleRename}>
+            <FormField label="Name">
+              <input
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                className="input"
+              />
+            </FormField>
+          </form>
+        </Dialog>
+      )}
     </Page>
   );
 }

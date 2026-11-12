@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   formatClock,
+  formatFileSize,
+  formatPercent,
   formatCount,
   formatDate,
   formatDateTime,
@@ -153,4 +155,27 @@ test('formatClock is the time half of formatTimestamp', () => {
   assert.ok(formatTimestamp(value).endsWith(` ${formatClock(value, { seconds: true })}`));
   assert.equal(formatClock(undefined), '—');
   assert.equal(formatClock('garbage', {}, 'garbage'), 'garbage');
+});
+
+test('formatPercent renders gauge percentages at the asked precision', () => {
+  assert.equal(formatPercent(42.34), '42.3%');
+  assert.equal(formatPercent(0), '0.0%');
+  assert.equal(formatPercent(99.96), '100.0%');
+  assert.equal(formatPercent(42.5, { digits: 0 }), '43%');
+  assert.equal(formatPercent(7, { digits: 0 }), '7%');
+});
+
+test('formatPercent trims a trailing .0 for axis ticks', () => {
+  assert.equal(formatPercent(40, { trim: true }), '40%');
+  assert.equal(formatPercent(99.5, { trim: true }), '99.5%');
+  assert.equal(formatPercent(100, { trim: true }), '100%');
+});
+
+test('formatFileSize steps from bytes to KB to MB', () => {
+  assert.equal(formatFileSize(0), '0 B');
+  assert.equal(formatFileSize(1023), '1023 B');
+  assert.equal(formatFileSize(1024), '1.0 KB');
+  assert.equal(formatFileSize(3482), '3.4 KB');
+  assert.equal(formatFileSize(1024 * 1024), '1.0 MB');
+  assert.equal(formatFileSize(1.5 * 1024 * 1024), '1.5 MB');
 });

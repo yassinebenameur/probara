@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  countMonitorStatuses,
+  groupContainsGroup,
+  groupHasMatchingMember,
+  monitorMatchesFilters,
+  type MonitorListFilters,
   formatMonitorListParams,
   getAllMonitors,
   matchesAnyTag,
@@ -8,6 +13,7 @@ import {
   parseMonitorListParams,
   sortMonitorList,
   sortMonitorsByName,
+  monitorsListHref,
 } from './monitor-list';
 import { getEffectiveMonitorStatus } from './monitor-utils';
 import type { CheckResult, Monitor, MonitorListResponse } from './types';
@@ -284,4 +290,111 @@ test('success, latency and last-check sorts follow the displayed values, missing
     names(sortMonitorList([monitors.member1, monitors.member3], { key: 'status', dir: 'asc' }, ctx)),
     ['Member three', 'Member one']
   );
+});
+
+test('monitorsListHref writes only the non-default filters', () => {
+  assert.equal(monitorsListHref({}), '/monitors');
+  assert.equal(monitorsListHref({ status: 'down' }), '/monitors?status=down');
+  assert.equal(monitorsListHref({ unroutedOnly: true }), '/monitors?routing=unrouted');
+  assert.equal(monitorsListHref({ status: 'down', tags: ['demo', 'team a'] }), '/monitors?status=down&tag=demo&tag=team+a');
+});
+
+// ── Filters and the group tree (moved from the monitors page) ──
+
+function named(id: string, over: Partial<Monitor> = {}): Monitor {
+  return { ...monitor(0), id, name: id, ...over };
+}
+
+function filters(over: Partial<MonitorListFilters> = {}): MonitorListFilters {
+  return {
+    query: '',
+    types: new Set(),
+    status: 'all',
+    tags: new Set(),
+    unroutedOnly: false,
+    statusOf: (item) => (item.enabled ? (item.current_state === 'down' ? 'down' : 'up') : 'paused'),
+    ...over,
+  };
+}
+
+test('monitorMatchesFilters: search covers name, target and tags', () => {
+  const api = named('Checkout API', {
+    config: { url: 'https://pay.example.com/health' } as Monitor['config'],
+    tags: ['Prod'],
+  });
+  assert.equal(monitorMatchesFilters(api, filters()), true);
+  assert.equal(monitorMatchesFilters(api, filters({ query: 'checkout' })), true);
+  assert.equal(monitorMatchesFilters(api, filters({ query: 'pay.example' })), true);
+  assert.equal(monitorMatchesFilters(api, filters({ query: 'prod' })), true);
+  assert.equal(monitorMatchesFilters(api, filters({ query: 'staging' })), false);
+});
+
+test('monitorMatchesFilters: type, tags, status and routing all have to pass; ignore drops one', () => {
+  const down = named('db', { type: 'tcp', tags: ['core'], current_state: 'down' });
+  assert.equal(monitorMatchesFilters(down, filters({ types: new Set(['http']) })), false);
+  assert.equal(monitorMatchesFilters(down, filters({ types: new Set(['http']) }), 'type'), true);
+  assert.equal(monitorMatchesFilters(down, filters({ tags: new Set(['edge']) })), false);
+  assert.equal(monitorMatchesFilters(down, filters({ tags: new Set(['edge']) }), 'tags'), true);
+  assert.equal(monitorMatchesFilters(down, filters({ tags: new Set(['edge', 'core']) })), true);
+  // "Down" covers degraded too; the other states match themselves only.
+  assert.equal(monitorMatchesFilters(down, filters({ status: 'down' })), true);
+  assert.equal(monitorMatchesFilters(down, filters({ status: 'down', statusOf: () => 'degraded' })), true);
+  assert.equal(monitorMatchesFilters(down, filters({ status: 'up' })), false);
+  assert.equal(monitorMatchesFilters(down, filters({ status: 'paused', statusOf: () => 'paused' })), true);
+  assert.equal(monitorMatchesFilters(down, filters({ status: 'maintenance', statusOf: () => 'maintenance' })), true);
+  assert.equal(monitorMatchesFilters(down, filters({ status: 'maintenance', statusOf: () => 'unknown' })), false);
+});
+
+test('monitorMatchesFilters: unrouted means enabled and reported unreachable', () => {
+  const routing = (reachable: boolean) => ({ reachable }) as Monitor['alert_routing'];
+  const only = filters({ unroutedOnly: true });
+  assert.equal(monitorMatchesFilters(named('a', { alert_routing: routing(false) }), only), true);
+  assert.equal(monitorMatchesFilters(named('b', { alert_routing: routing(true) }), only), false);
+  assert.equal(monitorMatchesFilters(named('c'), only), false);
+  assert.equal(monitorMatchesFilters(named('d', { enabled: false, alert_routing: routing(false) }), only), false);
+});
+
+test('countMonitorStatuses counts every monitor under the status filter rule', () => {
+  const statuses: Record<string, ReturnType<MonitorListFilters['statusOf']>> = {
+    a: 'up', b: 'down', c: 'degraded', d: 'paused', e: 'maintenance', f: 'unknown',
+  };
+  const list = Object.keys(statuses).map((id) => named(id));
+  assert.deepEqual(countMonitorStatuses(list, (item) => statuses[item.id]), {
+    all: 6, up: 1, down: 2, paused: 1, maintenance: 1,
+  });
+});
+
+function tree() {
+  const group = (id: string) => named(id, { type: 'group' });
+  const members: Record<string, Monitor[]> = {
+    root: [named('leaf-a'), group('inner')],
+    inner: [named('leaf-b'), group('deep')],
+    deep: [named('leaf-c'), group('root')], // cycle back to the root
+    other: [named('leaf-d')],
+  };
+  return (id: string) => members[id] || [];
+}
+
+test('groupHasMatchingMember looks through nested groups and survives cycles', () => {
+  const membersOf = tree();
+  const is = (id: string) => (member: Monitor) => member.id === id;
+  assert.equal(groupHasMatchingMember('root', membersOf, is('leaf-a')), true);
+  assert.equal(groupHasMatchingMember('root', membersOf, is('leaf-c')), true);
+  assert.equal(groupHasMatchingMember('root', membersOf, is('inner')), true);
+  assert.equal(groupHasMatchingMember('root', membersOf, is('leaf-d')), false);
+  assert.equal(groupHasMatchingMember('inner', membersOf, is('leaf-a')), true); // through the cycle
+  assert.equal(groupHasMatchingMember('other', membersOf, is('leaf-a')), false);
+  assert.equal(groupHasMatchingMember('missing', membersOf, () => true), false);
+});
+
+test('groupContainsGroup: itself, any nested group, never a leaf or an unrelated group', () => {
+  const membersOf = tree();
+  assert.equal(groupContainsGroup('root', 'root', membersOf), true);
+  assert.equal(groupContainsGroup('root', 'inner', membersOf), true);
+  assert.equal(groupContainsGroup('root', 'deep', membersOf), true);
+  assert.equal(groupContainsGroup('deep', 'inner', membersOf), true); // through the cycle
+  assert.equal(groupContainsGroup('root', 'other', membersOf), false);
+  assert.equal(groupContainsGroup('other', 'root', membersOf), false);
+  // A leaf id is not a group, even when it is a member.
+  assert.equal(groupContainsGroup('root', 'leaf-a', membersOf), false);
 });
