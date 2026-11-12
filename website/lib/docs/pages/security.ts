@@ -156,7 +156,7 @@ export const SECURITY_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'Session cookies are HttpOnly and SameSite=Lax. Their Secure attribute is controlled by `ADMIN_COOKIE_SECURE`, which defaults to false. Production HTTPS deployments must set it to true and preserve one stable JWT secret across API replicas.',
+            'Session cookies are HttpOnly and SameSite=Lax. Their Secure attribute is controlled by `ADMIN_COOKIE_SECURE`, which defaults to false. Production HTTPS deployments must set it to true (the Helm chart does so when `api.publicBaseURL` is an `https://` origin, or through `api.cookieSecure`) and preserve one stable JWT secret across API replicas.',
         },
         {
           type: 'callout',
@@ -531,7 +531,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           type: 'list',
           items: [
             'Published [status pages](/docs/status-pages/#page-model) are intentionally public. Do not include private monitor URLs, internal hostnames, customer names, or operational notes unless disclosure is intended.',
-            'Set one strong shared `STATUS_PAGE_PREVIEW_SECRET` on API and status service. Without it, preview-token enforcement is disabled.',
+            'Set one strong shared `STATUS_PAGE_PREVIEW_SECRET` on API and status service (Helm: `secrets.statusPagePreviewSecret`, rendered into both). Without it, preview-token enforcement is disabled.',
             'Preview tokens are HMAC-SHA256 values with a one-hour expiry. Treat preview URLs as temporary bearer links.',
             'The status service’s optional API proxy is intentionally restricted, but should still be exposed only through the expected status editing/preview flow.',
             'Synthetic browser screenshots can contain credentials, cookies, personal data, or application content. Store them encrypted, authorize retrieval, and expire them. Apply the same controls if trace or HAR capture is implemented later.',

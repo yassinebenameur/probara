@@ -146,7 +146,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`ADMIN_COOKIE_SECURE`',
               '`false`; boolean',
-              'Local-process script sets `false`. Compose and Helm do not expose it; production HTTPS deployments should wire `true`.',
+              'Local-process script and Compose set `false`. Helm renders `true` when `api.publicBaseURL` is an `https://` origin; set `api.cookieSecure` to force it either way. A Secure cookie is never sent over plain HTTP, so `true` on an HTTP-only deployment makes login impossible.',
             ],
             [
               '`ADMIN_BCRYPT_COST`',
@@ -782,7 +782,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_PREVIEW_SECRET`',
               'Empty',
-              'HMAC secret shared with API for one-hour [preview tokens](/docs/status-pages/#preview-security). With no secret, preview verification is not enforced.',
+              'HMAC secret shared with API for one-hour [preview tokens](/docs/status-pages/#preview-security). With no secret, preview verification is not enforced. Helm: `secrets.statusPagePreviewSecret` (or its `ExistingSecret` reference, canonical key `status_page_preview_secret`) renders it into both the API and the status service.',
             ],
             [
               '`STATUSPAGE_UPDATES_SUBJECT`',

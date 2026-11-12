@@ -435,6 +435,16 @@ kubectl -n probara get jobs`,
               'Required when OIDC is enabled — the render now fails if neither it nor `secrets.oidcClientSecretExistingSecret` is set, instead of leaving the API pod unable to start on a missing Secret key.',
             ],
             [
+              '`secrets.statusPagePreviewSecret`',
+              'Empty',
+              'Shared key for status page draft-preview tokens (`STATUS_PAGE_PREVIEW_SECRET`), rendered into both the API and the status service. Empty leaves preview-token enforcement off.',
+            ],
+            [
+              '`api.cookieSecure`',
+              'Empty (derived)',
+              'Secure attribute of the session cookies. Empty derives it: on when `api.publicBaseURL` is an `https://` origin. Set `"true"` behind TLS termination without a public base URL, or `"false"` to force it off.',
+            ],
+            [
               '`secrets.<field>ExistingSecret`, `.<field>ExistingSecretKey`',
               'Empty; canonical key name',
               'Per-field overrides for `adminJwtSecret`, `probaraSecretsKey`, and `oidcClientSecret`. They win over `secrets.existingSecret` and may point at different Secrets, so chart-managed, chart-wide, and per-field sources mix field by field.',
@@ -935,7 +945,7 @@ api:
           items: [
             'Pin immutable backend, frontend, local AI, collector, migration, PostgreSQL, and NATS versions.',
             'Use managed/HA PostgreSQL and NATS or define tested backup and restore objectives for embedded state.',
-            'Configure HTTPS, `ADMIN_COOKIE_SECURE=true`, a correct `PUBLIC_BASE_URL`, and trusted reverse-proxy headers.',
+            'Configure HTTPS, a correct `PUBLIC_BASE_URL` (`api.publicBaseURL`; an `https://` value also turns on `ADMIN_COOKIE_SECURE` in the chart), and trusted reverse-proxy headers.',
             'Use stable random JWT, encryption, local AI token, OIDC, preview, SMTP, webhook, database, and NATS secrets, sourced [from your secret manager](#external-secrets) rather than written into the values file.',
             'Confirm the cluster CNI enforces the [local AI NetworkPolicy](#helm-values-local-ai), or isolate the service another way.',
             'Align every NATS stream, subject, consumer, and status-update subject across services.',

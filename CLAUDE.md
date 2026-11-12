@@ -423,8 +423,13 @@ or imported groups come back empty. Any other path that creates groups through
   as a literal `value:` in a PodSpec and never hardcode the Secret name — the
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
-  `oidc_client_secret`, `local_ai_token`) are the contract external secret
-  managers fill.
+  `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
+  `status_page_preview_secret`) are the contract external secret managers
+  fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
+  (the api signs preview tokens, status-page verifies them) and is `optional`
+  in the Secret. `ADMIN_COOKIE_SECURE` comes from the
+  `monitoring-platform.adminCookieSecure` helper: `api.cookieSecure` if set,
+  else true exactly when `api.publicBaseURL` is https.
   Helm cannot read Secrets, so anything the chart *composes* from a
   credential (the Postgres DSN, the embedded NATS URL) needs the composed
   value externalized too — hence the paired `fail`s in `secret.yaml`.

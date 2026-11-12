@@ -178,6 +178,14 @@ secrets:
   statusPageVapidPrivateKey: ""
   statusPageVapidPrivateKeyExistingSecret: ""
   statusPageVapidPrivateKeyExistingSecretKey: status_page_vapid_private_key
+  # Shared key for status page draft-preview tokens (STATUS_PAGE_PREVIEW_SECRET,
+  # canonical key status_page_preview_secret). The api signs preview links and
+  # the status page verifies them, so the chart renders it into both. Unset
+  # leaves preview-token enforcement off. With only the chart-wide
+  # secrets.existingSecret set, the key is optional in that Secret.
+  statusPagePreviewSecret: ""
+  statusPagePreviewSecretExistingSecret: ""
+  statusPagePreviewSecretExistingSecretKey: status_page_preview_secret
   # Bearer token the api and the platform worker present to the local AI
   # service (LOCAL_AI_TOKEN, canonical key local_ai_token). Needed whenever
   # localAI.enabled or localAI.externalUrl is set; at least 16 characters.
@@ -298,6 +306,12 @@ api:
   # before pointing external locations at it.
   # Example: "tls://nats.example.com:4222"
   publicNatsURL: ""
+  # Secure attribute of the session cookies (ADMIN_COOKIE_SECURE). Leave empty
+  # to derive it: Secure when publicBaseURL is an https:// origin, otherwise
+  # not. Set "true" behind TLS termination when publicBaseURL is unset, or
+  # "false" to force it off. A Secure cookie is never sent over plain HTTP,
+  # so "true" on an HTTP-only install makes login impossible.
+  cookieSecure: ""
   resources:
     requests:
       cpu: "100m"
@@ -461,7 +475,8 @@ statusPage:
     subject: ""
 
   # Extra env vars for the status-page service only (Kubernetes EnvVar
-  # entries), e.g. STATUS_PAGE_PREVIEW_SECRET.
+  # entries). The preview-token key is secrets.statusPagePreviewSecret, not
+  # an entry here.
   extraEnv: []
 
 # =============================================================================

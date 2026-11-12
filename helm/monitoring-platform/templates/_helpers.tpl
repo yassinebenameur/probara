@@ -123,6 +123,24 @@ Args (dict): ctx, value (the literal), secret (per-field existingSecret).
 {{- end }}
 
 {{/*
+ADMIN_COOKIE_SECURE for the API, or empty to leave the code default (false).
+api.cookieSecure wins when set ("true"/"false"); left empty, the cookie is
+Secure exactly when api.publicBaseURL is an https:// origin. A Secure cookie
+is never sent over plain HTTP, so forcing it on for an HTTP-only install would
+make login impossible; hence derived, not defaulted.
+*/}}
+{{- define "monitoring-platform.adminCookieSecure" -}}
+{{- $explicit := .Values.api.cookieSecure -}}
+{{- if kindIs "bool" $explicit -}}
+{{- toString $explicit -}}
+{{- else if $explicit -}}
+{{- toString $explicit -}}
+{{- else if hasPrefix "https://" (default "" .Values.api.publicBaseURL) -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
 True when a secret field is still chart-managed, i.e. its value belongs in the
 Secret this chart renders. Inverse of "some existing Secret supplies it".
 
