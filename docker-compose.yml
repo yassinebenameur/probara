@@ -72,7 +72,7 @@ services:
   # The build fails on purpose for any artifact that is not release-approved on
   # CPU, and Compose builds every missing image before starting anything, so
   # one failed local-ai build aborts a whole `docker compose up`/`build`. The
-  # Makefile targets (up, build, rebuild, scale-workers, start-all,
+  # Makefile targets (up, build, rebuild, start-all,
   # start-all-local) therefore start the platform first and local-ai on its
   # own, tolerating its failure. With plain Compose and no pullable approved
   # image, name the services or set LOCAL_AI_IMAGE to an image you have.
@@ -232,10 +232,7 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    # No container_name and a host port range, so `make scale-workers N=3`
-    # can start replicas: Compose refuses to scale a service with a fixed
-    # name, and replicas cannot share one host port. A single worker still
-    # gets 9092.
+    container_name: probara-worker
     environment:
       # Local AI client (api + worker only; same token as the local-ai service).
       LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
@@ -258,7 +255,7 @@ services:
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       SIP_LOCALHOST_AS_HOST_GATEWAY: "true"
     ports:
-      - "9092-9099:9092"
+      - "9092:9092"
     volumes:
       - synthetic_artifacts:/artifacts
     extra_hosts:

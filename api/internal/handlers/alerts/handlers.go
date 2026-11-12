@@ -39,11 +39,6 @@ func NewHandlers(service alertservice.AlertService, hub *alertservice.Hub, log *
 	}
 }
 
-// GetHub returns the SSE hub for external access
-func (h *Handlers) GetHub() *alertservice.Hub {
-	return h.hub
-}
-
 // ListAlerts handles GET /api/v1/alerts
 func (h *Handlers) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	tenantUUID, ok := httpx.TenantID(w, r)
