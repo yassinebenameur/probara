@@ -841,6 +841,10 @@ or imported groups come back empty. Any other path that creates groups through
   The dashboard (`app/page.tsx`) reads `useDashboardData` and
   `useProblemTraces` and lays out the cards in `components/dashboard/`
   (grid cells and list limits in its `layout.ts`).
+  Settings tabs are panels in `components/settings/`; state that must
+  survive a tab switch (a just-created API key, the retention draft) is a
+  hook the page calls (`useApiKeys`, `useRetentionSettings`), never state
+  inside a panel that unmounts with its tab.
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
