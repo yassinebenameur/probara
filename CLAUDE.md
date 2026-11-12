@@ -519,6 +519,13 @@ or imported groups come back empty. Any other path that creates groups through
   never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
   skips notifications, so it is not an error to log.
+- **Incident recovery entries have one writer**: `shared/incidentrecovery`.
+  The alerter (monitor recovered) and the API (operator resolved an alert)
+  both call it in the transaction that resolves the alert; its advisory lock
+  on the incident is what serializes the two services, so never write the
+  "All linked alerts recovered" entry, or take that lock, anywhere else.
+  Auto-incident creation is alerter-only (`ensureAutoIncidentForAlertTx`,
+  gated by the tenant's `auto_create_incident`).
 - **Delivery ordering rests on row locks — keep them.** The async worker
   holds the alert row `FOR SHARE` from its status check through `Send`
   (`eventSuperseded` in `worker/internal/worker/notifications/consumer.go`),

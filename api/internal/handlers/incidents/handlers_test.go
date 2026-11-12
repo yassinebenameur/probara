@@ -308,15 +308,7 @@ func (m *mockIncidentService) UnpublishIncidentFromStatusPage(ctx context.Contex
 	return nil, nil
 }
 
-func (m *mockIncidentService) EnsureIncidentForAlert(context.Context, uuid.UUID, *models.AlertWithDetails) error {
-	return nil
-}
-
 func (m *mockIncidentService) RecordAlertRecoveryIfNeeded(context.Context, uuid.UUID, uuid.UUID) error {
-	return nil
-}
-
-func (m *mockIncidentService) EnsureIncidentForAlertTx(context.Context, *sql.Tx, uuid.UUID, *models.AlertWithDetails) error {
 	return nil
 }
 

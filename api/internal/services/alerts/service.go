@@ -17,7 +17,6 @@ import (
 )
 
 type incidentAutomation interface {
-	EnsureIncidentForAlertTx(ctx context.Context, tx *sql.Tx, tenantID uuid.UUID, alert *models.AlertWithDetails) error
 	RecordAlertRecoveryIfNeededTx(ctx context.Context, tx *sql.Tx, tenantID, alertID uuid.UUID) error
 }
 
@@ -404,61 +403,6 @@ func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID)
 	}
 
 	return s.getAlert(ctx, tenantID, alertID)
-}
-
-// CreateAlert creates a new alert
-func (s *Service) CreateAlert(ctx context.Context, tenantID, monitorID, policyID uuid.UUID, failureCount int, lastError *string) (*models.AlertWithDetails, error) {
-	alertID := uuid.New()
-	now := time.Now()
-
-	query := `
-		INSERT INTO alerts (
-			id, tenant_id, monitor_id, alert_policy_id, status,
-			triggered_at, failure_count, last_error, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $5, $5)
-	`
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin alert transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	if _, err := tx.ExecContext(ctx, query, alertID, tenantID, monitorID, policyID, now, failureCount, lastError); err != nil {
-		return nil, fmt.Errorf("failed to create alert: %w", err)
-	}
-
-	alert, err := s.getAlertTx(ctx, tx, tenantID, alertID)
-	if err != nil {
-		return nil, err
-	}
-	if s.incidents != nil {
-		if err := s.incidents.EnsureIncidentForAlertTx(ctx, tx, tenantID, alert); err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit alert transaction: %w", err)
-	}
-
-	return alert, nil
-}
-
-func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
-	query := alertDetailSelect + `
-		WHERE a.id = $1 AND a.tenant_id = $2 AND ` + alertVisibleClause
-
-	row := tx.QueryRowContext(ctx, query, alertID, tenantID)
-	alert, err := scanAlertWithDetails(row.Scan)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("alert not found")
-		}
-		return nil, fmt.Errorf("failed to get alert: %w", err)
-	}
-	return alert, nil
 }
 
 // GetActiveAlertForMonitor gets the active alert for a monitor if one exists

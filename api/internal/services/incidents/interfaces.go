@@ -55,9 +55,6 @@ type IncidentService interface {
 	// GetLatestAIAnalysis returns the most recent AI analysis for an incident (nil if none).
 	GetLatestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error)
 
-	// EnsureIncidentForAlert auto-creates or reuses an incident for a firing alert when policy settings allow it.
-	EnsureIncidentForAlert(ctx context.Context, tenantID uuid.UUID, alert *models.AlertWithDetails) error
-
 	// RecordAlertRecoveryIfNeeded appends a recovery timeline entry when all linked alerts are resolved.
 	RecordAlertRecoveryIfNeeded(ctx context.Context, tenantID, alertID uuid.UUID) error
 }

@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/shared/incidentrecovery"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
@@ -92,12 +92,6 @@ type groupFailure struct {
 	CreatedAt time.Time
 }
 
-const (
-	monitorTypeGroup        = "group"
-	alertsRecoveredMessage  = "All linked alerts recovered"
-	incidentSystemEntryType = "system"
-)
-
 func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UUID) (map[uuid.UUID]map[uuid.UUID]*notificationState, error) {
 	states := make(map[uuid.UUID]map[uuid.UUID]*notificationState)
 	if len(alertIDs) == 0 {
@@ -164,7 +158,7 @@ func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.
 		return time.Time{}, fmt.Errorf("failed to resolve alert: %w", err)
 	}
 
-	if err := a.recordAlertRecoveryIfNeededTx(ctx, tx, alertID); err != nil {
+	if err := incidentrecovery.RecordForAlertTx(ctx, tx, alertID); err != nil {
 		return time.Time{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -209,70 +203,7 @@ func (a *Alerter) ensureAutoIncidentForAlertTx(ctx context.Context, tx *sql.Tx, 
 		if binding.PolicyID != uuid.Nil {
 			metadata["alert_policy_id"] = binding.PolicyID.String()
 		}
-		if err := a.insertIncidentTimelineEntryTx(ctx, tx, binding.TenantID, incidentID, "system", message, metadata); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (a *Alerter) recordAlertRecoveryIfNeededTx(ctx context.Context, tx *sql.Tx, alertID uuid.UUID) error {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT DISTINCT i.id, i.tenant_id
-		FROM incidents i
-		JOIN incident_alerts ia ON ia.incident_id = i.id
-		JOIN alerts a ON a.id = ia.alert_id AND a.tenant_id = i.tenant_id
-		WHERE ia.alert_id = $1
-	`, alertID)
-	if err != nil {
-		return fmt.Errorf("load incidents for alert recovery: %w", err)
-	}
-	defer rows.Close()
-
-	type incidentTarget struct {
-		incidentID uuid.UUID
-		tenantID   uuid.UUID
-	}
-
-	targets := make([]incidentTarget, 0)
-	for rows.Next() {
-		var target incidentTarget
-		if err := rows.Scan(&target.incidentID, &target.tenantID); err != nil {
-			return fmt.Errorf("scan incident recovery target: %w", err)
-		}
-		targets = append(targets, target)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate incident recovery targets: %w", err)
-	}
-	sort.Slice(targets, func(i, j int) bool {
-		return targets[i].incidentID.String() < targets[j].incidentID.String()
-	})
-
-	for _, target := range targets {
-		if err := a.lockIncidentRecoveryKeyTx(ctx, tx, target.incidentID); err != nil {
-			return err
-		}
-		allResolved, resolvedAfter, err := a.loadIncidentAlertRecoveryStateTx(ctx, tx, target.incidentID)
-		if err != nil {
-			return err
-		}
-		if !allResolved {
-			continue
-		}
-		resolvedAfterMarker := recoveryResolutionMarker(resolvedAfter)
-		alreadyRecorded, err := a.recoveryTimelineExistsTx(ctx, tx, target.incidentID, incidentSystemEntryType, alertsRecoveredMessage, resolvedAfterMarker)
-		if err != nil {
-			return err
-		}
-		if alreadyRecorded {
-			continue
-		}
-		if err := a.insertIncidentTimelineEntryTx(ctx, tx, target.tenantID, target.incidentID, incidentSystemEntryType, alertsRecoveredMessage, map[string]interface{}{
-			"alert_id":       alertID.String(),
-			"resolved_after": resolvedAfterMarker,
-		}); err != nil {
+		if err := incidentrecovery.InsertTimelineEntryTx(ctx, tx, binding.TenantID, incidentID, incidentrecovery.SystemEntryType, message, metadata); err != nil {
 			return err
 		}
 	}
@@ -330,14 +261,6 @@ func (a *Alerter) lockAutoIncidentKeyTx(ctx context.Context, tx *sql.Tx, tenantI
 	return nil
 }
 
-func (a *Alerter) lockIncidentRecoveryKeyTx(ctx context.Context, tx *sql.Tx, incidentID uuid.UUID) error {
-	lockKey := fmt.Sprintf("incident-recovery:%s", incidentID)
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
-		return fmt.Errorf("lock incident recovery key: %w", err)
-	}
-	return nil
-}
-
 func (a *Alerter) ensureIncidentAlertLinkTx(ctx context.Context, tx *sql.Tx, incidentID, alertID uuid.UUID) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
@@ -360,77 +283,6 @@ func (a *Alerter) ensureIncidentMonitorLinkTx(ctx context.Context, tx *sql.Tx, i
 		return false, fmt.Errorf("attach incident monitor: %w", err)
 	}
 	return alerterMutationChanged(result), nil
-}
-
-func (a *Alerter) loadIncidentAlertRecoveryStateTx(ctx context.Context, tx *sql.Tx, incidentID uuid.UUID) (bool, time.Time, error) {
-	var totalCount int
-	var unresolvedCount int
-	var resolvedAfter sql.NullTime
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*),
-			COUNT(*) FILTER (WHERE a.status IN ('active', 'acknowledged')),
-			MAX(COALESCE(a.resolved_at, a.updated_at))
-		FROM incident_alerts ia
-		JOIN alerts a ON a.id = ia.alert_id
-		WHERE ia.incident_id = $1
-	`, incidentID).Scan(&totalCount, &unresolvedCount, &resolvedAfter); err != nil {
-		return false, time.Time{}, fmt.Errorf("load linked alert statuses: %w", err)
-	}
-
-	if totalCount == 0 || unresolvedCount != 0 || !resolvedAfter.Valid {
-		return false, time.Time{}, nil
-	}
-
-	return true, resolvedAfter.Time.UTC(), nil
-}
-
-func (a *Alerter) recoveryTimelineExistsTx(ctx context.Context, tx *sql.Tx, incidentID uuid.UUID, entryType, message, resolvedAfter string) (bool, error) {
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM incident_timeline_entries
-			WHERE incident_id = $1
-				AND entry_type = $2
-				AND message = $3
-				AND metadata->>'resolved_after' = $4
-		)
-	`, incidentID, entryType, message, resolvedAfter).Scan(&exists); err != nil {
-		return false, fmt.Errorf("check incident recovery timeline entry: %w", err)
-	}
-
-	return exists, nil
-}
-
-func recoveryResolutionMarker(resolvedAfter time.Time) string {
-	return resolvedAfter.UTC().Format(time.RFC3339Nano)
-}
-
-func (a *Alerter) insertIncidentTimelineEntryTx(ctx context.Context, tx *sql.Tx, tenantID, incidentID uuid.UUID, entryType, message string, metadata map[string]interface{}) error {
-	if metadata == nil {
-		metadata = map[string]interface{}{}
-	}
-	metadataJSON, err := json.Marshal(metadata)
-	if err != nil {
-		return fmt.Errorf("marshal incident timeline metadata: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO incident_timeline_entries (
-			id, tenant_id, incident_id, entry_type, message, metadata, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())
-	`, uuid.New(), tenantID, incidentID, entryType, message, metadataJSON); err != nil {
-		return fmt.Errorf("insert incident timeline entry: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE incidents
-		SET updated_at = NOW()
-		WHERE id = $1 AND tenant_id = $2
-	`, incidentID, tenantID); err != nil {
-		return fmt.Errorf("touch incident updated_at: %w", err)
-	}
-
-	return nil
 }
 
 func buildAlerterAutoIncidentNarrative(monitorName, policyName string) (string, string) {

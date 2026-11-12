@@ -12,6 +12,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/config"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/incidentrecovery"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
@@ -130,7 +131,7 @@ func TestAlerterResolveAlertSerializesConcurrentFinalResolutions(t *testing.T) {
 	// the normal path; the second is inserted directly (bypassing the unique
 	// index on the first monitor) and manually linked to the same incident.
 	// This exercises the advisory-lock serialization in
-	// recordAlertRecoveryIfNeededTx when both are resolved concurrently.
+	// incidentrecovery.RecordForAlertTx when both are resolved concurrently.
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
@@ -179,14 +180,14 @@ func TestAlerterResolveAlertSerializesConcurrentFinalResolutions(t *testing.T) {
 		t.Fatalf("setAlerterAlertResolvedTx(second) error = %v", err)
 	}
 
-	if err := alerter.recordAlertRecoveryIfNeededTx(ctx, tx1, firstAlert.ID); err != nil {
-		t.Fatalf("recordAlertRecoveryIfNeededTx(tx1) error = %v", err)
+	if err := incidentrecovery.RecordForAlertTx(ctx, tx1, firstAlert.ID); err != nil {
+		t.Fatalf("incidentrecovery.RecordForAlertTx(tx1) error = %v", err)
 	}
 	assertAlerterIncidentRecoveryLockHeld(ctx, t, dbClient, incidentID)
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := alerter.recordAlertRecoveryIfNeededTx(ctx, tx2, secondAlert.ID); err != nil {
+		if err := incidentrecovery.RecordForAlertTx(ctx, tx2, secondAlert.ID); err != nil {
 			_ = tx2.Rollback()
 			errCh <- err
 			return
@@ -242,9 +243,9 @@ func TestAlerterResolveAlertSkipsDuplicateAfterLaterNonRecoveryEntry(t *testing.
 	if err != nil {
 		t.Fatalf("BeginTx() error = %v", err)
 	}
-	if err := alerter.recordAlertRecoveryIfNeededTx(ctx, tx, alert.ID); err != nil {
+	if err := incidentrecovery.RecordForAlertTx(ctx, tx, alert.ID); err != nil {
 		_ = tx.Rollback()
-		t.Fatalf("recordAlertRecoveryIfNeededTx() error = %v", err)
+		t.Fatalf("incidentrecovery.RecordForAlertTx() error = %v", err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("Commit() error = %v", err)
@@ -334,7 +335,7 @@ func assertAlerterIncidentRecoveryLockHeld(ctx context.Context, t *testing.T, db
 // insertAlerterSecondAlertAndLink inserts an active alert for monitorID and
 // links it to an existing incidentID. This bypasses the auto-incident logic so that two concurrent active alerts can exist for
 // different monitors but share the same incident — needed for tests that verify
-// the advisory-lock serialization in recordAlertRecoveryIfNeededTx.
+// the advisory-lock serialization in incidentrecovery.RecordForAlertTx.
 func insertAlerterSecondAlertAndLink(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID, monitorID, incidentID uuid.UUID, triggeredAt time.Time) *alertRecord {
 	t.Helper()
 
