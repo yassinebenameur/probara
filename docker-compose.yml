@@ -304,6 +304,7 @@ services:
   #     CHECK_JOB_SUBJECT: "check.job"
   #     NATS_CONSUMER_NAME: "worker"
   #     WORKER_LOCATION_ID: "<location-uuid-from-the-locations-page>"
+  #     LOCATION_CREDENTIAL: "<credential-issued-with-the-location>"
   #     WORKER_CONCURRENCY: "10"
   #   depends_on:
   #     nats:
