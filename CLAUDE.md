@@ -257,9 +257,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
 
 ## Monitor import
 
-`api/internal/services/import/service.go` parses a source into `parsedSource`
-(rows + schema + warnings + skipped rows), then `ExecuteImport` creates
-monitors. Two paths, chosen by whether `FieldMapping.Config` is set:
+`api/internal/services/import/` parses a source into `parsedSource` (rows +
+schema + warnings + skipped rows; `parse.go`), then `ExecuteImport`
+(`execute.go`) creates monitors. Two paths, chosen by whether `FieldMapping.Config` is set:
 
 - **Raw path** (`useRawConfig`): rows carry an already-typed nested `config`
   object. Supports every registry type, resolves group members by name in a
