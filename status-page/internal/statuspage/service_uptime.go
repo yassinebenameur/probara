@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 )
 
 // bucketUptime converts one time bucket's (total, successful) check counts into
@@ -285,4 +286,94 @@ func (s *Service) GetGlobalMinuteUptime(ctx context.Context, monitorIDs []uuid.U
 		return nil, err
 	}
 	return minuteUptime(sumMinuteBuckets(byID, monitorIDs), start), nil
+}
+
+// GetGlobalHourlyUptime calculates hourly uptime across a status page's operational monitors
+// (resolveStatusPageOperationalMonitorIDs) for the last 24 hours.
+func (s *Service) GetGlobalHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) ([]HourlyUptime, error) {
+	if len(monitorIDs) == 0 {
+		return []HourlyUptime{}, nil
+	}
+
+	// Read the rollup cursor first and pass all hour-strip bounds as parameters:
+	// bounds derived from a CTE join on rollup_job_state cannot be pushed into
+	// index conditions on check_results.created_at and forced a full sequential scan.
+	cursor, err := sharedanalytics.LoadRollupCursor(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	startHour := now.Truncate(time.Hour).Add(-23 * time.Hour)
+	endExclusive := now.Truncate(time.Hour).Add(time.Hour)
+	rawStart := cursor.RawStart(startHour)
+
+	query := `
+		WITH rollup_per_hour AS (
+			SELECT
+				mhr.bucket_hour,
+				SUM(mhr.total_checks)::bigint AS total_checks,
+				SUM(mhr.success_checks)::bigint AS success_checks
+			FROM monitor_hourly_rollups mhr
+			WHERE mhr.tenant_id = $1
+			  AND mhr.monitor_id = ANY($2)
+			  AND mhr.bucket_hour >= $3
+			  AND mhr.bucket_hour < $4
+			GROUP BY mhr.bucket_hour
+		),
+		raw_per_hour AS (
+			SELECT
+				date_trunc('hour', cr.created_at) AS bucket_hour,
+				COUNT(*)::bigint AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks
+			FROM check_results cr
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($2)
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $5
+			  AND cr.created_at < $4
+			  AND (
+				$6::timestamptz IS NULL
+				OR (cr.created_at, cr.id) > ($6::timestamptz, $7::uuid)
+			  )
+			GROUP BY 1
+		)
+		SELECT
+			b.bucket_hour,
+			COALESCE(rh.total_checks, 0) + COALESCE(rwh.total_checks, 0) AS total_checks,
+			COALESCE(rh.success_checks, 0) + COALESCE(rwh.success_checks, 0) AS success_checks
+		FROM generate_series($3::timestamptz, $4::timestamptz - INTERVAL '1 hour', INTERVAL '1 hour') AS b(bucket_hour)
+		LEFT JOIN rollup_per_hour rh ON rh.bucket_hour = b.bucket_hour
+		LEFT JOIN raw_per_hour rwh ON rwh.bucket_hour = b.bucket_hour
+		ORDER BY b.bucket_hour
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs), startHour, endExclusive, rawStart, cursor.LastCreatedAt, cursor.LastCheckResultID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query hourly uptime: %w", err)
+	}
+	defer rows.Close()
+
+	var result []HourlyUptime
+	for rows.Next() {
+		var hour time.Time
+		var total, successful int
+
+		if err := rows.Scan(&hour, &total, &successful); err != nil {
+			return nil, fmt.Errorf("failed to scan hourly uptime: %w", err)
+		}
+
+		uptime := bucketUptime(total, successful)
+
+		result = append(result, HourlyUptime{
+			Hour:   hour.Format("15:04"),
+			Uptime: uptime,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating hourly uptime: %w", err)
+	}
+
+	return result, nil
 }

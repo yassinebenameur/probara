@@ -193,7 +193,7 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `api/internal/models/statuspages.go` (`StatusPageSettings`, the wire type),
   `api/internal/services/statuspages/service.go`
   (`statusPageSettingsStored`/`applyPatch`/`toAPI` — the **write** path), and
-  `status-page/internal/statuspage/service.go` (the **read** path the public
+  `status-page/internal/statuspage/service_settings.go` (the **read** path the public
   renderer uses). Plus `web/lib/types.ts` for the UI. The API's stored struct
   re-serializes only the fields it knows, so a setting added to the model but
   not to `applyPatch`/`toAPI` is accepted by the endpoint, silently dropped on
@@ -580,7 +580,7 @@ or imported groups come back empty. Any other path that creates groups through
 ## Status pages
 
 - **status-page is read-only except for push.** The `Service` takes a
-  `db.Querier` and `service.go` stubs `ExecContext` into a refusal so stray
+  `db.Querier` and `service_agent_metrics.go` stubs `ExecContext` into a refusal so stray
   writes cannot compile. `pushStore` (`push_store.go`) is the single
   deliberate exception and the only holder of a `*sql.DB` in the package; it
   is constructed only when VAPID keys are set, so an unconfigured deployment
