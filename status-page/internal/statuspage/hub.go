@@ -63,22 +63,6 @@ func (h *Hub) Broadcast(slug string, event SSEEvent) {
 	}
 }
 
-// BroadcastAll sends an event to all clients.
-func (h *Hub) BroadcastAll(event SSEEvent) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	for _, set := range h.clients {
-		for ch := range set {
-			select {
-			case ch <- event:
-			default:
-				// Drop if client is slow.
-			}
-		}
-	}
-}
-
 // HasAnyClients reports whether any client is connected for any slug.
 func (h *Hub) HasAnyClients() bool {
 	h.mu.RLock()

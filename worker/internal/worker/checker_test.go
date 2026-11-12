@@ -736,16 +736,3 @@ func TestHTTPChecker_TLSInfoAndExpiryCheck(t *testing.T) {
 		t.Fatalf("Expected MetricsData with TLS info on near-expiry result")
 	}
 }
-
-func TestAgentChecker_AlwaysSuccess(t *testing.T) {
-	checker := NewAgentChecker(nil)
-
-	config := map[string]interface{}{}
-	configJSON, _ := json.Marshal(config)
-
-	result := checker.Check(context.Background(), configJSON, 10)
-
-	if result.Status != "success" {
-		t.Errorf("AgentChecker.Check() status = %v, want success", result.Status)
-	}
-}

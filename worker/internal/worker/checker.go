@@ -19,6 +19,7 @@ import (
 
 	probing "github.com/prometheus-community/pro-bing"
 	"github.com/tidwall/gjson"
+
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/tlscert"
 )
@@ -830,36 +831,5 @@ func (c *PingChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	return CheckResult{
 		Status:    "success",
 		LatencyMs: &latencyMs,
-	}
-}
-
-// AgentChecker implements Checker for agent monitors
-// It doesn't actively check anything, but verifies the agent is still reporting
-type AgentChecker struct {
-	db interface {
-		QueryRowContext(ctx context.Context, query string, args ...interface{}) interface {
-			Scan(dest ...interface{}) error
-		}
-	}
-}
-
-// NewAgentChecker creates a new agent checker
-func NewAgentChecker(db interface {
-	QueryRowContext(ctx context.Context, query string, args ...interface{}) interface {
-		Scan(dest ...interface{}) error
-	}
-}) *AgentChecker {
-	return &AgentChecker{db: db}
-}
-
-// Check verifies that the agent has reported recently
-func (c *AgentChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
-	// Note: Agent monitors are primarily passive - they receive metrics pushed from agents
-	// This check is a placeholder that always returns success
-	// The actual staleness detection happens in the scheduler/alerter based on
-	// the last check_result timestamp
-
-	return CheckResult{
-		Status: "success",
 	}
 }

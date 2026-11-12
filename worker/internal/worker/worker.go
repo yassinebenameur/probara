@@ -272,11 +272,6 @@ func (w *Worker) RegisterChecker(monitorType string, checker Checker) {
 	w.checkerRegistry.Register(monitorType, checker)
 }
 
-// RegisterPassiveType marks a monitor type as passive (no active checking)
-func (w *Worker) RegisterPassiveType(monitorType string) {
-	w.passiveTypes[monitorType] = true
-}
-
 // jobFilterSubject returns the per-location subject this worker consumes.
 func (w *Worker) jobFilterSubject() string {
 	if w.config.LocationID == "" {

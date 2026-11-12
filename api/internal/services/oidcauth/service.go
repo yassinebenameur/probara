@@ -78,9 +78,6 @@ func (s *Service) ProviderLabel() string { return s.cfg.ProviderLabel }
 // IssuerURL returns the configured issuer.
 func (s *Service) IssuerURL() string { return s.cfg.IssuerURL }
 
-// JITEnabled reports whether just-in-time provisioning is on.
-func (s *Service) JITEnabled() bool { return s.cfg.JITProvision }
-
 func (s *Service) getProvider(ctx context.Context) (*oidc.Provider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

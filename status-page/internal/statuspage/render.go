@@ -671,32 +671,6 @@ func relativeTime(t time.Time) string {
 	}
 }
 
-func summaryMetric(monitor MonitorStatus) string {
-	switch {
-	case monitor.Uptime24h != nil:
-		return fmt.Sprintf("%.2f%%", *monitor.Uptime24h)
-	case monitor.LastLatency != nil:
-		return fmt.Sprintf("%dms", *monitor.LastLatency)
-	case monitor.LastCheckTime != nil:
-		return relativeTime(*monitor.LastCheckTime)
-	default:
-		return "—"
-	}
-}
-
-func summaryCaption(monitor MonitorStatus) string {
-	switch {
-	case monitor.Uptime24h != nil:
-		return "24h uptime"
-	case monitor.LastLatency != nil:
-		return "Latest response"
-	case monitor.LastCheckTime != nil:
-		return "Last check"
-	default:
-		return "No data"
-	}
-}
-
 func monitorUptimeLabel(rangeName string) string {
 	switch rangeName {
 	case "1h":
