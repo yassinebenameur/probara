@@ -1,3 +1,10 @@
+# [2.0.0-alpha.12](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.11...v2.0.0-alpha.12) (2026-11-12)
+
+
+### Features
+
+* **web:** rework the alerts page as a timeline over a calendar feed ([fe79381](https://github.com/yassinebenameur/probara/commit/fe79381a113fbbc1f773a17eac40c7b0c97043d5))
+
 # [2.0.0-alpha.11](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.10...v2.0.0-alpha.11) (2026-11-12)
 
 
