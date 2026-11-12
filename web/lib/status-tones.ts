@@ -4,6 +4,7 @@
 
 import type { AlertStatus, IncidentSeverity, IncidentState, MetricRule } from './types';
 import type { MonitorDisplayStatus } from './monitor-utils';
+import type { TimelineTone } from './alert-timeline';
 
 export type StatusTone = 'success' | 'danger' | 'warning' | 'info' | 'neutral';
 
@@ -276,6 +277,33 @@ export function alertStatusTone(status: AlertStatus | string | null | undefined)
       return 'neutral';
   }
 }
+
+/**
+ * The /alerts timeline's line and dot fills (lib/alert-timeline.ts tones).
+ * A resolved alert is history, so its line is neutral: green stays for the
+ * status pill. Suppressed is told apart by pattern as well as weight (a
+ * dashed line, a hollow dot), since on a 3px line colour alone would not.
+ */
+export const TIMELINE_LINE: Record<TimelineTone, string> = {
+  active: 'bg-rose-500',
+  acknowledged: 'bg-amber-500',
+  suppressed: 'bg-[repeating-linear-gradient(90deg,rgb(var(--tw-rose-500))_0_5px,transparent_5px_9px)]',
+  resolved: 'bg-slate-500',
+};
+
+export const TIMELINE_DOT: Record<TimelineTone, string> = {
+  active: 'bg-rose-500',
+  acknowledged: 'bg-amber-500',
+  suppressed: 'bg-[rgb(var(--panel-rgb))] shadow-[inset_0_0_0_1.5px_rgb(var(--tw-rose-500))]',
+  resolved: 'bg-slate-500',
+};
+
+export const TIMELINE_TONE_LABEL: Record<TimelineTone, string> = {
+  active: 'Active',
+  acknowledged: 'Acknowledged',
+  suppressed: 'Suppressed',
+  resolved: 'Resolved',
+};
 
 export const INCIDENT_STATE_LABEL: Record<IncidentState, string> = {
   investigating: 'Investigating',

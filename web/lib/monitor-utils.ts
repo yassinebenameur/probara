@@ -162,7 +162,7 @@ export function getEffectiveMonitorStatus(
 
 /**
  * Tailwind color classes for a monitor's current_state, used by the
- * dependency UI (status dots, graph nodes). Tones match AlertTable.
+ * dependency UI (status dots, graph nodes). Tones match AlertFeed.
  */
 export function monitorStateColors(state?: MonitorState): { dot: string; text: string; border: string } {
   switch (state) {

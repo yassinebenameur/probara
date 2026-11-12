@@ -643,7 +643,7 @@ or imported groups come back empty. Any other path that creates groups through
   actions, and `components/ui/RowMenu.tsx` (⋮, position:fixed, flips up)
   beyond that. Don't put text buttons in rows — except a lifecycle list's one
   labelled next step (alerts: Acknowledge → Resolve, the rest in ⋮; see
-  `components/alerts/AlertTable.tsx`).
+  `components/alerts/AlertFeed.tsx`).
   Bulk selection (monitors, alerts) is a hover-revealed box in a reserved
   lead slot (pinned once anything is selected, always on touch), Shift-click
   ranges, Escape clears, and a portaled bar at `md:left-[var(--sidebar-offset)]`
@@ -718,9 +718,11 @@ or imported groups come back empty. Any other path that creates groups through
   `duration-fast|base|slow`, `ease-standard|emphasized|exit` and
   `animate-fade-in|pop-in|dialog-in|toast-in|row-flash|bar-in|value-in|
   live-ping|status-pulse` (row-flash/live-ping take their colour from the
-  `--flash` CSS var, see `flashStyle` in `lib/useRowFlash.ts`). Only one
-  thing loops: `status-pulse`, on the newest CheckTrace bar of a monitor
-  degraded right now — never pulse whole traces or lists. Reduced motion is
+  `--flash` CSS var, see `flashStyle` in `lib/useRowFlash.ts`). Two things
+  loop, both meaning "this needs someone now": `status-pulse` on the newest
+  CheckTrace bar of a monitor degraded right now, and `live-ping` on an
+  unacknowledged alert's dot on /alerts (and on LiveStatus's dot) — never
+  pulse whole traces, lines or rows. Reduced motion is
   handled globally in `globals.css`; never hard-code a duration.
 - **Formatting and tones have one home each**: dates, recency, durations,
   uptime %, latency, call quality and the `RANGES` table live in
@@ -771,13 +773,36 @@ or imported groups come back empty. Any other path that creates groups through
 - **Sorting**: list columns use `components/ui/SortableHeader.tsx` over
   `lib/sort.ts` (nulls last in both directions), with state in
   `?sort=&dir=` through `useUrlSort` (defaults left out), and sort the whole
-  filtered set before paging. Server-paged views (every alerts view but
-  Open, audit) pass the sort to the API instead (`sort=`/`dir=`, a whitelist
-  in the service — `ParseListSort` in `services/alerts/sort.go`, `ParseSort`
-  in `services/audit/sort.go` — ending in an id tiebreaker so pages never
-  overlap); keep client sort wherever the whole set is loaded. A header shows
-  the order the rows are in: /alerts defaults per view and maps a status sort
-  under a one-status filter to newest first (`lib/alert-list.ts`).
+  filtered set before paging. Server-paged views (audit) pass the sort to
+  the API instead (`sort=`/`dir=`, a whitelist in the service — `ParseSort`
+  in `services/audit/sort.go`, and `ParseListSort` in
+  `services/alerts/sort.go` for API clients — ending in an id tiebreaker so
+  pages never overlap); keep client sort wherever the whole set is loaded.
+  /alerts has no column sort: it is a time-ordered feed (below).
+- **/alerts is a timeline over a feed**, both derived from one loaded set
+  (the whole open queue plus the range's newest resolved alerts, caps in
+  `app/alerts/page.tsx`). `lib/alert-timeline.ts` is the timeline's model
+  (segments, lanes, groups, ticks, and `foldSuppressed`: which open alerts
+  fold under a root cause) and `lib/alert-list.ts` the feed's (`feedRows`:
+  which alerts a view lists, newest start first; `feedItems`: their layout
+  on the range's calendar, where every hour or date appears and an empty
+  stretch is a "No alerts" gap, never skipped; `mergeLiveAlert`); both are pure with node
+  tests, and `AlertTimeline`/`AlertFeed` only lay them out. An alert folds
+  only when the API reports it suppressed and its root's open availability
+  alert is loaded — anything that pages stays a top-level row. Stream events
+  carry only identity, status, times and root cause, so apply them with
+  `mergeLiveAlert` (never `mergeAlertUpdate`, which is for full API
+  responses) or rows lose their kind and unfold. Past a cap, say so and
+  hatch the timeline (`coveredFrom`, taken from the load, never from the
+  rows); never count over a truncated set, and never lay out a gap below rows still
+  to load (`feedItems`' `complete`). The feed grows as its end scrolls into
+  view (`AutoMore` in `AlertFeed`, with the button kept for keyboard users),
+  then raises the resolved cap.
+  Timeline tones are `TIMELINE_LINE`/`TIMELINE_DOT` in `lib/status-tones.ts`
+  (a resolved alert's line is neutral; suppressed is dashed/hollow). Only an
+  unacknowledged alert moves: its rail dot and its line's "now" end ping
+  (`animate-live-ping`); acknowledged, suppressed and resolved stay still. Groups follow the tenant's
+  `dashboard_group_tags`, else monitor type (`timelineGroupOf`).
 - **Live pages and feedback**: relative times render as `RelativeTime` /
   `ElapsedTime` (`components/ui/RelativeTime.tsx`, on the shared `useNow`
   clock), never a frozen `formatRelativeTime` string. Live pages load through
@@ -827,8 +852,8 @@ or imported groups come back empty. Any other path that creates groups through
   carry (built in `present.suspectedCauseAction`) is parsed only by
   `lib/alert-links.ts`.
 - **Alert counts**: "active" = `status=active` only (sidebar fleet health,
-  dashboard tile); "open" = active + acknowledged (the alerts page's default
-  view). Keep the words matched to what is counted.
+  dashboard tile); "open" = active + acknowledged (the alerts page's Open
+  chip and the timeline's "Open now" group). Keep the words matched to what is counted.
 - **Overlays must portal**: pages wrap content in `space-y-*`, which puts a
   `margin-top` on a `fixed inset-0` sibling, so the backdrop stops covering the
   viewport (and `main`'s `overflow-x-clip` can clip it), and every `.glass`
