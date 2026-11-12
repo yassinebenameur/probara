@@ -4,10 +4,12 @@ package alerter
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -92,5 +94,78 @@ func TestGroupStatesClearEmptyGroupOutages(t *testing.T) {
 				t.Fatalf("empty group retains %d active alerts", got)
 			}
 		})
+	}
+}
+
+// S-G2: the SQL that stores a group's state and monitorstate's AlertState are
+// one rule. Every combination of two member states (plus a paused member and
+// an empty group) must give the same answer through both.
+func TestGroupAlertStateSQLMatchesSummary(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "group parity")
+	a := newIntegrationAlerter(db)
+
+	states := []monitorstate.State{
+		monitorstate.StateUp, monitorstate.StateSuspect, monitorstate.StateDegraded,
+		monitorstate.StateDown, monitorstate.StateUnknown,
+	}
+	type fixture struct {
+		group   uuid.UUID
+		members []monitorstate.State
+	}
+	var fixtures []fixture
+	add := func(name string, members ...monitorstate.State) {
+		group := testutil.InsertGroupMonitor(ctx, t, db, tenantID, name)
+		for i, state := range members {
+			leaf := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, fmt.Sprintf("%s leaf %d", name, i))
+			testutil.AddMonitorToGroup(ctx, t, db, leaf, group)
+			setStateForTest(ctx, t, db, leaf, string(state), time.Now())
+		}
+		fixtures = append(fixtures, fixture{group: group, members: members})
+	}
+	add("empty")
+	for _, first := range states {
+		add("one "+string(first), first)
+		for _, second := range states {
+			add(string(first)+"+"+string(second), first, second)
+		}
+	}
+
+	// A paused member takes no part: a down member that is disabled must not
+	// take the group down.
+	paused := testutil.InsertGroupMonitor(ctx, t, db, tenantID, "paused member")
+	upLeaf := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "paused member up leaf")
+	downLeaf := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "paused member down leaf")
+	testutil.AddMonitorToGroup(ctx, t, db, upLeaf, paused)
+	testutil.AddMonitorToGroup(ctx, t, db, downLeaf, paused)
+	setStateForTest(ctx, t, db, upLeaf, "up", time.Now())
+	setStateForTest(ctx, t, db, downLeaf, "down", time.Now())
+	if _, err := db.ExecContext(ctx, `UPDATE monitors SET enabled = FALSE WHERE id = $1`, downLeaf); err != nil {
+		t.Fatal(err)
+	}
+	fixtures = append(fixtures, fixture{group: paused, members: []monitorstate.State{monitorstate.StateUp}})
+
+	if err := a.refreshGroupStates(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fixtures {
+		var got string
+		if err := db.QueryRowContext(ctx, `SELECT COALESCE(current_state, 'unknown') FROM monitors WHERE id = $1`, f.group).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if want := monitorstate.SummarizeGroup(f.members).AlertState(); got != string(want) {
+			t.Errorf("members %v: SQL stored %q, AlertState is %q", f.members, got, want)
+		}
+
+		// The shared loader must see the same members the alerter aggregated.
+		summaries, err := monitorstate.LoadGroupSummaries(ctx, db, tenantID, []uuid.UUID{f.group})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := summaries[f.group], monitorstate.SummarizeGroup(f.members); got != want {
+			t.Errorf("members %v: LoadGroupSummaries gave %+v, want %+v", f.members, got, want)
+		}
 	}
 }

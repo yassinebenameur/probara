@@ -13,6 +13,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
@@ -232,7 +233,9 @@ func (a *Alerter) annotateOpenAlertRootCauses(ctx context.Context) error {
 // refreshGroupStates derives every group from its enabled leaf descendants in
 // one snapshot. UNION deduplicates shared descendants and terminates cycles.
 // Empty and paused groups are unknown; stale child-group states never delay
-// detection or recovery at an ancestor.
+// detection or recovery at an ancestor. The rule itself is monitorstate's
+// alert view of a group (S-G2): the counts and the CASE come from there, so
+// this statement and GroupSummary.AlertState cannot drift apart.
 func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 	_, err := a.db.ExecContext(ctx, `
 		WITH RECURSIVE descendants AS (
@@ -253,16 +256,12 @@ func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 				AND child.deleted_at IS NULL AND child.enabled
 		), member_states AS (
 			SELECT d.group_id,
-				BOOL_OR(child.current_state = 'down') AS any_down,
-				BOOL_AND(child.current_state IN ('up', 'suspect', 'degraded')) AS all_known_up
+				`+monitorstate.GroupMemberCountsSQL("child.current_state")+`
 			FROM descendants d
 			JOIN monitors child ON child.id = d.member_id AND child.type <> 'group'
 			GROUP BY d.group_id
 		), group_states AS (
-			SELECT g.id, CASE
-				WHEN ms.any_down THEN 'down'
-				WHEN ms.all_known_up THEN 'up'
-				ELSE 'unknown' END AS state
+			SELECT g.id, `+monitorstate.GroupAlertStateSQL("ms")+` AS state
 			FROM monitors g
 			LEFT JOIN member_states ms ON ms.group_id = g.id
 			WHERE g.type = 'group' AND g.deleted_at IS NULL

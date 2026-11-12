@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // populateGroupMonitorShortRange fills a group monitor's status, uptime, latency, hourly
@@ -25,7 +26,7 @@ func (s *Service) populateGroupMonitorShortRange(ctx context.Context, monitor *M
 		return
 	}
 
-	groupStatus, err := s.GetGroupAggregatedStatus(ctx, memberIDs, tenantID)
+	groupStatus, err := s.GetGroupAggregatedStatus(ctx, monitor.ID, memberIDs, tenantID)
 	if err != nil {
 		monitor.Status = "unknown"
 	} else {
@@ -123,93 +124,65 @@ func (s *Service) getGroupMemberIDs(ctx context.Context, groupID, tenantID uuid.
 	return memberIDs, nil
 }
 
-// GetGroupAggregatedStatus calculates the aggregated status for a group from its members
-// Returns "up" if all members are up, "down" if all are down, "degraded" if mixed
-func (s *Service) GetGroupAggregatedStatus(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID) (*CurrentStatus, error) {
+// GetGroupAggregatedStatus returns a group's displayed status plus the latest
+// check time and average latency across its members.
+//
+// The status is monitorstate's display view of the group (S-G3) over the
+// members' monitor-level states, so it honours location quorum, failure
+// thresholds and paused members exactly as the operator UI and the alerter
+// do. It is never derived from raw check rows: the newest row of a
+// multi-location monitor is one location's opinion, not the monitor's state.
+// memberIDs (the pre-resolved leaf members) only scope the latency and
+// last-check figures.
+func (s *Service) GetGroupAggregatedStatus(ctx context.Context, groupID string, memberIDs []uuid.UUID, tenantID uuid.UUID) (*CurrentStatus, error) {
+	id, err := uuid.Parse(groupID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid group ID %q: %w", groupID, err)
+	}
+	summaries, err := monitorstate.LoadGroupSummaries(ctx, s.db, tenantID, []uuid.UUID{id})
+	if err != nil {
+		return nil, err
+	}
+	result := &CurrentStatus{Status: mapMonitorState(string(summaries[id].DisplayState()))}
 	if len(memberIDs) == 0 {
-		return &CurrentStatus{Status: "unknown"}, nil
+		return result, nil
 	}
 
-	// Query the latest check result for each member monitor
-	query := `
-		SELECT DISTINCT ON (monitor_id) status, latency_ms, created_at
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (monitor_id) latency_ms, created_at
 		FROM check_results
 		WHERE monitor_id = ANY($1) AND tenant_id = $2
 		ORDER BY monitor_id, created_at DESC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(memberIDs), tenantID)
+	`, pq.Array(memberIDs), tenantID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query member statuses: %w", err)
+		return nil, fmt.Errorf("failed to query member checks: %w", err)
 	}
 	defer rows.Close()
 
-	successCount := 0
-	failureCount := 0
-	errorCount := 0
-	var latestCheckTime *time.Time
 	var totalLatency int64
 	var latencyCount int
-
 	for rows.Next() {
-		var status string
 		var latencyMS sql.NullInt64
 		var createdAt time.Time
-
-		if err := rows.Scan(&status, &latencyMS, &createdAt); err != nil {
-			return nil, fmt.Errorf("failed to scan member status: %w", err)
+		if err := rows.Scan(&latencyMS, &createdAt); err != nil {
+			return nil, fmt.Errorf("failed to scan member check: %w", err)
 		}
-
-		// Track latest check time
-		if latestCheckTime == nil || createdAt.After(*latestCheckTime) {
-			latestCheckTime = &createdAt
+		if result.LastCheckTime == nil || createdAt.After(*result.LastCheckTime) {
+			checkedAt := createdAt
+			result.LastCheckTime = &checkedAt
 		}
-
-		// Track latency for averaging
 		if latencyMS.Valid {
 			totalLatency += latencyMS.Int64
 			latencyCount++
 		}
-
-		switch status {
-		case "success":
-			successCount++
-		case "failure":
-			failureCount++
-		case "error":
-			errorCount++
-		}
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating member statuses: %w", err)
+		return nil, fmt.Errorf("error iterating member checks: %w", err)
 	}
-
-	totalChecked := successCount + failureCount + errorCount
-
-	if totalChecked == 0 {
-		return &CurrentStatus{Status: "unknown"}, nil
-	}
-
-	result := &CurrentStatus{
-		LastCheckTime: latestCheckTime,
-	}
-
-	// Calculate average latency
 	if latencyCount > 0 {
 		avgLatency := int(totalLatency / int64(latencyCount))
 		result.LastLatency = &avgLatency
 	}
-
-	// Apply status logic: all up = UP, all down = DOWN, otherwise = DEGRADED
-	if successCount == totalChecked {
-		result.Status = "up"
-	} else if failureCount+errorCount == totalChecked {
-		result.Status = "down"
-	} else {
-		result.Status = "degraded"
-	}
-
 	return result, nil
 }
 

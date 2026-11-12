@@ -249,7 +249,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The active built-in view shows current state and the configured monitor/global uptime summaries. It supports ordered sections, active/recent incidents, and maintenance. Group and passive monitors present derived or reported state rather than an active network-check result.",
+            "The active built-in view shows current state and the configured monitor/global uptime summaries. It supports ordered sections, active/recent incidents, and maintenance. Group and passive monitors present derived or reported state rather than an active network-check result. A group's status comes from its members' monitor states, not their latest check rows: it shows down only when every member with a verdict is down, degraded when some are down or degraded, and a paused member does not count.",
         },
         {
           type: "paragraph",

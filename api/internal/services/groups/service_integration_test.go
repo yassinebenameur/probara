@@ -121,15 +121,30 @@ func TestService_GetGroupStatus_EmptyIsUnknownAndMixedIsDegraded(t *testing.T) {
 		t.Fatalf("AddMonitorsToGroup(status <- leaves) error = %v", err)
 	}
 
+	// A failed check row alone does not move the group: only the members'
+	// monitor-level states do (S-G3).
 	now := time.Now().UTC()
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-5*time.Minute), "success", "monitor", testutil.IntPtr(120))
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, now.Add(-2*time.Minute), "failure", "monitor", nil)
 
-	status, err = svc.GetGroupStatus(ctx, tenantID, groupID)
-	if err != nil {
-		t.Fatalf("GetGroupStatus(mixed) error = %v", err)
-	}
-	if status != "degraded" {
-		t.Fatalf("GetGroupStatus(mixed) = %s, want degraded", status)
+	for _, tc := range []struct{ a, b, want string }{
+		{"up", "up", "success"},
+		{"up", "down", "degraded"},
+		{"up", "degraded", "degraded"},
+		{"down", "down", "failure"},
+		{"unknown", "unknown", "unknown"},
+	} {
+		for id, state := range map[uuid.UUID]string{monitorA: tc.a, monitorB: tc.b} {
+			if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = $2 WHERE id = $1`, id, state); err != nil {
+				t.Fatalf("set monitor state: %v", err)
+			}
+		}
+		status, err = svc.GetGroupStatus(ctx, tenantID, groupID)
+		if err != nil {
+			t.Fatalf("GetGroupStatus(%s+%s) error = %v", tc.a, tc.b, err)
+		}
+		if status != tc.want {
+			t.Errorf("GetGroupStatus(%s+%s) = %s, want %s", tc.a, tc.b, status, tc.want)
+		}
 	}
 }

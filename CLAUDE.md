@@ -215,7 +215,11 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   pause/maintenance handling, or uptime accounting must update the rule
   table in the same commit; tests cite rule IDs
   (`shared/monitorstate/spec_test.go`). New aggregation surfaces delegate to
-  `shared/monitorstate`, never invent parallel state rules.
+  `shared/monitorstate`, never invent parallel state rules. Group state is
+  `GroupSummary` (`group.go`, rules S-G): the alerter's SQL uses
+  `GroupAlertStateSQL` (pinned by `TestGroupAlertStateSQLMatchesSummary`),
+  every display surface `LoadGroupSummaries` + `DisplayState`; never roll a
+  group up from member check rows.
 - **Interval availability**: `IntegrateTimeline` (`shared/analytics/timeline.go`)
   is the one integration of `monitor_state_intervals` (+ maintenance union,
   paused/unknown/untracked split, serial composite). The monitor headline

@@ -12,6 +12,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 var ErrGroupCycleDetected = errors.New("group nesting would create a cycle")
@@ -266,66 +267,19 @@ func (s *Service) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid
 	return groups, nil
 }
 
-// GetGroupStatus calculates the aggregated status for a group
+// GetGroupStatus returns a group's displayed status in check-result
+// vocabulary: "success", "failure", "degraded" or "unknown".
+//
+// It is monitorstate's display view of the group (S-G3) over the members'
+// monitor-level states — the same rule public status pages use — so it
+// honours location quorum, failure thresholds and paused members. It is not
+// derived from the members' newest check rows.
 func (s *Service) GetGroupStatus(ctx context.Context, tenantID, groupID uuid.UUID) (string, error) {
-	// Get all non-group member monitors recursively
-	members, err := s.GetGroupLeafMembers(ctx, tenantID, groupID)
+	summaries, err := monitorstate.LoadGroupSummaries(ctx, s.db, tenantID, []uuid.UUID{groupID})
 	if err != nil {
 		return "", err
 	}
-
-	if len(members) == 0 {
-		return "unknown", nil
-	}
-
-	// Query the latest check result for each member monitor
-	successCount := 0
-	failureCount := 0
-	errorCount := 0
-
-	for _, member := range members {
-		query := `
-			SELECT status
-			FROM check_results
-			WHERE monitor_id = $1 AND tenant_id = $2 AND result_source <> 'platform'
-			ORDER BY created_at DESC
-			LIMIT 1
-		`
-
-		var status string
-		err := s.db.QueryRowContext(ctx, query, member.ID, tenantID).Scan(&status)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				// No results for this monitor yet, skip it
-				continue
-			}
-			return "", fmt.Errorf("failed to get monitor status: %w", err)
-		}
-
-		switch status {
-		case "success":
-			successCount++
-		case "failure":
-			failureCount++
-		case "error":
-			errorCount++
-		}
-	}
-
-	totalChecked := successCount + failureCount + errorCount
-
-	if totalChecked == 0 {
-		return "unknown", nil
-	}
-
-	// Apply status logic: all up = UP, all down = DOWN, otherwise = DEGRADED
-	if successCount == totalChecked {
-		return "success", nil
-	}
-	if failureCount+errorCount == totalChecked {
-		return "failure", nil
-	}
-	return "degraded", nil
+	return summaries[groupID].DisplayCheckStatus(), nil
 }
 
 func (s *Service) wouldCreateCycle(ctx context.Context, tenantID, parentGroupID, candidateMemberID uuid.UUID) (bool, error) {
