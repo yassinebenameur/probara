@@ -105,7 +105,7 @@ inventing new crypto.
 - **Client.** `shared/queue.NewClient` learns an auth option
   (`nats.UserCredentials(path)` or `nats.Token(...)`), wired from a new
   `NATS_CREDENTIAL` / `NATS_CREDS_FILE` config key in
-  `shared/config/config.go:235-240`.
+  `shared/config/config_worker.go` (`WorkerConfig`).
 
 ### Layer 3 — Ingest-side identity binding
 
@@ -210,7 +210,7 @@ limits the numbers it calls. Both are read by `shared/config`
 ## Key file references
 
 - Connect seam (add auth here): `shared/queue/nats.go:62-80`.
-- Config (add credential key): `shared/config/config.go:235-240`.
+- Config (add credential key): `shared/config/config_worker.go` (`WorkerConfig`).
 - Worker subject selection: `worker/internal/worker/worker.go:149-165`.
 - Ingest trust points: `scheduler/internal/ingest/ingest.go:172-227`,
   `ingest/heartbeat.go`, `ingest/mesh.go`.

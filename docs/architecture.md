@@ -39,7 +39,7 @@ names the OTLP endpoint; it reads no body and writes nothing.
 
 ## Messaging contracts
 
-The following are defaults; consult `shared/config/config.go` and the deployed
+The following are defaults; consult `shared/config/` (`config_<service>.go`) and the deployed
 values for overrides.
 
 | Purpose | Transport / stream | Subject |
