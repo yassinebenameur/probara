@@ -845,7 +845,10 @@ or imported groups come back empty. Any other path that creates groups through
   submit of the types it edits inline (http, ping, dns, synthetic) and draws
   their fields through field-only editors (`HttpMonitorForm`, `DnsEditor`,
   `SyntheticApiEditor`, `SyntheticBrowserEditor`); synthetic "Test now" is
-  `useSyntheticLiveTest`. Labelled fields in a type form are
+  `useSyntheticLiveTest`. A large type form keeps state, validation and
+  submit in its own file and draws its panels from a folder beside it
+  (`components/monitors/sip/`, `components/monitors/database/`); the
+  panels hold no form state. Labelled fields in a type form are
   `components/ui/FormField`; form-kit's `FormInput`/`FormSelect`/
   `FormTextarea` are only for those inline editors. Form layout is form-kit
   too: sections are `FormPanel`, settings are
