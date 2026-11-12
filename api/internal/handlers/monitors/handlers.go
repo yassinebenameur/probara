@@ -87,7 +87,7 @@ func NewHandlers(service monitorservice.MonitorService, groupSvc groupMembership
 		service:       service,
 		groupService:  groupSvc,
 		resultService: resultSvc,
-		checkSubject:  "check.jobs",
+		checkSubject:  sharedmodels.CheckJobSubject,
 		artifactsDir:  baseDir,
 		logger:        log,
 	}

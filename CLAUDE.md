@@ -326,7 +326,9 @@ or imported groups come back empty. Any other path that creates groups through
   the alerter against the store with a freshness bound.
 - **Check-job queue**: `CHECK_JOB_STREAM`/`CHECK_JOB_SUBJECT` must be identical
   on API (run-now publisher), scheduler, and workers. Code defaults
-  `CHECK_JOBS`/`check.jobs`; Compose and Helm ship `check-jobs`/`check.job` on
+  `CHECK_JOBS`/`check.jobs` (constants in `shared/models`, read for all three
+  by `loadCheckQueueConfig` in `shared/config` — never read a `CHECK_*` queue
+  variable anywhere else); Compose and Helm ship `check-jobs`/`check.job` on
   all three. Changing one service alone silently breaks run-now.
 - **Check-job delivery**: the worker heartbeats `InProgress` every 10 s while
   a check runs (`checkProgressInterval`, `worker.go`; keep it well under the

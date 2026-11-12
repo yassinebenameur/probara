@@ -5,7 +5,19 @@ import (
 	"time"
 )
 
+// Queue names shared by every service that touches check jobs or results.
+// They are the code defaults; CHECK_JOB_STREAM, CHECK_JOB_SUBJECT,
+// CHECK_RESULT_STREAM and CHECK_RESULT_SUBJECT override them, and the API
+// (run-now publisher), scheduler and workers must all agree or run-now
+// silently stops working. shared/config reads them through one loader
+// (loadCheckQueueConfig) for that reason.
 const (
+	// CheckJobStream is the JetStream work-queue stream carrying check jobs
+	// from the scheduler (and the API's run-now) to workers.
+	CheckJobStream = "CHECK_JOBS"
+	// CheckJobSubject is the subject check jobs are published to; private
+	// locations consume a per-location suffix of it.
+	CheckJobSubject = "check.jobs"
 	// CheckResultStream is the JetStream work-queue stream carrying check
 	// results from workers back to the platform-side ingest consumer.
 	CheckResultStream = "CHECK_RESULTS"

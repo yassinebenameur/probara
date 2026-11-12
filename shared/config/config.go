@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"github.com/yassinebenameur/probara/shared/ai"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/ai"
+	"github.com/yassinebenameur/probara/shared/models"
 
 	"github.com/google/uuid"
 )
@@ -428,15 +430,10 @@ func LoadAPIConfig() (*APIConfig, error) {
 		cfg.AlertConsumerName = alertConsumerName
 	}
 
-	// CHECK_JOB_SUBJECT
-	checkJobSubject := os.Getenv("CHECK_JOB_SUBJECT")
-	if checkJobSubject == "" {
-		cfg.CheckJobSubject = "check.jobs"
-	} else {
-		cfg.CheckJobSubject = checkJobSubject
-	}
-	cfg.CheckJobStream = envOrDefault("CHECK_JOB_STREAM", "CHECK_JOBS")
-	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
+	queues := loadCheckQueueConfig()
+	cfg.CheckJobSubject = queues.JobSubject
+	cfg.CheckJobStream = queues.JobStream
+	cfg.CheckResultSubject = queues.ResultSubject
 
 	// AI_RCA_SUBJECT — subject the API publishes AI root cause jobs to (the
 	// worker consumes them). Must match the worker's AI_RCA_SUBJECT.
@@ -707,25 +704,13 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 		cfg.SchedulerBatchSize = batchSize
 	}
 
-	// CHECK_JOB_SUBJECT
-	checkJobSubject := os.Getenv("CHECK_JOB_SUBJECT")
-	if checkJobSubject == "" {
-		cfg.CheckJobSubject = "check.jobs"
-	} else {
-		cfg.CheckJobSubject = checkJobSubject
-	}
-
-	// CHECK_JOB_STREAM
-	checkJobStream := os.Getenv("CHECK_JOB_STREAM")
-	if checkJobStream == "" {
-		cfg.CheckJobStream = "CHECK_JOBS"
-	} else {
-		cfg.CheckJobStream = checkJobStream
-	}
+	queues := loadCheckQueueConfig()
+	cfg.CheckJobSubject = queues.JobSubject
+	cfg.CheckJobStream = queues.JobStream
 
 	// Results ingest — the scheduler-side consumer persisting worker results.
-	cfg.CheckResultStream = envOrDefault("CHECK_RESULT_STREAM", "CHECK_RESULTS")
-	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
+	cfg.CheckResultStream = queues.ResultStream
+	cfg.CheckResultSubject = queues.ResultSubject
 	cfg.ResultIngestConsumerName = envOrDefault("RESULT_INGEST_CONSUMER_NAME", "result-ingest")
 	cfg.ResultIngestConcurrency = 10
 	if v := strings.TrimSpace(os.Getenv("RESULT_INGEST_CONCURRENCY")); v != "" {
@@ -933,26 +918,14 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		cfg.NATSConsumerName = consumerName
 	}
 
-	// CHECK_JOB_STREAM
-	checkJobStream := os.Getenv("CHECK_JOB_STREAM")
-	if checkJobStream == "" {
-		cfg.CheckJobStream = "CHECK_JOBS"
-	} else {
-		cfg.CheckJobStream = checkJobStream
-	}
-
-	// CHECK_JOB_SUBJECT
-	checkJobSubject := os.Getenv("CHECK_JOB_SUBJECT")
-	if checkJobSubject == "" {
-		cfg.CheckJobSubject = "check.jobs"
-	} else {
-		cfg.CheckJobSubject = checkJobSubject
-	}
+	queues := loadCheckQueueConfig()
+	cfg.CheckJobSubject = queues.JobSubject
+	cfg.CheckJobStream = queues.JobStream
 
 	// Results publishing — workers publish results here instead of writing
 	// Postgres, so remote location workers only need NATS reachability.
-	cfg.CheckResultStream = envOrDefault("CHECK_RESULT_STREAM", "CHECK_RESULTS")
-	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
+	cfg.CheckResultStream = queues.ResultStream
+	cfg.CheckResultSubject = queues.ResultSubject
 
 	// WORKER_LOCATION_ID — pins this worker to a private location (UUID from
 	// the Locations page). Empty = default platform fleet.
@@ -1096,6 +1069,27 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	cfg.NotificationEgressConfig = egressCfg
 
 	return cfg, nil
+}
+
+// CheckQueueConfig names the check-job and check-result queues.
+type CheckQueueConfig struct {
+	JobStream     string
+	JobSubject    string
+	ResultStream  string
+	ResultSubject string
+}
+
+// loadCheckQueueConfig is the sole reader of the CHECK_JOB_* and
+// CHECK_RESULT_* variables. The API, the scheduler and the worker all load
+// through it, so the three cannot disagree on a default: a service on a
+// different job subject makes run-now publish where no worker listens.
+func loadCheckQueueConfig() CheckQueueConfig {
+	return CheckQueueConfig{
+		JobStream:     envOrDefault("CHECK_JOB_STREAM", models.CheckJobStream),
+		JobSubject:    envOrDefault("CHECK_JOB_SUBJECT", models.CheckJobSubject),
+		ResultStream:  envOrDefault("CHECK_RESULT_STREAM", models.CheckResultStream),
+		ResultSubject: envOrDefault("CHECK_RESULT_SUBJECT", models.CheckResultSubject),
+	}
 }
 
 func envOrDefault(key, fallback string) string {
