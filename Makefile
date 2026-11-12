@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build build-collector-static kuma-export seed-demo seed-demo-targets seed-demo-stop seed-demo-teardown clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
+.PHONY: help up down restart logs build build-collector-static kuma-export seed-demo seed-demo-targets seed-demo-stop seed-demo-teardown clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop logs-api logs-scheduler logs-worker logs-status rebuild scale-workers db-shell db-backup db-restore
 
 # Local AI runs beside the platform, never in its way: its image build fails on
 # purpose for an artifact that is not release-approved, and Compose aborts a
@@ -54,7 +54,7 @@ help:
 	@echo "  make test-unit   - Run the fast suite without external services"
 	@echo "  make test-cover  - Run tests and open coverage report in browser"
 	@echo "  make lint        - Run go vet and fmt checks"
-	@echo "  make fmt         - Format Go code"
+	@echo "  make fmt         - Check Go formatting (gofmt -l; does not rewrite)"
 	@echo "  make vet         - Run go vet"
 	@echo ""
 	@echo "Service-specific logs:"
@@ -164,6 +164,9 @@ healthcheck:
 	@echo ""
 	@echo "Status Page:"
 	@curl -s -o /dev/null -w "  Status: %{http_code}\n" http://localhost:9093/healthz || echo "  Status: Not responding"
+	@echo ""
+	@echo "Alerter:"
+	@curl -s -o /dev/null -w "  Status: %{http_code}\n" http://localhost:9094/healthz || echo "  Status: Not responding"
 	@echo ""
 	@echo "NATS:"
 	@curl -s -o /dev/null -w "  Status: %{http_code}\n" http://localhost:8222/healthz || echo "  Status: Not responding"

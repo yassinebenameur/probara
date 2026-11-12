@@ -232,7 +232,10 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    container_name: probara-worker
+    # No container_name and a host port range, so `make scale-workers N=3`
+    # can start replicas: Compose refuses to scale a service with a fixed
+    # name, and replicas cannot share one host port. A single worker still
+    # gets 9092.
     environment:
       # Local AI client (api + worker only; same token as the local-ai service).
       LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
@@ -255,7 +258,7 @@ services:
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       SIP_LOCALHOST_AS_HOST_GATEWAY: "true"
     ports:
-      - "9092:9092"
+      - "9092-9099:9092"
     volumes:
       - synthetic_artifacts:/artifacts
     extra_hosts:
