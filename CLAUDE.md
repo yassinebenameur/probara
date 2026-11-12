@@ -271,7 +271,10 @@ or imported groups come back empty. Any other path that creates groups through
 
 ## Adding a monitor type (checklist)
 
-1. `MonitorType` constant in `api/internal/models/monitors.go`; config struct in
+1. `MonitorType` constant + `AllMonitorTypes` entry in
+   `shared/models/monitor_types.go` (the one Go list of types; aliased in
+   `api/internal/models/monitors.go`). Parity tests then fail in every Go
+   mirror that has not been taught the type; config struct in
    `shared/models/` (one file per newer type, e.g. `prometheus.go`; older types
    sit in `check_job_payload.go`). The API validator and the worker both consume
    the shared struct, so put `Validate()` on it rather than duplicating rules
@@ -290,9 +293,12 @@ or imported groups come back empty. Any other path that creates groups through
    the form hydrates, clone, secret clears) in `web/lib/monitor-form-*.test.ts`
 6. Docs: `website/lib/docs/pages/monitors.ts` (type table + protocol passage +
    secrets coverage) — import/export support is automatic via the registry
-7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
-   in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
-   `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
+7. Display-only mirrors that the registry cannot drive: `typeLabels`/`typeBadges`
+   in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars) and
+   `typeIcons` in `shared/statustemplate/statustemplate.go` (both pinned to
+   `AllMonitorTypes` by tests), `MONITOR_TYPE_ICONS` in
+   `web/components/monitors/monitor-type-icons.ts` (typed against
+   `MonitorType`, so a missing icon does not compile), `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
    `badge`), and the type count + `monitorGroups` on the
    landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
