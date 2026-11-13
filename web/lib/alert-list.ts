@@ -1,71 +1,185 @@
-import type { SortState } from './sort';
-import type { AlertSortColumn, AlertStatus } from './types';
+import { mergeAlertUpdate } from './ai-triage';
+import { currentTone, foldSuppressed, isOpenAlert, type TimelineTone } from './alert-timeline';
+import type { Alert, AlertStatus } from './types';
 
 /**
  * The /alerts list's view rules, kept pure so node tests cover them: which
- * sort each view shows and sends, where a live alert may be inserted, how a
- * row selection grows and shrinks, and when the row shortcuts (A / R and the
- * arrow keys) may fire.
+ * alerts a status view lists, how they lay out on the range's calendar, which
+ * fold under a root cause, what a live event may overwrite, how a row selection grows and
+ * shrinks, and when the row shortcuts (A / R and the arrow keys) may fire.
  */
-
-/** The status chips: 'open' (active + acknowledged) is the operator's queue. */
-export type AlertStatusFilter = 'open' | AlertStatus | 'all';
-
-export const ALERT_SORT_KEYS = ['status', 'monitor', 'started', 'duration'] as const;
-export type AlertSortKey = (typeof ALERT_SORT_KEYS)[number];
 
 /**
- * The Open view's default, sorted here over the whole queue: unhandled
- * (active) first, then acknowledged; newest first within each.
+ * The status chips. 'all' (the default) is every alert of the range; 'open'
+ * is active + acknowledged, the queue.
  */
-export const ALERT_SORT_DEFAULT: SortState<AlertSortKey> = { key: 'status', dir: 'asc' };
-/** The server-paged views' default, the API's own (triggered_at index + LIMIT). */
-export const ALERT_SORT_PAGED_DEFAULT: SortState<AlertSortKey> = { key: 'started', dir: 'desc' };
-/** Newest and longest first; Status and Monitor start ascending. */
-export const ALERT_SORT_DEFAULT_DIR = { started: 'desc', duration: 'desc' } as const;
+export type AlertStatusFilter = 'all' | 'open' | AlertStatus;
 
-/** The API's `sort` column for each header (server-paged views sort there). */
-export const ALERT_SORT_COLUMN: Record<AlertSortKey, AlertSortColumn> = {
-  status: 'status',
-  monitor: 'monitor',
-  started: 'triggered_at',
-  duration: 'duration',
-};
+/** Rows the feed shows before it loads more, and each step after. */
+export const FEED_PAGE = 25;
 
-/** Only the Open view holds its whole list and sorts it here; the rest page and sort on the server. */
-export function isClientSorted(view: AlertStatusFilter): boolean {
-  return view === 'open';
+/** Whether a status view lists this alert. */
+export function alertInView(alert: Alert, view: AlertStatusFilter): boolean {
+  if (view === 'all') return true;
+  if (view === 'open') return isOpenAlert(alert);
+  return alert.status === view;
 }
 
-/** The sort a view starts in (and leaves out of the URL). */
-export function alertSortFallback(view: AlertStatusFilter): SortState<AlertSortKey> {
-  return isClientSorted(view) ? ALERT_SORT_DEFAULT : ALERT_SORT_PAGED_DEFAULT;
-}
-
-/** Status orders nothing under a one-status filter (every row ranks the same). */
-export function statusSortApplies(view: AlertStatusFilter): boolean {
-  return view === 'open' || view === 'all';
+export interface Feed {
+  /** Top-level alerts, newest start first. */
+  rows: Alert[];
+  /** Suppressed downstream alerts folded under a row, by that row's id, oldest first. */
+  children: Map<string, Alert[]>;
 }
 
 /**
- * The sort a view actually applies, and so the one its header shows. A
- * status sort under a one-status filter is the API's newest-first order
- * (services/alerts ListAlerts collapses it), so it reads as Started.
+ * The feed for a view: every alert that was open at some point since
+ * `start` (so every unresolved alert, however old), newest start first.
+ *
+ * In the views that show the whole queue ('all', 'open') an alert the
+ * alerter is suppressing for a dependency folds under its root cause's alert
+ * (foldSuppressed), so an outage and its blast radius are one entry. A
+ * one-status view lists exactly the alerts in that status, unfolded: a parent
+ * in the other status would otherwise hide them.
  */
-export function effectiveAlertSort(sort: SortState<AlertSortKey>, view: AlertStatusFilter): SortState<AlertSortKey> {
-  return sort.key === 'status' && !statusSortApplies(view) ? ALERT_SORT_PAGED_DEFAULT : sort;
+export function feedRows(alerts: readonly Alert[], view: AlertStatusFilter, start: number): Feed {
+  const inRange = alerts.filter((a) => isOpenAlert(a) || Date.parse(a.resolved_at ?? a.triggered_at) >= start);
+  const folds = view === 'all' || view === 'open';
+  const parentOf = folds ? foldSuppressed(inRange) : new Map<string, string>();
+  const newestFirst = (a: Alert, b: Alert) => Date.parse(b.triggered_at) - Date.parse(a.triggered_at) || a.id.localeCompare(b.id);
+
+  const children = new Map<string, Alert[]>();
+  for (const alert of inRange) {
+    const parent = parentOf.get(alert.id);
+    if (!parent) continue;
+    const list = children.get(parent);
+    if (list) list.push(alert);
+    else children.set(parent, [alert]);
+  }
+  for (const list of children.values()) list.sort((a, b) => -newestFirst(a, b));
+
+  const rows = inRange.filter((alert) => !parentOf.has(alert.id) && alertInView(alert, view)).sort(newestFirst);
+  return { rows, children };
+}
+
+/** The feed's time headings: one per hour up to a day's range, one per date beyond. */
+export type FeedGrain = 'hour' | 'day';
+
+export function feedGrain(rangeMs: number): FeedGrain {
+  return rangeMs <= 24 * 3_600_000 ? 'hour' : 'day';
+}
+
+/** The start of the local hour or day `at` falls in. */
+export function bucketStart(at: number, grain: FeedGrain): number {
+  const d = new Date(at);
+  if (grain === 'hour') d.setMinutes(0, 0, 0);
+  else d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** The bucket `steps` after (or, negative, before) the one starting at `start`, on the local calendar. */
+export function bucketShift(start: number, grain: FeedGrain, steps: number): number {
+  const d = new Date(start);
+  if (grain === 'hour') d.setHours(d.getHours() + steps);
+  else d.setDate(d.getDate() + steps);
+  return d.getTime();
+}
+
+export type FeedItem =
+  /** A bucket that has alerts; they follow it. */
+  | { kind: 'heading'; at: number }
+  /** A run of buckets with no alert, `from` (oldest) through `to` (newest), both bucket starts. */
+  | { kind: 'gap'; from: number; to: number }
+  /** Alerts that started before the range and reach into it follow this. */
+  | { kind: 'earlier' }
+  | { kind: 'alert'; alert: Alert };
+
+/**
+ * `rows` (newest start first) laid out on the range's calendar, newest
+ * bucket first: every hour or date from now back to the range start appears,
+ * as a heading over its alerts or folded into a gap that says nothing
+ * happened, so the list reads as the history it is. Alerts that started
+ * before the range (still open, or resolved inside it) close the list under
+ * 'earlier'.
+ *
+ * `complete` is whether `rows` is everything the view has: when more rows
+ * are still to come the layout stops at the last one, since the buckets
+ * below it are not known to be empty.
+ */
+export function feedItems(
+  rows: readonly Alert[],
+  window: { start: number; end: number },
+  grain: FeedGrain,
+  complete: boolean
+): FeedItem[] {
+  const items: FeedItem[] = [];
+  const oldest = bucketStart(window.start, grain);
+  let gap: { from: number; to: number } | null = null;
+  const flushGap = () => {
+    if (gap) items.push({ kind: 'gap', ...gap });
+    gap = null;
+  };
+  let index = 0;
+  for (let bucket = bucketStart(window.end, grain); bucket >= oldest; bucket = bucketShift(bucket, grain, -1)) {
+    const from = index;
+    // A start past the window's end (clock skew) belongs to the newest bucket.
+    while (index < rows.length && Date.parse(rows[index].triggered_at) >= bucket) index++;
+    if (index > from) {
+      flushGap();
+      items.push({ kind: 'heading', at: bucket });
+      for (let i = from; i < index; i++) items.push({ kind: 'alert', alert: rows[i] });
+    } else if (!complete && index >= rows.length) {
+      break;
+    } else {
+      gap = { from: bucket, to: gap ? gap.to : bucket };
+    }
+  }
+  if (complete || index < rows.length) flushGap();
+  if (index < rows.length) {
+    items.push({ kind: 'earlier' });
+    for (let i = index; i < rows.length; i++) items.push({ kind: 'alert', alert: rows[i] });
+  }
+  return items;
+}
+
+/** The tone of the alert right now: what its dot on the rail shows. */
+export function alertTone(alert: Alert): TimelineTone {
+  return currentTone(alert, alert.suppression_reason === 'dependency');
 }
 
 /**
- * Whether a live alert not yet listed belongs at the top of page 1 of a
- * server-paged view under `sort` (an effective sort): always when newest
- * first, only an active one under the status order (active ranks first,
- * newest first within). Any other order waits for the poll, which places it.
+ * Applies a live stream event to a listed alert. Events are built from core
+ * NATS and carry only the alert's identity, status, times and root cause, so
+ * everything else a row shows is kept from `prev`: triage (mergeAlertUpdate),
+ * the kind and its values, the mesh subject, the acknowledgement time, and,
+ * while the alert stays open, its suppression and blast radius. An
+ * acknowledgement with no time takes the event's. The user's own
+ * acknowledge/resolve returns the whole alert: apply that with
+ * mergeAlertUpdate, never this.
  */
-export function newAlertLeads(sort: SortState<AlertSortKey>, status: AlertStatus): boolean {
-  if (sort.key === 'started') return sort.dir === 'desc';
-  if (sort.key === 'status') return sort.dir === 'asc' && status === 'active';
-  return false;
+export function mergeLiveAlert(prev: Alert | undefined, incoming: Alert): Alert {
+  const next: Alert = { ...mergeAlertUpdate(prev, incoming) };
+  if (prev) {
+    if (!next.kind) next.kind = prev.kind;
+    next.acknowledged_at ??= prev.acknowledged_at;
+    next.baseline_latency_ms ??= prev.baseline_latency_ms;
+    next.observed_latency_ms ??= prev.observed_latency_ms;
+    next.anomaly_score ??= prev.anomaly_score;
+    next.metric_name ??= prev.metric_name;
+    next.metric_value ??= prev.metric_value;
+    next.threshold_value ??= prev.threshold_value;
+    next.source_location_id ??= prev.source_location_id;
+    next.target_location_id ??= prev.target_location_id;
+    next.source_location_name ??= prev.source_location_name;
+    next.target_location_name ??= prev.target_location_name;
+    next.monitor_name ??= prev.monitor_name;
+    if (isOpenAlert(next)) {
+      next.suppression_reason ??= prev.suppression_reason;
+      next.impacted_count ??= prev.impacted_count;
+    }
+  }
+  if (next.status === 'acknowledged' && !next.acknowledged_at) next.acknowledged_at = incoming.updated_at;
+  return next;
 }
 
 /**

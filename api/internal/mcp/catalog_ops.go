@@ -4,9 +4,10 @@ import (
 	"net/http"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	discoveryservice "github.com/yassinebenameur/probara/api/internal/services/discovery"
 )
 
-var tagFilter = param{Name: "tag", Type: "array", Description: "Only monitors with these tags (repeatable)."}
+var tagFilter = param{Name: "tag", Type: "array", Description: "Only monitors carrying any of these tags (repeatable)."}
 
 func observabilityTools() []spec {
 	return []spec{
@@ -189,6 +190,142 @@ func locationTools() []spec {
 			Description: "Delete a maintenance window (ends it immediately if active).",
 			Method:      http.MethodDelete, Route: "/maintenance-windows/{id}",
 			PathDocs: map[string]string{"id": "Maintenance window ID."}, Destructive: true,
+		},
+	}
+}
+
+func discoveryTools() []spec {
+	integration := map[string]string{"id": "Discovery integration ID (list_discovery_integrations)."}
+	service := map[string]string{"id": "Discovered service ID (get_discovery_coverage)."}
+	return []spec{
+		{
+			Name:  "list_discovery_integrations",
+			Title: "List Kubernetes discovery integrations",
+			Description: "Connected Kubernetes clusters: each integration's active namespaces (namespaces), the namespace " +
+				"its collector runs in (home_namespace), namespaces added but not scanned successfully yet " +
+				"(pending_namespaces, with the last skip reason and time in pending_status: forbidden, too_large, " +
+				"inventory_limit, deadline or error), the private location its internal checks run from, when its " +
+				"collector last uploaded a snapshot, and the inventory revision.",
+			Method: http.MethodGet, Route: "/discovery/integrations",
+		},
+		{
+			Name:  "create_discovery_integration",
+			Title: "Create Kubernetes discovery integration",
+			Description: "Register a cluster for discovery. Returns the integration with its collector token, shown only " +
+				"this once; the in-cluster collector needs it (the Discovery page's Connect cluster flow builds the " +
+				"manifest). Nothing is monitored until a suggestion is approved.",
+			Method: http.MethodPost, Route: "/discovery/integrations",
+			Body: typeOf[discoveryservice.CreateRequest](), Required: []string{"name", "namespaces"},
+			FieldDocs: map[string]string{
+				"namespaces":  "1-20 existing Kubernetes namespaces the collector may list Services and Ingresses in; the first is home_namespace, where the collector runs, and can never be removed.",
+				"location_id": "Enabled private location (list_locations) for checks of cluster-internal services; null for none.",
+			},
+		},
+		{
+			Name:  "update_discovery_integration",
+			Title: "Update Kubernetes discovery integration",
+			Description: "Rename an integration, change its private location, or add/remove namespaces as a delta " +
+				"(adding a namespace already configured, or removing one that is not, does nothing). Added namespaces " +
+				"are pending until the collector lists them successfully (their Role/RoleBinding must exist; the " +
+				"Discovery page offers an access manifest), then turn active. A removed namespace leaves coverage at " +
+				"once; its discovered services and their monitor links are deleted after 7 days unless it is added back " +
+				"(links included). Monitors are never touched. The home namespace cannot be removed; at most 20 " +
+				"namespaces, active and pending together. Returns the updated integration (no token).",
+			Method: http.MethodPatch, Route: "/discovery/integrations/{id}",
+			PathDocs: integration,
+			Body:     typeOf[discoveryservice.UpdateRequest](),
+			FieldDocs: map[string]string{
+				"name":              "New name (1-100 characters); omit to keep.",
+				"location_id":       "Enabled private location (list_locations) for internal checks; null to clear; omit to keep.",
+				"add_namespaces":    "Namespaces to add (as pending). get_discovery_namespaces shows their state.",
+				"remove_namespaces": "Namespaces to remove (active or pending); never home_namespace.",
+			},
+			Destructive: true,
+		},
+		{
+			Name:  "get_discovery_namespaces",
+			Title: "Get Kubernetes discovery namespaces",
+			Description: "One integration's namespaces: home first, then active, then pending. Each has state " +
+				"(active or pending), home, for a pending one the last skip reason (forbidden: the namespace does not " +
+				"exist or its access manifest is not applied; too_large; inventory_limit; deadline; error) and " +
+				"checked_at, and counts of its discovered services and of those linked to a monitor. Use it before " +
+				"removing a namespace to see what leaves coverage.",
+			Method: http.MethodGet, Route: "/discovery/integrations/{id}/namespaces",
+			PathDocs: integration,
+		},
+		{
+			Name:  "delete_discovery_integration",
+			Title: "Delete Kubernetes discovery integration",
+			Description: "Delete an integration with its discovered inventory and links; its collector token stops " +
+				"working. Monitors created from it are kept.",
+			Method: http.MethodDelete, Route: "/discovery/integrations/{id}",
+			PathDocs: integration, Destructive: true,
+		},
+		{
+			Name:  "rotate_discovery_collector_token",
+			Title: "Rotate discovery collector token",
+			Description: "Issue a new collector token and revoke the old one at once: the running collector is " +
+				"refused until its secret is updated. Returns the new token, shown only this once.",
+			Method: http.MethodPost, Route: "/discovery/integrations/{id}/rotate-token",
+			PathDocs: integration, Destructive: true,
+		},
+		{
+			Name:  "get_discovery_coverage",
+			Title: "Get Kubernetes discovery coverage",
+			Description: "Monitoring coverage of one integration's discovered services, 50 per page: each service's " +
+				"Services/Ingresses with suggested HTTP/TCP checks (key, target, internal), linked monitors (enabled, " +
+				"state, fresh evidence, alert routing), existing monitors matching a suggestion (candidates) and gaps: " +
+				"no_enabled_monitor, stale_checks, unrouted, freshness_unavailable, resource_missing(_grace), " +
+				"inventory_stale. The summary counts every service before filtering and ignores inventory_stale " +
+				"(reported once as inventory_stale); missing counts resource_missing, missing_grace " +
+				"resource_missing_grace. Only services in the integration's active namespaces are counted: a removed " +
+				"namespace leaves at once, a pending one joins after its first successful scan. Coverage is not health.",
+			Method: http.MethodGet, Route: "/discovery/integrations/{id}/coverage",
+			PathDocs: integration,
+			Query: []param{
+				{Name: "page", Type: "integer", Description: "1-based page number (default 1)."},
+				{Name: "q", Description: "Search service names and namespaces (max 200 characters)."},
+				{Name: "gaps", Type: "boolean", Description: "true: only services with at least one gap."},
+				{Name: "sort", Enum: []string{"name", "gaps"}, Description: "Order by name (default) or most gaps first."},
+			},
+		},
+		{
+			Name:  "approve_discovery_suggestion",
+			Title: "Approve discovery suggestion",
+			Description: "Create a monitor (tagged \"discovered\") from one suggestion of a discovered service, together " +
+				"with its location, channels and inventory link. Returns monitor_id and created. Idempotent per " +
+				"suggestion: approving again returns the monitor already linked with created false. Refused while the inventory is stale, for an internal target without a private " +
+				"location, and when an existing monitor checks the target from that location (link it instead).",
+			Method: http.MethodPost, Route: "/discovery/services/{id}/approve",
+			PathDocs: service,
+			Body:     typeOf[discoveryservice.ApproveRequest](),
+			Required: []string{"key", "name", "interval_seconds"},
+			FieldDocs: map[string]string{
+				"key":               "Suggestion key from get_discovery_coverage.",
+				"interval_seconds":  "Seconds between checks, 30-86400.",
+				"expected_status":   "HTTP suggestions only: expected status code, 100-599.",
+				"location_id":       "Enabled private location to check from; required for internal targets.",
+				"notification_mode": "\"default\" (workspace default channels) or \"custom\" (channel_ids).",
+				"channel_ids":       "1-20 active channel IDs for notification_mode \"custom\"; empty for \"default\".",
+			},
+			Enums: map[string][]string{"notification_mode": {"default", "custom"}},
+		},
+		{
+			Name:  "link_discovery_monitor",
+			Title: "Link monitor to discovered service",
+			Description: "Count an existing monitor as coverage for a discovered service. key optionally binds it to one " +
+				"current suggestion; a suggestion links to at most one monitor.",
+			Method: http.MethodPost, Route: "/discovery/services/{id}/links",
+			PathDocs: service,
+			Body:     typeOf[discoveryservice.LinkRequest](), Required: []string{"monitor_id"},
+			FieldDocs: map[string]string{"key": "Suggestion key from get_discovery_coverage; omit for a service-level link."},
+		},
+		{
+			Name:        "unlink_discovery_monitor",
+			Title:       "Unlink monitor from discovered service",
+			Description: "Remove a monitor's link to a discovered service. The monitor itself is unchanged.",
+			Method:      http.MethodDelete, Route: "/discovery/services/{id}/links/{monitorID}",
+			PathDocs: map[string]string{"id": "Discovered service ID.", "monitorID": "Linked monitor ID."},
 		},
 	}
 }

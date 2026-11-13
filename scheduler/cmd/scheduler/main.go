@@ -2,21 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"github.com/yassinebenameur/probara/scheduler/internal/ingest"
 	"github.com/yassinebenameur/probara/scheduler/internal/scheduler"
+	"github.com/yassinebenameur/probara/shared/bootstrap"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/queue"
-	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -51,11 +48,9 @@ func main() {
 
 	// Create scheduler
 	sched := scheduler.NewScheduler(cfg, log, metricsRegistry, dbClient, queueClient)
-	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
-	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
-		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
-	} else if kerr != secrets.ErrKeyNotConfigured {
-		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
+	secretsEncryptor, _, err := bootstrap.PlatformEncryptor()
+	if err != nil {
+		log.WithError(err).Fatal("Invalid PROBARA_SECRETS_KEY")
 	}
 	sched.ConfigureEncryption(secretsEncryptor)
 
@@ -85,64 +80,25 @@ func main() {
 		log.Warn("RESULT_INGEST_ENABLED=false; check results published by workers will not be persisted")
 	}
 
-	// Start minimal HTTP server for health/metrics
-	go func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("OK"))
-		})
-		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			// Check database connection
-			if err := dbClient.HealthCheck(ctx); err != nil {
-				log.WithError(err).Debug("Database health check failed")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				w.Write([]byte("Database unavailable"))
-				return
-			}
-
-			// Check NATS connection
-			if err := queueClient.HealthCheck(ctx); err != nil {
-				log.WithError(err).Debug("NATS health check failed")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				w.Write([]byte("NATS unavailable"))
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("OK"))
-		})
-		mux.HandleFunc("/metrics", metricsRegistry.Handler().ServeHTTP)
-
-		server := &http.Server{
-			Addr:    fmt.Sprintf(":%d", cfg.MetricsPort),
-			Handler: mux,
-		}
-
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.WithError(err).Fatal("Failed to start metrics server")
-		}
-	}()
+	// Health, readiness and metrics.
+	go bootstrap.Serve(log, "metrics", cfg.MetricsPort, bootstrap.OpsMux(metricsRegistry,
+		bootstrap.Healthz(queueClient),
+		bootstrap.Readyz(log, bootstrap.DatabaseCheck(dbClient), bootstrap.QueueCheck(queueClient)),
+	))
 
 	// Start scheduler in a goroutine
+	// Shutdown cancels the scheduler's context, which makes Start return
+	// context.Canceled: that is the normal exit, not a failure.
 	go func() {
-		if err := sched.Start(); err != nil {
+		if err := sched.Start(); err != nil && !errors.Is(err, context.Canceled) {
 			log.WithError(err).Fatal("Scheduler failed")
 		}
 	}()
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
-
+	bootstrap.WaitForShutdownSignal()
 	log.Info("Shutting down scheduler...")
 
-	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := bootstrap.ShutdownContext()
 	defer cancel()
 
 	if ingestConsumer != nil {

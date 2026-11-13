@@ -461,10 +461,11 @@ test('database: switching from a connection string to fields clears it with ""',
   assertWire(config, { connection_string: '', host: 'redis.internal', port: 6379 });
 });
 
-test('database: TLS turned off omits the stored client key (pinned current behavior)', () => {
-  // ssl_mode disable makes PEM material irrelevant, so neither the cert nor
-  // the key is sent: the cert drops (non-secret), but an absent secret is
-  // kept server-side, so the stored key survives without its certificate.
+test('database: TLS turned off clears the stored client key with ""', () => {
+  // ssl_mode disable makes PEM material irrelevant, so the cert is not sent
+  // (non-secret: an update replaces the config, so it drops). An omitted
+  // secret is KEPT server-side, so the key has to be cleared explicitly or
+  // it would outlive its certificate.
   const config = edit('postgres', pgWithSecrets(), (form) => ({ ...form, ssl_mode: 'disable' })).config;
   assertWire(config, {
     host: 'pg.internal',
@@ -472,7 +473,33 @@ test('database: TLS turned off omits the stored client key (pinned current behav
     username: 'monitor',
     password: '***',
     ssl_mode: 'disable',
+    tls_client_key_pem: '',
   });
+});
+
+test('database: the TLS toggle turned off clears the stored client key on every toggle type', () => {
+  for (const type of ['redis', 'mongodb', 'rabbitmq', 'mysql'] as const) {
+    const monitor = storedMonitor(type, {
+      host: 'db.internal',
+      port: DEFAULT_PORTS[type],
+      username: 'monitor',
+      tls_enabled: true,
+      tls_client_cert_pem: 'CERT',
+      tls_client_key_pem: '***',
+    } as MonitorConfig);
+    const kept = edit(type, monitor).config as Record<string, unknown>;
+    assert.equal(kept.tls_client_key_pem, '***', `${type}: TLS on keeps the stored key`);
+    const off = edit(type, monitor, (form) => ({ ...form, tls_enabled: false })).config as Record<string, unknown>;
+    assert.equal(off.tls_enabled, undefined, `${type}: TLS off`);
+    assert.equal(off.tls_client_cert_pem, undefined, `${type}: cert dropped`);
+    assert.equal(off.tls_client_key_pem, '', `${type}: TLS off must clear the stored key with ""`);
+  }
+});
+
+test('database: TLS off with no stored key sends no client key at all', () => {
+  const monitor = storedMonitor('redis', { host: 'r', port: 6379, tls_enabled: true } as MonitorConfig);
+  const config = edit('redis', monitor, (form) => ({ ...form, tls_enabled: false })).config;
+  assert.ok(!('tls_client_key_pem' in (config as Record<string, unknown>)));
 });
 
 test('database: a clone never claims the source monitor\'s masked secrets', () => {

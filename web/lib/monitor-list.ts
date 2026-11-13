@@ -4,6 +4,7 @@ import {
   calculateUptime,
   getOperationalResults,
   type MonitorDisplayStatus,
+  monitorTarget,
   STATUS_RANK,
 } from './monitor-utils';
 import { readSortParams, sortRows, type SortDir, type SortState, type SortValue, writeSortParams } from './sort';
@@ -73,6 +74,75 @@ export interface MonitorListParams {
   sort: MonitorListSort;
 }
 
+/**
+ * The tag filter rule: with no tag selected every monitor matches, otherwise
+ * a monitor matches when it carries ANY selected tag. The dashboard API's
+ * `tag` scope is the same rule (`tags && $n`, see
+ * api/internal/services/dashboard/service.go), so a dashboard count and the
+ * `?tag=` list it links to cover the same monitors.
+ */
+export function matchesAnyTag(monitorTags: readonly string[] | null | undefined, selected: ReadonlySet<string>): boolean {
+  if (selected.size === 0) return true;
+  return Boolean(monitorTags?.some((tag) => selected.has(tag)));
+}
+
+/** The monitors list's filters, as the page holds them. */
+export interface MonitorListFilters {
+  /** The search box, trimmed and lower-cased ('' = no search). */
+  query: string;
+  types: ReadonlySet<string>;
+  status: MonitorStatusFilter;
+  tags: ReadonlySet<string>;
+  unroutedOnly: boolean;
+  /** The row's display status (getEffectiveMonitorStatus over its results). */
+  statusOf: (monitor: Monitor) => MonitorDisplayStatus;
+}
+
+/**
+ * Whether one monitor passes the list's filters. Search covers what the row
+ * shows: name, target (URL or host) and tags. `ignore` leaves one filter
+ * out: a filter popover counts its options against everything else that is
+ * set.
+ */
+export function monitorMatchesFilters(monitor: Monitor, filters: MonitorListFilters, ignore?: 'type' | 'tags'): boolean {
+  const { query, types: selectedTypes, status: statusFilter, tags: selectedTags, unroutedOnly } = filters;
+  const matchesSearch =
+    !query ||
+    monitor.name.toLowerCase().includes(query) ||
+    Boolean(monitorTarget(monitor)?.toLowerCase().includes(query)) ||
+    Boolean(monitor.tags?.some((tag) => tag.toLowerCase().includes(query)));
+  const matchesType = ignore === 'type' || selectedTypes.size === 0 || selectedTypes.has(monitor.type);
+  const status = filters.statusOf(monitor);
+  const matchesStatus = statusFilter === 'all' ||
+    (statusFilter === 'up' && status === 'up') ||
+    (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
+    (statusFilter === 'paused' && status === 'paused') ||
+    (statusFilter === 'maintenance' && status === 'maintenance');
+  const matchesTags = ignore === 'tags' || matchesAnyTag(monitor.tags, selectedTags);
+  const matchesRouting =
+    !unroutedOnly || (monitor.enabled && monitor.alert_routing?.reachable === false);
+  return matchesSearch && matchesType && matchesStatus && matchesTags && matchesRouting;
+}
+
+/**
+ * Status counts for the filter chips. These count every monitor, group
+ * members included, under the same rule the status filter applies.
+ */
+export function countMonitorStatuses(
+  monitors: readonly Monitor[],
+  statusOf: (monitor: Monitor) => MonitorDisplayStatus
+): Record<MonitorStatusFilter, number> {
+  const statusCounts: Record<MonitorStatusFilter, number> = { all: monitors.length, up: 0, down: 0, paused: 0, maintenance: 0 };
+  monitors.forEach((m) => {
+    const status = statusOf(m);
+    if (status === 'up') statusCounts.up += 1;
+    else if (status === 'down' || status === 'degraded') statusCounts.down += 1;
+    else if (status === 'paused') statusCounts.paused += 1;
+    else if (status === 'maintenance') statusCounts.maintenance += 1;
+  });
+  return statusCounts;
+}
+
 export function isMonitorStatusFilter(value: string | null | undefined): value is MonitorStatusFilter {
   return (MONITOR_STATUS_FILTERS as readonly string[]).includes(value ?? '');
 }
@@ -121,6 +191,12 @@ export function formatMonitorListParams(
   return next.toString();
 }
 
+/** A /monitors deep link: the list's defaults plus `overrides`. Never hand-write the query string. */
+export function monitorsListHref(overrides: Partial<MonitorListParams>): string {
+  const query = formatMonitorListParams({ ...parseMonitorListParams(''), ...overrides });
+  return query ? `/monitors?${query}` : '/monitors';
+}
+
 // ── List order ───────────────────────────────────────────────────────────
 //
 // One sort over groups and standalone monitors together, for every key and
@@ -137,21 +213,57 @@ export interface MonitorSortContext {
 }
 
 // Calls `visit` for each of a group's members, nested groups' members
-// included (cycles cut). False when the group has no members.
+// included (cycles cut). False when the group has no members. The one walk
+// over the list's group tree: the status rank, the last-check sort, the
+// filter's "a group matches through its members" and the move-to-group cycle
+// check all reduce it.
 function foldMembers(
-  group: Monitor,
-  ctx: MonitorSortContext,
+  groupId: string,
+  membersOf: (groupId: string) => Monitor[],
   visit: (member: Monitor) => void,
   visited: Set<string> = new Set()
 ): boolean {
-  if (visited.has(group.id)) return false;
-  visited.add(group.id);
-  const members = ctx.membersOf(group.id);
+  if (visited.has(groupId)) return false;
+  visited.add(groupId);
+  const members = membersOf(groupId);
   members.forEach((member) => {
     visit(member);
-    if (member.type === 'group') foldMembers(member, ctx, visit, visited);
+    if (member.type === 'group') foldMembers(member.id, membersOf, visit, visited);
   });
   return members.length > 0;
+}
+
+/**
+ * Whether any member of the group, nested groups' members included, passes
+ * `matches`: searching for a member surfaces the group it lives in.
+ */
+export function groupHasMatchingMember(
+  groupId: string,
+  membersOf: (groupId: string) => Monitor[],
+  matches: (member: Monitor) => boolean
+): boolean {
+  let found = false;
+  foldMembers(groupId, membersOf, (member) => {
+    if (!found && matches(member)) found = true;
+  });
+  return found;
+}
+
+/**
+ * Whether `candidateDescendantID` is `rootGroupID` itself or a group nested
+ * anywhere under it: moving the root into such a group would close a cycle.
+ */
+export function groupContainsGroup(
+  rootGroupID: string,
+  candidateDescendantID: string,
+  membersOf: (groupId: string) => Monitor[]
+): boolean {
+  if (rootGroupID === candidateDescendantID) return true;
+  return groupHasMatchingMember(
+    rootGroupID,
+    membersOf,
+    (member) => member.type === 'group' && member.id === candidateDescendantID
+  );
 }
 
 /**
@@ -163,7 +275,7 @@ function foldMembers(
 export function monitorStatusRank(monitor: Monitor, ctx: MonitorSortContext): number {
   if (monitor.type !== 'group') return STATUS_RANK[ctx.statusOf(monitor)];
   let worst = Infinity;
-  const hasMembers = foldMembers(monitor, ctx, (member) => {
+  const hasMembers = foldMembers(monitor.id, ctx.membersOf, (member) => {
     if (member.type !== 'group') worst = Math.min(worst, STATUS_RANK[ctx.statusOf(member)]);
   });
   // Only nested groups, all empty: nothing below to rank by.
@@ -202,7 +314,7 @@ export function monitorSortValue(monitor: Monitor, key: MonitorSortKey, ctx: Mon
       const own = latestCheckAt(results);
       if (monitor.type !== 'group' || own !== null) return own;
       let latest: number | null = null;
-      foldMembers(monitor, ctx, (member) => {
+      foldMembers(monitor.id, ctx.membersOf, (member) => {
         const at = latestCheckAt(ctx.resultsOf(member));
         if (at !== null && (latest === null || at > latest)) latest = at;
       });

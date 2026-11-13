@@ -12,8 +12,10 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
 
 var (
@@ -64,15 +66,7 @@ func NewService(dbClient *db.Client, bcryptCost int) *Service {
 
 // ListUsers returns paginated admin users with memberships.
 func (s *Service) ListUsers(ctx context.Context, page, pageSize int) (*models.AdminUserListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.DefaultSize, pagination.MaxSize)
 
 	items, total, err := s.repo.ListUsers(ctx, page, pageSize)
 	if err != nil {
@@ -277,8 +271,7 @@ func (s *Service) DeleteUser(ctx context.Context, actorUserID, targetUserID uuid
 }
 
 func mapUserWriteError(err error) error {
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+	if pqErr, ok := pgerr.As(err); ok && pgerr.IsUniqueViolation(err) {
 		if strings.Contains(pqErr.Constraint, "email") {
 			return ErrEmailTaken
 		}
@@ -329,7 +322,7 @@ func scanUser(row rowScanner) (*models.AdminUser, error) {
 }
 
 func (r *sqlRepository) ListUsers(ctx context.Context, page, pageSize int) ([]models.AdminUser, int, error) {
-	offset := (page - 1) * pageSize
+	offset := pagination.Offset(page, pageSize)
 
 	var total int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_users`).Scan(&total); err != nil {

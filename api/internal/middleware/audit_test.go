@@ -90,6 +90,10 @@ func TestItemizedSuccess(t *testing.T) {
 		{"/api/v1/alerts/bulk/acknowledge", http.StatusInternalServerError, false},
 		{"/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/acknowledge", http.StatusOK, false},
 		{"/api/v1/monitors/bulk/delete", http.StatusOK, false},
+		{"/api/v1/discovery/services/3f2a6c1e-0000-0000-0000-000000000001/approve", http.StatusOK, true},
+		{"/api/v1/discovery/integrations", http.StatusConflict, false},
+		// The collector routes sit outside the audited group and the prefix.
+		{"/api/v1/discovery-collectors/3f2a6c1e-0000-0000-0000-000000000001/snapshot", http.StatusNoContent, false},
 	}
 	for _, tc := range cases {
 		if got := itemizedSuccess(tc.path, tc.status); got != tc.want {

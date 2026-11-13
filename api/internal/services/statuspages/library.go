@@ -3,13 +3,14 @@ package statuspages
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
@@ -65,8 +66,8 @@ func (s *Service) GetLibraryTemplate(ctx context.Context, tenantID, templateID u
 		&item.ID, &item.Name, &item.Description, &item.Source, &item.SizeBytes, &item.CreatedAt, &item.UpdatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("library template not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrLibraryTemplateNotFound
 		}
 		return nil, fmt.Errorf("failed to get library template: %w", err)
 	}
@@ -88,8 +89,8 @@ func (s *Service) CreateLibraryTemplate(ctx context.Context, tenantID uuid.UUID,
 		INSERT INTO status_page_template_library (id, tenant_id, name, description, source)
 		VALUES ($1, $2, $3, $4, $5)
 	`, id, tenantID, name, trimOptionalString(req.Description), req.Source); err != nil {
-		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-			return nil, fmt.Errorf("template name already exists")
+		if pgerr.IsUniqueViolation(err) {
+			return nil, ErrTemplateNameExists
 		}
 		return nil, fmt.Errorf("failed to create library template: %w", err)
 	}
@@ -135,8 +136,8 @@ func (s *Service) UpdateLibraryTemplate(ctx context.Context, tenantID, templateI
 		`, strings.Join(setParts, ", "), argIndex, argIndex+1)
 		result, err := s.db.ExecContext(ctx, query, args...)
 		if err != nil {
-			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-				return nil, fmt.Errorf("template name already exists")
+			if pgerr.IsUniqueViolation(err) {
+				return nil, ErrTemplateNameExists
 			}
 			return nil, fmt.Errorf("failed to update library template: %w", err)
 		}
@@ -145,7 +146,7 @@ func (s *Service) UpdateLibraryTemplate(ctx context.Context, tenantID, templateI
 			return nil, fmt.Errorf("failed to get rows affected: %w", err)
 		}
 		if rowsAffected == 0 {
-			return nil, fmt.Errorf("library template not found")
+			return nil, ErrLibraryTemplateNotFound
 		}
 	}
 
@@ -167,7 +168,7 @@ func (s *Service) DeleteLibraryTemplate(ctx context.Context, tenantID, templateI
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("library template not found")
+		return ErrLibraryTemplateNotFound
 	}
 	return nil
 }

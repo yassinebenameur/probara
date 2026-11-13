@@ -134,15 +134,15 @@ func buildEmbed(m present.Message) discordPayload {
 		if len(fields) == maxFields {
 			break
 		}
-		fields = append(fields, discordEmbedField{Name: f.Label, Value: truncate(f.Value, maxFieldValue), Inline: len(f.Value) <= 40})
+		fields = append(fields, discordEmbedField{Name: f.Label, Value: plugin.Truncate(f.Value, maxFieldValue), Inline: len(f.Value) <= 40})
 	}
 	if m.LastError != "" && len(fields) < maxFields {
-		fields = append(fields, discordEmbedField{Name: "Last error", Value: truncate(m.LastError, maxFieldValue)})
+		fields = append(fields, discordEmbedField{Name: "Last error", Value: plugin.Truncate(m.LastError, maxFieldValue)})
 	}
 
 	return discordPayload{
 		Embeds: []discordEmbed{{
-			Title:       truncate(m.Title, maxTitle),
+			Title:       plugin.Truncate(m.Title, maxTitle),
 			Description: m.Summary,
 			URL:         m.ActionURL,
 			Color:       colorFor(m.Tone),
@@ -166,14 +166,6 @@ func colorFor(t present.Tone) int {
 	default:
 		return 0xE74C3C
 	}
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "…"
 }
 
 func parseConfig(raw json.RawMessage) (Config, error) {

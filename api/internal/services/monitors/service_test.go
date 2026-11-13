@@ -3,7 +3,6 @@ package monitors
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -17,12 +16,10 @@ import (
 type MockRepository struct {
 	monitors          map[uuid.UUID]*models.Monitor
 	members           map[uuid.UUID][]uuid.UUID
-	policies          map[uuid.UUID][]uuid.UUID
 	deletedHistoryIDs []uuid.UUID
 
-	// Controllable error/return fields for bulk alert policy tests.
-	verifyAlertPolicyErr error
-	verifyMonitorsErr    error
+	// Controllable error for the tenant-ownership check.
+	verifyMonitorsErr error
 
 	// Soft-delete tracking.
 	bulkSoftDeleted   []uuid.UUID
@@ -35,7 +32,6 @@ func NewMockRepository() *MockRepository {
 	return &MockRepository{
 		monitors: make(map[uuid.UUID]*models.Monitor),
 		members:  make(map[uuid.UUID][]uuid.UUID),
-		policies: make(map[uuid.UUID][]uuid.UUID),
 	}
 }
 
@@ -101,29 +97,8 @@ func (m *MockRepository) HardDelete(ctx context.Context, monitorID uuid.UUID) er
 	return nil
 }
 
-func (m *MockRepository) VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error {
-	return m.verifyAlertPolicyErr
-}
-
 func (m *MockRepository) VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
 	return m.verifyMonitorsErr
-}
-
-func (m *MockRepository) SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error {
-	m.policies[monitorID] = policyIDs
-	return nil
-}
-
-func (m *MockRepository) GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error) {
-	return m.policies[monitorID], nil
-}
-
-func (m *MockRepository) GetAlertPolicyIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
-	result := make(map[uuid.UUID][]uuid.UUID)
-	for _, monitorID := range monitorIDs {
-		result[monitorID] = m.policies[monitorID]
-	}
-	return result, nil
 }
 
 func (m *MockRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
@@ -164,17 +139,6 @@ func (m *MockRepository) GetLocationIDsForMonitors(ctx context.Context, monitorI
 
 func (m *MockRepository) GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error) {
 	return nil, nil
-}
-
-// ErrMonitorNotFound is returned when a monitor is not found
-var ErrMonitorNotFound = &NotFoundError{msg: "monitor not found"}
-
-type NotFoundError struct {
-	msg string
-}
-
-func (e *NotFoundError) Error() string {
-	return e.msg
 }
 
 func TestService_CreateMonitor(t *testing.T) {
@@ -442,7 +406,7 @@ func TestService_BulkDeleteMonitors_RejectsEmpty(t *testing.T) {
 
 func TestService_BulkDeleteMonitors_VerifyFailsBlocks(t *testing.T) {
 	repo := NewMockRepository()
-	repo.verifyMonitorsErr = fmt.Errorf("one or more monitors not found or do not belong to tenant")
+	repo.verifyMonitorsErr = ErrMonitorsNotInTenant
 	svc := NewService(repo)
 
 	_, err := svc.BulkDeleteMonitors(context.Background(), uuid.New(),

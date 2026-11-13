@@ -69,8 +69,6 @@ spec:
         env:
         {{- include "monitoring-platform.localAIEnv" . | nindent 8 }}
         {{- include "monitoring-platform.aiTriageEnv" . | nindent 8 }}
-        - name: SERVICE_NAME
-          value: "api"
         - name: HTTP_PORT
           value: "{{ .Values.api.httpPort }}"
         - name: METRICS_PORT
@@ -94,6 +92,15 @@ spec:
         {{- with .Values.api.publicBaseURL }}
         - name: PUBLIC_BASE_URL
           value: {{ . | quote }}
+        {{- end }}
+        {{- with include "monitoring-platform.adminCookieSecure" . }}
+        - name: ADMIN_COOKIE_SECURE
+          value: {{ . | quote }}
+        {{- end }}
+        # The API signs draft-preview tokens with this; the status page
+        # verifies them, so both workloads read the same key.
+        {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
         {{- end }}
         {{- with .Values.api.publicNatsURL }}
         - name: PUBLIC_NATS_URL

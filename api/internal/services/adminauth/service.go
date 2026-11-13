@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
 
 // Service handles admin authentication.
@@ -48,7 +48,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		&user.DisabledAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("invalid credentials")
 		}
 		return nil, fmt.Errorf("failed to query admin user: %w", err)
@@ -93,7 +93,7 @@ func (s *Service) GetAdminByID(ctx context.Context, adminID uuid.UUID) (*models.
 		&user.LastLoginAt,
 		&user.DisabledAt,
 	)
-	if isMissingSchema(err) {
+	if pgerr.IsMissingSchema(err) {
 		// Deploy-ordering tolerance: identity columns may not be migrated yet.
 		// Pre-migration every admin is a superadmin.
 		legacy := `
@@ -114,7 +114,7 @@ func (s *Service) GetAdminByID(ctx context.Context, adminID uuid.UUID) (*models.
 		user.AuthMethod = "password"
 	}
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("admin user not found")
 		}
 		return nil, fmt.Errorf("failed to query admin user: %w", err)
@@ -135,7 +135,7 @@ func (s *Service) GetMembershipsForAdmin(ctx context.Context, adminID uuid.UUID)
 
 	rows, err := s.db.QueryContext(ctx, query, adminID)
 	if err != nil {
-		if isMissingSchema(err) {
+		if pgerr.IsMissingSchema(err) {
 			return []models.TenantMembership{}, nil
 		}
 		return nil, fmt.Errorf("failed to query memberships: %w", err)
@@ -154,16 +154,6 @@ func (s *Service) GetMembershipsForAdmin(ctx context.Context, adminID uuid.UUID)
 		return nil, fmt.Errorf("failed to iterate memberships: %w", err)
 	}
 	return memberships, nil
-}
-
-// isMissingSchema reports whether err is Postgres undefined_table (42P01) or
-// undefined_column (42703) — this binary running ahead of the migrations job.
-func isMissingSchema(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
-		return false
-	}
-	return pqErr.Code == "42P01" || pqErr.Code == "42703"
 }
 
 // UpdateLastLogin updates the admin user's last login timestamp.
@@ -213,7 +203,7 @@ func (s *Service) GetSessionByTokenHash(ctx context.Context, refreshTokenHash st
 
 	var adminID uuid.UUID
 	if err := s.db.QueryRowContext(ctx, query, refreshTokenHash, refreshReuseGrace.Seconds()).Scan(&adminID); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return uuid.UUID{}, fmt.Errorf("invalid refresh token")
 		}
 		return uuid.UUID{}, fmt.Errorf("failed to query refresh token: %w", err)

@@ -47,27 +47,6 @@ func TestDedupeIDs_KeepsFirstOccurrenceOrder(t *testing.T) {
 	}
 }
 
-func TestRollUpLeafStatuses_MatchesGroupStatusRule(t *testing.T) {
-	cases := []struct {
-		name     string
-		leaves   int
-		statuses []string
-		want     string
-	}{
-		{"no leaves", 0, nil, "unknown"},
-		{"leaves never checked", 3, nil, "unknown"},
-		{"all success", 2, []string{"success", "success"}, "success"},
-		{"all failed", 2, []string{"failure", "error"}, "failure"},
-		{"mixed", 3, []string{"success", "failure"}, "degraded"},
-		{"unchecked leaf ignored", 3, []string{"success"}, "success"},
-	}
-	for _, tc := range cases {
-		if got := rollUpLeafStatuses(tc.leaves, tc.statuses); got != tc.want {
-			t.Errorf("%s: rollUpLeafStatuses = %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
 func TestGroupBatchResults_MergesNewestFirstCapsAndPrependsStatus(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	leafA, leafB := uuid.New(), uuid.New()

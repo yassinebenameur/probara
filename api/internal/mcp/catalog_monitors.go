@@ -25,8 +25,6 @@ var monitorFieldDocs = map[string]string{
 	"depends_on_ids":                 "Upstream monitor IDs this monitor depends on (for root-cause alert suppression).",
 	"location_ids":                   "Private location IDs to run from (list_locations); empty means the default worker fleet.",
 	"location_quorum":                "How many locations must fail before the monitor is down (multi-location monitors).",
-	"alert_policy_id":                "Retired (alert policies were replaced by notification settings); leave unset.",
-	"alert_policy_ids":               "Retired (alert policies were replaced by notification settings); leave unset.",
 }
 
 var monitorEnums = func() map[string][]string {

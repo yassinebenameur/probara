@@ -502,7 +502,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`tls_client_cert_pem`", "Client certificate for mutual TLS"],
             [
               "`tls_client_key_pem`",
-              "Client private key; must be paired with the client certificate",
+              "Client private key; must be paired with the client certificate. Turning TLS off in the operator UI (or PostgreSQL `ssl_mode` `disable`) submits it as `\"\"`, clearing the stored key along with the certificate",
             ],
           ],
         },
@@ -552,6 +552,11 @@ export const MONITORS_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Assertions can target status, response headers, body text, or JSON paths. Status supports equality, inequality, and membership. Text and header checks support existence, equality, containment, regular expressions, and negative forms. JSON checks additionally support numeric and boolean operations.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "An assertion's `value` is a JSON value, and its type decides the comparison. Header and body operations, and JSON `contains`, `regex` and their negative forms, compare text: a string's content, else the value's compact JSON text, which storage can normalize (object keys are reordered), so send text as a JSON string. JSON `equals` and `not_equals` compare by type: a string matches the value's text (`\"123\"` also matches the number `123`); a number or boolean matches a value of that type or a string that parses as one; arrays and objects compare structurally; and a missing path equals nothing, so `not_equals` passes on it. In the operator UI the value input is a JSON literal or plain text: for JSON equals, `123` and `true` are a number and a boolean and `\"123\"` (quoted) is the string, while text assertions always submit what was typed.",
         },
         {
           type: "code",
@@ -616,7 +621,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A `group` monitor stores member monitor IDs instead of executing a check. It is down when any enabled, non-deleted member is down. It is up when all effective member states are up, suspect, or degraded; otherwise it is unknown.",
+            "A `group` monitor stores member monitor IDs instead of executing a check. Its state is derived from its enabled, non-deleted leaf members' own states (a paused member or sub-group takes no part), in two views. For alerting, the group is down when any member is down, up when every member is up, suspect, or degraded, and unknown otherwise. For display in the operator UI and on status pages, a partial outage reads degraded: the group shows down only when every member with a verdict is down, degraded when some are down or degraded, and up otherwise. So a group can be alerting as down while it displays degraded.",
         },
         {
           type: "definitions",
@@ -659,6 +664,7 @@ export const MONITORS_PAGE: DocPage = {
             "Submit a new value to replace and encrypt it.",
             "Submit an empty string to clear a protected field. That is the only spelling that removes a stored secret.",
             "WebSocket header names remain visible while their values are masked. Submitting the `headers` object edits it key by key, so a key left out of a submitted object is removed; omitting the whole object keeps the stored headers.",
+            "On create there is no stored value, so `***` is dropped exactly like an omitted field and the monitor is created without that secret. Cloning a monitor in the operator UI therefore never copies its secrets: the clone keeps WebSocket header names with blank values and leaves passwords, tokens, connection strings and client keys empty, to be entered again.",
           ],
         },
         {

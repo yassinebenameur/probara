@@ -60,7 +60,7 @@ func TestService_GetMonitorAnalytics_UsesInjectedAnalyticsReader(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, next_run_at, created_at, updated_at
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2
@@ -68,10 +68,10 @@ func TestService_GetMonitorAnalytics_UsesInjectedAnalyticsReader(t *testing.T) {
 		WithArgs(monitorID, tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "name", "type", "config", "interval_seconds", "timeout_seconds",
-			"alert_policy_id", "enabled", "tags", "agent_id", "next_run_at", "created_at", "updated_at",
+			"enabled", "tags", "agent_id", "next_run_at", "created_at", "updated_at",
 		}).AddRow(
 			monitorID, tenantID, "monitor-a", "http", []byte(`{"url":"https://example.com","method":"GET"}`),
-			60, 30, nil, true, "{}", nil, nil, now, now,
+			60, 30, true, "{}", nil, nil, now, now,
 		))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, fakeGroupReader{}, analytics)
@@ -110,7 +110,7 @@ func TestService_GetMonitorAnalytics_GroupUsesLeafMembers(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, tenant_id, name, type, config,
-			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
+			interval_seconds, timeout_seconds, enabled, tags,
 			agent_id, next_run_at, created_at, updated_at
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2
@@ -118,10 +118,10 @@ func TestService_GetMonitorAnalytics_GroupUsesLeafMembers(t *testing.T) {
 		WithArgs(groupID, tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "name", "type", "config", "interval_seconds", "timeout_seconds",
-			"alert_policy_id", "enabled", "tags", "agent_id", "next_run_at", "created_at", "updated_at",
+			"enabled", "tags", "agent_id", "next_run_at", "created_at", "updated_at",
 		}).AddRow(
 			groupID, tenantID, "group-a", "group", []byte(`{"monitor_ids":[]}`),
-			60, 30, nil, true, "{}", nil, nil, now, now,
+			60, 30, true, "{}", nil, nil, now, now,
 		))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, fakeGroupReader{

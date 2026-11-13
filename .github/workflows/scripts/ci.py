@@ -16,6 +16,8 @@ SUMMARY_FAILURE_BYTES = 512 * 1024
 ALLOWED_SKIPS = {
     ("api/internal/services/agent", "TestGeneratedConfigValidatesWithCollector"):
         "Collector binaries are validated after make build-collector-static, not built in this workflow.",
+    ("api/internal/services/agent", "TestGeneratedConfigStartsWithoutDeprecationWarnings"):
+        "Collector binaries are validated after make build-collector-static, not built in this workflow.",
     ("shared/notifications/plugin/builtin/email", "TestDumpPreviews"):
         "Opt-in local email preview generator.",
     ("status-page/internal/statuspage", "TestWritePreviewHTML"):

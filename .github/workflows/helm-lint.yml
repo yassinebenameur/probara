@@ -26,7 +26,3 @@ jobs:
     - name: Run helm template
       run: |
         helm template monitoring-platform ./helm/monitoring-platform --debug --dry-run
-
-    - name: Validate values
-      run: |
-        helm template monitoring-platform ./helm/monitoring-platform > /dev/null

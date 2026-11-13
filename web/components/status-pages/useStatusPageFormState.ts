@@ -264,10 +264,10 @@ export function deriveState(state: FormState): DerivedState {
   return { monitorIdToSection: map, membershipCount: map.size };
 }
 
-/** Case-insensitive substring match over name, type, url and tags. */
+/** Case-insensitive substring match over name, type and tags. */
 export function monitorMatches(monitor: Monitor, needle: string): boolean {
   if (!needle) return true;
-  const haystack = [monitor.name, monitor.type, monitor.url || '', ...(monitor.tags || [])]
+  const haystack = [monitor.name, monitor.type, ...(monitor.tags || [])]
     .join(' ')
     .toLowerCase();
   return haystack.includes(needle);

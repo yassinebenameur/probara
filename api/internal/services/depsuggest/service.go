@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/shared/ai"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 )
@@ -235,7 +236,7 @@ func (s *Service) buildInput(ctx context.Context, tenantID uuid.UUID) (*inputSet
 
 var (
 	// ErrMonitorNotFound: a monitor of the pair is not a live monitor of the tenant.
-	ErrMonitorNotFound = errors.New("monitor not found")
+	ErrMonitorNotFound = apperr.ErrMonitorNotFound
 	// ErrPairUnavailable: the pair is not currently a dependency candidate
 	// (disabled monitor, group, outside the monitor cap, or no signal).
 	ErrPairUnavailable = errors.New("pair evidence unavailable")

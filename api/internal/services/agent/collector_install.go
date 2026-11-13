@@ -53,10 +53,16 @@ func buildFilesystemScraper(platform string) string {
 
 // buildCollectorConfig renders the collector YAML for one platform
 // (linux|darwin|windows). Scraper sets differ per OS: `processes` is
-// linux-only, `load` is unsupported on Windows. The metricstransform block
+// linux-only, `load` is unsupported on Windows. The metrics_transform block
 // produces the curated `system.cpu.utilization{state=used}` series (mean
 // across CPUs, non-idle states summed) that the default dashboards and rule
 // presets target.
+//
+// Component IDs use the collector's current snake_case type names
+// (host_metrics, resource_detection, metrics_transform, otlp_http). The old
+// spellings still load as deprecated aliases but warn at startup, and need
+// otelcol-contrib >= 0.153.0 for a stock build — keep the docs' minimum in
+// step if this moves.
 func buildCollectorConfig(backendURL string, intervalSeconds int, platform string) string {
 	scrapers := []string{
 		`      cpu:
@@ -102,7 +108,7 @@ func buildCollectorConfig(backendURL string, intervalSeconds int, platform strin
 # service's registry Environment (Windows); the file itself carries no
 # secrets and stock otelcol-contrib runs it unchanged.
 receivers:
-  hostmetrics:
+  host_metrics:
     collection_interval: %ds
     scrapers:
 %s
@@ -111,7 +117,7 @@ processors:
   memory_limiter:
     check_interval: 5s
     limit_mib: 256
-  resourcedetection:
+  resource_detection:
     detectors: [system]
     system:
       hostname_sources: [os]
@@ -123,7 +129,7 @@ processors:
   # Collapse per-CPU, per-state utilization into one {state=used} series:
   # mean across CPUs, then non-idle states summed. Rule presets and the host
   # overview target system.cpu.utilization{state=used}.
-  metricstransform:
+  metrics_transform:
     transforms:
       - include: system.cpu.utilization
         match_type: strict
@@ -140,7 +146,7 @@ processors:
   batch:
 
 exporters:
-  otlphttp:
+  otlp_http:
     # The exporter appends /v1/metrics — this lands on POST /api/v1/otlp/v1/metrics.
     endpoint: %s/api/v1/otlp
     compression: gzip
@@ -154,9 +160,9 @@ service:
       level: none
   pipelines:
     metrics:
-      receivers: [hostmetrics]
-      processors: [memory_limiter, resourcedetection, resource, metricstransform, batch]
-      exporters: [otlphttp]
+      receivers: [host_metrics]
+      processors: [memory_limiter, resource_detection, resource, metrics_transform, batch]
+      exporters: [otlp_http]
 `, intervalSeconds, strings.Join(scrapers, "\n"), backendURL)
 }
 

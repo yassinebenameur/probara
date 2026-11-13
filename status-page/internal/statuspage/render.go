@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
@@ -670,32 +671,6 @@ func relativeTime(t time.Time) string {
 	}
 }
 
-func summaryMetric(monitor MonitorStatus) string {
-	switch {
-	case monitor.Uptime24h != nil:
-		return fmt.Sprintf("%.2f%%", *monitor.Uptime24h)
-	case monitor.LastLatency != nil:
-		return fmt.Sprintf("%dms", *monitor.LastLatency)
-	case monitor.LastCheckTime != nil:
-		return relativeTime(*monitor.LastCheckTime)
-	default:
-		return "—"
-	}
-}
-
-func summaryCaption(monitor MonitorStatus) string {
-	switch {
-	case monitor.Uptime24h != nil:
-		return "24h uptime"
-	case monitor.LastLatency != nil:
-		return "Latest response"
-	case monitor.LastCheckTime != nil:
-		return "Last check"
-	default:
-		return "No data"
-	}
-}
-
 func monitorUptimeLabel(rangeName string) string {
 	switch rangeName {
 	case "1h":
@@ -762,71 +737,66 @@ func statusTone(status string) string {
 	}
 }
 
-func typeLabel(kind string) string {
-	switch kind {
-	case "http":
-		return "HTTP"
-	case "ping":
-		return "Ping"
-	case "dns":
-		return "DNS"
-	case "grpc":
-		return "gRPC"
-	case "group":
-		return "Group"
-	case "agent":
-		return "Agent"
-	case "push":
-		return "Push"
-	case "sip":
-		return "SIP"
-	case "synthetic_api":
-		return "Synthetic API"
-	case "synthetic_browser":
-		return "Synthetic Browser"
-	case "redis":
-		return "Redis"
-	case "postgres":
-		return "PostgreSQL"
-	case "mysql":
-		return "MySQL"
-	case "mongodb":
-		return "MongoDB"
-	case "rabbitmq":
-		return "RabbitMQ"
-	case "websocket":
-		return "WebSocket"
-	case "prometheus":
-		return "Prometheus"
-	default:
-		return strings.ToUpper(kind)
-	}
+// typeLabels and typeBadges are the status page's display names for monitor
+// types. Both must cover models.AllMonitorTypes
+// (TestTypeLabelAndBadgeCoverEveryMonitorType). A badge sits inline next to
+// the monitor name (list badge, kiosk tile), so it is at most five characters
+// to keep name columns aligned; database engines collapse to a generic DB and
+// the full product name stays available in the detail panel via typeLabel.
+var typeLabels = map[models.MonitorType]string{
+	models.MonitorTypeHTTP:             "HTTP",
+	models.MonitorTypePing:             "Ping",
+	models.MonitorTypeDNS:              "DNS",
+	models.MonitorTypeGRPC:             "gRPC",
+	models.MonitorTypeGroup:            "Group",
+	models.MonitorTypeAgent:            "Agent",
+	models.MonitorTypePush:             "Push",
+	models.MonitorTypeSIP:              "SIP",
+	models.MonitorTypeSyntheticAPI:     "Synthetic API",
+	models.MonitorTypeSyntheticBrowser: "Synthetic Browser",
+	models.MonitorTypeRedis:            "Redis",
+	models.MonitorTypePostgres:         "PostgreSQL",
+	models.MonitorTypeMySQL:            "MySQL",
+	models.MonitorTypeMongoDB:          "MongoDB",
+	models.MonitorTypeRabbitMQ:         "RabbitMQ",
+	models.MonitorTypeTCP:              "TCP",
+	models.MonitorTypeWebSocket:        "WebSocket",
+	models.MonitorTypePrometheus:       "Prometheus",
 }
 
-// typeBadge is the compact variant of typeLabel used where the label sits
-// inline next to the monitor name (list badge, kiosk tile). Labels are kept
-// to at most five characters so name columns stay aligned across rows;
-// database engines collapse to a generic DB — the full product name remains
-// available in the expanded detail panel via TypeLabel.
-func typeBadge(kind string) string {
-	switch kind {
-	case "postgres", "mysql", "mongodb":
-		return "DB"
-	case "rabbitmq":
-		return "MQ"
-	case "websocket":
-		return "WS"
-	case "prometheus":
-		return "PROM"
-	case "synthetic_api":
-		return "API"
-	case "synthetic_browser":
-		return "E2E"
-	case "grpc":
-		return "gRPC"
-	default:
-		return strings.ToUpper(kind)
+var typeBadges = map[models.MonitorType]string{
+	models.MonitorTypeHTTP:             "HTTP",
+	models.MonitorTypePing:             "PING",
+	models.MonitorTypeDNS:              "DNS",
+	models.MonitorTypeGRPC:             "gRPC",
+	models.MonitorTypeGroup:            "GROUP",
+	models.MonitorTypeAgent:            "AGENT",
+	models.MonitorTypePush:             "PUSH",
+	models.MonitorTypeSIP:              "SIP",
+	models.MonitorTypeSyntheticAPI:     "API",
+	models.MonitorTypeSyntheticBrowser: "E2E",
+	models.MonitorTypeRedis:            "REDIS",
+	models.MonitorTypePostgres:         "DB",
+	models.MonitorTypeMySQL:            "DB",
+	models.MonitorTypeMongoDB:          "DB",
+	models.MonitorTypeRabbitMQ:         "MQ",
+	models.MonitorTypeTCP:              "TCP",
+	models.MonitorTypeWebSocket:        "WS",
+	models.MonitorTypePrometheus:       "PROM",
+}
+
+func typeLabel(kind string) string {
+	if label, ok := typeLabels[models.MonitorType(kind)]; ok {
+		return label
 	}
+	return strings.ToUpper(kind)
+}
+
+func typeBadge(kind string) string {
+	if badge, ok := typeBadges[models.MonitorType(kind)]; ok {
+		return badge
+	}
+	return strings.ToUpper(kind)
 }
 
 func normalizeTheme(theme string) string {

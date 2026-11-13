@@ -16,13 +16,15 @@ var auditSkipPrefixes = []string{
 	"/api/v1/api-keys",
 }
 
-// auditItemizedPrefixes are routes whose handlers record one event per item
-// they act on (the alert bulk triage endpoints). A successful request is
+// auditItemizedPrefixes are routes whose handlers record their own success
+// events (one per item for alert bulk triage; one named event per write for
+// Kubernetes discovery). A successful request is
 // already fully audited there, so the middleware records only what never
 // reaches those per-item records: refusals (403), invalid requests (400) and
 // server errors.
 var auditItemizedPrefixes = []string{
 	"/api/v1/alerts/bulk/",
+	"/api/v1/discovery/",
 }
 
 // itemizedSuccess reports whether a request's own handler audited it item by

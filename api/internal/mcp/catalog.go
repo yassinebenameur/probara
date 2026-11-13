@@ -19,6 +19,7 @@ func catalog() []spec {
 		monitorTools(),
 		observabilityTools(),
 		locationTools(),
+		discoveryTools(),
 		alertTools(),
 		incidentTools(),
 		notificationTools(),
@@ -46,7 +47,7 @@ var notExposed = map[string]string{
 	"POST /api/v1/users/bootstrap/first": "first-run setup, unauthenticated",
 	"GET /api/v1/push/{token}":           "heartbeat ingest from the monitored job, authenticated by the token in the URL",
 	"POST /api/v1/push/{token}":          "heartbeat ingest from the monitored job",
-	"POST /api/v1/agent/metrics":         "legacy host-agent ingest (deprecated, sunset)",
+	"POST /api/v1/agent/metrics":         "retired (410 Gone); collectors push to /otlp/v1/metrics",
 	"POST /api/v1/otlp/v1/metrics":       "OTLP ingest from collectors, not an operator action",
 	"GET /api/v1/alerts/stream":          "server-sent events; wait_for_alert_events reads it for a bounded window",
 	"POST /api/v1/alert-policies":        "retired (410 Gone); notification settings replaced alert policies",
@@ -55,6 +56,9 @@ var notExposed = map[string]string{
 	"PATCH /api/v1/alert-policies/{id}":  "retired (410 Gone)",
 	"DELETE /api/v1/alert-policies/{id}": "retired (410 Gone)",
 	"* /api/v1/mcp":                      "the MCP endpoint itself",
+
+	"GET /api/v1/discovery-collectors/{id}/config":    "in-cluster Kubernetes discovery collector, authenticated by its integration token",
+	"POST /api/v1/discovery-collectors/{id}/snapshot": "inventory ingest from the in-cluster discovery collector, not an operator action",
 
 	"GET /api/v1/oauth/.well-known/oauth-authorization-server": "OAuth protocol endpoint for MCP clients",
 	"GET /api/v1/oauth/.well-known/openid-configuration":       "OAuth protocol endpoint for MCP clients",

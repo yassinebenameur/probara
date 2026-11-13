@@ -156,7 +156,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
             ],
             [
               "`tag`",
-              "Repeatable tag filter used to narrow the tenant dashboard",
+              "Repeatable tag filter that narrows the tenant dashboard to monitors carrying any of the given tags, the same rule as the monitors list's tag filter",
             ],
             [
               "`failures_limit`",

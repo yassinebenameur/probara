@@ -3,15 +3,17 @@ package incidents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
@@ -58,22 +60,6 @@ func (h *Handlers) ConfigureAIAnalysis(publisher aiJobPublisher, subject string,
 	h.aiChecker = checker
 }
 
-func tenantUUIDFromContext(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
-		return uuid.Nil, false
-	}
-
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		apierrors.WriteInternalError(w, "invalid tenant ID")
-		return uuid.Nil, false
-	}
-
-	return tenantUUID, true
-}
-
 func incidentIDFromRequest(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	incidentIDStr := chi.URLParam(r, "id")
 	incidentID, err := uuid.Parse(incidentIDStr)
@@ -106,6 +92,13 @@ func writeIncidentError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	if isIncidentResourceNotFound(err) {
+		apierrors.WriteNotFoundError(w, err.Error())
+		return
+	}
+
+	// The 400s are still matched by message: they come from
+	// api/internal/validation and the service as untyped errors.
 	switch err.Error() {
 	case "request is required",
 		"title is required",
@@ -122,18 +115,22 @@ func writeIncidentError(w http.ResponseWriter, err error) {
 		"selected monitors must be linked to the incident and status page",
 		"resolved incidents cannot be reopened":
 		apierrors.WriteValidationError(w, err.Error())
-	case "incident not found",
-		"alert not found",
-		"monitor not found",
-		"status page not found":
-		apierrors.WriteNotFoundError(w, err.Error())
 	default:
 		apierrors.WriteInternalError(w, "failed to process incident")
 	}
 }
 
 func isIncidentNotFoundError(err error) bool {
-	return err != nil && err.Error() == "incident not found"
+	return errors.Is(err, incidentservice.ErrIncidentNotFound)
+}
+
+// isIncidentResourceNotFound reports that the incident, or an alert, monitor
+// or status page the request attaches to it, does not exist in the tenant.
+func isIncidentResourceNotFound(err error) bool {
+	return errors.Is(err, incidentservice.ErrIncidentNotFound) ||
+		errors.Is(err, apperr.ErrAlertNotFound) ||
+		errors.Is(err, apperr.ErrMonitorNotFound) ||
+		errors.Is(err, apperr.ErrStatusPageNotFound)
 }
 
 func isIncidentExpectedTransitionError(err error) bool {
@@ -141,13 +138,7 @@ func isIncidentExpectedTransitionError(err error) bool {
 		return false
 	}
 
-	switch err.Error() {
-	case "incident not found",
-		"resolved incidents cannot be reopened":
-		return true
-	default:
-		return false
-	}
+	return isIncidentNotFoundError(err) || err.Error() == "resolved incidents cannot be reopened"
 }
 
 func isIncidentExpectedMutationError(err error) bool {
@@ -155,12 +146,12 @@ func isIncidentExpectedMutationError(err error) bool {
 		return false
 	}
 
+	if isIncidentResourceNotFound(err) {
+		return true
+	}
+
 	switch err.Error() {
 	case "request is required",
-		"incident not found",
-		"alert not found",
-		"monitor not found",
-		"status page not found",
 		"monitor ID is required",
 		"invalid monitor ID",
 		"invalid incident severity",
@@ -174,24 +165,12 @@ func isIncidentExpectedMutationError(err error) bool {
 
 // ListIncidents handles GET /api/v1/incidents
 func (h *Handlers) ListIncidents(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
 
-	page := 1
-	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
-		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-			page = p
-		}
-	}
-
-	pageSize := 20
-	if pageSizeStr := r.URL.Query().Get("page_size"); pageSizeStr != "" {
-		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
-			pageSize = ps
-		}
-	}
+	page, pageSize := httpx.Page(r)
 
 	result, err := h.service.ListIncidents(r.Context(), tenantUUID, page, pageSize)
 	if err != nil {
@@ -203,13 +182,12 @@ func (h *Handlers) ListIncidents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // GetIncident handles GET /api/v1/incidents/{id}
 func (h *Handlers) GetIncident(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -234,14 +212,13 @@ func (h *Handlers) GetIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }
 
 // RequestIncidentAIAnalysis handles POST /api/v1/incidents/{id}/ai-analysis.
 // It reserves a pending analysis row and enqueues a worker job, returning 202.
 func (h *Handlers) RequestIncidentAIAnalysis(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -301,9 +278,7 @@ func (h *Handlers) RequestIncidentAIAnalysis(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(analysis)
+	httpx.WriteJSON(w, http.StatusAccepted, analysis)
 }
 
 // aiEnqueueFailedMessage is what the panel shows for a run whose job never
@@ -333,7 +308,7 @@ func (h *Handlers) failUnqueuedAIAnalysis(ctx context.Context, tenantID, analysi
 // returning the latest analysis (used for polling), or JSON null when none has
 // been requested yet. The incident itself missing is a 404.
 func (h *Handlers) GetIncidentAIAnalysis(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -359,13 +334,12 @@ func (h *Handlers) GetIncidentAIAnalysis(w http.ResponseWriter, r *http.Request)
 
 	// analysis may be nil (no run yet) — encodes as JSON null, which the client
 	// reads as "no analysis", avoiding error-path handling for the common case.
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(analysis)
+	httpx.WriteJSON(w, http.StatusOK, analysis)
 }
 
 // CreateIncident handles POST /api/v1/incidents
 func (h *Handlers) CreateIncident(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -391,14 +365,12 @@ func (h *Handlers) CreateIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusCreated, incident)
 }
 
 // UpdateIncident handles PATCH /api/v1/incidents/{id}
 func (h *Handlers) UpdateIncident(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -434,13 +406,12 @@ func (h *Handlers) UpdateIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }
 
 // TransitionIncidentState handles POST /api/v1/incidents/{id}/state
 func (h *Handlers) TransitionIncidentState(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -474,13 +445,12 @@ func (h *Handlers) TransitionIncidentState(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }
 
 // CreateTimelineEntry handles POST /api/v1/incidents/{id}/timeline
 func (h *Handlers) CreateTimelineEntry(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -516,14 +486,12 @@ func (h *Handlers) CreateTimelineEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusCreated, incident)
 }
 
 // AttachIncidentAlert handles POST /api/v1/incidents/{id}/alerts
 func (h *Handlers) AttachIncidentAlert(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -565,13 +533,12 @@ func (h *Handlers) AttachIncidentAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }
 
 // DetachIncidentAlert handles DELETE /api/v1/incidents/{id}/alerts/{alertId}
 func (h *Handlers) DetachIncidentAlert(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -600,13 +567,12 @@ func (h *Handlers) DetachIncidentAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }
 
 // AttachIncidentMonitor handles POST /api/v1/incidents/{id}/monitors
 func (h *Handlers) AttachIncidentMonitor(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -648,13 +614,12 @@ func (h *Handlers) AttachIncidentMonitor(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }
 
 // DetachIncidentMonitor handles DELETE /api/v1/incidents/{id}/monitors/{monitorId}
 func (h *Handlers) DetachIncidentMonitor(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -683,13 +648,12 @@ func (h *Handlers) DetachIncidentMonitor(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }
 
 // PublishIncidentToStatusPage handles PUT /api/v1/incidents/{id}/status-pages/{statusPageId}
 func (h *Handlers) PublishIncidentToStatusPage(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -724,13 +688,12 @@ func (h *Handlers) PublishIncidentToStatusPage(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }
 
 // UnpublishIncidentFromStatusPage handles DELETE /api/v1/incidents/{id}/status-pages/{statusPageId}
 func (h *Handlers) UnpublishIncidentFromStatusPage(w http.ResponseWriter, r *http.Request) {
-	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	tenantUUID, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
 	}
@@ -759,6 +722,5 @@ func (h *Handlers) UnpublishIncidentFromStatusPage(w http.ResponseWriter, r *htt
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(incident)
+	httpx.WriteJSON(w, http.StatusOK, incident)
 }

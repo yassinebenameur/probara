@@ -20,6 +20,7 @@ import { IntervalField } from './ScheduleSection';
 import DependenciesField from './DependenciesField';
 import { formatDuration } from '@/lib/format';
 import { FieldHint, FormPanel, LabelsSection, PlanSummary, ToggleRow, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
+import { useClipboard } from '@/lib/useClipboard';
 
 type ServerType =
   | 'linux-amd64'
@@ -70,7 +71,7 @@ export default function AgentForm({
   const [installCommand, setInstallCommand] = useState<AgentInstallCommand | null>(null);
   const [loadingInstallCmd, setLoadingInstallCmd] = useState(false);
   const [apiKey, setApiKeyState] = useState<string>('');
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const clipboard = useClipboard();
   const [serverType, setServerType] = useState<ServerType>(DEFAULT_SERVER_TYPE);
   const [apiKeyOptions, setApiKeyOptions] = useState<ApiKeyOption[]>([]);
   const [selectedApiKeyId, setSelectedApiKeyId] = useState<string>('');
@@ -132,13 +133,6 @@ export default function AgentForm({
     } finally {
       setLoadingInstallCmd(false);
     }
-  };
-
-  const copyToClipboard = (text: string, field: string) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
   };
 
   const hashApiKey = async (key: string): Promise<string> => {
@@ -319,9 +313,9 @@ export default function AgentForm({
                       variant="ghost"
                       size="xs"
                       type="button"
-                      onClick={() => copyToClipboard(installCommand.agent_id, 'agent_id')}
+                      onClick={() => void clipboard.copy(installCommand.agent_id, 'agent_id')}
                     >
-                      {copiedField === 'agent_id' ? 'Copied' : 'Copy'}
+                      {clipboard.copiedKey === 'agent_id' ? 'Copied' : 'Copy'}
                     </Button>
                   </div>
                 </FormField>
@@ -350,9 +344,9 @@ export default function AgentForm({
                         size="xs"
                         type="button"
                         disabled={!activeApiKey}
-                        onClick={() => copyToClipboard(activeApiKey, 'api_key')}
+                        onClick={() => void clipboard.copy(activeApiKey, 'api_key')}
                       >
-                        {copiedField === 'api_key' ? 'Copied' : 'Copy'}
+                        {clipboard.copiedKey === 'api_key' ? 'Copied' : 'Copy'}
                       </Button>
                     </div>
                     {apiKeyError && <p className="text-xs text-amber-300">{apiKeyError}</p>}
@@ -384,9 +378,9 @@ export default function AgentForm({
                     size="xs"
                     type="button"
                     className="self-start"
-                    onClick={() => copyToClipboard(quickInstallCopy, 'install')}
+                    onClick={() => void clipboard.copy(quickInstallCopy, 'install')}
                   >
-                    {copiedField === 'install' ? 'Copied' : 'Copy'}
+                    {clipboard.copiedKey === 'install' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
               </FormField>
@@ -399,9 +393,9 @@ export default function AgentForm({
                     size="xs"
                     type="button"
                     className="self-start"
-                    onClick={() => copyToClipboard(quickUninstallCopy, 'uninstall')}
+                    onClick={() => void clipboard.copy(quickUninstallCopy, 'uninstall')}
                   >
-                    {copiedField === 'uninstall' ? 'Copied' : 'Copy'}
+                    {clipboard.copiedKey === 'uninstall' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
               </FormField>
@@ -414,9 +408,9 @@ export default function AgentForm({
                     size="xs"
                     type="button"
                     className="self-start"
-                    onClick={() => copyToClipboard(installCommand.collector_config, 'collector_config')}
+                    onClick={() => void clipboard.copy(installCommand.collector_config, 'collector_config')}
                   >
-                    {copiedField === 'collector_config' ? 'Copied' : 'Copy'}
+                    {clipboard.copiedKey === 'collector_config' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
                 <p className="mt-1 text-xs text-slate-500">Generated OpenTelemetry Collector configuration (Linux variant) — the install script writes it for you</p>
@@ -425,10 +419,10 @@ export default function AgentForm({
                   <button
                     type="button"
                     className="font-mono text-cyan-300 hover:text-cyan-200"
-                    onClick={() => copyToClipboard(collectorConfigUrl, 'config_url')}
+                    onClick={() => void clipboard.copy(collectorConfigUrl, 'config_url')}
                     title="Copy URL"
                   >
-                    {copiedField === 'config_url' ? 'Copied' : `…/agent/config.yaml?platform=${selectedServer.platform}`}
+                    {clipboard.copiedKey === 'config_url' ? 'Copied' : `…/agent/config.yaml?platform=${selectedServer.platform}`}
                   </button>{' '}
                   and ship the <span className="font-mono">probara-collector</span> binary from{' '}
                   <span className="font-mono break-all">{installCommand.download_url}</span>.

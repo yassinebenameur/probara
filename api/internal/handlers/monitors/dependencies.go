@@ -3,15 +3,15 @@ package monitors
 import (
 	"context"
 	"encoding/json"
-	stderrors "errors"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 )
 
@@ -29,22 +29,17 @@ func (h *Handlers) GetMonitorDependents(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handlers) listDependencyRelation(w http.ResponseWriter, r *http.Request, relation string) {
 	if h.dependencyService == nil {
-		errors.WriteInternalError(w, "dependency service not configured")
+		apierrors.WriteInternalError(w, "dependency service not configured")
 		return
 	}
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 	monitorID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
@@ -60,31 +55,25 @@ func (h *Handlers) listDependencyRelation(w http.ResponseWriter, r *http.Request
 			"tenant_id":  tenantID,
 			"monitor_id": monitorID,
 		}).Error("Failed to list monitor " + relation)
-		errors.WriteInternalError(w, "failed to list "+relation)
+		apierrors.WriteInternalError(w, "failed to list "+relation)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]interface{}{"items": items})
 }
 
 // GetDependencyGraph handles GET /api/v1/monitors/dependency-graph — the
 // tenant-wide dependency graph (nodes with state, directed edges).
 func (h *Handlers) GetDependencyGraph(w http.ResponseWriter, r *http.Request) {
 	if h.dependencyService == nil {
-		errors.WriteInternalError(w, "dependency service not configured")
+		apierrors.WriteInternalError(w, "dependency service not configured")
 		return
 	}
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	graph, err := h.dependencyService.GetDependencyGraph(r.Context(), tenantUUID)
 	if err != nil {
@@ -92,12 +81,11 @@ func (h *Handlers) GetDependencyGraph(w http.ResponseWriter, r *http.Request) {
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Failed to build dependency graph")
-		errors.WriteInternalError(w, "failed to build dependency graph")
+		apierrors.WriteInternalError(w, "failed to build dependency graph")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(graph)
+	httpx.WriteJSON(w, http.StatusOK, graph)
 }
 
 // AddDependencyRequest is the body of POST /monitors/{id}/dependencies.
@@ -118,22 +106,16 @@ func (h *Handlers) RemoveMonitorDependency(w http.ResponseWriter, r *http.Reques
 
 func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, op string) {
 	if h.dependencyService == nil {
-		errors.WriteInternalError(w, "dependency service not configured")
+		apierrors.WriteInternalError(w, "dependency service not configured")
 		return
 	}
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
-		return
-	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
 	monitorID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		errors.WriteValidationError(w, "invalid monitor ID")
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
@@ -141,7 +123,7 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 	if op == "add" {
 		var body AddDependencyRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			errors.WriteValidationError(w, "invalid request body: "+err.Error())
+			apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 			return
 		}
 		dependsOnID, err = uuid.Parse(body.DependsOnID)
@@ -149,7 +131,7 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 		dependsOnID, err = uuid.Parse(chi.URLParam(r, "dependsOnId"))
 	}
 	if err != nil {
-		errors.WriteValidationError(w, "invalid dependency monitor ID")
+		apierrors.WriteValidationError(w, "invalid dependency monitor ID")
 		return
 	}
 
@@ -170,7 +152,7 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 // payload.
 func (h *Handlers) syncDependencies(ctx context.Context, tenantUUID, monitorID uuid.UUID, dependsOnIDs []string) error {
 	if h.dependencyService == nil {
-		return stderrors.New("dependency service not configured")
+		return errors.New("dependency service not configured")
 	}
 
 	ids := make([]uuid.UUID, 0, len(dependsOnIDs))
@@ -188,16 +170,16 @@ func (h *Handlers) syncDependencies(ctx context.Context, tenantUUID, monitorID u
 // writeDependencyError maps a syncDependencies failure to an HTTP response.
 func (h *Handlers) writeDependencyError(w http.ResponseWriter, tenantUUID, monitorID uuid.UUID, err error) {
 	switch {
-	case stderrors.Is(err, depservice.ErrDependencyCycle):
-		errors.WriteError(w, http.StatusConflict, "dependency_cycle", err.Error())
-	case stderrors.Is(err, depservice.ErrMonitorNotFound):
-		errors.WriteValidationError(w, err.Error())
+	case errors.Is(err, depservice.ErrDependencyCycle):
+		apierrors.WriteError(w, http.StatusConflict, "dependency_cycle", err.Error())
+	case errors.Is(err, depservice.ErrMonitorNotFound):
+		apierrors.WriteValidationError(w, err.Error())
 	default:
 		h.logger.WithFields(map[string]interface{}{
 			"error":      err.Error(),
 			"tenant_id":  tenantUUID,
 			"monitor_id": monitorID,
 		}).Error("Failed to set monitor dependencies")
-		errors.WriteInternalError(w, "failed to set monitor dependencies")
+		apierrors.WriteInternalError(w, "failed to set monitor dependencies")
 	}
 }

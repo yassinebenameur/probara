@@ -79,7 +79,7 @@ func TestRecoveryDispatchDoesNotStarveFreshOutagesOrLaterRecoveries(t *testing.T
 	fresh := testutil.InsertHTTPMonitor(ctx, t, database, tenant, "new outage")
 	setStateForTest(ctx, t, database, fresh, "down", time.Now())
 	created := false
-	a.sendFunc = func(ctx context.Context, _ alertChannel, event string, _ policyBinding, alert *alertRecord, _ *groupDetail, _ time.Time) error {
+	a.sendFunc = func(ctx context.Context, _ alertChannel, event string, _ alertSubject, alert *alertRecord, _ *groupDetail, _ time.Time) error {
 		if event == "created" {
 			created = true
 			return nil

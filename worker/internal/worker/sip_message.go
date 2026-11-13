@@ -654,11 +654,7 @@ func sipHeaderTag(value string) string {
 }
 
 func sipTruncate(s string) string {
-	const limit = 80
-	if len(s) > limit {
-		return s[:limit] + "…"
-	}
-	return s
+	return truncateRunes(s, 80)
 }
 
 // sipRandomToken returns n random bytes, hex-encoded, for branches, tags and

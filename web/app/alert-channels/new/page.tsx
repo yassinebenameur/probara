@@ -9,6 +9,7 @@ import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import Page from '@/components/ui/Page';
+import { errorMessage } from '@/lib/errors';
 
 export default function NewAlertChannelPage() {
   return (
@@ -38,8 +39,8 @@ function NewAlertChannelPageInner() {
       setTimeout(() => {
         router.push('/settings?tab=channels');
       }, 1000);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create alert channel', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to create alert channel'), 'error');
       setLoading(false);
     }
   };

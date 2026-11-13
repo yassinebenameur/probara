@@ -11,10 +11,10 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/alerter ./alerter/cmd/alerter
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/alerter ./alerter/cmd/alerter
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.24
 
 RUN apk --no-cache add ca-certificates tzdata
 

@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	metricsqueryservice "github.com/yassinebenameur/probara/api/internal/services/metricsquery"
-	"github.com/yassinebenameur/probara/shared/context"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -29,7 +29,7 @@ func NewHandler(service *metricsqueryservice.Service, log *logger.Logger) *Handl
 }
 
 func (h *Handler) scope(w http.ResponseWriter, r *http.Request) (monitorID, tenantID uuid.UUID, ok bool) {
-	tenantIDStr, found := context.GetTenantID(r.Context())
+	tenantIDStr, found := ctxpkg.GetTenantID(r.Context())
 	if !found {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return uuid.Nil, uuid.Nil, false

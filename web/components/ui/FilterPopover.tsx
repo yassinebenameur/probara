@@ -63,7 +63,7 @@ interface FilterPopoverProps {
   accessibleLabel?: string;
   /**
    * One line at the top of the popup saying how the selection combines
-   * ("Monitors must carry every selected tag"); also its description.
+   * ("Monitors carrying any selected tag"); also its description.
    */
   hint?: string;
   /** `md` (32px) lines the chip up with RangePicker and buttons in a page header. */

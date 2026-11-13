@@ -11,7 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
@@ -99,12 +101,7 @@ func (s *Service) Get(ctx context.Context, tenantID, windowID uuid.UUID) (*model
 
 // List returns maintenance windows filtered by derived status and/or monitor.
 func (s *Service) List(ctx context.Context, tenantID uuid.UUID, status string, monitorID uuid.UUID, page, pageSize int) (*models.MaintenanceWindowListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.DefaultSize, pagination.MaxSize)
 	windows, total, err := s.query(ctx, tenantID, status, monitorID, nil, page, pageSize)
 	if err != nil {
 		return nil, err
@@ -217,7 +214,7 @@ func (s *Service) SnoozeMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		monitorID, tenantID).Scan(&monitorName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("monitor not found")
+			return nil, apperr.ErrMonitorNotFound
 		}
 		return nil, fmt.Errorf("failed to fetch monitor: %w", err)
 	}

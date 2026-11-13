@@ -917,18 +917,18 @@ func validateSyntheticAPIAssertion(stepIdx, assertionIdx int, a sharedmodels.Syn
 		if strings.TrimSpace(a.Path) == "" {
 			return fmt.Errorf("steps[%d].assert[%d].path is required for header assertions", stepIdx, assertionIdx)
 		}
-		if err := validateSyntheticTextAssertion(stepIdx, assertionIdx, op, value); err != nil {
+		if err := validateSyntheticTextAssertion(stepIdx, assertionIdx, op, value, a.ValueText()); err != nil {
 			return err
 		}
 	case "body":
-		if err := validateSyntheticTextAssertion(stepIdx, assertionIdx, op, value); err != nil {
+		if err := validateSyntheticTextAssertion(stepIdx, assertionIdx, op, value, a.ValueText()); err != nil {
 			return err
 		}
 	case "json":
 		if strings.TrimSpace(a.Path) == "" {
 			return fmt.Errorf("steps[%d].assert[%d].path is required for json assertions", stepIdx, assertionIdx)
 		}
-		if err := validateSyntheticJSONAssertion(stepIdx, assertionIdx, op, value); err != nil {
+		if err := validateSyntheticJSONAssertion(stepIdx, assertionIdx, op, value, a.ValueText()); err != nil {
 			return err
 		}
 	default:
@@ -938,7 +938,7 @@ func validateSyntheticAPIAssertion(stepIdx, assertionIdx int, a sharedmodels.Syn
 	return nil
 }
 
-func validateSyntheticTextAssertion(stepIdx, assertionIdx int, op string, value interface{}) error {
+func validateSyntheticTextAssertion(stepIdx, assertionIdx int, op string, value interface{}, text string) error {
 	switch op {
 	case "exists":
 		return nil
@@ -950,8 +950,7 @@ func validateSyntheticTextAssertion(stepIdx, assertionIdx int, op string, value 
 		if value == nil {
 			return fmt.Errorf("steps[%d].assert[%d].value is required for op %s", stepIdx, assertionIdx, op)
 		}
-		pattern := fmt.Sprint(value)
-		if _, err := regexp.Compile(pattern); err != nil {
+		if _, err := regexp.Compile(text); err != nil {
 			return fmt.Errorf("steps[%d].assert[%d].value is invalid regex: %w", stepIdx, assertionIdx, err)
 		}
 	default:
@@ -960,7 +959,7 @@ func validateSyntheticTextAssertion(stepIdx, assertionIdx int, op string, value 
 	return nil
 }
 
-func validateSyntheticJSONAssertion(stepIdx, assertionIdx int, op string, value interface{}) error {
+func validateSyntheticJSONAssertion(stepIdx, assertionIdx int, op string, value interface{}, text string) error {
 	switch op {
 	case "exists":
 		return nil
@@ -972,8 +971,7 @@ func validateSyntheticJSONAssertion(stepIdx, assertionIdx int, op string, value 
 		if value == nil {
 			return fmt.Errorf("steps[%d].assert[%d].value is required for op %s", stepIdx, assertionIdx, op)
 		}
-		pattern := fmt.Sprint(value)
-		if _, err := regexp.Compile(pattern); err != nil {
+		if _, err := regexp.Compile(text); err != nil {
 			return fmt.Errorf("steps[%d].assert[%d].value is invalid regex: %w", stepIdx, assertionIdx, err)
 		}
 	case "number_gt", "number_gte", "number_lt", "number_lte":

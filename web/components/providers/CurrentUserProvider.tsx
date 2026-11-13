@@ -7,7 +7,7 @@ import {
   useEffect,
   useState,
 } from 'react';
-import { getAuthContext } from '@/lib/api';
+import { getAuthContext, getSession } from '@/lib/api';
 import { hasApiKey } from '@/lib/auth';
 import { TENANT_CHANGED_EVENT } from '@/lib/tenant';
 import type { AdminUser, AuthContext, TenantRole } from '@/lib/types';
@@ -83,11 +83,7 @@ export function CurrentUserProvider({ children }: { children: React.ReactNode })
       let user: AdminUser | null = null;
       if (!hasApiKey()) {
         try {
-          const response = await fetch('/api/v1/auth/me', { credentials: 'include' });
-          if (response.ok) {
-            const data = await response.json();
-            user = (data?.user as AdminUser) ?? null;
-          }
+          user = (await getSession()).user;
         } catch {
           // AuthGuard handles redirecting unauthenticated sessions.
         }

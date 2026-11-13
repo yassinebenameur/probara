@@ -33,7 +33,7 @@ export const AGENTS_PAGE: DocPage = {
             ],
             [
               "Host metrics",
-              "OS metrics via `hostmetrics`; any OTel metric a collector sends is stored",
+              "OS metrics via the `host_metrics` receiver; any OTel metric a collector sends is stored",
               "Arbitrary submitted key/value metrics",
               "Worker process metrics only",
             ],
@@ -115,7 +115,7 @@ export const AGENTS_PAGE: DocPage = {
         },
         {
           type: "table",
-          columns: ["Platform", "Enabled `hostmetrics` scrapers", "Consequence"],
+          columns: ["Platform", "Enabled `host_metrics` scrapers", "Consequence"],
           rows: [
             [
               "Linux",
@@ -228,7 +228,7 @@ export const AGENTS_PAGE: DocPage = {
           tone: "info",
           title: "It is a standard OpenTelemetry Collector",
           text:
-            "`probara-collector` accepts the usual collector flags, and the generated config runs unchanged on a stock `otelcol-contrib` build if you prefer to distribute upstream binaries — see [migrating and extending](/docs/agents/#migrating-legacy).",
+            "`probara-collector` accepts the usual collector flags, and the generated config runs unchanged on a stock `otelcol-contrib` build (0.153.0 or newer) if you prefer to distribute upstream binaries — see [migrating and extending](/docs/agents/#migrating-legacy).",
         },
       ],
     },
@@ -244,7 +244,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Each accepted export doubles as one availability heartbeat: a success check result stamped with the server's receipt time, so collector clock skew can never affect state or history.",
+            "Each accepted export doubles as one availability heartbeat: a success check result stamped with the server's receipt time, so collector clock skew can never affect state or history. The heartbeat carries no `metrics_data`: host readings live only in the metric store, read through `GET /api/v1/monitors/{id}/metrics/series` and `POST /api/v1/monitors/{id}/metrics/query`.",
         },
         {
           type: "table",
@@ -252,7 +252,7 @@ export const AGENTS_PAGE: DocPage = {
           rows: [
             [
               "`system.cpu.utilization{state=used}`",
-              "A `metricstransform` processor aggregates per-CPU non-idle states into one used ratio",
+              "A `metrics_transform` processor aggregates per-CPU non-idle states into one used ratio",
             ],
             ["`system.memory.utilization` / `system.memory.usage`", "Memory ratio and bytes"],
             ["`system.paging.*`", "Swap utilization and usage"],
@@ -373,7 +373,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Legacy agents that were explicitly started with `--allow-remote-disable` still honor the old `410` self-uninstall during the [deprecation window](/docs/agents/#migrating-legacy) when their monitor is deleted; all others simply log and retry until manually uninstalled.",
+            "A legacy agent still running after the [sunset](/docs/agents/#migrating-legacy) receives `410 Gone` on every report. One explicitly started with `--allow-remote-disable` reads that as the old self-uninstall signal and runs its remove command; all others log the response and retry until uninstalled.",
         },
       ],
     },
@@ -384,7 +384,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The custom `probara-agent` binary is replaced by the OpenTelemetry Collector. `POST /api/v1/agent/metrics` still accepts legacy agents through a deprecation window ending **Wednesday, 18 November 2026**; every response carries `Deprecation`, `Sunset`, and `Link` headers, and each legacy report is logged server-side so operators can find stragglers. After the window the endpoint becomes a `410` tombstone. Old agent binaries are no longer distributed.",
+            "The custom `probara-agent` binary is replaced by the OpenTelemetry Collector. Its deprecation window ended on **Wednesday, 18 November 2026**: `POST /api/v1/agent/metrics` no longer accepts reports. It answers `410 Gone` with a JSON `error` naming `POST /api/v1/otlp/v1/metrics` and a `Link` header (`rel=\"successor-version\"`) pointing at it, stores nothing, and logs each rejected report server-side so operators can find stragglers. A monitor whose host still runs the legacy agent receives no reports, so it goes stale and then down until the collector is installed. Old agent binaries are no longer distributed.",
         },
         {
           type: "list",
@@ -392,7 +392,7 @@ export const AGENTS_PAGE: DocPage = {
           items: [
             "Re-run the install one-liner on each host: the installer removes the legacy agent (service, binary, config) and installs the collector in one pass.",
             "Verify the monitor keeps reporting; the same monitor, agent ID, and API key carry over unchanged.",
-            "Check server logs (or the sunset headers in your agent's responses) to enumerate hosts still on the legacy path.",
+            "Check the API logs for `legacy agent push rejected` warnings (each names the tenant), or for agent monitors that went down, to find hosts still on the legacy path.",
           ],
         },
         {
@@ -405,12 +405,12 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Air-gapped or mirror-constrained environments do not need the `probara-collector` binary at all: the generated configuration is a standard OpenTelemetry Collector config, and a stock `otelcol-contrib` build runs it unchanged. Fetch the YAML from `GET /api/v1/monitors/{id}/agent/config.yaml` and distribute upstream binaries from your own mirror.",
+            "Air-gapped or mirror-constrained environments do not need the `probara-collector` binary at all: the generated configuration is a standard OpenTelemetry Collector config, and a stock `otelcol-contrib` build runs it unchanged. It uses the current snake_case component names (`host_metrics`, `resource_detection`, `metrics_transform`, `otlp_http`), which need `otelcol-contrib` 0.153.0 or newer; an older upstream build rejects them as unknown components. Configs written by earlier installers use the old names (`hostmetrics`, `resourcedetection`, `metricstransform`, `otlphttp`), which the bundled collector still accepts as deprecated aliases, logging a warning at startup; re-running the install one-liner rewrites the config with the current names. Fetch the YAML from `GET /api/v1/monitors/{id}/agent/config.yaml` and distribute upstream binaries from your own mirror.",
         },
         {
           type: "paragraph",
           text:
-            "The configuration is also an extension point: add more `hostmetrics` scrapers, or additional receivers entirely (with `otelcol-contrib`), pushing to the same OTLP endpoint. Any metric that arrives is stored, chartable, and alertable through metric rules — subject to the [per-monitor series and rate limits](/docs/agents/#reporting).",
+            "The configuration is also an extension point: add more `host_metrics` scrapers, or additional receivers entirely (with `otelcol-contrib`), pushing to the same OTLP endpoint. Any metric that arrives is stored, chartable, and alertable through metric rules — subject to the [per-monitor series and rate limits](/docs/agents/#reporting).",
         },
       ],
     },

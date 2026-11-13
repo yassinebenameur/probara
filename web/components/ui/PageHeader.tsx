@@ -1,6 +1,6 @@
 import { Children, ReactNode } from 'react';
 import Breadcrumb, { BreadcrumbItem } from './Breadcrumb';
-import InfoTip, { InfoTipEntry } from './InfoTip';
+import { InfoTipFor, type InfoTipContent } from './InfoTip';
 
 interface PageHeaderProps {
   breadcrumb?: BreadcrumbItem[];
@@ -12,25 +12,9 @@ interface PageHeaderProps {
   subtitle?: ReactNode | ReactNode[];
   /** Sits beside the h1, outside it (e.g. a status Pill on a detail page). */
   titleAside?: ReactNode;
-  titleInfoTip?: ReactNode | { title?: string; entries?: InfoTipEntry[] };
+  titleInfoTip?: InfoTipContent;
   /** At most one accent button; the rest ghost. */
   action?: ReactNode;
-}
-
-function isInfoTipShape(
-  value: unknown
-): value is { title?: string; entries?: InfoTipEntry[] } {
-  if (typeof value !== 'object' || value === null) return false;
-  if ('type' in value) return false;
-  return 'title' in value || 'entries' in value;
-}
-
-function renderInfoTip(infoTip: PageHeaderProps['titleInfoTip']) {
-  if (!infoTip) return null;
-  if (isInfoTipShape(infoTip)) {
-    return <InfoTip title={infoTip.title} entries={infoTip.entries} />;
-  }
-  return <InfoTip>{infoTip as ReactNode}</InfoTip>;
 }
 
 // The breadcrumb sits on its own line so the actions align with the title
@@ -54,7 +38,7 @@ export default function PageHeader({
             {(titleAside || titleInfoTip) && (
               <div className="flex items-center gap-2">
                 {titleAside}
-                {renderInfoTip(titleInfoTip)}
+                <InfoTipFor content={titleInfoTip} />
               </div>
             )}
           </div>

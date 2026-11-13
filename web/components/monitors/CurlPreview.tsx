@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import { Check, Copy } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import { useClipboard } from '@/lib/useClipboard';
 
 type HeaderKV = { key: string; value: string; reveal?: boolean };
 
@@ -40,21 +41,13 @@ interface CurlPreviewProps {
 // Compact, copyable cURL equivalent of the configured request.
 export default function CurlPreview({ method, url, headers, body }: CurlPreviewProps) {
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useClipboard();
   const curl = buildCurl(method, url, headers, body);
   const lines = curl.split('\n');
   const hasMore = lines.length > 2;
   const shown = expanded ? lines : lines.slice(0, 2);
 
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(curl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      /* ignore */
-    }
-  }, [curl]);
+  const handleCopy = useCallback(() => void copy(curl), [copy, curl]);
 
   return (
     <div className="glass-well flex items-start justify-between gap-2 py-2 pl-3 pr-2">
@@ -62,7 +55,7 @@ export default function CurlPreview({ method, url, headers, body }: CurlPreviewP
         <span className="text-slate-500">curl -X</span>{' '}
         <span className="font-medium text-slate-200">{method || 'GET'}</span>
         {shown[0].split(' ').slice(3).length > 0 ? ` ${shown[0].split(' ').slice(3).join(' ')}` : ''}
-        {shown.slice(1).map((line, i) => `\n${line}`).join('')}
+        {shown.slice(1).map((line) => `\n${line}`).join('')}
         {!expanded && hasMore && (
           <button
             type="button"

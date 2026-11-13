@@ -15,13 +15,14 @@ import {
   Workflow,
   Wrench,
   MapPin,
+  Radar,
   ScrollText,
   Target,
   X,
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
-import { getIncidents } from '@/lib/api';
+import { getIncidents, logout } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { TENANT_CHANGED_EVENT, clearSelectedTenantId } from '@/lib/tenant';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
@@ -63,6 +64,7 @@ const navGroups: { key: string; items: NavItem[] }[] = [
       { name: 'Monitors', href: '/monitors', icon: Activity },
       { name: 'Locations', href: '/locations', icon: MapPin, also: ['/mesh'] },
       { name: 'Dependencies', href: '/dependencies', icon: Workflow },
+      { name: 'Discovery', href: '/discovery', icon: Radar },
       { name: 'Maintenance', href: '/maintenance', icon: Wrench },
       { name: 'Status pages', href: '/status-pages', icon: FileText },
       { name: 'SLAs', href: '/slas', icon: Target },
@@ -255,10 +257,7 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
       return;
     }
 
-    fetch('/api/v1/auth/logout', {
-      method: 'POST',
-      credentials: 'include',
-    }).finally(() => {
+    logout().finally(() => {
       clearSelectedTenantId();
       router.push('/login');
     });

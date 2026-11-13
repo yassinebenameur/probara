@@ -17,6 +17,7 @@ import { DEFAULT_ALERTING, STORED_ALERTING, assertWire, storedMonitor } from './
 import type {
   CreateMonitorRequest,
   HTTPMonitorConfig,
+  SyntheticAPIAssertionTarget,
   SyntheticAPIMonitorConfig,
   SyntheticBrowserMonitorConfig,
 } from './types';
@@ -545,26 +546,65 @@ test('synthetic_api: edit round trip', () => {
   });
 });
 
-test('synthetic_api: a string assertion value that reads as JSON comes back retyped', () => {
-  // Current behavior, pinned: the value input is a JSON literal, so a stored
-  // string "123" or "true" is saved back as a number or boolean.
+test('synthetic_api: an edit round trip keeps every assertion value its type', () => {
+  const assert_ = [
+    // Strings that read as another JSON type, or lose edge whitespace/quotes.
+    { target: 'json', op: 'equals', path: 'code', value: '123' },
+    { target: 'json', op: 'equals', path: 'flag', value: 'true' },
+    { target: 'json', op: 'not_equals', path: 'v', value: 'null' },
+    { target: 'json', op: 'equals', path: 'q', value: '"quoted"' },
+    { target: 'body', op: 'contains', value: ' padded ' },
+    { target: 'header', op: 'equals', path: 'X-Version', value: '1.50' },
+    { target: 'json', op: 'regex', path: 'id', value: '^\\d+$' },
+    // Non-strings stay what they are.
+    { target: 'json', op: 'equals', path: 'n', value: 123 },
+    { target: 'json', op: 'equals', path: 'b', value: false },
+    { target: 'json', op: 'number_lte', path: 'lag', value: 2.5 },
+    { target: 'json', op: 'bool_is', path: 'ok', value: true },
+    { target: 'status', op: 'in', value: [200, 204] },
+    { target: 'json', op: 'equals', path: 'obj', value: { a: 1 } },
+  ] as SyntheticAPIMonitorConfig['steps'][number]['assert'];
   const monitor = storedMonitor('synthetic_api', {
-    steps: [
-      {
-        id: 'check',
-        request: { method: 'GET', url: 'https://api.example.com' },
-        assert: [
-          { target: 'json', op: 'equals', path: 'code', value: '123' },
-          { target: 'json', op: 'equals', path: 'flag', value: 'true' },
-        ],
-      },
-    ],
+    steps: [{ id: 'check', request: { method: 'GET', url: 'https://api.example.com' }, assert: assert_ }],
   } as SyntheticAPIMonitorConfig);
-  const config = buildMonitorFormRequest('synthetic_api', initialMonitorFormState(monitor), false)
-    .config as SyntheticAPIMonitorConfig;
-  assertWire(config.steps[0].assert, [
-    { target: 'json', op: 'equals', path: 'code', value: 123 },
-    { target: 'json', op: 'equals', path: 'flag', value: true },
+  const form = initialMonitorFormState(monitor);
+  assert.deepEqual(
+    form.synthetic_api_steps[0].assertions.slice(0, 4).map((a) => a.value_input),
+    ['"123"', '"true"', '"null"', '"\\"quoted\\""'],
+  );
+  const config = buildMonitorFormRequest('synthetic_api', form, false).config as SyntheticAPIMonitorConfig;
+  assertWire(config.steps[0].assert, assert_);
+});
+
+test('synthetic_api: a typed value keeps the type the input expresses', () => {
+  const form = freshCreate('synthetic_api', { name: 'Journey', synthetic_api_base_url: 'https://api.example.com' });
+  const typed: Array<[SyntheticAPIAssertionTarget, string, string, string]> = [
+    // JSON equals: a bare literal is its JSON type, a quoted one a string.
+    ['json', 'equals', 'code', '"123"'],
+    ['json', 'equals', 'code', '123'],
+    ['json', 'equals', 'flag', '"true"'],
+    ['json', 'equals', 'flag', 'true'],
+    ['json', 'equals', 'name', 'plain text'],
+    // Text assertions submit the text as typed, never a number or object.
+    ['body', 'contains', '', '1.50'],
+    ['body', 'contains', '', '{"status":"ok"}'],
+    ['header', 'equals', 'X-Id', '12345678901234567890'],
+    ['json', 'regex', 'id', '123'],
+    ['body', 'contains', '', '"quoted"'],
+    // Number and boolean ops keep their literal.
+    ['json', 'number_gt', 'n', '5'],
+    ['json', 'bool_is', 'ok', 'false'],
+  ];
+  form.synthetic_api_steps = [{
+    ...form.synthetic_api_steps[0],
+    assertions: typed.map(([target, op, path, value_input]) => ({ target, op, path, value_input })),
+  }];
+  assert.deepEqual(validateMonitorForm('synthetic_api', form, false), {});
+  const config = buildMonitorFormRequest('synthetic_api', form, false).config as SyntheticAPIMonitorConfig;
+  assert.deepEqual(config.steps[0].assert?.map((a) => a.value), [
+    '123', 123, 'true', true, 'plain text',
+    '1.50', '{"status":"ok"}', '12345678901234567890', '123', 'quoted',
+    5, false,
   ]);
 });
 

@@ -112,10 +112,10 @@ func InsertHTTPMonitor(ctx context.Context, t testing.TB, dbClient *shareddb.Cli
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
-			alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
+			enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, 'http', '{"url":"https://example.com","method":"GET"}'::jsonb, 60, 30,
-			NULL, TRUE, ARRAY[]::text[], NULL, NULL, NULL, NOW(), NOW()
+			TRUE, ARRAY[]::text[], NULL, NULL, NULL, NOW(), NOW()
 		)
 	`, id, tenantID, name); err != nil {
 		t.Fatalf("insert http monitor: %v", err)
@@ -133,10 +133,10 @@ func InsertGroupMonitor(ctx context.Context, t testing.TB, dbClient *shareddb.Cl
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
-			alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
+			enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, 'group', '{"monitor_ids":[]}'::jsonb, 60, 30,
-			NULL, TRUE, ARRAY[]::text[], NULL, NULL, NULL, NOW(), NOW()
+			TRUE, ARRAY[]::text[], NULL, NULL, NULL, NOW(), NOW()
 		)
 	`, id, tenantID, name); err != nil {
 		t.Fatalf("insert group monitor: %v", err)
@@ -156,11 +156,11 @@ func InsertAgentMonitor(ctx context.Context, t testing.TB, dbClient *shareddb.Cl
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
-			alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
+			enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, 'agent',
 			jsonb_build_object('agent_id', $4::text, 'expected_interval_seconds', $5::int),
-			$5, $5, NULL, TRUE, ARRAY[]::text[], $4, NULL, NULL, NOW(), NOW()
+			$5, $5, TRUE, ARRAY[]::text[], $4, NULL, NULL, NOW(), NOW()
 		)
 	`, id, tenantID, name, agentID, intervalSeconds); err != nil {
 		t.Fatalf("insert agent monitor: %v", err)

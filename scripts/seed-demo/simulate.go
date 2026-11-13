@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
@@ -480,10 +479,6 @@ func simulate(in simInput) *simResult {
 					row.http = 200
 				}
 				row.metrics = succMetrics
-				if s.Type == "agent" && !at.Before(in.rawStart) {
-					// Only raw rows carry metrics; the rest only feed rollups.
-					row.metrics = agentSnapshot(s.Key, at)
-				}
 				return row
 			}
 			kind, code := profileKind, 0
@@ -738,27 +733,4 @@ func poisson(r *rand.Rand, lambda float64) int {
 		}
 		k++
 	}
-}
-
-// ── agent metrics ─────────────────────────────────────────────────────────
-
-func agentSnapshot(key string, t time.Time) []byte {
-	s := sampleHost(key, t)
-	m := models.AgentMetrics{CPUPercent: s.cpu * 100, CPUCores: s.cores, MemoryUsed: uint64(s.memUsed), MemoryTotal: uint64(s.memTotal),
-		SwapUsed: uint64(s.swapUsed), SwapTotal: uint64(s.swapTotal), LoadAvg1: s.load1, LoadAvg5: s.load5, LoadAvg15: s.load15,
-		NetworkBytesIn: uint64(s.netRx), NetworkBytesOut: uint64(s.netTx), DiskReadBytes: uint64(s.diskR), DiskWriteBytes: uint64(s.diskW),
-		ProcessCount: s.procs, UptimeSeconds: uint64(math.Max(0, s.uptime)), Timestamp: t.UTC()}
-	mounts := make([]string, 0, len(s.fs))
-	for mp := range s.fs {
-		mounts = append(mounts, mp)
-	}
-	sort.Strings(mounts)
-	for _, mp := range mounts {
-		v := s.fs[mp]
-		m.DiskUsed += uint64(v[0])
-		m.DiskTotal += uint64(v[0] + v[1])
-		m.DiskMounts = append(m.DiskMounts, models.DiskMount{Path: mp, Used: uint64(v[0]), Total: uint64(v[0] + v[1])})
-	}
-	b, _ := json.Marshal(m)
-	return b
 }

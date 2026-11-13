@@ -30,7 +30,7 @@ func newHostMetricAlerter(dbClient *shareddb.Client) *Alerter {
 		logger: logger.New("alerter-test", "error"),
 		db:     dbClient,
 	}
-	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+	a.sendFunc = func(context.Context, alertChannel, string, alertSubject, *alertRecord, *groupDetail, time.Time) error {
 		return nil
 	}
 	return a
@@ -43,10 +43,10 @@ func insertAgentMonitor(ctx context.Context, t *testing.T, dbClient *shareddb.Cl
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
-			alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
+			enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, 'agent', $4::jsonb, 60, 60,
-			NULL, TRUE, ARRAY[]::text[], $5, NULL, NULL, NOW(), NOW()
+			TRUE, ARRAY[]::text[], $5, NULL, NULL, NOW(), NOW()
 		)
 	`, id, tenantID, name, configJSON, id.String()); err != nil {
 		t.Fatalf("insert agent monitor: %v", err)
@@ -72,21 +72,6 @@ func seedFreshSeries(ctx context.Context, t *testing.T, dbClient *shareddb.Clien
 		t.Fatalf("insert sample: %v", err)
 	}
 	return id
-}
-
-// insertAgentMetricsResult inserts a successful check result carrying the
-// given metrics_data JSON (still used by the TLS-expiry evaluator tests,
-// which read metrics_data rather than the metric store).
-func insertAgentMetricsResult(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID, monitorID uuid.UUID, createdAt time.Time, metricsJSON string) {
-	t.Helper()
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO check_results (
-			id, monitor_id, tenant_id, job_id, status, latency_ms, created_at, started_at, completed_at,
-			result_source, metrics_data
-		) VALUES ($1, $2, $3, $4, 'success', 5, $5, $5, $5, 'monitor', $6::jsonb)
-	`, uuid.New(), monitorID, tenantID, uuid.New(), createdAt.UTC(), metricsJSON); err != nil {
-		t.Fatalf("insert agent metrics result: %v", err)
-	}
 }
 
 func countHostMetricAlerts(ctx context.Context, t *testing.T, dbClient *shareddb.Client, monitorID uuid.UUID, metric, status string) int {

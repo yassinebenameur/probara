@@ -6,7 +6,7 @@ import {
   ReactNode,
   useId,
 } from 'react';
-import InfoTip, { InfoTipEntry } from './InfoTip';
+import { InfoTipFor, type InfoTipContent } from './InfoTip';
 import Input from './Input';
 import Select from './Select';
 
@@ -15,7 +15,7 @@ interface FormFieldProps {
   description?: string;
   error?: string;
   required?: boolean;
-  infoTip?: ReactNode | { title?: string; entries?: InfoTipEntry[] };
+  infoTip?: InfoTipContent;
   /** Id of the control the label names; generated when omitted. */
   htmlFor?: string;
   /**
@@ -32,22 +32,6 @@ export interface FieldControlProps {
   'aria-describedby'?: string;
   /** Set for required fields: the visual asterisk is aria-hidden. */
   'aria-required'?: true;
-}
-
-function isInfoTipShape(
-  value: unknown
-): value is { title?: string; entries?: InfoTipEntry[] } {
-  if (typeof value !== 'object' || value === null) return false;
-  if ('type' in value) return false;
-  return 'title' in value || 'entries' in value;
-}
-
-function renderInfoTip(infoTip: FormFieldProps['infoTip']) {
-  if (!infoTip) return null;
-  if (isInfoTipShape(infoTip)) {
-    return <InfoTip title={infoTip.title} entries={infoTip.entries} inLabel />;
-  }
-  return <InfoTip inLabel>{infoTip as ReactNode}</InfoTip>;
 }
 
 const LINKABLE = new Set<unknown>(['input', 'select', 'textarea', Input, Select]);
@@ -105,7 +89,7 @@ export default function FormField({
           {label}
           {required && <span className="ml-1 text-rose-300" aria-hidden="true">*</span>}
         </label>
-        {renderInfoTip(infoTip)}
+        <InfoTipFor content={infoTip} inLabel />
       </div>
       {description && <p id={descriptionId} className="mb-2 text-xs text-slate-500">{description}</p>}
       {content}

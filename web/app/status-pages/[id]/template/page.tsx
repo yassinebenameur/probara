@@ -52,10 +52,11 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Dialog from '@/components/ui/Dialog';
 import Input from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
-import { formatDateTime, formatDateTimeFull } from '@/lib/format';
+import { formatDateTime, formatDateTimeFull, formatFileSize } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import { followLiveSource, templateEditorState } from '@/lib/template-editor';
 import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
+import { errorMessage } from '@/lib/errors';
 
 const CODE_AREA =
   'glass-well block w-full font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 ' +
@@ -67,11 +68,6 @@ interface PendingConfirm {
   confirmLabel: string;
   tone: 'danger' | 'default';
   run: () => Promise<unknown>;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 export default function StatusPageTemplatePage() {
@@ -138,8 +134,8 @@ export default function StatusPageTemplatePage() {
       }
       setSource(seed);
       setBaseline(seed);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load template');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to load template'));
     } finally {
       setLoading(false);
     }
@@ -207,8 +203,8 @@ export default function StatusPageTemplatePage() {
       showToast(successMessage, 'success');
       setPreviewNonce((n) => n + 1);
       return state;
-    } catch (err: any) {
-      showToast(err.message || 'Operation failed', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Operation failed'), 'error');
       return null;
     } finally {
       setBusy(false);
@@ -232,8 +228,8 @@ export default function StatusPageTemplatePage() {
         setBusy(true);
         await saveStatusPageTemplateDraft(id, source);
         setBaseline(source);
-      } catch (err: any) {
-        showToast(err.message || 'Draft is invalid; fix it before publishing', 'error');
+      } catch (err) {
+        showToast(errorMessage(err, 'Draft is invalid; fix it before publishing'), 'error');
         setBusy(false);
         return;
       }
@@ -289,8 +285,8 @@ export default function StatusPageTemplatePage() {
       setBusy(true);
       setSource(await getStatusPageDefaultTemplateSource(id));
       showToast('Built-in template loaded into the editor', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to load the built-in template', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to load the built-in template'), 'error');
     } finally {
       setBusy(false);
     }
@@ -301,8 +297,8 @@ export default function StatusPageTemplatePage() {
       setBusy(true);
       setSource(await getStatusPageTemplateVersionSource(id, version));
       showToast(`Version ${version} loaded into the editor`, 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to load version', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to load version'), 'error');
     } finally {
       setBusy(false);
     }
@@ -318,8 +314,8 @@ export default function StatusPageTemplatePage() {
         `“${item?.name || 'Template'}” loaded into the editor — save as draft to keep it`,
         'success'
       );
-    } catch (err: any) {
-      showToast(err.message || 'Failed to load library template', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to load library template'), 'error');
     } finally {
       setBusy(false);
     }
@@ -335,8 +331,8 @@ export default function StatusPageTemplatePage() {
         [...prev, created].sort((a, b) => a.name.localeCompare(b.name))
       );
       showToast(`Saved to library as “${created.name}”`, 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to save to library', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to save to library'), 'error');
     } finally {
       setBusy(false);
     }
@@ -373,8 +369,8 @@ export default function StatusPageTemplatePage() {
       setStatusPage(updated);
       applySettings(updated.settings);
       showToast('Branding saved — the public page picks it up immediately', 'success');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to save branding', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to save branding'), 'error');
     } finally {
       setSavingBranding(false);
     }
@@ -501,7 +497,7 @@ export default function StatusPageTemplatePage() {
             <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
               <span>Go html/template</span>
               <span className="tabular-nums">
-                {formatBytes(source.length)} / {formatBytes(maxSize)}
+                {formatFileSize(source.length)} / {formatFileSize(maxSize)}
               </span>
               {status === 'unsaved' ? (
                 <span className="text-amber-300">Unsaved changes</span>
@@ -724,7 +720,7 @@ export default function StatusPageTemplatePage() {
                   >
                     {v.status}
                   </Pill>
-                  <span className="text-xs tabular-nums text-slate-500">{formatBytes(v.size_bytes)}</span>
+                  <span className="text-xs tabular-nums text-slate-500">{formatFileSize(v.size_bytes)}</span>
                   {v.published_at && (
                     <span className="text-xs text-slate-500" title={formatDateTimeFull(v.published_at)}>
                       published {formatDateTime(v.published_at)}

@@ -1,6 +1,6 @@
 'use client';
 
-import { Dispatch, ReactNode, RefObject, SetStateAction, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Dispatch, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes, RefObject, SetStateAction, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
 import Button from '@/components/ui/Button';
@@ -548,8 +548,7 @@ export function FormInput({
   error?: string;
   hint?: string;
   required?: boolean;
-  [key: string]: any;
-}) {
+} & Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'type' | 'placeholder' | 'required'>) {
   const f = useFieldIds(error, hint);
   return (
     <div>
@@ -591,8 +590,7 @@ export function FormTextarea({
   error?: string;
   hint?: string;
   rows?: number;
-  [key: string]: any;
-}) {
+} & Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange' | 'placeholder' | 'rows'>) {
   const f = useFieldIds(error, hint);
   return (
     <div>

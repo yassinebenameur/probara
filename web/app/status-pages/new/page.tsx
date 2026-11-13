@@ -8,6 +8,7 @@ import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import { useToast } from '@/components/ui/ToastProvider';
+import { errorMessage } from '@/lib/errors';
 
 export default function NewStatusPagePage() {
   const router = useRouter();
@@ -22,8 +23,8 @@ export default function NewStatusPagePage() {
       // Straight into the editor: the template, and the page's public link,
       // live there.
       router.push(`/status-pages/${created.id}`);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create status page', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to create status page'), 'error');
       setLoading(false);
     }
   };

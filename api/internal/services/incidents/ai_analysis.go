@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -25,7 +26,7 @@ func (s *Service) RequestAIAnalysis(ctx context.Context, tenantID, incidentID uu
 		return nil, fmt.Errorf("check incident exists: %w", err)
 	}
 	if !exists {
-		return nil, fmt.Errorf("incident not found")
+		return nil, ErrIncidentNotFound
 	}
 
 	id := uuid.New()
@@ -80,7 +81,7 @@ func (s *Service) GetLatestAIAnalysis(ctx context.Context, tenantID, incidentID 
 		return nil, fmt.Errorf("check incident exists: %w", err)
 	}
 	if !exists {
-		return nil, fmt.Errorf("incident not found")
+		return nil, ErrIncidentNotFound
 	}
 	return s.loadLatestAIAnalysis(ctx, tenantID, incidentID)
 }
@@ -102,7 +103,7 @@ func (s *Service) loadLatestAIAnalysis(ctx context.Context, tenantID, incidentID
 		LIMIT 1`, incidentID, tenantID)
 
 	analysis, err := scanAIAnalysis(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

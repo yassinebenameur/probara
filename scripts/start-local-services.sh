@@ -220,7 +220,10 @@ start_service worker ./worker/cmd/worker 8083 9092 \
   CHECK_JOB_SUBJECT="${CHECK_JOB_SUBJECT:-check.jobs}" \
   NATS_CONSUMER_NAME="${NATS_CONSUMER_NAME:-worker}" \
   WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-10}" \
-  SIP_LOCALHOST_AS_HOST_GATEWAY="${SIP_LOCALHOST_AS_HOST_GATEWAY:-true}"
+  SIP_LOCALHOST_AS_HOST_GATEWAY="${SIP_LOCALHOST_AS_HOST_GATEWAY:-false}"
+# SIP_LOCALHOST_AS_HOST_GATEWAY stays off here: this worker runs on the host,
+# where loopback already is the developer machine and host.docker.internal
+# usually does not resolve. Only the Compose worker (in a container) needs it.
 
 # Visitor browser notifications need a VAPID keypair; without one the feature
 # is simply off. Mint a pair with `go run ./cmd/admin/gen_vapid_keys` and

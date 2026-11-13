@@ -2,9 +2,9 @@
 # minimal collector distribution served from the API's /static/collector/ and
 # installed on customer hosts by the generated install scripts.
 #
-# Components are the exact set the generated config uses (hostmetrics →
-# metricstransform/resourcedetection/resource/memory_limiter/batch →
-# otlphttp). Adding a component here without bumping
+# Components are the exact set the generated config uses (host_metrics →
+# metrics_transform/resource_detection/resource/memory_limiter/batch →
+# otlp_http). Adding a component here without bumping
 # scripts/build-collector.sh's pinned OCB version (and vice versa) breaks the
 # build — bump them together.
 dist:

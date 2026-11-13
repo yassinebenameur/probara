@@ -34,7 +34,7 @@ type sentRecorder struct {
 }
 
 func (r *sentRecorder) install(a *Alerter) {
-	a.sendFunc = func(_ context.Context, _ alertChannel, eventType string, _ policyBinding, alert *alertRecord, _ *groupDetail, _ time.Time) error {
+	a.sendFunc = func(_ context.Context, _ alertChannel, eventType string, _ alertSubject, alert *alertRecord, _ *groupDetail, _ time.Time) error {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.events = append(r.events, sentEvent{monitorID: alert.MonitorID, eventType: eventType, record: *alert})

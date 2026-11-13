@@ -157,8 +157,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
     const delay = Math.min(baseReconnectDelay * Math.pow(2, reconnectAttempts.current), 30000);
     reconnectAttempts.current++;
 
-    console.log(`SSE: Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempts.current})`);
-
     reconnectTimeoutRef.current = setTimeout(() => {
       connectRef.current?.();
     }, delay);
@@ -167,7 +165,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
   const handleEvent = useCallback((eventType: string, data: string) => {
     try {
       if (eventType === 'connected') {
-        console.log('SSE: Connected event received');
         callbacksRef.current.onConnected?.();
         return;
       }
@@ -176,7 +173,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
         return;
       }
 
-      console.log('SSE: Received event:', eventType);
       const alert: Alert = JSON.parse(data);
 
       switch (eventType) {
@@ -209,8 +205,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
 
     try {
       let requestConfig = await buildStreamRequestConfig();
-      console.log('SSE: Connecting to', requestConfig.url);
-
       let response = await fetch(requestConfig.url, {
         ...requestConfig.init,
         signal: abortControllerRef.current.signal,
@@ -220,7 +214,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
         const refreshed = await refreshSession();
         if (refreshed) {
           requestConfig = await buildStreamRequestConfig();
-          console.log('SSE: Reconnecting after refresh to', requestConfig.url);
           response = await fetch(requestConfig.url, {
             ...requestConfig.init,
             signal: abortControllerRef.current.signal,
@@ -236,7 +229,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
         throw new Error('No response body');
       }
 
-      console.log('SSE: Connection established');
       reconnectAttempts.current = 0;
       isConnectedRef.current = true;
       connectingRef.current = false;
@@ -249,7 +241,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
         const { done, value } = await reader.read();
 
         if (done) {
-          console.log('SSE: Connection closed by server');
           isConnectedRef.current = false;
           // The connection is gone even though nothing threw: say so, or
           // the UI keeps claiming "live" while it waits to reconnect.
@@ -265,7 +256,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
       connectingRef.current = false;
 
       if (error instanceof Error && error.name === 'AbortError') {
-        console.log('SSE: Connection aborted');
         return;
       }
 
@@ -281,7 +271,6 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
   }, [connect]);
 
   const disconnect = useCallback(() => {
-    console.log('SSE: Disconnecting');
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
@@ -298,10 +287,8 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
 
   useEffect(() => {
     if (enabled) {
-      console.log('SSE: Hook enabled, connecting...');
       void connect();
     } else {
-      console.log('SSE: Hook disabled, disconnecting...');
       disconnect();
     }
 

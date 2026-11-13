@@ -315,10 +315,13 @@ func templateData(event notifications.AlertEvent, appBaseURL string) map[string]
 	view := newAlertView(event, appBaseURL)
 
 	return map[string]any{
-		"alert_id":      event.Alert.ID,
-		"monitor_id":    event.Alert.MonitorID,
-		"monitor_name":  event.Alert.MonitorName,
-		"policy_id":     event.Alert.AlertPolicyID,
+		"alert_id":     event.Alert.ID,
+		"monitor_id":   event.Alert.MonitorID,
+		"monitor_name": event.Alert.MonitorName,
+		// Alert policies are retired, so there is no id to give; the key stays
+		// (empty) because stored custom templates may still reference it and
+		// a missing key would render "<no value>".
+		"policy_id":     "",
 		"policy_name":   event.Alert.PolicyName,
 		"kind":          event.Alert.Kind,
 		"status":        event.Alert.Status,

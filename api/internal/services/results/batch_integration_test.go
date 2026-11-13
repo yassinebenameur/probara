@@ -67,6 +67,15 @@ func TestService_GetMonitorResultsBatch_MatchesPerMonitorResults(t *testing.T) {
 		t.Fatalf("set metrics_data: %v", err)
 	}
 
+	// Group status rows follow the members' monitor-level states (S-G3), not
+	// their check rows: outer = alpha up + beta down + gamma up -> degraded;
+	// stale's only member is up.
+	for id, state := range map[uuid.UUID]string{alpha: "up", beta: "down", gamma: "up", quiet: "up"} {
+		if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = $2 WHERE id = $1`, id, state); err != nil {
+			t.Fatalf("set monitor state: %v", err)
+		}
+	}
+
 	const limit = 3
 	resp, err := svc.GetMonitorResultsBatch(ctx, tenantID, []uuid.UUID{alpha, beta, quiet, silent, outer, empty, stale, deleted, foreign, alpha}, limit)
 	if err != nil {

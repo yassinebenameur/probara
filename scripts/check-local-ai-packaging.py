@@ -319,7 +319,7 @@ def check_dev_wiring():
     # A failed local-ai build must never abort the platform: every compose
     # up/build a target runs either names platform services (never local-ai,
     # never "all services") or is the guarded, tolerant local-ai command.
-    for target in ('up', 'build', 'rebuild', 'scale-workers', 'start-all'):
+    for target in ('up', 'build', 'rebuild', 'start-all'):
         dry = subprocess.run(['make', '-n', '-C', str(ROOT), target, 'N=2'], capture_output=True, text=True, check=True).stdout
         commands = [line for line in dry.splitlines() if re.search(r'docker compose (up|build)\b', line)]
         assert commands, f'make {target} runs no compose up/build'

@@ -2,39 +2,12 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
-	"github.com/yassinebenameur/probara/shared/models"
 )
-
-func TestProcessMetricsReturnsDisabledWithoutUninstallSignal(t *testing.T) {
-	sqlDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New() error = %v", err)
-	}
-	defer sqlDB.Close()
-
-	tenantID := uuid.New()
-	monitorID := uuid.New()
-	agentID := uuid.New().String()
-
-	mock.ExpectQuery("SELECT id, name, enabled FROM monitors").
-		WithArgs(agentID, tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled"}).AddRow(monitorID, "disabled agent", false))
-
-	err = NewService(sqlDB, nil).ProcessMetrics(context.Background(), models.AgentMetricsPayload{AgentID: agentID}, tenantID)
-	if !errors.Is(err, ErrAgentDisabled) {
-		t.Fatalf("expected ErrAgentDisabled, got %v", err)
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
 
 func TestGenerateInstallCommandCreatesUnixServiceInstaller(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
@@ -51,7 +24,7 @@ func TestGenerateInstallCommandCreatesUnixServiceInstaller(t *testing.T) {
 		WithArgs(monitorID, tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "interval_seconds"}).AddRow(agentID, 30))
 
-	cmd, err := NewService(sqlDB, nil).GenerateInstallCommand(context.Background(), monitorID, tenantID, "https://api.example.test", "secret-key")
+	cmd, err := NewService(sqlDB).GenerateInstallCommand(context.Background(), monitorID, tenantID, "https://api.example.test", "secret-key")
 	if err != nil {
 		t.Fatalf("GenerateInstallCommand() error = %v", err)
 	}
@@ -103,7 +76,7 @@ func TestGenerateInstallCommandCreatesWindowsServiceInstaller(t *testing.T) {
 		WithArgs(monitorID, tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"agent_id", "interval_seconds"}).AddRow(agentID, 30))
 
-	cmd, err := NewService(sqlDB, nil).GenerateInstallCommand(context.Background(), monitorID, tenantID, "https://api.example.test", "secret-key")
+	cmd, err := NewService(sqlDB).GenerateInstallCommand(context.Background(), monitorID, tenantID, "https://api.example.test", "secret-key")
 	if err != nil {
 		t.Fatalf("GenerateInstallCommand() error = %v", err)
 	}

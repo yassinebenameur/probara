@@ -13,6 +13,9 @@ import { useToast } from '@/components/ui/ToastProvider';
 import { getMcpConnections, getMcpEndpointUrl, revokeMcpConnection } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import type { McpConnection } from '@/lib/types';
+import { errorMessage } from '@/lib/errors';
+import { useClipboard } from '@/lib/useClipboard';
+import { useAsyncData } from '@/lib/useAsyncData';
 
 type Client = 'claude-code' | 'claude-ai' | 'cursor' | 'api-key';
 
@@ -55,13 +58,20 @@ function hint(client: Client): string {
  * and revoke theirs; what an agent may do is the user's role narrowed by
  * the access chosen at consent.
  */
+async function fetchConnections(): Promise<McpConnection[]> {
+  return (await getMcpConnections()).items || [];
+}
+
 export function MCPPanel() {
   const { showToast } = useToast();
+  const clipboard = useClipboard();
   const [client, setClient] = useState<Client>('claude-code');
   const [url, setUrl] = useState('');
-  const [connections, setConnections] = useState<McpConnection[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { data: connections, loading, error, reload: load } = useAsyncData<McpConnection[]>(
+    fetchConnections,
+    [],
+    'Failed to load connections'
+  );
   const [pending, setPending] = useState<McpConnection | null>(null);
   const [revoking, setRevoking] = useState(false);
 
@@ -69,30 +79,9 @@ export function MCPPanel() {
     setUrl(getMcpEndpointUrl());
   }, []);
 
-  const load = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const res = await getMcpConnections();
-      setConnections(res.items || []);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load connections');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
   const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      showToast('Copied', 'success');
-    } catch {
-      showToast('Copy failed', 'error');
-    }
+    const ok = await clipboard.copy(text);
+    showToast(ok ? 'Copied' : 'Copy failed', ok ? 'success' : 'error');
   };
 
   const revoke = async () => {
@@ -103,8 +92,8 @@ export function MCPPanel() {
       showToast(`Disconnected ${pending.client_name}`, 'success');
       setPending(null);
       await load();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to disconnect', 'error');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to disconnect'), 'error');
     } finally {
       setRevoking(false);
     }

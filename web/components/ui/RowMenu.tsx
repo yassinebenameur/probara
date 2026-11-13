@@ -214,21 +214,6 @@ export function RowMenuSeparator() {
   return <div role="separator" className="my-1 border-t border-divider" />;
 }
 
-/**
- * A labelled run of items inside a RowMenu ("Snooze alerts" + 1h/4h/24h).
- * The caption is visible; the group carries the same name for screen readers.
- */
-export function RowMenuGroup({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div role="group" aria-label={label}>
-      <div className="px-2.5 pb-1 pt-1.5 text-2xs font-medium text-slate-500" aria-hidden="true">
-        {label}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 // Closes the menu from custom content (e.g. a row of option buttons).
 export function useCloseRowMenu() {
   return useContext(CloseContext);

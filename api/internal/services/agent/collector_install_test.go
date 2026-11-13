@@ -21,7 +21,7 @@ func TestBuildCollectorConfigPerPlatform(t *testing.T) {
 			"endpoint: https://probara.example.com/api/v1/otlp",
 			"${env:PROBARA_API_KEY}",
 			"${env:PROBARA_AGENT_ID}",
-			"metricstransform:",
+			"metrics_transform:",
 			"system.cpu.utilization:",
 			"system.filesystem.utilization:",
 		} {

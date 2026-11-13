@@ -160,7 +160,7 @@ func (a *Alerter) dispatchSuspectedCauses(ctx context.Context) error {
 	}
 
 	type pending struct {
-		binding policyBinding
+		binding alertSubject
 		record  alertRecord
 		channel alertChannel
 	}

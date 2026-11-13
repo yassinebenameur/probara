@@ -169,6 +169,23 @@ export function formatUptime(pct: number | null | undefined): string {
 }
 
 /**
+ * A gauge percentage (CPU, memory, disk utilization): `42.3%`. `digits: 0`
+ * for dials and axis ticks; `trim` drops a trailing `.0` (`40%`, `99.5%`).
+ * Availability is not a gauge: that is formatUptime.
+ */
+export function formatPercent(value: number, options: { digits?: number; trim?: boolean } = {}): string {
+  const fixed = value.toFixed(options.digits ?? 1);
+  return `${options.trim ? fixed.replace(/\.0+$/, '') : fixed}%`;
+}
+
+/** The size of a file or text source: `512 B`, `3.4 KB`, `1.2 MB`. */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
  * Latency in milliseconds: `67 ms`, `1.2 s`, `12 s`. Missing or negative is
  * `—`. Feed it successful checks only (calculateLatencyStats does): a failed
  * check's latency is usually its timeout.

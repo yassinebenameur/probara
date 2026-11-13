@@ -13,7 +13,11 @@ import (
 	"github.com/yassinebenameur/probara/shared/auth"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
+
+// ErrTenantNotFound: no tenant has that ID.
+var ErrTenantNotFound = errors.New("tenant not found")
 
 // Service handles tenant operations.
 type Service struct {
@@ -46,7 +50,7 @@ func (s *Service) ListTenants(ctx context.Context) ([]models.Tenant, error) {
 
 	rows, err := s.db.QueryContext(ctx, query, adminID)
 	if err != nil {
-		if isMissingSchema(err) {
+		if pgerr.IsMissingSchema(err) {
 			// Pre-migration there are no memberships and every admin is a
 			// superadmin; fall back to the unfiltered list.
 			return s.listAllTenants(ctx)
@@ -114,16 +118,6 @@ func (s *Service) listAllTenants(ctx context.Context) ([]models.Tenant, error) {
 	return tenants, nil
 }
 
-// isMissingSchema reports Postgres undefined_table/undefined_column — this
-// binary running ahead of the post-upgrade migrations job.
-func isMissingSchema(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
-		return false
-	}
-	return pqErr.Code == "42P01" || pqErr.Code == "42703"
-}
-
 // GetTenantSettings returns tenant settings by tenant ID.
 func (s *Service) GetTenantSettings(ctx context.Context, tenantID uuid.UUID) (*models.TenantSettings, error) {
 	query := `
@@ -137,8 +131,8 @@ func (s *Service) GetTenantSettings(ctx context.Context, tenantID uuid.UUID) (*m
 		&settings.DataRetentionDays,
 		pq.Array(&settings.DashboardGroupTags),
 	); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("tenant not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrTenantNotFound
 		}
 		return nil, fmt.Errorf("failed to get tenant settings: %w", err)
 	}
@@ -189,8 +183,8 @@ func (s *Service) UpdateTenantSettings(ctx context.Context, tenantID uuid.UUID, 
 		&settings.DataRetentionDays,
 		pq.Array(&settings.DashboardGroupTags),
 	); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("tenant not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrTenantNotFound
 		}
 		return nil, fmt.Errorf("failed to update tenant settings: %w", err)
 	}

@@ -114,7 +114,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "On an empty installation, the public bootstrap status and first-user endpoints allow exactly the initial account to be created. That first active account is a superadministrator. OIDC just-in-time login can also initialize the first superadministrator on an empty installation.",
+            "On an empty installation, the public bootstrap status and first-user endpoints allow exactly the initial account to be created. That first active account is a superadministrator. OIDC just-in-time login can also initialize the first superadministrator on an empty installation, and an operator with database access can create or recover one at any time with [`go run ./cmd/admin`](/docs/operations/#database-migrations).",
         },
         {
           type: "table",
@@ -369,6 +369,11 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
+            "Kubernetes discovery writes record named events: `discovery-integration.create`, `.update`, `.delete` and `.rotate-token` (resource `discovery-integration/{id}`; `.update` carries `details.added` and `details.removed`, the namespaces actually added or removed, plus `details.name_changed` and `details.location_changed`, and an edit that changes nothing records no event), `discovery-link.create` and `.delete` (resource `discovery-service/{id}`, `details.monitor_id`), and `discovery.approve`, filed under the monitor the approval created (resource `monitor/{id}`, with `details.discovered_service_id` and `details.suggestion_key`); a repeated approval that only returns the already linked monitor (`created: false`) writes nothing and records no event. As with bulk triage, these replace the request-level event on success, and a refused or failed discovery write records one request-level event.",
+        },
+        {
+          type: "paragraph",
+          text:
             "Audit writes are best-effort asynchronous operational records, not a transactional ledger. The platform `AUDIT_RETENTION_DAYS` setting defaults to 365 days; `0` keeps records indefinitely.",
         },
         {
@@ -466,7 +471,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, retry thresholds, and group membership names. Compatibility data can include legacy alert-policy names, but policy management is retired. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
+            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, retry thresholds, and group membership names. Exports no longer write `alert_policy_names`; a bundle from an older release that still carries the field imports normally and the field is ignored. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
         },
         {
           type: "callout",

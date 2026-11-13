@@ -1,3 +1,99 @@
+# [2.1.0-alpha.1](https://github.com/yassinebenameur/probara/compare/v2.0.0...v2.1.0-alpha.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **admin:** make cmd/admin create a platform superadmin ([7814b41](https://github.com/yassinebenameur/probara/commit/7814b416b63c79197c2f0ec45d7fac191aa9017a))
+* **agent:** use current collector component names in the generated config ([0371f96](https://github.com/yassinebenameur/probara/commit/0371f9652fe759ea32241a8b1ec6b9f268cf42d8))
+* **alerter:** describe auto-created incidents without the retired policy wording ([798d011](https://github.com/yassinebenameur/probara/commit/798d01120ed329eae5c9725bf173763d3148203c))
+* **api:** stop reading and writing the retired alert-policy tables ([891f8cf](https://github.com/yassinebenameur/probara/commit/891f8cf4619b9c7de4023a5bde4a8338f9fe2bb9))
+* **compose:** drop the worker scaling target the fixed container name never allowed ([6c2b227](https://github.com/yassinebenameur/probara/commit/6c2b227a1c902c96b5835f17815821c1123bdd9a))
+* **compose:** let the worker scale and bring Makefile targets back in line ([bf1d11a](https://github.com/yassinebenameur/probara/commit/bf1d11a4d77b02994ea89eda1f023cb65d825fe9))
+* **dashboard:** scope the tag filter to any selected tag, matching /monitors ([d74af31](https://github.com/yassinebenameur/probara/commit/d74af31562d5257ddabbf4c546798398559166b3))
+* **discovery:** bound stored inventory and rate-limit collector snapshots ([78c10f2](https://github.com/yassinebenameur/probara/commit/78c10f2ca0dc21bbe5fbad3a8228f3dee74c0844))
+* **helm:** set secure session cookies on https installs and wire the preview secret into api and status-page ([e5ee28a](https://github.com/yassinebenameur/probara/commit/e5ee28ad60fb62ba3a1c0d25ecc5b7158b16d10d))
+* **incidents:** search and page the whole alert history when attaching alerts ([60e1ca2](https://github.com/yassinebenameur/probara/commit/60e1ca2944a9e98501be0087e852aeb151831f9f))
+* **local:** default SIP loopback rewrite off for host-process workers ([56777cf](https://github.com/yassinebenameur/probara/commit/56777cfa29c0e4bffa791ad6555c4402932a6c64))
+* share one service bootstrap so probes, shutdown and consumer supervision cannot drift between mains ([5388c0d](https://github.com/yassinebenameur/probara/commit/5388c0d030e4e2c9f38b54198347ebfd4f47f5e7))
+* **synthetic:** keep the typed type of API assertion values from form to worker ([019b6fc](https://github.com/yassinebenameur/probara/commit/019b6fc476fc44ebf07efc64c566b0c37323bcb3))
+* **web:** clear a database monitor's stored TLS client key when TLS is turned off ([a4de6b3](https://github.com/yassinebenameur/probara/commit/a4de6b3bc5fe1b52857118c29384df9372f9c4b0))
+* **web:** strip masked secrets from every monitor clone ([52068b6](https://github.com/yassinebenameur/probara/commit/52068b699a0953fa73bb3c22d16ce3166a81f45f))
+* **web:** surface API error messages through one error contract ([580e259](https://github.com/yassinebenameur/probara/commit/580e259a73736cfbe28ddf788f2bea093afc0827))
+* **web:** surface discovery form errors and keep coverage pagination in range ([a9bd422](https://github.com/yassinebenameur/probara/commit/a9bd422e71daeef934c3aa8a8a03d4948ed2428e))
+* **worker:** cut SIP and MongoDB error text on character boundaries ([fa3b95b](https://github.com/yassinebenameur/probara/commit/fa3b95b9a626f1c056b31b81cf2baa1a865d1e19))
+* **worker:** dial HTTP and gRPC checks through the shared SSRF guard ([a51fd34](https://github.com/yassinebenameur/probara/commit/a51fd342ea95548e2061c6d5f396384459f3b1c9))
+
+
+### Features
+
+* **api:** retire the legacy agent metrics endpoint as a 410 tombstone ([e6d010c](https://github.com/yassinebenameur/probara/commit/e6d010c575c2c0dc0bfda862869b9ac71737cb63))
+* **discovery:** Kubernetes discovery and monitoring coverage ([96b5d9c](https://github.com/yassinebenameur/probara/commit/96b5d9c537f11bd0c3c9a041a77c6e4eaa6dea32))
+* **discovery:** make integration namespaces editable without breaking scans ([5a2037c](https://github.com/yassinebenameur/probara/commit/5a2037c898c81729cc675cc2a23a079c672e7016))
+* **monitorstate:** derive group state once, with an alert view and a display view ([64d95a9](https://github.com/yassinebenameur/probara/commit/64d95a9717e2d5c0e1a41cfe39a8cd8fc02a888e))
+* **web:** edit a discovery cluster's name, location and namespaces ([857ccb9](https://github.com/yassinebenameur/probara/commit/857ccb9508cd9b25fec2f3370960ccc9bf91984d))
+* **web:** rework the alerts page as a timeline over a calendar feed ([fe79381](https://github.com/yassinebenameur/probara/commit/fe79381a113fbbc1f773a17eac40c7b0c97043d5))
+
+# [2.0.0-alpha.12](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.11...v2.0.0-alpha.12) (2026-11-12)
+
+
+### Features
+
+* **web:** rework the alerts page as a timeline over a calendar feed ([fe79381](https://github.com/yassinebenameur/probara/commit/fe79381a113fbbc1f773a17eac40c7b0c97043d5))
+
+# [2.0.0-alpha.11](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.10...v2.0.0-alpha.11) (2026-11-12)
+
+
+### Bug Fixes
+
+* **alerter:** describe auto-created incidents without the retired policy wording ([798d011](https://github.com/yassinebenameur/probara/commit/798d01120ed329eae5c9725bf173763d3148203c))
+* **api:** stop reading and writing the retired alert-policy tables ([891f8cf](https://github.com/yassinebenameur/probara/commit/891f8cf4619b9c7de4023a5bde4a8338f9fe2bb9))
+* **compose:** drop the worker scaling target the fixed container name never allowed ([6c2b227](https://github.com/yassinebenameur/probara/commit/6c2b227a1c902c96b5835f17815821c1123bdd9a))
+* **compose:** let the worker scale and bring Makefile targets back in line ([bf1d11a](https://github.com/yassinebenameur/probara/commit/bf1d11a4d77b02994ea89eda1f023cb65d825fe9))
+* **helm:** set secure session cookies on https installs and wire the preview secret into api and status-page ([e5ee28a](https://github.com/yassinebenameur/probara/commit/e5ee28ad60fb62ba3a1c0d25ecc5b7158b16d10d))
+* share one service bootstrap so probes, shutdown and consumer supervision cannot drift between mains ([5388c0d](https://github.com/yassinebenameur/probara/commit/5388c0d030e4e2c9f38b54198347ebfd4f47f5e7))
+* **web:** surface API error messages through one error contract ([580e259](https://github.com/yassinebenameur/probara/commit/580e259a73736cfbe28ddf788f2bea093afc0827))
+* **worker:** cut SIP and MongoDB error text on character boundaries ([fa3b95b](https://github.com/yassinebenameur/probara/commit/fa3b95b9a626f1c056b31b81cf2baa1a865d1e19))
+* **worker:** dial HTTP and gRPC checks through the shared SSRF guard ([a51fd34](https://github.com/yassinebenameur/probara/commit/a51fd342ea95548e2061c6d5f396384459f3b1c9))
+
+
+### Features
+
+* **monitorstate:** derive group state once, with an alert view and a display view ([64d95a9](https://github.com/yassinebenameur/probara/commit/64d95a9717e2d5c0e1a41cfe39a8cd8fc02a888e))
+
+# [2.0.0-alpha.10](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.9...v2.0.0-alpha.10) (2026-11-02)
+
+
+### Bug Fixes
+
+* **discovery:** bound stored inventory and rate-limit collector snapshots ([78c10f2](https://github.com/yassinebenameur/probara/commit/78c10f2ca0dc21bbe5fbad3a8228f3dee74c0844))
+* **web:** surface discovery form errors and keep coverage pagination in range ([a9bd422](https://github.com/yassinebenameur/probara/commit/a9bd422e71daeef934c3aa8a8a03d4948ed2428e))
+
+
+### Features
+
+* **discovery:** Kubernetes discovery and monitoring coverage ([96b5d9c](https://github.com/yassinebenameur/probara/commit/96b5d9c537f11bd0c3c9a041a77c6e4eaa6dea32))
+* **discovery:** make integration namespaces editable without breaking scans ([5a2037c](https://github.com/yassinebenameur/probara/commit/5a2037c898c81729cc675cc2a23a079c672e7016))
+* **web:** edit a discovery cluster's name, location and namespaces ([857ccb9](https://github.com/yassinebenameur/probara/commit/857ccb9508cd9b25fec2f3370960ccc9bf91984d))
+
+# [2.0.0-alpha.9](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.8...v2.0.0-alpha.9) (2026-10-28)
+
+
+### Bug Fixes
+
+* **admin:** make cmd/admin create a platform superadmin ([7814b41](https://github.com/yassinebenameur/probara/commit/7814b416b63c79197c2f0ec45d7fac191aa9017a))
+* **agent:** use current collector component names in the generated config ([0371f96](https://github.com/yassinebenameur/probara/commit/0371f9652fe759ea32241a8b1ec6b9f268cf42d8))
+* **dashboard:** scope the tag filter to any selected tag, matching /monitors ([d74af31](https://github.com/yassinebenameur/probara/commit/d74af31562d5257ddabbf4c546798398559166b3))
+* **incidents:** search and page the whole alert history when attaching alerts ([60e1ca2](https://github.com/yassinebenameur/probara/commit/60e1ca2944a9e98501be0087e852aeb151831f9f))
+* **local:** default SIP loopback rewrite off for host-process workers ([56777cf](https://github.com/yassinebenameur/probara/commit/56777cfa29c0e4bffa791ad6555c4402932a6c64))
+* **synthetic:** keep the typed type of API assertion values from form to worker ([019b6fc](https://github.com/yassinebenameur/probara/commit/019b6fc476fc44ebf07efc64c566b0c37323bcb3))
+* **web:** clear a database monitor's stored TLS client key when TLS is turned off ([a4de6b3](https://github.com/yassinebenameur/probara/commit/a4de6b3bc5fe1b52857118c29384df9372f9c4b0))
+* **web:** strip masked secrets from every monitor clone ([52068b6](https://github.com/yassinebenameur/probara/commit/52068b699a0953fa73bb3c22d16ce3166a81f45f))
+
+
+### Features
+
+* **api:** retire the legacy agent metrics endpoint as a 410 tombstone ([e6d010c](https://github.com/yassinebenameur/probara/commit/e6d010c575c2c0dc0bfda862869b9ac71737cb63))
+
 # [2.0.0](https://github.com/yassinebenameur/probara/compare/v1.0.0...v2.0.0) (2026-10-22)
 
 

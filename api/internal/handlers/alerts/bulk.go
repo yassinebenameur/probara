@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
@@ -65,35 +65,30 @@ func (h *Handlers) bulkAction(
 	apply func(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) (*alertservice.BulkResult, error),
 	broadcast func(tenantID uuid.UUID, alert *models.AlertWithDetails),
 ) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	var req BulkAlertsRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBulkBodyBytes)).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 	if len(req.IDs) == 0 {
-		errors.WriteValidationError(w, "ids is required and cannot be empty")
+		apierrors.WriteValidationError(w, "ids is required and cannot be empty")
 		return
 	}
 	if len(req.IDs) > alertservice.MaxBulkAlerts {
-		errors.WriteValidationError(w, fmt.Sprintf("at most %d alerts per request", alertservice.MaxBulkAlerts))
+		apierrors.WriteValidationError(w, fmt.Sprintf("at most %d alerts per request", alertservice.MaxBulkAlerts))
 		return
 	}
 	ids := make([]uuid.UUID, len(req.IDs))
 	for i, raw := range req.IDs {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			errors.WriteValidationError(w, "invalid alert ID: "+raw)
+			apierrors.WriteValidationError(w, "invalid alert ID: "+raw)
 			return
 		}
 		ids[i] = id
@@ -106,7 +101,7 @@ func (h *Handlers) bulkAction(
 			"tenant_id": tenantID,
 			"count":     len(ids),
 		}).Error("Failed to bulk " + verb + " alerts")
-		errors.WriteInternalError(w, "failed to "+verb+" alerts")
+		apierrors.WriteInternalError(w, "failed to "+verb+" alerts")
 		return
 	}
 
@@ -123,8 +118,7 @@ func (h *Handlers) bulkAction(
 	}
 	h.recordBulkEvents(r, events)
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 // recordBulkEvents persists a bulk request's per-alert events before the

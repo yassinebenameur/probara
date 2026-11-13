@@ -21,7 +21,7 @@ import {
   syntheticBrowserGuidedDraftFromForm,
   validateMonitorForm,
 } from '@/lib/monitor-form/inline';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame } from 'lucide-react';
+import { MONITOR_TYPE_ICONS } from './monitor-type-icons';
 import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
 import { AlertingSection } from './AlertingSection';
 import GroupForm from './GroupForm';
@@ -61,32 +61,33 @@ const MONITOR_TYPE_CATEGORIES = ['Web & API', 'Network', 'Databases & brokers', 
 
 const typeMeta = (
   type: MonitorType,
-  rest: Omit<MonitorTypeMeta, 'type' | 'label' | 'category'> & { category: (typeof MONITOR_TYPE_CATEGORIES)[number] }
+  rest: Omit<MonitorTypeMeta, 'type' | 'label' | 'icon' | 'category'> & { category: (typeof MONITOR_TYPE_CATEGORIES)[number] }
 ): MonitorTypeMeta => ({
   type,
   label: monitorTypeLabel(type),
+  icon: MONITOR_TYPE_ICONS[type],
   ...rest,
 });
 
 const MONITOR_TYPE_META: MonitorTypeMeta[] = [
-  typeMeta('http', { description: 'Check an HTTP endpoint', icon: Globe, category: 'Web & API', namePlaceholder: 'My API health check' }),
-  typeMeta('websocket', { description: 'Handshake and reply checks', icon: Cable, category: 'Web & API', namePlaceholder: 'Live updates socket' }),
-  typeMeta('synthetic_api', { description: 'Multi-step API journey', icon: Code, category: 'Web & API', namePlaceholder: 'Checkout API journey' }),
-  typeMeta('synthetic_browser', { description: 'Real-browser user flow', icon: MousePointer2, category: 'Web & API', namePlaceholder: 'Login flow check' }),
-  typeMeta('ping', { description: 'ICMP reachability', icon: Radio, category: 'Network', namePlaceholder: 'Edge gateway ping' }),
-  typeMeta('dns', { description: 'Resolve and verify records', icon: Search, category: 'Network', namePlaceholder: 'example.com DNS' }),
-  typeMeta('grpc', { description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' }),
-  typeMeta('tcp', { description: 'Connect to a host and port', icon: PlugZap, category: 'Network', namePlaceholder: 'Postgres port reachability' }),
-  typeMeta('sip', { description: 'OPTIONS, REGISTER, test calls', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' }),
-  typeMeta('postgres', { description: 'Connect, auth and query', icon: Database, category: 'Databases & brokers', namePlaceholder: 'Postgres production' }),
-  typeMeta('mysql', { description: 'Connect, auth and query', icon: Cylinder, category: 'Databases & brokers', namePlaceholder: 'MySQL production' }),
-  typeMeta('redis', { description: 'Connect and PING latency', icon: Zap, category: 'Databases & brokers', namePlaceholder: 'Redis cache' }),
-  typeMeta('mongodb', { description: 'Connect, auth and ping', icon: Leaf, category: 'Databases & brokers', namePlaceholder: 'Mongo cluster' }),
-  typeMeta('rabbitmq', { description: 'AMQP connect and auth', icon: MessageSquare, category: 'Databases & brokers', namePlaceholder: 'RabbitMQ production' }),
-  typeMeta('prometheus', { description: 'PromQL with thresholds', icon: Flame, category: 'Infrastructure & grouping', namePlaceholder: 'API error rate' }),
-  typeMeta('agent', { description: 'Host metrics from a collector', icon: Server, category: 'Infrastructure & grouping', namePlaceholder: 'Production server' }),
-  typeMeta('push', { description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure & grouping', namePlaceholder: 'My service health' }),
-  typeMeta('group', { description: 'Roll monitors up into one status', icon: Folder, category: 'Infrastructure & grouping', namePlaceholder: 'Production services' }),
+  typeMeta('http', { description: 'Check an HTTP endpoint', category: 'Web & API', namePlaceholder: 'My API health check' }),
+  typeMeta('websocket', { description: 'Handshake and reply checks', category: 'Web & API', namePlaceholder: 'Live updates socket' }),
+  typeMeta('synthetic_api', { description: 'Multi-step API journey', category: 'Web & API', namePlaceholder: 'Checkout API journey' }),
+  typeMeta('synthetic_browser', { description: 'Real-browser user flow', category: 'Web & API', namePlaceholder: 'Login flow check' }),
+  typeMeta('ping', { description: 'ICMP reachability', category: 'Network', namePlaceholder: 'Edge gateway ping' }),
+  typeMeta('dns', { description: 'Resolve and verify records', category: 'Network', namePlaceholder: 'example.com DNS' }),
+  typeMeta('grpc', { description: 'gRPC health checks', category: 'Network', namePlaceholder: 'My gRPC service' }),
+  typeMeta('tcp', { description: 'Connect to a host and port', category: 'Network', namePlaceholder: 'Postgres port reachability' }),
+  typeMeta('sip', { description: 'OPTIONS, REGISTER, test calls', category: 'Network', namePlaceholder: 'My SIP server' }),
+  typeMeta('postgres', { description: 'Connect, auth and query', category: 'Databases & brokers', namePlaceholder: 'Postgres production' }),
+  typeMeta('mysql', { description: 'Connect, auth and query', category: 'Databases & brokers', namePlaceholder: 'MySQL production' }),
+  typeMeta('redis', { description: 'Connect and PING latency', category: 'Databases & brokers', namePlaceholder: 'Redis cache' }),
+  typeMeta('mongodb', { description: 'Connect, auth and ping', category: 'Databases & brokers', namePlaceholder: 'Mongo cluster' }),
+  typeMeta('rabbitmq', { description: 'AMQP connect and auth', category: 'Databases & brokers', namePlaceholder: 'RabbitMQ production' }),
+  typeMeta('prometheus', { description: 'PromQL with thresholds', category: 'Infrastructure & grouping', namePlaceholder: 'API error rate' }),
+  typeMeta('agent', { description: 'Host metrics from a collector', category: 'Infrastructure & grouping', namePlaceholder: 'Production server' }),
+  typeMeta('push', { description: 'Heartbeat sent by your service', category: 'Infrastructure & grouping', namePlaceholder: 'My service health' }),
+  typeMeta('group', { description: 'Roll monitors up into one status', category: 'Infrastructure & grouping', namePlaceholder: 'Production services' }),
 ];
 
 const getTypeMeta = (type: MonitorType): MonitorTypeMeta =>

@@ -11,7 +11,7 @@
 
 import { useMemo } from 'react';
 import { Monitor, MonitorAnalyticsRange, MongoDBMetrics, MongoDBMonitorConfig } from '@/lib/types';
-import { formatCount } from '@/lib/format';
+import { formatCount, formatPercent } from '@/lib/format';
 import { formatBytes } from '@/lib/metrics';
 import { pickSnapshots, snapshotStepMs, type TimedSnapshot } from '@/lib/metric-snapshots';
 import { useMetricsSnapshots } from '@/lib/useMetricsSnapshots';
@@ -52,7 +52,7 @@ const countValue = (v: number) => formatCount(v);
 const bytesTick = (v: number) => formatBytes(v);
 const rateValue = (v: number) => `${formatBytes(v)}/s`;
 const opsValue = (v: number) => `${v >= 10 ? Math.round(v) : v.toFixed(1)}/s`;
-const cpuValue = (v: number) => `${v >= 100 ? Math.round(v) : v.toFixed(1)}%`;
+const cpuValue = (v: number) => formatPercent(v, { digits: v >= 100 ? 0 : 1 });
 
 // Per-second rate between consecutive snapshots of a cumulative counter.
 // Negative deltas mean the server restarted — that interval is skipped.

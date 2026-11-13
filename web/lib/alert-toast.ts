@@ -22,7 +22,7 @@ export function alertSubject(alert: Alert): string {
   if (alert.source_location_name && alert.target_location_name) {
     return `${alert.source_location_name} → ${alert.target_location_name}`;
   }
-  return alert.policy_name || (alert.kind === 'mesh_edge' ? 'A mesh path' : 'A monitor');
+  return alert.kind === 'mesh_edge' ? 'A mesh path' : 'A monitor';
 }
 
 /** The firing condition, phrased to follow the subject ("Orders API is down"). */

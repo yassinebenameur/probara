@@ -25,6 +25,7 @@ import {
   SyntheticBrowserGuidedDraft,
   SyntheticBrowserGuidedTemplate,
   assertionPathRequired,
+  assertionValueFromInput,
   assertionValueRequired,
   buildSyntheticBrowserGuidedDraft,
   defaultSyntheticAPIStep,
@@ -38,7 +39,6 @@ import {
   mapVariablesToRows,
   normalizeAssertionTarget,
   normalizeSyntheticBrowserGuidedTemplate,
-  parseAssertionValueInput,
   syntheticAssertionOpsByTarget,
 } from './synthetic';
 
@@ -496,7 +496,7 @@ export function validateMonitorForm(
           }
 
           const requiresValue = assertionValueRequired(target, op);
-          const parsedValue = parseAssertionValueInput(assertion.value_input);
+          const parsedValue = assertionValueFromInput(target, op, assertion.value_input);
 
           if (requiresValue && (parsedValue === undefined || (typeof parsedValue === 'string' && !parsedValue.trim()))) {
             newErrors.synthetic_api_steps = `Step '${id}' assertion #${assertionIdx + 1} requires a value`;
@@ -823,7 +823,7 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
           item.path = assertion.path.trim();
         }
         if (assertion.value_input.trim()) {
-          item.value = parseAssertionValueInput(assertion.value_input);
+          item.value = assertionValueFromInput(target, op, assertion.value_input);
         }
         assertions.push(item);
       }

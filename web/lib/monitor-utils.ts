@@ -162,7 +162,7 @@ export function getEffectiveMonitorStatus(
 
 /**
  * Tailwind color classes for a monitor's current_state, used by the
- * dependency UI (status dots, graph nodes). Tones match AlertTable.
+ * dependency UI (status dots, graph nodes). Tones match AlertFeed.
  */
 export function monitorStateColors(state?: MonitorState): { dot: string; text: string; border: string } {
   switch (state) {
@@ -276,7 +276,7 @@ export function sortBySeverity<T>(
  * who a SIP test call rings (`number@domain`), the host for everything else. Null when the type has no target (push,
  * group, agent without a host).
  */
-export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>): string | null {
+export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config'>): string | null {
   const config = monitor.config as Record<string, unknown> | undefined;
   const str = (key: string) => {
     const v = config?.[key];
@@ -310,7 +310,6 @@ export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>)
       return `${host}:${(config.port as number | undefined) || (tls ? 5061 : 5060)}`;
     }
   }
-  if (monitor.url) return monitor.url;
   return str('host');
 }
 

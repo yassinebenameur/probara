@@ -1,8 +1,10 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
 
 export default defineConfig([
   ...nextVitals,
+  ...nextTs,
   {
     // Next 16 enables React Compiler advisory rules by default. The UI does not
     // enable the compiler yet, so keep the pre-migration lint contract while

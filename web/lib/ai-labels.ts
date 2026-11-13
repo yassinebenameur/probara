@@ -7,6 +7,7 @@ import type {
   IncidentAILabelRequest,
 } from './types';
 import { pluralize } from './format';
+import { errorCode, errorMessage } from './errors';
 
 // Pure helpers for the AI label controls (incident analysis Confirm/Correct,
 // dependency suggestion Accept/Dismiss). The server copies the evidence from
@@ -61,18 +62,13 @@ const LABEL_ERROR_COPY: Record<string, string> = {
   triage_not_labelable: 'This triage sent no decisions to the model, so it cannot be labelled.',
 };
 
-// API errors are thrown as plain `{error, message}` objects, not Error
-// instances; the label endpoints' 409 messages are written for operators.
+// Known label error codes get operator-facing copy; anything else shows the
+// server's own message (the label endpoints' 409 messages are written for
+// operators too).
 export function labelErrorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'error' in err) {
-    const code = (err as { error?: unknown }).error;
-    if (typeof code === 'string' && LABEL_ERROR_COPY[code]) return LABEL_ERROR_COPY[code];
-  }
-  if (err && typeof err === 'object' && 'message' in err) {
-    const m = (err as { message?: unknown }).message;
-    if (typeof m === 'string' && m) return m;
-  }
-  return fallback;
+  const code = errorCode(err);
+  if (code && LABEL_ERROR_COPY[code]) return LABEL_ERROR_COPY[code];
+  return errorMessage(err, fallback);
 }
 
 // Parses an X-Probara-Export-Rows/-Skipped header value; null when absent or

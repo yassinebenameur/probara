@@ -1,7 +1,7 @@
 # Multi-Location Monitoring & Monitor Roadmap
 
 **Date:** 2026-06-11
-**Status:** Design discussion / roadmap — not yet implemented
+**Status:** Design history. Multi-location checks, per-location state with quorum, private locations and the mesh shipped in 2026-07; `docs/architecture.md` and `docs/state-semantics.md` describe the system as built. The "Gaps" below record the state before that work.
 **Context:** Triggered by an AWS architecture review and asking whether this product can monitor a multi-VPC AWS estate (cross-network checks, multi-location checks, network-interlink verification).
 
 ---

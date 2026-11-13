@@ -26,7 +26,7 @@ This applies to both data paths:
 
 - **24h (raw/stitched)**: `computeMonitorWeightedUptime` /
   `computeMonitorWeightedLatency` in
-  `api/internal/services/dashboard/service.go`.
+  `api/internal/services/dashboard/stats.go`.
 - **7d/30d/90d/365d (daily rollups)**: the summary loop in
   `buildRollupResult`, `shared/analytics/repository.go`. Before D2 this path
   averaged each monitor's *per-day* rates, so a day with 1 check weighed the
@@ -37,7 +37,7 @@ This applies to both data paths:
 trend points) are *bucket-scoped* rates — each point answers "what was uptime
 during this bucket", pooled across the scope's monitors for that bucket. They
 are not required to average back to the headline stat (see the Decision D4
-comment in `getTrend`, `api/internal/services/dashboard/service.go`, near the
+comment in `getTrend`, `api/internal/services/dashboard/stats.go`, near the
 "pooled (sum-of-success / sum-of-total) bucket uptime" note). Do not "fix"
 charts to match the scalar, or vice versa.
 
@@ -87,7 +87,7 @@ its uptime computed over only the checked half. Consequences:
   for as long as they remain in the window.
 - Dashboard aggregate queries additionally filter `m.enabled = TRUE`, so
   currently-paused monitors drop out of tenant-level stats entirely
-  (`api/internal/services/dashboard/service.go`, `groups.go`).
+  (`api/internal/services/dashboard/`).
 - **Zero-data convention (S-D1, `state-semantics.md`)**: no checks in the
   window is *no data*, never a percentage. The analytics summary carries
   `has_data` (`shared/analytics`); dashboard `overall_uptime`, group/member
@@ -176,7 +176,7 @@ Concretely:
   migration (e.g. `error_checks`) return errors during the window; this
   self-heals once the migration job completes.
 - **Alerter notification state**: `loadNotificationStates`
-  (`alerter/internal/alerter/evaluator.go`) reads every
+  (`alerter/internal/alerter/alert_event.go`) reads every
   `alert_notification_states` column, including `acknowledged_sent_at`
   (000089) and `suspected_cause_sent_at` (000095). Until the migration lands,
   the evaluate, dispatch and mesh paths fail with SQLSTATE 42703 on every tick
@@ -185,7 +185,7 @@ Concretely:
   once the column exists; since the API migrates at startup before it serves,
   the window is usually seconds. Do not add a fallback query without the
   column: it would duplicate the due rules in `claimNotificationTx` and
-  `shouldSendNotification`.
+  `openAlertEventDue`.
 - **Per-recipient delivery ledger**: until migration 000097 creates
   `alert_notification_recipient_deliveries`, `recipientledger` reads report
   nothing delivered (SQLSTATE 42P01 — exact, since nothing could have been

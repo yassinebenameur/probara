@@ -6,7 +6,7 @@ package models
 // worker skips any stray job for one, and the stale watchdog leaves them to
 // the heartbeat pass. web/app/monitors/[id]/page.tsx (PASSIVE_TYPES) mirrors
 // this list.
-var PassiveMonitorTypes = []string{"group", "push", "agent"}
+var PassiveMonitorTypes = []string{string(MonitorTypeGroup), string(MonitorTypePush), string(MonitorTypeAgent)}
 
 // IsPassiveMonitorType reports whether monitorType is in PassiveMonitorTypes.
 func IsPassiveMonitorType(monitorType string) bool {

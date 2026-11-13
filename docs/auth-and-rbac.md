@@ -29,6 +29,16 @@ Three credential types, resolved by `api/internal/middleware/auth.go`:
   client can set) — the token's audience is the MCP resource, not the REST
   API. See [MCP](#mcp).
 
+Outside this middleware, **discovery collector tokens** authenticate only the
+in-cluster Kubernetes collector, on `/api/v1/discovery-collectors/{id}/config`
+and `/snapshot` for their own integration (`handlers/discovery`,
+`collectorToken`). One per integration, 32 random bytes, stored as a SHA-256
+hash in `discovery_integrations.token_hash`, shown only by the create and
+`rotate-token` responses (both write-gated). They carry no tenant role or
+scope and are never accepted on tenant routes, so they cannot read coverage or
+create monitors. On exposure: rotate (or delete the integration) and re-apply
+the manifest Secret.
+
 Tenant roles (fixed, on `tenant_memberships.role`):
 
 | Role   | Can                                                      |
@@ -157,7 +167,11 @@ Identity mapping on callback:
 
 **Bootstrap × SSO:** on an install with zero active admins, the first
 OIDC login JIT-provisions a *superadmin* (mirroring the password
-bootstrap guard). Whichever path runs first claims superadmin.
+bootstrap guard). Whichever path runs first claims superadmin. The
+DB-side `cmd/admin` tool (`ADMIN_USERNAME`/`ADMIN_PASSWORD`) always upserts
+a superadmin — no memberships, same as the password bootstrap — and on an
+existing username resets the password, re-enables and promotes it (the
+break-glass path).
 
 ### Group→role mappings
 

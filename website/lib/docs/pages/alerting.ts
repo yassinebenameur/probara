@@ -76,7 +76,12 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "On the Alerts page, users who can write work the queue in bulk: tick open alerts (Shift-click selects a range, the header box selects every open alert on the page, Escape clears), then Acknowledge or Resolve from the bar. Each action sends only the selected alerts it applies to, and alerts that changed state meanwhile are reported as skipped rather than failing the batch. Bulk acknowledge and resolve notify and record incident recovery as the single actions do; they skip alerts of deleted monitors (reported as not found), which the list no longer shows. With a row focused, `A` acknowledges and `R` resolves that alert; these keys work only while focus is on an alert row, never while typing or with Ctrl, Alt or Cmd held, and a press on an alert that is already past that step says so instead of acting. Every view except Open sorts on the server, so a column sort orders every matching alert, not just the page; those views default to newest first, while Open (which loads the whole queue) defaults to active first. Under a one-status filter (Active, Acknowledged, Resolved) the Status column does not sort, since every row has the same status.",
+            "The Alerts page reads as a timeline over a list, for the range chosen in the header (1 hour to 1 year). The timeline draws one thin line per monitor that alerted in the range: red while active, amber from the moment of acknowledgement, dashed while its notifications are suppressed by a dependency, grey once resolved, with a dot where each alert began so a short alert still shows. Monitors with an open alert lead; the rest are gathered into collapsible groups, by the dashboard's group tags when the workspace has any and by monitor type otherwise, and a collapsed group draws all its lines on one row. Selecting a line opens that alert in the list. The list below is that same history as rows: every alert that was open at some point in the range, by start time with the newest first, under a heading for each date (each hour, for ranges up to a day). A date or hour with no alert is still listed, as a stretch marked **No alerts**, so the list reads as the calendar it covers; alerts that started before the range and are still open, or ended inside it, close the list under **Started before this range**. The status chips narrow it to the open queue (active and acknowledged) or to one status. An alert suppressed by a dependency folds under the open alert of its root cause, which is the one that notifies; unfold it to see and act on the suppressed alerts. An alert that still pages is never folded. A row's details show its lifecycle times, the recorded error or measured value, and the suspected cause when triage has one. The page loads every open alert (up to 1,000 per status) and the newest 500 resolved alerts of the range; past that it says so, hatches the part of the timeline it has no alerts for, and reaching the end of the list (or **Load older alerts** there) reads 500 more. The list shows 25 rows at first and adds 25 as you scroll to its end.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "On the Alerts page, users who can write work the queue in bulk: tick open alerts (Shift-click selects a range, the box beside the list heading selects every open alert shown, Escape clears), then Acknowledge or Resolve from the bar. Each action sends only the selected alerts it applies to, and alerts that changed state meanwhile are reported as skipped rather than failing the batch. Bulk acknowledge and resolve notify and record incident recovery as the single actions do; they skip alerts of deleted monitors (reported as not found), which the list no longer shows. With a row focused, `A` acknowledges and `R` resolves that alert; these keys work only while focus is on an alert row, never while typing or with Ctrl, Alt or Cmd held, and a press on an alert that is already past that step says so instead of acting.",
         },
       ],
     },
@@ -549,7 +554,7 @@ export const ALERTING_PAGE: DocPage = {
             ["`source`", "`manual` or automatically created"],
             [
               "Linked resources",
-              "Attach or detach alerts and monitors as investigation changes",
+              "Attach or detach alerts and monitors as investigation changes. The alert picker searches the workspace's whole alert history by monitor or location name, or alert ID, newest first, so an older alert can be attached too",
             ],
           ],
         },
@@ -683,7 +688,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "warning",
           title: "Remove policy automation",
           text:
-            "Older integrations that create or attach alert-policy records must be migrated. Compatibility-shaped fields or count endpoints should not be treated as a supported policy-management workflow.",
+            "Older integrations that create or attach alert-policy records must be migrated. Monitor writes that still send `alert_policy_id` or `alert_policy_ids` are accepted and the fields ignored; monitor, alert and incident API responses no longer carry `alert_policy_id`, `alert_policy_ids`, `policy_name` or `auto_alert_policy_id`, exports no longer write `alert_policy_names`, webhook payloads no longer carry `alert.alert_policy_id` (`alert.policy_name` stays, empty for monitor alerts and the channel name on a test send), and the `/alerts/counts/by-policy` and `/alerts/counts/monitors-by-policy` endpoints are removed. The email template variable `policy_id` is kept and always empty.",
         },
       ],
     },

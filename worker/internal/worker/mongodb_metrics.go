@@ -251,11 +251,7 @@ func mongoCmdUnavailable(check string, err error) mongoUnavailableCheck {
 }
 
 func truncateMongoError(msg string) string {
-	const maxLen = 200
-	if len(msg) > maxLen {
-		return msg[:maxLen] + "…"
-	}
-	return msg
+	return truncateRunes(msg, 200)
 }
 
 // mongoFinishResult turns a successful ping plus collected metrics into the

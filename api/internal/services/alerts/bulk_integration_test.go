@@ -21,10 +21,6 @@ import (
 // alerts BulkResolve reported as recovered inside its transaction.
 type recoveryRecorder struct{ recovered []uuid.UUID }
 
-func (r *recoveryRecorder) EnsureIncidentForAlertTx(context.Context, *sql.Tx, uuid.UUID, *models.AlertWithDetails) error {
-	return nil
-}
-
 func (r *recoveryRecorder) RecordAlertRecoveryIfNeededTx(_ context.Context, _ *sql.Tx, _ uuid.UUID, alertID uuid.UUID) error {
 	r.recovered = append(r.recovered, alertID)
 	return nil

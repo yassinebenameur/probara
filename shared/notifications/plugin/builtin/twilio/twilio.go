@@ -183,7 +183,7 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 		"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+cfg.AuthToken)),
 	}
 	target := fmt.Sprintf("%s/2010-04-01/Accounts/%s/Messages.json", p.base, url.PathEscape(cfg.AccountSID))
-	body := truncate(req.View().Short(), maxBody)
+	body := plugin.Truncate(req.View().Short(), maxBody)
 
 	// A retry of a partially delivered event texts only the recipients the
 	// provider has not accepted yet; the ledger outlives this process, so the
@@ -302,14 +302,6 @@ func splitNumbers(s string) []string {
 		out = append(out, n)
 	}
 	return out
-}
-
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "…"
 }
 
 func parseConfig(raw json.RawMessage) (Config, error) {

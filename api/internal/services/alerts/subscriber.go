@@ -26,8 +26,6 @@ type AlertDetails struct {
 	ID                   string     `json:"id"`
 	MonitorID            string     `json:"monitor_id"`
 	MonitorName          string     `json:"monitor_name"`
-	AlertPolicyID        string     `json:"alert_policy_id"`
-	PolicyName           string     `json:"policy_name"`
 	Status               string     `json:"status"`
 	TriggeredAt          time.Time  `json:"triggered_at"`
 	ResolvedAt           *time.Time `json:"resolved_at,omitempty"`
@@ -186,15 +184,6 @@ func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertW
 	}
 	alert.RootCauseMonitorName = event.Alert.RootCauseMonitorName
 	alert.RootCauseDownSince = event.Alert.RootCauseDownSince
-
-	if event.Alert.AlertPolicyID != "" {
-		if policyID, err := uuid.Parse(event.Alert.AlertPolicyID); err == nil {
-			alert.AlertPolicyID = &policyID
-		}
-	}
-	if event.Alert.PolicyName != "" {
-		alert.PolicyName = &event.Alert.PolicyName
-	}
 
 	return alert
 }

@@ -226,6 +226,10 @@ jobs:
             --extra-index-url https://download.pytorch.org/whl/cpu -r ai-service/requirements-dev.lock
           python -m pip install --no-deps --no-build-isolation -r ai-service/requirements-laya.txt
           python -m pip check
+      - name: Lint Python (pyflakes rules, see ruff.toml)
+        run: |
+          python -m pip install ruff==0.8.4
+          ruff check ai-service scripts .github/workflows/scripts
       - name: Generate controlled dataset
         run: python ai-service/training/generate.py --output ai-service/artifacts/dataset
       - name: Test contracts, packaging, server and synthetic fixtures

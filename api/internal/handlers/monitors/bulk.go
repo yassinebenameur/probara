@@ -2,13 +2,13 @@ package monitors
 
 import (
 	"encoding/json"
-	stderrors "errors"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/api/internal/errors"
-	"github.com/yassinebenameur/probara/api/internal/middleware"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
@@ -25,30 +25,25 @@ type BulkAlertingRequest struct {
 
 // BulkUpdateAlerting handles POST /api/v1/monitors/bulk/alerting
 func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
 		return
 	}
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
+	tenantID := tenantUUID.String()
 
 	var req BulkAlertingRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
 	}
 
 	if len(req.MonitorIDs) == 0 {
-		errors.WriteValidationError(w, "monitor_ids cannot be empty")
+		apierrors.WriteValidationError(w, "monitor_ids cannot be empty")
 		return
 	}
 
 	if err := validation.ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, nil, req.NotificationChannels); err != nil {
-		errors.WriteValidationError(w, err.Error())
+		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
 
@@ -56,7 +51,7 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 	for _, idStr := range req.MonitorIDs {
 		id, err := uuid.Parse(idStr)
 		if err != nil {
-			errors.WriteValidationError(w, "invalid monitor_id: "+idStr)
+			apierrors.WriteValidationError(w, "invalid monitor_id: "+idStr)
 			return
 		}
 		monitorIDs = append(monitorIDs, id)
@@ -65,24 +60,22 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 	updated, err := h.service.BulkUpdateAlerting(r.Context(), tenantUUID, monitorIDs,
 		req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels)
 	if err != nil {
-		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
-			errors.WriteForbiddenError(w, err.Error())
+		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
+			apierrors.WriteForbiddenError(w, err.Error())
 			return
 		}
 		msg := err.Error()
-		if msg == "one or more monitors not found or do not belong to tenant" {
-			errors.WriteNotFoundError(w, "one or more monitors not found")
+		if errors.Is(err, monitorservice.ErrMonitorsNotInTenant) {
+			apierrors.WriteNotFoundError(w, "one or more monitors not found")
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     msg,
 			"tenant_id": tenantID,
 		}).Error("Failed to bulk update alerting")
-		errors.WriteInternalError(w, "failed to bulk update alerting")
+		apierrors.WriteInternalError(w, "failed to bulk update alerting")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]int{"updated": updated})
+	httpx.WriteJSON(w, http.StatusOK, map[string]int{"updated": updated})
 }

@@ -7,30 +7,33 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/alertrouting"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 )
 
-// MonitorType represents the type of monitor
-type MonitorType string
+// MonitorType and its constants are defined in shared/models (the single Go
+// list of monitor types); they are aliased here so API code keeps one models
+// import.
+type MonitorType = sharedmodels.MonitorType
 
 const (
-	MonitorTypePrometheus       MonitorType = "prometheus"
-	MonitorTypeHTTP             MonitorType = "http"
-	MonitorTypePing             MonitorType = "ping"
-	MonitorTypeDNS              MonitorType = "dns"
-	MonitorTypeGRPC             MonitorType = "grpc"
-	MonitorTypeGroup            MonitorType = "group"
-	MonitorTypeAgent            MonitorType = "agent"
-	MonitorTypePush             MonitorType = "push"
-	MonitorTypeSIP              MonitorType = "sip"
-	MonitorTypeSyntheticAPI     MonitorType = "synthetic_api"
-	MonitorTypeSyntheticBrowser MonitorType = "synthetic_browser"
-	MonitorTypeRedis            MonitorType = "redis"
-	MonitorTypePostgres         MonitorType = "postgres"
-	MonitorTypeMongoDB          MonitorType = "mongodb"
-	MonitorTypeRabbitMQ         MonitorType = "rabbitmq"
-	MonitorTypeTCP              MonitorType = "tcp"
-	MonitorTypeMySQL            MonitorType = "mysql"
-	MonitorTypeWebSocket        MonitorType = "websocket"
+	MonitorTypePrometheus       = sharedmodels.MonitorTypePrometheus
+	MonitorTypeHTTP             = sharedmodels.MonitorTypeHTTP
+	MonitorTypePing             = sharedmodels.MonitorTypePing
+	MonitorTypeDNS              = sharedmodels.MonitorTypeDNS
+	MonitorTypeGRPC             = sharedmodels.MonitorTypeGRPC
+	MonitorTypeGroup            = sharedmodels.MonitorTypeGroup
+	MonitorTypeAgent            = sharedmodels.MonitorTypeAgent
+	MonitorTypePush             = sharedmodels.MonitorTypePush
+	MonitorTypeSIP              = sharedmodels.MonitorTypeSIP
+	MonitorTypeSyntheticAPI     = sharedmodels.MonitorTypeSyntheticAPI
+	MonitorTypeSyntheticBrowser = sharedmodels.MonitorTypeSyntheticBrowser
+	MonitorTypeRedis            = sharedmodels.MonitorTypeRedis
+	MonitorTypePostgres         = sharedmodels.MonitorTypePostgres
+	MonitorTypeMongoDB          = sharedmodels.MonitorTypeMongoDB
+	MonitorTypeRabbitMQ         = sharedmodels.MonitorTypeRabbitMQ
+	MonitorTypeTCP              = sharedmodels.MonitorTypeTCP
+	MonitorTypeMySQL            = sharedmodels.MonitorTypeMySQL
+	MonitorTypeWebSocket        = sharedmodels.MonitorTypeWebSocket
 )
 
 // MonitorChannelAssignment is one channel in a monitor's custom routing list.
@@ -50,8 +53,6 @@ type Monitor struct {
 	Config                       json.RawMessage            `json:"config"`
 	IntervalSeconds              int                        `json:"interval_seconds"`
 	TimeoutSeconds               int                        `json:"timeout_seconds"`
-	AlertPolicyID                *uuid.UUID                 `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs               []uuid.UUID                `json:"alert_policy_ids,omitempty"`
 	Enabled                      bool                       `json:"enabled"`
 	Tags                         []string                   `json:"tags,omitempty"`
 	NextRunAt                    *time.Time                 `json:"next_run_at,omitempty"`
@@ -86,8 +87,6 @@ type CreateMonitorRequest struct {
 	Config                       json.RawMessage            `json:"config"`
 	IntervalSeconds              int                        `json:"interval_seconds"`
 	TimeoutSeconds               int                        `json:"timeout_seconds"`
-	AlertPolicyID                *string                    `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs               []string                   `json:"alert_policy_ids,omitempty"`
 	Enabled                      *bool                      `json:"enabled,omitempty"`
 	Tags                         []string                   `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
@@ -107,8 +106,6 @@ type UpdateMonitorRequest struct {
 	Config                       json.RawMessage            `json:"config,omitempty"`
 	IntervalSeconds              *int                       `json:"interval_seconds,omitempty"`
 	TimeoutSeconds               *int                       `json:"timeout_seconds,omitempty"`
-	AlertPolicyID                *string                    `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs               *[]string                  `json:"alert_policy_ids,omitempty"`
 	Enabled                      *bool                      `json:"enabled,omitempty"`
 	Tags                         *[]string                  `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`

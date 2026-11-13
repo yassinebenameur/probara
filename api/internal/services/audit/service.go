@@ -3,7 +3,6 @@ package audit
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,10 +10,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -270,7 +270,7 @@ func (r *Recorder) RecordBatch(ctx context.Context, events []Event) error {
 	for start := 0; start < len(events); start += syncChunk {
 		end := min(start+syncChunk, len(events))
 		if err := r.insertEvents(ctx, events[start:end]); err != nil {
-			if isMissingSchema(err) {
+			if pgerr.IsMissingSchema(err) {
 				return nil
 			}
 			return err
@@ -284,7 +284,7 @@ func (r *Recorder) insertBatch(batch []Event) {
 	defer cancel()
 
 	if err := r.insertEvents(ctx, batch); err != nil {
-		if isMissingSchema(err) {
+		if pgerr.IsMissingSchema(err) {
 			// Pre-migration window (post-upgrade migrations job): drop quietly.
 			return
 		}
@@ -342,15 +342,7 @@ func NewService(dbClient *db.Client) *Service {
 // List returns audit entries for a tenant. When includePlatform is true
 // (superadmin), platform-level events (tenant_id IS NULL) are included.
 func (s *Service) List(ctx context.Context, tenantID uuid.UUID, includePlatform bool, f Filters) (*ListResponse, error) {
-	if f.Page < 1 {
-		f.Page = 1
-	}
-	if f.PageSize < 1 {
-		f.PageSize = 50
-	}
-	if f.PageSize > 200 {
-		f.PageSize = 200
-	}
+	f.Page, f.PageSize = pagination.Normalize(f.Page, f.PageSize, pagination.LargeDefaultSize, pagination.LargeMaxSize)
 
 	where := make([]string, 0, 6)
 	args := make([]any, 0, 8)
@@ -384,7 +376,7 @@ func (s *Service) List(ctx context.Context, tenantID uuid.UUID, includePlatform 
 
 	var total int
 	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log "+whereClause, args...).Scan(&total); err != nil {
-		if isMissingSchema(err) {
+		if pgerr.IsMissingSchema(err) {
 			return &ListResponse{Items: []Entry{}, Page: f.Page, PageSize: f.PageSize}, nil
 		}
 		return nil, fmt.Errorf("failed to count audit entries: %w", err)
@@ -435,7 +427,7 @@ func (s *Service) DistinctActions(ctx context.Context, tenantID uuid.UUID, inclu
 
 	rows, err := s.db.QueryContext(ctx, query, tenantID)
 	if err != nil {
-		if isMissingSchema(err) {
+		if pgerr.IsMissingSchema(err) {
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("failed to list audit actions: %w", err)
@@ -526,7 +518,7 @@ func (p *Pruner) pruneOnce() {
 			)
 		`, p.retentionDays)
 		if err != nil {
-			if !isMissingSchema(err) {
+			if !pgerr.IsMissingSchema(err) {
 				p.log.WithError(err).Error("Failed to prune audit log")
 			}
 			return
@@ -539,12 +531,4 @@ func (p *Pruner) pruneOnce() {
 			return
 		}
 	}
-}
-
-func isMissingSchema(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
-		return false
-	}
-	return pqErr.Code == "42P01" || pqErr.Code == "42703"
 }

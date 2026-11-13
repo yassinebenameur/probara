@@ -137,7 +137,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "For an administrator cookie, send `X-Tenant-ID: <tenant-id>` to select an allowed membership. A supported `tenant_id` query fallback can select context where middleware permits it. API keys ignore caller-selected tenant values and remain pinned to one tenant.",
+            "For an administrator cookie, send `X-Tenant-ID: <tenant-id>` to select an allowed membership. A supported `tenant_id` query fallback can select context where middleware permits it. API keys ignore caller-selected tenant values and remain pinned to one tenant. A malformed `X-Tenant-ID` or `tenant_id` is rejected with HTTP 400 (`bad_request`) before the route runs. Tenant-scoped routes apply the same rule to the tenant context they are handed: `400 validation_error` when it is not a UUID, `401 unauthorized` when there is none.",
         },
         {
           type: "code",
@@ -186,7 +186,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Collection APIs generally accept 1-based `page` and `page_size`. The common maximum is 100; locations allow up to 200, and dashboard recent-item limits are capped at 50. Use returned total/page metadata where provided rather than inferring completion from a short page.",
+            "Collection APIs generally accept 1-based `page` and `page_size`. The default page size is 20 and the maximum 100; locations and the audit log default to 50 and allow up to 200, and dashboard recent-item limits are capped at 50. A `page_size` above the maximum is clamped to the maximum (the response's `page_size` shows the size used); a missing, non-numeric or non-positive `page` or `page_size` takes the default. Use returned total/page metadata where provided rather than inferring completion from a short page.",
         },
         {
           type: "table",
@@ -210,7 +210,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "Alerts",
-              "`status`, `monitor_id`, `since`, `page`, `page_size` (max 100)",
+              "`status`, `monitor_id`, `since`, `q`, `suppressed`, `sort`, `dir`, `page`, `page_size` (max 100)",
             ],
             ["Maintenance", "`status`, `monitor_id`, `page`, `page_size`"],
             ["Mesh history", "`source`, `target`, and `hours`"],
@@ -528,7 +528,7 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET /api/v1/alerts`",
-              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`, and `q`, a case-insensitive search of the subject: the monitor name or either location of a mesh alert, or an exact alert ID, up to 200 characters), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
             ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
@@ -603,7 +603,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Alert policies are gone",
           text:
-            "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints under `/alerts/counts/...` should not be used as a supported policy-management model. See [retired alert policies](/docs/alerting/#retired-policies).",
+            "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints (`/alerts/counts/by-policy`, `/alerts/counts/monitors-by-policy`) are removed and return `404`, and monitor, alert and incident responses no longer carry alert-policy fields. See [retired alert policies](/docs/alerting/#retired-policies).",
         },
         {
           type: "paragraph",
@@ -843,7 +843,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/agent/metrics`",
-              "Deprecated legacy-agent ingest (Sunset: 18 Nov 2026, then `410`); tenant write API key",
+              "Retired legacy-agent ingest (sunset 18 Nov 2026): an authenticated request gets `410 Gone`, a JSON `error` naming the OTLP endpoint, and a `Link: </api/v1/otlp/v1/metrics>; rel=\"successor-version\"` header. The body is not read and nothing is stored",
             ],
             [
               "`GET /api/v1/monitors/{id}/agent/install`",
@@ -897,6 +897,59 @@ export const API_PAGE: DocPage = {
           title: "Capability URLs are credentials",
           text:
             "Redact push tokens from logs and tracing. [Agent installer](/docs/agents/#install) responses can embed a tenant API key supplied for installation and must be handled as secret output.",
+        },
+      ],
+    },
+    {
+      id: "discovery-api",
+      title: "Discovery endpoints",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Method and path", "Authorization and purpose"],
+          rows: [
+            [
+              "`GET/POST /api/v1/discovery/integrations`",
+              "Authenticated; list or create a [Kubernetes discovery](/docs/discovery/) integration. Create (write access) returns the collector token once; the first namespace becomes `home_namespace`. An integration carries `namespaces` (active), `home_namespace`, `pending_namespaces` (always an array) and `pending_status` (always an object of `{reason, checked_at}` per pending namespace with a recorded skip)",
+            ],
+            [
+              "`PATCH /api/v1/discovery/integrations/{id}`",
+              "Write access; any of `name` (1–100 characters), `location_id` (an enabled location, `null` clears, absent keeps), `add_namespaces`, `remove_namespaces` (each at most 20). Added namespaces become pending; the home namespace cannot be removed; at most 20 namespaces active and pending together. Namespaces change only as this delta: an unknown field such as `namespaces` is a 400. Returns 200 with the integration (no token); an edit that changes nothing returns 200 and is not audited. See [Change namespaces](/docs/discovery/#namespaces)",
+            ],
+            [
+              "`GET /api/v1/discovery/integrations/{id}/namespaces`",
+              "Authenticated; `items`: home first, then the other active namespaces, then pending ones, each with `namespace`, `state` (`active`/`pending`), `home`, `reason` and `checked_at` (pending with a recorded skip only), `services` (stored, present or missing) and `linked_services` (linked to a monitor that is not deleted), counted whatever the state",
+            ],
+            [
+              "`DELETE /api/v1/discovery/integrations/{id}`",
+              "Write access; removes inventory and links, keeps monitors",
+            ],
+            [
+              "`POST /api/v1/discovery/integrations/{id}/rotate-token`",
+              "Write access; returns a new collector token and invalidates the old one",
+            ],
+            [
+              "`GET /api/v1/discovery/integrations/{id}/coverage`",
+              "Authenticated; `page`, `q` (service or namespace), `gaps=true`, `sort=name|gaps` apply across all services in the integration's active namespaces; `summary` is unfiltered. `summary.missing` counts `resource_missing` only, `summary.missing_grace` counts `resource_missing_grace`. `inventory_stale` is reported once at the top level and prefixed to every row's `gaps`, but the summary counts, `gaps=true` and `sort=gaps` ignore it",
+            ],
+            [
+              "`POST /api/v1/discovery/services/{id}/approve`",
+              "Write access; create and link a monitor from a suggestion. Returns `{monitor_id, created}` with 200; a repeat for an already linked suggestion returns that monitor with `created: false`, writes nothing and is not audited",
+            ],
+            [
+              "`POST /api/v1/discovery/services/{id}/links`, `DELETE …/links/{monitorID}`",
+              "Write access; explicitly link or unlink an existing monitor",
+            ],
+            [
+              "`GET /api/v1/discovery-collectors/{id}/config`, `POST …/snapshot`",
+              "Integration-scoped collector token only (Bearer); never valid on other routes. Config returns `{namespaces, pending, revision}`; a snapshot reports pending namespaces it could not scan in `skipped` (`{namespace: reason}`)",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "`POST /api/v1/discovery-collectors/{id}/snapshot` returns 204 when the snapshot is applied, 401 for a missing or malformed bearer, 404 for an unknown integration or wrong token, 400 for an invalid body (unknown JSON fields are ignored, so a newer collector still syncs; known fields are fully validated), 409 for a stale or replayed revision (no `Retry-After`), 409 with `Retry-After: 10` when it scanned a namespace that was removed meanwhile (not counted against the rate limit), 429 `rate_limited` with `Retry-After` (whole seconds) when a snapshot was applied, or refused with 422, less than 60 seconds earlier, and 422 `inventory_limit` when the integration would store more than 10,000 resources after reconciling its active namespaces (pending namespaces that would exceed it are left pending as `inventory_limit` and the snapshot is applied without them). A refused snapshot leaves the inventory, revision and last-seen time unchanged; a 422 still counts against the rate limit, since it did the reconciliation work. The token and the rate limit are checked before the body of up to 4 MiB is read.",
         },
       ],
     },

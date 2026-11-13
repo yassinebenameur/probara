@@ -12,9 +12,33 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+)
+
+// Errors the handlers map to a status with errors.Is. The text reaches API
+// clients, so it is part of the API.
+var (
+	// ErrStatusPageNotFound: the status page does not exist in the tenant.
+	ErrStatusPageNotFound = apperr.ErrStatusPageNotFound
+	// ErrSlugExists: another status page already uses the slug.
+	ErrSlugExists = errors.New("slug already exists")
+	// ErrLibraryTemplateNotFound: the tenant's library has no such template.
+	ErrLibraryTemplateNotFound = errors.New("library template not found")
+	// ErrTemplateNameExists: the tenant's library already has that name.
+	ErrTemplateNameExists = errors.New("template name already exists")
+	// ErrTemplateVersionNotFound: the page has no template version with
+	// that number.
+	ErrTemplateVersionNotFound = errors.New("template version not found")
+	// ErrNoDraftTemplate: publish was asked for a page without a draft.
+	ErrNoDraftTemplate = errors.New("no draft template to publish")
+	// ErrAlreadyPublished: the version asked for is the published one. It is
+	// returned wrapped as "version N is already published".
+	ErrAlreadyPublished = errors.New("is already published")
 )
 
 type statusPageSettingsStored struct {
@@ -222,8 +246,8 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 		pageID, tenantID, req.Slug, req.Title, req.Description,
 		req.LogoURL, req.PrimaryColor, req.SecondaryColor, settingsJSON,
 	); err != nil {
-		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-			return nil, fmt.Errorf("slug already exists")
+		if pgerr.IsUniqueViolation(err) {
+			return nil, ErrSlugExists
 		}
 		return nil, fmt.Errorf("failed to create status page: %w", err)
 	}
@@ -259,8 +283,8 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 		&page.Description, &page.LogoURL, &page.PrimaryColor,
 		&page.SecondaryColor, &settingsJSON, &page.CreatedAt, &page.UpdatedAt,
 	); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("status page not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrStatusPageNotFound
 		}
 		return nil, fmt.Errorf("failed to get status page: %w", err)
 	}
@@ -278,17 +302,9 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 
 // ListStatusPages lists status pages with pagination.
 func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page, pageSize int) (*models.StatusPageListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	page, pageSize = pagination.Normalize(page, pageSize, pagination.DefaultSize, pagination.MaxSize)
 
-	offset := (page - 1) * pageSize
+	offset := pagination.Offset(page, pageSize)
 
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM status_pages WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
@@ -388,8 +404,8 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 	if req.Settings != nil {
 		var existingJSON []byte
 		if err := tx.QueryRowContext(ctx, `SELECT settings FROM status_pages WHERE id = $1 AND tenant_id = $2`, pageID, tenantID).Scan(&existingJSON); err != nil {
-			if err == sql.ErrNoRows {
-				return nil, fmt.Errorf("status page not found")
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, ErrStatusPageNotFound
 			}
 			return nil, fmt.Errorf("failed to get existing settings: %w", err)
 		}
@@ -428,8 +444,8 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 		`, strings.Join(setParts, ", "), whereArgIndex, whereArgIndex+1)
 		result, err := tx.ExecContext(ctx, updateQuery, args...)
 		if err != nil {
-			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-				return nil, fmt.Errorf("slug already exists")
+			if pgerr.IsUniqueViolation(err) {
+				return nil, ErrSlugExists
 			}
 			return nil, fmt.Errorf("failed to update status page: %w", err)
 		}
@@ -438,7 +454,7 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 			return nil, fmt.Errorf("failed to get rows affected: %w", err)
 		}
 		if rowsAffected == 0 {
-			return nil, fmt.Errorf("status page not found")
+			return nil, ErrStatusPageNotFound
 		}
 	}
 
@@ -464,7 +480,7 @@ func (s *Service) DeleteStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("status page not found")
+		return ErrStatusPageNotFound
 	}
 	return nil
 }
@@ -533,7 +549,7 @@ func (s *Service) loadStatusPageSections(ctx context.Context, pageID uuid.UUID) 
 	`
 	rows, err := s.db.QueryContext(ctx, query, pageID)
 	if err != nil {
-		if isUndefinedTableError(err) {
+		if pgerr.IsUndefinedTable(err) {
 			return s.loadLegacyStatusPageSections(ctx, pageID)
 		}
 		return nil, fmt.Errorf("failed to query status page sections: %w", err)
@@ -554,7 +570,7 @@ func (s *Service) loadStatusPageSections(ctx context.Context, pageID uuid.UUID) 
 		section.UpdatedAt = &updatedAt
 		monitors, err := s.loadStatusPageSectionMonitors(ctx, sectionID)
 		if err != nil {
-			if isUndefinedTableError(err) {
+			if pgerr.IsUndefinedTable(err) {
 				return s.loadLegacyStatusPageSections(ctx, pageID)
 			}
 			return nil, err
@@ -672,7 +688,7 @@ func flattenSectionMonitorIDs(sections []models.StatusPageSection) []uuid.UUID {
 func (s *Service) writeStatusPageSections(ctx context.Context, dbtx statusPageDBTX, tenantID, pageID uuid.UUID, sections []statusPageSectionInput) error {
 	sectionsTableAvailable := true
 	if _, err := dbtx.ExecContext(ctx, `DELETE FROM status_page_sections WHERE status_page_id = $1`, pageID); err != nil {
-		if isUndefinedTableError(err) {
+		if pgerr.IsUndefinedTable(err) {
 			sectionsTableAvailable = false
 		} else {
 			return fmt.Errorf("failed to clear status page sections: %w", err)
@@ -752,14 +768,6 @@ func trimOptionalString(value *string) *string {
 		return nil
 	}
 	return &trimmed
-}
-
-func isUndefinedTableError(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
-		return false
-	}
-	return pqErr.Code == "42P01"
 }
 
 // validateAndParseMonitorIDs validates that monitor IDs belong to the tenant and returns UUIDs.

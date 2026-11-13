@@ -55,7 +55,7 @@ func newMeshAlerter(dbClient *shareddb.Client) (*Alerter, *meshSendSpy) {
 		logger: logger.New("alerter-test", "error"),
 		db:     dbClient,
 	}
-	a.sendFunc = func(_ context.Context, channel alertChannel, eventType string, binding policyBinding, _ *alertRecord, _ *groupDetail, _ time.Time) error {
+	a.sendFunc = func(_ context.Context, channel alertChannel, eventType string, binding alertSubject, _ *alertRecord, _ *groupDetail, _ time.Time) error {
 		spy.record(eventType, channel.ID, binding.MonitorName)
 		return nil
 	}

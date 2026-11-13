@@ -14,10 +14,10 @@ RUN go mod download
 COPY . .
 
 # Build a simple migration runner
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/migrate -ldflags="-w -s" -tags 'postgres' ./cmd/migrate
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/migrate -ldflags="-w -s" -tags 'postgres' ./cmd/migrate
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.24
 
 RUN apk --no-cache add ca-certificates
 

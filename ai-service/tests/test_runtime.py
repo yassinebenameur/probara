@@ -1,6 +1,5 @@
 import os
 import socket
-from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from probara_ai.contract import options
