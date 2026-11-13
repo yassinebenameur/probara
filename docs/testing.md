@@ -85,6 +85,18 @@ Go check and verifies all Go groups without waiting for AI reproduction.
 The existing frontend check names also remain unchanged. An unexpectedly
 skipped, failed or cancelled dependency fails its aggregate check.
 
+The aggregate also uploads the merged profile as `merged-coverage`, which the
+`SonarQube Cloud` job scans with the rest of the repository once every Go
+group has passed. `sonar-project.properties` sets the organization, project
+key, source/test split and exclusions; coverage is Go-only, so the other
+languages are kept out of the coverage metric. The organization is on the
+Free plan, which analyzes only the project's main branch and PRs targeting it,
+so `dev` is the main branch in SonarQube Cloud and the job runs only for
+pushes to `dev` and PRs into it (`staging`/`main` are promotions of `dev`).
+Automatic Analysis is off for the project; with it on, the CI scan fails.
+Without the `SONAR_TOKEN` repository secret (fork and Dependabot PRs never
+receive it) the job's steps skip and it passes. It is not a required check.
+
 ## Python and checkpoint validation
 
 Install the existing hash-locked CPU test dependencies and pinned laya package
