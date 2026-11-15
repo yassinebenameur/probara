@@ -633,6 +633,11 @@ helm lint ./helm/monitoring-platform \\
               'Confirm provider protocol. Use the correct implicit-TLS port or a supported non-TLS/private relay setting.',
             ],
             [
+              'Email fails with `i/o timeout`',
+              'The SMTP server accepted the connection but did not finish a message within 30 seconds, the bound every send applies to connecting, greeting, authentication and each message',
+              'Check that the host and port reach a responsive relay and that nothing between drops the session; a relay that greets slowly fails the same way.',
+            ],
+            [
               'OIDC redirects or callback fails',
               'Issuer/client secret/callback mismatch, bad public base URL, or JIT tenant/role error',
               'Compare the exact HTTPS callback with the IdP registration and inspect OIDC discovery.',

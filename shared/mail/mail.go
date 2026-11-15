@@ -57,6 +57,18 @@ type Attachment struct {
 // caller knows not to retry it.
 var ErrInvalidMessage = errors.New("invalid mail message")
 
+// Length bounds that keep every header line the mailer writes under the
+// SMTP 998-octet limit. The subject needs none: it is encoded and folded.
+// A header value is sent as given, since List-Unsubscribe and similar fields
+// must stay parseable; a filename or content type may triple in length once
+// RFC 2231-encoded.
+const (
+	maxRecipientLen   = 512
+	maxHeaderValueLen = 900
+	maxFilenameLen    = 255
+	maxContentTypeLen = 255
+)
+
 // RecipientFailure is one recipient a SendMessage could not reach.
 type RecipientFailure struct {
 	Recipient string
@@ -140,6 +152,9 @@ func (m Message) Validate() error {
 		if hasControl(value) {
 			return invalid("header %q contains a control character", name)
 		}
+		if len(value) > maxHeaderValueLen {
+			return invalid("header %q is longer than %d bytes", name, maxHeaderValueLen)
+		}
 	}
 	for i, a := range m.Attachments {
 		if strings.TrimSpace(a.Filename) == "" {
@@ -147,6 +162,12 @@ func (m Message) Validate() error {
 		}
 		if hasControl(a.Filename) {
 			return invalid("attachment %q filename contains a control character", a.Filename)
+		}
+		if len(a.Filename) > maxFilenameLen {
+			return invalid("attachment %d filename is longer than %d bytes", i, maxFilenameLen)
+		}
+		if len(a.ContentType) > maxContentTypeLen {
+			return invalid("attachment %q content type is longer than %d bytes", a.Filename, maxContentTypeLen)
 		}
 		if a.ContentType != "" {
 			if hasControl(a.ContentType) {
@@ -161,16 +182,49 @@ func (m Message) Validate() error {
 }
 
 // ParseRecipient parses one To entry ("ops@example.com" or
-// "Ops <ops@example.com>"), refusing control characters.
+// "Ops <ops@example.com>"), refusing control characters and any address
+// that is not plain ASCII dot-atoms on both sides of the "@".
+//
+// net/mail accepts quoted local parts and returns them unquoted, so
+// "attacker@evil.example>"@corp.example would come back as
+// attacker@evil.example>@corp.example and smuggle a second address into
+// RCPT TO:<...> and the To header. Without SMTPUTF8 the envelope must be
+// ASCII as well, so an internationalised domain is given in its punycode
+// form.
 func ParseRecipient(value string) (*netmail.Address, error) {
 	if hasControl(value) {
 		return nil, invalid("recipient %q contains a control character", value)
+	}
+	if len(value) > maxRecipientLen {
+		return nil, invalid("recipient is longer than %d bytes", maxRecipientLen)
 	}
 	addr, err := netmail.ParseAddress(value)
 	if err != nil {
 		return nil, invalid("recipient %q: %v", value, err)
 	}
+	at := strings.LastIndexByte(addr.Address, '@')
+	if at < 0 || !isDotAtom(addr.Address[:at]) || !isDotAtom(addr.Address[at+1:]) {
+		return nil, invalid("recipient %q: only plain addresses are accepted (letters, digits and !#$%%&'*+-/=?^_`{|}~ in dot-separated words)", value)
+	}
 	return addr, nil
+}
+
+// isDotAtom reports whether s is an RFC 5322 dot-atom of ASCII atext: no
+// quotes, whitespace or <>()[],;:\" and no leading, trailing or doubled dot.
+func isDotAtom(s string) bool {
+	if s == "" || s[0] == '.' || s[len(s)-1] == '.' || strings.Contains(s, "..") {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.':
+		case strings.IndexByte("!#$%&'*+-/=?^_`{|}~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func invalid(format string, args ...any) error {

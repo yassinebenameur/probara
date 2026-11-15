@@ -58,6 +58,11 @@ func TestValidateRejects(t *testing.T) {
 		"CRLF in attachment name":   func(m *Message) { m.Attachments[0].Filename = "a.pdf\r\nX: y" },
 		"bad attachment media type": func(m *Message) { m.Attachments[0].ContentType = "not a type" },
 		"CRLF in attachment ct":     func(m *Message) { m.Attachments[0].ContentType = "text/plain\r\nX: y" },
+		"quoted local part":         func(m *Message) { m.To = []string{`"attacker@evil.example>"@corp.example`} },
+		"overlong recipient":        func(m *Message) { m.To = []string{strings.Repeat("a", 510) + "@example.com"} },
+		"overlong header value":     func(m *Message) { m.Headers["X-Long"] = strings.Repeat("v", maxHeaderValueLen+1) },
+		"overlong filename":         func(m *Message) { m.Attachments[0].Filename = strings.Repeat("é", 128) + ".pdf" },
+		"overlong content type":     func(m *Message) { m.Attachments[0].ContentType = "text/plain; x=" + strings.Repeat("v", 250) },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -89,5 +94,37 @@ func TestDeliveryError(t *testing.T) {
 	}
 	if msg := err.Error(); !strings.Contains(msg, "2 recipient(s)") || !strings.Contains(msg, "a@example.com: 550 mailbox unavailable") {
 		t.Errorf("Error() = %q", msg)
+	}
+}
+
+// net/mail accepts quoted local parts and hands them back unquoted, so the
+// address would carry quotes, spaces, commas or angle brackets into RCPT TO
+// and the To header. Only plain ASCII dot-atom addresses get through.
+func TestParseRecipientRequiresPlainAddresses(t *testing.T) {
+	for _, bad := range []string{
+		`"attacker@evil.example>"@corp.example`,
+		`"john doe"@example.com`,
+		`"a,b"@example.com`,
+		`Ops <"x>"@example.com>`,
+		`jöhn@example.com`,
+		`john@exämple.com`,
+		`.john@example.com`,
+		`john.@example.com`,
+		`jo..hn@example.com`,
+	} {
+		if addr, err := ParseRecipient(bad); !errors.Is(err, ErrInvalidMessage) {
+			t.Errorf("ParseRecipient(%q) = %v, %v; want ErrInvalidMessage", bad, addr, err)
+		}
+	}
+	for value, want := range map[string]string{
+		"o'brien+tag@mail.example.co.uk":     "o'brien+tag@mail.example.co.uk",
+		"Élodie Müller <elodie@example.com>": "elodie@example.com",
+		`"Doe, Jane" <jane@example.com>`:     "jane@example.com",
+		"ops@xn--exmple-cua.com":             "ops@xn--exmple-cua.com",
+	} {
+		addr, err := ParseRecipient(value)
+		if err != nil || addr.Address != want {
+			t.Errorf("ParseRecipient(%q) = %v, %v; want %s", value, addr, err, want)
+		}
 	}
 }

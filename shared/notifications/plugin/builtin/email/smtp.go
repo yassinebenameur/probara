@@ -3,12 +3,10 @@ package email
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"mime"
-	"net/smtp"
 	"net/textproto"
 	"sort"
 	"strings"
@@ -66,8 +64,6 @@ func NewSMTPMailer(params SMTPParams) (*SMTPMailer, error) {
 // SendAlert renders subject/body via the email plugin's template engine and
 // dispatches the message over SMTP.
 func (m *SMTPMailer) SendAlert(ctx context.Context, event notifications.AlertEvent, templates Templates, recipients []string) error {
-	_ = ctx
-
 	to := recipients
 	if len(to) == 0 {
 		to = m.to
@@ -89,7 +85,7 @@ func (m *SMTPMailer) SendAlert(ctx context.Context, event notifications.AlertEve
 		HTML:     html,
 	})
 
-	if err := m.deliver(message, to); err != nil {
+	if err := m.deliver(ctx, message, to); err != nil {
 		return err
 	}
 	return deliveredDespite(renderErr)
@@ -104,9 +100,16 @@ var _ mail.Sender = (*SMTPMailer)(nil)
 // each other (status-page subscribers, report recipients outside the tenant).
 // Unlike SendAlert it never falls back to the default recipients, and an
 // invalid message (mail.ErrInvalidMessage) is refused before anything is
-// dialled. A recipient listed twice is sent one copy. Every recipient is
-// attempted even after a failure, and the failures come back as a
-// *mail.DeliveryError so a retry can skip those already served.
+// dialled. A recipient listed twice is sent one copy.
+//
+// The transactions share one authenticated connection, since hosted relays
+// throttle a sender that opens a session per message. A refused recipient is
+// RSET and the rest carry on. When the connection is lost the session is
+// reopened; the recipient in flight is retried on it only if the loss came
+// before the end of its DATA, when the server cannot have accepted it, so
+// nobody gets two copies. If the session cannot be reopened, every remaining
+// recipient fails. Failures come back as a *mail.DeliveryError so a retry can
+// skip those already served.
 func (m *SMTPMailer) SendMessage(ctx context.Context, msg mail.Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -127,18 +130,38 @@ func (m *SMTPMailer) SendMessage(ctx context.Context, msg mail.Message) error {
 			continue
 		}
 		seen[key] = true
-		header := addr.Address
-		if addr.Name != "" {
-			header = addr.String()
-		}
-		recipients = append(recipients, recipient{given: to, header: header, envelope: addr.Address})
+		// addr.String() re-quotes and RFC 2047-encodes the display name, so
+		// the header carries the parsed address, never the caller's raw text.
+		recipients = append(recipients, recipient{given: to, header: foldEncodedWords(addr.String()), envelope: addr.Address})
 	}
 
 	var failed []mail.RecipientFailure
-	for _, r := range recipients {
-		if err := ctx.Err(); err != nil {
+	failRest := func(from int, err error) {
+		for _, r := range recipients[from:] {
 			failed = append(failed, mail.RecipientFailure{Recipient: r.given, Err: err})
-			continue
+		}
+	}
+	var session *smtpSession
+	defer func() {
+		if session != nil {
+			// Every message is already accepted or refused; a failed QUIT
+			// changes neither.
+			_ = session.quit(ctx)
+		}
+	}()
+	retried := -1
+	for i := 0; i < len(recipients); {
+		r := recipients[i]
+		if err := ctx.Err(); err != nil {
+			failRest(i, err)
+			break
+		}
+		if session == nil {
+			var err error
+			if session, err = m.openSMTPSession(ctx); err != nil {
+				failRest(i, err)
+				break
+			}
 		}
 		message := buildEmailMessage(emailMessage{
 			From:        m.cfg.From,
@@ -150,9 +173,24 @@ func (m *SMTPMailer) SendMessage(ctx context.Context, msg mail.Message) error {
 			Headers:     msg.Headers,
 			Attachments: msg.Attachments,
 		})
-		if err := m.deliver(message, []string{r.envelope}); err != nil {
-			failed = append(failed, mail.RecipientFailure{Recipient: r.given, Err: err})
+		stage, err := session.send(ctx, m.cfg.From, []string{r.envelope}, message)
+		if err == nil {
+			i++
+			continue
 		}
+		if connectionLost(err) {
+			session.close()
+			session = nil
+			if stage == stageBeforeData && retried != i && ctx.Err() == nil {
+				retried = i
+				continue
+			}
+		} else if rerr := session.reset(ctx); rerr != nil {
+			session.close()
+			session = nil
+		}
+		failed = append(failed, mail.RecipientFailure{Recipient: r.given, Err: err})
+		i++
 	}
 	if len(failed) > 0 {
 		return &mail.DeliveryError{Failed: failed}
@@ -160,17 +198,18 @@ func (m *SMTPMailer) SendMessage(ctx context.Context, msg mail.Message) error {
 	return nil
 }
 
-// deliver sends one assembled message over SMTP (implicit TLS when UseTLS).
-func (m *SMTPMailer) deliver(message string, to []string) error {
-	addr := fmt.Sprintf("%s:%d", m.cfg.Host, m.cfg.Port)
-	var auth smtp.Auth
-	if m.cfg.Username != "" {
-		auth = smtp.PlainAuth("", m.cfg.Username, m.cfg.Password, m.cfg.Host)
+// deliver sends one assembled message to every recipient in to over a
+// session of its own (implicit TLS when UseTLS).
+func (m *SMTPMailer) deliver(ctx context.Context, message string, to []string) error {
+	session, err := m.openSMTPSession(ctx)
+	if err != nil {
+		return err
 	}
-	if m.cfg.UseTLS {
-		return m.sendWithTLS(addr, auth, message, to)
+	if _, err := session.send(ctx, m.cfg.From, to, message); err != nil {
+		session.close()
+		return err
 	}
-	return smtp.SendMail(addr, auth, m.cfg.From, to, []byte(message))
+	return session.quit(ctx)
 }
 
 // deliveredDespite reports a template failure on a message that already went
@@ -184,55 +223,6 @@ func deliveredDespite(renderErr error) error {
 		return nil
 	}
 	return plugin.Permanent(fmt.Errorf("email sent with built-in fallback: %w", renderErr))
-}
-
-func (m *SMTPMailer) sendWithTLS(addr string, auth smtp.Auth, message string, recipients []string) error {
-	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: m.cfg.Host})
-	if err != nil {
-		return fmt.Errorf("failed to dial smtp server: %w", err)
-	}
-	defer conn.Close()
-
-	client, err := smtp.NewClient(conn, m.cfg.Host)
-	if err != nil {
-		return fmt.Errorf("failed to create smtp client: %w", err)
-	}
-	defer client.Close()
-
-	if auth != nil {
-		if ok, _ := client.Extension("AUTH"); ok {
-			if err := client.Auth(auth); err != nil {
-				return fmt.Errorf("smtp auth failed: %w", err)
-			}
-		}
-	}
-
-	if err := client.Mail(m.cfg.From); err != nil {
-		return fmt.Errorf("smtp from failed: %w", err)
-	}
-	for _, recipient := range recipients {
-		if err := client.Rcpt(recipient); err != nil {
-			return fmt.Errorf("smtp rcpt failed: %w", err)
-		}
-	}
-
-	writer, err := client.Data()
-	if err != nil {
-		return fmt.Errorf("smtp data failed: %w", err)
-	}
-
-	if _, err := writer.Write([]byte(message)); err != nil {
-		return fmt.Errorf("smtp write failed: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("smtp close failed: %w", err)
-	}
-
-	if err := client.Quit(); err != nil {
-		return fmt.Errorf("smtp quit failed: %w", err)
-	}
-
-	return nil
 }
 
 func parseRecipients(value string) []string {
@@ -385,10 +375,46 @@ func formatAddress(addr, name string) string {
 	return fmt.Sprintf("%s <%s>", encodeHeader(name), addr)
 }
 
+// maxRawHeaderValue is the longest printable-ASCII header value sent as it
+// is. Anything longer is encoded and folded, so no header line nears the
+// SMTP 998-octet limit.
+const maxRawHeaderValue = 900
+
 // encodeHeader applies RFC 2047 encoded-word wrapping when a header value is not
 // pure ASCII, so a monitor named "Téléphonie SIP" survives the subject line.
+// The encoder splits a long value into several encoded words but separates
+// them with plain spaces, leaving one unbounded line; foldEncodedWords breaks
+// the line between them. Decoders drop the whitespace between adjacent
+// encoded words, so the folded value decodes to exactly the original.
 func encodeHeader(value string) string {
-	return mime.QEncoding.Encode("utf-8", value)
+	encoded := mime.QEncoding.Encode("utf-8", value)
+	if encoded == value && len(value) > maxRawHeaderValue {
+		// Printable ASCII with no spaces to fold at would still overflow
+		// the line, so it is encoded too.
+		return bEncodeFolded(value)
+	}
+	return foldEncodedWords(encoded)
+}
+
+// foldEncodedWords puts each RFC 2047 encoded word after the first on its own
+// continuation line. An encoded word cannot contain "?= =?" (Q encoding
+// escapes "?" and space), so the pattern only matches between words.
+func foldEncodedWords(s string) string {
+	return strings.ReplaceAll(s, "?= =?", "?=\r\n =?")
+}
+
+// bEncodeFolded encodes value as base64 encoded words of 45 bytes each (a
+// 72-character word), one per line. Only called for printable ASCII, so a
+// byte split never cuts a character in two.
+func bEncodeFolded(value string) string {
+	const chunk = 45
+	var words []string
+	for len(value) > chunk {
+		words = append(words, "=?utf-8?b?"+base64.StdEncoding.EncodeToString([]byte(value[:chunk]))+"?=")
+		value = value[chunk:]
+	}
+	words = append(words, "=?utf-8?b?"+base64.StdEncoding.EncodeToString([]byte(value))+"?=")
+	return strings.Join(words, "\r\n ")
 }
 
 // base64Body encodes a part and hard-wraps to 76 columns per RFC 2045.

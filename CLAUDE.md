@@ -595,13 +595,16 @@ or imported groups come back empty. Any other path that creates groups through
 - **Alert kinds**: `alerts_kind_check` (latest rewrite 000100) and the
   `Kind*` constants in `shared/notifications/event.go` list the same kinds;
   a new kind rewrites the CHECK in one migration and adds its constant, its
-  wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`.
+  wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
+  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last).
 - **Transactional mail** (invites, resets, subscriber mail, reports) goes
   through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
-  MIME builder; `Message.Validate` is the header-injection guard. It sends
-  one copy per recipient, never falls back to the alert default recipients,
-  and reports partial failures as `*mail.DeliveryError`. Alert email stays
-  on `SendAlert`.
+  MIME builder; `Message.Validate` is the header-injection guard and accepts
+  only plain dot-atom addresses (`ParseRecipient`). It sends one copy per
+  recipient over one reused connection, never falls back to the alert
+  default recipients, and reports partial failures as `*mail.DeliveryError`.
+  Alert email stays on `SendAlert`. Both run SMTP I/O under a deadline
+  (`smtp_session.go`: the ctx deadline, else 30 s per message).
 - **Channel plugins** (`shared/notifications/plugin/builtin/<type>/`,
   registered in `builtin.go`) follow the checklist in the `plugin` package
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and
