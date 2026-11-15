@@ -69,6 +69,9 @@ func TestValidate(t *testing.T) {
 		{"missing server", `{"app_token":"A"}`, true},
 		{"http", `{"server_url":"http://gotify.example.com","app_token":"A"}`, true},
 		{"embedded credentials", `{"server_url":"https://u:p@gotify.example.com","app_token":"A"}`, true},
+		{"token in query", `{"server_url":"https://gotify.example.com/?token=Areal","app_token":"A"}`, true},
+		{"empty query", `{"server_url":"https://gotify.example.com/?","app_token":"A"}`, true},
+		{"fragment", `{"server_url":"https://gotify.example.com/#x","app_token":"A"}`, true},
 		{"unknown priority", `{"server_url":"https://gotify.example.com","app_token":"A","priority":"7"}`, true},
 		{"empty", ``, true},
 	}
@@ -78,6 +81,13 @@ func TestValidate(t *testing.T) {
 				t.Errorf("err = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidate_QueryErrorPointsAtTokenField(t *testing.T) {
+	err := New().Validate(json.RawMessage(`{"server_url":"https://gotify.example.com/?token=Areal","app_token":"A"}`))
+	if err == nil || !strings.Contains(err.Error(), "Application token") || strings.Contains(err.Error(), "Areal") {
+		t.Errorf("err = %v, want a pointer to the token field that does not echo the token", err)
 	}
 }
 

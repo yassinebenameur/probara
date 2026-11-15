@@ -72,6 +72,10 @@ func TestValidate(t *testing.T) {
 		{"topic too long", `{"topic":"` + strings.Repeat("a", 65) + `"}`, true},
 		{"http server", `{"server_url":"http://ntfy.example.com","topic":"t"}`, true},
 		{"embedded credentials", `{"server_url":"https://u:p@ntfy.example.com","topic":"t"}`, true},
+		{"query string", `{"server_url":"https://ntfy.example.com/?auth=x","topic":"t"}`, true},
+		{"empty query", `{"server_url":"https://ntfy.example.com/?","topic":"t"}`, true},
+		{"fragment", `{"server_url":"https://ntfy.example.com/#x","topic":"t"}`, true},
+		{"path prefix", `{"server_url":"https://example.com/ntfy/","topic":"t"}`, false},
 		{"token and basic", `{"topic":"t","access_token":"tk","username":"u","password":"p"}`, true},
 		{"token with space", `{"topic":"t","access_token":"tk abc"}`, true},
 		{"username without password", `{"topic":"t","username":"u"}`, true},
@@ -268,5 +272,43 @@ func TestBuild_NoDeepLinkWithoutBaseURL(t *testing.T) {
 	msg := build("t", defaultOutagePriority, m)
 	if msg.Click != "" || len(msg.Actions) != 0 {
 		t.Errorf("click %q actions %+v, want none without APP_BASE_URL", msg.Click, msg.Actions)
+	}
+}
+
+// A probe error dense in characters JSON escapes must still fit ntfy's limit
+// once encoded, or the publish is refused with a permanent 413.
+func TestSend_EscapeDenseErrorFitsEncodedLimit(t *testing.T) {
+	var raw []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ev := plugintest.SampleEvent()
+	dense := strings.Repeat(`<a href="x">&\</a>`+"\t\n", 600)
+	ev.Alert.LastError = &dense
+	if err := New().Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: map[string]any{"server_url": srv.URL, "topic": "alerts"}},
+		Event:   ev,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if n := len(fields["message"]); n > maxMessage {
+		t.Errorf("encoded message is %d bytes, limit %d", n, maxMessage)
+	}
+	var msg string
+	if err := json.Unmarshal(fields["message"], &msg); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg, "Last error: <a href") {
+		t.Errorf("clipped error dropped entirely: %q", msg[:min(len(msg), 200)])
+	}
+	if strings.Contains(string(raw), `\u003c`) || strings.Contains(string(raw), `\u0026`) {
+		t.Error("payload is HTML-escaped, wasting the message budget")
 	}
 }

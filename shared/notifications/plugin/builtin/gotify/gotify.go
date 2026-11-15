@@ -103,7 +103,7 @@ func (p *Plugin) Manifest() plugin.Manifest {
 					{Value: strconv.Itoa(priorityHigh), Label: "High (8)"},
 					{Value: strconv.Itoa(priorityNormal), Label: "Normal (5)"},
 				},
-				Help: "Priority for outages. Degradations (latency, host metrics, certificate and domain expiry) are sent one level lower, recoveries at 4, acknowledgements and AI triage notes at 2.",
+				Help: "Priority for outages. Degradations (latency, host metrics, certificate and domain expiry) are sent one level lower, recoveries at 4, AI triage notes at 2.",
 			},
 		},
 	}
@@ -115,8 +115,15 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if _, err := plugin.ParseHTTPSURL(cfg.ServerURL, "server_url"); err != nil {
+	u, err := plugin.ParseHTTPSURL(cfg.ServerURL, "server_url")
+	if err != nil {
 		return err
+	}
+	// Gotify's own examples put the token in ?token=, and server_url is not a
+	// secret field: a token pasted there would be stored unencrypted and shown
+	// back unmasked.
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return errors.New("server_url must not include a query string or fragment; put the token in the Application token field")
 	}
 	if cfg.AppToken == "" {
 		return errors.New("app_token is required")
@@ -206,8 +213,9 @@ func outagePriority(v string) (int, bool) {
 
 // priorityFor maps the tone onto Gotify's scale: an outage at the channel's
 // outage priority, a degradation one level below it (never below normal), a
-// recovery with sound but no heads-up, and an advisory (acknowledgement, AI
-// triage) silently.
+// recovery with sound but no heads-up, and an AI triage note silently.
+// Acknowledgements never reach this plugin: it does not advertise
+// CapabilityAcknowledge.
 func priorityFor(t present.Tone, outage int) int {
 	switch t {
 	case present.ToneDown:

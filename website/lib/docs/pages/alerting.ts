@@ -273,12 +273,12 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`ntfy`",
               "HTTPS `server_url` (defaults to the public `https://ntfy.sh`), `topic` (stored encrypted), optional `access_token` **or** `username` + `password`, outage `priority` `5`, `4` (default) or `3`",
-              "Push notification published to the topic: title, summary and details as the body, an emoji tag by severity, and a tap-through plus an action button to the monitor when `APP_BASE_URL` is set. Degradations are sent one level below the outage priority (never below `3`), recoveries at `3`, acknowledgements and AI triage notes at `2`",
+              "Push notification published to the topic: title, summary and details as the body, an emoji tag by severity, and a tap-through plus an action button to the monitor when `APP_BASE_URL` is set. Degradations are sent one level below the outage priority (never below `3`), recoveries at `3`, AI triage notes at `2`",
             ],
             [
               "`gotify`",
               "HTTPS `server_url` of your Gotify server (a path prefix is fine), application `app_token` (sent in the `X-Gotify-Key` header, never in the URL), outage `priority` `10`, `8` (default) or `5`",
-              "Plain-text Gotify message; the monitor link is printed under the body and opens on tap in the Android app when `APP_BASE_URL` is set. Degradations are sent one level below the outage priority (`10` → `8`, otherwise `5`), recoveries at `4`, acknowledgements and AI triage notes at `2`",
+              "Plain-text Gotify message; the monitor link is printed under the body and opens on tap in the Android app when `APP_BASE_URL` is set. Degradations are sent one level below the outage priority (`10` → `8`, otherwise `5`), recoveries at `4`, AI triage notes at `2`",
             ],
             [
               "`generic_webhook`",
@@ -334,7 +334,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "warning",
           title: "Self-hosted ntfy and Gotify servers on a private network",
           text:
-            "ntfy and Gotify accept any HTTPS server, and a self-hosted one usually lives on a private address. With the default policy that server is refused: the channel test fails with `ssrf_blocked`, and real alerts fail permanently and are not retried. Add the server's address range to `NOTIFICATION_ALLOWED_CIDRS` on the API, alerter and worker (for example `10.20.0.15/32`, not the whole private network). The server must serve HTTPS with a certificate the platform's system trust store accepts: `http` URLs are rejected on save, and a self-signed or private-CA certificate fails every send.",
+            "A self-hosted ntfy or Gotify server on a private network needs **both** of these, or no alert reaches it: (1) its address range in `NOTIFICATION_ALLOWED_CIDRS` on the API, alerter and worker (for example `10.20.0.15/32`, not the whole private network), and (2) an `https` endpoint with a certificate the platform trusts, meaning one that chains to a public CA in the system trust store. Without the allow-list entry the server is refused: the channel test fails with `ssrf_blocked`, and real alerts fail permanently and are not retried. An `http://` server URL, or one with a query string or fragment, is rejected when the channel is saved; there is no plain-HTTP option and no custom CA setting. With a self-signed or private-CA certificate the channel saves, but the test fails with the TLS verification error (for example `x509: certificate signed by unknown authority`), and every alert send fails the same way: it is retried as a transient network failure and is never delivered until the server presents a trusted certificate.",
         },
         {
           type: "callout",

@@ -11,6 +11,7 @@
 package ntfy
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -33,7 +34,9 @@ const (
 	// left empty.
 	DefaultServer = "https://ntfy.sh"
 	// maxMessage stays under ntfy's default 4096-byte message limit; a
-	// longer body is turned into an attachment or rejected.
+	// longer body is turned into an attachment or rejected (413, which is
+	// permanent, so the alert would never arrive). It bounds the message as
+	// JSON-encoded, which is never shorter than the decoded text.
 	maxMessage = 4000
 	maxTitle   = 250
 	// maxActions is ntfy's limit on action buttons per message.
@@ -137,7 +140,7 @@ func (p *Plugin) Manifest() plugin.Manifest {
 					{Value: strconv.Itoa(priorityHigh), Label: "High (4)"},
 					{Value: strconv.Itoa(priorityDefault), Label: "Default (3)"},
 				},
-				Help: "Priority for outages. Degradations (latency, host metrics, certificate and domain expiry) are sent one level lower, recoveries at default (3), acknowledgements and AI triage notes at low (2).",
+				Help: "Priority for outages. Degradations (latency, host metrics, certificate and domain expiry) are sent one level lower, recoveries at default (3), AI triage notes at low (2).",
 			},
 		},
 	}
@@ -149,8 +152,14 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if _, err := plugin.ParseHTTPSURL(cfg.server(), "server_url"); err != nil {
+	u, err := plugin.ParseHTTPSURL(cfg.server(), "server_url")
+	if err != nil {
 		return err
+	}
+	// Send publishes to the server root, so a query or fragment would be
+	// mangled into the path rather than sent.
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return errors.New("server_url must not include a query string or fragment")
 	}
 	if !topicPattern.MatchString(cfg.Topic) {
 		return errors.New("topic must be 1-64 letters, digits, - or _")
@@ -217,14 +226,51 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	// alert over.
 	outage, _ := outagePriority(cfg.OutagePriority)
 	target := strings.TrimRight(cfg.server(), "/") + "/"
-	return plugin.PostJSON(ctx, p.httpClient, target, build(cfg.Topic, outage, req.View()), headers, "ntfy")
+	payload, err := encode(build(cfg.Topic, outage, req.View()))
+	if err != nil {
+		return plugin.Permanent(fmt.Errorf("marshal ntfy payload: %w", err))
+	}
+	return plugin.Post(ctx, p.httpClient, target, "application/json", payload, headers, "ntfy")
+}
+
+// encode marshals v as JSON without HTML escaping. ntfy shows the text as
+// is, and escaping would spend six bytes of the message budget on every <, >
+// and & of a probe error.
+func encode(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// fitBody renders the message body so that its JSON encoding stays within
+// maxMessage bytes. Quotes, backslashes and control characters (newlines
+// included) grow when encoded, so the raw budget shrinks by the overflow
+// until the encoded text fits; it strictly decreases, so the loop ends.
+func fitBody(m present.Message) string {
+	budget := maxMessage
+	for {
+		body := pushtext.Body(m, budget)
+		encoded, err := encode(body)
+		if err != nil {
+			return ""
+		}
+		over := len(encoded) - maxMessage
+		if over <= 0 || budget <= 0 {
+			return body
+		}
+		budget -= over
+	}
 }
 
 func build(topic string, outage int, m present.Message) message {
 	out := message{
 		Topic:    topic,
 		Title:    pushtext.Clip(m.Title, maxTitle),
-		Message:  pushtext.Body(m, maxMessage),
+		Message:  fitBody(m),
 		Priority: priorityFor(m.Tone, outage),
 		Tags:     []string{tagFor(m.Tone)},
 		Click:    m.ActionURL,
@@ -264,8 +310,9 @@ func outagePriority(v string) (int, bool) {
 
 // priorityFor maps the tone onto ntfy's 1-5 scale: an outage at the
 // channel's outage priority, a degradation one level below it (never below
-// default), a recovery at default and an advisory (acknowledgement, AI
-// triage) at low, so it never buzzes like a page.
+// default), a recovery at default and an AI triage note at low, so it never
+// buzzes like a page. Acknowledgements never reach this plugin: it does not
+// advertise CapabilityAcknowledge.
 func priorityFor(t present.Tone, outage int) int {
 	switch t {
 	case present.ToneDown:
