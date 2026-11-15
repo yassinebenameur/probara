@@ -31,7 +31,9 @@ concurrency:
 jobs:
   helm:
     name: Helm and Compose local AI cases
-    runs-on: ubuntu-latest
+    # Pinned: the Python 3.13.3 these jobs need has no build for the image
+    # ubuntu-latest now resolves to; move it together with python-version.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout code
