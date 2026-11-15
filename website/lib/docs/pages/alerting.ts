@@ -271,6 +271,16 @@ export const ALERTING_PAGE: DocPage = {
               "One SMS per recipient per event, the short form of the alert plus the deep link",
             ],
             [
+              "`ntfy`",
+              "HTTPS `server_url` (defaults to the public `https://ntfy.sh`), `topic` (stored encrypted), optional `access_token` **or** `username` + `password`, outage `priority` `5`, `4` (default) or `3`",
+              "Push notification published to the topic: title, summary and details as the body, an emoji tag by severity, and a tap-through plus an action button to the monitor when `APP_BASE_URL` is set. Degradations are sent one level below the outage priority (never below `3`), recoveries at `3`, AI triage notes at `2`",
+            ],
+            [
+              "`gotify`",
+              "HTTPS `server_url` of your Gotify server (a path prefix is fine), application `app_token` (sent in the `X-Gotify-Key` header, never in the URL), outage `priority` `10`, `8` (default) or `5`",
+              "Plain-text Gotify message; the monitor link is printed under the body and opens on tap in the Android app when `APP_BASE_URL` is set. Degradations are sent one level below the outage priority (`10` → `8`, otherwise `5`), recoveries at `4`, AI triage notes at `2`",
+            ],
+            [
               "`generic_webhook`",
               "HTTPS `url`, optional `hmac_secret`, optional custom headers encoded as JSON (stored encrypted and write-only; leaving the field blank on edit keeps them, **Remove stored value** deletes them)",
               "Structured Probara event JSON",
@@ -284,7 +294,7 @@ export const ALERTING_PAGE: DocPage = {
         },
         {
           type: "table",
-          columns: ["Event", "Chat, email, SMS, webhook", "PagerDuty, Opsgenie / JSM"],
+          columns: ["Event", "Chat, email, SMS, push, webhook", "PagerDuty, Opsgenie / JSM"],
           rows: [
             ["`created`", "Message", "Trigger / create"],
             ["`reminder`", "Message at the reminder interval", "Skipped — the provider escalates and re-notifies on its own"],
@@ -318,6 +328,13 @@ export const ALERTING_PAGE: DocPage = {
           title: "Channel destinations are egress-guarded",
           text:
             "Every channel dials through the [notification egress policy](/docs/security/#ssrf-network-policy): private, loopback, link-local (including cloud metadata) and reserved addresses are refused by default, checked against the resolved IP at connect time. A webhook receiver on an internal network needs its range in `NOTIFICATION_ALLOWED_CIDRS`. Slack and Discord additionally require their own HTTPS hosts; Teams and generic webhooks accept any HTTPS host.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Self-hosted ntfy and Gotify servers on a private network",
+          text:
+            "A self-hosted ntfy or Gotify server on a private network needs **both** of these, or no alert reaches it: (1) its address range in `NOTIFICATION_ALLOWED_CIDRS` on the API, alerter and worker (for example `10.20.0.15/32`, not the whole private network), and (2) an `https` endpoint with a certificate the platform trusts, meaning one that chains to a public CA in the system trust store. Without the allow-list entry the server is refused: the channel test fails with `ssrf_blocked`, and real alerts fail permanently and are not retried. An `http://` server URL, or one with a query string or fragment, is rejected when the channel is saved; there is no plain-HTTP option and no custom CA setting. With a self-signed or private-CA certificate the channel saves, but the test fails with the TLS verification error (for example `x509: certificate signed by unknown authority`), and every alert send fails the same way: it is retried as a transient network failure and is never delivered until the server presents a trusted certificate.",
         },
         {
           type: "callout",

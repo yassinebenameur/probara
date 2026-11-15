@@ -1,8 +1,10 @@
 import {
   AlertCircle,
   Bell,
+  BellDot,
   BellRing,
   Mail,
+  Megaphone,
   MessageCircle,
   MessageSquare,
   Send,
@@ -28,6 +30,8 @@ const iconMap: Record<string, LucideIcon> = {
   opsgenie: BellRing,
   telegram: Send,
   sms: Smartphone,
+  ntfy: Megaphone,
+  gotify: BellDot,
 };
 
 export function iconFor(key: string | undefined): LucideIcon {
