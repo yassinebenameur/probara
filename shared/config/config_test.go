@@ -38,6 +38,25 @@ func TestLoadAPIConfigLocationAuthSubjects(t *testing.T) {
 	}
 }
 
+func TestLoadAPIConfigLocationWorkerImage(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("LOCATION_WORKER_IMAGE", "")
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LocationWorkerImage != "" {
+		t.Fatalf("default image = %q, want empty", cfg.LocationWorkerImage)
+	}
+	t.Setenv("LOCATION_WORKER_IMAGE", " registry.example/probara-worker:2.0.0 ")
+	if cfg, err = LoadAPIConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LocationWorkerImage != "registry.example/probara-worker:2.0.0" {
+		t.Fatalf("image = %q", cfg.LocationWorkerImage)
+	}
+}
+
 func TestLoadBaseConfig_MissingHTTPPort(t *testing.T) {
 	t.Setenv("HTTP_PORT", "")
 	t.Setenv("METRICS_PORT", "9090")

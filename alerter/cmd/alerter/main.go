@@ -6,6 +6,7 @@ import (
 
 	"github.com/yassinebenameur/probara/alerter/internal/alerter"
 	"github.com/yassinebenameur/probara/shared/bootstrap"
+	"github.com/yassinebenameur/probara/shared/buildinfo"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -24,7 +25,7 @@ func main() {
 
 	// Initialize logger
 	log := logger.New(cfg.ServiceName, cfg.LogLevel)
-	log.Info("Starting alerter service")
+	log.WithField("version", buildinfo.Version).Info("Starting alerter service")
 
 	// Initialize metrics
 	metricsRegistry := metrics.NewRegistry(cfg.ServiceName)

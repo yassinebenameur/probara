@@ -48,13 +48,18 @@ type APIConfig struct {
 	// baked into agent install scripts and push webhook URLs, bypassing
 	// Host-header inspection which is unreliable behind reverse proxies.
 	PublicBaseURL string
-	// PublicNATSURL is the NATS address reachable from remote networks (e.g.
-	// "nats://nats.example.com:4222"), baked into private-location worker
-	// deploy snippets. Empty renders a placeholder.
+	// PublicNATSURL is the NATS address reachable from remote networks
+	// ("tls://nats.example.com:4222", or "wss://nats.example.com" for the
+	// broker's websocket listener behind an HTTPS ingress), baked into
+	// private-location worker deploy snippets. Empty disables the snippets.
 	PublicNATSURL string
 	// NATSLocationAuthIssuerSeed enables the API-hosted NATS authorization
 	// callout used to issue per-location broker permissions.
 	NATSLocationAuthIssuerSeed string
+	// LocationWorkerImage is LOCATION_WORKER_IMAGE, the image private-location
+	// deploy snippets reference. Empty means the locations service default
+	// (the worker image at this build's release version).
+	LocationWorkerImage string
 	// Mesh knobs mirrored from the scheduler (same env vars) so edge
 	// staleness and probe-now timeouts agree with the actual probe cadence.
 	MeshProbeIntervalSeconds int
@@ -221,6 +226,7 @@ func LoadAPIConfig() (*APIConfig, error) {
 	if cfg.NATSLocationAuthIssuerSeed != "" && strings.TrimSpace(os.Getenv("PROBARA_SECRETS_KEY")) == "" {
 		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
 	}
+	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
 
 	// OTLP_* — ingest guardrails for the OTel metrics endpoint.
 	cfg.OTLPMaxSeriesPerMonitor = 2000
