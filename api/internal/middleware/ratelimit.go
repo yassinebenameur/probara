@@ -53,9 +53,12 @@ import (
 // cookie (signed, unexpired) is authenticated by that cookie alone, whose
 // signature the limiter checks without a lookup, so it is never refused this
 // way; nor is a refreshing session. A sign-in is refused whatever cookie it
-// carries.
-// The price is that valid keys and tokens from an address someone is
-// flooding wait with the flood until the bucket refills.
+// carries. A key or token that verified successfully in the last ten minutes
+// on this replica is not refused either (verifiedCredentials: a keyed hash,
+// never the value; dropped at its first failure), so valid machines and
+// sessions behind a flooded address keep working. A valid credential the
+// replica has not seen succeed recently still waits until the address has
+// budget again: telling it from a guess would take the lookup.
 //
 // Address buckets -- the anonymous bucket and the auth-failure bucket -- are
 // used only for attributable addresses (clientip.Attributable): forwarded by
@@ -85,6 +88,10 @@ type RateLimiter struct {
 	buckets    map[string]*rateBucket
 	lastSweep  time.Time
 	maxBuckets int
+
+	// verified holds credentials that recently passed verification, which
+	// the failure pre-check lets through (see RateLimiter).
+	verified *verifiedCredentials
 }
 
 type rateBucket struct {
@@ -121,6 +128,7 @@ func NewRateLimiter(perMinute, burst int) *RateLimiter {
 		now:        time.Now,
 		buckets:    make(map[string]*rateBucket),
 		maxBuckets: rateLimiterMaxBuckets,
+		verified:   newVerifiedCredentials(verifiedCredentialTTL, verifiedCredentialsMax),
 	}
 }
 
@@ -236,10 +244,11 @@ func (l *RateLimiter) Anonymous(next http.Handler) http.Handler {
 			return
 		}
 		if tokenPathRoute(path) {
-			if l.refuseWhileFailing(w, r) {
+			cred := tokenPathCredential(r)
+			if l.refuseWhileFailing(w, r, cred) {
 				return
 			}
-			l.serveChargingFailures(w, r, next)
+			l.serveChargingFailures(w, r, next, cred)
 			return
 		}
 		if path == refreshPath {
@@ -247,21 +256,22 @@ func (l *RateLimiter) Anonymous(next http.Handler) http.Handler {
 				// Checked before the cookie's own bucket exists, so a
 				// stream of random cookies cannot mint buckets (or lookups)
 				// once the address has failed enough.
-				if l.refuseWhileFailing(w, r) {
+				cred := refreshCredential(c.Value)
+				if l.refuseWhileFailing(w, r, cred) {
 					return
 				}
 				if ok, wait := l.take("refresh:" + hashCredential(c.Value)); !ok {
 					writeRateLimited(w, wait)
 					return
 				}
-				l.serveChargingFailures(w, r, next)
+				l.serveChargingFailures(w, r, next, cred)
 				return
 			}
 		}
 		// A sign-in is a password guess whatever cookie comes with it, so a
 		// live session does not lift the failure check here.
 		login := path == loginPath && r.Method == http.MethodPost
-		if login && l.refuseWhileFailing(w, r) {
+		if login && l.refuseWhileFailing(w, r, "") {
 			return
 		}
 		key, ok := "", false
@@ -277,7 +287,7 @@ func (l *RateLimiter) Anonymous(next http.Handler) http.Handler {
 			}
 		}
 		if login {
-			l.serveChargingFailures(w, r, next)
+			l.serveChargingFailures(w, r, next, "")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -286,10 +296,15 @@ func (l *RateLimiter) Anonymous(next http.Handler) http.Handler {
 
 // refuseWhileFailing answers 429 and reports true when the request's address
 // has emptied its auth-failure bucket, before anything is looked up for the
-// credential it presents. An unattributable address has no such bucket.
-func (l *RateLimiter) refuseWhileFailing(w http.ResponseWriter, r *http.Request) bool {
+// credential it presents (cred, "" for none or a sign-in). A credential that
+// recently verified is let through. An unattributable address has no such
+// bucket.
+func (l *RateLimiter) refuseWhileFailing(w http.ResponseWriter, r *http.Request, cred string) bool {
 	key, ok := addressKey("authfail:", r)
 	if !ok {
+		return false
+	}
+	if l.verified.known(cred, l.now()) {
 		return false
 	}
 	if empty, wait := l.empty(key); empty {
@@ -300,13 +315,21 @@ func (l *RateLimiter) refuseWhileFailing(w http.ResponseWriter, r *http.Request)
 }
 
 // serveChargingFailures runs next with its response held. A 401 or 404 --
-// the presented token or cookie was not valid -- spends from the address's
-// auth-failure bucket, and is answered 429 once that is empty. Any other
-// answer goes out unchanged and uncharged.
-func (l *RateLimiter) serveChargingFailures(w http.ResponseWriter, r *http.Request, next http.Handler) {
+// the presented token or cookie (cred) was not valid -- forgets cred, spends
+// from the address's auth-failure bucket, and is answered 429 once that is
+// empty. A 2xx records cred as verified, and so does a refresh cookie the
+// response issues (refresh rotates it, sign-in issues one): the next refresh
+// presents that one. Any other answer goes out unchanged and uncharged.
+func (l *RateLimiter) serveChargingFailures(w http.ResponseWriter, r *http.Request, next http.Handler, cred string) {
 	held := &heldResponse{header: http.Header{}}
 	next.ServeHTTP(held, r)
+	if held.status >= 200 && held.status < 300 {
+		now := l.now()
+		l.verified.remember(cred, now)
+		l.verified.remember(refreshCredential(issuedRefreshCookie(held.header)), now)
+	}
 	if held.status == http.StatusUnauthorized || held.status == http.StatusNotFound {
+		l.verified.forget(cred)
 		if ok, wait := l.chargeFailure(r); !ok {
 			writeRateLimited(w, wait)
 			return
@@ -355,7 +378,12 @@ func (g *authGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// though: AuthMiddleware falls through from an expired cookie to a
 	// bearer credential and looks that up, so a cookie must not shield one.
 	refreshing := session == sessionExpired && !carriesCredentialHeader(r)
-	if session != sessionLive && !refreshing && g.l.refuseWhileFailing(w, r) {
+	// What AuthMiddleware verifies when no live cookie is present.
+	cred := ""
+	if session != sessionLive {
+		cred = bearerCredential(r)
+	}
+	if session != sessionLive && !refreshing && g.l.refuseWhileFailing(w, r, cred) {
 		return
 	}
 
@@ -365,6 +393,7 @@ func (g *authGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	passed := false
 	g.authenticate(http.HandlerFunc(func(_ http.ResponseWriter, ar *http.Request) {
 		passed = true
+		g.l.verified.remember(cred, g.l.now())
 		for k, v := range held.header {
 			w.Header()[k] = v
 		}
@@ -382,6 +411,7 @@ func (g *authGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if held.status == http.StatusUnauthorized && !refreshing {
+		g.l.verified.forget(cred)
 		if ok, wait := g.l.chargeFailure(r); !ok {
 			writeRateLimited(w, wait)
 			return

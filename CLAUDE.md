@@ -579,7 +579,12 @@ or imported groups come back empty. Any other path that creates groups through
   failures (401s incl. sign-in, unknown push/collector tokens) are charged
   to the address afterwards. While that failure bucket is empty, anything
   needing a lookup (key, token, refresh cookie, sign-in) is refused before
-  the handler; only a live session cookie passes. The cookie check is
+  the handler, except a live session cookie and a credential that verified
+  on this replica in the last 10 min (`verifiedCredentials`,
+  `ratelimit_verified.go`: keyed HMAC only, bounded LRU, TTL restarted per
+  success, forgotten at first failure; a refresh's rotated cookie is
+  recorded from its Set-Cookie). A never-seen valid credential and every
+  sign-in wait for budget -- accepted. The cookie check is
   `classifySessionToken`, unexported in `middleware` -- never authentication. Address buckets exist only for
   `clientip.Attributable` addresses (trusted-proxy-forwarded or public
   peer), IPv6 per /64. Authenticated routes are read from the router (on

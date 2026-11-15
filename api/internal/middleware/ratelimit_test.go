@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,8 +65,11 @@ func do(h http.Handler, req *http.Request) *httptest.ResponseRecorder {
 	return rec
 }
 
+// revokedKeys lists "good-<id>" keys fakeAuth now refuses.
+var revokedKeys sync.Map
+
 // fakeAuth mirrors AuthMiddleware: a valid session cookie, else "Bearer
-// good-<id>" as API key <id>, else 401.
+// good-<id>" (not revoked) as API key <id>, else 401.
 func fakeAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(sessionCookieName); err == nil {
@@ -76,7 +80,7 @@ func fakeAuth(next http.Handler) http.Handler {
 		}
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		id, ok := strings.CutPrefix(token, "good-")
-		if !ok {
+		if _, revoked := revokedKeys.Load(token); !ok || revoked {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
@@ -108,10 +112,13 @@ func fakeAnonymous(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case p == refreshPath:
-		if c, err := r.Cookie(refreshCookieName); err != nil || c.Value != "good-refresh" {
+		c, err := r.Cookie(refreshCookieName)
+		if err != nil || (c.Value != "good-refresh" && !strings.HasPrefix(c.Value, "rotated-")) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		// Refresh rotates the cookie, as the real handler does.
+		http.SetCookie(w, &http.Cookie{Name: refreshCookieName, Value: "rotated-" + c.Value, MaxAge: 3600})
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -538,10 +545,8 @@ func TestRateLimiterExemptRoutesStillChargeFailures(t *testing.T) {
 	}
 }
 
-// Token-path routes: a valid push or collector token is not limited while
-// the address has failure budget left, but an unknown one is a failure, so
-// looping random tokens is bounded -- and once the budget is gone, every
-// token from that address waits for the refill.
+// Token-path routes: a valid push or collector token is not limited, but an
+// unknown one is a failure, so looping random tokens is bounded.
 func TestRateLimiterTokenPathsChargeOnlyFailures(t *testing.T) {
 	l, clock := newTestLimiter(60, 2)
 	h := testStack(l)
@@ -566,8 +571,10 @@ func TestRateLimiterTokenPathsChargeOnlyFailures(t *testing.T) {
 	if rec := do(h, anonRequest("/api/v1/discovery-collectors/x/config", addr)); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("bad collector token after the failure bucket emptied: %d, want 429", rec.Code)
 	}
-	if rec := do(h, anonRequest("/api/v1/push/good", addr)); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("push token while the failure bucket is empty: %d, want 429", rec.Code)
+	// The push token verified a moment ago, so the empty bucket does not
+	// stop it (see TestRateLimiterRecentlyVerifiedCredentialsPassPreCheck).
+	if rec := do(h, anonRequest("/api/v1/push/good", addr)); rec.Code != http.StatusOK {
+		t.Fatalf("verified push token while the failure bucket is empty: %d, want 200", rec.Code)
 	}
 	clock.t = clock.t.Add(time.Second)
 	if rec := do(h, anonRequest("/api/v1/push/good", addr)); rec.Code != http.StatusOK {
@@ -729,5 +736,159 @@ func TestClassifySessionToken(t *testing.T) {
 		if _, state := classifySessionToken(bad.token, bad.secret, now, lifetime); state != sessionNone {
 			t.Fatalf("accepted %q with secret %q", bad.token, bad.secret)
 		}
+	}
+}
+
+// emptyFailureBucket spends addr's failure budget with junk keys.
+func emptyFailureBucket(t *testing.T, h http.Handler, addr string, burst int) {
+	t.Helper()
+	for i := 0; i < burst; i++ {
+		do(h, bearer("/api/v1/monitors", addr, fmt.Sprintf("junk-%d", i)))
+	}
+	if rec := do(h, bearer("/api/v1/monitors", addr, "junk-check")); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("failure bucket not empty: %d", rec.Code)
+	}
+}
+
+// With the address out of failure budget, a key or token that verified
+// recently still reaches its handler; one never seen to succeed does not --
+// a valid one included, which waits until the address has budget again.
+func TestRateLimiterRecentlyVerifiedCredentialsPassPreCheck(t *testing.T) {
+	l, _ := newTestLimiter(60, 3)
+	h, reached := countingTestStack(l)
+	const addr = "198.51.100.120"
+	collector := func(token string) *http.Request {
+		req := anonRequest("/api/v1/discovery-collectors/x/config", addr)
+		req.Header.Set("Authorization", "Bearer "+token)
+		return req
+	}
+	refresh := func(value string) *http.Request {
+		req := anonRequest(refreshPath, addr)
+		req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: value})
+		return req
+	}
+	signIn := bearer(loginPath, addr, "good-k1")
+	signIn.Method = http.MethodPost
+
+	// Verified while the address still had budget.
+	for name, req := range map[string]*http.Request{
+		"API key":         bearer("/api/v1/monitors", addr, "good-k1"),
+		"push token":      anonRequest("/api/v1/push/good", addr),
+		"collector token": collector("collector"),
+	} {
+		if rec := do(h, req); rec.Code != http.StatusOK {
+			t.Fatalf("%s while the address has budget: %d", name, rec.Code)
+		}
+	}
+	rec := do(h, refresh("good-refresh"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh while the address has budget: %d", rec.Code)
+	}
+	rotated := issuedRefreshCookie(rec.Header())
+	if rotated == "" {
+		t.Fatal("the fake refresh did not rotate the cookie")
+	}
+
+	emptyFailureBucket(t, h, addr, 3)
+
+	for name, req := range map[string]*http.Request{
+		"verified API key":         bearer("/api/v1/monitors", addr, "good-k1"),
+		"verified push token":      anonRequest("/api/v1/push/good", addr),
+		"verified collector token": collector("collector"),
+		"rotated refresh cookie":   refresh(rotated),
+	} {
+		before := *reached
+		if rec := do(h, req); rec.Code != http.StatusOK || *reached != before+1 {
+			t.Fatalf("%s from the flooded address: %d (reached handler: %v), want 200 through the handler", name, rec.Code, *reached == before+1)
+		}
+	}
+	for name, req := range map[string]*http.Request{
+		"unknown API key":          bearer("/api/v1/monitors", addr, "guess"),
+		"never-verified valid key": bearer("/api/v1/monitors", addr, "good-k2"),
+		"unknown push token":       anonRequest("/api/v1/push/guess", addr),
+		"unknown collector token":  collector("guess"),
+		"unseen refresh cookie":    refresh("rotated-unseen"),
+		"sign-in":                  signIn,
+	} {
+		before := *reached
+		if rec := do(h, req); rec.Code != http.StatusTooManyRequests || *reached != before {
+			t.Fatalf("%s from the flooded address: %d, want 429 before the handler", name, rec.Code)
+		}
+	}
+}
+
+// One success vouches for a credential for the TTL; after that it waits for
+// the address's budget like any unknown credential.
+func TestRateLimiterVerifiedCredentialExpires(t *testing.T) {
+	l, clock := newTestLimiter(60, 3)
+	h := testStack(l)
+	const addr = "198.51.100.121"
+	if rec := do(h, bearer("/api/v1/monitors", addr, "good-k")); rec.Code != http.StatusOK {
+		t.Fatalf("verify: %d", rec.Code)
+	}
+	clock.t = clock.t.Add(verifiedCredentialTTL - time.Second)
+	emptyFailureBucket(t, h, addr, 3)
+	if rec := do(h, bearer("/api/v1/monitors", addr, "good-k")); rec.Code != http.StatusOK {
+		t.Fatalf("within the TTL: %d, want 200", rec.Code)
+	}
+	// That success restarted the TTL; let it lapse.
+	clock.t = clock.t.Add(verifiedCredentialTTL)
+	emptyFailureBucket(t, h, addr, 3)
+	if rec := do(h, bearer("/api/v1/monitors", addr, "good-k")); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("after the TTL: %d, want 429", rec.Code)
+	}
+}
+
+// A verified key that is then revoked fails once and is forgotten: from then
+// on it is refused before the lookup like any unknown key.
+func TestRateLimiterRevokedCredentialIsForgotten(t *testing.T) {
+	l, _ := newTestLimiter(60, 3)
+	h, reached := countingTestStack(l)
+	const addr = "198.51.100.122"
+	const key = "good-revoked"
+	t.Cleanup(func() { revokedKeys.Delete(key) })
+	if rec := do(h, bearer("/api/v1/monitors", addr, key)); rec.Code != http.StatusOK {
+		t.Fatalf("verify: %d", rec.Code)
+	}
+	emptyFailureBucket(t, h, addr, 3)
+	revokedKeys.Store(key, true)
+	before := *reached
+	if rec := do(h, bearer("/api/v1/monitors", addr, key)); *reached != before+1 || rec.Code == http.StatusOK {
+		t.Fatalf("first use after revocation: %d, want it looked up and refused", rec.Code)
+	}
+	before = *reached
+	if rec := do(h, bearer("/api/v1/monitors", addr, key)); rec.Code != http.StatusTooManyRequests || *reached != before {
+		t.Fatalf("revoked key after its failure: %d, want 429 before the handler", rec.Code)
+	}
+}
+
+// The set is bounded with least-recently-verified eviction, expires entries,
+// and keys its digests per process.
+func TestVerifiedCredentialsBoundedLRU(t *testing.T) {
+	v := newVerifiedCredentials(time.Minute, 3)
+	now := time.Unix(1_700_000_000, 0)
+	for _, c := range []string{"a", "b", "c"} {
+		v.remember(c, now)
+	}
+	v.remember("a", now) // most recent again
+	v.remember("d", now) // evicts b, the least recently verified
+	if v.len() != 3 {
+		t.Fatalf("size = %d, want 3", v.len())
+	}
+	if v.known("b", now) || !v.known("a", now) || !v.known("c", now) || !v.known("d", now) {
+		t.Fatal("eviction did not drop the least recently verified entry")
+	}
+	if v.known("a", now.Add(time.Minute)) {
+		t.Fatal("entry outlived its TTL")
+	}
+	v.forget("c")
+	if v.known("c", now) {
+		t.Fatal("forget kept the entry")
+	}
+	if v.known("", now) {
+		t.Fatal("empty credential is known")
+	}
+	if newVerifiedCredentials(time.Minute, 3).digest("d") == v.digest("d") {
+		t.Fatal("digests are not keyed per process")
 	}
 }
