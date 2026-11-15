@@ -690,16 +690,21 @@ or imported groups come back empty. Any other path that creates groups through
   paging channels and the `suspected_cause` follow-up still go out. The
   rule is `shared/alertrouting/mute.go` (`MutedPredicate`, `MuteHolds`,
   `DispatchResumedAtExpr`), applied by `openAlertEventDue` (pre-filter, also
-  mesh), `deliverNotification` (claim) and the worker's `eventSuperseded`;
+  mesh, location offline), `deliverNotification` (claim) and the worker's `eventSuperseded`;
   change all three together (`TestMutePreFilterMatchesClaim` pins the
   alerter pair). Unack/unsnooze restart the delay and reminder clocks
   (`DispatchEligibleSinceExpr`, the reminder claim). A held page the worker
   drops hands its claim back (`releaseMutedClaim`) only when it provably
-  reached nobody (first attempt, empty recipient ledger); otherwise the
-  route keeps counting as paged so it hears the ack and the resolve.
-  Dispatch message ids are per claim (`sendChannelNotification`) and
-  published with `queue.PublishJSONUnique`, so JetStream's duplicate window
-  never swallows a re-page while its claim commits.
+  reached nobody: no page attempt marker and no recipient in the ledger
+  (`recipientledger.MarkAttempt`, written before the send, cleared only on
+  `plugin.IsNotDelivered`; `worker/.../page_marker.go`), never by delivery
+  count; otherwise the route keeps counting as paged so it hears the ack
+  and the resolve. Dispatch message ids are the idempotency key plus the
+  claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
+  finds again on retry (the resume clock for a page, the round for a
+  reminder, `acknowledged_at` for an ack, nothing for resolve and
+  follow-up), so JetStream's duplicate window collapses a retried publish
+  ("duplicate" is success) yet queues a re-page after an unack or snooze end.
   SLA time to acknowledge reads `first_acknowledged_at` (set once by the API,
   never cleared), not `acknowledged_at`, which an unacknowledge clears.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser

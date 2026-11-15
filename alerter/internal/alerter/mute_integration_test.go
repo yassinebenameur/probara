@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
@@ -486,5 +487,77 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 				t.Fatalf("claim of %s sent=%v, pre-filter said %q", event, sent, pre)
 			}
 		})
+	}
+}
+
+// Offline-location alerts run their own dispatch loop; the mute and the
+// resumed clocks apply there too: an acknowledged and a snoozed alert send no
+// reminder and no unfired tier, still send the resolve notice when their
+// location reports again, and the acknowledged one resumes counted from its
+// unacknowledge.
+func TestLocationOfflineAlertAckAndSnooze(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "loc-mute")
+	mustExec(ctx, t, db, `UPDATE tenants SET alert_reminder_seconds = 300 WHERE id = $1`, tenantID)
+	first := insertRoute(ctx, t, db, tenantID, "first", 0)
+	tier := insertRoute(ctx, t, db, tenantID, "tier", 10*time.Minute)
+	ackedLoc := insertLocationSeen(ctx, t, db, tenantID, "acked", dur(10*time.Minute))
+	snoozedLoc := insertLocationSeen(ctx, t, db, tenantID, "snoozed", dur(10*time.Minute))
+	// A location still reporting, so the quiet two are not a silent fleet.
+	insertLocationSeen(ctx, t, db, tenantID, "alive", dur(5*time.Second))
+
+	rec := newMuteRecorder()
+	a := newIntegrationAlerter(db)
+	a.sendFunc = rec.send
+	evaluate := func() {
+		t.Helper()
+		if err := a.evaluateLocationOffline(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alertOf := func(loc uuid.UUID) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		if err := db.QueryRowContext(ctx, `SELECT id FROM alerts WHERE kind = 'location_offline' AND source_location_id = $1`, loc).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	evaluate()
+	if got := rec.count(first, "created"); got != 2 {
+		t.Fatalf("location pages = %d, want one per offline location (2)", got)
+	}
+	acked, snoozed := alertOf(ackedLoc), alertOf(snoozedLoc)
+	acknowledge(ctx, t, db, acked)
+	snoozeUntil(ctx, t, db, snoozed, time.Hour)
+	ageAlert(ctx, t, db, acked, 30*time.Minute)
+	ageAlert(ctx, t, db, snoozed, 30*time.Minute)
+
+	evaluate()
+	if r, c := rec.count(first, "reminder"), rec.count(tier, "created"); r != 0 || c != 0 {
+		t.Fatalf("acknowledged and snoozed location alerts: reminders=%d tier pages=%d, want none", r, c)
+	}
+
+	unacknowledgeAt(ctx, t, db, acked, time.Minute)
+	evaluate()
+	if r, c := rec.count(first, "reminder"), rec.count(tier, "created"); r != 0 || c != 0 {
+		t.Fatalf("a minute after the unack: reminders=%d tier pages=%d, want none", r, c)
+	}
+	unacknowledgeAt(ctx, t, db, acked, 11*time.Minute)
+	evaluate()
+	if r, c := rec.count(first, "reminder"), rec.count(tier, "created"); r != 1 || c != 1 {
+		t.Fatalf("eleven minutes after the unack: reminders=%d tier pages=%d, want 1 and 1 (the snoozed alert stays quiet)", r, c)
+	}
+
+	// The snoozed location reports again while snoozed; the other one too.
+	mustExec(ctx, t, db, `UPDATE locations SET last_seen_at = NOW() WHERE id = ANY($1)`, pq.Array([]uuid.UUID{ackedLoc, snoozedLoc}))
+	evaluate()
+	if got := rec.count(first, "resolved"); got != 2 {
+		t.Fatalf("resolve notices on the paged route = %d, want one per alert (2)", got)
+	}
+	if got := rec.count(tier, "resolved"); got != 1 {
+		t.Fatalf("resolve notices on the tier = %d, want 1 (only the unacknowledged alert paged it)", got)
 	}
 }

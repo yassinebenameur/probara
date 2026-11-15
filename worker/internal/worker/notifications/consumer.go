@@ -210,7 +210,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// already queued. Unlike a resolve the mute can lift, so a page that
 		// provably reached nobody hands the alerter's claim back under the
 		// same lock and is due again then (releaseMutedClaim).
-		if err := releaseMutedClaim(ctx, tx, envelope, deliveryAttempt(msg)); err != nil {
+		if err := releaseMutedClaim(ctx, tx, envelope); err != nil {
 			entry.WithError(err).Error("Failed to release a muted notification claim")
 			return err
 		}
@@ -267,7 +267,13 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			Recipients: recipients,
 		})
 	}
+	marked, err := c.markPage(ctx, envelope)
+	if err != nil {
+		entry.WithError(err).Error("Failed to record a page attempt")
+		return err
+	}
 	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
+	c.settlePage(ctx, entry, envelope, marked, err)
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted
@@ -335,21 +341,21 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 // would only ever get reminders after an unacknowledge, which paging
 // providers ignore.
 //
-// Only a page that provably reached nobody is handed back: the first
-// delivery attempt (no earlier attempt can have reached a provider, even
-// one whose answer was lost to a timeout) with nothing in the recipient
-// ledger for its key. Any other held page keeps its claim, so the channel
-// still counts as paged and gets the acknowledgement and the recovery notice:
-// a provider that opened an incident on an attempt whose reply was lost, or
-// the recipients a multi-recipient send already reached, must hear both.
-// The row is matched only while it still records exactly this claim (its
-// time is the event's timestamp, the claim's `now`).
+// Only a page that provably reached nobody is handed back: no attempt
+// marker (markPage; an attempt whose send may have been accepted keeps it)
+// and no recipient recorded delivered, on whichever delivery attempt this is.
+// Any other held page keeps its claim, so the channel still counts as paged
+// and gets the acknowledgement and the recovery notice: a provider that
+// opened an incident on an attempt whose reply was lost, or the recipients a
+// multi-recipient send already reached, must hear both. The row is matched
+// only while it still records exactly this claim (its time is the event's
+// timestamp, the claim's `now`).
 //
 // A held reminder keeps its claim: its next round counts from the later of
 // the last send and the way out of the mute, which comes after this claim,
 // so the earlier last_sent_at would change nothing.
-func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope, attempt int) error {
-	if envelope.EventType != "created" || attempt > 1 || envelope.Event.Timestamp.IsZero() {
+func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) error {
+	if envelope.EventType != "created" || envelope.Event.Timestamp.IsZero() {
 		return nil
 	}
 	alertID, err := uuid.Parse(envelope.AlertID)

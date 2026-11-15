@@ -120,8 +120,14 @@ times: the alerter's pre-filter (`openAlertEventDue`, lifecycle and mesh
 dispatch), its claim (`deliverNotification`, under the alert row's
 `FOR SHARE` lock), and the async worker (`eventSuperseded`, same lock), which
 drops a page or reminder queued before the ack or snooze and hands a page's
-claim back when it provably reached nobody. Dispatch message ids are unique
-per claim, so a re-page is never discarded as a JetStream duplicate.
+claim back when it provably reached nobody: the worker writes a page attempt
+marker into the recipient ledger before the send and clears it only when the
+plugin's error proves nothing was accepted (`plugin.IsNotDelivered`). The
+dispatch message id is the idempotency key plus what identifies the claimed
+occurrence (`dispatchRound`: the alert's resume clock for a page, the round
+for a reminder, the acknowledgement time for an ack), so a publish whose
+claim rolled back is collapsed by JetStream on retry, while a re-page after
+an unacknowledge or snooze end gets a new id.
 Unacknowledge (`unacknowledged_at`) and the end of a snooze (`snoozed_until`,
 migration 000101) restart the escalation-delay and reminder clocks.
 `first_acknowledged_at` (migration 000102) keeps the first acknowledgement

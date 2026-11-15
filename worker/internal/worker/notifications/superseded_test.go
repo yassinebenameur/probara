@@ -97,8 +97,17 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 					// the envelope carries no claim time) and committed.
 					mock.ExpectCommit()
 				} else {
+					if tc.eventType == "created" && tc.wantSend {
+						// The page attempt marker, written before the send.
+						mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+							WillReturnResult(sqlmock.NewResult(0, 1))
+					}
 					mock.ExpectRollback()
 				}
+			} else {
+				// A delivered resolve clears the channel's page marker.
+				mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM alert_notification_recipient_deliveries`)).
+					WillReturnResult(sqlmock.NewResult(0, 0))
 			}
 
 			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
@@ -171,6 +180,8 @@ func TestHandle_DropsTriggerQueuedBeforeAck(t *testing.T) {
 			if tc.alertStatus == "acknowledged" {
 				mock.ExpectCommit()
 			} else {
+				mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+					WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectRollback()
 			}
 

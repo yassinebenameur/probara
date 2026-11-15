@@ -17,6 +17,11 @@
 //   - Mark failures that retrying cannot fix with Permanent. The async worker
 //     then stops redelivering, and the alerter keeps its claim instead of
 //     failing identically every cycle.
+//   - Mark a failure that proves the provider accepted nothing with
+//     NotDelivered (Post and CheckResponse do it for a failed dial, refused
+//     egress and any non-2xx answer). Unmarked failures count as possibly
+//     delivered: a page an acknowledgement then holds keeps its claim rather
+//     than being paged again, the safe side.
 //   - Check provider hosts with HostMatches, which matches on label
 //     boundaries, never with strings.Contains or strings.HasSuffix. The API
 //     re-runs Validate on the merged config of every channel update
@@ -52,8 +57,7 @@
 // sending to everyone. The ledger is durable (package recipientledger), so
 // the skip holds whichever alerter replica or worker runs the retry. Each
 // send has its own ledger, chosen by the delivery layer: a deliberate second
-// send of an event (the acknowledgement re-sent after a trigger it
-// overtook) starts empty, so a plugin never special-cases it.
+// send of an event starts empty, so a plugin never special-cases it.
 //
 // It must also not return a mixed errors.Join. IsPermanent walks the joined
 // children, so one permanent child would stop the retry for every other
