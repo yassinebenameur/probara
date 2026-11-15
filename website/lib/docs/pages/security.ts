@@ -308,6 +308,18 @@ go run ./cmd/admin/reencrypt_monitor_configs`,
 go run ./cmd/admin/encrypt_existing_channels`,
         },
         {
+          type: 'code',
+          language: 'bash',
+          title: 'Move plaintext request credentials into secrets (once, after upgrading)',
+          code: `go run ./cmd/admin/migrate_sensitive_headers -dry-run
+go run ./cmd/admin/migrate_sensitive_headers`,
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Monitors saved before HTTP, gRPC and synthetic API request credentials became [secrets](/docs/monitors/#secrets) keep them in plain text until their next save. `migrate_sensitive_headers` moves them for every monitor at once, with the current key: credential-named HTTP `headers` into `secret_headers`, gRPC `metadata` into `secret_metadata`, literal credential headers of synthetic API steps into generated `secret_variables` (the header becomes the `{{reference}}`), and credential-named synthetic API `variables` such as `password` into `secret_variables` under the same name. It logs monitor ids, never values, skips deleted monitors and rows edited while it runs (run it again for those), and a second run finds nothing to do. Upgrade every worker, private-location workers included, before saving monitors or running it: an older worker ignores the secret maps and would send these requests without their credentials.',
+        },
+        {
           type: 'list',
           ordered: true,
           items: [

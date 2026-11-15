@@ -176,7 +176,9 @@ export const MONITORS_PAGE: DocPage = {
               "`method`",
               "Required: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, or `OPTIONS`",
             ],
-            ["`headers`", "Request header map"],
+            ["`headers`", "Request header map, stored and returned in plain text. A credential-named header (`Authorization`, `Proxy-Authorization`, `Cookie`, `X-API-Key`, `Api-Key`, `X-Auth-Token`, or any name containing `token`, `secret`, `password`, `apikey` or `api-key`, case-insensitive) is moved to `secret_headers` on every save"],
+            ["`secret_headers`", "Request headers whose values are [secrets](#secrets): encrypted at rest and returned as `***`. Any header can be placed here; a name may not appear in both maps"],
+            ["`basic_auth_username` / `basic_auth_password`", "Optional HTTP basic auth, sent as `Authorization: Basic`. The password is a secret; the username may not contain `:`, and basic auth cannot be combined with an `Authorization` header"],
             ["`body`", "Optional request body"],
             [
               "`expected_status`",
@@ -224,7 +226,7 @@ export const MONITORS_PAGE: DocPage = {
             ],
             [
               "`follow_redirects` / `max_redirects`",
-              "Redirect policy; maximum is 0–50",
+              "Redirect policy; maximum is 0–50. A hop that leaves the configured URL's origin (scheme, host and port, so an `https` to `http` downgrade too) is followed without request credentials: `Authorization`, `Cookie`, every secret header, every credential-named header and basic auth are dropped from it. Configure the final `https` URL when a service redirects there and needs the credentials",
             ],
             [
               "`tls_skip_verify`",
@@ -289,7 +291,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "gRPC",
               description:
-                "Set `host`, optional `port`, optional `service`, and `use_tls`. Probara calls the standard `grpc.health.v1.Health/Check` method and succeeds only for `SERVING`. The default port is 443 with TLS and 80 without it.",
+                "Set `host`, optional `port`, optional `service`, and `use_tls`. Probara calls the standard `grpc.health.v1.Health/Check` method and succeeds only for `SERVING`. The default port is 443 with TLS and 80 without it. Optional `metadata` (plain) and `secret_metadata` ([secret](#secrets) values, returned as `***`) are sent with the call; keys use letters, digits, `-`, `_` and `.`, may not start with `grpc-`, and may not appear in both maps. A credential-named key (the HTTP header rule, such as `authorization`) is moved from `metadata` to `secret_metadata` on every save.",
             },
             {
               term: "TCP",
@@ -527,7 +529,7 @@ export const MONITORS_PAGE: DocPage = {
           rows: [
             [
               "Journey",
-              "`base_url`, `failure_mode`, `variables`, and ordered `steps`",
+              "`base_url`, `failure_mode`, `variables`, `secret_variables`, and ordered `steps`",
             ],
             [
               "Step",
@@ -546,7 +548,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "URLs may be absolute, or relative when `base_url` is present. Static and extracted variables are referenced with `{{variable_name}}` in a step's URL, header values, body, and assertion values; a variable extracted by a step is available from the next step on. An unknown variable in the URL, a header or the body makes the step an error. `failure_mode` is `fail_fast` by default; use `continue` when later diagnostic steps should still execute after a failed step. Every step's request and redirect hops dial under the worker's [network policy](/docs/security/#ssrf-network-policy).",
+            "URLs may be absolute, or relative when `base_url` is present. Static and extracted variables are referenced with `{{variable_name}}` in a step's URL, header values, body, and assertion values; a variable extracted by a step is available from the next step on. An unknown variable in the URL, a header or the body makes the step an error. `secret_variables` are referenced the same way, but their values are [secrets](#secrets) (encrypted, returned as `***`), and the worker replaces every value of theirs with `[REDACTED]` in everything a check reports (step URLs, errors, assertion messages, extracted values), including the URL-encoded, JSON-escaped and HTML-escaped spellings of the value; a name may not be both a variable and a secret variable. A step header with a credential name (the HTTP header rule) whose value is a literal, without a `{{reference}}`, is moved on save into a generated secret variable named `<step id>_<header>` and replaced by its reference. A redirect hop that leaves the step URL's origin is followed without the credential-named headers and the headers that reference a secret variable or a sensitive extraction. `failure_mode` is `fail_fast` by default; use `continue` when later diagnostic steps should still execute after a failed step. Every step's request and redirect hops dial under the worker's [network policy](/docs/security/#ssrf-network-policy).",
         },
         {
           type: "paragraph",
@@ -556,7 +558,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An assertion's `value` is a JSON value, and its type decides the comparison. Header and body operations, and JSON `contains`, `regex` and their negative forms, compare text: a string's content, else the value's compact JSON text, which storage can normalize (object keys are reordered), so send text as a JSON string. JSON `equals` and `not_equals` compare by type: a string matches the value's text (`\"123\"` also matches the number `123`); a number or boolean matches a value of that type or a string that parses as one; arrays and objects compare structurally; and a missing path equals nothing, so `not_equals` passes on it. In the operator UI the value input is a JSON literal or plain text: for JSON equals, `123` and `true` are a number and a boolean and `\"123\"` (quoted) is the string, while text assertions always submit what was typed. Templates work in the string values of header, body and JSON text assertions and of JSON `equals`/`not_equals`; status, `number_*` and `bool_is` values cannot be templated (saving one is rejected), and `exists` ignores its value. A defined variable is inserted as-is (in a `regex` its characters keep their regex meaning); a name that is not defined is left as literal text, so a typo shows up as an ordinary assertion failure displaying the unresolved `{{name}}`. Assertion messages show a value extracted as `sensitive` by an earlier step as `[REDACTED]` wherever it was substituted into the expected value, and elsewhere in the message when it is at least 4 characters long. A step's assertions run before its own extraction, so an assertion on a value that step extracts shows it unredacted, and a sensitive value placed in a URL is visible in step results (request errors and each step's recorded `url`).",
+            "An assertion's `value` is a JSON value, and its type decides the comparison. Header and body operations, and JSON `contains`, `regex` and their negative forms, compare text: a string's content, else the value's compact JSON text, which storage can normalize (object keys are reordered), so send text as a JSON string. JSON `equals` and `not_equals` compare by type: a string matches the value's text (`\"123\"` also matches the number `123`); a number or boolean matches a value of that type or a string that parses as one; arrays and objects compare structurally; and a missing path equals nothing, so `not_equals` passes on it. In the operator UI the value input is a JSON literal or plain text: for JSON equals, `123` and `true` are a number and a boolean and `\"123\"` (quoted) is the string, while text assertions always submit what was typed. Templates work in the string values of header, body and JSON text assertions and of JSON `equals`/`not_equals`; status, `number_*` and `bool_is` values cannot be templated (saving one is rejected), and `exists` ignores its value. A defined variable is inserted as-is (in a `regex` its characters keep their regex meaning); a name that is not defined is left as literal text, so a typo shows up as an ordinary assertion failure displaying the unresolved `{{name}}`. Assertion messages show a value extracted as `sensitive` by an earlier step as `[REDACTED]` wherever it was substituted into the expected value, and elsewhere in the message when it is at least 4 characters long. A step's assertions run before its own extraction, so an assertion on a value that step extracts shows it unredacted, and a sensitive value placed in a URL is visible in step results (request errors and each step's recorded `url`). Put a credential that must never appear in results in `secret_variables` instead, which are redacted everywhere.",
         },
         {
           type: "code",
@@ -661,7 +663,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password` (also used for INVITE test calls), the Prometheus `password` and `bearer_token`, plus every WebSocket header value. API reads replace protected values with `***`.",
+            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password` (also used for INVITE test calls), the Prometheus `password` and `bearer_token`, every WebSocket header value, HTTP `secret_headers` values and `basic_auth_password`, gRPC `secret_metadata` values, and synthetic API `secret_variables` values. API reads replace protected values with `***`. Every save (form, API, MCP, import) moves credential-named HTTP headers and gRPC metadata keys into their secret map, and literal credential headers of synthetic API steps into secret variables, so they are never stored in plain text. Monitors saved before this release keep such values in plain text until they are saved again or the [backfill](/docs/security/#encryption-at-rest) moves them.",
         },
         {
           type: "list",
@@ -670,8 +672,11 @@ export const MONITORS_PAGE: DocPage = {
             "Omit the field entirely and the stored value is preserved as well, so an update that resubmits a config read back from the API cannot destroy a credential it was never shown.",
             "Submit a new value to replace and encrypt it.",
             "Submit an empty string to clear a protected field. That is the only spelling that removes a stored secret.",
-            "WebSocket header names remain visible while their values are masked. Submitting the `headers` object edits it key by key, so a key left out of a submitted object is removed; omitting the whole object keeps the stored headers.",
-            "On create there is no stored value, so `***` is dropped exactly like an omitted field and the monitor is created without that secret. Cloning a monitor in the operator UI therefore never copies its secrets: the clone keeps WebSocket header names with blank values and leaves passwords, tokens, connection strings and client keys empty, to be entered again.",
+            "WebSocket header names remain visible while their values are masked. Submitting the `headers` object edits it key by key, so a key left out of a submitted object is removed; omitting the whole object keeps the stored headers. HTTP `secret_headers`, gRPC `secret_metadata` and synthetic API `secret_variables` follow the same rule.",
+            "A save whose config only conflicts once an omitted secret is kept is refused with a validation error naming the conflict: basic auth added while a stored `Authorization` secret header is kept, a plain header beside a kept secret one of the same name, or a username removed while the password is kept. Send `\"\"` to clear the stored secret, or leave it out of a submitted secret map.",
+            "Secret keys are spelled exactly as documented: the API refuses a config key that matches one in another case, such as `Secret_Headers` or `Basic_Auth_Password`.",
+            "On create there is no stored value, so `***` is dropped exactly like an omitted field and the monitor is created without that secret. Cloning a monitor in the operator UI therefore never copies its secrets: the clone keeps WebSocket, HTTP secret header, gRPC secret metadata and synthetic secret variable names with blank values and leaves passwords, tokens, connection strings and client keys empty, to be entered again.",
+            "Testing a saved monitor with `POST /monitors/test` and its `monitor_id` resolves `***` against the stored secrets, so it needs write access for every type that can hold one, HTTP and gRPC included, even when that monitor holds none.",
           ],
         },
         {
@@ -757,7 +762,7 @@ export const MONITORS_PAGE: DocPage = {
           tone: "warning",
           title: "Secrets do not round-trip",
           text:
-            "Raw portable import accepts every monitor type in the live registry, including Redis, PostgreSQL, MySQL, MongoDB, RabbitMQ, and WebSocket. Exported masked secrets are not usable credentials, so re-enter passwords, connection strings, and client keys after import; verify every preview before execution.",
+            "Raw portable import accepts every monitor type in the live registry, including Redis, PostgreSQL, MySQL, MongoDB, RabbitMQ, and WebSocket. Exported masked secrets are not usable credentials, so re-enter passwords, connection strings, client keys, secret headers, secret metadata and secret variables after import; verify every preview before execution.",
         },
       ],
     },

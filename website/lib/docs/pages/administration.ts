@@ -460,7 +460,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "info",
           title: "Notifications and credentials are never migrated",
           text:
-            "Uptime Kuma notifier configuration holds credentials, so `notificationIDList` is ignored and each affected monitor carries a note naming the notifiers it referenced — attach alert channels after import. HTTP basic, OAuth2, NTLM, and client-certificate auth are dropped rather than folded into request headers, which are stored unencrypted, and credential-bearing headers are stripped. Monitor descriptions, retry intervals, resend intervals, and custom ICMP packet sizes have no equivalent and are reported as dropped.",
+            "Uptime Kuma notifier configuration holds credentials, so `notificationIDList` is ignored and each affected monitor carries a note naming the notifiers it referenced — attach alert channels after import. HTTP basic auth is carried into the monitor's `basic_auth_username` and encrypted `basic_auth_password` (an `Authorization` header Uptime Kuma replaced with it is dropped, as Kuma did), and credential-bearing request headers into the encrypted `secret_headers`; OAuth2, NTLM, and client-certificate auth are dropped and reported. Monitor descriptions, retry intervals, resend intervals, and custom ICMP packet sizes have no equivalent and are reported as dropped.",
         },
       ],
     },

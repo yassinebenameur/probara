@@ -51,6 +51,9 @@ func (r *ValidatorRegistry) Validate(monitorType models.MonitorType, config json
 	if !ok {
 		return fmt.Errorf("unknown monitor type: %s", monitorType)
 	}
+	if err := validateSecretKeySpelling(monitorType, config); err != nil {
+		return err
+	}
 	return validator.ValidateConfig(config)
 }
 

@@ -168,6 +168,22 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   clone strips masks for every type first (`stripMaskedSecrets` in
   `web/lib/monitor-clone.ts`), and a form marks a masked value "stored" only
   in edit mode.
+  Request credentials: http `secret_headers` + `basic_auth_password`, grpc
+  `secret_metadata`, synthetic_api `secret_variables`. A secret nested below
+  the top level (a step header) is a `{{name}}` reference to
+  `secret_variables`, never a nested registry path; the worker redacts those
+  values from results (`secretRedactor`, `worker/internal/worker/secret_redact.go`)
+  and drops credentials on redirects off the origin
+  (`stripCredentialsOnRedirect`). Every write moves credential-named headers
+  and metadata into the secret maps (`secrets.NormalizeSensitiveHeaders`,
+  after the merge in `prepareConfigForWrite`, which then refuses a merged
+  config that conflicts with a kept secret). `IsSensitiveHeaderName` has a TS
+  twin in `web/lib/monitor-form/http.ts`, pinned by
+  `shared/secrets/testdata/sensitive_header_names.json`. Skip secret work
+  for a config with no secret key via `secrets.HasSecretValues` (byte-level).
+  Secret keys match exactly while config structs decode case-insensitively,
+  so `ValidatorRegistry.Validate` refuses a miscapitalized secret key
+  (`validateSecretKeySpelling`).
 - **Channel config secrets** are the plugin manifest's `secret` fields, and
   they merge differently (`secrets.MergePreserveSecrets`): absent, `""` and
   `***` all **keep** the stored value (the channel form submits every secret
