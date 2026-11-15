@@ -1,3 +1,15 @@
+# [2.1.0-alpha.2](https://github.com/yassinebenameur/probara/compare/v2.1.0-alpha.1...v2.1.0-alpha.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* **alerter:** stop retrying recovery notices 24 hours after an alert resolves ([b3ac535](https://github.com/yassinebenameur/probara/commit/b3ac535c1aa5fe4a62a860973e0a7ec13cc9c137))
+* **helm:** name the check-job queue once for the API, scheduler and workers ([13cb371](https://github.com/yassinebenameur/probara/commit/13cb3714960301b6cf4c669dd5887810c577054a))
+* **otlp:** cache series ids only after the ingest transaction commits ([38c4bd8](https://github.com/yassinebenameur/probara/commit/38c4bd8b025b26e582028b01809ba27665dcfb91))
+* **push:** bound the heartbeat payload and keep query fields a JSON body omits ([f26412a](https://github.com/yassinebenameur/probara/commit/f26412ae5138ad823a3ac6927e846910fee1952a))
+* **worker:** guard synthetic API and DNS nameserver dials and resolve variables in assertions ([c0f1fc2](https://github.com/yassinebenameur/probara/commit/c0f1fc2ba7a73b577e8a6af0d52918a3e850d37a))
+* **worker:** verify each HTTPS redirect hop against its own host name ([efb95bb](https://github.com/yassinebenameur/probara/commit/efb95bb945d63b52b191a00964d44f55706f1d4f))
+
 # [2.1.0-alpha.1](https://github.com/yassinebenameur/probara/compare/v2.0.0...v2.1.0-alpha.1) (2026-11-13)
 
 
