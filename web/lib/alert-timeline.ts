@@ -78,15 +78,18 @@ export const isOpenAlert = (alert: Alert): boolean => alert.status !== 'resolved
 
 /** The alert's subject as the list names it. */
 export function alertSubject(alert: Alert): string {
-  return alert.kind === 'mesh_edge'
-    ? `${alert.source_location_name || 'unknown'} → ${alert.target_location_name || 'unknown'}`
-    : alert.monitor_name || alert.monitor_id || '';
+  if (alert.kind === 'mesh_edge') {
+    return `${alert.source_location_name || 'unknown'} → ${alert.target_location_name || 'unknown'}`;
+  }
+  if (alert.kind === 'location_offline') return alert.source_location_name || 'unknown location';
+  return alert.monitor_name || alert.monitor_id || '';
 }
 
-/** One lane per subject: a monitor, or a directed mesh edge. */
+/** One lane per subject: a monitor, a directed mesh edge, or a location. */
 export function alertSubjectKey(alert: Alert): string {
   if (alert.monitor_id) return alert.monitor_id;
   if (alert.kind === 'mesh_edge') return `mesh:${alert.source_location_id ?? ''}>${alert.target_location_id ?? ''}`;
+  if (alert.kind === 'location_offline' && alert.source_location_id) return `location:${alert.source_location_id}`;
   return `alert:${alert.id}`;
 }
 
@@ -227,7 +230,7 @@ export function buildTimeline(
   const parentOf = foldSuppressed(alerts);
   const byId = new Map(alerts.map((alert) => [alert.id, alert]));
   const suppressedIds = new Set(
-    alerts.filter((a) => isOpenAlert(a) && a.suppression_reason === 'dependency').map((a) => a.id)
+    alerts.filter((a) => isOpenAlert(a) && a.suppression_reason != null).map((a) => a.id)
   );
 
   const bySubject = new Map<string, Alert[]>();
@@ -402,9 +405,9 @@ export interface TimelineMonitor {
  * The group a quiet lane sits in. With dashboard group tags configured
  * (tenant `dashboard_group_tags`) it is the first of them the monitor
  * carries, so the timeline groups like the dashboard's service groups;
- * without any, monitors group by type. Mesh edges have a group of their own,
- * and a monitor the list does not know (deleted, or past the lookup cap)
- * falls into "Other".
+ * without any, monitors group by type. Mesh edges and offline locations each
+ * have a group of their own, and a monitor the list does not know (deleted,
+ * or past the lookup cap) falls into "Other".
  */
 export function timelineGroupOf(
   alert: Alert,
@@ -413,6 +416,7 @@ export function timelineGroupOf(
   typeLabel: (type: string) => string
 ): TimelineGroupRef {
   if (alert.kind === 'mesh_edge') return { key: 'mesh', label: 'Mesh' };
+  if (alert.kind === 'location_offline') return { key: 'locations', label: 'Locations' };
   if (!monitor) return { key: 'other', label: 'Other' };
   if (groupTags.length === 0) return { key: `type:${monitor.type}`, label: typeLabel(monitor.type) };
   const tag = groupTags.find((candidate) => monitor.tags?.includes(candidate));

@@ -18,6 +18,11 @@ type Location struct {
 	// Connected is derived from LastSeenAt freshness (worker heartbeats).
 	Connected  bool       `json:"connected"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	// Offline is rule S-F6 (monitorstate.LocationOfflinePredicate, the
+	// alerter's own rule): enabled, seen before, silent for 180 seconds.
+	Offline bool `json:"offline"`
+	// OpenAlertID is the location's open location_offline alert, if any.
+	OpenAlertID *uuid.UUID `json:"open_alert_id,omitempty"`
 	// MeshEndpoint (host:port) opts the location into the connectivity mesh:
 	// other locations probe this address's /mesh/echo. Empty = not in mesh.
 	MeshEndpoint *string `json:"mesh_endpoint,omitempty"`

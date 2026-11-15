@@ -115,6 +115,7 @@ test('alertTone: what the alert is now', () => {
   assert.equal(alertTone(alert('a', 'm', { status: 'acknowledged', acknowledged_at: at(5) })), 'acknowledged');
   assert.equal(alertTone(alert('a', 'm', { suppression_reason: 'dependency' })), 'suppressed');
   assert.equal(alertTone(alert('a', 'm', { status: 'resolved', resolved_at: at(9), suppression_reason: 'dependency' })), 'resolved');
+  assert.equal(alertTone(alert('a', 'm', { kind: 'mesh_edge', suppression_reason: 'location_offline' })), 'suppressed');
 });
 
 test('mergeLiveAlert keeps what a stream event never carries', () => {

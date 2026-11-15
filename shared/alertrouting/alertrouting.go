@@ -27,9 +27,19 @@
 // the alert's suppression_reason, so what pages and what the UI calls
 // suppressed cannot disagree. Classify does not model it: routing reachability
 // is static configuration, dependency suppression follows live upstream state.
+//
+// Mesh-edge alerts have the same kind of per-alert rule: while one of an
+// edge's locations has stopped reporting, its location_offline alert is the
+// root cause and the edge dispatches nothing
+// (SuppressedByOfflineLocationPredicate, reported as suppression_reason
+// "location_offline").
 package alertrouting
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/monitorstate"
+)
 
 // Routing source values reported by Classify.
 const (
@@ -156,6 +166,19 @@ func Classify(c Counts) Status {
 		}
 	}
 	return st
+}
+
+// TenantTargetsSQL returns the `$1` tenant's default routes as
+// `(channel_id, delay_seconds, pos)`, unordered. It is the routing of the
+// alerts that have no monitor (mesh edges, location_offline): exactly the
+// rows TargetsSQL emits for a monitor in 'default' mode, minus the monitor
+// column (TestTenantTargetsSQLMatchesDefaults pins the pair). Like TargetsSQL
+// it ignores is_active; callers join alert_channels and filter.
+func TenantTargetsSQL() string {
+	return `
+		SELECT tdc.channel_id, tdc.delay_seconds, tdc.position AS pos
+		FROM tenant_default_channels tdc
+		WHERE tdc.tenant_id = $1`
 }
 
 // TargetsSQL returns the set of routed channel assignments for the monitors in
@@ -348,4 +371,34 @@ func UnreachablePredicate(monAlias string) string {
 			FROM monitors rg WHERE rg.id = ` + rollup + `)
 		ELSE ` + ChannelCountExpr(monAlias, true) + ` = 0
 	END)`
+}
+
+// SuppressionReasonLocationOffline is the value the API reports in an alert's
+// suppression_reason when SuppressedByOfflineLocationPredicate holds for it.
+const SuppressionReasonLocationOffline = "location_offline"
+
+// SuppressedByOfflineLocationPredicate returns a SQL boolean that is TRUE when
+// the open mesh_edge alert aliased by alertAlias must not dispatch because one
+// of its two locations has stopped reporting (S-F6): that location's own
+// location_offline alert is the root cause and speaks for every path it
+// breaks, so a dead site pages once instead of once per edge. Like dependency
+// suppression it gates dispatch only; the edge alert still opens and
+// resolves, and a channel it already paged still hears the resolve.
+//
+// The hold starts when the location misses its connected window, not at the
+// offline threshold: edges into a dead site go down after a few probes, well
+// before 180 seconds. It covers a location only while an offline alert would
+// or does speak for it (seen within the alert horizon, or with one open), so
+// a long-abandoned location never silences its edges with nothing paging in
+// their place. Never NULL; FALSE for every other kind.
+func SuppressedByOfflineLocationPredicate(alertAlias string) string {
+	return `(` + alertAlias + `.kind = 'mesh_edge' AND EXISTS (
+		SELECT 1 FROM locations sol
+		WHERE sol.id IN (` + alertAlias + `.source_location_id, ` + alertAlias + `.target_location_id)
+		  AND ` + monitorstate.LocationDisconnectedPredicate("sol") + `
+		  AND (` + monitorstate.LocationWithinOfflineHorizonPredicate("sol") + `
+			OR EXISTS (SELECT 1 FROM alerts sola
+				WHERE sola.kind = 'location_offline'
+				  AND sola.status IN ('active', 'acknowledged')
+				  AND sola.source_location_id = sol.id))))`
 }

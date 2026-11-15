@@ -14,7 +14,7 @@ website (`website/`) are separate applications.
 | `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
-| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
+| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, mesh, and offline-location alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
 | `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
 | `ai-service/` | Local CPU inference (Python, FastAPI) for incident analysis, automatic alert triage and dependency suggestions: authenticated `/v1/decisions` returning probabilities over the closed choices in `shared/ai/catalogue.json`; bundled fine-tuned Laya head, offline | None: no PostgreSQL, NATS or egress. Called only by the API and the database-connected worker |
 | `cmd/discovery-collector` | Namespaced read-only Kubernetes inventory collection; complete snapshot uploads | Kubernetes API reads; HTTPS to Probara only |
@@ -110,6 +110,19 @@ one open alert per monitor and kind, enforced by a partial unique index.
 Routing comes from monitor overrides or workspace defaults; maintenance,
 group rollup, and dependency suppression determine which channels may fire.
 Escalation delays and reminders are tracked per alert/channel.
+
+Monitor-less alerts route to the tenant defaults through
+`alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
+S-F6 in [state semantics](state-semantics.md)), one alert per check location
+that reported within 7 days and has sent no heartbeat for 180 seconds. The
+alerter reads `locations.last_seen_at`, which the scheduler's heartbeat
+consumer writes, so it opens none while no location of the installation is
+online (that path or the database is at fault, not every site) or until its
+own restart has seen a fresh heartbeat. From the moment a location misses its
+one-minute connected window its mesh edges stay open but do not dispatch
+(`SuppressedByOfflineLocationPredicate`); the location's alert is the page.
+The alerter exports the bounded gauges `probara_alerter_locations{state}` and
+`probara_alerter_location_offline_guard{reason}`.
 
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.

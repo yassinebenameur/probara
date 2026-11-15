@@ -211,7 +211,12 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   silences its whole membership — reachability reports it
   (`group_rollup_paused`), dispatch still does it. The package doc, the
   fragments' comments and `annotateOpenAlertRootCauses` (the grace clock)
-  cover the rest.
+  cover the rest. Monitor-less alerts (mesh edges, `location_offline`) route
+  through `TenantTargetsSQL`, the tenant defaults without a monitor
+  (`TestTenantTargetsSQLMatchesDefaults`), and a mesh edge with a location
+  that stopped reporting dispatches nothing
+  (`SuppressedByOfflineLocationPredicate`, `suppression_reason`
+  `location_offline`).
 - **Status page settings live in THREE mirrors**, all of which must change
   together for a new setting to survive a round trip:
   `api/internal/models/statuspages.go` (`StatusPageSettings`, the wire type),
@@ -643,6 +648,14 @@ or imported groups come back empty. Any other path that creates groups through
   a new kind rewrites the CHECK in one migration and adds its constant, its
   wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
   (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last).
+- **Location liveness** (S-F6) is `shared/monitorstate/freshness.go`:
+  offline is `LocationOfflinePredicate` (Go twin `LocationOffline`,
+  `TestLocationOfflinePredicateMatchesGo`), connected `LocationConnected`,
+  the mesh hold `LocationDisconnectedPredicate`. The alerter's
+  `location_offline` evaluator (`alerter/internal/alerter/location_offline.go`),
+  the mesh hold and the API's `connected`/`offline` all read them; never
+  re-derive one from `last_seen_at`. The evaluator holds new alerts while the
+  whole fleet is silent or the alerter has just started (`locationOfflineHold`).
 - **Transactional mail** (invites, resets, subscriber mail, reports) goes
   through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
   MIME builder; `Message.Validate` is the header-injection guard and accepts

@@ -2,7 +2,7 @@
 
 import { CSSProperties, KeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Bell, BellOff, Check, ChevronDown, CircleCheck, Network, PencilLine, Tag, UserCheck } from 'lucide-react';
+import { Bell, BellOff, Check, ChevronDown, CircleCheck, MapPin, Network, PencilLine, Tag, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
 import { acknowledgeAlert, labelAlertTriage, resolveAlert } from '@/lib/api';
 import { labelErrorMessage } from '@/lib/ai-labels';
@@ -144,6 +144,7 @@ function kindDetail(alert: Alert): string | null {
       alert.threshold_value != null ? ` (threshold ${formatAlertValue(alert.metric_name, alert.threshold_value)})` : ''
     }`;
   }
+  if (alert.kind === 'location_offline') return 'no worker heartbeat for 3 min or more';
   if (alert.kind === 'tls_expiry' && alert.metric_value != null) {
     return `expires in ${Math.round(alert.metric_value)}d${
       alert.threshold_value != null ? ` (threshold ${Math.round(alert.threshold_value)}d)` : ''
@@ -363,6 +364,7 @@ export default function AlertFeed({
     const hasChips =
       (alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id) ||
       (alert.suppression_reason === 'dependency' && !alert.root_cause_monitor_name) ||
+      alert.suppression_reason === 'location_offline' ||
       (alert.impacted_count ?? 0) > 0 ||
       triagePresentation(alert.triage).visible ||
       (repeat && repeat.nth > 1);
@@ -427,6 +429,15 @@ export default function AlertFeed({
                   <Network className="h-3.5 w-3.5 shrink-0 text-slate-400" strokeWidth={1.75} />
                   <span className="truncate">{subject}</span>
                 </Link>
+              ) : alert.kind === 'location_offline' ? (
+                <Link
+                  href="/locations"
+                  className={`alert-row-link inline-flex min-w-0 items-center gap-1.5 rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
+                  title="Check location stopped reporting — view locations"
+                >
+                  <MapPin className="h-3.5 w-3.5 shrink-0 text-slate-400" strokeWidth={1.75} />
+                  <span className="truncate">{subject}</span>
+                </Link>
               ) : (
                 <Link
                   href={`/monitors/${alert.monitor_id}`}
@@ -437,6 +448,11 @@ export default function AlertFeed({
               )}
               {monitor && <TypeBadge type={monitor.type} config={monitor.config} size="sm" />}
               {alert.kind === 'mesh_edge' && <KindTag title="Directed inter-location connectivity path">mesh</KindTag>}
+              {alert.kind === 'location_offline' && (
+                <KindTag title="No worker heartbeat from this check location for 3 minutes; its monitors get no fresh checks from it">
+                  location
+                </KindTag>
+              )}
               {alert.kind === 'latency_anomaly' && <KindTag title="Latency degraded relative to baseline">latency</KindTag>}
               {alert.kind === 'host_metric' && (
                 <KindTag title="Host metric breached its configured threshold">{formatSeriesLabel(alert.metric_name)}</KindTag>
@@ -487,6 +503,16 @@ export default function AlertFeed({
                     <BellOff className="h-3 w-3 shrink-0" strokeWidth={1.75} />
                     Suppressed, upstream just recovered
                   </span>
+                )}
+                {alert.suppression_reason === 'location_offline' && (
+                  <Link
+                    href="/locations"
+                    className={`${CHIP} min-w-0 bg-well-hover text-slate-400 transition-colors hover:text-slate-200 ${FOCUS_RING}`}
+                    title="Notifications suppressed: a location on this path stopped reporting, and its own offline alert pages instead"
+                  >
+                    <BellOff className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    <span className="truncate">Suppressed, location offline</span>
+                  </Link>
                 )}
                 {(alert.impacted_count ?? 0) > 0 && (
                   <span
@@ -601,7 +627,8 @@ export default function AlertFeed({
                 {/* The alerter rewrites failure_count with the failures in
                     its current window on every evaluation, so it is a
                     recent count, not the number that triggered the alert. */}
-                <DetailRow label="Recent failures">{alert.failure_count}</DetailRow>
+                {/* A location alert counts no check failures. */}
+                {alert.kind !== 'location_offline' && <DetailRow label="Recent failures">{alert.failure_count}</DetailRow>}
               </DetailList>
             </div>
             <div className="min-w-0">

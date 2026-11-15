@@ -114,3 +114,65 @@ func TestBuildLocationOffline(t *testing.T) {
 		t.Errorf("resolved summary = %q", resolved.Summary)
 	}
 }
+
+// An open location_offline alert says when the location went quiet and what
+// that strands; the closed one does not repeat it.
+func TestBuildLocationOfflineFacts(t *testing.T) {
+	ev := locationOfflineSample()
+	seen := ev.Alert.TriggeredAt.Add(-3 * time.Minute)
+	ev.Alert.LocationLastSeenAt = &seen
+	cases := []struct {
+		total, only int
+		want        string
+	}{
+		{0, 0, "none run from it"},
+		{12, 0, "12, all also run from another location"},
+		{12, 5, "12, 5 with no other location"},
+		{4, 4, "4, none with another location"},
+	}
+	for _, tc := range cases {
+		ev.Alert.LocationMonitorCount, ev.Alert.LocationOnlyMonitorCount = tc.total, tc.only
+		m := Build(ev, EventCreated, "")
+		want := []Row{
+			{Label: "Location", Value: "eu-west"},
+			{Label: "Last heartbeat", Value: HumanTime(seen)},
+			{Label: "Monitors", Value: tc.want},
+		}
+		for i, row := range want {
+			if i >= len(m.Rows) || m.Rows[i] != row {
+				t.Fatalf("%d/%d: Rows = %+v, want prefix %+v", tc.total, tc.only, m.Rows, want)
+			}
+		}
+	}
+
+	resolvedAt := ev.Alert.TriggeredAt.Add(time.Hour)
+	ev.Alert.ResolvedAt, ev.Alert.Status = &resolvedAt, "resolved"
+	for _, row := range Build(ev, EventResolved, "").Rows {
+		if row.Label == "Monitors" || row.Label == "Last heartbeat" {
+			t.Fatalf("a closed alert repeats %q", row.Label)
+		}
+	}
+}
+
+// A location_offline alert closed because the location was disabled or
+// deleted must not claim the location is back.
+func TestBuildLocationOfflineClosedWithoutRecovery(t *testing.T) {
+	for reason, want := range map[string]string{
+		notifications.ResolveReasonLocationDisabled: "Location eu-west was disabled, so it is no longer expected to report.",
+		notifications.ResolveReasonLocationDeleted:  "Location eu-west was deleted.",
+	} {
+		ev := locationOfflineSample()
+		resolvedAt := ev.Alert.TriggeredAt.Add(time.Hour)
+		ev.Alert.ResolvedAt, ev.Alert.Status, ev.Alert.ResolveReason = &resolvedAt, "resolved", reason
+		m := Build(ev, EventResolved, "")
+		if m.Label != "Location Alert Closed" || m.StatusWord != "CLOSED" || m.Tone != ToneInfo || m.Summary != want {
+			t.Errorf("%s: label=%q status=%q tone=%q summary=%q", reason, m.Label, m.StatusWord, m.Tone, m.Summary)
+		}
+	}
+	ev := locationOfflineSample()
+	resolvedAt := ev.Alert.TriggeredAt.Add(time.Hour)
+	ev.Alert.ResolvedAt, ev.Alert.Status, ev.Alert.ResolveReason = &resolvedAt, "resolved", notifications.ResolveReasonRecovered
+	if m := Build(ev, EventResolved, ""); m.Label != "Location Back Online" || m.StatusWord != "BACK ONLINE" {
+		t.Errorf("recovered: label=%q status=%q", m.Label, m.StatusWord)
+	}
+}

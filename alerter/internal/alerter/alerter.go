@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -36,6 +37,17 @@ type Alerter struct {
 	recoveryBudget       time.Duration
 	suspectedCauseBudget time.Duration
 
+	// startedAt holds location_offline opening for one offline threshold
+	// after the process starts (see openLocationOfflineAlerts). The zero
+	// value, as in tests that build an Alerter literal, never holds.
+	startedAt time.Time
+	// lastLocationHold is the previous tick's hold reason, so the warning is
+	// logged when a hold starts rather than every tick. Tick goroutine only.
+	lastLocationHold string
+	// Fleet gauges (location_offline.go); nil when no registry was given.
+	locationsGauge     *prometheus.GaugeVec
+	locationGuardGauge *prometheus.GaugeVec
+
 	// sendFunc dispatches one channel notification. It defaults to
 	// sendChannelNotification and is swapped in tests so the lifecycle can be
 	// exercised without hitting real channel plugins.
@@ -56,8 +68,19 @@ func NewAlerter(cfg *config.AlerterConfig, log *logger.Logger, metricsRegistry *
 		nats:      natsClient,
 		encryptor: encryptor,
 		stop:      make(chan struct{}),
+		startedAt: time.Now(),
 	}
 	a.sendFunc = a.sendChannelNotification
+	if metricsRegistry != nil {
+		// Platform-wide, with bounded labels: a per-tenant or per-location
+		// label would grow with every workspace and site.
+		a.locationsGauge = metricsRegistry.NewGauge("locations",
+			"Check locations by liveness (S-F6): online, offline, never_seen, disabled. Deleted locations are not counted.",
+			[]string{"state"})
+		a.locationGuardGauge = metricsRegistry.NewGauge("location_offline_guard",
+			"1 while the alerter holds new location_offline alerts: fleet_silent (no location heartbeat reached the platform within the threshold) or startup (the alerter started less than one threshold ago).",
+			[]string{"reason"})
+	}
 	return a
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
@@ -193,14 +194,13 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 }
 
 // resolveTenantDefaultChannels returns the tenant's default channel routing —
-// the only routing a monitor-less mesh alert can use.
+// the only routing a monitor-less alert (mesh edge, location_offline) can use.
 func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uuid.UUID) ([]channelTarget, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, tdc.delay_seconds
-		FROM tenant_default_channels tdc
-		JOIN alert_channels ac ON ac.id = tdc.channel_id
-		WHERE tdc.tenant_id = $1
-		ORDER BY tdc.position, ac.id
+		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, rt.delay_seconds
+		FROM (`+alertrouting.TenantTargetsSQL()+`) rt
+		JOIN alert_channels ac ON ac.id = rt.channel_id
+		ORDER BY rt.pos, ac.id
 	`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve tenant default channels: %w", err)
@@ -223,7 +223,10 @@ func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uui
 }
 
 // dispatchOpenMeshAlerts fires due escalation tiers and reminders for open
-// mesh alerts, mirroring dispatchOpenAlerts' delay/reminder contract.
+// mesh alerts, mirroring dispatchOpenAlerts' delay/reminder contract. An edge
+// with a location that stopped reporting stays open but quiet
+// (alertrouting.SuppressedByOfflineLocationPredicate): that location's one
+// location_offline alert speaks for every path it breaks.
 func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.source_location_id, al.target_location_id,
@@ -240,6 +243,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 		WHERE al.kind = 'mesh_edge'
 		  AND al.status IN ('active', 'acknowledged')
 		  AND ms.current_state = 'down'
+		  AND NOT `+alertrouting.SuppressedByOfflineLocationPredicate("al")+`
 	`)
 	if err != nil {
 		return fmt.Errorf("query open mesh alerts: %w", err)

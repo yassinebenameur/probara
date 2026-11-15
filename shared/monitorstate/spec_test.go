@@ -15,6 +15,7 @@ package monitorstate
 import (
 	"math/rand"
 	"testing"
+	"time"
 )
 
 // specStep is one piece of evidence arriving for a multi-location monitor,
@@ -266,5 +267,46 @@ func TestSpecProperty_AggregateInvariants(t *testing.T) {
 					c, got, worse, AggregateLocations(worse, quorum))
 			}
 		}
+	}
+}
+
+// S-F6: a location is offline when it is enabled, not deleted, was seen at
+// least once, and has been silent for LocationOfflineAfter (180s).
+// Never-seen, disabled and deleted locations are never offline. Connected is
+// a separate, shorter window: between the two a location is disconnected
+// but not yet offline.
+func TestSpecLocationOffline(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) *time.Time { ts := now.Add(-d); return &ts }
+	cases := []struct {
+		name     string
+		enabled  bool
+		deleted  bool
+		lastSeen *time.Time
+		want     bool
+	}{
+		{"never_seen_is_not_offline", true, false, nil, false},
+		{"recent_heartbeat", true, false, ago(15 * time.Second), false},
+		{"just_under_threshold", true, false, ago(179 * time.Second), false},
+		{"at_threshold", true, false, ago(180 * time.Second), true},
+		{"long_silent", true, false, ago(30 * 24 * time.Hour), true},
+		{"disabled_is_not_offline", false, false, ago(time.Hour), false},
+		{"deleted_is_not_offline", true, true, ago(time.Hour), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LocationOffline(tc.enabled, tc.deleted, tc.lastSeen, now); got != tc.want {
+				t.Fatalf("LocationOffline = %v, want %v [S-F6]", got, tc.want)
+			}
+		})
+	}
+	if !LocationConnected(ago(59*time.Second), now) || LocationConnected(ago(60*time.Second), now) {
+		t.Fatal("connected is a one-minute window [S-F6]")
+	}
+	if LocationConnected(ago(90*time.Second), now) || LocationOffline(true, false, ago(90*time.Second), now) {
+		t.Fatal("90s silent must read disconnected but not yet offline [S-F6]")
+	}
+	if LocationOfflineAfter <= LocationConnectedWindow {
+		t.Fatal("offline must come after the connected window ends, or the mesh hold starts late [S-F6]")
 	}
 }

@@ -49,6 +49,11 @@ export const LOCATIONS_PAGE: DocPage = {
             ],
             ["`last_seen_at`", "Most recent accepted worker heartbeat"],
             [
+              "`offline`",
+              "Seen at least once, enabled, and no heartbeat for 180 seconds: the rule the offline alert uses",
+            ],
+            ["`open_alert_id`", "The location's open `location_offline` alert, when there is one"],
+            [
               "`mesh_endpoint`",
               "Optional host-and-port endpoint other locations probe for mesh health",
             ],
@@ -211,6 +216,18 @@ export const LOCATIONS_PAGE: DocPage = {
             "Location workers publish lightweight core-NATS heartbeats approximately every 15 seconds with jitter. The API derives `connected` from the latest accepted heartbeat and treats a location as disconnected after about one minute without one.",
         },
         {
+          type: "paragraph",
+          text:
+            "A location that stays silent for 180 seconds is **offline**: it is enabled, has reported at least once, and has sent no accepted heartbeat since. Offline opens one `location_offline` [alert](/docs/alerting/#model) for the location, routed to the workspace's default channels, and resolves it when the location reports again or is disabled or deleted; the closing notification says which. The alert is always on and the threshold is fixed. A location that never connected is never offline: nothing was lost. Only locations seen within the last 7 days alert, so upgrading never pages for long-abandoned ones. The alert says when the location was last heard from and how many monitors run from it, and how many of those have no other location; those go `unknown` without fresh checks, while offline itself never changes a monitor's state. The Locations page links an offline location to its open alert, and the API reports `offline` and `open_alert_id` on each location.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "No storm when the platform loses heartbeats",
+          text:
+            "Heartbeats reach the database through NATS and the scheduler. When none of the installation's locations has reported within 180 seconds (and there are at least two), the alerter opens no offline alert: that pattern means the broker, the scheduler or the database is at fault rather than every site. An alerter that has just restarted likewise waits until a heartbeat arrives after its start, or 180 seconds. Both holds are logged by the alerter and exported as `probara_alerter_location_offline_guard{reason}`; a single-location installation cannot tell a dead site from a platform fault and still alerts.",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Connected does not mean every check is healthy",
@@ -262,7 +279,7 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Mesh alerts are directional and use the tenant's [default notification channels](/docs/alerting/#routing). They maintain their own lifecycle rather than changing an application monitor's state.",
+            "Mesh alerts are directional and use the tenant's [default notification channels](/docs/alerting/#routing). They maintain their own lifecycle rather than changing an application monitor's state. As soon as a location misses its heartbeat window (about one minute, well before it counts as offline), alerts on paths to or from it stay open but send nothing and read as suppressed, so a dead site pages once, through its [offline alert](#heartbeats), instead of once per path. Paths of a location silent for more than 7 days, which raises no offline alert, page normally.",
         },
         {
           type: "callout",

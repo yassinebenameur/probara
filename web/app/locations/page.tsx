@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { MapPin, Plus, Rocket, Pencil, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
@@ -19,6 +20,7 @@ import { LocationDeployModal } from '@/components/locations/LocationDeployModal'
 import { LocationFormModal } from '@/components/locations/LocationFormModal';
 import MeshMatrix from '@/components/locations/MeshMatrix';
 import Tabs, { useUrlTab } from '@/components/ui/Tabs';
+import { FOCUS_RING } from '@/components/ui/focus';
 import { Location } from '@/lib/types';
 import { deleteLocation, getLocations } from '@/lib/api';
 import { pluralize } from '@/lib/format';
@@ -303,6 +305,15 @@ export default function LocationsPage() {
                             location={location}
                             onDeploy={canManageLocations ? () => setDeployLocation(location) : undefined}
                           />
+                          {/* Silent for 3 minutes: the alerter's offline alert for it. */}
+                          {location.open_alert_id && (
+                            <Link
+                              href={`/alerts?alert=${encodeURIComponent(location.open_alert_id)}`}
+                              className={`mt-0.5 block whitespace-nowrap rounded-sm pl-4 text-xs text-slate-400 transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
+                            >
+                              Offline alert open
+                            </Link>
+                          )}
                         </td>
                         <td>
                           {location.mesh_endpoint ? (

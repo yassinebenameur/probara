@@ -202,3 +202,24 @@ func TestDependencySuppressionFragments(t *testing.T) {
 		}
 	}
 }
+
+func TestOfflineLocationSuppressionFragment(t *testing.T) {
+	// It is dropped under NOT into the alerter's mesh dispatch and into the
+	// API's suppression CASE: it must name only the alias it is given, apply to
+	// mesh edges alone, read both endpoints, and hold from the connected
+	// window (S-F6) rather than the offline threshold.
+	pred := SuppressedByOfflineLocationPredicate("al")
+	for _, want := range []string{
+		"al.kind = 'mesh_edge'",
+		"sol.id IN (al.source_location_id, al.target_location_id)",
+		"make_interval(secs => 60)",
+		"sola.kind = 'location_offline'",
+	} {
+		if !strings.Contains(pred, want) {
+			t.Fatalf("SuppressedByOfflineLocationPredicate missing %q:\n%s", want, pred)
+		}
+	}
+	if tt := TenantTargetsSQL(); !strings.Contains(tt, "tdc.tenant_id = $1") || !strings.Contains(tt, "tdc.position AS pos") {
+		t.Fatalf("TenantTargetsSQL shape changed:\n%s", tt)
+	}
+}

@@ -120,8 +120,9 @@ func TestTypeConstraintMigrationsUpDownUp(t *testing.T) {
 	}
 	expect("down 000099: push, timeout > interval", insertMonitor("push", 60, 600), true)
 
-	if err := m.Up(); err != nil {
-		t.Fatalf("re-up: %v", err)
-	}
+	// Back to 000100, not the latest: 000103 gives location_offline its own
+	// subject (no monitor), so a monitor-bound row of that kind is refused
+	// from there on; location_offline_migration_integration_test.go walks it.
+	migrateTo(100)
 	checkUp("re-up")
 }

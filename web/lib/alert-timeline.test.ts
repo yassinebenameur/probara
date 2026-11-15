@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   alertSegments,
+  alertSubject,
+  alertSubjectKey,
   buildTimeline,
   foldSuppressed,
   groupSegments,
@@ -211,4 +213,33 @@ test('timelineGroupOf: dashboard group tags first, else the monitor type', () =>
   assert.deepEqual(timelineGroupOf(a, { type: 'http' }, [], label), { key: 'type:http', label: 'HTTP' });
   assert.deepEqual(timelineGroupOf(a, undefined, ['payments'], label), { key: 'other', label: 'Other' });
   assert.deepEqual(timelineGroupOf(alert('e', '', { kind: 'mesh_edge' }), undefined, [], label), { key: 'mesh', label: 'Mesh' });
+});
+
+test('offline-location alerts: one lane per location, named by it, grouped apart', () => {
+  const offline = (id: string, loc: string) =>
+    alert(id, '', {
+      monitor_id: undefined,
+      monitor_name: 'factory-floor',
+      kind: 'location_offline',
+      source_location_id: loc,
+      source_location_name: 'factory-floor',
+    });
+  assert.equal(alertSubject(offline('a', 'l1')), 'factory-floor');
+  assert.equal(alertSubjectKey(offline('a', 'l1')), alertSubjectKey(offline('b', 'l1')));
+  assert.notEqual(alertSubjectKey(offline('a', 'l1')), alertSubjectKey(offline('c', 'l2')));
+  assert.deepEqual(timelineGroupOf(offline('a', 'l1'), undefined, ['team'], (t) => t), { key: 'locations', label: 'Locations' });
+});
+
+test('buildTimeline: a mesh edge held for an offline location draws suppressed', () => {
+  const held = alert('m', '', {
+    monitor_id: undefined,
+    kind: 'mesh_edge',
+    source_location_id: 'a',
+    target_location_id: 'b',
+    suppression_reason: 'location_offline',
+  });
+  const timeline = buildTimeline([held], WINDOW, () => ({ key: 'mesh', label: 'Mesh' }));
+  const lane = timeline.open[0];
+  assert.ok(lane, 'the held edge is still an open subject');
+  assert.ok(lane.segments.every((segment) => segment.tone === 'suppressed'), JSON.stringify(lane.segments));
 });
