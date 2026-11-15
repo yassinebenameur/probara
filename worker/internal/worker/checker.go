@@ -155,6 +155,10 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	}
 
 	var redirectsFollowed int
+	secretHeaderNames := make([]string, 0, len(config.SecretHeaders))
+	for name := range config.SecretHeaders {
+		secretHeaderNames = append(secretHeaderNames, name)
+	}
 	client := &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -165,6 +169,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
 			redirectsFollowed = len(via)
+			stripCredentialsOnRedirect(req, via, secretHeaderNames)
 			return nil
 		},
 	}
@@ -227,9 +232,18 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		}
 	}
 
-	// Set headers
+	// Set headers. Secret headers go last so they win over a same-named
+	// plain one (validation refuses that pairing; this is belt and braces),
+	// and basic auth, which validation keeps apart from an Authorization
+	// header, last of all.
 	for k, v := range config.Headers {
 		req.Header.Set(k, v)
+	}
+	for k, v := range config.SecretHeaders {
+		req.Header.Set(k, v)
+	}
+	if config.BasicAuthUsername != "" {
+		req.SetBasicAuth(config.BasicAuthUsername, config.BasicAuthPassword)
 	}
 
 	var traceTimings httpTimingInfo
