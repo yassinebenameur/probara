@@ -105,6 +105,11 @@ export interface HTTPMonitorConfig {
   tls_server_name?: string;
   tls_ca_pem?: string;
   collect_timing?: boolean;
+  // Write-only (shared/secrets): secret header values and the password read
+  // back as "***". The API moves credential-named `headers` here on write.
+  secret_headers?: Record<string, string>;
+  basic_auth_username?: string;
+  basic_auth_password?: string;
 }
 
 export interface PingMonitorConfig {
@@ -125,6 +130,10 @@ export interface GRPCMonitorConfig {
   port?: number;
   service?: string;
   use_tls?: boolean;
+  metadata?: Record<string, string>;
+  // Write-only: values read back as "***". The API moves credential-named
+  // `metadata` keys here on write.
+  secret_metadata?: Record<string, string>;
 }
 
 export interface PrometheusMonitorConfig {
@@ -413,6 +422,8 @@ export interface SyntheticAPIMonitorConfig {
   failure_mode?: SyntheticFailureMode;
   variables?: Record<string, string>;
   steps: SyntheticAPIStepConfig[];
+  // Write-only {{name}} values: read back as "***", redacted from results.
+  secret_variables?: Record<string, string>;
 }
 
 export type SyntheticBrowserAction =

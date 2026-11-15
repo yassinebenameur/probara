@@ -9,7 +9,9 @@ import Tabs from '@/components/ui/Tabs';
 import { Location } from '@/lib/types';
 import { formatLatency } from '@/lib/format';
 import { SyntheticEditorMode, SyntheticTestPhase, SyntheticVarKV } from '@/lib/monitor-form/synthetic';
+import type { SecretKV } from '@/lib/monitor-form/secret-map';
 import { FIELD_LABEL } from './form-kit';
+import SecretRowsEditor from './SecretRowsEditor';
 import type { SyntheticLiveTest } from './useSyntheticLiveTest';
 
 // Pieces the synthetic API and browser editors share: the Basic/Advanced
@@ -175,6 +177,39 @@ export function SyntheticVariablesField({
         </Button>
       </div>
       <p className="mt-2 text-xs text-slate-500">{hint}</p>
+    </div>
+  );
+}
+
+/**
+ * Secret variables: referenced as {{name}} like plain ones, but stored
+ * encrypted, never shown again, and redacted from check results.
+ */
+export function SyntheticSecretVariablesField({
+  rows,
+  onChange,
+  error,
+}: {
+  rows: SecretKV[];
+  onChange: (rows: SecretKV[]) => void;
+  error?: string;
+}) {
+  return (
+    <div>
+      <label className={`${FIELD_LABEL} mb-1.5`}>Secret variables (optional)</label>
+      {error && <p className="mb-2 text-xs text-rose-300">{error}</p>}
+      <SecretRowsEditor
+        rows={rows}
+        onChange={onChange}
+        toggleable={false}
+        itemNoun="secret variable"
+        namePlaceholder="Variable name"
+        valuePlaceholder="Secret value"
+      />
+      <p className="mt-2 text-xs text-slate-500">
+        Passwords, tokens and keys. Reference them as <code>{'{{name}}'}</code>; values are stored encrypted, never
+        shown again, and replaced by [REDACTED] in check results.
+      </p>
     </div>
   );
 }
