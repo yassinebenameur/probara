@@ -314,3 +314,36 @@ the fail cases for an underivable token live in secret.yaml.
 {{- sha256sum (printf "probara/local-ai-token/v1:%s" .Values.secrets.adminJwtSecret) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+CHECK_JOB_STREAM / CHECK_JOB_SUBJECT for every workload on the check-job queue:
+the API (run-now publisher), the scheduler, the default worker fleet and each
+in-cluster location worker. They must be identical everywhere — a publisher
+and a consumer on different names drop every job without an error — so
+scheduler.checkJobStream / checkJobSubject are the one source. The old
+worker.checkJobStream / checkJobSubject keys are still accepted when they
+equal the scheduler's; a different value fails the render instead of
+silently splitting the queue.
+*/}}
+{{- define "monitoring-platform.checkJobEnv" -}}
+- name: CHECK_JOB_STREAM
+  value: {{ include "monitoring-platform.checkJobQueueName" (dict "ctx" . "field" "checkJobStream") | quote }}
+- name: CHECK_JOB_SUBJECT
+  value: {{ include "monitoring-platform.checkJobQueueName" (dict "ctx" . "field" "checkJobSubject") | quote }}
+{{- end -}}
+
+{{/*
+One check-job queue name, scheduler.<field>, after checking the deprecated
+worker.<field> against it. Args (dict): ctx (root context), field.
+*/}}
+{{- define "monitoring-platform.checkJobQueueName" -}}
+{{- $name := index .ctx.Values.scheduler .field | default "" | toString -}}
+{{- if not $name -}}
+{{- fail (printf "scheduler.%s must be set: it names the check-job queue for the API, scheduler and workers" .field) -}}
+{{- end -}}
+{{- $legacy := index (.ctx.Values.worker | default dict) .field | default "" | toString -}}
+{{- if and $legacy (ne $legacy $name) -}}
+{{- fail (printf "worker.%s (%q) differs from scheduler.%s (%q). The API, scheduler and workers must share one check-job queue, and scheduler.%s now sets it for all of them: remove worker.%s (with --reuse-values it can be a previous chart version's default; set it to null)." .field $legacy .field $name .field .field) -}}
+{{- end -}}
+{{- $name -}}
+{{- end -}}

@@ -72,10 +72,7 @@ spec:
           value: "{{ .Values.scheduler.logLevel }}"
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 8 }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_URL" "key" "nats_url" "secret" .Values.nats.existingSecret "secretKey" .Values.nats.existingSecretKey) | nindent 8 }}
-        - name: CHECK_JOB_STREAM
-          value: "{{ .Values.scheduler.checkJobStream }}"
-        - name: CHECK_JOB_SUBJECT
-          value: "{{ .Values.scheduler.checkJobSubject }}"
+        {{- include "monitoring-platform.checkJobEnv" . | nindent 8 }}
         - name: SCHEDULE_INTERVAL_SECONDS
           value: "{{ .Values.scheduler.intervalSeconds }}"
         - name: RETENTION_CLEANUP_ENABLED

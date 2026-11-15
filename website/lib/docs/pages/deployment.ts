@@ -470,7 +470,7 @@ kubectl -n probara get jobs`,
             [
               '`scheduler.checkJobStream`, `.checkJobSubject`, `.intervalSeconds`',
               '`check-jobs`, `check.job`, `5`',
-              'Must match worker and API. Current API subject wiring does not match.',
+              'The check-job queue for the whole release: the API, scheduler, default workers and every `worker.locations` entry all take these two values.',
             ],
             [
               '`scheduler.retentionCleanup*`',
@@ -483,9 +483,9 @@ kubectl -n probara get jobs`,
               'Default check-execution fleet and mesh echo port.',
             ],
             [
-              '`worker.checkJobStream`, `.checkJobSubject`, `.consumerName`, `.concurrency`',
-              '`check-jobs`, `check.job`, `worker`, `10`',
-              'Queue contract and worker parallelism.',
+              '`worker.consumerName`, `.concurrency`',
+              '`worker`, `10`',
+              'Durable consumer name and worker parallelism. The legacy `worker.checkJobStream` / `.checkJobSubject` keys are unset by default; when set they must equal the scheduler values or the render fails.',
             ],
             [
               '`worker.autoscaling.*`',

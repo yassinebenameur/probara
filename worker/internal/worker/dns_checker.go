@@ -12,11 +12,15 @@ import (
 )
 
 // DNSChecker implements Checker for DNS monitors
-type DNSChecker struct{}
+type DNSChecker struct {
+	blockPrivateIPs bool
+	allowedCIDRs    []*net.IPNet
+}
 
-// NewDNSChecker creates a new DNS checker
-func NewDNSChecker() *DNSChecker {
-	return &DNSChecker{}
+// NewDNSChecker creates a new DNS checker. A custom nameserver is dialed
+// through the worker's network policy.
+func NewDNSChecker(blockPrivateIPs bool, allowedCIDRs []*net.IPNet) *DNSChecker {
+	return &DNSChecker{blockPrivateIPs: blockPrivateIPs, allowedCIDRs: allowedCIDRs}
 }
 
 type dnsMetricsEnvelope struct {
@@ -59,7 +63,7 @@ func (c *DNSChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	defer cancel()
 
 	nameserver := strings.TrimSpace(config.Nameserver)
-	resolver, err := buildDNSResolver(nameserver, timeout)
+	resolver, err := buildDNSResolver(nameserver, newDialGuard(c.blockPrivateIPs, c.allowedCIDRs, timeout))
 	if err != nil {
 		errMsg := fmt.Sprintf("invalid nameserver: %v", err)
 		return CheckResult{
@@ -133,7 +137,11 @@ func (c *DNSChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 // buildDNSResolver returns the resolver for a check: the system default, or a
 // Go-native resolver pinned to a specific nameserver (host or host:port,
 // default port 53) — the way to validate private zones and VPC resolvers.
-func buildDNSResolver(nameserver string, timeout time.Duration) (*net.Resolver, error) {
+// The nameserver is an operator-supplied address like any target, so it is
+// dialed through guard: a private resolver needs its range in the allowed
+// CIDRs when private destinations are blocked. The system default resolver
+// is the worker's own and stays unguarded, as for every hostname lookup.
+func buildDNSResolver(nameserver string, guard *dialGuard) (*net.Resolver, error) {
 	if nameserver == "" {
 		return net.DefaultResolver, nil
 	}
@@ -146,8 +154,7 @@ func buildDNSResolver(nameserver string, timeout time.Duration) (*net.Resolver, 
 	return &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: timeout}
-			return d.DialContext(ctx, network, addr)
+			return guard.DialContext(ctx, network, addr)
 		},
 	}, nil
 }

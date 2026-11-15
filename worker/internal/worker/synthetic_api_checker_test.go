@@ -32,7 +32,7 @@ func TestSyntheticAPIChecker_SuccessWithExtraction(t *testing.T) {
 	}))
 	defer server.Close()
 
-	checker := NewSyntheticAPIChecker()
+	checker := NewSyntheticAPIChecker(false, nil)
 	sensitive := true
 	cfg := map[string]interface{}{
 		"base_url": server.URL,
@@ -119,7 +119,7 @@ func TestSyntheticAPIChecker_FailureModeContinue(t *testing.T) {
 	}))
 	defer server.Close()
 
-	checker := NewSyntheticAPIChecker()
+	checker := NewSyntheticAPIChecker(false, nil)
 	cfg := map[string]interface{}{
 		"base_url":     server.URL,
 		"failure_mode": "continue",
@@ -158,7 +158,7 @@ func TestSyntheticAPIChecker_FailureModeContinue(t *testing.T) {
 }
 
 func TestSyntheticAPIChecker_MissingVariable(t *testing.T) {
-	checker := NewSyntheticAPIChecker()
+	checker := NewSyntheticAPIChecker(false, nil)
 	cfg := map[string]interface{}{
 		"base_url": "https://example.com",
 		"steps": []map[string]interface{}{

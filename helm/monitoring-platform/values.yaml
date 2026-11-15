@@ -331,7 +331,10 @@ scheduler:
   replicas: 1
   metricsPort: 9090
   logLevel: "info"
-  # Scheduler-specific configuration
+  # Check-job queue (JetStream stream and subject) for the WHOLE platform:
+  # the API ("Run now"), the scheduler, the default workers and every
+  # worker.locations entry all read these two values, because a publisher and
+  # a consumer on different names drop every job without an error.
   checkJobStream: "check-jobs"
   checkJobSubject: "check.job"
   intervalSeconds: "5"
@@ -361,9 +364,10 @@ worker:
   # exposed across networks without exposing /metrics.
   httpPort: 8080
   logLevel: "info"
-  # Worker-specific configuration
-  checkJobStream: "check-jobs"
-  checkJobSubject: "check.job"
+  # Worker-specific configuration. The queue names come from
+  # scheduler.checkJobStream / checkJobSubject. worker.checkJobStream /
+  # checkJobSubject are no longer defaults; an existing values file may still
+  # set them to the scheduler's values, and any other value fails the render.
   consumerName: "worker"
   concurrency: "10"
   resources:

@@ -76,7 +76,7 @@ func TestAIFaultFixtures(t *testing.T) {
 	run("connection_failure", "http://"+address)
 	run("latency_degradation", slow.URL)
 	dcfg, _ := json.Marshal(map[string]any{"host": "fixture.invalid", "record_type": "A", "nameserver": dns.LocalAddr().String()})
-	r := NewDNSChecker().Check(context.Background(), dcfg, 2)
+	r := NewDNSChecker(false, nil).Check(context.Background(), dcfg, 2)
 	c := ai.CheckContext{Status: r.Status, CheckedAt: fixtures["healthy"].CheckedAt}
 	if r.ErrorMessage != nil {
 		c.ErrorCategory = ai.ErrorCategory(*r.ErrorMessage)

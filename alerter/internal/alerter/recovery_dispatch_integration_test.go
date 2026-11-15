@@ -112,6 +112,55 @@ func TestRecoveryDispatchDoesNotStarveFreshOutagesOrLaterRecoveries(t *testing.T
 	}
 }
 
+// A recovery notice is retried only within recoveryRetryMaxAge of the
+// resolution: older ones are no longer selected, so a channel that failed
+// transiently for days cannot keep them in every sweep or flush them as a
+// burst of stale RESOLVED messages when it comes back.
+func TestRecoveryDispatchSkipsRecoveriesPastMaxAge(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, database, "recovery-max-age")
+	channelID := insertTestChannel(ctx, t, database, tenantID, "webhook")
+	a := newIntegrationAlerter(database)
+
+	resolvePending := func(name string, resolvedAt time.Time) uuid.UUID {
+		monitorID := testutil.InsertHTTPMonitor(ctx, t, database, tenantID, name)
+		alertID := openDownAlert(ctx, t, database, tenantID, monitorID)
+		mustExec(ctx, t, database, `INSERT INTO alert_notification_states
+			(alert_id, channel_id, last_sent_at, last_event_type) VALUES ($1, $2, $3, 'created')`, alertID, channelID, resolvedAt.Add(-time.Hour))
+		if _, err := a.resolveAlert(ctx, alertID, resolvedAt); err != nil {
+			t.Fatal(err)
+		}
+		return alertID
+	}
+	recent := resolvePending("recently recovered", time.Now().Add(-recoveryRetryMaxAge+time.Hour))
+	expired := resolvePending("long recovered", time.Now().Add(-recoveryRetryMaxAge-time.Hour))
+
+	sent := map[uuid.UUID]int{}
+	a.sendFunc = func(_ context.Context, _ alertChannel, event string, _ alertSubject, alert *alertRecord, _ *groupDetail, _ time.Time) error {
+		if event == "resolved" {
+			sent[alert.ID]++
+		}
+		return nil
+	}
+	if err := a.dispatchPendingRecoveries(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sent[recent] != 1 {
+		t.Fatalf("recovery sends for the alert inside the window = %d, want 1", sent[recent])
+	}
+	if sent[expired] != 0 {
+		t.Fatalf("recovery sends for the alert past the window = %d, want 0", sent[expired])
+	}
+	if event, _, _ := notificationStateFor(ctx, t, database, recent, channelID); event != "resolved" {
+		t.Fatalf("recent recovery state = %s, want resolved", event)
+	}
+	if event, _, _ := notificationStateFor(ctx, t, database, expired, channelID); event != "created" {
+		t.Fatalf("expired recovery state = %s, want created (left unsent)", event)
+	}
+}
+
 func TestRecoveryDispatchRecoversCrashAfterResolutionCommit(t *testing.T) {
 	ctx := context.Background()
 	database, cleanup := testutil.SetupPostgresDB(ctx, t)

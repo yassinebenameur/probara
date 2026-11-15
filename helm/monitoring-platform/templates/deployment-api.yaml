@@ -77,12 +77,9 @@ spec:
           value: "{{ .Values.api.logLevel }}"
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 8 }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_URL" "key" "nats_url" "secret" .Values.nats.existingSecret "secretKey" .Values.nats.existingSecretKey) | nindent 8 }}
-        - name: CHECK_JOB_STREAM
-          value: {{ .Values.scheduler.checkJobStream | quote }}
-        # Must match the scheduler/worker subject: "Run now" publishes
-        # check jobs onto this subject and silently breaks if they diverge.
-        - name: CHECK_JOB_SUBJECT
-          value: {{ .Values.scheduler.checkJobSubject | quote }}
+        # Must match the scheduler/worker queue: "Run now" publishes check
+        # jobs onto it and silently breaks if they diverge.
+        {{- include "monitoring-platform.checkJobEnv" . | nindent 8 }}
         - name: CHECK_RESULT_SUBJECT
           value: "check.results"
         {{- if .Values.nats.auth.enabled }}

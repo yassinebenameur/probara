@@ -146,7 +146,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "info",
           title: "One notification per event, however many alerters run",
           text:
-            "Before it sends, the alerter claims the (alert, channel, event) slot in `alert_notification_states` inside a transaction and commits only after the channel accepted the message. A second alerter replica racing on the same alert blocks on that row, then finds the slot taken and stays quiet, so `alerter.replicas` can be raised for availability without duplicating deliveries. A failed send rolls the claim back and is retried on the next cycle. The same guarded update makes exactly one replica resolve an alert and send its recovery notice.",
+            "Before it sends, the alerter claims the (alert, channel, event) slot in `alert_notification_states` inside a transaction and commits only after the channel accepted the message. A second alerter replica racing on the same alert blocks on that row, then finds the slot taken and stays quiet, so `alerter.replicas` can be raised for availability without duplicating deliveries. A failed send rolls the claim back and is retried on the next cycle. The same guarded update makes exactly one replica resolve an alert and send its recovery notice. A recovery notice that keeps failing is retried for up to 24 hours after the alert resolved and then dropped, so a channel coming back from a long outage does not deliver a burst of stale recoveries.",
         },
         {
           type: "paragraph",

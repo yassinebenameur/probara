@@ -66,10 +66,7 @@ spec:
         - name: NATS_URL
           value: {{ required "each worker.locations entry needs its location-authenticated natsUrl (or an existingSecret supplying it)" .natsUrl | quote }}
         {{- end }}
-        - name: CHECK_JOB_STREAM
-          value: "{{ $.Values.worker.checkJobStream }}"
-        - name: CHECK_JOB_SUBJECT
-          value: "{{ $.Values.worker.checkJobSubject }}"
+        {{- include "monitoring-platform.checkJobEnv" $ | nindent 8 }}
         - name: NATS_CONSUMER_NAME
           # Scheduler pre-creates this fixed per-location durable so the
           # restricted worker account never needs JetStream management rights.

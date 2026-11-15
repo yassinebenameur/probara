@@ -26,7 +26,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `scheduler/` — cron-style dispatch, JetStream stream provisioning, results
   ingest (`internal/ingest/`)
 - `worker/` — check execution (all monitor types); checkers dial through
-  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`);
+  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`),
+  except `synthetic_browser`, whose Chromium connects on its own and is
+  documented as outside the policy (`website/lib/docs/pages/security.ts`);
   SIP call-quality math (RTP and RTCP codecs, RFC 3550 statistics, the G.107
   E-model, G.711 frames) is the I/O-free `internal/rtp`
 - `alerter/` — alert evaluation and notification delivery
@@ -349,7 +351,11 @@ or imported groups come back empty. Any other path that creates groups through
   `CHECK_JOBS`/`check.jobs` (constants in `shared/models`, read for all three
   by `loadCheckQueueConfig` in `shared/config` — never read a `CHECK_*` queue
   variable anywhere else); Compose and Helm ship `check-jobs`/`check.job` on
-  all three. Changing one service alone silently breaks run-now.
+  all three. Changing one service alone silently breaks run-now. In Helm,
+  `scheduler.checkJobStream`/`checkJobSubject` are the only knob: every
+  workload renders them through the `checkJobEnv` helper (`_helpers.tpl`),
+  and a legacy `worker.checkJobStream`/`checkJobSubject` that differs fails
+  the render.
 - **Check-job delivery**: the worker heartbeats `InProgress` every 10 s while
   a check runs (`checkProgressInterval`, `worker.go`; keep it well under the
   30 s AckWait). Checks whose checker implements `SideEffectingChecker`

@@ -236,7 +236,7 @@ export const MONITORS_PAGE: DocPage = {
             ],
             [
               "`tls_server_name`",
-              "Override the TLS server name used for verification",
+              "Override the TLS server name (SNI and verification) for every connection, redirect hops included. When unset, each hop is verified against its own host, so a redirect to another HTTPS host works; the recorded certificate is the final hop's",
             ],
             ["`tls_ca_pem`", "Additional PEM-encoded certificate authority"],
             [
@@ -284,7 +284,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "DNS",
               description:
-                "Set `host`, optional `record_type`, optional `expected_answers`, and optional `nameserver`. Supported record types are `A`, `AAAA`, `CNAME`, `TXT`, `MX`, and `NS`; the record type defaults to `A`. A nameserver can be a host or `host:port`, with port 53 used when omitted.",
+                "Set `host`, optional `record_type`, optional `expected_answers`, and optional `nameserver`. Supported record types are `A`, `AAAA`, `CNAME`, `TXT`, `MX`, and `NS`; the record type defaults to `A`. A nameserver can be a host or `host:port`, with port 53 used when omitted. It is dialed under the worker's [network policy](/docs/security/#ssrf-network-policy), so with private destinations blocked a private resolver needs its address in `HTTP_ALLOWED_CIDRS`.",
             },
             {
               term: "gRPC",
@@ -546,7 +546,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "URLs may be absolute, or relative when `base_url` is present. Static and extracted variables are referenced with `{{variable_name}}` in subsequent supported fields. `failure_mode` is `fail_fast` by default; use `continue` when later diagnostic steps should still execute after a failed step.",
+            "URLs may be absolute, or relative when `base_url` is present. Static and extracted variables are referenced with `{{variable_name}}` in a step's URL, header values, body, and assertion values; a variable extracted by a step is available from the next step on. An unknown variable in the URL, a header or the body makes the step an error. `failure_mode` is `fail_fast` by default; use `continue` when later diagnostic steps should still execute after a failed step. Every step's request and redirect hops dial under the worker's [network policy](/docs/security/#ssrf-network-policy).",
         },
         {
           type: "paragraph",
@@ -556,7 +556,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An assertion's `value` is a JSON value, and its type decides the comparison. Header and body operations, and JSON `contains`, `regex` and their negative forms, compare text: a string's content, else the value's compact JSON text, which storage can normalize (object keys are reordered), so send text as a JSON string. JSON `equals` and `not_equals` compare by type: a string matches the value's text (`\"123\"` also matches the number `123`); a number or boolean matches a value of that type or a string that parses as one; arrays and objects compare structurally; and a missing path equals nothing, so `not_equals` passes on it. In the operator UI the value input is a JSON literal or plain text: for JSON equals, `123` and `true` are a number and a boolean and `\"123\"` (quoted) is the string, while text assertions always submit what was typed.",
+            "An assertion's `value` is a JSON value, and its type decides the comparison. Header and body operations, and JSON `contains`, `regex` and their negative forms, compare text: a string's content, else the value's compact JSON text, which storage can normalize (object keys are reordered), so send text as a JSON string. JSON `equals` and `not_equals` compare by type: a string matches the value's text (`\"123\"` also matches the number `123`); a number or boolean matches a value of that type or a string that parses as one; arrays and objects compare structurally; and a missing path equals nothing, so `not_equals` passes on it. In the operator UI the value input is a JSON literal or plain text: for JSON equals, `123` and `true` are a number and a boolean and `\"123\"` (quoted) is the string, while text assertions always submit what was typed. Templates work in the string values of header, body and JSON text assertions and of JSON `equals`/`not_equals`; status, `number_*` and `bool_is` values cannot be templated (saving one is rejected), and `exists` ignores its value. A defined variable is inserted as-is (in a `regex` its characters keep their regex meaning); a name that is not defined is left as literal text, so a typo shows up as an ordinary assertion failure displaying the unresolved `{{name}}`. Assertion messages show a value extracted as `sensitive` by an earlier step as `[REDACTED]` wherever it was substituted into the expected value, and elsewhere in the message when it is at least 4 characters long. A step's assertions run before its own extraction, so an assertion on a value that step extracts shows it unredacted, and a sensitive value placed in a URL is visible in step results (request errors and each step's recorded `url`).",
         },
         {
           type: "code",
@@ -604,6 +604,13 @@ export const MONITORS_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Failure screenshots are exposed by the authenticated [monitor artifact endpoint](/docs/api/#monitor-endpoints) when the result contains a valid stored artifact path. Artifact availability depends on shared worker/API storage and retention. Do not build automation that expects trace or HAR files until worker support is implemented.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "The network policy does not apply to the browser",
+          text:
+            "Chromium resolves and connects on its own, so `HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` are not applied to browser journeys at all: not to `start_url` or `goto` steps, and not to redirects, scripts, subresources or form submissions. A browser monitor reaches whatever its worker's network reaches. Run browser monitors only on a [location](/docs/locations/) whose network a journey may touch, and enforce egress there with firewall or Kubernetes network policy.",
         },
         {
           type: "callout",

@@ -1,15 +1,19 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,11 +25,27 @@ import (
 var syntheticTemplateRegex = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}`)
 
 // SyntheticAPIChecker implements workflow-style API monitoring.
-type SyntheticAPIChecker struct{}
+type SyntheticAPIChecker struct {
+	blockPrivateIPs bool
+	allowedCIDRs    []*net.IPNet
+}
 
-// NewSyntheticAPIChecker creates a new synthetic API checker.
-func NewSyntheticAPIChecker() *SyntheticAPIChecker {
-	return &SyntheticAPIChecker{}
+// NewSyntheticAPIChecker creates a new synthetic API checker. Every step's
+// request, and every redirect hop, dials through the worker's network policy.
+func NewSyntheticAPIChecker(blockPrivateIPs bool, allowedCIDRs []*net.IPNet) *SyntheticAPIChecker {
+	return &SyntheticAPIChecker{blockPrivateIPs: blockPrivateIPs, allowedCIDRs: allowedCIDRs}
+}
+
+// newTransport is the transport one check's steps share: the default
+// transport's timeouts and pooling, with the dial guard as its dialer and no
+// proxy. Like every other worker checker it ignores HTTP(S)_PROXY: through a
+// proxy the guard would only vet the proxy's address, so a public proxy would
+// switch the policy off and a private one would refuse every step.
+func (c *SyntheticAPIChecker) newTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = newDialGuard(c.blockPrivateIPs, c.allowedCIDRs, 30*time.Second).DialContext
+	return transport
 }
 
 type syntheticAPIMetricsEnvelope struct {
@@ -85,6 +105,12 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 	for k, v := range config.Variables {
 		vars[k] = v
 	}
+	// sensitive names the extracted variables marked sensitive, whose values
+	// are kept out of assertion messages.
+	sensitive := make(map[string]bool)
+
+	transport := c.newTransport()
+	defer transport.CloseIdleConnections()
 
 	start := time.Now()
 	overallStatus := "success"
@@ -215,7 +241,8 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 		}
 
 		client := &http.Client{
-			Timeout: time.Duration(stepTimeout) * time.Second,
+			Timeout:   time.Duration(stepTimeout) * time.Second,
+			Transport: transport,
 		}
 		followRedirects := true
 		if step.Request.FollowRedirects != nil {
@@ -279,7 +306,7 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 			}
 			bodyText := string(payload)
 
-			assertionFailures, evalErr := evaluateSyntheticAssertions(step.Assert, resp, bodyText)
+			assertionFailures, evalErr := evaluateSyntheticAssertions(step.Assert, resp, bodyText, vars, sensitive)
 			if evalErr != nil {
 				msg := fmt.Sprintf("step %s assertion error: %v", step.ID, evalErr)
 				stepResult.Status = "error"
@@ -309,7 +336,7 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 				}
 			}
 
-			extracted, extractErr := extractSyntheticVariables(step.Extract, resp, bodyText, vars)
+			extracted, extractErr := extractSyntheticVariables(step.Extract, resp, bodyText, vars, sensitive)
 			if extractErr != nil {
 				msg := fmt.Sprintf("step %s extraction error: %v", step.ID, extractErr)
 				stepResult.Status = "error"
@@ -412,12 +439,30 @@ func interpolateTemplate(input string, vars map[string]string) (string, error) {
 	return resolved, nil
 }
 
-func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig, resp *http.Response, body string) ([]string, error) {
+// evaluateSyntheticAssertions checks a step's assertions against its
+// response. vars resolves {{name}} templates in string values (see
+// interpolateSyntheticAssertionValue); sensitive names the variables whose
+// values are kept out of the returned failures and error.
+func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig, resp *http.Response, body string, vars map[string]string, sensitive map[string]bool) ([]string, error) {
+	failures, err := evaluateSyntheticAssertionsUnredacted(assertions, resp, body, vars, sensitive)
+	redact := syntheticSensitiveRedactor(vars, sensitive)
+	if err != nil {
+		return nil, errors.New(redact(err.Error()))
+	}
+	for i := range failures {
+		failures[i] = redact(failures[i])
+	}
+	return failures, nil
+}
+
+func evaluateSyntheticAssertionsUnredacted(assertions []models.SyntheticAPIAssertionConfig, resp *http.Response, body string, vars map[string]string, sensitive map[string]bool) ([]string, error) {
 	failures := make([]string, 0)
 
 	for i, assertion := range assertions {
 		target := strings.ToLower(strings.TrimSpace(assertion.Target))
 		op := strings.ToLower(strings.TrimSpace(assertion.Op))
+
+		assertion, display := interpolateSyntheticAssertionValue(assertion, op, vars, sensitive)
 
 		var expected interface{}
 		if len(assertion.Value) > 0 {
@@ -426,6 +471,9 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 			}
 		}
 		expectedText := assertion.ValueText()
+		if display == nil {
+			display = expected
+		}
 
 		switch target {
 		case "status":
@@ -434,7 +482,7 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 				return nil, fmt.Errorf("assert[%d] status: %w", i, err)
 			}
 			if !ok {
-				failures = append(failures, fmt.Sprintf("status assertion failed: op=%s expected=%v actual=%d", op, expected, resp.StatusCode))
+				failures = append(failures, fmt.Sprintf("status assertion failed: op=%s expected=%v actual=%d", op, display, resp.StatusCode))
 			}
 		case "header":
 			headerName := strings.TrimSpace(assertion.Path)
@@ -444,7 +492,7 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 				return nil, fmt.Errorf("assert[%d] header: %w", i, err)
 			}
 			if !ok {
-				failures = append(failures, fmt.Sprintf("header assertion failed: header=%s op=%s expected=%v actual=%q", headerName, op, expected, actual))
+				failures = append(failures, fmt.Sprintf("header assertion failed: header=%s op=%s expected=%v actual=%q", headerName, op, display, actual))
 			}
 		case "body":
 			ok, err := evaluateSyntheticStringAssertion(body, op, expectedText)
@@ -452,7 +500,7 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 				return nil, fmt.Errorf("assert[%d] body: %w", i, err)
 			}
 			if !ok {
-				failures = append(failures, fmt.Sprintf("body assertion failed: op=%s expected=%v", op, expected))
+				failures = append(failures, fmt.Sprintf("body assertion failed: op=%s expected=%v", op, display))
 			}
 		case "json":
 			ok, err := evaluateSyntheticJSONAssertion(body, assertion.Path, op, expected, expectedText)
@@ -460,7 +508,7 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 				return nil, fmt.Errorf("assert[%d] json: %w", i, err)
 			}
 			if !ok {
-				failures = append(failures, fmt.Sprintf("json assertion failed: path=%s op=%s expected=%v", assertion.Path, op, expected))
+				failures = append(failures, fmt.Sprintf("json assertion failed: path=%s op=%s expected=%v", assertion.Path, op, display))
 			}
 		default:
 			return nil, fmt.Errorf("unsupported target %q", target)
@@ -468,6 +516,117 @@ func evaluateSyntheticAssertions(assertions []models.SyntheticAPIAssertionConfig
 	}
 
 	return failures, nil
+}
+
+// interpolateSyntheticAssertionValue resolves templates in an assertion's
+// value when it is a JSON string; any other JSON type is returned untouched,
+// so numbers, booleans, null, arrays and objects compare exactly as typed.
+// display is what failure messages show for the value (sensitive variables
+// as [REDACTED]); nil means nothing was substituted.
+//
+// Unlike a request, an assertion never fails on an undefined name: the
+// template stays as literal text. Assertion values were compared literally
+// before templating existed, and monitors rely on that (a not_contains
+// "{{ title }}" that checks a page has no unrendered template, or a value
+// left over after switching the op to exists), so only names that are
+// defined change anything. A typo then reads as an ordinary assertion
+// failure showing the unresolved {{name}}. Ops that ignore the value are
+// never templated.
+func interpolateSyntheticAssertionValue(a models.SyntheticAPIAssertionConfig, op string, vars map[string]string, sensitive map[string]bool) (models.SyntheticAPIAssertionConfig, interface{}) {
+	if syntheticOpIgnoresValue(op) {
+		return a, nil
+	}
+	raw := bytes.TrimSpace(a.Value)
+	if len(raw) == 0 || raw[0] != '"' {
+		return a, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return a, nil
+	}
+	resolved := substituteDefinedVariables(text, vars)
+	if resolved == text {
+		return a, nil
+	}
+	encoded, err := json.Marshal(resolved)
+	if err != nil {
+		return a, nil
+	}
+	a.Value = encoded
+
+	displayVars := vars
+	if len(sensitive) > 0 {
+		displayVars = make(map[string]string, len(vars))
+		for k, v := range vars {
+			if sensitive[k] {
+				v = syntheticRedacted
+			}
+			displayVars[k] = v
+		}
+	}
+	return a, substituteDefinedVariables(text, displayVars)
+}
+
+// syntheticOpIgnoresValue reports whether an assertion op never reads its
+// value (the UI can leave a stale one behind when the op changes).
+func syntheticOpIgnoresValue(op string) bool {
+	return op == "exists"
+}
+
+// substituteDefinedVariables replaces each {{name}} whose name is in vars and
+// leaves any other template as written.
+func substituteDefinedVariables(input string, vars map[string]string) string {
+	return syntheticTemplateRegex.ReplaceAllStringFunc(input, func(token string) string {
+		matches := syntheticTemplateRegex.FindStringSubmatch(token)
+		if len(matches) < 2 {
+			return token
+		}
+		if val, ok := vars[strings.TrimSpace(matches[1])]; ok {
+			return val
+		}
+		return token
+	})
+}
+
+const syntheticRedacted = "[REDACTED]"
+
+// syntheticMinScrubbedSecretLen is the shortest sensitive value scrubbed from
+// whole assertion messages. A shorter one ("1", "ok") matches unrelated text
+// (status 401 becomes 40[REDACTED]), garbling the message, and where the
+// marker lands reveals the value anyway. The substituted expected value is
+// redacted at any length (display, in interpolateSyntheticAssertionValue).
+const syntheticMinScrubbedSecretLen = 4
+
+// syntheticSensitiveRedactor returns a function that replaces every
+// sensitive variable's value of at least syntheticMinScrubbedSecretLen bytes
+// in s with [REDACTED]. Assertion messages are scrubbed whole, not only the
+// expected value: an interpolated pattern can echo back through a regex
+// error, and a header's actual value can be the secret itself (a not_equals
+// that failed).
+func syntheticSensitiveRedactor(vars map[string]string, sensitive map[string]bool) func(string) string {
+	var secrets []string
+	for name := range sensitive {
+		v := vars[name]
+		if len(v) < syntheticMinScrubbedSecretLen {
+			continue
+		}
+		secrets = append(secrets, v)
+		// %q in messages escapes quotes, backslashes and control bytes.
+		if quoted := strconv.Quote(v); quoted[1:len(quoted)-1] != v {
+			secrets = append(secrets, quoted[1:len(quoted)-1])
+		}
+	}
+	if len(secrets) == 0 {
+		return func(s string) string { return s }
+	}
+	// Longest first, so a secret that contains another is replaced whole.
+	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	return func(s string) string {
+		for _, secret := range secrets {
+			s = strings.ReplaceAll(s, secret, syntheticRedacted)
+		}
+		return s
+	}
 }
 
 func evaluateSyntheticStatusAssertion(actual int, op string, expected interface{}) (bool, error) {
@@ -603,6 +762,7 @@ func extractSyntheticVariables(
 	resp *http.Response,
 	body string,
 	vars map[string]string,
+	sensitive map[string]bool,
 ) (map[string]string, error) {
 	if len(extractors) == 0 {
 		return nil, nil
@@ -636,6 +796,7 @@ func extractSyntheticVariables(
 
 		vars[name] = value
 		if extractor.Sensitive != nil && *extractor.Sensitive {
+			sensitive[name] = true
 			extracted[name] = "[REDACTED]"
 		} else {
 			extracted[name] = value

@@ -2,6 +2,7 @@ package push
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -13,6 +14,16 @@ import (
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
+
+// maxPushPayloadBytes caps both the JSON body and the raw query string of a
+// push report. Whatever arrives is stored whole on every push (metrics as
+// check_results.metrics_data, the error as error_message, raw rows kept 30
+// days), and anyone holding the token can push at any rate. A real report —
+// a status, an error line and a handful of metrics — is a few hundred bytes;
+// 64 KiB leaves ample room without letting one request write megabytes. The
+// query string needs its own bound because net/http alone admits ~1 MiB of
+// request line.
+const maxPushPayloadBytes = 64 << 10
 
 // Handler handles push monitor HTTP requests
 type Handler struct {
@@ -58,6 +69,9 @@ func (h *Handler) HandlePushGet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "token is required", http.StatusBadRequest)
 		return
 	}
+	if !queryWithinLimit(w, r) {
+		return
+	}
 
 	// Build payload from query parameters
 	payload := h.buildPayloadFromQuery(r)
@@ -89,13 +103,17 @@ func (h *Handler) HandlePushGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandlePushPost handles POST /api/v1/push/{token}
-// Accepts JSON body or query parameters
+// Accepts query parameters, a JSON body, or both (body keys override query keys)
 func (h *Handler) HandlePushPost(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	token := chi.URLParam(r, "token")
 
 	if token == "" {
 		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+
+	if !queryWithinLimit(w, r) {
 		return
 	}
 
@@ -106,21 +124,34 @@ func (h *Handler) HandlePushPost(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(contentType, "application/json") {
 		// Parse JSON body
 		var bodyData map[string]interface{}
-		decoder := json.NewDecoder(r.Body)
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPushPayloadBytes))
 		err := decoder.Decode(&bodyData)
 		if err != nil && err != io.EOF {
+			if bodyTooLarge(w, err) {
+				return
+			}
 			h.log.WithError(err).Warn("failed to decode push payload")
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
 
 		if err == nil {
-			var trailing interface{}
-			if bodyData == nil || decoder.Decode(&trailing) != io.EOF {
+			if bodyData == nil {
 				http.Error(w, "expected a single JSON object", http.StatusBadRequest)
 				return
 			}
-			payload = push.PushPayload{Metrics: bodyData}
+			var trailing interface{}
+			if terr := decoder.Decode(&trailing); terr != io.EOF {
+				if bodyTooLarge(w, terr) {
+					return
+				}
+				http.Error(w, "expected a single JSON object", http.StatusBadRequest)
+				return
+			}
+			// The body overlays the query string field by field: a key the
+			// body omits keeps its query value, so `POST ?status=down` with
+			// a metrics-only body still records a failure. Body metrics win
+			// over query metrics of the same name.
 			if value, present := bodyData["status"]; present {
 				status, ok := value.(string)
 				if !ok {
@@ -138,6 +169,9 @@ func (h *Handler) HandlePushPost(w http.ResponseWriter, r *http.Request) {
 				}
 				payload.Error = errMsg
 				delete(bodyData, "error")
+			}
+			for key, value := range bodyData {
+				payload.Metrics[key] = value
 			}
 		}
 	}
@@ -216,6 +250,26 @@ func (h *Handler) HandleGetPushInfo(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
+}
+
+// queryWithinLimit answers 414 when the raw query string exceeds
+// maxPushPayloadBytes, so query-string reports are bounded like bodies.
+func queryWithinLimit(w http.ResponseWriter, r *http.Request) bool {
+	if len(r.URL.RawQuery) > maxPushPayloadBytes {
+		http.Error(w, "query string too large", http.StatusRequestURITooLong)
+		return false
+	}
+	return true
+}
+
+// bodyTooLarge answers 413 when err came from the body cap.
+func bodyTooLarge(w http.ResponseWriter, err error) bool {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return true
+	}
+	return false
 }
 
 // buildPayloadFromQuery extracts push payload from query parameters

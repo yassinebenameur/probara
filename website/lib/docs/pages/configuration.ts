@@ -62,7 +62,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'Keep queue names identical across publishers and consumers',
           text:
-            'The code defaults are `CHECK_JOBS` and `check.jobs`, while the shipped Compose and Helm values are `check-jobs` and `check.job` — set identically on the API, scheduler, and workers so on-demand “run now” jobs land where workers consume them. If you override either value, treat stream and subject as one cross-service contract and change them everywhere at once.',
+            'The code defaults are `CHECK_JOBS` and `check.jobs`, while the shipped Compose and Helm values are `check-jobs` and `check.job` — set identically on the API, scheduler, and workers so on-demand “run now” jobs land where workers consume them. If you override either value, treat stream and subject as one cross-service contract and change them everywhere at once. The Helm chart does this for you: `scheduler.checkJobStream` and `scheduler.checkJobSubject` set both variables on every workload, and a `worker.checkJobStream` or `worker.checkJobSubject` that differs from them fails the render.',
         },
       ],
     },
@@ -571,7 +571,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'The HTTP prefix is historical',
           text:
-            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, browser, TCP, gRPC, database, broker, and other [outbound dial paths](/docs/security/#ssrf-network-policy). Disabling the policy grants broad internal-network reach to monitor configuration.',
+            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, synthetic API, TCP, gRPC, database, broker, DNS nameserver, and other [outbound dial paths](/docs/security/#ssrf-network-policy); synthetic browser journeys are not covered. Disabling the policy grants broad internal-network reach to monitor configuration.',
         },
       ],
     },

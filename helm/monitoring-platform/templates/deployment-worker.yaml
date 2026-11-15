@@ -77,10 +77,7 @@ spec:
           value: "{{ .Values.worker.logLevel }}"
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 8 }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_URL" "key" "nats_url" "secret" .Values.nats.existingSecret "secretKey" .Values.nats.existingSecretKey) | nindent 8 }}
-        - name: CHECK_JOB_STREAM
-          value: "{{ .Values.worker.checkJobStream }}"
-        - name: CHECK_JOB_SUBJECT
-          value: "{{ .Values.worker.checkJobSubject }}"
+        {{- include "monitoring-platform.checkJobEnv" . | nindent 8 }}
         - name: NATS_CONSUMER_NAME
           value: "{{ .Values.worker.consumerName }}"
         - name: WORKER_CONCURRENCY
