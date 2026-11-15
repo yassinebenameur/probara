@@ -4,7 +4,7 @@ import { CSSProperties, KeyboardEvent, ReactNode, useEffect, useRef, useState } 
 import Link from 'next/link';
 import { AlarmClock, AlarmClockOff, Bell, BellOff, Check, ChevronDown, CircleCheck, Network, PencilLine, Tag, Undo2, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
-import { acknowledgeAlert, labelAlertTriage, resolveAlert, unacknowledgeAlert, unsnoozeAlert } from '@/lib/api';
+import { acknowledgeAlert, labelAlertTriage, resolveAlert, snoozeAlert, unacknowledgeAlert, unsnoozeAlert } from '@/lib/api';
 import { isSnoozed, notificationState } from '@/lib/alert-mute';
 import { labelErrorMessage } from '@/lib/ai-labels';
 import { buildTriageLabelRequest, triageMenuCopy, triagePresentation } from '@/lib/ai-triage';
@@ -544,7 +544,7 @@ export default function AlertFeed({
                 {snoozed && alert.snoozed_until && (
                   <span
                     className={`${CHIP} bg-well-hover text-slate-400`}
-                    title="Reminders and escalation steps not sent yet wait until then; the recovery notice is still sent"
+                    title={`Snoozed${alert.snoozed_by ? ` by ${alert.snoozed_by}` : ''}: reminders and escalation steps not sent yet wait until then; the recovery notice is still sent`}
                   >
                     <AlarmClock className="h-3 w-3 shrink-0" strokeWidth={1.75} />
                     Snoozed until {formatDateTime(alert.snoozed_until)}
@@ -669,9 +669,9 @@ export default function AlertFeed({
                 {open && (
                   <DetailRow label="Notifications" tone={notificationState(alert, now.getTime()) === 'notifying' ? 'default' : 'note'}>
                     {notificationState(alert, now.getTime()) === 'acknowledged'
-                      ? 'Stopped by the acknowledgement; only the recovery notice is sent'
+                      ? 'Reminders and escalation stopped by the acknowledgement'
                       : snoozed && alert.snoozed_until
-                        ? `Snoozed until ${formatDateTimeFull(alert.snoozed_until)}`
+                        ? `Snoozed until ${formatDateTimeFull(alert.snoozed_until)}${alert.snoozed_by ? ` by ${alert.snoozed_by}` : ''}`
                         : 'Reminders and escalation as configured'}
                   </DetailRow>
                 )}
@@ -837,7 +837,16 @@ export default function AlertFeed({
           <kbd className={KBD}>↓</kbd> move
         </p>
       )}
-      {snoozing && <SnoozeAlertDialog alert={snoozing} onClose={() => setSnoozing(null)} onSnoozed={handleSnoozed} />}
+      {snoozing && (
+        <SnoozeAlertDialog
+          subject={alertSubject(snoozing)}
+          onClose={() => setSnoozing(null)}
+          onSubmit={async (body) => {
+            stream?.markLocalAction(snoozing.id);
+            handleSnoozed(await snoozeAlert(snoozing.id, body));
+          }}
+        />
+      )}
       {labelling && (
         <TriageLabelDialog
           alert={labelling.alert}

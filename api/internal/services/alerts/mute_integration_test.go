@@ -33,6 +33,12 @@ func TestAlertMuteActions(t *testing.T) {
 	asUser := ctxpkg.WithAdminID(ctx, userID.String())
 	svc := alertsvc.NewService(dbc, nil)
 	now := time.Now()
+	firstAck := func(id uuid.UUID) *time.Time {
+		t.Helper()
+		var at *time.Time
+		require.NoError(t, dbc.QueryRowContext(ctx, `SELECT first_acknowledged_at FROM alerts WHERE id = $1`, id).Scan(&at))
+		return at
+	}
 
 	alertID := insertAlert(ctx, t, dbc, tenantID, monitor("api"), "active", now.Add(-time.Hour))
 	channelID := uuid.New()
@@ -75,9 +81,19 @@ func TestAlertMuteActions(t *testing.T) {
 		require.NoError(t, dbc.QueryRowContext(ctx, `SELECT acknowledged_sent_at FROM alert_notification_states WHERE alert_id = $1`,
 			alertID).Scan(&ackSentAt))
 		require.Nil(t, ackSentAt, "a later acknowledge must reach paging channels again")
+		require.NotNil(t, firstAck(alertID), "the first acknowledgement survives, for SLA reports")
 
 		_, err = svc.UnacknowledgeAlert(ctx, tenantID, alertID)
 		require.ErrorIs(t, err, alertsvc.ErrAlertNotAcknowledged)
+	})
+
+	t.Run("a re-acknowledge keeps the first acknowledgement time", func(t *testing.T) {
+		first := firstAck(alertID)
+		_, err := svc.AcknowledgeAlert(asUser, tenantID, alertID)
+		require.NoError(t, err)
+		require.Equal(t, first.UTC(), firstAck(alertID).UTC())
+		_, err = svc.UnacknowledgeAlert(ctx, tenantID, alertID)
+		require.NoError(t, err)
 	})
 
 	t.Run("snooze sets the end, reported while it holds", func(t *testing.T) {
@@ -85,11 +101,22 @@ func TestAlertMuteActions(t *testing.T) {
 		_, err := svc.SnoozeAlert(ctx, otherTenant, alertID, until)
 		require.ErrorIs(t, err, alertsvc.ErrAlertNotOpen)
 
-		got, err := svc.SnoozeAlert(ctx, tenantID, alertID, until)
+		got, err := svc.SnoozeAlert(asUser, tenantID, alertID, until)
 		require.NoError(t, err)
 		require.NotNil(t, got.SnoozedUntil)
 		require.WithinDuration(t, until, *got.SnoozedUntil, time.Second)
 		require.Equal(t, "active", string(got.Status), "a snoozed alert is still active")
+		require.NotNil(t, got.SnoozedBy)
+		require.Equal(t, "oncall", *got.SnoozedBy)
+		require.Equal(t, userID, *got.SnoozedByUserID)
+		require.NotNil(t, got.SnoozedAt)
+		started := *got.SnoozedAt
+
+		// Extending a running snooze keeps when it began.
+		got, err = svc.SnoozeAlert(ctx, tenantID, alertID, until.Add(time.Hour))
+		require.NoError(t, err)
+		require.Equal(t, started.UTC(), got.SnoozedAt.UTC())
+		require.Nil(t, got.SnoozedByUserID, "an API-key snooze names nobody")
 
 		_, err = svc.SnoozeAlert(ctx, tenantID, alertID, time.Now().Add(30*time.Second))
 		require.ErrorIs(t, err, alertsvc.ErrInvalidSnooze)
@@ -104,6 +131,8 @@ func TestAlertMuteActions(t *testing.T) {
 		got, err := svc.UnsnoozeAlert(ctx, tenantID, alertID)
 		require.NoError(t, err)
 		require.Nil(t, got.SnoozedUntil)
+		require.Nil(t, got.SnoozedAt)
+		require.Nil(t, got.SnoozedBy)
 		var end time.Time
 		require.NoError(t, dbc.QueryRowContext(ctx, `SELECT snoozed_until FROM alerts WHERE id = $1`, alertID).Scan(&end))
 		require.WithinDuration(t, time.Now(), end, 5*time.Second, "the end is kept: the alerter counts from it")

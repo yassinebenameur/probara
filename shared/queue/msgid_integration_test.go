@@ -4,6 +4,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -54,6 +55,39 @@ func TestPublishWithMsgIDDeduplicates(t *testing.T) {
 	}
 	if info.State.Msgs != 2 {
 		t.Fatalf("stored %d messages, want 2 (one per distinct id)", info.State.Msgs)
+	}
+}
+
+// PublishJSONUnique reports a publish JetStream discarded as a duplicate
+// instead of calling it a success; a new id is stored.
+func TestPublishJSONUniqueReportsDuplicates(t *testing.T) {
+	srv, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Start()
+	if !srv.ReadyForConnections(10 * time.Second) {
+		t.Fatal("nats server not ready")
+	}
+	t.Cleanup(srv.Shutdown)
+
+	c, err := NewClient(srv.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	ctx := context.Background()
+	if _, err := c.EnsureWorkQueueStream(ctx, "UNIQUE_TEST", []string{"unique.test"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PublishJSONUnique(ctx, "unique.test", map[string]int{"n": 1}, MsgIDHeaders("one")); err != nil {
+		t.Fatalf("first publish: %v", err)
+	}
+	if err := c.PublishJSONUnique(ctx, "unique.test", map[string]int{"n": 2}, MsgIDHeaders("one")); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("second publish with the same id: err = %v, want ErrDuplicate", err)
+	}
+	if err := c.PublishJSONUnique(ctx, "unique.test", map[string]int{"n": 3}, MsgIDHeaders("two")); err != nil {
+		t.Fatalf("publish with a new id: %v", err)
 	}
 }
 

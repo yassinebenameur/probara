@@ -358,58 +358,56 @@ func insertTriageLabel(ctx context.Context, t *testing.T, db *shareddb.Client, c
 	`, c.tenantID, c.triageID.String(), c.triageID, verdict, ai.CatalogueVersion)
 }
 
-// An acknowledged or snoozed alert gets no hint: acknowledging stops every
-// notification but the resolve. Once unacknowledged and unsnoozed it does,
-// carrying the catalogue's wording for the triage's key; the claim re-checks
-// the mute too, for a dispatcher that read the alert before the ack.
-func TestSuspectedCauseMutedByAckAndSnooze(t *testing.T) {
-	ctx := context.Background()
-	db, cleanup := testutil.SetupPostgresDB(ctx, t)
-	defer cleanup()
-	c := newCauseCase(ctx, t, db, followUpStubType)
+// An acknowledged or snoozed alert still gets the hint (it helps whoever is
+// working it), exactly once, while its reminders stay muted; the event
+// carries the catalogue's wording for the triage's key and the alert's own
+// status.
+func TestSuspectedCauseOnAcknowledgedOrSnoozedAlert(t *testing.T) {
+	for _, tc := range []struct {
+		name, mute, wantStatus string
+	}{
+		{"acknowledged", `UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW() WHERE id = $1`, "acknowledged"},
+		{"snoozed", `UPDATE alerts SET snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, "active"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, cleanup := testutil.SetupPostgresDB(ctx, t)
+			defer cleanup()
+			c := newCauseCase(ctx, t, db, followUpStubType)
+			mustExec(ctx, t, db, `UPDATE tenants SET alert_reminder_seconds = 60 WHERE id = $1`, c.tenantID)
+			mustExec(ctx, t, db, tc.mute, c.alertID)
 
-	rec := &causeRecorder{}
-	a := newIntegrationAlerter(db)
-	a.sendFunc = rec.send
-	mustExec(ctx, t, db, `UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW() WHERE id = $1`, c.alertID)
-	if err := a.dispatchSuspectedCauses(ctx); err != nil {
-		t.Fatal(err)
-	}
-	mustExec(ctx, t, db, `UPDATE alerts SET status = 'active', acknowledged_at = NULL, unacknowledged_at = NOW(),
-		snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, c.alertID)
-	if err := a.dispatchSuspectedCauses(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if got := rec.count("suspected_cause", c.alertID); got != 0 {
-		t.Fatalf("follow-ups while acknowledged or snoozed = %d, want 0", got)
-	}
-	// Through the claim alone, as for a dispatcher that loaded it earlier.
-	record := alertRecord{ID: c.alertID, TenantID: c.tenantID, MonitorID: c.monitorID, Status: "active"}
-	if sent, err := a.deliverNotification(ctx, "suspected_cause", alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID},
-		&record, nil, alertChannel{ID: c.channelID, Type: followUpStubType, IsActive: true}, time.Now(), 0); err != nil || sent {
-		t.Fatalf("follow-up claimed on a snoozed alert: sent=%v err=%v", sent, err)
-	}
-	if at := suspectedCauseSentAt(ctx, t, db, c.alertID, c.channelID); at != nil {
-		t.Fatal("a muted follow-up must not hold its one-shot claim")
-	}
-
-	mustExec(ctx, t, db, `UPDATE alerts SET snoozed_until = NOW() WHERE id = $1`, c.alertID)
-	if err := a.dispatchSuspectedCauses(ctx); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := rec.last("suspected_cause")
-	if !ok {
-		t.Fatal("no follow-up once the alert is neither acknowledged nor snoozed")
-	}
-	title, actions, _ := ai.RCAChoice("dns_failure")
-	sc := got.record.SuspectedCause
-	if got.record.Status != "active" || sc == nil || sc.Key != "dns_failure" || sc.Title != title ||
-		sc.Confidence != "high" || len(sc.Actions) != len(actions) || sc.TriageID != c.triageID.String() {
-		t.Fatalf("record = status %q cause %+v", got.record.Status, sc)
-	}
-	event := buildAlertEvent("suspected_cause", alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID}, &got.record, nil, time.Now())
-	if event.Type != "suspected_cause" || event.Alert.Status != "active" || event.Alert.SuspectedCause == nil {
-		t.Fatalf("event = %+v", event)
+			rec := &causeRecorder{}
+			a := newIntegrationAlerter(db)
+			a.sendFunc = rec.send
+			for i := 0; i < 2; i++ {
+				if err := a.dispatchSuspectedCauses(ctx); err != nil {
+					t.Fatal(err)
+				}
+				// The page is five minutes old and reminders are due every
+				// minute: only the mute keeps them back.
+				if err := a.dispatchOpenAlerts(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := rec.count("suspected_cause", c.alertID); got != 1 {
+				t.Fatalf("follow-ups = %d, want exactly 1", got)
+			}
+			if got := rec.count("reminder", c.alertID); got != 0 {
+				t.Fatalf("reminders on a muted alert = %d, want 0", got)
+			}
+			got, _ := rec.last("suspected_cause")
+			title, actions, _ := ai.RCAChoice("dns_failure")
+			sc := got.record.SuspectedCause
+			if got.record.Status != tc.wantStatus || sc == nil || sc.Key != "dns_failure" || sc.Title != title ||
+				sc.Confidence != "high" || len(sc.Actions) != len(actions) || sc.TriageID != c.triageID.String() {
+				t.Fatalf("record = status %q cause %+v", got.record.Status, sc)
+			}
+			event := buildAlertEvent("suspected_cause", alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID}, &got.record, nil, time.Now())
+			if event.Type != "suspected_cause" || event.Alert.Status != tc.wantStatus || event.Alert.SuspectedCause == nil {
+				t.Fatalf("event = %+v", event)
+			}
+		})
 	}
 }
 

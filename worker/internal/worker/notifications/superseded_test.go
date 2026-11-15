@@ -55,14 +55,14 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 		{"suspected_cause", "resolved", false, false},
 		{"suspected_cause", "active", false, true},
 		{"resolved", "resolved", false, true}, // resolves are never superseded
-		// Acknowledged or snoozed since publish: the mute holds the page,
-		// the reminder and the follow-up, never the provider acknowledgement.
+		// Acknowledged or snoozed since publish: the mute holds the page and
+		// the reminder, never the follow-up or the provider acknowledgement.
 		{"created", "acknowledged", false, false},
 		{"reminder", "acknowledged", false, false},
-		{"suspected_cause", "acknowledged", false, false},
+		{"suspected_cause", "acknowledged", false, true},
 		{"created", "active", true, false},
 		{"reminder", "active", true, false},
-		{"suspected_cause", "active", true, false},
+		{"suspected_cause", "active", true, true},
 		{"acknowledged", "acknowledged", true, true},
 		// Unacknowledged since publish: the provider must not be told to stop.
 		{"acknowledged", "active", false, false},
@@ -196,28 +196,5 @@ func TestHandle_DropsTriggerQueuedBeforeAck(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-	}
-}
-
-// ackOvertaken stays the backstop for a trigger that reaches a paging
-// provider after an acknowledgement: it asks for a follow-up acknowledge on
-// paging channels only, and only after a trigger.
-func TestAckOvertaken(t *testing.T) {
-	paging := pagingStub.Manifest()
-	chat := stub.Manifest()
-	if !ackOvertaken(paging, "created", "acknowledged") {
-		t.Fatal("a trigger delivered to a paging channel after the ack must be acknowledged again")
-	}
-	for _, tc := range []struct {
-		m             plugin.Manifest
-		event, status string
-	}{
-		{paging, "created", "active"},
-		{paging, "reminder", "acknowledged"},
-		{chat, "created", "acknowledged"},
-	} {
-		if ackOvertaken(tc.m, tc.event, tc.status) {
-			t.Fatalf("ackOvertaken(%s, %s, %s) = true", tc.m.Type, tc.event, tc.status)
-		}
 	}
 }

@@ -1,3 +1,4 @@
+import { isSnoozed } from './alert-mute';
 import type { Alert } from './types';
 
 /**
@@ -7,11 +8,15 @@ import type { Alert } from './types';
  * ticks. components/alerts/AlertTimeline.tsx only lays the result out.
  */
 
-/** What a line segment says about the alert during that span. */
-export type TimelineTone = 'active' | 'acknowledged' | 'suppressed' | 'resolved';
+/**
+ * What a line segment says about the alert during that span. `snoozed` is an
+ * active alert whose reminders a snooze holds: still active everywhere it is
+ * counted, drawn muted.
+ */
+export type TimelineTone = 'active' | 'snoozed' | 'acknowledged' | 'suppressed' | 'resolved';
 
 /** Draw order where spans overlap on a lane, and which open alert a lane speaks for. */
-const TONE_RANK: Record<TimelineTone, number> = { resolved: 0, suppressed: 1, acknowledged: 2, active: 3 };
+const TONE_RANK: Record<TimelineTone, number> = { resolved: 0, suppressed: 1, snoozed: 2, acknowledged: 3, active: 4 };
 
 export interface TimelineWindow {
   /** Epoch ms. */
@@ -125,9 +130,11 @@ export function foldSuppressed(alerts: readonly Alert[]): Map<string, string> {
 /**
  * The alert as line segments inside `window`, oldest first; empty when the
  * alert never overlaps it. An acknowledged alert is active until its
- * acknowledgement and acknowledged after; a resolved one is one resolved
- * span whatever happened on the way; a suppressed one is suppressed
- * throughout (`suppressed` comes from the API's own predicate).
+ * acknowledgement and acknowledged after; an active alert snoozed at the
+ * window's end is active until its snooze began and snoozed after (an
+ * earlier, ended snooze is not reported, so it draws as active); a resolved
+ * one is one resolved span whatever happened on the way; a suppressed one is
+ * suppressed throughout (`suppressed` comes from the API's own predicate).
  */
 export function alertSegments(alert: Alert, window: TimelineWindow, suppressed: boolean): TimelineSegment[] {
   const triggered = time(alert.triggered_at);
@@ -142,18 +149,25 @@ export function alertSegments(alert: Alert, window: TimelineWindow, suppressed: 
 
   if (alert.status === 'resolved') return [span(from, to, 'resolved')];
   if (suppressed) return [span(from, to, 'suppressed')];
-  if (alert.status !== 'acknowledged') return [span(from, to, 'active')];
+  if (alert.status !== 'acknowledged') {
+    if (!isSnoozed(alert, window.end)) return [span(from, to, 'active')];
+    const since = time(alert.snoozed_at);
+    if (since === null || since <= from) return [span(from, to, 'snoozed')];
+    if (since >= to) return [span(from, to, 'active')];
+    return [span(from, since, 'active'), span(since, to, 'snoozed')];
+  }
   const acked = time(alert.acknowledged_at);
   if (acked === null || acked <= from) return [span(from, to, 'acknowledged')];
   if (acked >= to) return [span(from, to, 'active')];
   return [span(from, acked, 'active'), span(acked, to, 'acknowledged')];
 }
 
-/** The tone an alert has now (its last segment's). */
-export function currentTone(alert: Alert, suppressed: boolean): TimelineTone {
+/** The tone an alert has at `now` (its last segment's). */
+export function currentTone(alert: Alert, suppressed: boolean, now: number = Date.now()): TimelineTone {
   if (alert.status === 'resolved') return 'resolved';
   if (suppressed) return 'suppressed';
-  return alert.status === 'acknowledged' ? 'acknowledged' : 'active';
+  if (alert.status === 'acknowledged') return 'acknowledged';
+  return isSnoozed(alert, now) ? 'snoozed' : 'active';
 }
 
 function buildLane(
@@ -178,7 +192,7 @@ function buildLane(
     if (triggered >= window.start) markers.push({ alertId: alert.id, at: triggered, tone: spans[0].tone });
     if (!newest || triggered > Date.parse(newest.triggered_at)) newest = alert;
     if (isOpenAlert(alert)) {
-      const tone = currentTone(alert, suppressed);
+      const tone = currentTone(alert, suppressed, window.end);
       // The open alert that matters most; the newest among equals, as the queue orders them.
       if (
         !lead ||

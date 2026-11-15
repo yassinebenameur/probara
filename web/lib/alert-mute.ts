@@ -2,7 +2,8 @@ import type { Alert } from './types';
 
 /**
  * The acknowledge mute, as the Alerts page shows and drives it. An
- * acknowledged or snoozed open alert sends nothing but its resolve notice;
+ * acknowledged or snoozed open alert sends no reminder and no further
+ * escalation (its resolve and any suspected-cause follow-up still go out);
  * unacknowledging or ending the snooze resumes reminders and escalation tiers
  * not fired yet, counted from then. The rule itself is the server's
  * (shared/alertrouting); these only read the alert and shape requests.

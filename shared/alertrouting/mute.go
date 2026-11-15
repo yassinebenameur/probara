@@ -1,12 +1,13 @@
 package alertrouting
 
 // The acknowledge/snooze mute. An open alert that is acknowledged, or snoozed
-// until a time still ahead, sends nothing but its resolve notice: no
-// reminder, no first send to an escalation route whose delay had not run out
-// yet, no suspected-cause follow-up. It applies to every alert kind and every
-// route, with no setting. An acknowledgement still reaches the paging
-// channels already paged (the "acknowledged" event), since that is what stops
-// the provider's own escalation.
+// until a time still ahead, sends no reminder and no first page to an
+// escalation route whose delay had not run out yet. It applies to every alert
+// kind and every route, with no setting. Everything else still goes out: the
+// resolve notice, the acknowledgement to paging channels already paged (it
+// is what stops the provider's own escalation), and the one-shot
+// suspected-cause follow-up to channels already paged (it helps whoever is
+// working the alert).
 //
 // Three places decide a send and all of them read the mute from here, so they
 // cannot disagree: the alerter's pre-filter (MutedPredicate selected next to
@@ -41,16 +42,11 @@ func DispatchResumedAtExpr(alertAlias string) string {
 }
 
 // MuteHolds reports whether the mute holds back an event of eventType for an
-// alert that is acknowledged and/or snoozed. It holds the page ("created"),
-// the reminder and the suspected-cause follow-up; never the resolve, nor the
-// acknowledgement to paging channels.
+// alert that is acknowledged and/or snoozed: the page ("created") and the
+// reminder only.
 func MuteHolds(eventType string, acknowledged, snoozed bool) bool {
 	if !acknowledged && !snoozed {
 		return false
 	}
-	switch eventType {
-	case "created", "reminder", "suspected_cause":
-		return true
-	}
-	return false
+	return eventType == "created" || eventType == "reminder"
 }

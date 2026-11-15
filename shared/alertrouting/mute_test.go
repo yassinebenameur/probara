@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// The mute holds every notification of an open alert except its resolve and
-// the acknowledgement to paging channels, for any reason it is muted.
+// The mute holds an open alert's pages and reminders, for any reason it is
+// muted; the resolve, the acknowledgement and the suspected-cause follow-up
+// still go out.
 func TestMuteHolds(t *testing.T) {
 	for _, tc := range []struct {
 		event          string
@@ -18,10 +19,10 @@ func TestMuteHolds(t *testing.T) {
 		{"suspected_cause", false, false, false},
 		{"created", true, false, true},
 		{"reminder", true, false, true},
-		{"suspected_cause", true, false, true},
+		{"suspected_cause", true, false, false},
 		{"created", false, true, true},
 		{"reminder", false, true, true},
-		{"suspected_cause", false, true, true},
+		{"suspected_cause", false, true, false},
 		{"reminder", true, true, true},
 		{"resolved", true, true, false},
 		{"resolved", false, true, false},

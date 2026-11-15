@@ -31,7 +31,6 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
-	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
@@ -208,10 +207,10 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	if muted {
 		// Acknowledged or snoozed since publish (alertrouting.MuteHolds): an
 		// acknowledgement must never lose the race to a page or reminder
-		// already queued. Unlike a resolve the mute can lift, so the
-		// alerter's claim is handed back under the same lock and the event
-		// is due again then, instead of counting as sent when it never was.
-		if err := releaseMutedClaim(ctx, tx, envelope); err != nil {
+		// already queued. Unlike a resolve the mute can lift, so a page that
+		// provably reached nobody hands the alerter's claim back under the
+		// same lock and is due again then (releaseMutedClaim).
+		if err := releaseMutedClaim(ctx, tx, envelope, deliveryAttempt(msg)); err != nil {
 			entry.WithError(err).Error("Failed to release a muted notification claim")
 			return err
 		}
@@ -269,20 +268,6 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		})
 	}
 	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
-	if err == nil && ackOvertaken(p.Manifest(), envelope.EventType, alertStatus) {
-		// The operator acknowledged while this trigger sat on a retry
-		// backoff, so the "acknowledged" envelope has already been delivered
-		// and the provider dropped it as a no-op for an incident it did not
-		// have yet. It is never re-sent (acknowledged_sent_at is set), so the
-		// incident just opened would escalate forever. Acknowledge it now,
-		// still under the share lock, so nothing else can reorder the pair.
-		// It has its own ledger key: under "acknowledged" a fan-out plugin
-		// would skip everyone the no-op ack reached.
-		ack := envelope.Event
-		ack.Type = present.EventAcknowledged
-		ack.Alert.Status = alertStatus
-		err = send(present.EventAcknowledged, notifications.OvertakenAckKey, ack)
-	}
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted
@@ -290,33 +275,12 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			entry.WithError(err).WithField("attempt", attempt).Error("Plugin Send failed permanently; dropping message")
 			return nil
 		}
-		// A failed follow-up acknowledge also retries the trigger. Paging
-		// providers dedupe triggers on the alert's key, so the redelivery
-		// re-opens nothing and gets the acknowledge a second chance.
 		entry.WithError(err).WithField("attempt", attempt).Warn("Plugin Send failed; will retry")
 		return err
 	}
 
 	entry.WithField("attempt", attempt).Debug("Notification delivered")
 	return nil
-}
-
-// ackOvertaken reports whether a just-delivered trigger landed after the
-// alert was acknowledged, on a channel that tracks acknowledgement state.
-// That happens when a trigger fails and waits on the JetStream backoff while
-// the operator acknowledges: the alerter publishes "acknowledged" as soon as
-// the created slot is claimed, not when it is delivered, so the ack can
-// overtake it. It also covers a later escalation tier paging a channel after
-// the ack.
-//
-// Since acknowledging mutes an alert, eventSuperseded drops such a trigger
-// under the same lock before it is sent, so this no longer fires for an
-// acknowledged alert; it stays as the backstop that keeps a provider incident
-// from escalating forever should a trigger ever reach a send after an ack.
-func ackOvertaken(m plugin.Manifest, eventType, alertStatus string) bool {
-	return eventType == present.EventCreated &&
-		alertStatus == "acknowledged" &&
-		m.HasCapability(plugin.CapabilityAcknowledge)
 }
 
 // eventSuperseded reports whether envelope describes an alert state the
@@ -332,9 +296,9 @@ func ackOvertaken(m plugin.Manifest, eventType, alertStatus string) bool {
 //
 // muted is set (with superseded false) when the alert is still open but
 // acknowledged or snoozed and the event is one the mute holds
-// (alertrouting.MuteHolds: a page, a reminder or a suspected-cause
-// follow-up): the caller drops it and hands its claim back
-// (releaseMutedClaim), because the mute is temporary.
+// (alertrouting.MuteHolds: a page or a reminder): the caller drops it and,
+// when it is safe, hands its claim back (releaseMutedClaim), because the
+// mute is temporary.
 func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded, muted bool, status string, err error) {
 	if envelope.EventType == "resolved" {
 		return false, false, "", nil
@@ -364,19 +328,30 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 	return false, alertrouting.MuteHolds(envelope.EventType, status == "acknowledged", snoozed), status, nil
 }
 
-// releaseMutedClaim hands back the alerter's claim on an event the mute held,
-// inside tx (which still holds the alert row FOR SHARE, so no claim can move
-// meanwhile), matching the row only while it still records exactly that
-// claim: its time is the event's timestamp, the claim's `now`.
+// releaseMutedClaim hands back the alerter's claim on a page ("created") the
+// mute held, inside tx (which still holds the alert row FOR SHARE, so no
+// claim can move meanwhile), so the route is paged once the mute lifts
+// instead of counting as paged when it never was. Left in place, a route
+// would only ever get reminders after an unacknowledge, which paging
+// providers ignore.
 //
-//   - created: the state row is deleted. Left in place the channel would
-//     count as paged, so after an unacknowledge it would only ever get
-//     reminders, which paging providers ignore, and never the page itself.
-//   - suspected_cause: the one-shot suspected_cause_sent_at is cleared.
-//   - reminder: left as claimed. The next round counts from the later of
-//     the last send and the way out of the mute, and the mute was lifted
-//     after this claim, so the earlier last_sent_at would change nothing.
-func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) error {
+// Only a page that provably reached nobody is handed back: the first
+// delivery attempt (no earlier attempt can have reached a provider, even
+// one whose answer was lost to a timeout) with nothing in the recipient
+// ledger for its key. Any other held page keeps its claim, so the channel
+// still counts as paged and gets the acknowledgement and the recovery notice:
+// a provider that opened an incident on an attempt whose reply was lost, or
+// the recipients a multi-recipient send already reached, must hear both.
+// The row is matched only while it still records exactly this claim (its
+// time is the event's timestamp, the claim's `now`).
+//
+// A held reminder keeps its claim: its next round counts from the later of
+// the last send and the way out of the mute, which comes after this claim,
+// so the earlier last_sent_at would change nothing.
+func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope, attempt int) error {
+	if envelope.EventType != "created" || attempt > 1 || envelope.Event.Timestamp.IsZero() {
+		return nil
+	}
 	alertID, err := uuid.Parse(envelope.AlertID)
 	if err != nil {
 		return fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
@@ -385,24 +360,15 @@ func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.D
 	if err != nil {
 		return fmt.Errorf("invalid channel id %q: %w", envelope.ChannelID, err)
 	}
-	claimedAt := envelope.Event.Timestamp
-	if claimedAt.IsZero() {
-		return nil
+	reached, err := recipientledger.Reached(ctx, tx, alertID, channelID, envelope.RecipientKey())
+	if err != nil || reached {
+		return err
 	}
-	switch envelope.EventType {
-	case "created":
-		_, err = tx.ExecContext(ctx, `
-			DELETE FROM alert_notification_states
-			WHERE alert_id = $1 AND channel_id = $2
-			  AND last_event_type = 'created' AND last_sent_at = $3::timestamptz`,
-			alertID, channelID, claimedAt)
-	case "suspected_cause":
-		_, err = tx.ExecContext(ctx, `
-			UPDATE alert_notification_states
-			SET suspected_cause_sent_at = NULL, updated_at = NOW()
-			WHERE alert_id = $1 AND channel_id = $2 AND suspected_cause_sent_at = $3::timestamptz`,
-			alertID, channelID, claimedAt)
-	}
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM alert_notification_states
+		WHERE alert_id = $1 AND channel_id = $2
+		  AND last_event_type = 'created' AND last_sent_at = $3::timestamptz`,
+		alertID, channelID, envelope.Event.Timestamp)
 	return err
 }
 

@@ -283,9 +283,12 @@ export function alertStatusTone(status: AlertStatus | string | null | undefined)
  * A resolved alert is history, so its line is neutral: green stays for the
  * status pill. Suppressed is told apart by pattern as well as weight (a
  * dashed line, a hollow dot), since on a 3px line colour alone would not.
+ * Snoozed is active muted: the same red, faint.
  */
 export const TIMELINE_LINE: Record<TimelineTone, string> = {
   active: 'bg-rose-500',
+  // Snoozed: still active, drawn muted (the red at low strength, solid).
+  snoozed: 'bg-rose-500/35',
   acknowledged: 'bg-amber-500',
   suppressed: 'bg-[repeating-linear-gradient(90deg,rgb(var(--tw-rose-500))_0_5px,transparent_5px_9px)]',
   resolved: 'bg-slate-500',
@@ -293,6 +296,7 @@ export const TIMELINE_LINE: Record<TimelineTone, string> = {
 
 export const TIMELINE_DOT: Record<TimelineTone, string> = {
   active: 'bg-rose-500',
+  snoozed: 'bg-rose-500/35',
   acknowledged: 'bg-amber-500',
   suppressed: 'bg-[rgb(var(--panel-rgb))] shadow-[inset_0_0_0_1.5px_rgb(var(--tw-rose-500))]',
   resolved: 'bg-slate-500',
@@ -300,6 +304,7 @@ export const TIMELINE_DOT: Record<TimelineTone, string> = {
 
 export const TIMELINE_TONE_LABEL: Record<TimelineTone, string> = {
   active: 'Active',
+  snoozed: 'Snoozed',
   acknowledged: 'Acknowledged',
   suppressed: 'Suppressed',
   resolved: 'Resolved',

@@ -15,7 +15,7 @@ import (
 
 // Unacknowledge and snooze, the two ways out of and around the
 // acknowledge mute (shared/alertrouting mute.go): an acknowledged or snoozed
-// alert sends nothing but its resolve notice. Lifting either (unacknowledge,
+// alert sends no reminder and no further escalation. Lifting either (unacknowledge,
 // unsnooze, or the snooze running out) stamps the moment the alerter counts
 // unfired escalation tiers and reminders from.
 
@@ -61,7 +61,7 @@ func actingUserID(ctx context.Context) *uuid.UUID {
 // unackSQL (after bulkTargetCTE over acknowledged alerts) returns them to
 // active: unacknowledged_at restarts the tier and reminder clocks, and the
 // acknowledgement (time, user) is cleared, since the payload reports the
-// current one. The one-shot acknowledged_sent_at goes too, so a later
+// current one; first_acknowledged_at stays, for SLA reports. The one-shot acknowledged_sent_at goes too, so a later
 // acknowledge reaches paging channels again. A provider already told about
 // the first acknowledge (PagerDuty, Opsgenie) is not un-acknowledged: their
 // event APIs have no such action. The database clock stamps it, the clock
@@ -82,11 +82,13 @@ const unackSQL = `
 	)
 	SELECT id FROM changed`
 
-// snoozeSQL (after bulkTargetCTE over open alerts) sets the snooze end $4,
-// replacing a running snooze. It is independent of acknowledgement.
+// snoozeSQL (after bulkTargetCTE over open alerts) sets the snooze end $4 and
+// the snoozing user $5, replacing a running snooze (whose start it keeps). It
+// is independent of acknowledgement.
 const snoozeSQL = `
 	UPDATE alerts a
-	SET snoozed_until = $4, updated_at = NOW()
+	SET snoozed_until = $4, snoozed_by_user_id = $5, updated_at = NOW(),
+		snoozed_at = CASE WHEN a.snoozed_until > NOW() THEN a.snoozed_at ELSE NOW() END
 	FROM target
 	WHERE a.id = target.id
 	RETURNING a.id`
@@ -123,13 +125,13 @@ func (s *Service) UnacknowledgeAlert(ctx context.Context, tenantID, alertID uuid
 	return s.getAlert(ctx, tenantID, alertID)
 }
 
-// SnoozeAlert mutes an open alert's notifications, except its resolve
-// notice, until until (ValidateSnoozeEnd).
+// SnoozeAlert mutes an open alert's reminders and further escalation until
+// until (ValidateSnoozeEnd), recording the acting user as the snoozer.
 func (s *Service) SnoozeAlert(ctx context.Context, tenantID, alertID uuid.UUID, until time.Time) (*models.AlertWithDetails, error) {
 	if err := ValidateSnoozeEnd(until); err != nil {
 		return nil, err
 	}
-	changed, err := s.applyMute(ctx, tenantID, []uuid.UUID{alertID}, openStatuses, snoozeSQL, until)
+	changed, err := s.applyMute(ctx, tenantID, []uuid.UUID{alertID}, openStatuses, snoozeSQL, until, actingUserID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to snooze alert: %w", err)
 	}
@@ -175,7 +177,7 @@ func (s *Service) BulkSnooze(ctx context.Context, tenantID uuid.UUID, alertIDs [
 		return nil, err
 	}
 	ids := dedupeIDs(alertIDs)
-	changed, err := s.applyMute(ctx, tenantID, ids, openStatuses, snoozeSQL, until)
+	changed, err := s.applyMute(ctx, tenantID, ids, openStatuses, snoozeSQL, until, actingUserID(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to bulk snooze alerts: %w", err)
 	}

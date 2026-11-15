@@ -272,12 +272,18 @@ func outageRow(o sharedanalytics.Outage, name string) models.SLAReportOutage {
 }
 
 // alertResponse fills MTTA from availability alerts triggered in the window,
-// including group roll-up alerts on the SLA's explicit group monitors.
+// including group roll-up alerts on the SLA's explicit group monitors. It
+// counts from an alert's first acknowledgement, which an unacknowledge never
+// clears: a later re-acknowledge does not stretch it, and an alert
+// unacknowledged before it resolved still counts as acknowledged. The
+// COALESCE covers an acknowledgement written during a rollout by an API
+// that predates first_acknowledged_at (migration 000102).
 func (s *Service) alertResponse(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, window sharedanalytics.TimeRange, out *models.SLAReportResponse) error {
 	var mtta sql.NullFloat64
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*), COUNT(acknowledged_at),
-			AVG(EXTRACT(EPOCH FROM acknowledged_at - triggered_at)) FILTER (WHERE acknowledged_at IS NOT NULL)
+		SELECT COUNT(*), COUNT(COALESCE(first_acknowledged_at, acknowledged_at)),
+			AVG(EXTRACT(EPOCH FROM COALESCE(first_acknowledged_at, acknowledged_at) - triggered_at))
+				FILTER (WHERE COALESCE(first_acknowledged_at, acknowledged_at) IS NOT NULL)
 		FROM alerts
 		WHERE tenant_id = $1 AND kind = 'availability' AND monitor_id = ANY($2)
 		  AND triggered_at >= $3 AND triggered_at < $4

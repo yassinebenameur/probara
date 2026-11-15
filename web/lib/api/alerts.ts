@@ -56,9 +56,9 @@ export async function resolveAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/resolve`);
 }
 
-// The acknowledge mute: an acknowledged or snoozed alert sends nothing but its
-// resolve notice. Unacknowledging or ending a snooze resumes reminders and
-// unfired escalation tiers, counted from then.
+// The acknowledge mute: an acknowledged or snoozed alert sends no reminder and
+// no further escalation. Unacknowledging or ending a snooze resumes reminders
+// and unfired escalation tiers, counted from then.
 export async function unacknowledgeAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/unacknowledge`);
 }
@@ -73,6 +73,17 @@ export async function snoozeAlert(
 
 export async function unsnoozeAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/unsnooze`);
+}
+
+export async function bulkUnacknowledgeAlerts(ids: string[]): Promise<AlertBulkResult> {
+  return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/unacknowledge', { ids });
+}
+
+export async function bulkSnoozeAlerts(
+  ids: string[],
+  body: { duration_minutes: number } | { until: string }
+): Promise<AlertBulkResult> {
+  return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/snooze', { ids, ...body });
 }
 
 // Bulk triage (writes; at most 500 ids). Never all-or-nothing: `items` are

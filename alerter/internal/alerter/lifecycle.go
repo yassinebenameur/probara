@@ -75,9 +75,8 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 // decides whether an open alert may notify right now: dispatchOpenAlerts
 // (escalation tiers, reminders) and dispatchSuspectedCauses share it, so an
 // advisory follow-up is muted exactly when a reminder would be. The
-// acknowledge/snooze mute is not part of it: dispatchOpenAlerts applies that
-// per channel in openAlertEventDue, and dispatchSuspectedCauses adds
-// alertrouting.MutedPredicate itself.
+// acknowledge/snooze mute is not part of it: it holds pages and reminders
+// only, and dispatchOpenAlerts applies it per channel in openAlertEventDue.
 func openAlertDispatchablePredicate() string {
 	return `al.status IN ('active', 'acknowledged')
 		  AND m.deleted_at IS NULL

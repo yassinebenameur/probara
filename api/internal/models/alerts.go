@@ -78,8 +78,13 @@ type AlertWithDetails struct {
 	AcknowledgedByUserID *uuid.UUID `json:"acknowledged_by_user_id,omitempty"`
 	AcknowledgedBy       *string    `json:"acknowledged_by,omitempty"`
 	// SnoozedUntil is set while the open alert is snoozed: until then it
-	// sends nothing but its resolve notice. Absent once the snooze ended.
-	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
+	// sends no reminder and no further escalation. Absent once the snooze
+	// ended, as are SnoozedAt (when the running snooze began) and
+	// SnoozedByUserID / SnoozedBy (who set it; absent for an API key).
+	SnoozedUntil    *time.Time `json:"snoozed_until,omitempty"`
+	SnoozedAt       *time.Time `json:"snoozed_at,omitempty"`
+	SnoozedByUserID *uuid.UUID `json:"snoozed_by_user_id,omitempty"`
+	SnoozedBy       *string    `json:"snoozed_by,omitempty"`
 }
 
 // SnoozeAlertRequest is the body of POST /alerts/{id}/snooze: exactly one of

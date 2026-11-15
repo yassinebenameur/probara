@@ -16,9 +16,10 @@ import (
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
-// Migration 000101 adds the alert columns behind acknowledge, unacknowledge
-// and snooze. Walk it down and back up through golang-migrate, as a rollback
-// and re-upgrade would, with an alert carrying all three set.
+// Migrations 000101 and 000102 add the alert columns behind acknowledge,
+// unacknowledge and snooze. Walk them down and back up through
+// golang-migrate, as a rollback and re-upgrade would, with alerts carrying
+// them set; 000102 backfills the first acknowledgement from the current one.
 func TestAlertMuteMigrationUpDownUp(t *testing.T) {
 	ctx := context.Background()
 	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -48,7 +49,8 @@ func TestAlertMuteMigrationUpDownUp(t *testing.T) {
 		if err := dbc.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM information_schema.columns
 			WHERE table_name = 'alerts'
-			  AND column_name IN ('acknowledged_by_user_id', 'unacknowledged_at', 'snoozed_until')`).Scan(&n); err != nil {
+			  AND column_name IN ('acknowledged_by_user_id', 'unacknowledged_at', 'snoozed_until',
+				'first_acknowledged_at', 'snoozed_at', 'snoozed_by_user_id')`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
@@ -73,20 +75,57 @@ func TestAlertMuteMigrationUpDownUp(t *testing.T) {
 		}
 	}
 
-	migrateTo(101)
-	if got := columns(); got != 3 {
-		t.Fatalf("columns after 000101 = %d, want 3", got)
+	snoozeBy := func() {
+		t.Helper()
+		userID := uuid.New()
+		if _, err := dbc.ExecContext(ctx, `INSERT INTO admin_users (id, username, password_hash) VALUES ($1, $2, 'x')`,
+			userID, "s-"+userID.String()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := dbc.ExecContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count,
+				first_acknowledged_at, snoozed_at, snoozed_by_user_id, snoozed_until)
+			VALUES ($1, $2, $3, 'availability', 'resolved', NOW(), 0, NOW(), NOW(), $4, NOW() + INTERVAL '1 hour')`,
+			uuid.New(), tenant, monitor, userID); err != nil {
+			t.Fatalf("insert a snoozed alert: %v", err)
+		}
+		if _, err := dbc.ExecContext(ctx, `DELETE FROM admin_users WHERE id = $1`, userID); err != nil {
+			t.Fatalf("delete the snoozing user: %v", err)
+		}
 	}
-	muteAlert()
 
-	migrateTo(100)
-	if got := columns(); got != 0 {
-		t.Fatalf("columns after rolling back 000101 = %d, want 0", got)
+	for round := 0; round < 2; round++ {
+		migrateTo(100)
+		if got := columns(); got != 0 {
+			t.Fatalf("columns at 000100 = %d, want 0", got)
+		}
+		migrateTo(101)
+		if got := columns(); got != 3 {
+			t.Fatalf("columns after 000101 = %d, want 3", got)
+		}
+		muteAlert()
+		// An acknowledged alert from before 000102.
+		acked := uuid.New()
+		if _, err := dbc.ExecContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count, acknowledged_at)
+			VALUES ($1, $2, $3, 'availability', 'resolved', NOW(), 0, NOW() - INTERVAL '5 minutes')`,
+			acked, tenant, monitor); err != nil {
+			t.Fatal(err)
+		}
+		migrateTo(102)
+		if got := columns(); got != 6 {
+			t.Fatalf("columns after 000102 = %d, want 6", got)
+		}
+		var backfilled bool
+		if err := dbc.QueryRowContext(ctx, `SELECT first_acknowledged_at = acknowledged_at FROM alerts WHERE id = $1`,
+			acked).Scan(&backfilled); err != nil || !backfilled {
+			t.Fatalf("first_acknowledged_at not backfilled from acknowledged_at: %v %v", backfilled, err)
+		}
+		snoozeBy()
+		migrateTo(101)
+		if got := columns(); got != 3 {
+			t.Fatalf("columns after rolling back 000102 = %d, want 3", got)
+		}
 	}
-
-	migrateTo(101)
-	if got := columns(); got != 3 {
-		t.Fatalf("columns after re-applying 000101 = %d, want 3", got)
-	}
-	muteAlert()
+	migrateTo(102)
 }

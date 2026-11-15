@@ -538,7 +538,7 @@ export const API_PAGE: DocPage = {
             ["`GET /api/v1/alerts/{id}`", "Alert detail; a labelable `triage` also carries `label_context`"],
             [
               "`POST /api/v1/alerts/{id}/acknowledge`",
-              "Mark an open condition acknowledged; from then on only its recovery notice is sent ([acknowledging](/docs/alerting/#model))",
+              "Mark an open condition acknowledged; from then on it sends no reminders or further escalation ([acknowledging](/docs/alerting/#model))",
             ],
             [
               "`POST /api/v1/alerts/{id}/resolve`",
@@ -558,7 +558,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/alerts/{id}/snooze`",
-              "Write; mute an open alert's notifications except its recovery notice, body `{\"duration_minutes\": N}` or `{\"until\": \"<RFC 3339>\"}` (exactly one, 1 minute to 7 days ahead, else HTTP 400); replaces a running snooze",
+              "Write; mute an open alert's reminders and unpaged escalation routes, body `{\"duration_minutes\": N}` or `{\"until\": \"<RFC 3339>\"}` (exactly one, 1 minute to 7 days ahead, else HTTP 400); replaces a running snooze",
             ],
             [
               "`POST /api/v1/alerts/{id}/unsnooze`",

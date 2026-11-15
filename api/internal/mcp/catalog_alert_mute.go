@@ -8,7 +8,7 @@ import (
 )
 
 // alertMuteTools are the ways out of and around the acknowledge mute: an
-// acknowledged or snoozed alert sends nothing but its resolve notice.
+// acknowledged or snoozed alert sends no reminder and no further escalation.
 func alertMuteTools() []spec {
 	snoozeDocs := map[string]string{
 		"duration_minutes": "Snooze length in minutes (1 minute to 7 days).",

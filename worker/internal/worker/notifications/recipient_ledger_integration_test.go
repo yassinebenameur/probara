@@ -169,7 +169,7 @@ func TestHandle_RedeliverySkipsDeliveredRecipients(t *testing.T) {
 }
 
 // ackFanoutPlugin is the fan-out stub on a channel that tracks
-// acknowledgement state, so a late trigger fires the overtaken-ack re-send.
+// acknowledgement state, like a paging provider.
 type ackFanoutPlugin struct{ fanoutPlugin }
 
 const ackFanoutStubType = "test_worker_ack_fanout_stub"
@@ -186,7 +186,7 @@ func init() { plugin.Register(ackFanoutStub) }
 // everyone once, and the late trigger is then dropped (acknowledging mutes
 // the alert), so the provider never opens an incident that would need
 // acknowledging again and no recipient hears the page after the ack.
-func TestHandle_OvertakenAckReachesRecipientsTheFirstAckReached(t *testing.T) {
+func TestHandle_LateTriggerAfterAckIsDropped(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()

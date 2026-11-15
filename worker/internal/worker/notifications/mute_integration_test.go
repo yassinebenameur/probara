@@ -47,11 +47,18 @@ var muteStub = &mutePlugin{}
 
 func init() { plugin.Register(muteStub) }
 
-// A page, reminder or follow-up the alerter claimed and queued before the
-// alert was acknowledged or snoozed is dropped by the worker, and its claim is
-// handed back (except a reminder's, whose next round already counts from the
-// way out of the mute), so the event fires once the mute lifts. A claim that
-// moved on since is left alone. The resolve still goes out.
+// A page or reminder the alerter claimed and queued before the alert was
+// acknowledged or snoozed is dropped by the worker. A page that provably
+// reached nobody (first attempt, nothing in the recipient ledger) hands its
+// claim back, so it fires once the mute lifts; every other held page keeps
+// it, so the channel still gets the acknowledgement and the recovery notice:
+//   - a multi-recipient page that reached one recipient before failing for
+//     another (a ledger entry, redelivered);
+//   - a single-recipient page whose earlier attempt may have reached the
+//     provider (a lost reply, redelivered), with its acknowledged_sent_at.
+//
+// A reminder keeps its claim too, a claim that moved on since is left alone,
+// and the suspected-cause follow-up and the resolve are never held.
 func TestHandle_MutedEventsDroppedAndClaimsReleased(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -72,28 +79,37 @@ func TestHandle_MutedEventsDroppedAndClaimsReleased(t *testing.T) {
 			VALUES ($1, $2, $3, $4, '{}'::jsonb, TRUE, NOW(), NOW())`, id, tenantID, name, muteStubType)
 		return id
 	}
-	pageCh, remindCh, staleCh, causeCh := newChannel("page"), newChannel("remind"), newChannel("stale"), newChannel("cause")
+	freshCh, fanoutCh, lostReplyCh, firstReachedCh, remindCh, staleCh, causeCh :=
+		newChannel("fresh"), newChannel("fanout"), newChannel("lost-reply"), newChannel("first-reached"),
+		newChannel("remind"), newChannel("stale"), newChannel("cause")
 	exec(`INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count, created_at, updated_at)
 		VALUES ($1, $2, $3, 'availability', 'active', NOW() - INTERVAL '1 hour', 3, NOW(), NOW())`, alertID, tenantID, monitorID)
 
 	// The alerter's claims, each stamped with the time it published under.
 	claimedAt := time.Now().Add(-time.Minute).UTC().Truncate(time.Microsecond)
-	for _, ch := range []uuid.UUID{pageCh, staleCh} {
+	for _, ch := range []uuid.UUID{freshCh, fanoutCh, lostReplyCh, firstReachedCh, staleCh} {
 		exec(`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
 			VALUES ($1, $2, $3, 'created', NOW(), NOW())`, alertID, ch, claimedAt)
 	}
+	// The provider may have the incident: the acknowledgement already went.
+	exec(`UPDATE alert_notification_states SET acknowledged_sent_at = NOW() WHERE alert_id = $1 AND channel_id = $2`, alertID, lostReplyCh)
 	exec(`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
 		VALUES ($1, $2, $3, 'reminder', NOW(), NOW())`, alertID, remindCh, claimedAt)
-	exec(`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, suspected_cause_sent_at, created_at, updated_at)
-		VALUES ($1, $2, NOW() - INTERVAL '1 hour', 'created', $3, NOW(), NOW())`, alertID, causeCh, claimedAt)
+	exec(`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
+		VALUES ($1, $2, NOW() - INTERVAL '1 hour', 'created', NOW(), NOW())`, alertID, causeCh)
+	// Recipients an earlier attempt reached.
+	for _, ch := range []uuid.UUID{fanoutCh, firstReachedCh} {
+		exec(`INSERT INTO alert_notification_recipient_deliveries (alert_id, channel_id, event_key, recipient_hash)
+			VALUES ($1, $2, 'created', 'h1')`, alertID, ch)
+	}
 
-	envelope := func(ch uuid.UUID, eventType string, at time.Time) *queue.Message {
+	envelope := func(ch uuid.UUID, eventType string, at time.Time, attempt uint64) *queue.Message {
 		raw, _ := json.Marshal(notifications.DispatchEnvelope{
 			V: 1, ChannelID: ch.String(), ChannelType: muteStubType,
 			AlertID: alertID.String(), EventType: eventType,
 			Event: notifications.AlertEvent{Type: eventType, Timestamp: at},
 		})
-		return &queue.Message{Data: raw}
+		return &queue.Message{Data: raw, NumDelivered: attempt}
 	}
 	handle := func(msg *queue.Message) {
 		t.Helper()
@@ -114,50 +130,56 @@ func TestHandle_MutedEventsDroppedAndClaimsReleased(t *testing.T) {
 
 	// Acknowledged after the alerter published.
 	exec(`UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW() WHERE id = $1`, alertID)
-	handle(envelope(pageCh, "created", claimedAt))
-	handle(envelope(remindCh, "reminder", claimedAt))
-	// A stale redelivery whose claim is not the row's any more.
-	handle(envelope(staleCh, "created", claimedAt.Add(-time.Hour)))
+	handle(envelope(freshCh, "created", claimedAt, 1))
+	handle(envelope(fanoutCh, "created", claimedAt, 2))
+	handle(envelope(lostReplyCh, "created", claimedAt, 2))
+	handle(envelope(firstReachedCh, "created", claimedAt, 1))
+	handle(envelope(remindCh, "reminder", claimedAt, 1))
+	handle(envelope(staleCh, "created", claimedAt.Add(-time.Hour), 1))
 	if got := muteStub.take(); len(got) != 0 {
 		t.Fatalf("sends after the ack = %v, want none", got)
 	}
-	if rowExists(pageCh) {
-		t.Fatal("the dropped page's claim must be handed back, or the channel never gets paged after an unacknowledge")
+	if rowExists(freshCh) {
+		t.Fatal("a page that reached nobody must hand its claim back, or the channel is never paged after an unacknowledge")
 	}
-	if !rowExists(remindCh) {
-		t.Fatal("a dropped reminder keeps its claim")
+	for name, ch := range map[string]uuid.UUID{
+		"a redelivered page that reached a recipient": fanoutCh,
+		"a redelivered page whose reply was lost":     lostReplyCh,
+		"a page with a recorded recipient":            firstReachedCh,
+		"a held reminder":                             remindCh,
+		"a claim that moved on since":                 staleCh,
+	} {
+		if !rowExists(ch) {
+			t.Fatalf("%s must keep its claim", name)
+		}
 	}
-	if !rowExists(staleCh) {
-		t.Fatal("a claim that moved on since must be left alone")
+	var ackSentAt *time.Time
+	if err := dbClient.QueryRowContext(ctx, `SELECT acknowledged_sent_at FROM alert_notification_states WHERE alert_id = $1 AND channel_id = $2`,
+		alertID, lostReplyCh).Scan(&ackSentAt); err != nil || ackSentAt == nil {
+		t.Fatalf("the provider acknowledgement record must survive: %v %v", ackSentAt, err)
 	}
 
-	// Snoozed (and no longer acknowledged): the follow-up is held too.
+	// The follow-up is never held, acknowledged or snoozed.
+	handle(envelope(causeCh, "suspected_cause", claimedAt, 1))
 	exec(`UPDATE alerts SET status = 'active', acknowledged_at = NULL, unacknowledged_at = NOW(),
 		snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, alertID)
-	handle(envelope(causeCh, "suspected_cause", claimedAt))
-	handle(envelope(remindCh, "reminder", claimedAt))
-	if got := muteStub.take(); len(got) != 0 {
-		t.Fatalf("sends while snoozed = %v, want none", got)
-	}
-	var causeSentAt *time.Time
-	if err := dbClient.QueryRowContext(ctx, `SELECT suspected_cause_sent_at FROM alert_notification_states WHERE alert_id = $1 AND channel_id = $2`,
-		alertID, causeCh).Scan(&causeSentAt); err != nil {
-		t.Fatal(err)
-	}
-	if causeSentAt != nil {
-		t.Fatalf("the dropped follow-up's one-shot claim must be cleared, got %v", causeSentAt)
+	handle(envelope(causeCh, "suspected_cause", claimedAt, 2))
+	handle(envelope(remindCh, "reminder", claimedAt, 1))
+	if got := muteStub.take(); len(got) != 2 || got[0] != "suspected_cause" || got[1] != "suspected_cause" {
+		t.Fatalf("sends while acknowledged then snoozed = %v, want the two follow-ups only", got)
 	}
 
 	// The snooze ended: the queued reminder goes out again.
 	exec(`UPDATE alerts SET snoozed_until = NOW() - INTERVAL '1 second' WHERE id = $1`, alertID)
-	handle(envelope(remindCh, "reminder", claimedAt))
+	handle(envelope(remindCh, "reminder", claimedAt, 2))
 	if got := muteStub.take(); len(got) != 1 || got[0] != "reminder" {
 		t.Fatalf("sends after the snooze ended = %v, want [reminder]", got)
 	}
 
-	// The resolve is never muted, however the alert ended.
+	// The resolve reaches every channel that kept its claim, however the
+	// alert ended.
 	exec(`UPDATE alerts SET status = 'resolved', resolved_at = NOW(), snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, alertID)
-	handle(envelope(remindCh, "resolved", time.Now()))
+	handle(envelope(fanoutCh, "resolved", time.Now(), 1))
 	if got := muteStub.take(); len(got) != 1 || got[0] != "resolved" {
 		t.Fatalf("sends after resolve = %v, want [resolved]", got)
 	}

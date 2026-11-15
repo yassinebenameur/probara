@@ -43,9 +43,10 @@ func alertTools() []spec {
 		{
 			Name:  "acknowledge_alert",
 			Title: "Acknowledge alert",
-			Description: "Acknowledge an active alert: from then on only its resolve notice is sent (no reminders, " +
-				"no escalation tier that had not fired yet), and paging channels (PagerDuty, Opsgenie) are told to " +
-				"stop escalating. Only active alerts can be acknowledged; unacknowledge_alert undoes it.",
+			Description: "Acknowledge an active alert: from then on it sends no reminders and no escalation tier " +
+				"that had not fired yet (the resolve and any suspected-cause follow-up still go out), and paging " +
+				"channels (PagerDuty, Opsgenie) are told to stop escalating. Only active alerts can be acknowledged; " +
+				"unacknowledge_alert undoes it.",
 			Method: http.MethodPost, Route: "/alerts/{id}/acknowledge",
 			PathDocs: map[string]string{"id": "Alert ID."},
 		},
