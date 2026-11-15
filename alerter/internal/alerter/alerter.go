@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -36,6 +38,18 @@ type Alerter struct {
 	recoveryBudget       time.Duration
 	suspectedCauseBudget time.Duration
 
+	// startupHold and startedAt (database clock) hold new location_offline
+	// alerts just after the process starts (locationOfflineHold). An Alerter
+	// literal, as tests build, has no startup hold.
+	startupHold bool
+	startedAt   time.Time
+	// lastLocationHold is the previous tick's hold reason, so the warning is
+	// logged when a hold starts rather than every tick. Tick goroutine only.
+	lastLocationHold string
+	// Fleet gauges (location_offline.go); nil when no registry was given.
+	locationsGauge     *prometheus.GaugeVec
+	locationGuardGauge *prometheus.GaugeVec
+
 	// sendFunc dispatches one channel notification. It defaults to
 	// sendChannelNotification and is swapped in tests so the lifecycle can be
 	// exercised without hitting real channel plugins.
@@ -49,15 +63,31 @@ func NewAlerter(cfg *config.AlerterConfig, log *logger.Logger, metricsRegistry *
 		encryptor = secrets.NoOpEncryptor{}
 	}
 	a := &Alerter{
-		config:    cfg,
-		logger:    log,
-		metrics:   metricsRegistry,
-		db:        dbClient,
-		nats:      natsClient,
-		encryptor: encryptor,
-		stop:      make(chan struct{}),
+		config:      cfg,
+		logger:      log,
+		metrics:     metricsRegistry,
+		db:          dbClient,
+		nats:        natsClient,
+		encryptor:   encryptor,
+		stop:        make(chan struct{}),
+		startupHold: true,
 	}
 	a.sendFunc = a.sendChannelNotification
+	if metricsRegistry != nil {
+		// Platform-wide, with bounded labels: a per-tenant or per-location
+		// label would grow with every workspace and site.
+		a.locationsGauge = metricsRegistry.NewGauge("locations",
+			"Check locations by liveness (S-F6): online, offline, never_seen, disabled. Deleted locations are not counted.",
+			[]string{"state"})
+		a.locationGuardGauge = metricsRegistry.NewGauge("location_offline_guard",
+			"1 while the alerter holds new location_offline alerts: fleet_silent (several locations went quiet together, so the heartbeat path is suspect) or startup (no heartbeat since the alerter started, less than one offline threshold ago).",
+			[]string{"reason"})
+		limits := metricsRegistry.NewGauge("location_offline_guard_limit_seconds",
+			"How long each location_offline hold can last at most, by reason.",
+			[]string{"reason"})
+		limits.With(prometheus.Labels{"reason": "fleet_silent"}).Set(fleetSilenceHoldMax.Seconds())
+		limits.With(prometheus.Labels{"reason": "startup"}).Set(monitorstate.LocationOfflineAfter.Seconds())
+	}
 	return a
 }
 
@@ -68,6 +98,11 @@ func (a *Alerter) Start() error {
 	if a.db == nil {
 		return fmt.Errorf("database client is required")
 	}
+	startCtx, cancelStart := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := a.recordStartTime(startCtx); err != nil {
+		a.logger.WithError(err).Warn("Failed to read the start time from the database; the first evaluation retries")
+	}
+	cancelStart()
 
 	if a.nats != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

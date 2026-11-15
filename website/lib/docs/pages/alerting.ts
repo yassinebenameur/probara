@@ -52,6 +52,11 @@ export const ALERTING_PAGE: DocPage = {
               "An HTTPS or SIP-over-TLS monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
               "A renewed certificate is observed, or the threshold is removed",
             ],
+            [
+              "`location_offline`",
+              "A check location that has reported before sends no worker heartbeat for 180 seconds ([details](/docs/locations/#heartbeats)); always on, routed to the default channels",
+              "The location reports again, or is disabled or deleted; the closing notification says which",
+            ],
           ],
         },
         {
@@ -512,6 +517,11 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
+            "A check location that stops reporting opens one `location_offline` alert, routed to the tenant default channels like mesh alerts. It names the location, its last heartbeat, and how many monitors run from it and how many of those have no other location. There is no setting: every location that has reported at least once in the last 7 days is covered, with a fixed 180-second threshold. Resolving it by hand sends a \"closed by an operator\" notice; if the location is still silent, a new alert opens on the next evaluation. While one of its locations is disconnected and its offline alert is about to open or open, a mesh edge's alert stays open but sends nothing and reads as suppressed (`suppression_reason` `location_offline`), so a dead site pages once instead of once per path; see [heartbeats](/docs/locations/#heartbeats).",
+        },
+        {
+          type: "paragraph",
+          text:
             "An HTTPS or SIP-over-TLS monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
         },
         {
@@ -519,7 +529,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "info",
           title: "Automatic incident coverage is specific",
           text:
-            "The verified automatic-incident paths cover availability and latency anomaly alerts. Do not assume the tenant switch automatically creates incidents for every host-metric, mesh-edge, or TLS-expiry alert.",
+            "The verified automatic-incident paths cover availability and latency anomaly alerts. Do not assume the tenant switch automatically creates incidents for every host-metric, mesh-edge, TLS-expiry, or offline-location alert.",
         },
       ],
     },

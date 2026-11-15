@@ -24,7 +24,8 @@ export interface Alert {
   threshold_value?: number;
   root_cause_monitor_id?: string;
   root_cause_down_since?: string;
-  // Mesh-edge subject (kind === 'mesh_edge').
+  // Mesh-edge subject (kind === 'mesh_edge'); an offline location
+  // (kind === 'location_offline') is the source alone.
   source_location_id?: string;
   target_location_id?: string;
   created_at: string;
@@ -36,7 +37,9 @@ export interface Alert {
   // Set while the alerter deliberately sends no notification for this open
   // alert. 'dependency': an upstream dependency is down (or recovered less
   // than the grace period ago) and dependency suppression is on.
-  suppression_reason?: 'dependency';
+  // 'location_offline': a mesh edge whose location stopped reporting; that
+  // location's own alert pages instead.
+  suppression_reason?: 'dependency' | 'location_offline';
   // How many open downstream alerts this alert's monitor is the suppressed
   // root cause of (its notification lists them under "also affecting").
   impacted_count?: number;

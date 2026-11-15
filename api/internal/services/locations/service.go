@@ -35,11 +35,6 @@ var ErrNotFound = errors.New("location not found")
 // disabled, deleted location from a wrong credential.
 var ErrInvalidWorkerCredential = errors.New("invalid location worker credential")
 
-// connectedWindow is how fresh last_seen_at must be for a location to count
-// as connected. Workers heartbeat every ~15s, so a minute tolerates a few
-// missed beats without flapping.
-const connectedWindow = time.Minute
-
 // Service handles location business logic.
 type Service struct {
 	db        *db.Client
@@ -62,12 +57,19 @@ func (s *Service) ConfigureEncryption(encryptor secrets.Encryptor) {
 	}
 }
 
-const locationColumns = `
+// locationColumns computes `offline` with the alerter's own predicate, in
+// SQL on the database clock, so the API never calls a location offline that
+// the alerter does not (or the reverse).
+var locationColumns = `
 	l.id, l.tenant_id, l.name, l.slug, l.description, l.enabled,
 	l.last_seen_at, l.mesh_endpoint, l.created_at, l.updated_at,
 	(SELECT COUNT(*) FROM monitor_locations ml
 	 JOIN monitors m ON m.id = ml.monitor_id AND m.deleted_at IS NULL
-	 WHERE ml.location_id = l.id) AS monitor_count`
+	 WHERE ml.location_id = l.id) AS monitor_count,
+	` + monitorstate.LocationOfflinePredicate("l") + ` AS offline,
+	(SELECT oa.id FROM alerts oa
+	 WHERE oa.kind = 'location_offline' AND oa.status IN ('active', 'acknowledged')
+	   AND oa.source_location_id = l.id AND oa.tenant_id = l.tenant_id) AS open_alert_id`
 
 // Create registers a new location.
 func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.CreateLocationRequest) (*models.Location, error) {
@@ -310,9 +312,13 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID uuid.UUID, re
 		}
 	}
 
+	// enabled_at restarts only on a disabled → enabled change (the SET reads
+	// the row's old enabled): the offline rule waits one threshold from it,
+	// so a re-enabled location whose worker is not back yet does not page.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE locations
-		SET name = $1, slug = $2, description = $3, enabled = $4, mesh_endpoint = $5, updated_at = NOW()
+		SET name = $1, slug = $2, description = $3, enabled = $4, mesh_endpoint = $5, updated_at = NOW(),
+			enabled_at = CASE WHEN $4 AND NOT enabled THEN NOW() ELSE enabled_at END
 		WHERE id = $6 AND tenant_id = $7 AND deleted_at IS NULL
 	`, name, slug, description, enabled, meshEndpoint, locationID, tenantID)
 	if err != nil {
@@ -456,6 +462,7 @@ func scanLocation(row rowScanner) (*models.Location, error) {
 	if err := row.Scan(
 		&l.ID, &l.TenantID, &l.Name, &l.Slug, &l.Description, &l.Enabled,
 		&l.LastSeenAt, &l.MeshEndpoint, &l.CreatedAt, &l.UpdatedAt, &l.MonitorCount,
+		&l.Offline, &l.OpenAlertID,
 	); err != nil {
 		return nil, err
 	}
@@ -464,9 +471,9 @@ func scanLocation(row rowScanner) (*models.Location, error) {
 }
 
 // IsConnected reports whether a heartbeat timestamp is fresh enough to show
-// the location as connected.
+// the location as connected (monitorstate.LocationConnectedWindow, S-F6).
 func IsConnected(lastSeenAt *time.Time) bool {
-	return lastSeenAt != nil && time.Since(*lastSeenAt) < connectedWindow
+	return monitorstate.LocationConnected(lastSeenAt, time.Now())
 }
 
 // normalizeMeshEndpoint validates a host:port mesh endpoint. Nil or empty

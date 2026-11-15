@@ -50,6 +50,12 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateTLSExpiry(ctx); err != nil {
 		a.logger.WithError(err).Error("TLS expiry evaluation failed")
 	}
+	// Before mesh edges, so a dead location's alert opens in the same tick
+	// its edges go quiet. A failure here must not stop availability alerting
+	// further down the lifecycle.
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		a.logger.WithError(err).Error("Location offline evaluation failed")
+	}
 	if err := a.evaluateMeshEdges(ctx); err != nil {
 		return err
 	}

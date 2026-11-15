@@ -144,7 +144,7 @@ export function feedItems(
 
 /** The tone of the alert right now: what its dot on the rail shows. */
 export function alertTone(alert: Alert): TimelineTone {
-  return currentTone(alert, alert.suppression_reason === 'dependency');
+  return currentTone(alert, alert.suppression_reason != null);
 }
 
 /**
