@@ -20,6 +20,7 @@ func insertMaintenanceWindow(ctx context.Context, t *testing.T, db *shareddb.Cli
 		INSERT INTO maintenance_windows (id, tenant_id, title, starts_at, ends_at)
 		VALUES ($1, $2, 'test window', $3, $4)
 	`, windowID, tenantID, startsAt, endsAt)
+	testutil.MaterializeOneOffMaintenance(ctx, t, db, windowID)
 	for _, monitorID := range monitorIDs {
 		mustExec(ctx, t, db, `
 			INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id)
@@ -33,6 +34,9 @@ func expireMaintenanceWindow(ctx context.Context, t *testing.T, db *shareddb.Cli
 	t.Helper()
 	mustExec(ctx, t, db, `
 		UPDATE maintenance_windows SET ends_at = NOW() - INTERVAL '1 second' WHERE id = $1
+	`, windowID)
+	mustExec(ctx, t, db, `
+		UPDATE maintenance_window_occurrences SET ends_at = NOW() - INTERVAL '1 second' WHERE window_id = $1
 	`, windowID)
 }
 

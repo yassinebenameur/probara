@@ -299,6 +299,18 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
   cascades only on tenant delete. The label routes are writes (never in
   `postReadPaths`); export is `RequireTenantAdmin`.
+- **Maintenance coverage**: `shared/maintenance` (S-M5). A window is a
+  schedule (one-off, or the weekly `Rule`, expanded only by `Rule.Expand`);
+  what covers monitors is its materialized occurrences
+  (`maintenance_window_occurrences`), read only through
+  `OccurrenceRangesSQL`, `InMaintenance*Predicate` and
+  `MaintenanceUntilExpr` — never `maintenance_windows.starts_at/ends_at`.
+  Every occurrence writer is in `store.go`: the API on save, the scheduler's
+  `maintenance_occurrences.go` rolling the 35-day horizon. Started
+  occurrences, removed targets (`maintenance_window_past_targets`) and
+  deleted windows (`deleted_at`) are history, never rewritten. Anything that
+  inserts a window directly (tests, `scripts/seed-demo`) must insert its
+  occurrence too (`testutil.MaterializeOneOffMaintenance`).
 
 ## Monitor import
 

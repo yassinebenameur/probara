@@ -121,6 +121,8 @@ type Scheduler struct {
 	publish func(ctx context.Context, subject string, job *models.Job, headers map[string][]string) error
 
 	purger *purger
+
+	occurrences *occurrenceRoller
 }
 
 // NewScheduler creates a new scheduler instance
@@ -248,6 +250,12 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		BatchSize:     cfg.MonitorPurgeBatchSize,
 		MaxRowsPerRun: cfg.MonitorPurgeMaxRowsPerRun,
 	})
+	s.occurrences = &occurrenceRoller{
+		added: metricsRegistry.NewCounter(
+			"maintenance_occurrences_added_total", "Maintenance occurrences materialized by the horizon roll", []string{}),
+		errors: metricsRegistry.NewCounter(
+			"maintenance_occurrence_roll_errors_total", "Failed maintenance occurrence rolls", []string{}),
+	}
 
 	return s
 }
@@ -308,12 +316,15 @@ func (s *Scheduler) Start() error {
 	defer meshTicker.Stop()
 	watchdogTicker := time.NewTicker(watchdogTickerInterval)
 	defer watchdogTicker.Stop()
+	occurrenceTicker := time.NewTicker(maintenanceOccurrenceRollInterval)
+	defer occurrenceTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
 	s.triggerRetentionCleanup()
 	s.triggerRollupMaintenance()
 	s.triggerWatchdog()
+	s.triggerOccurrenceRoll()
 	if s.config.MeshEnabled {
 		s.runMeshBatch(s.ctx)
 	}
@@ -340,6 +351,8 @@ func (s *Scheduler) Start() error {
 			}
 		case <-watchdogTicker.C:
 			s.triggerWatchdog()
+		case <-occurrenceTicker.C:
+			s.triggerOccurrenceRoll()
 		}
 	}
 }

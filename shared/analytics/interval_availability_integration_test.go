@@ -58,6 +58,7 @@ func TestComputeIntervalAvailability_IntegratesTimeline(t *testing.T) {
 	`, mwID, tenantID, tDown, tDown.Add(6*time.Minute)); err != nil {
 		t.Fatalf("insert maintenance window: %v", err)
 	}
+	testutil.MaterializeOneOffMaintenance(ctx, t, dbClient, mwID)
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id)
 		VALUES ($1, $2)
