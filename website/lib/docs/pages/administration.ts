@@ -114,7 +114,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "On an empty installation, the public bootstrap status and first-user endpoints allow exactly the initial account to be created. That first active account is a superadministrator. OIDC just-in-time login can also initialize the first superadministrator on an empty installation, and an operator with database access can create or recover one at any time with [`go run ./cmd/admin`](/docs/operations/#database-migrations).",
+            "On an empty installation, the public bootstrap status and first-user endpoints allow exactly the initial account to be created. That first active account is a superadministrator. With `BOOTSTRAP_SETUP_CODE` set on the API, the first-user endpoint also requires that code (missing and wrong codes get the same 403), and the status endpoint reports that one is required, never the code itself. OIDC just-in-time login can also initialize the first superadministrator on an empty installation, and an operator with database access can create or recover one at any time with [`go run ./cmd/admin`](/docs/operations/#database-migrations).",
         },
         {
           type: "table",

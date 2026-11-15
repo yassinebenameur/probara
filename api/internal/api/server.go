@@ -226,7 +226,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		mountOAuthRoutes(r, oauthHandlers, authMiddleware)
 
 		adminUsersSvc := adminusersservice.NewService(dbClient, cfg.AdminBcryptCost)
-		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder)
+		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder).WithSetupCode(cfg.BootstrapSetupCode)
 
 		// Auth endpoints (no auth required)
 		authService := adminauthservice.NewService(dbClient, cfg.AdminBcryptCost)

@@ -280,12 +280,13 @@ cd /opt/probara && docker compose ps     # .env names both Compose files`,
         {
           type: 'list',
           items: [
-            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). Every form Compose accepts counts as set, including `export KEY=v`, `KEY = v`, quoted values and inline comments. `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
+            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, `BOOTSTRAP_SETUP_CODE`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). Every form Compose accepts counts as set, including `export KEY=v`, `KEY = v`, `KEY: v`, quoted values and inline comments. `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
             'Back up `.env`. `PROBARA_SECRETS_KEY` decrypts every stored credential, and `POSTGRES_PASSWORD` is fixed when the database volume is first created.',
+            'First administrator: the UI is published, so the first-administrator form asks for a one-time setup code (`BOOTSTRAP_SETUP_CODE`, five groups of four characters). The script generates it once, prints it with the UI address when it finishes, and keeps it in `.env`; anyone who reaches the UI without it cannot claim the install. It has no effect once the first administrator exists.',
             'Generated values are hex or base64 because Compose embeds the database and NATS passwords in connection URLs; if you write your own, keep them URL-safe and free of `$`.',
             'Credentials of optional features stay optional and never fall back to a development value: `SMTP_PASSWORD`, `OIDC_CLIENT_SECRET` (empty instead of the Dex development secret) and `STATUS_PAGE_VAPID_PRIVATE_KEY`.',
-            'Published ports: the UI on `3000` (`PROBARA_UI_PORT`), served by the `edge` proxy (Caddy), and status pages on `8082` (`PROBARA_STATUS_PAGE_PORT`). The API is reached through the UI\'s `/api` proxy; the frontend itself, PostgreSQL, NATS client and monitoring ports, and every metrics port stay on the Compose network. Put HTTPS in front, then set `PUBLIC_BASE_URL` (the UI origin) and `ADMIN_COOKIE_SECURE=true` in `.env` and run `docker compose up -d`.',
-            'Client IPs: every browser request reaches the API through the frontend, so without help the API would see one client for everyone. `edge` replaces any `X-Forwarded-For` with the client it resolves and drops `X-Real-IP`; the frontend, reachable only through `edge`, forwards that value, and the API trusts only the Compose network (`TRUSTED_PROXY_CIDRS` = `PROBARA_NETWORK_SUBNET`, default `172.31.213.0/24`; change it if it collides with a host network). A client cannot choose its address by sending its own header.',
+            'Published ports: the UI on `3000` (`PROBARA_UI_PORT`), served by the `edge` proxy (Caddy), and status pages on `8082` (`PROBARA_STATUS_PAGE_PORT`). The API is reached through the UI\'s `/api` proxy; the frontend itself, PostgreSQL, NATS client and monitoring ports, and every metrics port stay on the Compose networks. Put HTTPS in front, then set `PUBLIC_BASE_URL` (the UI origin) and `ADMIN_COOKIE_SECURE=true` in `.env` and run `docker compose up -d`.',
+            'Client IPs: every browser request reaches the API through the frontend, so without help the API would see one client for everyone. `edge` replaces any `X-Forwarded-For` with the client it resolves and drops every other client-address header (`X-Real-IP`, `True-Client-IP`, `Forwarded`, `X-Client-IP`, `CF-Connecting-IP`, `X-Cluster-Client-IP` and similar); the frontend, reachable only through `edge`, forwards that value, and the API trusts exactly the frontend\'s address (`TRUSTED_PROXY_CIDRS` = `PROBARA_FRONTEND_IP/32`, default `172.31.213.10`). `edge`, the frontend and the API share a separate `probara-front` network that the worker is not on, because the worker sends tenant-defined HTTP requests with arbitrary headers and must not be able to speak to a trusted proxy. If `probara-front`\'s subnet (`PROBARA_FRONT_SUBNET`, default `172.31.213.0/24`) collides with a host network, change it together with `PROBARA_FRONTEND_IP` (inside the subnet) and `PROBARA_FRONT_IP_RANGE` (default `172.31.213.128/25`, the range dynamic addresses come from, which must exclude the frontend\'s). A client cannot choose its address by sending its own header.',
             'Behind your own TLS proxy or load balancer, set `PROBARA_TRUSTED_PROXIES` (space-separated CIDRs) to its address as the `edge` container sees it, or every client looks like that proxy; `edge` then takes the rightmost untrusted address of the incoming chain, so that proxy must append to `X-Forwarded-For`. Where Docker\'s userland proxy handles published ports (Docker Desktop, rootless), every connection arrives from the network gateway and real client addresses are lost before `edge`; on Linux with the default iptables publishing they are preserved.',
             'Private locations: the broker\'s [websocket listener](#nats-websocket) is published on `127.0.0.1:8443` (`NATS_WEBSOCKET_PUBLISH`) for a TLS reverse proxy on the host to front on 443. Set `PUBLIC_NATS_URL=wss://<that host>` in `.env` to enable the deploy snippets.',
             'Local AI runs through the `local-ai` Compose profile, which the script puts in `COMPOSE_PROFILES`. To run without it, set `COMPOSE_PROFILES=` and `LOCAL_AI_DISABLED=true` in `.env`.',
@@ -418,7 +419,12 @@ kubectl -n probara get jobs`,
             [
               '`nats.websocket.ingress.enabled`, `.host`, `.path`, `.className`, `.annotations`, `.tls`',
               '`false`, empty, `/`, `ingress.className`, nginx proxy timeouts of 3600 s, `[]`',
-              'A separate Ingress for the listener, where TLS terminates. Requires `nats.websocket.enabled` and `nats.auth.enabled` (the render fails otherwise). On a host that is also in `ingress.hosts`, give it its own path such as `/nats`: the render refuses `/` there.',
+              'A separate Ingress for the listener, where TLS terminates. Requires `nats.websocket.enabled`, `nats.auth.enabled` and a `tls` entry (the render fails otherwise: location credentials would cross the network in clear while the API advertises `wss://`). On a host that is also in `ingress.hosts`, give it its own path such as `/nats`: the render refuses `/` there.',
+            ],
+            [
+              '`nats.websocket.ingress.tlsTerminatedUpstream`',
+              '`false`',
+              'Set `true` only when a load balancer in front of the ingress (for example an AWS ALB holding the certificate) terminates TLS, so `tls` may stay empty.',
             ],
             ['`nats.persistence.enabled`', '`true`', 'Persist JetStream state.'],
             ['`nats.persistence.size`', '`1Gi`', 'NATS PVC request.'],
@@ -879,6 +885,7 @@ api:
             'To share the UI host, set `nats.websocket.ingress.host` to it and `path: /nats`; the snippets then carry `wss://probara.example.com/nats` and the worker sends that path in its upgrade request.',
             'The default annotations raise ingress-nginx\'s proxy read and send timeouts to an hour: NATS keeps idle connections open between pings, longer than the controller\'s 60 s default. Other controllers need their equivalent.',
             'Release Compose publishes the listener on `127.0.0.1:8443`; front it with a TLS reverse proxy on 443 (it must pass websocket upgrades) and set `PUBLIC_NATS_URL=wss://<host>` in `.env`.',
+            'Workers refuse a plain `ws://` URL that carries credentials unless it points at a loopback address; use `wss://`.',
             'Worker image and broker contract move together: the snippets pin the worker to the platform\'s release, so upgrade remote workers when you upgrade the platform.',
           ],
         },
@@ -950,6 +957,13 @@ api:
           title: 'A Helm rollback is not a database rollback',
           text:
             'The migration hook changes shared PostgreSQL state. Keep backups and review migration compatibility before upgrading; never assume an application rollback will undo schema or data changes.',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading to a release with the NATS websocket listener and pinned worker snippets',
+          text:
+            'Two chart changes show up on the first upgrade. The embedded NATS pod template now carries a checksum of its `nats.conf`, so installs with `nats.auth.enabled` (or the websocket listener) see the NATS pod restart once; with persistence on, JetStream state survives, and services reconnect on their own after a short broker outage. From then on a broker config change rolls the pod, which is what makes enabling the websocket listener take effect. The generated private-location worker snippets now reference `{image.repository}-worker:{image tag}` instead of the public `:latest` worker, so an install with a mirrored `image.repository` hands remote sites an image from that mirror: make sure they can pull from it, or set `api.locationWorkerImage`.',
         },
         {
           type: 'callout',

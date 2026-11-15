@@ -21,6 +21,13 @@ UI's "/" route, so the render refuses it.
 {{- fail "nats.websocket.ingress.enabled requires nats.auth.enabled: location workers must authenticate through the auth callout before the broker is reachable from outside the cluster" }}
 {{- end }}
 {{- $host := required "nats.websocket.ingress.host is required when nats.websocket.ingress.enabled" $ws.ingress.host }}
+{{- /* The listener is plaintext and location credentials ride in the
+connection: without TLS here the ingress would serve ws:// while the API
+advertises wss://. Only an explicit statement that TLS ends in front of the
+ingress (a cloud load balancer) lifts this. */}}
+{{- if and (not $ws.ingress.tls) (not $ws.ingress.tlsTerminatedUpstream) }}
+{{- fail "nats.websocket.ingress.tls is empty: location credentials would cross the network in clear. Add a tls entry, or set nats.websocket.ingress.tlsTerminatedUpstream=true when a load balancer in front of the ingress terminates TLS" }}
+{{- end }}
 {{- $path := $ws.ingress.path | default "/" }}
 {{- if not (hasPrefix "/" $path) }}
 {{- fail "nats.websocket.ingress.path must start with /" }}

@@ -177,6 +177,9 @@ services:
       # Image the private-location deploy snippets reference. Empty = the
       # worker at this api's release version (see the build args above).
       LOCATION_WORKER_IMAGE: "${LOCATION_WORKER_IMAGE:-}"
+      # One-time code required to create the first administrator. Empty (the
+      # development default) leaves that form open until an admin exists.
+      BOOTSTRAP_SETUP_CODE: "${BOOTSTRAP_SETUP_CODE:-}"
     ports:
       - "8080:8080"
       - "9090:9090"

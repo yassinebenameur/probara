@@ -238,7 +238,8 @@ curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/main/script
 
 This downloads the release Compose files into `./probara`, generates every
 secret into `.env` (back it up), and starts the published images, the UI
-included, on <http://localhost:3000>. Re-running it never changes an existing
+included, on <http://localhost:3000>. It prints a one-time setup code that
+the first-administrator form asks for, so nobody else can claim the install. Re-running it never changes an existing
 value; `--version X` upgrades. See
 [Release Compose install](https://probara-uptime.com/docs/deployment/#release-compose).
 

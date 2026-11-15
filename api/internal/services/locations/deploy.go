@@ -21,9 +21,12 @@ const workerImageRepository = "ghcr.io/yassinebenameur/probara-worker"
 // LOCATION_WORKER_IMAGE is unset: the worker at this API's own release
 // version, so a location worker speaks the same NATS contract as the
 // platform it joins. Every release, prerelease included, pushes that exact
-// tag. Unreleased builds (dev, branch builds) have no matching tag, so they
-// fall back to "alpha", the newest prerelease. Never "latest": it moves only
-// on stable releases and can lag the platform by a major version.
+// tag. Unreleased builds (dev, branch builds) have no matching tag and carry
+// no channel to pick one by, so they fall back to "alpha": the moving tag
+// docker-build.yml re-points at each -alpha.N release, which is the channel
+// the development branch ships on. It is not "the newest prerelease" (a
+// -beta.N never moves it). Never "latest": it moves only on stable releases
+// and can lag the platform by a major version.
 func DefaultWorkerImage() string {
 	if v, ok := buildinfo.ReleaseVersion(); ok {
 		return workerImageRepository + ":" + v

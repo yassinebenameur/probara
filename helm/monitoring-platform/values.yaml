@@ -120,7 +120,11 @@ nats:
       # Same shape as ingress.tls, e.g.
       # - secretName: nats-tls
       #   hosts: [nats.example.com]
+      # Required (the render fails without it) unless tlsTerminatedUpstream.
       tls: []
+      # Set true only when TLS ends before the ingress (e.g. an AWS ALB or
+      # another load balancer with the certificate) so tls can stay empty.
+      tlsTerminatedUpstream: false
   persistence:
     enabled: true
     size: 1Gi
@@ -215,6 +219,15 @@ secrets:
   statusPagePreviewSecret: ""
   statusPagePreviewSecretExistingSecret: ""
   statusPagePreviewSecretExistingSecretKey: status_page_preview_secret
+  # One-time code the first-admin form asks for (BOOTSTRAP_SETUP_CODE,
+  # canonical key bootstrap_setup_code, api only). Set it when the UI is
+  # reachable before you create the first administrator, so nobody else can
+  # claim the install; unset leaves that form open until an admin exists.
+  # With only the chart-wide secrets.existingSecret set, the key is optional
+  # in that Secret.
+  bootstrapSetupCode: ""
+  bootstrapSetupCodeExistingSecret: ""
+  bootstrapSetupCodeExistingSecretKey: bootstrap_setup_code
   # Bearer token the api and the platform worker present to the local AI
   # service (LOCAL_AI_TOKEN, canonical key local_ai_token). Needed whenever
   # localAI.enabled or localAI.externalUrl is set; at least 16 characters.

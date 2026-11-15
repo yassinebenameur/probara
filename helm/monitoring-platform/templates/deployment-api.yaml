@@ -99,6 +99,11 @@ spec:
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
         {{- end }}
+        {{- /* First-admin setup code; optional in a chart-wide existing Secret
+        so installs whose Secret predates it keep starting (form stays open). */}}
+        {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.bootstrapSetupCode "secret" .Values.secrets.bootstrapSetupCodeExistingSecret) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "BOOTSTRAP_SETUP_CODE" "key" "bootstrap_setup_code" "secret" .Values.secrets.bootstrapSetupCodeExistingSecret "secretKey" .Values.secrets.bootstrapSetupCodeExistingSecretKey "optional" true) | nindent 8 }}
+        {{- end }}
         {{- with (include "monitoring-platform.publicNatsUrl" .) }}
         - name: PUBLIC_NATS_URL
           value: {{ . | quote }}

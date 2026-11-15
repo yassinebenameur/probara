@@ -66,13 +66,14 @@ umask 077
 touch "$env_file"
 chmod 600 "$env_file"
 
-# .env lines are read the way Compose reads them: `KEY=v`, `KEY = v` and
-# `export KEY=v` all define KEY, a value may be quoted, and an unquoted value
-# ends at " #". Matching only the plain `KEY=` form would miss a hand-edited
-# line and append a second, freshly generated secret after it, which Compose
-# would then use: stored credentials unreadable, the database password wrong.
+# .env lines are read the way Compose reads them: `KEY=v`, `KEY = v`,
+# `KEY: v` and `export KEY=v` all define KEY (the separator is the first `=`
+# or `:`), a value may be quoted, and an unquoted value ends at " #".
+# Matching only the plain `KEY=` form would miss a hand-edited line and
+# append a second, freshly generated secret after it, which Compose would
+# then use: stored credentials unreadable, the database password wrong.
 # Keys are plain [A-Z0-9_] names, safe inside the regular expression.
-env_key_re() { printf '^[[:space:]]*(export[[:space:]]+)?%s[[:space:]]*=' "$1"; }
+env_key_re() { printf '^[[:space:]]*(export[[:space:]]+)?%s[[:space:]]*[=:]' "$1"; }
 
 # env_has KEY succeeds when .env defines KEY in any form, even as empty.
 env_has() {
@@ -123,6 +124,15 @@ env_init() {
   env_has "$1" || env_set "$1" "$2"
 }
 
+# gen_setup_code prints a one-time code for creating the first administrator:
+# 20 base32 characters (100 bits) in five groups of four, easy to read out and
+# type. 256 is a multiple of 32, so mapping each random byte mod 32 is uniform.
+gen_setup_code() {
+  openssl rand 20 | od -An -v -tu1 | awk -v a="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" '
+    { for (i = 1; i <= NF; i++) c = c substr(a, $i % 32 + 1, 1) }
+    END { for (i = 0; i < 5; i++) printf "%s%s", (i ? "-" : ""), substr(c, i * 4 + 1, 4) }'
+}
+
 # --- version ---------------------------------------------------------------
 if [[ -z "$version" ]]; then
   version="$(env_value PROBARA_VERSION)"
@@ -162,6 +172,9 @@ env_default POSTGRES_PASSWORD "$(openssl rand -hex 24)"
 env_default NATS_PLATFORM_PASSWORD "$(openssl rand -hex 24)"
 env_default LOCAL_AI_TOKEN "$(openssl rand -hex 32)"
 env_default STATUS_PAGE_PREVIEW_SECRET "$(openssl rand -hex 32)"
+# Required to create the first administrator, so the published UI cannot be
+# claimed by whoever reaches it first. Useless once that admin exists.
+env_default BOOTSTRAP_SETUP_CODE "$(gen_setup_code)"
 
 seed="$(env_value NATS_LOCATION_AUTH_ISSUER_SEED)"
 public_key="$(env_value NATS_LOCATION_AUTH_ISSUER_PUBLIC_KEY)"
@@ -189,8 +202,13 @@ done
 
 docker compose config --quiet || die "the Compose configuration does not render; check $(pwd)/$env_file"
 
+ui_port="$(env_value PROBARA_UI_PORT)"
+status_port="$(env_value PROBARA_STATUS_PAGE_PORT)"
+setup_code="$(env_value BOOTSTRAP_SETUP_CODE)"
+
 if [[ "$start" != true ]]; then
   log "Files written. Start with: cd $(pwd) && docker compose up -d"
+  log "First-admin setup code (also BOOTSTRAP_SETUP_CODE in $env_file): $setup_code"
   exit 0
 fi
 
@@ -199,12 +217,11 @@ docker compose pull
 log "Starting"
 docker compose up -d
 
-ui_port="$(env_value PROBARA_UI_PORT)"
-status_port="$(env_value PROBARA_STATUS_PAGE_PORT)"
 cat <<EOF
 
 Probara $version is starting.
   UI:           http://localhost:${ui_port:-3000}  (create the first administrator there)
+  Setup code:   $setup_code  (asked for by that form; also BOOTSTRAP_SETUP_CODE in $env_file)
   Status pages: http://localhost:${status_port:-8082}/public/status/<slug>
 
 Back up $(pwd)/$env_file: it holds every generated secret.

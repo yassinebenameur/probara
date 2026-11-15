@@ -57,6 +57,25 @@ func TestLoadAPIConfigLocationWorkerImage(t *testing.T) {
 	}
 }
 
+func TestLoadAPIConfigBootstrapSetupCode(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("BOOTSTRAP_SETUP_CODE", "")
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BootstrapSetupCode != "" {
+		t.Fatalf("default setup code = %q, want empty", cfg.BootstrapSetupCode)
+	}
+	t.Setenv("BOOTSTRAP_SETUP_CODE", " ABCD-EFGH ")
+	if cfg, err = LoadAPIConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BootstrapSetupCode != "ABCD-EFGH" {
+		t.Fatalf("setup code = %q", cfg.BootstrapSetupCode)
+	}
+}
+
 func TestLoadBaseConfig_MissingHTTPPort(t *testing.T) {
 	t.Setenv("HTTP_PORT", "")
 	t.Setenv("METRICS_PORT", "9090")

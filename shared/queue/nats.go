@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -97,12 +98,37 @@ func websocketPath(natsURL string) (string, []nats.Option) {
 	return u.String(), []nats.Option{nats.ProxyPath(path)}
 }
 
+// checkWebsocketCredentials refuses a plain ws:// URL that carries
+// credentials to anything but a loopback host: a private-location worker's
+// URL holds its location credential, which ws:// would send in clear across
+// the network. wss:// (TLS) and credential-free ws:// URLs pass.
+func checkWebsocketCredentials(natsURL string) error {
+	for _, raw := range strings.Split(natsURL, ",") {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || !strings.EqualFold(u.Scheme, "ws") || u.User == nil {
+			continue
+		}
+		host := u.Hostname()
+		if strings.EqualFold(host, "localhost") {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			continue
+		}
+		return fmt.Errorf("refusing to send NATS credentials over plaintext ws:// to %s: use wss:// (TLS)", host)
+	}
+	return nil
+}
+
 // NewClient creates a new NATS JetStream client. The connection retries
 // forever (initial connect and reconnects) so a NATS outage never leaves
 // the client permanently disconnected. natsURL may be nats://, tls://, or
 // ws:// / wss:// (the broker's websocket listener, optionally with a path),
 // which private-location workers use to reach the broker over 443.
 func NewClient(natsURL string) (*Client, error) {
+	if err := checkWebsocketCredentials(natsURL); err != nil {
+		return nil, err
+	}
 	natsURL, pathOpts := websocketPath(natsURL)
 	nc, err := nats.Connect(natsURL, append(reconnectOptions(), pathOpts...)...)
 	if err != nil {

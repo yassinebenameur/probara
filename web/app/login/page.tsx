@@ -7,11 +7,12 @@ import BrandMark from "@/components/ui/BrandMark";
 import Callout from "@/components/ui/Callout";
 import { clearApiKey } from "@/lib/auth";
 import { getOidcStatus } from "@/lib/api";
+import {
+  bootstrapRequestBody,
+  bootstrapView,
+  type BootstrapStatus,
+} from "@/lib/bootstrap";
 import type { OidcStatus } from "@/lib/types";
-
-type BootstrapStatusResponse = {
-  has_admin_users: boolean;
-};
 
 type ApiErrorResponse = {
   message?: string;
@@ -54,6 +55,8 @@ function LoginPageInner() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [setupCode, setSetupCode] = useState("");
+  const [setupCodeRequired, setSetupCodeRequired] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [oidc, setOidc] = useState<OidcStatus>({ enabled: false });
@@ -90,9 +93,10 @@ function LoginPageInner() {
           throw new Error("status lookup failed");
         }
 
-        const data = (await response.json()) as BootstrapStatusResponse;
+        const view = bootstrapView((await response.json()) as BootstrapStatus);
         if (!ignore) {
-          setAuthMode(data.has_admin_users ? "login" : "bootstrap");
+          setAuthMode(view.mode);
+          setSetupCodeRequired(view.setupCodeRequired);
         }
       } catch {
         if (!ignore) {
@@ -188,6 +192,11 @@ function LoginPageInner() {
       setLoading(false);
       return;
     }
+    if (setupCodeRequired && !setupCode.trim()) {
+      setError("The setup code is required");
+      setLoading(false);
+      return;
+    }
 
     try {
       const response = await fetch("/api/v1/users/bootstrap/first", {
@@ -196,11 +205,16 @@ function LoginPageInner() {
           "Content-Type": "application/json",
         },
         credentials: "include",
-        body: JSON.stringify({
-          username: username.trim(),
-          password,
-        }),
+        body: JSON.stringify(
+          bootstrapRequestBody(username, password, setupCode, setupCodeRequired),
+        ),
       });
+
+      if (response.status === 403) {
+        setError("The setup code is not valid.");
+        setLoading(false);
+        return;
+      }
 
       if (response.status === 409) {
         setAuthMode("login");
@@ -333,6 +347,36 @@ function LoginPageInner() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   disabled={loading}
                 />
+              </div>
+            )}
+
+            {authMode === "bootstrap" && setupCodeRequired && (
+              <div>
+                <label
+                  htmlFor="setup-code"
+                  className="mb-1.5 block text-ui font-medium text-slate-300"
+                >
+                  Setup code
+                </label>
+                <input
+                  id="setup-code"
+                  name="setup-code"
+                  type="text"
+                  required
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  className="input font-mono"
+                  placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"
+                  aria-describedby="setup-code-hint"
+                  value={setupCode}
+                  onChange={(e) => setSetupCode(e.target.value)}
+                  disabled={loading}
+                />
+                <p id="setup-code-hint" className="mt-1.5 text-xs text-slate-400">
+                  The installer printed it when it finished; it is also
+                  BOOTSTRAP_SETUP_CODE in the install directory&apos;s .env.
+                </p>
               </div>
             )}
 

@@ -82,7 +82,7 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The snippet pins the worker to the platform's own release (the API's version tag), so a new location speaks the same queue contract as the scheduler that feeds it. An API built without a release version, such as a local build, references `:alpha` instead. Set `LOCATION_WORKER_IMAGE` on the API (Helm: `api.locationWorkerImage`) to point remote sites at a mirror or a different tag. After a platform upgrade, upgrade existing location workers to the same tag.",
+            "The snippet pins the worker to the platform's own release (the API's version tag), so a new location speaks the same queue contract as the scheduler that feeds it. An API built without a release version, such as a local build, references the moving `:alpha` channel tag instead. Set `LOCATION_WORKER_IMAGE` on the API (Helm: `api.locationWorkerImage`) to point remote sites at a mirror or a different tag. After a platform upgrade, upgrade existing location workers to the same tag.",
         },
         {
           type: "paragraph",

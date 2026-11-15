@@ -460,7 +460,7 @@ or imported groups come back empty. Any other path that creates groups through
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
   `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
-  `status_page_preview_secret`) are the contract external secret managers
+  `status_page_preview_secret`, `bootstrap_setup_code`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
   in the Secret. `ADMIN_COOKIE_SECURE` comes from the
@@ -483,7 +483,7 @@ or imported groups come back empty. Any other path that creates groups through
   Services log it at startup and MCP reports it. **`LOCATION_WORKER_IMAGE`**
   (api) is the image private-location deploy snippets reference: unset is
   `locations.DefaultWorkerImage`, the worker at `buildinfo.ReleaseVersion`
-  (`:alpha` for unreleased builds), never `:latest`. Helm sets
+  (the moving `:alpha` channel tag for unreleased builds), never `:latest`. Helm sets
   `{image.repository}-worker:{imageTag}` (override `api.locationWorkerImage`).
 - **Release Compose** (`docker-compose.release.yml`, an override of the base
   file) runs the published images plus the frontend and an `edge` Caddy. It
@@ -491,20 +491,35 @@ or imported groups come back empty. Any other path that creates groups through
   features' never a dev default) and the client-IP chain; other env stays in
   the base file. `scripts/install.sh` must generate every `:?` secret
   (`bash scripts/test-install.sh` checks its `.env` handling: every form
-  Compose accepts counts as set, a second run changes nothing). Client IPs:
-  `edge` overwrites `X-Forwarded-For` with `{client_ip}`, the frontend
-  (never published) forwards it with `API_PROXY_TRUST_FORWARDED_FOR=true`,
-  and the api trusts only `PROBARA_NETWORK_SUBNET` (`TRUSTED_PROXY_CIDRS`).
+  Compose accepts, `KEY: v` included, counts as set; a second run changes
+  nothing). Client IPs: `edge` overwrites `X-Forwarded-For` with
+  `{client_ip}` and drops every other client-address header; the frontend
+  (never published) forwards it with `API_PROXY_TRUST_FORWARDED_FOR=true`;
+  the api trusts only the frontend's fixed address `PROBARA_FRONTEND_IP/32`
+  (`TRUSTED_PROXY_CIDRS`). `edge`, frontend and api share `probara-front`,
+  which the worker (tenant-defined requests, arbitrary headers) must never
+  join; never trust a whole network the worker is on.
 - **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
   ingress or proxy) lets private locations dial `wss://` on 443. Helm
   `nats.websocket.*`: its own Ingress (`ingress-nats-websocket.yaml`, never a
-  path in `ingress.yaml`), which fails the render without `nats.auth.enabled`
-  and refuses `/` on an app host; with it on and `api.publicNatsURL` empty the
+  path in `ingress.yaml`), which fails the render without `nats.auth.enabled`,
+  without `tls` (unless `tlsTerminatedUpstream`), and on `/` of an app host; with it on and `api.publicNatsURL` empty the
   API advertises `wss://<host><path>` (`monitoring-platform.publicNatsUrl`).
   Release Compose serves it on loopback 8443. The listener has no auth block,
   so the callout covers it (`TestAuthorizationCalloutCoversWebsocketClients`);
   `shared/queue.NewClient` moves a `wss://` URL's path into `nats.ProxyPath`,
-  since nats.go otherwise upgrades on `/`.
+  since nats.go otherwise upgrades on `/`, and refuses credentials over plain
+  `ws://` to a non-loopback host.
+- **`BOOTSTRAP_SETUP_CODE`** (api, optional): when set, `POST
+  /users/bootstrap/first` needs it (`setup_code`, constant-time compare,
+  case/dash-insensitive, same 403 for missing and wrong, never logged), and
+  `GET /users/bootstrap/status` reports `setup_code_required`, never the code
+  (`api/internal/handlers/users`). Unset keeps the open first-run form for
+  dev and existing installs. `scripts/install.sh` generates and prints it,
+  the release Compose requires it, Helm renders `secrets.bootstrapSetupCode`
+  through `secretEnv` (optional). The login page's field logic lives in
+  `web/lib/bootstrap.ts`. OIDC just-in-time first login is a separate path
+  the code does not gate.
 
 ## MCP server
 

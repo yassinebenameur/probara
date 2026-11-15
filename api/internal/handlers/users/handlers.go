@@ -2,6 +2,8 @@ package users
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -34,6 +36,9 @@ type Handlers struct {
 	service userService
 	logger  *logger.Logger
 	audit   *audit.Recorder
+	// setupCode is BOOTSTRAP_SETUP_CODE, normalized; empty leaves first-admin
+	// creation open until an admin exists.
+	setupCode string
 }
 
 type userService interface {
@@ -58,6 +63,40 @@ func NewHandlers(service userService, log *logger.Logger) *Handlers {
 func (h *Handlers) WithAudit(recorder *audit.Recorder) *Handlers {
 	h.audit = recorder
 	return h
+}
+
+// WithSetupCode makes first-admin creation require the install's one-time
+// setup code (BOOTSTRAP_SETUP_CODE). Empty keeps it open, as before.
+func (h *Handlers) WithSetupCode(code string) *Handlers {
+	h.setupCode = normalizeSetupCode(code)
+	return h
+}
+
+// normalizeSetupCode lets an operator type the code the way the installer
+// printed it or not: case, dashes and spaces are ignored.
+func normalizeSetupCode(code string) string {
+	return strings.ToUpper(strings.Map(func(r rune) rune {
+		switch r {
+		case '-', ' ', '\t':
+			return -1
+		}
+		return r
+	}, code))
+}
+
+// setupCodeMatches compares in constant time. Hashing first keeps the
+// comparison independent of the submitted length as well.
+func (h *Handlers) setupCodeMatches(submitted string) bool {
+	want := sha256.Sum256([]byte(h.setupCode))
+	got := sha256.Sum256([]byte(normalizeSetupCode(submitted)))
+	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
+}
+
+// bootstrapFirstUserRequest is the first-admin body: the user fields plus the
+// install's setup code when one is configured.
+type bootstrapFirstUserRequest struct {
+	models.CreateAdminUserRequest
+	SetupCode string `json:"setup_code,omitempty"`
 }
 
 // recordUserEvent emits a rich user-management audit event (the /users
@@ -160,15 +199,29 @@ func (h *Handlers) BootstrapStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, models.AdminBootstrapStatusResponse{
-		HasAdminUsers: hasAdminUsers,
+		HasAdminUsers:     hasAdminUsers,
+		SetupCodeRequired: h.setupCode != "",
 	})
 }
 
 // BootstrapFirstUser handles POST /api/v1/users/bootstrap/first.
 func (h *Handlers) BootstrapFirstUser(w http.ResponseWriter, r *http.Request) {
-	var req models.CreateAdminUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var body bootstrapFirstUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+		return
+	}
+	req := body.CreateAdminUserRequest
+
+	// Checked before anything else, so a caller without the code learns
+	// nothing (not even whether an admin exists). Missing and wrong codes get
+	// the same answer; the log never carries the submitted value.
+	if h.setupCode != "" && !h.setupCodeMatches(body.SetupCode) {
+		h.logger.WithFields(map[string]any{
+			"remote_addr":     r.RemoteAddr,
+			"setup_code_sent": strings.TrimSpace(body.SetupCode) != "",
+		}).Warn("First-admin bootstrap refused: invalid or missing setup code")
+		apierrors.WriteForbiddenError(w, "invalid or missing setup code")
 		return
 	}
 

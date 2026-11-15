@@ -60,6 +60,11 @@ type APIConfig struct {
 	// deploy snippets reference. Empty means the locations service default
 	// (the worker image at this build's release version).
 	LocationWorkerImage string
+	// BootstrapSetupCode is BOOTSTRAP_SETUP_CODE: when set, creating the
+	// first administrator requires it, so a freshly published install cannot
+	// be claimed by whoever reaches the UI first. Empty keeps the endpoint
+	// open until the first admin exists.
+	BootstrapSetupCode string
 	// Mesh knobs mirrored from the scheduler (same env vars) so edge
 	// staleness and probe-now timeouts agree with the actual probe cadence.
 	MeshProbeIntervalSeconds int
@@ -227,6 +232,7 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
 	}
 	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
+	cfg.BootstrapSetupCode = strings.TrimSpace(os.Getenv("BOOTSTRAP_SETUP_CODE"))
 
 	// OTLP_* — ingest guardrails for the OTel metrics endpoint.
 	cfg.OTLPMaxSeriesPerMonitor = 2000
