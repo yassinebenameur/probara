@@ -59,6 +59,13 @@ export const GETTING_STARTED_PAGE: DocPage = {
           text:
             "`make start-all-local` runs application services as local processes. `make start-all` builds and runs them with Docker Compose. Use the matching stop or restart target for the workflow you chose.",
         },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Just running Probara? Use the release install",
+          text:
+            "To run a release on one host without cloning or building, `curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/main/scripts/install.sh | bash` downloads the [release Compose files](/docs/deployment/#release-compose), generates every secret into `.env`, and starts the published images, the operator UI included, on port 3000.",
+        },
       ],
     },
     {

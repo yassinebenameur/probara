@@ -183,7 +183,12 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PUBLIC_NATS_URL`',
               'Empty',
-              'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected.',
+              'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected. `wss://host[/path]` is the broker\'s [websocket listener](/docs/deployment/#nats-websocket) behind an HTTPS ingress, reachable over 443. Helm derives it from `nats.websocket.ingress.*` when `api.publicNatsURL` is empty.',
+            ],
+            [
+              '`LOCATION_WORKER_IMAGE`',
+              'Empty: `ghcr.io/yassinebenameur/probara-worker:<API version>`, or `:alpha` for an unreleased build',
+              'Image the generated location-worker snippets reference. Released API images default to the worker at their own version, so a new location runs the same release as the platform; builds without a release version (local, Compose without `PROBARA_VERSION`) fall back to the newest prerelease tag. Never `:latest`. Helm sets it to `{image.repository}-worker:{image tag}` (override with `api.locationWorkerImage`); Compose passes it through from the shell. Set it for a mirror registry.',
             ],
             [
               '`NATS_LOCATION_AUTH_ISSUER_SEED`',

@@ -452,7 +452,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'list',
           items: [
-            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo.',
+            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo. The broker\'s websocket listener is plaintext and must sit behind a TLS-terminating ingress or proxy; websocket clients go through the same authorization callout as TCP clients.',
             'Keep the account issuer seed only in API. Configure only its public account key in NATS.',
             'Use a separate platform NATS user for trusted internal services. Never give it to a location worker.',
             'Location claims restrict result publication, heartbeat publication, consumer pull/ACK operations, inbox responses, and test-job subscription to that location.',
@@ -466,7 +466,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           tone: 'warning',
           title: 'Local Compose NATS is not a private-location broker',
           text:
-            'It listens without authentication or TLS. The embedded Helm NATS service is ClusterIP-only until you add secure external exposure. Setting `PUBLIC_NATS_URL` alone does not create that exposure.',
+            'It listens without authentication or TLS. The embedded Helm NATS service is ClusterIP-only until you add secure external exposure (`nats.websocket.ingress.*`, which refuses to render without `nats.auth.enabled`). Setting `PUBLIC_NATS_URL` alone does not create that exposure. The [release Compose override](/docs/deployment/#release-compose) turns authentication on.',
         },
       ],
     },

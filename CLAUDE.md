@@ -409,7 +409,8 @@ or imported groups come back empty. Any other path that creates groups through
   deliver alerts but fail every test with `mailer not configured`. Parsed once
   in `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
   top-level `smtp:` and `appBaseURL:` values render the env into all three
-  workloads via the `smtpEnv` helper. Compose wires none of it.
+  workloads via the `smtpEnv` helper. The base Compose file wires none of
+  it; `docker-compose.release.yml` passes it to all three.
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
   `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
   deep links to notifications (every channel, via `plugin.Configure`) —
@@ -473,7 +474,37 @@ or imported groups come back empty. Any other path that creates groups through
   `nats-statefulset.yaml`). Never move it into `nats.conf` `$VAR` expansion:
   that re-parses the value as config (numeric, boolean-ish or
   space/comma/brace passwords abort startup), and quoting the reference
-  silently disables the expansion.
+  silently disables the expansion. The release Compose file does the same
+  with a Compose-interpolated `--pass` in the nats `command`.
+- **Release version (`shared/buildinfo.Version`)** is stamped by
+  `-ldflags -X` from each Go Dockerfile's `VERSION` build-arg
+  (`docker-build.yml`: the metadata action's version; base Compose:
+  `PROBARA_VERSION`, default `dev`); a new Go Dockerfile must stamp it too.
+  Services log it at startup and MCP reports it. **`LOCATION_WORKER_IMAGE`**
+  (api) is the image private-location deploy snippets reference: unset is
+  `locations.DefaultWorkerImage`, the worker at `buildinfo.ReleaseVersion`
+  (`:alpha` for unreleased builds), never `:latest`. Helm sets
+  `{image.repository}-worker:{imageTag}` (override `api.locationWorkerImage`).
+- **Release Compose** (`docker-compose.release.yml`, an override of the base
+  file) runs the published images plus the frontend and an `edge` Caddy. It
+  overrides images, ports, credentials (platform ones `${VAR:?}`; optional
+  features' never a dev default) and the client-IP chain; other env stays in
+  the base file. `scripts/install.sh` must generate every `:?` secret
+  (`bash scripts/test-install.sh` checks its `.env` handling: every form
+  Compose accepts counts as set, a second run changes nothing). Client IPs:
+  `edge` overwrites `X-Forwarded-For` with `{client_ip}`, the frontend
+  (never published) forwards it with `API_PROXY_TRUST_FORWARDED_FOR=true`,
+  and the api trusts only `PROBARA_NETWORK_SUBNET` (`TRUSTED_PROXY_CIDRS`).
+- **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
+  ingress or proxy) lets private locations dial `wss://` on 443. Helm
+  `nats.websocket.*`: its own Ingress (`ingress-nats-websocket.yaml`, never a
+  path in `ingress.yaml`), which fails the render without `nats.auth.enabled`
+  and refuses `/` on an app host; with it on and `api.publicNatsURL` empty the
+  API advertises `wss://<host><path>` (`monitoring-platform.publicNatsUrl`).
+  Release Compose serves it on loopback 8443. The listener has no auth block,
+  so the callout covers it (`TestAuthorizationCalloutCoversWebsocketClients`);
+  `shared/queue.NewClient` moves a `wss://` URL's path into `nats.ProxyPath`,
+  since nats.go otherwise upgrades on `/`.
 
 ## MCP server
 
@@ -955,7 +986,10 @@ or imported groups come back empty. Any other path that creates groups through
   start script, run `python .github/workflows/scripts/local_ai_helm_cases.py`
   and `python3 -I scripts/check-local-ai-packaging.py` (render cases, fail
   cases and Compose wiring; CI runs both in `local-ai-pr.yml`).
-- Compose: `docker compose config` validates env wiring.
+- Compose: `docker compose config` validates env wiring; for the release
+  override, `docker compose -f docker-compose.yml -f docker-compose.release.yml
+  config -q` under dummy values for its required variables, and
+  `bash scripts/test-install.sh` (needs only the docker CLI).
 - ai-service: from the repo root with the hash-locked deps installed
   (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
   PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests
