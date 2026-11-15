@@ -35,7 +35,11 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
 - `shared/db/migrations/` — golang-migrate pairs `NNNNNN_name.{up,down}.sql`
-  (take the next free number), applied by `cmd/migrate` — from the repo root
+  (take the next free number; numbering must stay contiguous — a gap filled
+  later is silently skipped on upgraded installs, and `TestMigrationNumbering`
+  (`shared/db/migrations_numbering_test.go`) fails on a duplicate number, an
+  unpaired file, or a gap not in `knownMigrationGaps`), applied by
+  `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
   Compose job, Helm a post-install/upgrade hook Job
 - `cmd/` — `migrate`, `discovery-collector` (the in-cluster Kubernetes
@@ -145,6 +149,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   Import, preview, and anything type-driven must delegate to it
   (`DefaultRegistry.Has/Types`), never keep a parallel hardcoded list.
 - **Active-check types** (timeout semantics): `validation.IsActiveCheckType`.
+  Every registered type is active xor passive
+  (`TestRegistryTypesArePartitionedActiveOrPassive`).
 - **Passive types** (never dispatched, refused by run-now, skipped by the
   worker): `shared/models.PassiveMonitorTypes`; the monitor page's
   `PASSIVE_TYPES` is its UI mirror.
@@ -308,7 +314,11 @@ or imported groups come back empty. Any other path that creates groups through
    the shared struct, so put `Validate()` on it rather than duplicating rules
 2. Validator in `api/internal/validation/` + register in `registry.go`, and
    its `ConfigType()` in `config_types.go` (the struct MCP's
-   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`)
+   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`);
+   an active type also goes in `activeCheckTypes` (`validation.go`). No
+   migration: `monitors_timeout_check` (000099) names only the passive types,
+   so only a new passive type rewrites it, together with
+   `PassiveMonitorTypes` (`TestTimeoutCheckPassiveTypesMatchGo`)
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
    through `dialGuard` (SSRF policy)
@@ -582,6 +592,19 @@ or imported groups come back empty. Any other path that creates groups through
   there, never in a plugin or template. Email wraps it (`email/view.go`:
   `alertView` = `present.Message` + palette) so `alert.gohtml` (HTML part)
   and `renderAlertText` (plain-text part) render from one model.
+- **Alert kinds**: `alerts_kind_check` (latest rewrite 000100) and the
+  `Kind*` constants in `shared/notifications/event.go` list the same kinds;
+  a new kind rewrites the CHECK in one migration and adds its constant, its
+  wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
+  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last).
+- **Transactional mail** (invites, resets, subscriber mail, reports) goes
+  through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
+  MIME builder; `Message.Validate` is the header-injection guard and accepts
+  only plain dot-atom addresses (`ParseRecipient`). It sends one copy per
+  recipient over one reused connection, never falls back to the alert
+  default recipients, and reports partial failures as `*mail.DeliveryError`.
+  Alert email stays on `SendAlert`. Both run SMTP I/O under a deadline
+  (`smtp_session.go`: the ctx deadline, else 30 s per message).
 - **Channel plugins** (`shared/notifications/plugin/builtin/<type>/`,
   registered in `builtin.go`) follow the checklist in the `plugin` package
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and

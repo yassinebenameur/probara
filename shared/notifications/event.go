@@ -75,7 +75,8 @@ type AlertDetails struct {
 	// Mesh-edge annotation: populated when Kind == "mesh_edge". The alert's
 	// subject is the directed source→target location path (MonitorID is the
 	// zero UUID for these; MonitorName carries a readable "mesh: A → B" label
-	// so existing channel templates render something meaningful).
+	// so existing channel templates render something meaningful). A
+	// location_offline alert names its location in the Source pair alone.
 	SourceLocationID   *string `json:"source_location_id,omitempty"`
 	SourceLocationName *string `json:"source_location_name,omitempty"`
 	TargetLocationID   *string `json:"target_location_id,omitempty"`
@@ -130,14 +131,21 @@ func (d AlertDetails) ImpactedMonitorNames() []string {
 	return names
 }
 
-// KindAvailability, KindLatencyAnomaly, KindHostMetric, KindMeshEdge and
-// KindTLSExpiry are the alert kinds.
+// The alert kinds. This block mirrors the alerts_kind_check SQL constraint
+// (latest rewrite: migration 000100); change them together.
 const (
 	KindAvailability   = "availability"
 	KindLatencyAnomaly = "latency_anomaly"
 	KindHostMetric     = "host_metric"
 	KindMeshEdge       = "mesh_edge"
 	KindTLSExpiry      = "tls_expiry"
+	// KindDomainExpiry: a domain registration is inside its expiry window.
+	// MetricValue is the days left (negative once expired), ThresholdValue
+	// the warning window in days, as for KindTLSExpiry.
+	KindDomainExpiry = "domain_expiry"
+	// KindLocationOffline: a check location stopped reporting. The location
+	// is named by SourceLocationID/SourceLocationName.
+	KindLocationOffline = "location_offline"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.
@@ -158,6 +166,18 @@ func (d AlertDetails) IsMeshEdge() bool {
 // IsTLSExpiry reports whether this alert is a TLS-certificate-expiry warning.
 func (d AlertDetails) IsTLSExpiry() bool {
 	return d.Kind == KindTLSExpiry
+}
+
+// IsDomainExpiry reports whether this alert is a domain-registration-expiry
+// warning.
+func (d AlertDetails) IsDomainExpiry() bool {
+	return d.Kind == KindDomainExpiry
+}
+
+// IsLocationOffline reports whether this alert is a check location that
+// stopped reporting.
+func (d AlertDetails) IsLocationOffline() bool {
+	return d.Kind == KindLocationOffline
 }
 
 // TLSExpiryLabel returns a header label for a tls_expiry alert, for use in

@@ -134,6 +134,10 @@ func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message
 		Resolved:    resolved,
 	}
 	m.Tone, m.StatusWord = toneFor(alert, eventType, resolved)
+	if m.MonitorName == "" && alert.IsLocationOffline() {
+		// The subject is a location, not a monitor.
+		m.MonitorName = locationName(alert)
+	}
 	if m.MonitorName == "" {
 		m.MonitorName = "Unnamed monitor"
 	}
@@ -219,7 +223,8 @@ func suspectedCauseRows(alert notifications.AlertDetails, elapsed string) []Row 
 // followedUpPage names the page a follow-up refers to: the kind-aware
 // headline the page itself carried, e.g. "CPU Usage High".
 func followedUpPage(alert notifications.AlertDetails) string {
-	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() {
+	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() ||
+		alert.IsDomainExpiry() || alert.IsLocationOffline() {
 		return labelFor(alert, EventCreated)
 	}
 	return "Down alert"
@@ -341,6 +346,10 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 			return ToneUp, "BACK TO NORMAL"
 		case alert.IsTLSExpiry():
 			return ToneUp, "CERTIFICATE RENEWED"
+		case alert.IsDomainExpiry():
+			return ToneUp, "DOMAIN RENEWED"
+		case alert.IsLocationOffline():
+			return ToneUp, "BACK ONLINE"
 		}
 		return ToneUp, "RECOVERED"
 	}
@@ -360,11 +369,23 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		return ToneWarn, "THRESHOLD BREACHED"
 	case alert.IsTLSExpiry():
 		return ToneWarn, "EXPIRING SOON"
+	case alert.IsDomainExpiry():
+		// Past expiry the name stops resolving (or is released), which is an
+		// outage, not a warning.
+		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+			return ToneDown, "DOMAIN EXPIRED"
+		}
+		return ToneWarn, "EXPIRING SOON"
 	case alert.IsMeshEdge():
 		if eventType == EventReminder {
 			return ToneDown, "PATH STILL DOWN"
 		}
 		return ToneDown, "PATH DOWN"
+	case alert.IsLocationOffline():
+		if eventType == EventReminder {
+			return ToneDown, "STILL OFFLINE"
+		}
+		return ToneDown, "OFFLINE"
 	}
 	if eventType == EventReminder {
 		return ToneDown, "STILL DOWN"
@@ -398,6 +419,24 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 		return alert.HostMetricLabel(eventType)
 	case alert.IsTLSExpiry():
 		return alert.TLSExpiryLabel(eventType)
+	case alert.IsDomainExpiry():
+		switch eventType {
+		case EventResolved:
+			return "Domain Renewed"
+		case EventReminder:
+			return "Domain Still Expiring"
+		default:
+			return "Domain Expiring"
+		}
+	case alert.IsLocationOffline():
+		switch eventType {
+		case EventResolved:
+			return "Location Back Online"
+		case EventReminder:
+			return "Location Still Offline"
+		default:
+			return "Location Offline"
+		}
 	case alert.IsMeshEdge():
 		switch eventType {
 		case EventResolved:
@@ -484,6 +523,35 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		}
 		return "The TLS certificate is approaching expiry."
 
+	case alert.IsDomainExpiry():
+		if resolved {
+			return "The domain registration has been renewed."
+		}
+		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+			return fmt.Sprintf("The domain registration expired %s ago. Renew it before the registry releases the name.", dayValue(-*alert.MetricValue))
+		}
+		if alert.MetricValue != nil {
+			s := fmt.Sprintf("The domain registration expires in %s", dayValue(*alert.MetricValue))
+			if alert.ThresholdValue != nil {
+				s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
+			}
+			return s + "."
+		}
+		return "The domain registration is approaching expiry."
+
+	case alert.IsLocationOffline():
+		name := locationName(alert)
+		if resolved {
+			if outage != "" {
+				return fmt.Sprintf("Location %s is reporting again after %s offline.", name, outage)
+			}
+			return fmt.Sprintf("Location %s is reporting again.", name)
+		}
+		if eventType == EventReminder && outage != "" {
+			return fmt.Sprintf("Location %s is still not reporting, %s after it went silent.", name, outage)
+		}
+		return fmt.Sprintf("Location %s has stopped reporting; monitors that run from it go stale without fresh checks.", name)
+
 	case alert.IsMeshEdge():
 		path := meshPath(alert)
 		if resolved {
@@ -557,6 +625,18 @@ func metricFor(alert notifications.AlertDetails, resolved bool) *Metric {
 			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
 		}
 		return p
+	case alert.IsDomainExpiry():
+		if alert.MetricValue == nil {
+			return nil
+		}
+		p := &Metric{Label: "Registration left", Value: dayValue(*alert.MetricValue)}
+		if *alert.MetricValue < 0 {
+			p = &Metric{Label: "Registration expired", Value: dayValue(-*alert.MetricValue) + " ago"}
+		}
+		if alert.ThresholdValue != nil {
+			p.Note = "warns under " + dayValue(*alert.ThresholdValue)
+		}
+		return p
 	}
 	return nil
 }
@@ -568,6 +648,9 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 		if path := meshPath(alert); path != "" {
 			rows = append(rows, Row{Label: "Path", Value: strings.TrimPrefix(path, "from ")})
 		}
+	}
+	if alert.IsLocationOffline() {
+		rows = append(rows, Row{Label: "Location", Value: locationName(alert)})
 	}
 	if name := strings.TrimSpace(alert.PolicyName); name != "" {
 		rows = append(rows, Row{Label: "Alert rule", Value: name})
@@ -610,6 +693,9 @@ func actionFor(alert notifications.AlertDetails, appBaseURL string) (string, str
 	}
 	if alert.IsMeshEdge() {
 		return base + "/mesh", "Open the mesh matrix"
+	}
+	if alert.IsLocationOffline() {
+		return base + "/locations", "Open locations"
 	}
 	if id := strings.TrimSpace(alert.MonitorID); id != "" && id != emptyUUID {
 		return base + "/monitors/" + id, "Open the monitor"
@@ -759,6 +845,20 @@ func meshPath(alert notifications.AlertDetails) string {
 		return "on " + name
 	}
 	return "between locations"
+}
+
+// locationName is a location_offline alert's subject: the Source location
+// name, else the alert's display name.
+func locationName(alert notifications.AlertDetails) string {
+	if alert.SourceLocationName != nil {
+		if name := strings.TrimSpace(*alert.SourceLocationName); name != "" {
+			return name
+		}
+	}
+	if name := strings.TrimSpace(alert.MonitorName); name != "" {
+		return name
+	}
+	return "unknown"
 }
 
 func capitalize(s string) string {

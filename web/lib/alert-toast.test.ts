@@ -35,11 +35,22 @@ test('wording follows the alert kind', () => {
   const mesh = alert({ kind: 'mesh_edge', source_location_name: 'Paris', target_location_name: 'Frankfurt' });
   assert.equal(alertSubject(mesh), 'Paris → Frankfurt');
   assert.equal(alertToast('created', mesh)?.message, 'Paris → Frankfurt path is down');
+  assert.equal(
+    alertToast('created', alert({ kind: 'domain_expiry', monitor_name: 'example.com', metric_value: 12.2 }))?.message,
+    'example.com domain registration expires in 12d'
+  );
+  const offline = alert({ kind: 'location_offline', source_location_name: 'Paris' });
+  assert.equal(alertSubject(offline), 'Paris');
+  assert.equal(alertToast('created', offline)?.message, 'Paris stopped reporting');
+  assert.equal(alertToast('resolved', { ...offline, status: 'resolved' })?.message, 'Paris: location alert closed');
 });
 
 test('severity: outages are errors, softer kinds are warnings', () => {
   assert.equal(alertToast('created', alert({ monitor_name: 'x' }))?.type, 'error');
   assert.equal(alertToast('created', alert({ kind: 'tls_expiry', monitor_name: 'x' }))?.type, 'warning');
+  assert.equal(alertToast('created', alert({ kind: 'domain_expiry', monitor_name: 'x', metric_value: 5 }))?.type, 'warning');
+  assert.equal(alertToast('created', alert({ kind: 'domain_expiry', monitor_name: 'x', metric_value: -1 }))?.type, 'error');
+  assert.equal(alertToast('created', alert({ kind: 'location_offline', source_location_name: 'x' }))?.type, 'error');
   // A stream payload without a kind reads "is down", so it is an error too.
   const noKind = alertToast('created', alert({ kind: undefined, monitor_name: 'Storefront' }));
   assert.equal(noKind?.message, 'Storefront is down');

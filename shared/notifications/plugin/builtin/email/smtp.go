@@ -3,15 +3,16 @@ package email
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"mime"
-	"net/smtp"
+	"net/textproto"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/mail"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
@@ -63,8 +64,6 @@ func NewSMTPMailer(params SMTPParams) (*SMTPMailer, error) {
 // SendAlert renders subject/body via the email plugin's template engine and
 // dispatches the message over SMTP.
 func (m *SMTPMailer) SendAlert(ctx context.Context, event notifications.AlertEvent, templates Templates, recipients []string) error {
-	_ = ctx
-
 	to := recipients
 	if len(to) == 0 {
 		to = m.to
@@ -86,24 +85,131 @@ func (m *SMTPMailer) SendAlert(ctx context.Context, event notifications.AlertEve
 		HTML:     html,
 	})
 
-	addr := fmt.Sprintf("%s:%d", m.cfg.Host, m.cfg.Port)
-	var auth smtp.Auth
-	if m.cfg.Username != "" {
-		auth = smtp.PlainAuth("", m.cfg.Username, m.cfg.Password, m.cfg.Host)
-	}
-
-	if m.cfg.UseTLS {
-		if err := m.sendWithTLS(addr, auth, message, to); err != nil {
-			return err
-		}
-		return deliveredDespite(renderErr)
-	}
-
-	if err := smtp.SendMail(addr, auth, m.cfg.From, to, []byte(message)); err != nil {
+	if err := m.deliver(ctx, message, to); err != nil {
 		return err
 	}
-
 	return deliveredDespite(renderErr)
+}
+
+var _ mail.Sender = (*SMTPMailer)(nil)
+
+// SendMessage delivers a transactional message (invites, password resets,
+// subscriber mail, reports) as one SMTP transaction per recipient, each copy
+// addressed to that recipient alone: alert email lists a channel's whole team
+// in one To header, but transactional mail goes to people who do not know
+// each other (status-page subscribers, report recipients outside the tenant).
+// Unlike SendAlert it never falls back to the default recipients, and an
+// invalid message (mail.ErrInvalidMessage) is refused before anything is
+// dialled. A recipient listed twice is sent one copy.
+//
+// The transactions share one authenticated connection, since hosted relays
+// throttle a sender that opens a session per message. A refused recipient is
+// RSET and the rest carry on. When the connection is lost the session is
+// reopened; the recipient in flight is retried on it only if the loss came
+// before the end of its DATA, when the server cannot have accepted it, so
+// nobody gets two copies. If the session cannot be reopened, every remaining
+// recipient fails. Failures come back as a *mail.DeliveryError so a retry can
+// skip those already served.
+func (m *SMTPMailer) SendMessage(ctx context.Context, msg mail.Message) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := msg.Validate(); err != nil {
+		return err
+	}
+	type recipient struct{ given, header, envelope string }
+	recipients := make([]recipient, 0, len(msg.To))
+	seen := make(map[string]bool, len(msg.To))
+	for _, to := range msg.To {
+		addr, err := mail.ParseRecipient(to)
+		if err != nil {
+			return err
+		}
+		key := strings.ToLower(addr.Address)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		// addr.String() re-quotes and RFC 2047-encodes the display name, so
+		// the header carries the parsed address, never the caller's raw text.
+		recipients = append(recipients, recipient{given: to, header: foldEncodedWords(addr.String()), envelope: addr.Address})
+	}
+
+	var failed []mail.RecipientFailure
+	failRest := func(from int, err error) {
+		for _, r := range recipients[from:] {
+			failed = append(failed, mail.RecipientFailure{Recipient: r.given, Err: err})
+		}
+	}
+	var session *smtpSession
+	defer func() {
+		if session != nil {
+			// Every message is already accepted or refused; a failed QUIT
+			// changes neither.
+			_ = session.quit(ctx)
+		}
+	}()
+	retried := -1
+	for i := 0; i < len(recipients); {
+		r := recipients[i]
+		if err := ctx.Err(); err != nil {
+			failRest(i, err)
+			break
+		}
+		if session == nil {
+			var err error
+			if session, err = m.openSMTPSession(ctx); err != nil {
+				failRest(i, err)
+				break
+			}
+		}
+		message := buildEmailMessage(emailMessage{
+			From:        m.cfg.From,
+			FromName:    m.cfg.FromName,
+			To:          []string{r.header},
+			Subject:     msg.Subject,
+			Text:        msg.Text,
+			HTML:        msg.HTML,
+			Headers:     msg.Headers,
+			Attachments: msg.Attachments,
+		})
+		stage, err := session.send(ctx, m.cfg.From, []string{r.envelope}, message)
+		if err == nil {
+			i++
+			continue
+		}
+		if connectionLost(err) {
+			session.close()
+			session = nil
+			if stage == stageBeforeData && retried != i && ctx.Err() == nil {
+				retried = i
+				continue
+			}
+		} else if rerr := session.reset(ctx); rerr != nil {
+			session.close()
+			session = nil
+		}
+		failed = append(failed, mail.RecipientFailure{Recipient: r.given, Err: err})
+		i++
+	}
+	if len(failed) > 0 {
+		return &mail.DeliveryError{Failed: failed}
+	}
+	return nil
+}
+
+// deliver sends one assembled message to every recipient in to over a
+// session of its own (implicit TLS when UseTLS).
+func (m *SMTPMailer) deliver(ctx context.Context, message string, to []string) error {
+	session, err := m.openSMTPSession(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := session.send(ctx, m.cfg.From, to, message); err != nil {
+		session.close()
+		return err
+	}
+	return session.quit(ctx)
 }
 
 // deliveredDespite reports a template failure on a message that already went
@@ -117,55 +223,6 @@ func deliveredDespite(renderErr error) error {
 		return nil
 	}
 	return plugin.Permanent(fmt.Errorf("email sent with built-in fallback: %w", renderErr))
-}
-
-func (m *SMTPMailer) sendWithTLS(addr string, auth smtp.Auth, message string, recipients []string) error {
-	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: m.cfg.Host})
-	if err != nil {
-		return fmt.Errorf("failed to dial smtp server: %w", err)
-	}
-	defer conn.Close()
-
-	client, err := smtp.NewClient(conn, m.cfg.Host)
-	if err != nil {
-		return fmt.Errorf("failed to create smtp client: %w", err)
-	}
-	defer client.Close()
-
-	if auth != nil {
-		if ok, _ := client.Extension("AUTH"); ok {
-			if err := client.Auth(auth); err != nil {
-				return fmt.Errorf("smtp auth failed: %w", err)
-			}
-		}
-	}
-
-	if err := client.Mail(m.cfg.From); err != nil {
-		return fmt.Errorf("smtp from failed: %w", err)
-	}
-	for _, recipient := range recipients {
-		if err := client.Rcpt(recipient); err != nil {
-			return fmt.Errorf("smtp rcpt failed: %w", err)
-		}
-	}
-
-	writer, err := client.Data()
-	if err != nil {
-		return fmt.Errorf("smtp data failed: %w", err)
-	}
-
-	if _, err := writer.Write([]byte(message)); err != nil {
-		return fmt.Errorf("smtp write failed: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("smtp close failed: %w", err)
-	}
-
-	if err := client.Quit(); err != nil {
-		return fmt.Errorf("smtp quit failed: %w", err)
-	}
-
-	return nil
 }
 
 func parseRecipients(value string) []string {
@@ -197,7 +254,7 @@ func combineTemplateErrors(errs ...error) error {
 	return fmt.Errorf("template rendering failed: %s", strings.Join(parts, "; "))
 }
 
-// emailMessage is one outgoing alert message before MIME assembly.
+// emailMessage is one outgoing message before MIME assembly.
 type emailMessage struct {
 	From     string
 	FromName string
@@ -205,14 +262,19 @@ type emailMessage struct {
 	Subject  string
 	Text     string
 	HTML     string
+	// Headers and Attachments come only from SendMessage, already checked by
+	// mail.Message.Validate (no CR/LF, no mailer-owned field names).
+	Headers     map[string]string
+	Attachments []mail.Attachment
 }
 
 // buildEmailMessage assembles the RFC 5322 message. With an HTML part it emits
 // multipart/alternative so rich clients render the branded email and text-only
 // clients (and mail archives) still get the readable fallback; without one it
-// emits a plain single-part message.
+// emits a plain single-part message. Attachments wrap that body in
+// multipart/mixed, the body first.
 //
-// Both parts are base64-encoded: quoting is what keeps a long styled line from
+// Every part is base64-encoded: quoting is what keeps a long styled line from
 // tripping the SMTP 998-octet line limit, and it makes the encoding correct for
 // any UTF-8 content (accented monitor names, σ, →) without per-character work.
 func buildEmailMessage(msg emailMessage) string {
@@ -226,33 +288,81 @@ func buildEmailMessage(msg emailMessage) string {
 		"Auto-Submitted: auto-generated",
 		"X-Auto-Response-Suppress: All",
 	}
+	names := make([]string, 0, len(msg.Headers))
+	for name := range msg.Headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		headers = append(headers, textproto.CanonicalMIMEHeaderKey(name)+": "+encodeHeader(msg.Headers[name]))
+	}
 
-	if strings.TrimSpace(msg.HTML) == "" {
-		headers = append(headers,
-			"Content-Type: text/plain; charset=\"UTF-8\"",
-			"Content-Transfer-Encoding: base64",
-		)
-		return strings.Join(headers, "\r\n") + "\r\n\r\n" + base64Body(msg.Text)
+	bodyHeaders, body := buildBody(msg.Text, msg.HTML)
+	if len(msg.Attachments) == 0 {
+		headers = append(headers, bodyHeaders...)
+		return strings.Join(headers, "\r\n") + "\r\n\r\n" + body
 	}
 
 	boundary := mimeBoundary()
-	headers = append(headers, fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q", boundary))
-
+	headers = append(headers, fmt.Sprintf("Content-Type: multipart/mixed; boundary=%q", boundary))
 	var b strings.Builder
 	b.WriteString(strings.Join(headers, "\r\n"))
+	b.WriteString("\r\n\r\n--" + boundary + "\r\n")
+	b.WriteString(strings.Join(bodyHeaders, "\r\n"))
 	b.WriteString("\r\n\r\n")
+	b.WriteString(body)
+	for _, a := range msg.Attachments {
+		b.WriteString("\r\n--" + boundary + "\r\n")
+		b.WriteString("Content-Type: " + attachmentContentType(a.ContentType) + "\r\n")
+		b.WriteString("Content-Disposition: " + mime.FormatMediaType("attachment", map[string]string{"filename": a.Filename}) + "\r\n")
+		b.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
+		b.WriteString(base64Body(string(a.Data)))
+	}
+	b.WriteString("\r\n--" + boundary + "--\r\n")
+	return b.String()
+}
+
+// buildBody returns the content headers and encoded body of the readable
+// part: text/plain alone, or multipart/alternative when there is HTML.
+func buildBody(text, html string) (headers []string, body string) {
+	if strings.TrimSpace(html) == "" {
+		return []string{
+			"Content-Type: text/plain; charset=\"UTF-8\"",
+			"Content-Transfer-Encoding: base64",
+		}, base64Body(text)
+	}
+
+	boundary := mimeBoundary()
+	var b strings.Builder
 	// Least-rich part first: multipart/alternative is ordered by increasing
 	// preference, so a client picks the last part it understands.
 	b.WriteString("--" + boundary + "\r\n")
 	b.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
 	b.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
-	b.WriteString(base64Body(msg.Text))
+	b.WriteString(base64Body(text))
 	b.WriteString("\r\n--" + boundary + "\r\n")
 	b.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n")
 	b.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
-	b.WriteString(base64Body(msg.HTML))
+	b.WriteString(base64Body(html))
 	b.WriteString("\r\n--" + boundary + "--\r\n")
-	return b.String()
+	return []string{fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q", boundary)}, b.String()
+}
+
+// attachmentContentType re-renders a validated media type (dropping anything
+// mime would not round-trip), defaulting to application/octet-stream.
+func attachmentContentType(contentType string) string {
+	const fallback = "application/octet-stream"
+	if contentType == "" {
+		return fallback
+	}
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return fallback
+	}
+	if formatted := mime.FormatMediaType(mediaType, params); formatted != "" {
+		return formatted
+	}
+	return fallback
 }
 
 // formatAddress renders a From header, RFC 2047-encoding the display name when
@@ -265,10 +375,46 @@ func formatAddress(addr, name string) string {
 	return fmt.Sprintf("%s <%s>", encodeHeader(name), addr)
 }
 
+// maxRawHeaderValue is the longest printable-ASCII header value sent as it
+// is. Anything longer is encoded and folded, so no header line nears the
+// SMTP 998-octet limit.
+const maxRawHeaderValue = 900
+
 // encodeHeader applies RFC 2047 encoded-word wrapping when a header value is not
 // pure ASCII, so a monitor named "Téléphonie SIP" survives the subject line.
+// The encoder splits a long value into several encoded words but separates
+// them with plain spaces, leaving one unbounded line; foldEncodedWords breaks
+// the line between them. Decoders drop the whitespace between adjacent
+// encoded words, so the folded value decodes to exactly the original.
 func encodeHeader(value string) string {
-	return mime.QEncoding.Encode("utf-8", value)
+	encoded := mime.QEncoding.Encode("utf-8", value)
+	if encoded == value && len(value) > maxRawHeaderValue {
+		// Printable ASCII with no spaces to fold at would still overflow
+		// the line, so it is encoded too.
+		return bEncodeFolded(value)
+	}
+	return foldEncodedWords(encoded)
+}
+
+// foldEncodedWords puts each RFC 2047 encoded word after the first on its own
+// continuation line. An encoded word cannot contain "?= =?" (Q encoding
+// escapes "?" and space), so the pattern only matches between words.
+func foldEncodedWords(s string) string {
+	return strings.ReplaceAll(s, "?= =?", "?=\r\n =?")
+}
+
+// bEncodeFolded encodes value as base64 encoded words of 45 bytes each (a
+// 72-character word), one per line. Only called for printable ASCII, so a
+// byte split never cuts a character in two.
+func bEncodeFolded(value string) string {
+	const chunk = 45
+	var words []string
+	for len(value) > chunk {
+		words = append(words, "=?utf-8?b?"+base64.StdEncoding.EncodeToString([]byte(value[:chunk]))+"?=")
+		value = value[chunk:]
+	}
+	words = append(words, "=?utf-8?b?"+base64.StdEncoding.EncodeToString([]byte(value))+"?=")
+	return strings.Join(words, "\r\n ")
 }
 
 // base64Body encodes a part and hard-wraps to 76 columns per RFC 2045.
