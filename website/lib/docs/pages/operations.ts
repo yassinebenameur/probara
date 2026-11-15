@@ -257,8 +257,8 @@ make healthcheck`,
             ],
             [
               'Alerter locations',
-              '`probara_alerter_locations{state=online|offline|never_seen|disabled}`, `probara_alerter_location_offline_guard{reason=fleet_silent|startup}`',
-              'Offline count rising (each one also raises a `location_offline` alert), or `fleet_silent` at 1: no location heartbeat is reaching the database, so check NATS and the scheduler. Platform-wide counts; per-workspace detail is on the Locations page.',
+              '`probara_alerter_locations{state=online|offline|never_seen|disabled}`, `probara_alerter_location_offline_guard{reason=fleet_silent|startup}`, `probara_alerter_location_offline_guard_limit_seconds{reason}`',
+              'Offline count rising: locations past the 180-second rule. Not every one has an alert: locations silent for more than 7 days and locations held by the guard do not. `fleet_silent` at 1 means several locations went quiet together, so check NATS and the scheduler before the hold ends (`guard_limit_seconds`, 15 minutes after the newest heartbeat). Platform-wide counts; per-workspace detail is on the Locations page.',
             ],
             [
               'Status live updates',
@@ -339,6 +339,13 @@ go run ./cmd/migrate`,
           type: 'paragraph',
           text:
             'The migration CLI requires `POSTGRES_URL`, defaults `MIGRATIONS_PATH` to `./migrations`, and retries the initial database connection up to 30 times at one-second intervals. API startup also runs the shared migration set. The [Helm migration Job](/docs/deployment/#migrations-upgrades) is a post-install/post-upgrade hook.',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading to offline-location alerts',
+          text:
+            'Migration 000103 rewrites the `alerts` subject constraint and builds an index on it, which scans and locks the `alerts` table while it runs (quick at typical sizes; plan a quiet moment for a very large alert history). 000104 adds `locations.enabled_at`. During a mixed-version rollout, an alerter replica still on the previous version sends the resolve notices of `location_offline` alerts without the location\'s name and still pages mesh paths that the new version holds for an offline location; finish the rollout of every alerter replica.',
         },
         {
           type: 'code',

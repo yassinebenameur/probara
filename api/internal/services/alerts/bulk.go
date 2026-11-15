@@ -10,6 +10,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
 // MaxBulkAlerts caps one bulk acknowledge/resolve request.
@@ -95,7 +96,8 @@ func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs 
 
 	changed, err := collectIDs(tx.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
-		SET status = 'resolved', resolved_at = $4, updated_at = $4
+		SET status = 'resolved', resolved_at = $4, updated_at = $4,
+			resolve_reason = '`+notifications.ResolveReasonManual+`'
 		FROM target
 		WHERE a.id = target.id
 		RETURNING a.id

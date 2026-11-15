@@ -450,7 +450,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A check location that stops reporting opens one `location_offline` alert, routed to the tenant default channels like mesh alerts. It names the location, its last heartbeat, and how many monitors run from it and how many of those have no other location. There is no setting: every location that has reported at least once in the last 7 days is covered, with a fixed 180-second threshold. While one of its locations is silent, a mesh edge's alert stays open but sends nothing and reads as suppressed (`suppression_reason` `location_offline`), so a dead site pages once instead of once per path; see [heartbeats](/docs/locations/#heartbeats).",
+            "A check location that stops reporting opens one `location_offline` alert, routed to the tenant default channels like mesh alerts. It names the location, its last heartbeat, and how many monitors run from it and how many of those have no other location. There is no setting: every location that has reported at least once in the last 7 days is covered, with a fixed 180-second threshold. Resolving it by hand sends a \"closed by an operator\" notice; if the location is still silent, a new alert opens on the next evaluation. While one of its locations is disconnected and its offline alert is about to open or open, a mesh edge's alert stays open but sends nothing and reads as suppressed (`suppression_reason` `location_offline`), so a dead site pages once instead of once per path; see [heartbeats](/docs/locations/#heartbeats).",
         },
         {
           type: "paragraph",

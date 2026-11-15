@@ -550,6 +550,8 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		name := locationName(alert)
 		if resolved {
 			switch alert.ResolveReason {
+			case notifications.ResolveReasonManual:
+				return fmt.Sprintf("An operator closed the alert for location %s. If it is still not reporting, a new alert opens.", name)
 			case notifications.ResolveReasonLocationDisabled:
 				return fmt.Sprintf("Location %s was disabled, so it is no longer expected to report.", name)
 			case notifications.ResolveReasonLocationDeleted:
@@ -872,7 +874,8 @@ func meshPath(alert notifications.AlertDetails) string {
 // alert closed for a reason other than the location reporting again.
 func locationClosedWithoutRecovery(alert notifications.AlertDetails) bool {
 	switch alert.ResolveReason {
-	case notifications.ResolveReasonLocationDisabled, notifications.ResolveReasonLocationDeleted:
+	case notifications.ResolveReasonLocationDisabled, notifications.ResolveReasonLocationDeleted,
+		notifications.ResolveReasonManual:
 		return true
 	}
 	return false

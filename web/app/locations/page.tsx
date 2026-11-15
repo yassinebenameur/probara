@@ -24,6 +24,13 @@ import { FOCUS_RING } from '@/components/ui/focus';
 import { Location } from '@/lib/types';
 import { deleteLocation, getLocations } from '@/lib/api';
 import { pluralize } from '@/lib/format';
+import {
+  LOCATION_CONNECTION_LABEL,
+  LOCATION_TONE_DOT,
+  LOCATION_TONE_TEXT,
+  locationConnection,
+  locationConnectionTone,
+} from '@/lib/status-tones';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { errorMessage } from '@/lib/errors';
@@ -36,12 +43,14 @@ const DEFAULT_SORT: SortState<LocationSortKey> = { key: 'name', dir: 'asc' };
 // Most monitors first; Status ascending is worst first, Last seen stalest first.
 const DEFAULT_DIR = { monitors: 'desc' } as const;
 
-// Worst first, in the order ConnectionStatus words them: stranded monitors,
-// offline, never connected, connected.
+// Worst first: offline then disconnected with monitors depending on it, a
+// silent location nothing runs from, never connected, connected.
 function connectionRank(location: Location): number {
-  if (location.connected) return 3;
-  if (!location.last_seen_at) return 2;
-  return location.monitor_count > 0 ? 0 : 1;
+  const connection = locationConnection(location);
+  if (connection === 'connected') return 4;
+  if (connection === 'never_connected') return 3;
+  if (location.monitor_count === 0) return 2;
+  return connection === 'offline' ? 0 : 1;
 }
 
 const SORT_VALUE: Record<LocationSortKey, (location: Location) => SortValue> = {
@@ -56,49 +65,43 @@ function StatusDot({ className }: { className: string }) {
   return <span className={`h-2 w-2 flex-shrink-0 rounded-full ${className}`} aria-hidden="true" />;
 }
 
-// Rose is for something failing now: a disconnected location only alarms when
-// monitors depend on it. An unused one is just offline, and one that never
-// connected needs a worker, so that is the cell's next step.
+// Tone and wording come from lib/status-tones (locationConnection): the
+// same "Disconnected" (a minute without a heartbeat) and "Offline" (three
+// minutes, the offline alert's rule) as everywhere else. A location that
+// never connected needs a worker, so that is the cell's next step.
 function ConnectionStatus({ location, onDeploy }: { location: Location; onDeploy?: () => void }) {
-  if (location.connected) {
+  const connection = locationConnection(location);
+  if (connection === 'never_connected' && onDeploy) {
     return (
-      <span className="inline-flex items-center gap-2 whitespace-nowrap text-ui text-slate-300">
-        <StatusDot className="bg-emerald-500" />
-        Connected
-      </span>
-    );
-  }
-  if (!location.last_seen_at) {
-    return onDeploy ? (
       <Button variant="subtle" size="xs" icon={<Rocket strokeWidth={1.75} />} onClick={onDeploy} className="-ml-2.5">
         Deploy worker
       </Button>
-    ) : (
-      <span className="inline-flex items-center gap-2 whitespace-nowrap text-ui text-slate-400">
-        <StatusDot className="bg-slate-500" />
-        Never connected
-      </span>
     );
   }
-  if (location.monitor_count > 0) {
+  const tone = locationConnectionTone(connection, location.monitor_count);
+  const title =
+    connection === 'disconnected'
+      ? 'No heartbeat for over a minute; offline (and alerting) after three'
+      : connection === 'offline'
+        ? 'No heartbeat for three minutes or more: the location offline alert applies'
+        : undefined;
+  const label = (
+    <span className={`inline-flex items-center gap-2 whitespace-nowrap text-ui ${LOCATION_TONE_TEXT[tone]}`} title={title}>
+      <StatusDot className={LOCATION_TONE_DOT[tone]} />
+      {LOCATION_CONNECTION_LABEL[connection]}
+    </span>
+  );
+  if ((connection === 'disconnected' || connection === 'offline') && location.monitor_count > 0) {
     return (
       <span className="inline-flex flex-col">
-        <span className="inline-flex items-center gap-2 whitespace-nowrap text-ui text-rose-300">
-          <StatusDot className="bg-rose-500" />
-          Disconnected
-        </span>
+        {label}
         <span className="mt-0.5 pl-4 text-xs text-slate-400">
           {pluralize(location.monitor_count, 'monitor')} stranded
         </span>
       </span>
     );
   }
-  return (
-    <span className="inline-flex items-center gap-2 whitespace-nowrap text-ui text-slate-400">
-      <StatusDot className="bg-slate-500" />
-      Offline
-    </span>
-  );
+  return label;
 }
 
 export default function LocationsPage() {
@@ -256,7 +259,7 @@ export default function LocationsPage() {
                       sort={sort}
                       onSort={setSort}
                       defaultDir={DEFAULT_DIR}
-                      title="Disconnected first"
+                      title="Offline and disconnected first"
                     />
                     <SortableHeader label="Mesh endpoint" sortKey="endpoint" sort={sort} onSort={setSort} defaultDir={DEFAULT_DIR} />
                     <SortableHeader

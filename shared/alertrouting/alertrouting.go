@@ -385,18 +385,23 @@ const SuppressionReasonLocationOffline = "location_offline"
 // suppression it gates dispatch only; the edge alert still opens and
 // resolves, and a channel it already paged still hears the resolve.
 //
-// The hold starts when the location misses its connected window, not at the
-// offline threshold: edges into a dead site go down after a few probes, well
-// before 180 seconds. It covers a location only while an offline alert would
-// or does speak for it (seen within the alert horizon, or with one open), so
-// a long-abandoned location never silences its edges with nothing paging in
-// their place. Never NULL; FALSE for every other kind.
+// A location holds its edges while it is disconnected and either
+//
+//   - not yet offline (the 60–180 s window): edges into a dead site go down
+//     after a few probes, before the site counts as offline, and its alert
+//     opens at the threshold; or
+//   - offline with an open location_offline alert, which is the page.
+//
+// An offline location without an open alert (beyond the alert horizon, or
+// held by the fleet-silence or startup guard) holds nothing: while no
+// location alert pages, the edges page for themselves. Never NULL; FALSE for
+// every other kind.
 func SuppressedByOfflineLocationPredicate(alertAlias string) string {
 	return `(` + alertAlias + `.kind = 'mesh_edge' AND EXISTS (
 		SELECT 1 FROM locations sol
 		WHERE sol.id IN (` + alertAlias + `.source_location_id, ` + alertAlias + `.target_location_id)
 		  AND ` + monitorstate.LocationDisconnectedPredicate("sol") + `
-		  AND (` + monitorstate.LocationWithinOfflineHorizonPredicate("sol") + `
+		  AND (NOT ` + monitorstate.LocationOfflinePredicate("sol") + `
 			OR EXISTS (SELECT 1 FROM alerts sola
 				WHERE sola.kind = 'location_offline'
 				  AND sola.status IN ('active', 'acknowledged')

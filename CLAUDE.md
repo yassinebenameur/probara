@@ -649,13 +649,16 @@ or imported groups come back empty. Any other path that creates groups through
   wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
   (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last).
 - **Location liveness** (S-F6) is `shared/monitorstate/freshness.go`:
-  offline is `LocationOfflinePredicate` (Go twin `LocationOffline`,
-  `TestLocationOfflinePredicateMatchesGo`), connected `LocationConnected`,
-  the mesh hold `LocationDisconnectedPredicate`. The alerter's
-  `location_offline` evaluator (`alerter/internal/alerter/location_offline.go`),
-  the mesh hold and the API's `connected`/`offline` all read them; never
-  re-derive one from `last_seen_at`. The evaluator holds new alerts while the
-  whole fleet is silent or the alerter has just started (`locationOfflineHold`).
+  offline is `LocationOfflinePredicate`, disconnected
+  `LocationDisconnectedPredicate`, each with a Go twin
+  (`TestLocationPredicatesMatchGo` pins both at the boundaries), connected
+  `LocationConnected`. The alerter's `location_offline` evaluator
+  (`alerter/internal/alerter/location_offline.go`), the mesh hold, the API's
+  `connected`/`offline` and the UI's wording (`locationConnection` in
+  `web/lib/status-tones.ts`) all read them; never re-derive one from
+  `last_seen_at`. The evaluator's guard (`locationOfflineHold`) holds the
+  locations that went quiet together with the newest heartbeat, at most
+  15 minutes, and everything just after startup (database clock).
 - **Transactional mail** (invites, resets, subscriber mail, reports) goes
   through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
   MIME builder; `Message.Validate` is the header-injection guard and accepts

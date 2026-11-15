@@ -32,8 +32,8 @@ func TestLocationOfflineAlertReadPaths(t *testing.T) {
 		t.Helper()
 		id := uuid.New()
 		_, err := dbc.ExecContext(ctx, `
-			INSERT INTO locations (id, tenant_id, name, slug, last_seen_at)
-			VALUES ($1, $2, $3, $3, NOW() - make_interval(secs => $4))`, id, tenant, name, seenAgo.Seconds())
+			INSERT INTO locations (id, tenant_id, name, slug, last_seen_at, enabled_at)
+			VALUES ($1, $2, $3, $3, NOW() - make_interval(secs => $4), NOW() - INTERVAL '30 days')`, id, tenant, name, seenAgo.Seconds())
 		require.NoError(t, err)
 		return id
 	}
@@ -99,6 +99,14 @@ func TestLocationOfflineAlertReadPaths(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, held.Items, 1)
 	require.Equal(t, meshAlert, held.Items[0].ID)
+
+	// A manual resolve records why it closed, so the alerter's notice says
+	// an operator closed it rather than that the location came back.
+	_, err = svc.ResolveAlert(ctx, tenantID, offlineAlert)
+	require.NoError(t, err)
+	var reason string
+	require.NoError(t, dbc.QueryRowContext(ctx, `SELECT resolve_reason FROM alerts WHERE id = $1`, offlineAlert).Scan(&reason))
+	require.Equal(t, "manual", reason)
 
 	// The location reports again: the edge is no longer held.
 	_, err = dbc.ExecContext(ctx, `UPDATE locations SET last_seen_at = NOW() WHERE id = $1`, factory)

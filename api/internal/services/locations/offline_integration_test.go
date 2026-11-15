@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 
+	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -28,8 +29,8 @@ func TestLocationOfflineFlag_Integration(t *testing.T) {
 		t.Helper()
 		id := uuid.New()
 		if _, err := dbClient.ExecContext(ctx, `
-			INSERT INTO locations (id, tenant_id, name, slug, enabled, last_seen_at)
-			VALUES ($1, $2, $3, $3, $4, NOW() - $5::interval)`, id, tenantID, name, enabled, lastSeen); err != nil {
+			INSERT INTO locations (id, tenant_id, name, slug, enabled, last_seen_at, enabled_at)
+			VALUES ($1, $2, $3, $3, $4, NOW() - $5::interval, NOW() - INTERVAL '30 days')`, id, tenantID, name, enabled, lastSeen); err != nil {
 			t.Fatalf("insert location: %v", err)
 		}
 		return id
@@ -72,5 +73,39 @@ func TestLocationOfflineFlag_Integration(t *testing.T) {
 	}
 	if len(list.Items) != 5 {
 		t.Fatalf("listed %d locations, want 5", len(list.Items))
+	}
+
+	// Disabling and re-enabling restarts enabled_at: the location is not
+	// offline again until one threshold after the re-enable, whatever its
+	// last heartbeat. A rename of an enabled location does not restart it.
+	off, on := false, true
+	if _, err := svc.Update(ctx, tenantID, dead, &models.UpdateLocationRequest{Enabled: &off}); err != nil {
+		t.Fatal(err)
+	}
+	renamed := "dead-renamed"
+	if _, err := svc.Update(ctx, tenantID, dead, &models.UpdateLocationRequest{Name: &renamed}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := svc.Update(ctx, tenantID, dead, &models.UpdateLocationRequest{Enabled: &on})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Offline {
+		t.Fatal("a just re-enabled location reads offline")
+	}
+	var recent bool
+	if err := dbClient.QueryRowContext(ctx, `SELECT enabled_at > NOW() - INTERVAL '1 minute' FROM locations WHERE id = $1`, dead).Scan(&recent); err != nil || !recent {
+		t.Fatalf("enabled_at not restarted on re-enable (%v)", err)
+	}
+	fresh, err := svc.Update(ctx, tenantID, dead, &models.UpdateLocationRequest{Name: &renamed})
+	if err != nil || fresh.Offline {
+		t.Fatalf("rename: offline=%v err=%v", fresh != nil && fresh.Offline, err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE locations SET enabled_at = NOW() - INTERVAL '1 hour' WHERE id = $1`, dead); err != nil {
+		t.Fatal(err)
+	}
+	again, err := svc.Update(ctx, tenantID, dead, &models.UpdateLocationRequest{Name: &renamed})
+	if err != nil || !again.Offline {
+		t.Fatalf("an update that does not enable must keep enabled_at (offline=%v, err=%v)", again != nil && again.Offline, err)
 	}
 }

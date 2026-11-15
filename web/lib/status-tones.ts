@@ -396,3 +396,56 @@ export const TONE_DOT: Record<StatusTone, string> = {
   info: 'bg-sky-500',
   neutral: 'bg-slate-500',
 };
+
+// ── Location connection (S-F6) ───────────────────────────────────────────
+
+/**
+ * A location's liveness as every surface words it: connected (heartbeat
+ * within a minute), disconnected (past that, not yet offline), offline (the
+ * API's `offline`: silent 180 s, the rule the offline alert uses), or never
+ * connected (no worker ever reported).
+ */
+export type LocationConnection = 'connected' | 'disconnected' | 'offline' | 'never_connected';
+
+export function locationConnection(location: { connected: boolean; offline: boolean; last_seen_at?: string }): LocationConnection {
+  if (location.connected) return 'connected';
+  if (location.offline) return 'offline';
+  if (!location.last_seen_at) return 'never_connected';
+  return 'disconnected';
+}
+
+export const LOCATION_CONNECTION_LABEL: Record<LocationConnection, string> = {
+  connected: 'Connected',
+  disconnected: 'Disconnected',
+  offline: 'Offline',
+  never_connected: 'Never connected',
+};
+
+/**
+ * Rose is for something failing now: an offline location only alarms when
+ * monitors depend on it. Disconnected is amber while it is not yet offline
+ * (a missed beat or a restarting worker), and a location nothing runs from
+ * stays neutral.
+ */
+export function locationConnectionTone(connection: LocationConnection, monitorCount: number): StatusTone {
+  if (connection === 'connected') return 'success';
+  if (connection === 'never_connected' || monitorCount === 0) return 'neutral';
+  return connection === 'offline' ? 'danger' : 'warning';
+}
+
+/** Status dot and label colour by tone, for location connection. */
+export const LOCATION_TONE_DOT: Record<StatusTone, string> = {
+  success: 'bg-emerald-500',
+  danger: 'bg-rose-500',
+  warning: 'bg-amber-500',
+  info: 'bg-sky-500',
+  neutral: 'bg-slate-500',
+};
+
+export const LOCATION_TONE_TEXT: Record<StatusTone, string> = {
+  success: 'text-slate-300',
+  danger: 'text-rose-300',
+  warning: 'text-amber-300',
+  info: 'text-sky-300',
+  neutral: 'text-slate-400',
+};

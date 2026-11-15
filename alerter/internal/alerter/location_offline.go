@@ -68,28 +68,64 @@ func locationMonitorCountsSQL(locAlias string) string {
 				WHERE oml.monitor_id = lml.monitor_id AND oml.location_id <> lml.location_id))`
 }
 
-// fleetSilenceMinLocations is how many locations seen within the alert
-// horizon must exist platform-wide before "none of them reports" reads as a
-// platform fault rather than dead sites. With one location the two look the
-// same, and a single alert is no storm.
-const fleetSilenceMinLocations = 2
+// Fleet-silence guard. Heartbeats reach last_seen_at through the broker and
+// the scheduler's heartbeat consumer, so when that path (or the database
+// behind it) stalls, every location goes quiet together: their last
+// heartbeats sit within one beat of each other, staggered by the ~15 s beat
+// and the 10 s write throttle, and they then cross the offline threshold one
+// by one. The guard therefore keys on the newest heartbeat, not on how many
+// locations are still online: once the newest heartbeat anywhere is older
+// than the connected window, the locations last heard within
+// fleetSilenceCluster of it went quiet together, and when there are at least
+// fleetSilenceMinLocations of them they are held. A location that went quiet
+// well before that moment is a real outage and alerts normally.
+const (
+	// fleetSilenceMinLocations: with one location a dead site and a platform
+	// fault look the same, and a single alert is no storm.
+	fleetSilenceMinLocations = 2
+	// fleetSilenceCluster is how close to the newest heartbeat a location's
+	// last heartbeat must be to count as going quiet with it: a few beats.
+	fleetSilenceCluster = monitorstate.LocationConnectedWindow
+	// fleetSilenceHoldMax ends the hold: a heartbeat path down for 15 minutes
+	// is itself worth a page, and a hold with no end would hide a second
+	// real outage for good. Measured from the newest heartbeat.
+	fleetSilenceHoldMax = 15 * time.Minute
+)
 
-// locationFleet is the platform-wide liveness tally one tick reads.
+// locationFleet is the platform-wide liveness tally one tick reads. All times
+// are database times.
 type locationFleet struct {
 	online, offline, neverSeen, disabled int
-	// recent counts enabled locations seen within the alert horizon.
-	recent int
+	dbNow                                time.Time
+	// newest is the newest heartbeat among enabled locations seen within the
+	// alert horizon; cluster counts those last heard within
+	// fleetSilenceCluster of it.
+	newest  sql.NullTime
+	cluster int
 	// heartbeatSinceStart: some location's heartbeat landed after this
-	// process started, so the heartbeat ingest is writing right now.
+	// alerter started, so the heartbeat ingest is writing right now.
 	heartbeatSinceStart bool
 }
 
-// fleetSilent: several recently-seen locations and none of them online.
-// Heartbeats reach last_seen_at through the broker and the scheduler's
-// ingest, so every location going quiet at once is that path failing (or
-// the database lagging behind it), not every site dying together.
+// quietSince is how long the newest heartbeat is old; zero without one.
+func (f locationFleet) quietSince() time.Duration {
+	if !f.newest.Valid {
+		return 0
+	}
+	return f.dbNow.Sub(f.newest.Time)
+}
+
+// fleetSilent reports whether the cluster around the newest heartbeat is
+// held: several locations went quiet together, longer ago than the connected
+// window and less than fleetSilenceHoldMax ago.
 func (f locationFleet) fleetSilent() bool {
-	return f.recent >= fleetSilenceMinLocations && f.online == 0
+	quiet := f.quietSince()
+	return f.cluster >= fleetSilenceMinLocations && quiet >= monitorstate.LocationConnectedWindow && quiet < fleetSilenceHoldMax
+}
+
+// clusterFloor is the oldest heartbeat that belongs to the quiet cluster.
+func (f locationFleet) clusterFloor() time.Time {
+	return f.newest.Time.Add(-fleetSilenceCluster)
 }
 
 // evaluateLocationOffline runs the location_offline lifecycle (rule S-F6):
@@ -113,37 +149,68 @@ func (a *Alerter) evaluateLocationOffline(ctx context.Context) error {
 	return a.dispatchOpenLocationOfflineAlerts(ctx)
 }
 
+// recordStartTime reads the alerter's start time from the database clock,
+// the clock last_seen_at is written with, so the startup hold never compares
+// two machines' clocks. Start calls it; the first evaluation retries when it
+// failed there.
+func (a *Alerter) recordStartTime(ctx context.Context) error {
+	return a.db.QueryRowContext(ctx, `SELECT NOW()`).Scan(&a.startedAt)
+}
+
 func (a *Alerter) loadLocationFleet(ctx context.Context) (locationFleet, error) {
+	if a.startupHold && a.startedAt.IsZero() {
+		if err := a.recordStartTime(ctx); err != nil {
+			return locationFleet{}, fmt.Errorf("read alerter start time: %w", err)
+		}
+	}
+	var startedAt sql.NullTime
+	if a.startupHold {
+		startedAt = sql.NullTime{Time: a.startedAt, Valid: true}
+	}
 	var f locationFleet
 	offline := monitorstate.LocationOfflinePredicate("l")
+	recent := `l.enabled AND ` + monitorstate.LocationWithinOfflineHorizonPredicate("l")
 	if err := a.db.QueryRowContext(ctx, `
+		WITH fleet AS (
+			SELECT l.*, MAX(l.last_seen_at) FILTER (WHERE `+recent+`) OVER () AS newest
+			FROM locations l
+			WHERE l.deleted_at IS NULL
+		)
 		SELECT
 			COUNT(*) FILTER (WHERE l.enabled AND l.last_seen_at IS NOT NULL AND NOT `+offline+`),
 			COUNT(*) FILTER (WHERE `+offline+`),
 			COUNT(*) FILTER (WHERE l.enabled AND l.last_seen_at IS NULL),
 			COUNT(*) FILTER (WHERE NOT l.enabled),
-			COUNT(*) FILTER (WHERE l.enabled AND `+monitorstate.LocationWithinOfflineHorizonPredicate("l")+`),
+			NOW(),
+			MAX(l.newest),
+			COUNT(*) FILTER (WHERE `+recent+` AND l.last_seen_at >= l.newest - make_interval(secs => $2)),
 			COALESCE(BOOL_OR(l.enabled AND l.last_seen_at > $1), FALSE)
-		FROM locations l
-		WHERE l.deleted_at IS NULL
-	`, a.startedAt).Scan(&f.online, &f.offline, &f.neverSeen, &f.disabled, &f.recent, &f.heartbeatSinceStart); err != nil {
+		FROM fleet l
+	`, startedAt, fleetSilenceCluster.Seconds()).Scan(&f.online, &f.offline, &f.neverSeen, &f.disabled,
+		&f.dbNow, &f.newest, &f.cluster, &f.heartbeatSinceStart); err != nil {
 		return locationFleet{}, fmt.Errorf("query location fleet: %w", err)
 	}
 	return f, nil
 }
 
 // locationOfflineHold says whether new location_offline alerts must wait,
-// and why: fleet_silent (see locationFleet.fleetSilent), or startup. An
-// alerter that just started may be judging timestamps the heartbeat ingest
-// has not refreshed yet (the scheduler restarting in the same rollout), so
-// it waits until a heartbeat lands after its start, or one full offline
-// threshold has passed. Resolution and dispatch of open alerts never wait.
+// and why:
+//
+//   - fleet_silent: the cluster around the newest heartbeat is held (see the
+//     fleet-silence guard above); only its members wait, until
+//     fleetSilenceHoldMax.
+//   - startup: an alerter that just started may be judging timestamps the
+//     heartbeat ingest has not refreshed yet (the scheduler restarting in the
+//     same rollout), so every location waits until a heartbeat lands after
+//     the start, or one offline threshold has passed.
+//
+// Resolution and dispatch of open alerts never wait.
 func (a *Alerter) locationOfflineHold(f locationFleet) string {
+	if a.startupHold && f.dbNow.Sub(a.startedAt) < monitorstate.LocationOfflineAfter && !f.heartbeatSinceStart {
+		return "startup"
+	}
 	if f.fleetSilent() {
 		return "fleet_silent"
-	}
-	if !a.startedAt.IsZero() && time.Since(a.startedAt) < monitorstate.LocationOfflineAfter && !f.heartbeatSinceStart {
-		return "startup"
 	}
 	return ""
 }
@@ -169,18 +236,28 @@ func (a *Alerter) setFleetGauges(f locationFleet) {
 
 // openLocationOfflineAlerts opens an alert for each offline location seen
 // within monitorstate.LocationOfflineAlertHorizon that has none open, unless
-// locationOfflineHold says to wait.
+// locationOfflineHold says it must wait.
 func (a *Alerter) openLocationOfflineAlerts(ctx context.Context, fleet locationFleet) error {
-	if hold := a.locationOfflineHold(fleet); hold != "" {
-		if fleet.offline > 0 && hold != a.lastLocationHold {
-			a.logger.WithFields(map[string]interface{}{
-				"reason": hold, "offline_locations": fleet.offline, "recent_locations": fleet.recent,
-			}).Warn("Holding location offline alerts: no location heartbeat can be trusted right now (heartbeat ingest, broker or database lag, or alerter startup)")
+	hold := a.locationOfflineHold(fleet)
+	if hold != "" && fleet.offline > 0 && hold != a.lastLocationHold {
+		fields := map[string]interface{}{"reason": hold, "offline_locations": fleet.offline}
+		if hold == "fleet_silent" {
+			fields["quiet_locations"] = fleet.cluster
+			fields["newest_heartbeat"] = fleet.newest.Time
+			fields["held_until"] = fleet.newest.Time.Add(fleetSilenceHoldMax)
 		}
-		a.lastLocationHold = hold
+		a.logger.WithFields(fields).Warn("Holding location offline alerts: heartbeats cannot be trusted right now (heartbeat ingest, broker or database lag, or alerter startup)")
+	}
+	a.lastLocationHold = hold
+	if hold == "startup" {
 		return nil
 	}
-	a.lastLocationHold = ""
+	// The held cluster, as a heartbeat floor; locations that went quiet
+	// before it alert normally. NULL (no hold) excludes nothing.
+	var heldFrom sql.NullTime
+	if hold == "fleet_silent" {
+		heldFrom = sql.NullTime{Time: fleet.clusterFloor(), Valid: true}
+	}
 
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT l.tenant_id, l.id, l.name, l.last_seen_at, `+locationMonitorCountsSQL("l")+`
@@ -192,7 +269,8 @@ func (a *Alerter) openLocationOfflineAlerts(ctx context.Context, fleet locationF
 			WHERE al.kind = 'location_offline'
 			  AND al.status IN ('active', 'acknowledged')
 			  AND al.source_location_id = l.id)
-	`)
+		  AND NOT COALESCE(l.last_seen_at >= $1, FALSE)
+	`, heldFrom)
 	if err != nil {
 		return fmt.Errorf("query offline locations: %w", err)
 	}

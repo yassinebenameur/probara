@@ -271,31 +271,35 @@ func TestSpecProperty_AggregateInvariants(t *testing.T) {
 }
 
 // S-F6: a location is offline when it is enabled, not deleted, was seen at
-// least once, and has been silent for LocationOfflineAfter (180s).
-// Never-seen, disabled and deleted locations are never offline. Connected is
-// a separate, shorter window: between the two a location is disconnected
-// but not yet offline.
+// least once, and has been silent for LocationOfflineAfter (180s), and
+// enabled for at least as long. Never-seen, disabled, deleted and freshly
+// re-enabled locations are never offline. Connected is a separate, shorter
+// window: between the two a location is disconnected but not yet offline.
 func TestSpecLocationOffline(t *testing.T) {
 	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 	ago := func(d time.Duration) *time.Time { ts := now.Add(-d); return &ts }
+	longEnabled := now.Add(-30 * 24 * time.Hour)
 	cases := []struct {
-		name     string
-		enabled  bool
-		deleted  bool
-		lastSeen *time.Time
-		want     bool
+		name      string
+		enabled   bool
+		deleted   bool
+		lastSeen  *time.Time
+		enabledAt time.Time
+		want      bool
 	}{
-		{"never_seen_is_not_offline", true, false, nil, false},
-		{"recent_heartbeat", true, false, ago(15 * time.Second), false},
-		{"just_under_threshold", true, false, ago(179 * time.Second), false},
-		{"at_threshold", true, false, ago(180 * time.Second), true},
-		{"long_silent", true, false, ago(30 * 24 * time.Hour), true},
-		{"disabled_is_not_offline", false, false, ago(time.Hour), false},
-		{"deleted_is_not_offline", true, true, ago(time.Hour), false},
+		{"never_seen_is_not_offline", true, false, nil, longEnabled, false},
+		{"recent_heartbeat", true, false, ago(15 * time.Second), longEnabled, false},
+		{"just_under_threshold", true, false, ago(179 * time.Second), longEnabled, false},
+		{"at_threshold", true, false, ago(180 * time.Second), longEnabled, true},
+		{"long_silent", true, false, ago(30 * 24 * time.Hour), longEnabled, true},
+		{"disabled_is_not_offline", false, false, ago(time.Hour), longEnabled, false},
+		{"deleted_is_not_offline", true, true, ago(time.Hour), longEnabled, false},
+		{"re_enabled_just_now_is_not_offline", true, false, ago(time.Hour), *ago(10 * time.Second), false},
+		{"re_enabled_a_threshold_ago", true, false, ago(time.Hour), *ago(180 * time.Second), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := LocationOffline(tc.enabled, tc.deleted, tc.lastSeen, now); got != tc.want {
+			if got := LocationOffline(tc.enabled, tc.deleted, tc.lastSeen, tc.enabledAt, now); got != tc.want {
 				t.Fatalf("LocationOffline = %v, want %v [S-F6]", got, tc.want)
 			}
 		})
@@ -303,7 +307,11 @@ func TestSpecLocationOffline(t *testing.T) {
 	if !LocationConnected(ago(59*time.Second), now) || LocationConnected(ago(60*time.Second), now) {
 		t.Fatal("connected is a one-minute window [S-F6]")
 	}
-	if LocationConnected(ago(90*time.Second), now) || LocationOffline(true, false, ago(90*time.Second), now) {
+	if !LocationDisconnected(true, false, ago(60*time.Second), now) || LocationDisconnected(true, false, nil, now) ||
+		LocationDisconnected(false, false, ago(time.Hour), now) {
+		t.Fatal("disconnected is seen, enabled, live and past the connected window [S-F6]")
+	}
+	if LocationConnected(ago(90*time.Second), now) || LocationOffline(true, false, ago(90*time.Second), longEnabled, now) {
 		t.Fatal("90s silent must read disconnected but not yet offline [S-F6]")
 	}
 	if LocationOfflineAfter <= LocationConnectedWindow {

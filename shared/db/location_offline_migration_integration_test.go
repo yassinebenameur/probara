@@ -106,3 +106,62 @@ func TestLocationOfflineAlertMigrationUpDownUp(t *testing.T) {
 	}
 	checkUp("re-up")
 }
+
+// Migration 000104 adds locations.enabled_at, backfilled from created_at and
+// defaulting to NOW() for new rows; down drops it.
+func TestLocationEnabledAtMigrationUpDownUp(t *testing.T) {
+	ctx := context.Background()
+	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, dbc, "location-enabled-at")
+
+	_, file, _, _ := runtime.Caller(0)
+	driver, err := postgres.WithInstance(dbc.DB, &postgres.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := migrate.NewWithDatabaseInstance("file://"+filepath.Join(filepath.Dir(file), "migrations"), "postgres", driver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Not m.Close(): the driver would close dbc.DB, which cleanup owns.
+	if err := m.Migrate(103); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate to 103: %v", err)
+	}
+	old := uuid.New()
+	if _, err := dbc.ExecContext(ctx, `
+		INSERT INTO locations (id, tenant_id, name, slug, created_at) VALUES ($1, $2, 'old', 'old', NOW() - INTERVAL '40 days')`,
+		old, tenant); err != nil {
+		t.Fatal(err)
+	}
+	check := func(phase string) {
+		t.Helper()
+		var backfilled bool
+		if err := dbc.QueryRowContext(ctx, `SELECT enabled_at = created_at FROM locations WHERE id = $1`, old).Scan(&backfilled); err != nil || !backfilled {
+			t.Fatalf("%s: existing location enabled_at not backfilled from created_at (%v)", phase, err)
+		}
+		var fresh bool
+		if err := dbc.QueryRowContext(ctx, `
+			INSERT INTO locations (id, tenant_id, name, slug) VALUES ($1, $2, $3, $3)
+			RETURNING enabled_at > NOW() - INTERVAL '1 minute'`, uuid.New(), tenant, phase).Scan(&fresh); err != nil || !fresh {
+			t.Fatalf("%s: new location enabled_at not defaulted to NOW() (%v)", phase, err)
+		}
+		if _, err := dbc.ExecContext(ctx, `UPDATE locations SET enabled_at = NULL WHERE id = $1`, old); err == nil {
+			t.Fatalf("%s: enabled_at accepted NULL", phase)
+		}
+	}
+	if err := m.Migrate(104); err != nil {
+		t.Fatalf("up 000104: %v", err)
+	}
+	check("up")
+	if err := m.Steps(-1); err != nil {
+		t.Fatalf("down 000104: %v", err)
+	}
+	if _, err := dbc.ExecContext(ctx, `SELECT enabled_at FROM locations LIMIT 1`); err == nil {
+		t.Fatal("down 000104 kept locations.enabled_at")
+	}
+	if err := m.Steps(1); err != nil {
+		t.Fatalf("re-up 000104: %v", err)
+	}
+	check("re-up")
+}

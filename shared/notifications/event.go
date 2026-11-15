@@ -161,8 +161,9 @@ const (
 	KindLocationOffline = "location_offline"
 )
 
-// Why a location_offline alert closed (alerts.resolve_reason). Every other
-// resolve leaves the reason empty.
+// Why an alert closed (alerts.resolve_reason) when it is not its condition
+// clearing: the location_offline reasons are set by the alerter, manual by
+// the API. Every other resolve leaves the reason empty.
 const (
 	// ResolveReasonRecovered: the location reports again.
 	ResolveReasonRecovered = "recovered"
@@ -171,6 +172,10 @@ const (
 	ResolveReasonLocationDisabled = "location_disabled"
 	// ResolveReasonLocationDeleted: the location was deleted.
 	ResolveReasonLocationDeleted = "location_deleted"
+	// ResolveReasonManual: an operator resolved the alert (the API sets it
+	// for every kind); the condition may still hold, and if it does the
+	// alerter opens a new alert on its next evaluation.
+	ResolveReasonManual = "manual"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.

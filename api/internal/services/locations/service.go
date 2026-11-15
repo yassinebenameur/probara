@@ -310,9 +310,13 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID uuid.UUID, re
 		}
 	}
 
+	// enabled_at restarts only on a disabled → enabled change (the SET reads
+	// the row's old enabled): the offline rule waits one threshold from it,
+	// so a re-enabled location whose worker is not back yet does not page.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE locations
-		SET name = $1, slug = $2, description = $3, enabled = $4, mesh_endpoint = $5, updated_at = NOW()
+		SET name = $1, slug = $2, description = $3, enabled = $4, mesh_endpoint = $5, updated_at = NOW(),
+			enabled_at = CASE WHEN $4 AND NOT enabled THEN NOW() ELSE enabled_at END
 		WHERE id = $6 AND tenant_id = $7 AND deleted_at IS NULL
 	`, name, slug, description, enabled, meshEndpoint, locationID, tenantID)
 	if err != nil {

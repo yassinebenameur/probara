@@ -160,6 +160,7 @@ func TestBuildLocationOfflineClosedWithoutRecovery(t *testing.T) {
 	for reason, want := range map[string]string{
 		notifications.ResolveReasonLocationDisabled: "Location eu-west was disabled, so it is no longer expected to report.",
 		notifications.ResolveReasonLocationDeleted:  "Location eu-west was deleted.",
+		notifications.ResolveReasonManual:           "An operator closed the alert for location eu-west. If it is still not reporting, a new alert opens.",
 	} {
 		ev := locationOfflineSample()
 		resolvedAt := ev.Alert.TriggeredAt.Add(time.Hour)

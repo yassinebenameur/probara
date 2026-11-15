@@ -116,13 +116,16 @@ Monitor-less alerts route to the tenant defaults through
 S-F6 in [state semantics](state-semantics.md)), one alert per check location
 that reported within 7 days and has sent no heartbeat for 180 seconds. The
 alerter reads `locations.last_seen_at`, which the scheduler's heartbeat
-consumer writes, so it opens none while no location of the installation is
-online (that path or the database is at fault, not every site) or until its
-own restart has seen a fresh heartbeat. From the moment a location misses its
+consumer writes, so it holds the locations that went quiet together with the
+installation's newest heartbeat (that path or the database is at fault, not
+every site) for up to 15 minutes, and opens none after its own restart until
+a heartbeat lands later than its start. From the moment a location misses its
 one-minute connected window its mesh edges stay open but do not dispatch
-(`SuppressedByOfflineLocationPredicate`); the location's alert is the page.
-The alerter exports the bounded gauges `probara_alerter_locations{state}` and
-`probara_alerter_location_offline_guard{reason}`.
+(`SuppressedByOfflineLocationPredicate`) while its alert is about to open or
+open; the location's alert is the page. The alerter exports the bounded
+gauges `probara_alerter_locations{state}`,
+`probara_alerter_location_offline_guard{reason}` and
+`probara_alerter_location_offline_guard_limit_seconds{reason}`.
 
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.

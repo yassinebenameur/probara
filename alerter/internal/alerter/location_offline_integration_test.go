@@ -25,9 +25,11 @@ func insertLocationSeen(ctx context.Context, t *testing.T, db *shareddb.Client, 
 	if seenAgo != nil {
 		lastSeen = time.Now().Add(-*seenAgo)
 	}
+	// Enabled long ago, so only the heartbeat decides (S-F6 also waits one
+	// threshold after a re-enable).
 	mustExec(ctx, t, db, `
-		INSERT INTO locations (id, tenant_id, name, slug, mesh_endpoint, enabled, last_seen_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $3, $3 || '.mesh.internal:8080', TRUE, $4, NOW(), NOW())
+		INSERT INTO locations (id, tenant_id, name, slug, mesh_endpoint, enabled, last_seen_at, enabled_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $3, $3 || '.mesh.internal:8080', TRUE, $4, NOW() - INTERVAL '30 days', NOW(), NOW())
 	`, id, tenantID, name, lastSeen)
 	return id
 }
@@ -66,6 +68,13 @@ func latestResolveReason(ctx context.Context, t *testing.T, db *shareddb.Client,
 }
 
 func dur(d time.Duration) *time.Duration { return &d }
+
+// setSeenAgo moves a location's last heartbeat to `ago` before the database
+// clock.
+func setSeenAgo(ctx context.Context, t *testing.T, db *shareddb.Client, locationID uuid.UUID, ago time.Duration) {
+	t.Helper()
+	mustExec(ctx, t, db, `UPDATE locations SET last_seen_at = NOW() - make_interval(secs => $2) WHERE id = $1`, locationID, ago.Seconds())
+}
 
 // S-F6: a location silent past 180s raises exactly one location_offline alert
 // across two replicas, routed to the tenant default channels and only there;
@@ -245,18 +254,100 @@ func TestLocationOfflineResolvesWhenDisabledOrDeleted(t *testing.T) {
 	}
 }
 
-// Fleet-silence guard: when no location's heartbeat reaches the platform
-// (broker or heartbeat ingest down, database lag), every location looks
-// offline at once; no alert opens while at least two recently seen
-// locations exist and none is online. A location silent beyond the 7-day
-// horizon never opens one, and a single-location fleet still alerts.
-func TestLocationOfflineFleetSilenceAndHorizon(t *testing.T) {
+// Fleet-silence guard (S-F6). When the heartbeat path stalls, every
+// location goes quiet together but crosses the 180 s threshold one by one,
+// because heartbeats are staggered: no alert may open for the locations last
+// heard within a minute of the newest heartbeat, on either of two replicas
+// ticking at different moments. A location that went quiet well before them
+// is a real outage and alerts; a location beyond the 7-day horizon never
+// does; and after 15 minutes of silence the held locations alert too.
+func TestLocationOfflineFleetSilenceStaggered(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "fleet-silence")
 	other := testutil.InsertTenant(ctx, t, dbClient, "fleet-silence-other")
+	// Staggered last heartbeats: east has already crossed the threshold,
+	// west and north (another workspace: the heartbeat path is shared) not
+	// yet. early went quiet ten minutes before them.
+	east := insertLocationSeen(ctx, t, dbClient, tenantID, "east", dur(181*time.Second))
+	west := insertLocationSeen(ctx, t, dbClient, tenantID, "west", dur(170*time.Second))
+	north := insertLocationSeen(ctx, t, dbClient, other, "north", dur(160*time.Second))
+	early := insertLocationSeen(ctx, t, dbClient, tenantID, "early", dur(10*time.Minute))
+	abandoned := insertLocationSeen(ctx, t, dbClient, tenantID, "abandoned", dur(8*24*time.Hour))
+	cluster := map[string]uuid.UUID{"east": east, "west": west, "north": north}
+	// Time passes for every location alike.
+	seen := map[uuid.UUID]time.Duration{east: 181 * time.Second, west: 170 * time.Second, north: 160 * time.Second, early: 10 * time.Minute}
+	elapse := func(d time.Duration) {
+		t.Helper()
+		for id, ago := range seen {
+			seen[id] = ago + d
+			setSeenAgo(ctx, t, dbClient, id, seen[id])
+		}
+	}
+	held := func(phase string) {
+		t.Helper()
+		for name, id := range cluster {
+			if got := locationOfflineAlerts(ctx, t, dbClient, id, "active"); got != 0 {
+				t.Fatalf("%s: %s opened %d alerts while the fleet went quiet together", phase, name, got)
+			}
+		}
+	}
+
+	r1, r2 := newIntegrationAlerter(dbClient), newIntegrationAlerter(dbClient)
+	if err := r1.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	held("replica 1")
+	if r1.lastLocationHold != "fleet_silent" {
+		t.Fatalf("hold = %q, want fleet_silent", r1.lastLocationHold)
+	}
+	if locationOfflineAlerts(ctx, t, dbClient, early, "active") != 1 {
+		t.Fatal("a location that went quiet well before the cluster must alert")
+	}
+	if locationOfflineAlerts(ctx, t, dbClient, abandoned, "active") != 0 {
+		t.Fatal("a location silent beyond the horizon must not alert")
+	}
+
+	// 25 s later every cluster member is past the threshold; the other
+	// replica ticks now.
+	elapse(25 * time.Second)
+	if err := r2.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	held("replica 2")
+	elapse(5 * time.Minute)
+	if err := r1.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	held("replica 1, 5 min on")
+
+	// Fifteen minutes after the newest heartbeat the hold ends: a heartbeat
+	// path down that long is worth a page.
+	elapse(10 * time.Minute)
+	if err := r2.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for name, id := range cluster {
+		if got := locationOfflineAlerts(ctx, t, dbClient, id, "active"); got != 1 {
+			t.Fatalf("after the hold limit %s has %d alerts, want 1", name, got)
+		}
+	}
+	if r2.lastLocationHold != "" {
+		t.Fatalf("hold = %q after the limit", r2.lastLocationHold)
+	}
+}
+
+// Two real outages in a row on a two-location install: the second site's
+// death is not a "fleet went quiet together" pattern (the first went quiet
+// twenty minutes earlier), so it alerts. A lone location still alerts.
+func TestLocationOfflineConsecutiveOutagesBothAlert(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "consecutive")
 	a := newIntegrationAlerter(dbClient)
 	run := func() {
 		t.Helper()
@@ -264,35 +355,20 @@ func TestLocationOfflineFleetSilenceAndHorizon(t *testing.T) {
 			t.Fatalf("evaluateLocationOffline: %v", err)
 		}
 	}
-	east := insertLocationSeen(ctx, t, dbClient, tenantID, "east", dur(10*time.Minute))
-	west := insertLocationSeen(ctx, t, dbClient, other, "west", dur(10*time.Minute))
-	abandoned := insertLocationSeen(ctx, t, dbClient, tenantID, "abandoned", dur(8*24*time.Hour))
+	siteA := insertLocationSeen(ctx, t, dbClient, tenantID, "site-a", dur(25*time.Minute))
+	siteB := insertLocationSeen(ctx, t, dbClient, tenantID, "site-b", dur(5*time.Second))
 	run()
-	for name, id := range map[string]uuid.UUID{"east": east, "west": west, "abandoned": abandoned} {
-		if got := locationOfflineAlerts(ctx, t, dbClient, id, "active"); got != 0 {
-			t.Fatalf("whole fleet silent: %s opened %d alerts", name, got)
-		}
+	if locationOfflineAlerts(ctx, t, dbClient, siteA, "active") != 1 {
+		t.Fatal("site A must alert")
 	}
-	if hold := a.lastLocationHold; hold != "fleet_silent" {
-		t.Fatalf("hold = %q, want fleet_silent", hold)
+	setSeenAgo(ctx, t, dbClient, siteB, 200*time.Second)
+	run()
+	if locationOfflineAlerts(ctx, t, dbClient, siteB, "active") != 1 {
+		t.Fatalf("site B must alert too (hold %q)", a.lastLocationHold)
 	}
 
-	// One location reports (another workspace's: the guard is platform-wide
-	// because the heartbeat path is), so the silent ones are really offline,
-	// except the one beyond the horizon.
-	mustExec(ctx, t, dbClient, `UPDATE locations SET last_seen_at = NOW() WHERE id = $1`, west)
-	run()
-	if locationOfflineAlerts(ctx, t, dbClient, east, "active") != 1 {
-		t.Fatal("a silent location in a live fleet must alert")
-	}
-	if locationOfflineAlerts(ctx, t, dbClient, abandoned, "active") != 0 {
-		t.Fatal("a location silent beyond the horizon must not alert")
-	}
-
-	// A single-location fleet still alerts: one page is no storm, and a dead
-	// site looks the same as a platform fault there.
-	mustExec(ctx, t, dbClient, `UPDATE locations SET deleted_at = NOW()`)
 	solo := testutil.InsertTenant(ctx, t, dbClient, "solo")
+	mustExec(ctx, t, dbClient, `UPDATE locations SET deleted_at = NOW()`)
 	only := insertLocationSeen(ctx, t, dbClient, solo, "only", dur(10*time.Minute))
 	run()
 	if locationOfflineAlerts(ctx, t, dbClient, only, "active") != 1 {
@@ -300,9 +376,35 @@ func TestLocationOfflineFleetSilenceAndHorizon(t *testing.T) {
 	}
 }
 
-// Startup guard: an alerter that just started does not trust last_seen_at
-// until a heartbeat lands after its start (the heartbeat ingest is writing),
-// or one offline threshold has passed.
+// A location re-enabled less than one threshold ago is not offline yet, so
+// it does not page before its worker had a chance to come back.
+func TestLocationOfflineWaitsAfterReEnable(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "re-enable")
+	loc := insertLocationSeen(ctx, t, dbClient, tenantID, "returning", dur(48*time.Hour))
+	mustExec(ctx, t, dbClient, `UPDATE locations SET enabled_at = NOW() - INTERVAL '10 seconds' WHERE id = $1`, loc)
+	a := newIntegrationAlerter(dbClient)
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if locationOfflineAlerts(ctx, t, dbClient, loc, "active") != 0 {
+		t.Fatal("a location re-enabled 10 s ago paged")
+	}
+	mustExec(ctx, t, dbClient, `UPDATE locations SET enabled_at = NOW() - INTERVAL '181 seconds' WHERE id = $1`, loc)
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if locationOfflineAlerts(ctx, t, dbClient, loc, "active") != 1 {
+		t.Fatal("still silent one threshold after the re-enable: must alert")
+	}
+}
+
+// Startup guard: an alerter that just started (start time read from the
+// database clock) does not trust last_seen_at until a heartbeat lands after
+// its start, or one offline threshold has passed.
 func TestLocationOfflineHeldAtStartup(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -311,16 +413,20 @@ func TestLocationOfflineHeldAtStartup(t *testing.T) {
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "startup")
 	dead := insertLocationSeen(ctx, t, dbClient, tenantID, "dead", dur(10*time.Minute))
 	a := newIntegrationAlerter(dbClient)
-	a.startedAt = time.Now()
+	a.startupHold = true
 	if err := a.evaluateLocationOffline(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if a.startedAt.IsZero() {
+		t.Fatal("the start time must come from the database on the first evaluation")
 	}
 	if locationOfflineAlerts(ctx, t, dbClient, dead, "active") != 0 || a.lastLocationHold != "startup" {
 		t.Fatalf("a fresh alerter opened an alert before any heartbeat (hold %q)", a.lastLocationHold)
 	}
 
 	// A heartbeat after the start proves the ingest writes: no more hold.
-	insertLocationSeen(ctx, t, dbClient, tenantID, "alive", dur(0))
+	insertLocationSeen(ctx, t, dbClient, tenantID, "alive", nil)
+	mustExec(ctx, t, dbClient, `UPDATE locations SET last_seen_at = NOW() WHERE name = 'alive'`)
 	if err := a.evaluateLocationOffline(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -333,12 +439,44 @@ func TestLocationOfflineHeldAtStartup(t *testing.T) {
 	mustExec(ctx, t, dbClient, `UPDATE locations SET deleted_at = NOW()`)
 	lone := insertLocationSeen(ctx, t, dbClient, solo, "lone", dur(10*time.Minute))
 	b := newIntegrationAlerter(dbClient)
-	b.startedAt = time.Now().Add(-monitorstate.LocationOfflineAfter - time.Second)
+	b.startupHold = true
+	if err := dbClient.QueryRowContext(ctx, `SELECT NOW() - INTERVAL '181 seconds'`).Scan(&b.startedAt); err != nil {
+		t.Fatal(err)
+	}
 	if err := b.evaluateLocationOffline(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if locationOfflineAlerts(ctx, t, dbClient, lone, "active") != 1 {
 		t.Fatal("the startup hold must end after one threshold")
+	}
+}
+
+// While the guard holds a location's own alert, nothing would page for its
+// mesh edges if they were held too: they page for themselves.
+func TestMeshEdgePagesWhileLocationAlertIsHeld(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mesh-guard")
+	insertDefaultChannel(ctx, t, dbClient, tenantID, "ops", 0)
+	x := insertLocationSeen(ctx, t, dbClient, tenantID, "x", dur(200*time.Second))
+	y := insertLocationSeen(ctx, t, dbClient, tenantID, "y", dur(195*time.Second))
+	insertMeshEdgeState(ctx, t, dbClient, tenantID, x, y, "down", 3, "dial tcp: i/o timeout")
+
+	a, spy := newMeshAlerter(dbClient)
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.evaluateMeshEdges(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.lastLocationHold != "fleet_silent" || locationOfflineAlerts(ctx, t, dbClient, x, "active")+locationOfflineAlerts(ctx, t, dbClient, y, "active") != 0 {
+		t.Fatalf("setup: the location alerts must be held (hold %q)", a.lastLocationHold)
+	}
+	created := spy.byType("created")
+	if len(created) != 1 || created[0].monitorName != "mesh: x → y" {
+		t.Fatalf("mesh pages while the location alerts are held = %+v, want the edge", created)
 	}
 }
 
@@ -439,52 +577,86 @@ func TestMeshEdgeOfOfflineLocationIsQuiet(t *testing.T) {
 	}
 }
 
-// LocationOfflinePredicate (SQL) and LocationOffline (Go) are twins (S-F6).
-func TestLocationOfflinePredicateMatchesGo(t *testing.T) {
+// The offline and disconnected predicates (SQL) and their Go twins agree,
+// including exactly at the 180 s and 60 s boundaries and the re-enable
+// grace: the rows are written and read in one transaction, so NOW() is one
+// instant for every row (S-F6).
+func TestLocationPredicatesMatchGo(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "loc-twin")
-	cases := map[string]*time.Duration{
-		"never": nil, "fresh": dur(30 * time.Second), "under": dur(170 * time.Second),
-		"over": dur(190 * time.Second), "long": dur(30 * 24 * time.Hour),
+	tx, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, ago := range cases {
-		insertLocationSeen(ctx, t, dbClient, tenantID, name, ago)
+	defer func() { _ = tx.Rollback() }()
+	type row struct {
+		name                string
+		seenAgo, enabledAgo *string
+		enabled, deleted    bool
 	}
-	disabled := insertLocationSeen(ctx, t, dbClient, tenantID, "disabled", dur(time.Hour))
-	mustExec(ctx, t, dbClient, `UPDATE locations SET enabled = FALSE WHERE id = $1`, disabled)
-	deleted := insertLocationSeen(ctx, t, dbClient, tenantID, "deleted", dur(time.Hour))
-	mustExec(ctx, t, dbClient, `UPDATE locations SET deleted_at = NOW() WHERE id = $1`, deleted)
-
-	rows, err := dbClient.QueryContext(ctx, `
-		SELECT l.name, l.enabled, l.deleted_at IS NOT NULL, l.last_seen_at,
-			`+monitorstate.LocationOfflinePredicate("l")+`, NOW()
+	str := func(s string) *string { return &s }
+	long := str("30 days")
+	rows := []row{
+		{"never", nil, long, true, false},
+		{"fresh", str("5 seconds"), long, true, false},
+		{"connected_edge", str("59.999999 seconds"), long, true, false},
+		{"disconnected_edge", str("60 seconds"), long, true, false},
+		{"offline_under", str("179.999999 seconds"), long, true, false},
+		{"offline_edge", str("180 seconds"), long, true, false},
+		{"long", str("30 days"), long, true, false},
+		{"enabled_under", str("1 hour"), str("179.999999 seconds"), true, false},
+		{"enabled_edge", str("1 hour"), str("180 seconds"), true, false},
+		{"disabled", str("1 hour"), long, false, false},
+		{"deleted", str("1 hour"), long, true, true},
+	}
+	for _, r := range rows {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO locations (id, tenant_id, name, slug, enabled, last_seen_at, enabled_at, deleted_at)
+			VALUES ($1, $2, $3, $3, $4, NOW() - $5::interval, NOW() - $6::interval, CASE WHEN $7 THEN NOW() END)`,
+			uuid.New(), tenantID, r.name, r.enabled, r.seenAgo, *r.enabledAgo, r.deleted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := tx.QueryContext(ctx, `
+		SELECT l.name, l.enabled, l.deleted_at IS NOT NULL, l.last_seen_at, l.enabled_at,
+			`+monitorstate.LocationOfflinePredicate("l")+`, `+monitorstate.LocationDisconnectedPredicate("l")+`, NOW()
 		FROM locations l WHERE l.tenant_id = $1`, tenantID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	seen, offline := 0, 0
-	for rows.Next() {
+	defer res.Close()
+	want := map[string][2]bool{ // offline, disconnected
+		"never": {false, false}, "fresh": {false, false},
+		"connected_edge": {false, false}, "disconnected_edge": {false, true},
+		"offline_under": {false, true}, "offline_edge": {true, true}, "long": {true, true},
+		"enabled_under": {false, true}, "enabled_edge": {true, true},
+		"disabled": {false, false}, "deleted": {false, false},
+	}
+	seen := 0
+	for res.Next() {
 		var name string
-		var enabled, isDeleted, sqlOffline bool
+		var enabled, isDeleted, sqlOffline, sqlDisconnected bool
 		var lastSeen *time.Time
-		var now time.Time
-		if err := rows.Scan(&name, &enabled, &isDeleted, &lastSeen, &sqlOffline, &now); err != nil {
+		var enabledAt, now time.Time
+		if err := res.Scan(&name, &enabled, &isDeleted, &lastSeen, &enabledAt, &sqlOffline, &sqlDisconnected, &now); err != nil {
 			t.Fatal(err)
 		}
-		if goOffline := monitorstate.LocationOffline(enabled, isDeleted, lastSeen, now); goOffline != sqlOffline {
-			t.Fatalf("%s: SQL offline=%v, Go offline=%v", name, sqlOffline, goOffline)
+		goOffline := monitorstate.LocationOffline(enabled, isDeleted, lastSeen, enabledAt, now)
+		goDisconnected := monitorstate.LocationDisconnected(enabled, isDeleted, lastSeen, now)
+		if goOffline != sqlOffline || goDisconnected != sqlDisconnected {
+			t.Fatalf("%s: SQL offline=%v disconnected=%v, Go offline=%v disconnected=%v",
+				name, sqlOffline, sqlDisconnected, goOffline, goDisconnected)
 		}
-		if sqlOffline {
-			offline++
+		if w := want[name]; w != [2]bool{sqlOffline, sqlDisconnected} {
+			t.Fatalf("%s: offline=%v disconnected=%v, want %v", name, sqlOffline, sqlDisconnected, w)
 		}
 		seen++
 	}
-	if seen != len(cases)+2 || offline != 2 {
-		t.Fatalf("checked %d locations (%d offline), want %d (2 offline)", seen, offline, len(cases)+2)
+	if seen != len(rows) {
+		t.Fatalf("checked %d locations, want %d", seen, len(rows))
 	}
 }
 
@@ -535,5 +707,54 @@ func TestTenantTargetsSQLMatchesDefaults(t *testing.T) {
 		if tenantTargets[i] != monitorTargets[i] {
 			t.Fatalf("row %d: tenant %+v != monitor %+v", i, tenantTargets[i], monitorTargets[i])
 		}
+	}
+}
+
+// An operator resolves a location alert while the location is still silent:
+// the paged channel hears "closed by an operator" (resolve_reason manual,
+// set by the API), never "back online", and a new alert opens and pages on
+// the next evaluation, as availability alerts do.
+func TestLocationOfflineManualResolveReopens(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "manual-resolve")
+	insertDefaultChannel(ctx, t, dbClient, tenantID, "ops", 0)
+	dead := insertLocationSeen(ctx, t, dbClient, tenantID, "dead", dur(10*time.Minute))
+
+	a := newIntegrationAlerter(dbClient)
+	type sent struct {
+		event  string
+		reason string
+	}
+	var sends []sent
+	a.sendFunc = func(_ context.Context, _ alertChannel, eventType string, _ alertSubject, alert *alertRecord, _ *groupDetail, _ time.Time) error {
+		sends = append(sends, sent{eventType, alert.ResolveReason})
+		return nil
+	}
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(ctx, t, dbClient, `
+		UPDATE alerts SET status = 'resolved', resolved_at = NOW(), resolve_reason = 'manual'
+		WHERE kind = 'location_offline' AND source_location_id = $1`, dead)
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.dispatchPendingRecoveries(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []sent{{"created", ""}, {"created", ""}, {"resolved", "manual"}}
+	if len(sends) != len(want) {
+		t.Fatalf("sends = %+v, want %+v", sends, want)
+	}
+	for i := range want {
+		if sends[i] != want[i] {
+			t.Fatalf("sends = %+v, want %+v", sends, want)
+		}
+	}
+	if locationOfflineAlerts(ctx, t, dbClient, dead, "active") != 1 || locationOfflineAlerts(ctx, t, dbClient, dead, "resolved") != 1 {
+		t.Fatal("the still-silent location must have a new open alert next to the closed one")
 	}
 }

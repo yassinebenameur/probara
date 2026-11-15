@@ -17,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/triageview"
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
 // Errors the handlers map to a status with errors.Is. The text reaches API
@@ -384,9 +385,12 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 // ResolveAlert marks an alert as resolved
 func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
 	now := time.Now()
+	// resolve_reason 'manual' (notifications.ResolveReasonManual): the
+	// closing notice the alerter sends must not claim the condition cleared.
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1
+		SET status = 'resolved', resolved_at = $1, updated_at = $1,
+			resolve_reason = '` + notifications.ResolveReasonManual + `'
 		WHERE id = $2 AND tenant_id = $3 AND status IN ('active', 'acknowledged')
 		RETURNING id
 	`
