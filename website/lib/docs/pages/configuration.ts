@@ -62,7 +62,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'Keep queue names identical across publishers and consumers',
           text:
-            'The code defaults are `CHECK_JOBS` and `check.jobs`, while the shipped Compose and Helm values are `check-jobs` and `check.job` — set identically on the API, scheduler, and workers so on-demand “run now” jobs land where workers consume them. If you override either value, treat stream and subject as one cross-service contract and change them everywhere at once.',
+            'The code defaults are `CHECK_JOBS` and `check.jobs`, while the shipped Compose and Helm values are `check-jobs` and `check.job` — set identically on the API, scheduler, and workers so on-demand “run now” jobs land where workers consume them. If you override either value, treat stream and subject as one cross-service contract and change them everywhere at once. The Helm chart does this for you: `scheduler.checkJobStream` and `scheduler.checkJobSubject` set both variables on every workload, and a `worker.checkJobStream` or `worker.checkJobSubject` that differs from them fails the render.',
         },
       ],
     },
