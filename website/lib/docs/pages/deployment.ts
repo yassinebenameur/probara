@@ -43,6 +43,11 @@ export const DEPLOYMENT_PAGE: DocPage = {
               'Compose services only. There is no frontend service in the current root Compose file.',
             ],
             [
+              '`scripts/install.sh` ([release Compose](#release-compose))',
+              'A single host from published images',
+              'Every service, the operator UI and an `edge` proxy from the release images on GHCR, with generated secrets; nothing is built.',
+            ],
+            [
               'Helm chart',
               'Kubernetes staging and production',
               'Frontend, services, local AI inference, migration hook, and optionally embedded PostgreSQL/NATS in the cluster.',
@@ -109,7 +114,7 @@ openssl rand -base64 32    # PROBARA_SECRETS_KEY`,
           tone: 'warning',
           title: 'Compose ships an insecure hardcoded secret',
           text:
-            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `LOCAL_AI_*`) are optional, and `LOCAL_AI_TOKEN` falls back to a public development token. Populate `.env` anyway so the platform runs on real values instead of placeholders.',
+            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `LOCAL_AI_*`) are optional, and `LOCAL_AI_TOKEN` falls back to a public development token. Populate `.env` anyway so the platform runs on real values instead of placeholders. The [release override](#release-compose) has none of these defaults: it requires every platform credential.',
         },
       ],
     },
@@ -236,7 +241,7 @@ docker compose down`,
           items: [
             'API, scheduler, and worker all use stream `check-jobs` and subject `check.job`, so scheduled and on-demand jobs share one subject contract. If you change these values, change them on all three services together.',
             'The root `.env` file is not passed as a service `env_file`; only variables explicitly declared in Compose reach containers. `PROBARA_SECRETS_KEY` is forwarded from the shell environment to the api, scheduler, worker, and alerter services.',
-            'SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired.',
+            'SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired. The [release override](#release-compose) adds SMTP and NATS authorization.',
             'Without an exported `LOCAL_AI_TOKEN` (shell or `.env`), `local-ai`, API and worker share a fixed development token that is public in the repository. That is tolerable only because port 8090 is bound to loopback; set your own (`openssl rand -hex 32`) on any shared host. `make start-all-local` generates a per-checkout token instead.',
             'The commented private-location worker example omits required `LOCATION_CREDENTIAL` and should not be enabled as written.',
             'The API and worker correctly share the `synthetic_artifacts` volume used for failure screenshots. Trace and HAR capture are configured by the schema but are not implemented by the current worker.',
@@ -248,6 +253,46 @@ docker compose down`,
           title: 'Do not hide these gaps with documentation-only values',
           text:
             'Adding an entry to `.env` does not repair the Compose wiring for variables that are not forwarded. Customize the service environment explicitly for anything beyond the declared variables, and keep queue stream/subject values identical across the API, scheduler, and workers.',
+        },
+      ],
+    },
+    {
+      id: 'release-compose',
+      title: 'Release Compose install',
+      intro:
+        'For a single host without building anything: `docker-compose.release.yml` is an override of `docker-compose.yml` that swaps every build for the release image on GHCR (`ghcr.io/yassinebenameur/probara-<service>:${PROBARA_VERSION}`), adds the operator UI behind an `edge` reverse proxy, turns NATS authentication and the websocket listener on, and makes every platform credential a required variable. `scripts/install.sh` downloads both files at a release tag and writes `.env`.',
+      blocks: [
+        {
+          type: 'code',
+          language: 'bash',
+          title: 'Install, upgrade, operate',
+          code: `# Newest release (prereleases included) into ./probara, then start it
+curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/main/scripts/install.sh | bash
+
+# A pinned release into another directory
+bash install.sh --version 2.1.0 --dir /opt/probara
+
+# Upgrade: rewrites PROBARA_VERSION in .env, keeps every secret
+bash install.sh --version 2.2.0 --dir /opt/probara
+
+cd /opt/probara && docker compose ps     # .env names both Compose files`,
+        },
+        {
+          type: 'list',
+          items: [
+            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, `BOOTSTRAP_SETUP_CODE`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). Every form Compose accepts counts as set, including `export KEY=v`, `KEY = v`, `KEY: v`, quoted values and inline comments. `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
+            'Back up `.env`. `PROBARA_SECRETS_KEY` decrypts every stored credential, and `POSTGRES_PASSWORD` is fixed when the database volume is first created.',
+            'First administrator: the UI is published, so the first-administrator form asks for a one-time setup code (`BOOTSTRAP_SETUP_CODE`, five groups of four characters). The script generates it once, prints it with the UI address when it finishes, and keeps it in `.env`; anyone who reaches the UI without it cannot claim the install. It has no effect once the first administrator exists.',
+            'Generated values are hex or base64 because Compose embeds the database and NATS passwords in connection URLs; if you write your own, keep them URL-safe and free of `$`.',
+            'Credentials of optional features stay optional and never fall back to a development value: `SMTP_PASSWORD`, `OIDC_CLIENT_SECRET` (empty instead of the Dex development secret) and `STATUS_PAGE_VAPID_PRIVATE_KEY`.',
+            'Published ports: the UI on `3000` (`PROBARA_UI_PORT`), served by the `edge` proxy (Caddy), and status pages on `8082` (`PROBARA_STATUS_PAGE_PORT`). The API is reached through the UI\'s `/api` proxy; the frontend itself, PostgreSQL, NATS client and monitoring ports, and every metrics port stay on the Compose networks. Put HTTPS in front, then set `PUBLIC_BASE_URL` (the UI origin) and `ADMIN_COOKIE_SECURE=true` in `.env` and run `docker compose up -d`.',
+            'Client IPs: every browser request reaches the API through the frontend, so without help the API would see one client for everyone. `edge` replaces any `X-Forwarded-For` with the client it resolves and drops every other client-address header (`X-Real-IP`, `True-Client-IP`, `Forwarded`, `X-Client-IP`, `CF-Connecting-IP`, `X-Cluster-Client-IP` and similar); the frontend, reachable only through `edge`, forwards that value, and the API trusts exactly the frontend\'s address (`TRUSTED_PROXY_CIDRS` = `PROBARA_FRONTEND_IP/32`, default `172.31.213.10`). `edge`, the frontend and the API share a separate `probara-front` network that the worker is not on, because the worker sends tenant-defined HTTP requests with arbitrary headers and must not be able to speak to a trusted proxy. If `probara-front`\'s subnet (`PROBARA_FRONT_SUBNET`, default `172.31.213.0/24`) collides with a host network, change it together with `PROBARA_FRONTEND_IP` (inside the subnet) and `PROBARA_FRONT_IP_RANGE` (default `172.31.213.128/25`, the range dynamic addresses come from, which must exclude the frontend\'s). A client cannot choose its address by sending its own header.',
+            'Behind your own TLS proxy or load balancer, set `PROBARA_TRUSTED_PROXIES` (space-separated CIDRs) to its address as the `edge` container sees it, or every client looks like that proxy; `edge` then takes the rightmost untrusted address of the incoming chain, so that proxy must append to `X-Forwarded-For`. Where Docker\'s userland proxy handles published ports (Docker Desktop, rootless), every connection arrives from the network gateway and real client addresses are lost before `edge`; on Linux with the default iptables publishing they are preserved.',
+            'Private locations: the broker\'s [websocket listener](#nats-websocket) is published on `127.0.0.1:8443` (`NATS_WEBSOCKET_PUBLISH`) for a TLS reverse proxy on the host to front on 443. Set `PUBLIC_NATS_URL=wss://<that host>` in `.env` to enable the deploy snippets.',
+            'Local AI runs through the `local-ai` Compose profile, which the script puts in `COMPOSE_PROFILES`. To run without it, set `COMPOSE_PROFILES=` and `LOCAL_AI_DISABLED=true` in `.env`.',
+            'SMTP: fill `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `APP_BASE_URL` in `.env`; the release override passes them to the API, worker and alerter.',
+            'Container names are fixed (`probara-*`), so one host runs either this stack or the development stack, not both. Needs Docker Compose 2.24.4 or newer.',
+          ],
         },
       ],
     },
@@ -366,6 +411,21 @@ kubectl -n probara get jobs`,
               'Auth-callout account seed for the API. The matching public key stays a plain ConfigMap value.',
             ],
             ['`nats.image`', '`nats:2.10-alpine`', 'Embedded broker image.'],
+            [
+              '`nats.websocket.enabled`, `.port`',
+              '`false`, `8443`',
+              'Serves the embedded broker\'s [websocket listener](#nats-websocket) (plaintext inside the cluster) and adds a `websocket` port to the NATS Service. The broker then reads a `nats.conf` even without auth, and a config change rolls the NATS pod.',
+            ],
+            [
+              '`nats.websocket.ingress.enabled`, `.host`, `.path`, `.className`, `.annotations`, `.tls`',
+              '`false`, empty, `/`, `ingress.className`, nginx proxy timeouts of 3600 s, `[]`',
+              'A separate Ingress for the listener, where TLS terminates. Requires `nats.websocket.enabled`, `nats.auth.enabled` and a `tls` entry (the render fails otherwise: location credentials would cross the network in clear while the API advertises `wss://`). On a host that is also in `ingress.hosts`, give it its own path such as `/nats`: the render refuses `/` there.',
+            ],
+            [
+              '`nats.websocket.ingress.tlsTerminatedUpstream`',
+              '`false`',
+              'Set `true` only when a load balancer in front of the ingress (for example an AWS ALB holding the certificate) terminates TLS, so `tls` may stay empty.',
+            ],
             ['`nats.persistence.enabled`', '`true`', 'Persist JetStream state.'],
             ['`nats.persistence.size`', '`1Gi`', 'NATS PVC request.'],
             ['`nats.persistence.storageClass`', 'Empty', 'Cluster default storage class.'],
@@ -460,7 +520,12 @@ kubectl -n probara get jobs`,
             [
               '`api.publicBaseURL`, `.publicNatsURL`',
               'Empty',
-              'External API origin and optional external TLS/WSS NATS endpoint.',
+              'External API origin and optional external TLS/WSS NATS endpoint. With `.publicNatsURL` empty and the NATS websocket ingress on, the API advertises `wss://<nats.websocket.ingress.host><path>`.',
+            ],
+            [
+              '`api.locationWorkerImage`',
+              'Empty: `{image.repository}-worker:{image tag}`',
+              'Image the generated [location-worker snippets](/docs/locations/#create-and-deploy) reference (`LOCATION_WORKER_IMAGE`). The default is the worker this release deploys; override it when remote sites pull from a mirror.',
             ],
             [
               '`scheduler.enabled`, `.replicas`, `.metricsPort`, `.logLevel`',
@@ -783,7 +848,45 @@ api:
             'The chart does not expose HTTP egress policy; provide `HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` through extra environment configuration, and keep any allowlist limited to networks that location is explicitly trusted to monitor.',
             'Expose the mesh echo endpoint only on private inter-location networks.',
             'For locations outside the Kubernetes cluster, use the generated container/deployment snippet rather than granting database access.',
-            'The embedded NATS Service is ClusterIP-only; an external location needs a separate TLS/WSS exposure path.',
+            'The embedded NATS Service is ClusterIP-only. For locations outside the cluster, enable the [websocket listener and its Ingress](#nats-websocket), or expose the broker over TLS yourself.',
+          ],
+        },
+      ],
+    },
+    {
+      id: 'nats-websocket',
+      title: 'NATS over websocket for restricted networks',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Many networks allow only outbound HTTPS. The broker can serve a websocket listener (port 8443, plaintext) behind an HTTPS ingress or reverse proxy, so a location worker dials `wss://` on 443 instead of the broker\'s TCP port. Websocket clients go through the same [auth callout](/docs/security/#private-locations-nats) as TCP clients: the listener has no authorization of its own, and a wrong or missing location credential is refused on both.',
+        },
+        {
+          type: 'code',
+          language: 'yaml',
+          title: 'Helm: websocket listener on its own host',
+          code: `nats:
+  auth:
+    enabled: true          # required before the ingress renders
+  websocket:
+    enabled: true
+    ingress:
+      enabled: true
+      host: nats.example.com
+      tls:
+        - secretName: nats-tls
+          hosts: [nats.example.com]
+# api.publicNatsURL left empty: snippets get wss://nats.example.com`,
+        },
+        {
+          type: 'list',
+          items: [
+            'To share the UI host, set `nats.websocket.ingress.host` to it and `path: /nats`; the snippets then carry `wss://probara.example.com/nats` and the worker sends that path in its upgrade request.',
+            'The default annotations raise ingress-nginx\'s proxy read and send timeouts to an hour: NATS keeps idle connections open between pings, longer than the controller\'s 60 s default. Other controllers need their equivalent.',
+            'Release Compose publishes the listener on `127.0.0.1:8443`; front it with a TLS reverse proxy on 443 (it must pass websocket upgrades) and set `PUBLIC_NATS_URL=wss://<host>` in `.env`.',
+            'Workers refuse a plain `ws://` URL that carries credentials unless it points at a loopback address; use `wss://`.',
+            'Worker image and broker contract move together: the snippets pin the worker to the platform\'s release, so upgrade remote workers when you upgrade the platform.',
           ],
         },
       ],
@@ -858,6 +961,13 @@ api:
         {
           type: 'callout',
           tone: 'info',
+          title: 'Upgrading to a release with the NATS websocket listener and pinned worker snippets',
+          text:
+            'Two chart changes show up on the first upgrade. The embedded NATS pod template now carries a checksum of its `nats.conf`, so installs with `nats.auth.enabled` (or the websocket listener) see the NATS pod restart once; with persistence on, JetStream state survives, and services reconnect on their own after a short broker outage. From then on a broker config change rolls the pod, which is what makes enabling the websocket listener take effect. The generated private-location worker snippets now reference `{image.repository}-worker:{image tag}` instead of the public `:latest` worker, so an install with a mirrored `image.repository` hands remote sites an image from that mirror: make sure they can pull from it, or set `api.locationWorkerImage`.',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
           title: 'Upgrading from 1.0.x: AI is local and on by default',
           text:
             'The external LLM path is gone: `LLM_*` variables and workspace provider settings are no longer read (the old columns stay for rollback), and workspaces without an explicit AI setting are enabled. The chart now deploys `<release>-local-ai` (1 CPU/2 GiB request) and wires API and worker to it (the alerter gets only its kill switches); with `secrets.existingSecret`, add a `local_ai_token` key (see [local AI values](/docs/deployment/#helm-values-local-ai)). Deployments that do not use this chart need the `probara-local-ai` workload plus `LOCAL_AI_URL` and `LOCAL_AI_TOKEN` on API and worker, or `LOCAL_AI_DISABLED=true` on API, worker and alerter; otherwise analyses and alert triages fail with local AI reported unavailable, while alerting and paging are unaffected. Set `localAI.enabled=false` to opt out.',
@@ -897,8 +1007,8 @@ api:
               'Changing them does not alter workload behavior.',
             ],
             [
-              'Embedded NATS is ClusterIP-only',
-              'Private locations outside the cluster cannot connect without an additional secure exposure.',
+              'Embedded NATS is ClusterIP-only by default',
+              'Private locations outside the cluster need the [websocket Ingress](#nats-websocket) (`nats.websocket.*`) or a TLS exposure you add yourself.',
             ],
             [
               'Local AI accuracy is measured on a controlled corpus only',

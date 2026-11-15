@@ -230,6 +230,19 @@ masked and must be re-entered).
 
 ## Quick start
 
+### Run a release with Docker Compose
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/main/scripts/install.sh | bash
+```
+
+This downloads the release Compose files into `./probara`, generates every
+secret into `.env` (back it up), and starts the published images, the UI
+included, on <http://localhost:3000>. It prints a one-time setup code that
+the first-administrator form asks for, so nobody else can claim the install. Re-running it never changes an existing
+value; `--version X` upgrades. See
+[Release Compose install](https://probara-uptime.com/docs/deployment/#release-compose).
+
 ### Try it locally
 
 You need Docker with Compose v2, `make`, Node.js 20.9 or newer, and free
@@ -271,7 +284,8 @@ kubectl -n probara port-forward svc/probara-frontend 3000:3000
 
 Pin `--version 2.0.0` for repeatable installs. The images are linux/amd64
 only, and the bundled Postgres and NATS need a default StorageClass. Add
-`--set localAI.enabled=false` to skip the AI pod.
+`--set localAI.enabled=false` to skip the AI pod. The location-worker snippet
+the UI generates pins the worker to the platform's own version.
 
 ## Going further
 

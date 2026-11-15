@@ -8,6 +8,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/api"
 	"github.com/yassinebenameur/probara/shared/bootstrap"
+	"github.com/yassinebenameur/probara/shared/buildinfo"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -25,7 +26,7 @@ func main() {
 
 	// Initialize logger
 	log := logger.New(cfg.ServiceName, cfg.LogLevel)
-	log.Info("Starting API service")
+	log.WithField("version", buildinfo.Version).Info("Starting API service")
 
 	// Initialize database
 	if cfg.PostgresURL == "" {

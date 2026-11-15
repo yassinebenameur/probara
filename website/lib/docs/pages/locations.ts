@@ -77,7 +77,17 @@ export const LOCATIONS_PAGE: DocPage = {
           language: "yaml",
           title: "Shape of generated worker environment",
           code:
-            "image: ghcr.io/yassinebenameur/probara-worker:latest\nenvironment:\n  NATS_URL: tls://nats.example.com:4222\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
+            "image: ghcr.io/yassinebenameur/probara-worker:<platform version>\nenvironment:\n  NATS_URL: wss://nats.example.com\n  WORKER_LOCATION_ID: <location-uuid>\n  LOCATION_CREDENTIAL: <generated-secret>\n  HTTP_PORT: \"8080\"\n  METRICS_PORT: \"9090\"",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The snippet pins the worker to the platform's own release (the API's version tag), so a new location speaks the same queue contract as the scheduler that feeds it. An API built without a release version, such as a local build, references the moving `:alpha` channel tag instead. Set `LOCATION_WORKER_IMAGE` on the API (Helm: `api.locationWorkerImage`) to point remote sites at a mirror or a different tag. After a platform upgrade, upgrade existing location workers to the same tag.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Locations behind a firewall that allows only outbound HTTPS connect over `wss://` on 443: the broker's [websocket listener](/docs/deployment/#nats-websocket) behind an HTTPS ingress or reverse proxy. A `tls://` URL instead needs the broker's TCP port open outbound. The snippet carries a one-line comment naming which of the two it uses. A `wss://` URL may carry a path (`wss://probara.example.com/nats`) when the listener shares a host with the UI.",
         },
         {
           type: "callout",

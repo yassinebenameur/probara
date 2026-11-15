@@ -149,6 +149,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Local-process script and Compose set `false`. Helm renders `true` when `api.publicBaseURL` is an `https://` origin; set `api.cookieSecure` to force it either way. A Secure cookie is never sent over plain HTTP, so `true` on an HTTP-only deployment makes login impossible.',
             ],
             [
+              '`BOOTSTRAP_SETUP_CODE`',
+              'Empty',
+              'One-time code the first-administrator form asks for, so a reachable install cannot be claimed by whoever gets there first. Compared in constant time, ignoring case, spaces and dashes; missing and wrong codes get the same 403 and are logged without the submitted value. Empty leaves the form open until an administrator exists. Has no effect afterwards. The release installer generates one; Compose passes it through; Helm: `secrets.bootstrapSetupCode` or an existing Secret with key `bootstrap_setup_code`.',
+            ],
+            [
               '`ADMIN_BCRYPT_COST`',
               '`12`; integer',
               'Not exposed by Compose or Helm. Also used by the admin creation CLI.',
@@ -183,7 +188,12 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PUBLIC_NATS_URL`',
               'Empty',
-              'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected.',
+              'Broker address embedded in private-location deployment instructions. When deployment information is generated, only `tls://` and `wss://` URLs are accepted; pre-existing URL credentials are rejected. `wss://host[/path]` is the broker\'s [websocket listener](/docs/deployment/#nats-websocket) behind an HTTPS ingress, reachable over 443. Helm derives it from `nats.websocket.ingress.*` when `api.publicNatsURL` is empty.',
+            ],
+            [
+              '`LOCATION_WORKER_IMAGE`',
+              'Empty: `ghcr.io/yassinebenameur/probara-worker:<API version>`, or `:alpha` for an unreleased build',
+              'Image the generated location-worker snippets reference. Released API images default to the worker at their own version, so a new location runs the same release as the platform; builds without a release version (local, Compose without `PROBARA_VERSION`) fall back to the moving `alpha` channel tag, which follows the latest `-alpha.N` release. Never `:latest`. Helm sets it to `{image.repository}-worker:{image tag}` (override with `api.locationWorkerImage`); Compose passes it through from the shell. Set it for a mirror registry.',
             ],
             [
               '`NATS_LOCATION_AUTH_ISSUER_SEED`',

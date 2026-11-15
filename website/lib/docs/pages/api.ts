@@ -124,7 +124,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/users/bootstrap/first`",
-              "Create the one-time first superadministrator",
+              "Create the one-time first superadministrator; send `setup_code` when the status reports `setup_code_required`",
             ],
           ],
         },

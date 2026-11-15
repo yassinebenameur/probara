@@ -51,9 +51,12 @@ type AdminAuthResponse struct {
 	User AdminUser `json:"user"`
 }
 
-// AdminBootstrapStatusResponse indicates whether at least one active admin exists.
+// AdminBootstrapStatusResponse indicates whether at least one active admin
+// exists, and whether creating the first one needs the install's setup code
+// (BOOTSTRAP_SETUP_CODE). The code itself is never returned.
 type AdminBootstrapStatusResponse struct {
-	HasAdminUsers bool `json:"has_admin_users"`
+	HasAdminUsers     bool `json:"has_admin_users"`
+	SetupCodeRequired bool `json:"setup_code_required"`
 }
 
 // AdminUserListResponse represents a paginated list of admin users.

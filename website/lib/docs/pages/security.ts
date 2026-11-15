@@ -230,6 +230,11 @@ export const SECURITY_PAGE: DocPage = {
               'Changing invalidates outstanding one-hour preview tokens.',
             ],
             [
+              '`BOOTSTRAP_SETUP_CODE`',
+              'API only, until the first administrator exists',
+              'Gates first-administrator creation on a reachable install. Useless once that account exists; remove or rotate it freely. OIDC just-in-time login on an empty install is a separate path that the code does not gate, so keep the IdP restricted until the first administrator exists.',
+            ],
+            [
               '`NATS_LOCATION_AUTH_ISSUER_SEED`',
               'API only',
               'NATS receives the public account key, not the seed. Rotation requires coordinated broker/API changes.',
@@ -452,7 +457,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'list',
           items: [
-            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo.',
+            'Use `tls://` or `wss://` for every public broker endpoint. Deploy generation rejects plaintext schemes and URLs that already contain userinfo. The broker\'s websocket listener is plaintext and must sit behind a TLS-terminating ingress or proxy (the chart refuses a websocket Ingress without TLS unless `tlsTerminatedUpstream` says a load balancer does it); websocket clients go through the same authorization callout as TCP clients, and workers refuse to send credentials over plain `ws://` to anything but loopback.',
             'Keep the account issuer seed only in API. Configure only its public account key in NATS.',
             'Use a separate platform NATS user for trusted internal services. Never give it to a location worker.',
             'Location claims restrict result publication, heartbeat publication, consumer pull/ACK operations, inbox responses, and test-job subscription to that location.',
@@ -466,7 +471,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           tone: 'warning',
           title: 'Local Compose NATS is not a private-location broker',
           text:
-            'It listens without authentication or TLS. The embedded Helm NATS service is ClusterIP-only until you add secure external exposure. Setting `PUBLIC_NATS_URL` alone does not create that exposure.',
+            'It listens without authentication or TLS. The embedded Helm NATS service is ClusterIP-only until you add secure external exposure (`nats.websocket.ingress.*`, which refuses to render without `nats.auth.enabled`). Setting `PUBLIC_NATS_URL` alone does not create that exposure. The [release Compose override](/docs/deployment/#release-compose) turns authentication on.',
         },
       ],
     },

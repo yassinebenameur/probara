@@ -235,6 +235,109 @@ func TestHandlers_BootstrapFirstUser(t *testing.T) {
 	})
 }
 
+func TestHandlers_BootstrapSetupCode(t *testing.T) {
+	log := logger.New("test", "debug")
+	const code = "ABCD-EFGH-JKLM-NPQR-STUV"
+
+	// adminExists models the service: CreateFirstUser succeeds only while no
+	// admin exists. created counts the calls that reached it.
+	newHandlers := func(setupCode string, adminExists bool, created *int) *Handlers {
+		return NewHandlers(&mockUserService{
+			hasActiveUsersFn: func(ctx context.Context) (bool, error) { return adminExists, nil },
+			createFirstUserFn: func(ctx context.Context, req *models.CreateAdminUserRequest) (*models.AdminUser, error) {
+				*created++
+				if adminExists {
+					return nil, adminusers.ErrBootstrapClosed
+				}
+				return &models.AdminUser{ID: uuid.New(), Username: req.Username}, nil
+			},
+		}, log).WithSetupCode(setupCode)
+	}
+	post := func(h *Handlers, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/users/bootstrap/first", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.BootstrapFirstUser(w, req)
+		return w
+	}
+	status := func(h *Handlers) models.AdminBootstrapStatusResponse {
+		w := httptest.NewRecorder()
+		h.BootstrapStatus(w, httptest.NewRequest(http.MethodGet, "/api/v1/users/bootstrap/status", nil))
+		var resp models.AdminBootstrapStatusResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	t.Run("unset keeps the endpoint open", func(t *testing.T) {
+		created := 0
+		h := newHandlers("", false, &created)
+		if status(h).SetupCodeRequired {
+			t.Fatal("status reports a setup code without one configured")
+		}
+		if w := post(h, `{"username":"admin.new","password":"super-secure-password"}`); w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body)
+		}
+	})
+
+	t.Run("set refuses missing and wrong codes alike", func(t *testing.T) {
+		created := 0
+		h := newHandlers(code, false, &created)
+		resp := status(h)
+		if !resp.SetupCodeRequired || resp.HasAdminUsers {
+			t.Fatalf("status = %+v", resp)
+		}
+		var bodies []string
+		for _, body := range []string{
+			`{"username":"admin.new","password":"super-secure-password"}`,
+			`{"username":"admin.new","password":"super-secure-password","setup_code":""}`,
+			`{"username":"admin.new","password":"super-secure-password","setup_code":"ABCD-EFGH-JKLM-NPQR-STUW"}`,
+			`{"username":"admin.new","password":"super-secure-password","setup_code":"ABCD"}`,
+		} {
+			w := post(h, body)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("%s: expected 403, got %d", body, w.Code)
+			}
+			bodies = append(bodies, w.Body.String())
+		}
+		for _, b := range bodies[1:] {
+			if b != bodies[0] {
+				t.Fatalf("missing and wrong codes answer differently: %q vs %q", bodies[0], b)
+			}
+		}
+		if created != 0 {
+			t.Fatalf("a refused request reached the service %d times", created)
+		}
+	})
+
+	t.Run("set accepts the right code however it is typed", func(t *testing.T) {
+		for _, submitted := range []string{code, "abcd efgh jklm npqr stuv", "ABCDEFGHJKLMNPQRSTUV"} {
+			created := 0
+			h := newHandlers(code, false, &created)
+			w := post(h, `{"username":"admin.new","password":"super-secure-password","setup_code":"`+submitted+`"}`)
+			if w.Code != http.StatusCreated || created != 1 {
+				t.Fatalf("%q: expected 201 and one create, got %d (%d): %s", submitted, w.Code, created, w.Body)
+			}
+		}
+	})
+
+	t.Run("an existing admin keeps it closed whatever the code", func(t *testing.T) {
+		created := 0
+		h := newHandlers(code, true, &created)
+		if w := post(h, `{"username":"admin.new","password":"super-secure-password","setup_code":"`+code+`"}`); w.Code != http.StatusConflict {
+			t.Fatalf("right code after bootstrap: expected 409, got %d", w.Code)
+		}
+		if w := post(h, `{"username":"admin.new","password":"super-secure-password"}`); w.Code != http.StatusForbidden {
+			t.Fatalf("no code after bootstrap: expected 403, got %d", w.Code)
+		}
+		created = 0
+		open := newHandlers("", true, &created)
+		if w := post(open, `{"username":"admin.new","password":"super-secure-password"}`); w.Code != http.StatusConflict {
+			t.Fatalf("unset code after bootstrap: expected 409, got %d", w.Code)
+		}
+	})
+}
+
 func TestHandlers_GetUser(t *testing.T) {
 	log := logger.New("test", "debug")
 	userID := uuid.New()
