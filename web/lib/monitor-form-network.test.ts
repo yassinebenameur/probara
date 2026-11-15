@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildGrpcRequest, buildTcpRequest, initialGrpcFormState, initialTcpFormState } from './monitor-form/network';
+import {
+  buildGrpcRequest,
+  buildTcpRequest,
+  grpcMetadataError,
+  initialGrpcFormState,
+  initialTcpFormState,
+} from './monitor-form/network';
+import { buildClonedMonitorInitialData } from './monitor-clone';
+import { renameSecretRow, toggleSecretRow } from './monitor-form/secret-map';
 import {
   buildWebsocketRequest,
   initialWebsocketFormState,
@@ -16,7 +24,8 @@ import {
   cloneSource,
   storedMonitor,
 } from './monitor-form/testing';
-import type { CreateMonitorRequest, SIPMonitorConfig, WebSocketMonitorConfig } from './types';
+import { MASKED_SECRET } from './types';
+import type { CreateMonitorRequest, GRPCMonitorConfig, SIPMonitorConfig, WebSocketMonitorConfig } from './types';
 
 // gRPC, TCP, WebSocket and SIP: the delegated forms with a schedule and
 // locations. WebSocket headers (a secret map) and the SIP password are the
@@ -111,6 +120,84 @@ test('grpc: a clone takes config, schedule, tags and locations from initialData,
 });
 
 // --- tcp --------------------------------------------------------------------
+
+test('grpc metadata: create splits plain and secret entries', () => {
+  const form = {
+    ...initialGrpcFormState(),
+    name: 'Payments',
+    host: 'grpc.example.com',
+    metadata: [
+      { key: 'x-tenant', value: 'acme' },
+      toggleSecretRow({ key: 'x-signing', value: 'sig' }, true),
+      // Credential-named: always secret.
+      { key: 'authorization', value: 'Bearer t' },
+      { key: '', value: '' },
+    ],
+  };
+  assert.equal(grpcMetadataError(form.metadata), undefined);
+  const config = buildGrpcRequest(form).config as GRPCMonitorConfig;
+  assert.deepEqual(config.metadata, { 'x-tenant': 'acme' });
+  assert.deepEqual(config.secret_metadata, { 'x-signing': 'sig', authorization: 'Bearer t' });
+});
+
+const storedGrpcWithMetadata = () =>
+  storedMonitor('grpc', {
+    host: 'grpc.internal',
+    port: 50051,
+    use_tls: true,
+    metadata: { 'x-tenant': 'acme' },
+    secret_metadata: { authorization: MASKED_SECRET, 'x-key': MASKED_SECRET, 'x-old': MASKED_SECRET },
+  });
+
+test('grpc metadata: edit keeps, replaces and removes stored entries per key', () => {
+  const form = initialGrpcFormState(storedGrpcWithMetadata());
+  assert.deepEqual(
+    form.metadata.map((row) => [row.key, row.value, Boolean(row.hasStoredValue)]),
+    [
+      ['x-tenant', 'acme', false],
+      ['authorization', '', true],
+      ['x-key', '', true],
+      ['x-old', '', true],
+    ]
+  );
+  form.metadata = [form.metadata[0], form.metadata[1], { ...form.metadata[2], value: 'rotated' }];
+  assert.equal(grpcMetadataError(form.metadata), undefined);
+  const config = buildGrpcRequest(form).config as GRPCMonitorConfig;
+  assert.deepEqual(config.metadata, { 'x-tenant': 'acme' });
+  assert.deepEqual(config.secret_metadata, { authorization: MASKED_SECRET, 'x-key': 'rotated' });
+});
+
+test('grpc metadata: an edit that drops every secret entry submits {}', () => {
+  const form = initialGrpcFormState(storedGrpcWithMetadata());
+  form.metadata = [form.metadata[0]];
+  assert.deepEqual((buildGrpcRequest(form).config as GRPCMonitorConfig).secret_metadata, {});
+  // Without stored secrets there is nothing to clear, so no map is sent.
+  const plain = initialGrpcFormState(storedMonitor('grpc', { host: 'g', port: 443, use_tls: true }));
+  assert.equal((buildGrpcRequest(plain).config as GRPCMonitorConfig).secret_metadata, undefined);
+});
+
+test('grpc metadata: a renamed stored entry needs a value; reserved and broken keys are refused', () => {
+  const form = initialGrpcFormState(storedGrpcWithMetadata());
+  assert.equal(grpcMetadataError([renameSecretRow(form.metadata[2], 'x-other')]), 'Metadata entries must have both a name and a value');
+  assert.equal(grpcMetadataError([renameSecretRow(form.metadata[2], 'X-KEY')]), undefined);
+  assert.equal(
+    grpcMetadataError([{ key: 'grpc-timeout', value: '1S' }]),
+    '"grpc-timeout" is reserved: grpc- metadata keys belong to the protocol'
+  );
+  assert.equal(grpcMetadataError([{ key: 'x-a', value: 'a\nb' }]), 'Metadata entries cannot contain line breaks');
+  assert.equal(
+    grpcMetadataError([{ key: 'x-a', value: '1' }, toggleSecretRow({ key: 'X-A', value: '2' }, true)]),
+    '"X-A" is set more than once'
+  );
+});
+
+test('grpc metadata: a clone keeps entry names but never submits a mask', () => {
+  const clone = buildClonedMonitorInitialData(storedGrpcWithMetadata());
+  const form = initialGrpcFormState(undefined, clone);
+  assert.ok(form.metadata.every((row) => !row.hasStoredValue));
+  assert.equal(grpcMetadataError(form.metadata), 'Metadata entries must have both a name and a value');
+  assert.ok(!JSON.stringify(buildGrpcRequest(form)).includes(MASKED_SECRET));
+});
 
 test('tcp: create from defaults', () => {
   const defaults = initialTcpFormState();

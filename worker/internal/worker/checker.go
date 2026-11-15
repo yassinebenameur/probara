@@ -155,6 +155,10 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	}
 
 	var redirectsFollowed int
+	guard := redirectGuard{secretNames: make([]string, 0, len(config.SecretHeaders))}
+	for name := range config.SecretHeaders {
+		guard.secretNames = append(guard.secretNames, name)
+	}
 	client := &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -165,7 +169,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
 			redirectsFollowed = len(via)
-			return nil
+			return guard.check(req, via)
 		},
 	}
 
@@ -227,9 +231,18 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		}
 	}
 
-	// Set headers
+	// Set headers. Secret headers go last so they win over a same-named
+	// plain one (validation refuses that pairing; this is belt and braces),
+	// and basic auth, which validation keeps apart from an Authorization
+	// header, last of all.
 	for k, v := range config.Headers {
 		req.Header.Set(k, v)
+	}
+	for k, v := range config.SecretHeaders {
+		req.Header.Set(k, v)
+	}
+	if config.BasicAuthUsername != "" {
+		req.SetBasicAuth(config.BasicAuthUsername, config.BasicAuthPassword)
 	}
 
 	var traceTimings httpTimingInfo
@@ -275,7 +288,9 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	if err != nil {
 		errorReason := "unknown"
 		errStr := err.Error()
-		if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline") {
+		if errors.Is(err, errRedirectRefused) {
+			errorReason = "redirect"
+		} else if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline") {
 			errorReason = "timeout"
 		} else if strings.Contains(errStr, "no such host") || strings.Contains(errStr, "DNS") {
 			errorReason = "dns"

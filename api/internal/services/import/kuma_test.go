@@ -230,6 +230,8 @@ func TestParseKumaExport_TypeMappingTable(t *testing.T) {
 				"method":                 "GET",
 				"body":                   "{\"probe\":true}",
 				"headers":                map[string]string{"X-Trace": "on"},
+				"basic_auth_username":    "svc",
+				"basic_auth_password":    "s3cret",
 				"expected_statuses":      []int{301},
 				"expected_status_ranges": []map[string]int{{"min": 200, "max": 299}},
 				"max_redirects":          10,
@@ -538,34 +540,40 @@ func hasWarning(warnings []string, fragment string) bool {
 func TestParseKumaExport_SecretsRedacted(t *testing.T) {
 	preview := parseKumaFixture(t)
 
-	// Nothing anywhere in the translated bundle may carry a credential from
-	// the source file.
+	// Database credentials and the Authorization header Kuma overrode with
+	// basic auth never reach the translated bundle.
 	encoded, err := json.Marshal(preview.Rows)
 	if err != nil {
 		t.Fatalf("marshal rows: %v", err)
 	}
-	for _, secret := range []string{"s3cret", "hunter2", "topsecret", "abc123", "Bearer"} {
+	for _, secret := range []string{"hunter2", "topsecret", "abc123", "Bearer"} {
 		if strings.Contains(string(encoded), secret) {
 			t.Fatalf("credential %q leaked into the imported rows", secret)
 		}
 	}
 
+	// Basic auth is carried into the http monitor's own fields, where the
+	// password is a registered secret encrypted on create.
 	api := kumaRowByName(t, preview, "API")
-	headers, ok := kumaConfig(t, api)["headers"].(map[string]string)
+	config := kumaConfig(t, api)
+	if config["basic_auth_username"] != "svc" || config["basic_auth_password"] != "s3cret" {
+		t.Fatalf("basic auth = %v / %v, want svc / s3cret", config["basic_auth_username"], config["basic_auth_password"])
+	}
+	headers, ok := config["headers"].(map[string]string)
 	if !ok {
-		t.Fatalf("API headers = %T, want a map", kumaConfig(t, api)["headers"])
+		t.Fatalf("API headers = %T, want a map", config["headers"])
 	}
-	if _, present := headers["Authorization"]; present {
-		t.Fatal("the Authorization header was imported; HTTP headers are stored in plaintext")
+	if headers["X-Trace"] != "on" || len(headers) != 1 {
+		t.Fatalf("plain headers = %v, want only X-Trace", headers)
 	}
-	if headers["X-Trace"] != "on" {
-		t.Fatalf("harmless headers should survive, got %v", headers)
+	if _, present := config["secret_headers"]; present {
+		t.Fatalf("Kuma overrides Authorization with basic auth, so it must not be imported: %v", config["secret_headers"])
 	}
-	if !hasWarning(api.Warnings, "credential-bearing request headers") {
-		t.Fatalf("dropped header is not reported: %v", api.Warnings)
+	if !hasWarning(api.Warnings, "Authorization header was dropped") {
+		t.Fatalf("the overridden Authorization header is not reported: %v", api.Warnings)
 	}
-	if !hasWarning(api.Warnings, "HTTP authentication was not imported") {
-		t.Fatalf("dropped basic auth is not reported: %v", api.Warnings)
+	if hasWarning(api.Warnings, "HTTP authentication was not imported") {
+		t.Fatalf("basic auth is imported now, yet reported as dropped: %v", api.Warnings)
 	}
 
 	// Database monitors lose their password, so they must land disabled rather
@@ -766,5 +774,102 @@ func TestExecuteImport_KumaBundleCreatesMonitors(t *testing.T) {
 
 	if enabled := byName["Main PG"].Enabled; enabled == nil || *enabled {
 		t.Fatalf("Main PG should have been created disabled, Enabled = %v", enabled)
+	}
+}
+
+func TestKumaHTTPConfig_CredentialHeadersAndAuthMethods(t *testing.T) {
+	base := kumaMonitor{URL: "https://api.example.com", Method: "GET",
+		Headers: `{"X-Api-Key":"k1","Authorization":"Bearer t","Accept":"*/*"}`}
+
+	t.Run("credential headers become secret headers", func(t *testing.T) {
+		config, warnings, skip := kumaHTTPConfig(base, "http")
+		if skip != "" {
+			t.Fatalf("skipped: %s", skip)
+		}
+		secret, _ := config["secret_headers"].(map[string]string)
+		if secret["X-Api-Key"] != "k1" || secret["Authorization"] != "Bearer t" {
+			t.Fatalf("secret_headers = %v", config["secret_headers"])
+		}
+		if plain, _ := config["headers"].(map[string]string); len(plain) != 1 || plain["Accept"] != "*/*" {
+			t.Fatalf("headers = %v", config["headers"])
+		}
+		if hasWarning(warnings, "not imported") {
+			t.Fatalf("nothing was dropped, warnings = %v", warnings)
+		}
+	})
+
+	t.Run("explicit basic method", func(t *testing.T) {
+		monitor := base
+		monitor.AuthMethod, monitor.BasicAuthUser, monitor.BasicAuthPass = "basic", "u", "p"
+		config, _, _ := kumaHTTPConfig(monitor, "http")
+		if config["basic_auth_username"] != "u" || config["basic_auth_password"] != "p" {
+			t.Fatalf("basic auth = %v", config)
+		}
+		if secret, _ := config["secret_headers"].(map[string]string); secret["Authorization"] != "" || secret["X-Api-Key"] != "k1" {
+			t.Fatalf("secret_headers = %v, want X-Api-Key only", secret)
+		}
+		raw, _ := json.Marshal(config)
+		if err := validation.DefaultRegistry.Validate(models.MonitorTypeHTTP, raw); err != nil {
+			t.Fatalf("translated config does not validate: %v", err)
+		}
+	})
+
+	t.Run("ntlm reuses the columns but is not basic auth", func(t *testing.T) {
+		monitor := base
+		monitor.AuthMethod, monitor.BasicAuthUser, monitor.BasicAuthPass = "ntlm", "DOMAIN\\u", "p"
+		config, warnings, _ := kumaHTTPConfig(monitor, "http")
+		if _, present := config["basic_auth_username"]; present {
+			t.Fatalf("ntlm credentials were imported as basic auth: %v", config)
+		}
+		if !hasWarning(warnings, "ntlm authentication") {
+			t.Fatalf("dropped ntlm is not reported: %v", warnings)
+		}
+	})
+
+	t.Run("username with a colon", func(t *testing.T) {
+		monitor := base
+		monitor.BasicAuthUser, monitor.BasicAuthPass = "a:b", "p"
+		config, warnings, _ := kumaHTTPConfig(monitor, "http")
+		if _, present := config["basic_auth_username"]; present || !hasWarning(warnings, "contains ':'") {
+			t.Fatalf("config = %v, warnings = %v", config, warnings)
+		}
+	})
+}
+
+// TestParseKumaExport_BasicAuthWithoutPasswordImportsDisabled:
+// scripts/kuma-export redacts basic_auth_pass and keeps the username. Such a
+// monitor would send "user:" on every check and alert, so it is created
+// disabled with a note to re-enter the password, as database monitors are.
+func TestParseKumaExport_BasicAuthWithoutPasswordImportsDisabled(t *testing.T) {
+	backup := `{"version":"2.0.0","monitorList":[
+		{"id":1,"name":"Redacted","type":"http","active":true,"url":"https://api.example.com/health","method":"get","interval":60,"maxredirects":10,"basic_auth_user":"svc"},
+		{"id":2,"name":"Full","type":"http","active":true,"url":"https://api.example.com/health","method":"get","interval":60,"maxredirects":10,"basic_auth_user":"svc","basic_auth_pass":"pw"}
+	]}`
+	preview, err := (&Service{}).ParseFile([]byte(backup), "kuma-export.json")
+	if err != nil {
+		t.Fatalf("ParseFile() error = %v", err)
+	}
+
+	redacted := kumaRowByName(t, preview, "Redacted")
+	config := kumaConfig(t, redacted)
+	if config["basic_auth_username"] != "svc" {
+		t.Fatalf("username = %v, want it kept", config["basic_auth_username"])
+	}
+	if _, present := config["basic_auth_password"]; present {
+		t.Fatalf("an empty password must not be imported: %v", config)
+	}
+	if redacted.Fields["enabled"] != false {
+		t.Fatalf("enabled = %v, want the monitor created disabled", redacted.Fields["enabled"])
+	}
+	if !hasWarning(redacted.Warnings, "re-enter the basic auth password") {
+		t.Fatalf("missing password is not reported: %v", redacted.Warnings)
+	}
+	if !hasWarning(preview.Warnings, "1 monitor(s) were imported disabled") {
+		t.Fatalf("summary does not count it: %v", preview.Warnings)
+	}
+
+	full := kumaRowByName(t, preview, "Full")
+	if full.Fields["enabled"] != true || hasWarning(full.Warnings, "re-enter the basic auth password") {
+		t.Fatalf("a monitor with its password must import enabled: %v %v", full.Fields["enabled"], full.Warnings)
 	}
 }

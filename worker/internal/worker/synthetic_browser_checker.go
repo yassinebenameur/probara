@@ -81,8 +81,18 @@ func NewSyntheticBrowserChecker(artifactsDir string) *SyntheticBrowserChecker {
 	return &SyntheticBrowserChecker{artifactsDir: dir}
 }
 
-// Check executes a synthetic browser journey.
+// Check executes a synthetic browser journey, then scrubs the values of its
+// secret_variables from everything the result reports: step URLs and
+// selectors, errors (an assert_text failure quotes the page text), the final
+// URL and artifact warnings. A failure screenshot is pixels and is not
+// redacted: a secret typed into a field the page renders as text, or shown
+// on the page, can appear in it (password inputs render masked).
 func (c *SyntheticBrowserChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
+	result := c.check(ctx, configRaw, timeoutSeconds)
+	return newSecretRedactor(syntheticSecretValues(configRaw)).redactResult(result)
+}
+
+func (c *SyntheticBrowserChecker) check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
 	var config models.SyntheticBrowserMonitorConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		errMsg := fmt.Sprintf("failed to unmarshal synthetic_browser config: %v", err)
@@ -103,10 +113,7 @@ func (c *SyntheticBrowserChecker) Check(ctx context.Context, configRaw json.RawM
 		failureMode = "fail_fast"
 	}
 
-	vars := make(map[string]string, len(config.Variables))
-	for key, value := range config.Variables {
-		vars[key] = value
-	}
+	vars := mergeSyntheticVariables(config.Variables, config.SecretVariables)
 
 	resolvedStartURL, err := interpolateTemplate(config.StartURL, vars)
 	if err != nil {

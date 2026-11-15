@@ -453,14 +453,14 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "warning",
           title: "Three behavior changes to expect",
           text:
-            "Monitors using Uptime Kuma's \"upside down\" mode are skipped, because inverted up/down cannot be expressed and importing one would alert backwards. Push monitors receive a new token, so every heartbeat sender must be repointed at the new URL before the monitor is enabled. Database monitors are imported disabled: their password is deliberately not carried over, and the per-monitor notes name what to re-enter.",
+            "Monitors using Uptime Kuma's \"upside down\" mode are skipped, because inverted up/down cannot be expressed and importing one would alert backwards. Push monitors receive a new token, so every heartbeat sender must be repointed at the new URL before the monitor is enabled. Database monitors are imported disabled: their password is deliberately not carried over, and the per-monitor notes name what to re-enter. An HTTP monitor whose basic-auth username arrives without its password (`scripts/kuma-export` redacts it) is imported disabled too, with a note to re-enter the basic auth password.",
         },
         {
           type: "callout",
           tone: "info",
           title: "Notifications and credentials are never migrated",
           text:
-            "Uptime Kuma notifier configuration holds credentials, so `notificationIDList` is ignored and each affected monitor carries a note naming the notifiers it referenced — attach alert channels after import. HTTP basic, OAuth2, NTLM, and client-certificate auth are dropped rather than folded into request headers, which are stored unencrypted, and credential-bearing headers are stripped. Monitor descriptions, retry intervals, resend intervals, and custom ICMP packet sizes have no equivalent and are reported as dropped.",
+            "Uptime Kuma notifier configuration holds credentials, so `notificationIDList` is ignored and each affected monitor carries a note naming the notifiers it referenced — attach alert channels after import. HTTP basic auth is carried into the monitor's `basic_auth_username` and encrypted `basic_auth_password` (an `Authorization` header Uptime Kuma replaced with it is dropped, as Kuma did), and credential-bearing request headers into the encrypted `secret_headers`; OAuth2, NTLM, and client-certificate auth are dropped and reported. Monitor descriptions, retry intervals, resend intervals, and custom ICMP packet sizes have no equivalent and are reported as dropped.",
         },
       ],
     },

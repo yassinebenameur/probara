@@ -41,13 +41,17 @@ redacts the *credential*, not the field, so the monitor is still importable:
 
 - Pure-secret fields are dropped: `basic_auth_pass`, `oauth_client_secret`,
   `tlsKey`, `radiusPassword`, `radiusSecret`, `mqttPassword`, `pushToken`.
+  An HTTP monitor that keeps its `basic_auth_user` without the password is
+  imported **disabled**, with a note to re-enter the basic auth password.
 - `databaseConnectionString` keeps its scheme, user, host, port, path, and
   query but loses the password. The importer builds a database monitor from
   what remains and creates it **disabled**, so it cannot page anyone before
   someone supplies the password.
-- `headers` loses credential-bearing entries (`Authorization`, `Cookie`,
-  `X-Api-Key`, anything containing `token`/`secret`/`apikey`/`password`) and
-  keeps the rest.
+- `headers` loses credential-bearing entries and keeps the rest. Credential
+  names follow the API's own rule (`secrets.IsSensitiveHeaderName`, listed in
+  `shared/secrets/testdata/sensitive_header_names.json`): `Authorization`,
+  `Proxy-Authorization`, `Cookie`, `X-Api-Key`, `Api-Key`, `X-Auth-Token`, and
+  anything containing `token`/`secret`/`password`/`apikey`/`api-key`.
 - Notifiers are reduced to `id` and `name`. Their configuration holds Slack
   webhooks and SMTP passwords, and notifications are never migrated, so the
   rest is dropped unconditionally — including under `-include-secrets`.

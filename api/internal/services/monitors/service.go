@@ -61,8 +61,13 @@ func (s *Service) ConfigureHistoryDependencies(groupResolver GroupResolver, stat
 }
 
 // prepareConfigForWrite merges write-only secret placeholders ("***"/empty =
-// keep the stored value; pass nil existing on create) and encrypts secret
-// fields. Configs for types without secret fields pass through unchanged.
+// keep the stored value; pass nil existing on create), moves credential-named
+// headers into the secret maps (secrets.NormalizeSensitiveHeaders, after the
+// merge so an absent secret map is restored before a moved header edits it),
+// refuses a merged config whose kept secrets conflict with the request, and
+// encrypts secret fields. Every monitor write (handlers, import, MCP, bulk)
+// goes through here. Configs for types without secret fields pass through
+// unchanged.
 func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming, existing json.RawMessage) (json.RawMessage, error) {
 	if !secrets.HasMonitorSecrets(string(monitorType)) {
 		return incoming, nil
@@ -70,6 +75,13 @@ func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming
 	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), incoming, existing)
 	if err != nil {
 		return nil, fmt.Errorf("merge config secrets: %w", err)
+	}
+	merged, _, err = secrets.NormalizeSensitiveHeaders(string(monitorType), merged)
+	if err != nil {
+		return nil, fmt.Errorf("normalize sensitive headers: %w", err)
+	}
+	if err := validation.ValidateMergedSecretPairs(monitorType, merged); err != nil {
+		return nil, fmt.Errorf("%w: %v (a stored secret was kept because the request omitted it; send \"\" to clear it, or leave it out of a submitted secret map)", ErrSecretConflict, err)
 	}
 	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
 	if err != nil {
@@ -91,6 +103,12 @@ func (s *Service) maskSecrets(monitor *models.Monitor) {
 }
 
 var ErrMonitorTypeMismatch = errors.New("test type must match the saved monitor type")
+
+// ErrSecretConflict reports a config that is only invalid once the write-only
+// merge restored a stored secret the request left out (basic auth beside a
+// kept Authorization secret header, a plain header beside a kept secret one).
+// Handlers map it to 400.
+var ErrSecretConflict = errors.New("config conflicts with stored secrets")
 
 // ErrCallMonitorForbidden refuses a SIP test-call (INVITE) monitor to anyone
 // but a tenant admin's session. Each check of such a monitor places a real,

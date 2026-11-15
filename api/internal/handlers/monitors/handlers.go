@@ -126,6 +126,10 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteForbiddenError(w, err.Error())
 			return
 		}
+		if errors.Is(err, monitorservice.ErrSecretConflict) {
+			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
@@ -333,6 +337,10 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, monitorservice.ErrTimeoutNotBelowInterval) {
+			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		if errors.Is(err, monitorservice.ErrSecretConflict) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}

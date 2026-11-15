@@ -6,7 +6,9 @@ import {
   CreateMonitorRequest,
   UpdateMonitorRequest,
 } from '@/lib/types';
-import { buildGrpcRequest, initialGrpcFormState } from '@/lib/monitor-form/network';
+import { buildGrpcRequest, grpcMetadataError, initialGrpcFormState } from '@/lib/monitor-form/network';
+import { isSensitiveHeaderName } from '@/lib/monitor-form/http';
+import SecretRowsEditor from './SecretRowsEditor';
 import FormField from '@/components/ui/FormField';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
@@ -46,6 +48,8 @@ export default function GrpcForm({
     if (!formData.name.trim()) newErrors.name = 'Name is required';
     if (!formData.host.trim()) newErrors.host = 'Host is required';
     if (formData.port < 1 || formData.port > 65535) newErrors.port = 'Port must be between 1 and 65535';
+    const metadataError = grpcMetadataError(formData.metadata);
+    if (metadataError) newErrors.metadata = metadataError;
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
@@ -137,6 +141,22 @@ export default function GrpcForm({
               <FieldHint>Optional. Passed to grpc.health.v1.Health/Check</FieldHint>
             </>
           )}
+        </FormField>
+
+        <FormField label="Metadata" error={errors.metadata}>
+          <SecretRowsEditor
+            rows={formData.metadata}
+            onChange={(metadata) => setFormData((prev) => ({ ...prev, metadata }))}
+            toggleable
+            forceSecret={isSensitiveHeaderName}
+            itemNoun="metadata entry"
+            namePlaceholder="x-tenant-id"
+            valuePlaceholder="Value"
+          />
+          <FieldHint>
+            Optional. Sent with the health RPC, e.g. an authorization token. Locked entries are stored encrypted and
+            never shown again.
+          </FieldHint>
         </FormField>
       </FormPanel>
 
