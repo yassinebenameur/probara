@@ -470,7 +470,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Reserved JSON keys are `status` and `error`; remaining keys are stored as metrics. Query-string values on GET are converted to integers, floating-point values, booleans, or strings when possible.",
+            "Reserved keys are `status` and `error`; remaining keys are stored as metrics. Query-string values (on `GET` and `POST`) are converted to integers, floating-point values, booleans, or strings when possible. A `POST` may combine both: the JSON body (sent with `Content-Type: application/json`) overrides the query string key by key, and any key the body omits keeps its query value, so `POST ?status=down` with a metrics-only body records a failure. The JSON body and the raw query string are each capped at 64 KiB; a larger body is rejected with HTTP 413 and a larger query string with HTTP 414, and nothing is recorded.",
         },
         {
           type: "table",
@@ -479,9 +479,10 @@ export const AGENTS_PAGE: DocPage = {
             ["`up`", "Success"],
             ["`down`", "Failure"],
             ["`error`", "Error"],
+            ["Omitted from both body and query string", "Success"],
             [
-              "Omitted or any other value",
-              "Success; validate client spelling instead of expecting rejection",
+              "Any other value",
+              "Rejected with HTTP 400; nothing is recorded",
             ],
           ],
         },
