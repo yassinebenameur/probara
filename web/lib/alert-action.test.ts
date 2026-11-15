@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   alertStatusLabel,
   describeAlertActionState,
+  openInProbaraHref,
   parseAlertActionResponse,
   readActionToken,
 } from './alert-action';
@@ -66,4 +67,14 @@ test('labels the alert status', () => {
   assert.equal(alertStatusLabel('active'), 'Active');
   assert.equal(alertStatusLabel('acknowledged'), 'Acknowledged');
   assert.equal(alertStatusLabel('resolved'), 'Resolved');
+});
+
+test('opens the alert itself when the API names it, else the Alerts page', () => {
+  const alert = { subject: 'API', label: 'Alert Triggered', status: 'active', triggered_at: 'x' };
+  const path = '/alerts?alert=b17c2e90-4a1d-4f3e-9c88-71f0a2d5c311&tenant=8f14e45f-ceea-467a-9f0b-2c1a3b4d5e6f';
+  assert.equal(openInProbaraHref({ state: 'pending', alert: { ...alert, open_path: path } }), path);
+  assert.equal(openInProbaraHref({ state: 'invalid' }), '/alerts');
+  assert.equal(openInProbaraHref(null), '/alerts');
+  assert.equal(openInProbaraHref({ state: 'pending', alert: { ...alert, open_path: 'https://evil.example/alerts?x' } }), '/alerts');
+  assert.equal(openInProbaraHref({ state: 'pending', alert: { ...alert, open_path: '//evil.example' } }), '/alerts');
 });

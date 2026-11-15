@@ -43,10 +43,11 @@ func TestAckLink(t *testing.T) {
 	})
 }
 
-// With a real-length token on a realistic origin the text stays within two
-// SMS segments' worth of characters, and however long the alert text, the
-// acknowledge link arrives whole inside Twilio's body limit: the text is
-// clipped, never the link.
+// A page texts only the acknowledge link, not the open-the-monitor link, and
+// with a real-length token on a realistic origin it stays near two SMS
+// segments' worth of characters. However long the alert text, the link
+// arrives whole inside Twilio's body limit: the text is clipped, never the
+// link. Without an acknowledge link the deep link stays.
 func TestAckLinkLength(t *testing.T) {
 	prev := plugin.CurrentRuntime()
 	t.Cleanup(func() { plugin.Configure(prev) })
@@ -54,13 +55,17 @@ func TestAckLinkLength(t *testing.T) {
 	plugin.Configure(plugin.Runtime{AppBaseURL: "https://probara.example.com", Links: plugintest.StaticSigner(token), Egress: prev.Egress})
 
 	req := plugintest.Cases(config(nil))[0].Req
+	deepLink := "https://probara.example.com/monitors/" + req.Event.Alert.MonitorID
 	b := sendBodies(t, req)[0]
 	ack := "Acknowledge: https://probara.example.com/alert-action#" + token
 	if !strings.HasSuffix(b, "\n"+ack) {
 		t.Fatalf("body does not end with the whole ack link:\n%s", b)
 	}
-	if n := len([]rune(b)); n > 320 {
-		t.Fatalf("a typical alert text is %d characters, more than two SMS segments:\n%s", n, b)
+	if strings.Contains(b, deepLink) {
+		t.Fatalf("a page with an ack link also texts the deep link:\n%s", b)
+	}
+	if n := len([]rune(b)); n > 240 {
+		t.Fatalf("a typical page is %d characters:\n%s", n, b)
 	}
 	t.Logf("%d runes:\n%s", len([]rune(b)), b)
 
@@ -71,5 +76,15 @@ func TestAckLinkLength(t *testing.T) {
 	}
 	if !strings.HasSuffix(b, "\n"+ack) {
 		t.Fatalf("long alert lost the whole ack link:\n%s", b)
+	}
+
+	var resolved plugin.DispatchRequest
+	for _, c := range plugintest.Cases(config(nil)) {
+		if c.Name == "resolved" {
+			resolved = c.Req
+		}
+	}
+	if b = sendBodies(t, resolved)[0]; !strings.Contains(b, deepLink) {
+		t.Fatalf("a text without an ack link must keep the deep link:\n%s", b)
 	}
 }

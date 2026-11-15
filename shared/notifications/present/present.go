@@ -98,7 +98,7 @@ type Message struct {
 	ActionURL   string
 	ActionLabel string
 	// AckURL is the signed one-click acknowledge link and AckLabel its
-	// caption. Set only on pages that still ask for action; see ackFor.
+	// caption. Set only on created and reminder pages; see ackFor.
 	AckURL   string
 	AckLabel string
 
@@ -247,15 +247,26 @@ func followedUpPage(alert notifications.AlertDetails) string {
 // the alert's own workspace.
 func suspectedCauseAction(event notifications.AlertEvent, appBaseURL string) (string, string) {
 	base := strings.TrimRight(strings.TrimSpace(appBaseURL), "/")
-	id := strings.TrimSpace(event.Alert.ID)
-	if base == "" || id == "" {
+	path := AlertPath(event.Alert.ID, event.TenantID)
+	if base == "" || path == "" {
 		return "", ""
 	}
+	return base + path, "Review the triage"
+}
+
+// AlertPath is the operator-UI path that opens one alert on the Alerts page
+// in its workspace (web/lib/alert-links.ts parses it), or "" without an
+// alert ID.
+func AlertPath(alertID, tenantID string) string {
+	id := strings.TrimSpace(alertID)
+	if id == "" {
+		return ""
+	}
 	q := url.Values{"alert": {id}}
-	if tenant := strings.TrimSpace(event.TenantID); tenant != "" {
+	if tenant := strings.TrimSpace(tenantID); tenant != "" {
 		q.Set("tenant", tenant)
 	}
-	return base + "/alerts?" + q.Encode(), "Review the triage"
+	return "/alerts?" + q.Encode()
 }
 
 // Severity maps the tone onto the three-level scale paging providers use.

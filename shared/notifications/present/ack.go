@@ -45,9 +45,11 @@ type Options struct {
 	ChannelID string
 }
 
-// ackFor mints the acknowledge link. Only a page that still asks for action
-// carries one: a created or reminder event of an alert that is neither
-// resolved nor already acknowledged. It also needs the operator-UI origin, a
+// ackFor mints the acknowledge link. Only a page carries one: a created or
+// reminder event of an alert that is not resolved. The senders build those
+// events with status "active" and stop sending them once an alert is
+// acknowledged, so the "acknowledged" check below is a defensive guard, not
+// something production relies on. It also needs the operator-UI origin, a
 // signer and the delivering channel; with any of them missing, or a signer
 // that cannot mint (no key, an alert ID that is not a real alert's), there is
 // no link rather than a broken one.

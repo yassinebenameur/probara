@@ -1,7 +1,6 @@
 // Package plugintest holds the acknowledge-link cases every builtin plugin's
 // tests run, so each channel is held to the same rule: the link appears on
-// created and reminder pages of an alert that still needs acknowledging, and
-// nowhere else.
+// created and reminder pages and nowhere else (paging plugins: never).
 package plugintest
 
 import (
@@ -82,9 +81,6 @@ func Cases(config map[string]any) []Case {
 			r.Event.Alert.Status = "resolved"
 			r.Event.Alert.ResolvedAt = &resolvedAt
 		}), Runtime: linked},
-		{Name: "reminder of an acknowledged alert", Req: req(present.EventReminder, func(r *plugin.DispatchRequest) {
-			r.Event.Alert.Status = "acknowledged"
-		}), Runtime: linked},
 		{Name: "suspected cause follow-up", Req: req(present.EventSuspectedCause, nil), Runtime: linked},
 		{Name: "channel test send", Req: req(present.EventCreated, func(r *plugin.DispatchRequest) { r.Test = true }), Runtime: linked},
 		{Name: "no APP_BASE_URL", Req: req(present.EventCreated, nil), Runtime: plugin.Runtime{Links: StaticSigner(AckToken)}},
@@ -97,6 +93,18 @@ func Cases(config map[string]any) []Case {
 // it should be, under the runtime the case installs.
 func CheckAckLink(t *testing.T, config map[string]any, render func(t *testing.T, req plugin.DispatchRequest) string) {
 	t.Helper()
+	check(t, config, render, true)
+}
+
+// CheckNoAckLink is CheckAckLink for paging plugins, which never render the
+// link: people acknowledge in the paging tool.
+func CheckNoAckLink(t *testing.T, config map[string]any, render func(t *testing.T, req plugin.DispatchRequest) string) {
+	t.Helper()
+	check(t, config, render, false)
+}
+
+func check(t *testing.T, config map[string]any, render func(t *testing.T, req plugin.DispatchRequest) string, renders bool) {
+	t.Helper()
 	prev := plugin.CurrentRuntime()
 	t.Cleanup(func() { plugin.Configure(prev) })
 	for _, tc := range Cases(config) {
@@ -107,10 +115,11 @@ func CheckAckLink(t *testing.T, config map[string]any, render func(t *testing.T,
 			plugin.Configure(rt)
 			out := render(t, tc.Req)
 			has := strings.Contains(out, AckURL)
-			if tc.WantAck && !has {
+			want := tc.WantAck && renders
+			if want && !has {
 				t.Fatalf("missing the acknowledge link %s:\n%s", AckURL, out)
 			}
-			if !tc.WantAck && (has || strings.Contains(out, AckToken) || strings.Contains(out, present.AckPath)) {
+			if !want && (has || strings.Contains(out, AckToken) || strings.Contains(out, present.AckPath)) {
 				t.Fatalf("carries an acknowledge link it must not:\n%s", out)
 			}
 		})

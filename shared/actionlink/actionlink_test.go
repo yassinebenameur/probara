@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,6 +138,27 @@ func TestWrongTenantRejected(t *testing.T) {
 	copy(raw[2:18], other[:])
 	if _, err := s.Verify(base64.RawURLEncoding.EncodeToString(raw), ActionAcknowledge); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("re-pointed tenant: err = %v, want ErrInvalid", err)
+	}
+}
+
+// The last character carries two unused bits; only the canonical spelling
+// verifies, so a token has exactly one form.
+func TestTrailingCharacterVariantsRejected(t *testing.T) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	s := signerAt(keyring{1: key1}, t0)
+	tok := mint(t, s, t0)
+	last := strings.IndexByte(alphabet, tok[len(tok)-1])
+	if last < 0 || last&3 != 0 {
+		t.Fatalf("canonical last character %q must have its two unused bits clear", tok[len(tok)-1])
+	}
+	for low := 1; low <= 3; low++ {
+		variant := tok[:len(tok)-1] + string(alphabet[last|low])
+		if _, err := s.Verify(variant, ActionAcknowledge); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("variant %q verified (err %v); only %q may", variant[len(variant)-3:], err, tok[len(tok)-3:])
+		}
+	}
+	if _, err := s.Verify(tok, ActionAcknowledge); err != nil {
+		t.Fatalf("canonical token: %v", err)
 	}
 }
 

@@ -268,7 +268,7 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`twilio_sms`",
               "`account_sid`, optional `api_key_sid`, `auth_token` (API key secret or account token), `from` number or Messaging Service SID, up to 10 E.164 `to` numbers",
-              "One SMS per recipient per event, the short form of the alert plus the deep link and, on pages, the [acknowledge link](#acknowledge-links)",
+              "One SMS per recipient per event, the short form of the alert plus the deep link, or on pages the [acknowledge link](#acknowledge-links) in its place",
             ],
             [
               "`generic_webhook`",
@@ -280,7 +280,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not. Pages also carry a one-click [acknowledge link](#acknowledge-links) on every channel.",
+            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not. Pages also carry a one-click [acknowledge link](#acknowledge-links) on every channel except PagerDuty and Opsgenie.",
         },
         {
           type: "table",
@@ -340,7 +340,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. A page of an alert nobody has acknowledged yet also carries an **Acknowledge** button, which then leads and the open-the-monitor button sits beside it, and the plain-text part carries the same [acknowledge link](#acknowledge-links). `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
+            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. A page (created or reminder) also carries an **Acknowledge** button, which then leads and the open-the-monitor button sits beside it, and the plain-text part carries the same [acknowledge link](#acknowledge-links). `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
         },
         {
           type: "table",
@@ -374,17 +374,17 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every page of an alert that still needs acknowledging — the `created` notification and each `reminder` — carries a signed one-click acknowledge link, on every channel. The link opens a page in the operator UI that works without signing in: it shows the monitor, what kind of alert it is, its state and since when, and an **Acknowledge alert** button. Opening the link never acknowledges anything; only pressing the button does, because mail scanners and chat link previews open every link they see. The acknowledgement is the same as one made on the Alerts page: the alert's state and time, the live alert stream and the acknowledgement sent to PagerDuty and Opsgenie all follow from it.",
+            "Every page — the `created` notification and each `reminder` — carries a signed one-click acknowledge link on chat, email, SMS and webhook channels. PagerDuty and Opsgenie never carry it: acknowledge in the paging tool there. The link opens a page in the operator UI that works without signing in: it shows the monitor, what kind of alert it is, its state and since when, and an **Acknowledge alert** button. Opening the link never acknowledges anything; only pressing the button does, because mail scanners and chat link previews open every link they see. The acknowledgement is the same as one made on the Alerts page: the alert's state and time, the live alert stream and the acknowledgement sent to PagerDuty and Opsgenie all follow from it.",
         },
         {
           type: "list",
           items: [
             "The link acknowledges, and nothing else: it cannot resolve the alert or change anything about it, its monitor or its routing.",
             "It is valid for 72 hours from when the notification was built. Each reminder carries a fresh link.",
-            "Resolve notices, acknowledgement notices, suspected-cause follow-ups, channel test sends and pages of an alert already acknowledged carry no link.",
+            "Resolve notices, acknowledgement notices, suspected-cause follow-ups and channel test sends carry no link. An acknowledged alert stops sending reminders (only its resolve notice follows), so nothing sent after an acknowledgement carries one; links already delivered still open the page, which then says the alert is already acknowledged.",
             "It needs both `APP_BASE_URL` (the link points at the operator UI) and `PROBARA_SECRETS_KEY` (it is signed with a key derived from it). Without either, notifications carry no acknowledge link.",
-            "Opening a link for an alert someone already acknowledged says so; that is not an error. A resolved alert, an expired link and an invalid link each get their own message, with a way to the Alerts page.",
-            "The audit log records each use as `alert.acknowledge` on the alert, with the actor shown as `link sent to <channel name>` and `details.via` `acknowledge_link`, `details.channel_id` and `details.channel_name`.",
+            "Opening a link for an alert someone already acknowledged says so; that is not an error. A resolved alert, an expired link and an invalid link each get their own message. Every state offers an **Open in Probara** link onward, to that alert on the Alerts page (or to the Alerts page when the link is expired or invalid), which works for anyone signed in to the workspace.",
+            "The audit log records the use that acknowledged as `alert.acknowledge` on the alert (repeat uses of a link write nothing), with the actor shown as `link sent to <channel name>` and `details.via` `acknowledge_link`, `details.channel_id` and `details.channel_name`.",
           ],
         },
         {
@@ -396,10 +396,9 @@ export const ALERTING_PAGE: DocPage = {
             ["Microsoft Teams", "**Acknowledge** action on both the Adaptive Card and the legacy MessageCard"],
             ["Discord", "Bold **Acknowledge** link in the embed text (plain webhooks cannot post buttons)"],
             ["Telegram", "**Acknowledge** link above the open-the-monitor link"],
-            ["SMS (Twilio)", "Last line, `Acknowledge: <link>`. The link is never cut: a long alert text is shortened instead. Expect a page to take several SMS segments"],
+            ["SMS (Twilio)", "Last line, `Acknowledge: <link>`, in place of the open-the-monitor link (a text without an acknowledge link keeps that one). The link is never cut: a long alert text is shortened instead. Expect a page to take more than one SMS segment"],
             ["Generic webhook", "`alert.links.acknowledge`; the field is absent when the delivery carries no link"],
-            ["PagerDuty", "An `Acknowledge in Probara` entry in the event's `links`. Acknowledging there reaches PagerDuty as the usual acknowledgement"],
-            ["Opsgenie / JSM", "An `Acknowledge in Probara` detail and a line in the description"],
+            ["PagerDuty, Opsgenie / JSM", "None: acknowledge in the paging tool"],
           ],
         },
         {

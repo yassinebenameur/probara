@@ -186,7 +186,10 @@ func (s *Signer) Verify(token, action string) (Claims, error) {
 	if len(token) != EncodedLen {
 		return Claims{}, ErrInvalid
 	}
-	buf, err := base64.RawURLEncoding.DecodeString(token)
+	// Strict: the last character of a 71-byte token carries two unused
+	// bits, and the lenient decoder would accept four spellings of one
+	// token. Exactly one encoding verifies.
+	buf, err := base64.RawURLEncoding.Strict().DecodeString(token)
 	if err != nil || len(buf) != tokenBytes || buf[0] != formatV1 {
 		return Claims{}, ErrInvalid
 	}

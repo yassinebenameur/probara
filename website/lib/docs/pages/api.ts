@@ -547,11 +547,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/alert-actions/acknowledge`",
-              "Public; token in `X-Action-Token`. Describes the alert a notification's [acknowledge link](/docs/alerting/#acknowledge-links) names and never changes it: `state` `pending`, `already` or `resolved` (HTTP 200) with `alert` (`subject`, `label`, `status`, `triggered_at`, `acknowledged_at`) and `expires_at`, `expired` (410) or `invalid` (404) with nothing else",
+              "Public; token in `X-Action-Token`. Describes the alert a notification's [acknowledge link](/docs/alerting/#acknowledge-links) names and never changes it: `state` `pending`, `already` or `resolved` (HTTP 200) with `alert` (`subject`, `label`, `status`, `triggered_at`, `acknowledged_at`, and `open_path`, the alert's relative Alerts-page link) and `expires_at`, `expired` (410) or `invalid` (404) with nothing else",
             ],
             [
               "`POST /api/v1/alert-actions/acknowledge`",
-              "Public; token in `X-Action-Token`. Acknowledges that alert: `acknowledged` or, for an alert already acknowledged, `already` (both 200), `resolved` (409), `expired` (410), `invalid` (404). Audited as `alert.acknowledge`",
+              "Public; token in `X-Action-Token`. Acknowledges that alert: `acknowledged` or, for an alert already acknowledged, `already` (both 200), `resolved` (409), `expired` (410), `invalid` (404). Only a POST that acknowledges (or fails with a server error) is audited, as `alert.acknowledge`",
             ],
             [
               "`POST /api/v1/alerts/{id}/resolve`",

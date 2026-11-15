@@ -67,7 +67,7 @@ func newAlertView(event notifications.AlertEvent, appBaseURL string) alertView {
 
 // withAck adds this delivery's acknowledge link (minted by Send, carried in
 // templates) on the events present gives one to: a created or reminder page
-// of an alert that is neither resolved nor acknowledged.
+// of an alert that is not resolved.
 func (v alertView) withAck(templates Templates) alertView {
 	if templates.AckURL == "" || v.Resolved || v.Message.EventType != present.EventCreated && v.Message.EventType != present.EventReminder {
 		return v

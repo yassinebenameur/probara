@@ -10,6 +10,7 @@ import {
   ALERT_ACTION_PATH,
   alertStatusLabel,
   describeAlertActionState,
+  openInProbaraHref,
   parseAlertActionResponse,
   readActionToken,
   type AlertActionResponse,
@@ -146,9 +147,14 @@ export default function AlertActionPage() {
               </>
             )}
 
+            {/* For people signed in to the workspace; it adds nothing a
+                link holder does not already have (the IDs are in the token). */}
             <div className="text-center text-xs">
-              <Link href="/alerts" className="text-slate-400 underline-offset-2 hover:text-slate-200 hover:underline">
-                Open the Alerts page
+              <Link
+                href={openInProbaraHref(data)}
+                className="text-slate-400 underline-offset-2 hover:text-slate-200 hover:underline"
+              >
+                Open in Probara
               </Link>
             </div>
           </div>

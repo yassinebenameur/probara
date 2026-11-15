@@ -19,6 +19,8 @@ export type AlertActionResponse = {
     status: string;
     triggered_at: string;
     acknowledged_at?: string;
+    /** `/alerts?alert=<id>&tenant=<id>`: the alert on the Alerts page (lib/alert-links.ts). */
+    open_path?: string;
   };
   expires_at?: string;
 };
@@ -77,6 +79,16 @@ export function describeAlertActionState(state: AlertActionState): AlertActionCo
         text: 'This link is incomplete or no longer valid. Sign in to find the alert on the Alerts page.',
       };
   }
+}
+
+/**
+ * Where "Open in Probara" goes: the alert on the Alerts page when the API
+ * named it, else the Alerts page. Only an `/alerts?` path is followed, so a
+ * response can never send the visitor off-site.
+ */
+export function openInProbaraHref(data: AlertActionResponse | null): string {
+  const path = data?.alert?.open_path ?? '';
+  return path.startsWith('/alerts?') ? path : '/alerts';
 }
 
 /** The alert's own status as the page shows it. */

@@ -223,11 +223,6 @@ func buildEvent(routingKey, dedupKey, action string, m present.Message) event {
 		ev.ClientURL = m.ActionURL
 		ev.Links = []link{{Href: m.ActionURL, Text: m.ActionLabel}}
 	}
-	if m.AckURL != "" {
-		// Acknowledging there syncs back here as an "acknowledged" event,
-		// like any other acknowledgement in Probara.
-		ev.Links = append(ev.Links, link{Href: m.AckURL, Text: m.AckLabel + " in Probara"})
-	}
 	return ev
 }
 

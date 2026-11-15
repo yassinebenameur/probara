@@ -170,6 +170,9 @@ func TestGetDescribesAndNeverAcknowledges(t *testing.T) {
 		if resp.Alert == nil || resp.Alert.Subject != monitorN || resp.Alert.Label != "Alert Triggered" || resp.Alert.Status != "active" || resp.ExpiresAt == nil {
 			t.Fatalf("summary = %+v", resp)
 		}
+		if want := "/alerts?alert=" + alertID.String() + "&tenant=" + tenantA.String(); resp.Alert.OpenPath != want {
+			t.Fatalf("open_path = %q, want %q", resp.Alert.OpenPath, want)
+		}
 	}
 	if h.alerts.acks != 0 || h.alerts.status != models.AlertStatusActive || len(h.audit.events) != 0 || h.hub.acked != 0 {
 		t.Fatalf("GET acted: acks=%d status=%s audit=%d hub=%d", h.alerts.acks, h.alerts.status, len(h.audit.events), h.hub.acked)
@@ -195,20 +198,44 @@ func TestPostAcknowledgesOnceAndIsIdempotent(t *testing.T) {
 		t.Fatalf("acks = %d, broadcasts = %d; want exactly one each", h.alerts.acks, h.hub.acked)
 	}
 
-	// Both POSTs are audited against the alert, attributed to the channel's
-	// link; only the first succeeded.
-	if len(h.audit.events) != 2 {
-		t.Fatalf("audit events = %d, want 2", len(h.audit.events))
+	// Only the POST that acknowledged is audited, attributed to the
+	// channel's link; the replay writes nothing.
+	if len(h.audit.events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(h.audit.events))
 	}
-	ok, replay := h.audit.events[0], h.audit.events[1]
+	ok := h.audit.events[0]
 	if ok.Action != "alert.acknowledge" || ok.ResourceType != "alert" || ok.ResourceID != alertID.String() ||
 		ok.TenantID == nil || *ok.TenantID != tenantA || ok.Outcome != audit.OutcomeSuccess ||
 		ok.ActorType != audit.ActorAnonymous || ok.ActorLabel != "link sent to On-call email" ||
 		ok.Details["channel_id"] != channel.String() || ok.Details["channel_name"] != "On-call email" || ok.Details["via"] != ViaLink {
 		t.Fatalf("success audit = %+v", ok)
 	}
-	if replay.Outcome != audit.OutcomeFailure || replay.Details["reason"] != StateAlready {
-		t.Fatalf("replay audit = %+v", replay)
+	if _, has := ok.Details["reason"]; has {
+		t.Fatalf("success audit carries a reason: %+v", ok.Details)
+	}
+}
+
+// One forwarded link opened many times must not flood the shared audit
+// queue: refusals of a genuine token write nothing.
+func TestRepeatUsesWriteNoAudit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status models.AlertStatus
+		issued time.Time
+	}{
+		"already acknowledged": {models.AlertStatusAcknowledged, time.Now()},
+		"resolved":             {models.AlertStatusResolved, time.Now()},
+		"expired":              {models.AlertStatusActive, time.Now().Add(-actionlink.TTL - time.Hour)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(tc.status)
+			tok := tokenFor(t, tenantA, alertID, tc.issued)
+			for i := 0; i < 5; i++ {
+				h.do(t, http.MethodPost, tok)
+			}
+			if len(h.audit.events) != 0 {
+				t.Fatalf("audit events = %d, want none: %+v", len(h.audit.events), h.audit.events)
+			}
+		})
 	}
 }
 

@@ -167,8 +167,8 @@ type alertLinks struct {
 }
 
 // payload is the webhook body: the raw AlertEvent, plus alert.links when
-// this delivery carries an acknowledge link (created and reminder pages of an
-// unacknowledged alert, never test sends).
+// this delivery carries an acknowledge link (created and reminder pages,
+// never test sends).
 func payload(req plugin.DispatchRequest) any {
 	ack := req.View().AckURL
 	if ack == "" {

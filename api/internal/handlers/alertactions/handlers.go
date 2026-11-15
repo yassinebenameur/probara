@@ -155,6 +155,10 @@ type AlertSummary struct {
 	Status         string     `json:"status"`
 	TriggeredAt    time.Time  `json:"triggered_at"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+	// OpenPath opens this alert on the Alerts page for someone signed in to
+	// the workspace. It names only the alert and tenant IDs, which the token
+	// the caller holds already carries in the clear.
+	OpenPath string `json:"open_path"`
 }
 
 // lookup is a verified token, its channel and the alert it names.
@@ -314,6 +318,7 @@ func summarize(a *models.AlertWithDetails) *AlertSummary {
 		Status:         string(a.Status),
 		TriggeredAt:    a.TriggeredAt,
 		AcknowledgedAt: a.AcknowledgedAt,
+		OpenPath:       present.AlertPath(a.ID.String(), a.TenantID.String()),
 	}
 	name := func(p *string) string {
 		if p == nil {
@@ -334,12 +339,18 @@ func summarize(a *models.AlertWithDetails) *AlertSummary {
 	return s
 }
 
-// record audits a POST that carried an authentic token, as
-// alert.acknowledge on the alert, attributed to the link and the channel it
-// was sent to rather than to a user. Forged tokens name no trustworthy
-// tenant, so they are not audited.
+// record audits the POST that acknowledged (and server errors on an
+// authentic token) as alert.acknowledge on the alert, attributed to the link
+// and the channel it was sent to rather than to a user. Repeat uses of a
+// link ("already", "resolved", "expired") write nothing: one forwarded link
+// opened many times must not flood the audit queue, which every workspace
+// shares and which drops when full. Forged tokens name no trustworthy
+// tenant, so they are never audited.
 func (h *Handlers) record(r *http.Request, l lookup, status int) {
 	if h.audit == nil || !l.authentic {
+		return
+	}
+	if l.state != StateAcknowledged && status < http.StatusInternalServerError {
 		return
 	}
 	tenantID := l.claims.TenantID
@@ -362,13 +373,9 @@ func (h *Handlers) record(r *http.Request, l lookup, status int) {
 	if l.channelName != "" {
 		details["channel_name"] = l.channelName
 	}
-	switch {
-	case status >= http.StatusInternalServerError:
+	if status >= http.StatusInternalServerError {
 		event.Outcome = audit.OutcomeFailure
 		details["reason"] = "internal_error"
-	case l.state != StateAcknowledged:
-		event.Outcome = audit.OutcomeFailure
-		details["reason"] = l.state
 	}
 	event.MergeDetails(details)
 	h.audit.Record(event)

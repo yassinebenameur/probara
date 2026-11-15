@@ -8,10 +8,10 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/internal/plugintest"
 )
 
-// The create request carries the acknowledge link in its details and
-// description.
-func TestAckLink(t *testing.T) {
-	plugintest.CheckAckLink(t, nil, func(t *testing.T, req plugin.DispatchRequest) string {
+// People acknowledge in Opsgenie itself, so its alerts never carry the
+// acknowledge link, even when the view has one.
+func TestNoAckLink(t *testing.T) {
+	plugintest.CheckNoAckLink(t, nil, func(t *testing.T, req plugin.DispatchRequest) string {
 		raw, err := json.Marshal(buildCreate(Alias(req.Event.Alert.ID), "P1", req.View()))
 		if err != nil {
 			t.Fatal(err)

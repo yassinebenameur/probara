@@ -62,7 +62,8 @@ func TestNoAckLink(t *testing.T) {
 		{"resolved", func() Message { return BuildWith(resolved, EventResolved, linkedOptions(s)) }},
 		{"resolved status on a reminder", func() Message { return BuildWith(resolved, EventReminder, linkedOptions(s)) }},
 		{"acknowledged event", func() Message { return BuildWith(sample(), EventAcknowledged, linkedOptions(s)) }},
-		{"reminder of an acknowledged alert", func() Message { return BuildWith(acked, EventReminder, linkedOptions(s)) }},
+		// Defensive only: senders never build a page with this status.
+		{"guard: event status acknowledged", func() Message { return BuildWith(acked, EventReminder, linkedOptions(s)) }},
 		{"suspected cause", func() Message { return BuildWith(sample(), EventSuspectedCause, linkedOptions(s)) }},
 		{"no signer", func() Message {
 			return BuildWith(sample(), EventCreated, Options{AppBaseURL: "https://probara.example.com", ChannelID: "c-1"})
