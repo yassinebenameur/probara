@@ -409,3 +409,27 @@ when the chart's ingress terminates TLS, else 0 (off).
 0
 {{- end -}}
 {{- end }}
+
+{{/*
+Worker pod securityContext: podSecurityContext plus, when
+worker.pingGroupRange is set, the net.ipv4.ping_group_range sysctl that
+unprivileged ICMP sockets need (ping monitors). Shared by the default worker
+fleet and every location worker. A ping_group_range entry already in
+podSecurityContext.sysctls wins.
+*/}}
+{{- define "monitoring-platform.workerPodSecurityContext" -}}
+{{- $psc := deepCopy (default dict .Values.podSecurityContext) -}}
+{{- with .Values.worker.pingGroupRange -}}
+{{- $sysctls := list -}}
+{{- $present := false -}}
+{{- range ($psc.sysctls | default list) -}}
+{{- $sysctls = append $sysctls . -}}
+{{- if eq .name "net.ipv4.ping_group_range" }}{{ $present = true }}{{ end -}}
+{{- end -}}
+{{- if not $present -}}
+{{- $sysctls = append $sysctls (dict "name" "net.ipv4.ping_group_range" "value" (toString .)) -}}
+{{- end -}}
+{{- $_ := set $psc "sysctls" $sysctls -}}
+{{- end -}}
+{{- toYaml $psc -}}
+{{- end -}}

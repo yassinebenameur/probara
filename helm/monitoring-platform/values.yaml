@@ -509,6 +509,14 @@ worker:
   # (Kubernetes EnvVar entries), e.g. HTTP_ALLOWED_CIDRS or check tuning.
   # Individual locations entries may also carry their own extraEnv list.
   extraEnv: []
+  # Ping monitors send ICMP echoes over unprivileged "ping" sockets (never raw
+  # sockets: no NET_RAW, no root). Linux allows them only to groups inside
+  # net.ipv4.ping_group_range, which the default worker fleet and every
+  # location worker get as a pod sysctl. It is a namespaced "safe" sysctl,
+  # allowed by the kubelet without flags. Set "" to leave the node runtime's
+  # value (containerd 2.x already opens it to every group); a worker outside
+  # the range reports ping checks as errors naming the sysctl.
+  pingGroupRange: "0 2147483647"
 
 # =============================================================================
 # ALERTER SERVICE

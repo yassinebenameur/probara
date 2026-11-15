@@ -329,3 +329,33 @@ func TestServerChosenRangesStayOutOfSharedTable(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyResolveAllowed(t *testing.T) {
+	ctx := context.Background()
+	blocking := Policy{BlockPrivate: true}
+
+	// IP literals, both families, stand for themselves.
+	for _, literal := range []string{"192.0.2.1", "2001:db8::1"} {
+		got, err := Policy{}.ResolveAllowed(ctx, literal)
+		if err != nil || len(got) != 1 || !got[0].Equal(net.ParseIP(literal)) {
+			t.Fatalf("ResolveAllowed(%s) = %v, %v", literal, got, err)
+		}
+	}
+	for _, literal := range []string{"127.0.0.1", "::1", "10.1.2.3", "fd00::1"} {
+		if _, err := blocking.ResolveAllowed(ctx, literal); !errors.Is(err, ErrBlocked) {
+			t.Fatalf("blocking ResolveAllowed(%s) err = %v, want ErrBlocked", literal, err)
+		}
+	}
+
+	// A name resolving only to loopback is refused under the policy, and
+	// allowed through an AllowedCIDRs entry.
+	if _, err := blocking.ResolveAllowed(ctx, "localhost"); !errors.Is(err, ErrBlocked) {
+		t.Fatalf("blocking ResolveAllowed(localhost) err = %v, want ErrBlocked", err)
+	}
+	_, loopback4, _ := net.ParseCIDR("127.0.0.0/8")
+	_, loopback6, _ := net.ParseCIDR("::1/128")
+	got, err := Policy{BlockPrivate: true, AllowedCIDRs: []*net.IPNet{loopback4, loopback6}}.ResolveAllowed(ctx, "localhost")
+	if err != nil || len(got) == 0 || !got[0].IsLoopback() {
+		t.Fatalf("allow-listed ResolveAllowed(localhost) = %v, %v", got, err)
+	}
+}

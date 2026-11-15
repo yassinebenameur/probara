@@ -110,7 +110,7 @@ export const MONITORS_PAGE: DocPage = {
           columns: ["Type", "What it verifies", "Scheduled active check"],
           rows: [
             ["`http`", "HTTP response, content, headers, JSON, TLS, and latency", "Yes"],
-            ["`ping`", "ICMP reachability", "Yes"],
+            ["`ping`", "ICMP echo: packet loss and round trip", "Yes"],
             ["`dns`", "DNS resolution and optional expected answers", "Yes"],
             ["`grpc`", "Standard gRPC health service status", "Yes"],
             ["`tcp`", "TCP connection and optional TLS handshake", "Yes"],
@@ -234,7 +234,7 @@ export const MONITORS_PAGE: DocPage = {
             ],
             [
               "`tls_min_days_valid`",
-              "Open a [`tls_expiry` alert](/docs/alerting/#host-and-mesh) when the leaf certificate has fewer remaining validity days; the check itself still passes",
+              "Open a [`tls_expiry` alert](/docs/alerting/#host-and-mesh) when the earliest-expiring certificate of the chain, the leaf or an intermediate the server presents, has fewer remaining validity days; the check itself still passes",
             ],
             [
               "`tls_server_name`",
@@ -260,6 +260,11 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
+            "Every failed or errored check that received a response stores it with the result, with no setting: the status line, the response headers and the first 8 KiB of the body, under 16 KiB in all. Redaction runs over the whole body before it is cut: the monitor's own secret headers, credential-named headers and basic auth, in every spelling the worker knows; credential-shaped body fields (JSON members, form and query parameters and `name: value` lines named like a token, secret, password, API key, session or cookie, and bearer or basic tokens); and the values of `Set-Cookie`, `Authorization`-style and session headers and of every header the monitor itself sends. Field redaction is best effort for credentials the worker does not know. A binary body is described (type and size), never stored, and text that holds NUL bytes or invalid UTF-8 is stored with replacement characters. The capture stays in the check result (kept 30 days), never in alert text, and the monitor's History tab shows it under each failed check. Successful checks store nothing extra.",
+        },
+        {
+          type: "paragraph",
+          text:
             "Display fields put facts from a JSON response on the monitors list, such as a deployed `version` or `checks.db`. Configure them under Show values in monitor list, in the form's Labels & display section. They are resolved on every check, including failed ones, and shown as chips from the latest result (a chip without a label shows only the value), with the full value in the preview panel. A path that is missing or a body that is not JSON shows nothing and never fails the check. Scalars are shown as text and objects or arrays as raw JSON, cut to 64 characters. Each value is stored with its check result for the raw result retention window and is visible to anyone who can read the monitor, so do not point a display field at sensitive data.",
         },
         {
@@ -281,7 +286,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "Ping",
               description:
-                "Set `host` to a hostname or IP address. The worker performs an ICMP reachability check; firewalls and worker privileges can affect results independently of application health.",
+                "Set `host` to a hostname or IP address. Each check sends `count` ICMP echoes (1–10, default 3, every existing ping monitor included) `interval_ms` apart (200–10,000, default 1,000) and fails when no echo is answered, when more than `max_packet_loss_pct` of them go unanswered (0 to below 100; unset fails only at 100% loss), or when the average round trip exceeds `max_rtt_ms`. Latency is the average round trip, and the result records the address pinged, echoes sent and answered, loss %, the gap used and min/avg/max round trip. The echoes always fit the timeout: the last one keeps up to 1 second (half a shorter timeout) for its reply, a default gap is shortened to fit (three echoes 250 ms apart under a 1-second timeout), and a save is refused when an explicit `interval_ms` would not fit or a default one would drop below 200 ms. The host is resolved once and vetted by the worker's [network policy](/docs/security/#ssrf-network-policy) like every dial (IPv4 preferred, else IPv6), and the echo goes to that address; a refused address is an `error`. Echoes use unprivileged ICMP sockets, never raw sockets, so on Linux the worker's group must be inside the `net.ipv4.ping_group_range` sysctl, which the Helm chart and Compose set ([deployment](/docs/deployment/#ping-sockets)); without it every ping check is an `error` that names the sysctl. Firewalls that drop ICMP still fail the check independently of application health.",
             },
             {
               term: "DNS",
@@ -296,7 +301,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "TCP",
               description:
-                "Set `host` and `port`; optionally enable TLS and `tls_skip_verify`. A successful connection, plus a successful TLS handshake when enabled, is healthy. No application payload is exchanged.",
+                "Set `host` and `port`; optionally enable `use_tls` for a TLS-wrapped port (443, 993, 5671, 6697, …). A successful connection, plus a successful TLS handshake when enabled, is healthy. No application payload is exchanged. With TLS the certificate is verified against the system trust store under the server name `tls_server_name` (default: the host); `tls_skip_verify` accepts self-signed or mismatched certificates. The certificate is recorded either way, and `tls_min_days_valid` (requires `use_tls`) opens a [`tls_expiry` alert](/docs/alerting/#host-and-mesh) like HTTPS: when the earliest-expiring certificate of the presented chain has fewer days left, while the check itself still passes. A trust store of your own (`tls_ca_pem`) is HTTP-only; a private CA needs `tls_skip_verify` on TCP.",
             },
             {
               term: "SIP",

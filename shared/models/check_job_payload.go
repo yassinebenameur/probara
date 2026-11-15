@@ -71,11 +71,6 @@ type HTTPMonitorConfig struct {
 	BasicAuthPassword string            `json:"basic_auth_password,omitempty"`
 }
 
-// PingMonitorConfig represents configuration for ping monitors
-type PingMonitorConfig struct {
-	Host string `json:"host"`
-}
-
 // DNSMonitorConfig represents configuration for DNS monitors
 type DNSMonitorConfig struct {
 	Host            string   `json:"host"`
@@ -97,16 +92,6 @@ type GRPCMonitorConfig struct {
 	// values are secrets (shared/secrets registry).
 	Metadata       map[string]string `json:"metadata,omitempty"`
 	SecretMetadata map[string]string `json:"secret_metadata,omitempty"`
-}
-
-// TCPMonitorConfig represents configuration for raw TCP connect monitors. It
-// validates that a host:port accepts a connection (route/SG/listener
-// reachability), optionally completing a TLS handshake.
-type TCPMonitorConfig struct {
-	Host          string `json:"host"`
-	Port          int    `json:"port"`
-	UseTLS        *bool  `json:"use_tls,omitempty"`         // perform a TLS handshake after connecting
-	TLSSkipVerify *bool  `json:"tls_skip_verify,omitempty"` // accept self-signed / mismatched certs
 }
 
 // GroupMonitorConfig represents configuration for group monitors

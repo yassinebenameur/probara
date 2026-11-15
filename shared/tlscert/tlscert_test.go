@@ -38,7 +38,146 @@ var pinFixtures = []struct {
 	{name: "top-level scalar", raw: `42`},
 	{name: "top-level null", raw: `null`},
 	{name: "empty object", raw: `{}`},
-	{name: "unrelated envelope", raw: `{"tcp":{"tls":{"days_until_expiry":3}}}`},
+	{name: "tcp only", raw: `{"tcp":{"host":"mail.example.com","port":465,"use_tls":true,"tls":{"not_after":"2027-03-01T00:00:00Z","days_until_expiry":90,"chain_not_after":"2026-12-01T00:00:00Z","chain_min_days":20,"chain_expiring_subject":"CN=Test R3"}}}`, want: "tcp"},
+	{name: "unrelated envelope", raw: `{"websocket":{"tls":{"days_until_expiry":3}}}`},
+}
+
+// expiryFixtures are certificate objects both Expiry readers must agree on
+// (TestExpiry, TestExpirySQLMatchesExpiry).
+var expiryFixtures = []struct {
+	name     string
+	cert     string
+	notAfter string
+	days     string
+	subject  string
+}{
+	{"chain earlier than leaf", `{"subject":"CN=svc","not_after":"2027-03-01T00:00:00Z","days_until_expiry":90,"chain_not_after":"2026-12-01T00:00:00Z","chain_min_days":20,"chain_expiring_subject":"CN=Test R3"}`, "2026-12-01T00:00:00Z", "20", "CN=Test R3"},
+	{"leaf is the earliest", `{"subject":"CN=svc","not_after":"2027-03-01T00:00:00Z","days_until_expiry":90,"chain_not_after":"2027-03-01T00:00:00Z","chain_min_days":90,"chain_expiring_subject":"CN=svc"}`, "2027-03-01T00:00:00Z", "90", "CN=svc"},
+	{"snapshot before chain capture", `{"subject":"CN=svc","not_after":"2027-03-01T00:00:00Z","days_until_expiry":90}`, "2027-03-01T00:00:00Z", "90", "CN=svc"},
+	{"empty chain_not_after falls back", `{"subject":"CN=svc","not_after":"2027-03-01T00:00:00Z","days_until_expiry":90,"chain_not_after":"","chain_min_days":1,"chain_expiring_subject":"CN=x"}`, "2027-03-01T00:00:00Z", "90", "CN=svc"},
+	{"null chain_not_after falls back", `{"not_after":"2027-03-01T00:00:00Z","chain_not_after":null}`, "2027-03-01T00:00:00Z", "", ""},
+	{"chain without days", `{"not_after":"2027-03-01T00:00:00Z","days_until_expiry":90,"chain_not_after":"2026-12-01T00:00:00Z"}`, "2026-12-01T00:00:00Z", "", ""},
+	{"nothing", `{}`, "", "", ""},
+}
+
+func TestExpiry(t *testing.T) {
+	for _, tt := range expiryFixtures {
+		t.Run(tt.name, func(t *testing.T) {
+			var info Info
+			if err := json.Unmarshal([]byte(tt.cert), &info); err != nil {
+				t.Fatal(err)
+			}
+			notAfter, days, subject := info.Expiry()
+			gotDays := ""
+			if days != nil {
+				gotDays = jsonNumber(*days)
+			}
+			if notAfter != tt.notAfter || gotDays != tt.days || subject != tt.subject {
+				t.Errorf("Expiry() = %q, %q, %q; want %q, %q, %q", notAfter, gotDays, subject, tt.notAfter, tt.days, tt.subject)
+			}
+		})
+	}
+}
+
+func jsonNumber(n int) string {
+	raw, _ := json.Marshal(n)
+	return string(raw)
+}
+
+// testCA issues certificates for chain tests.
+type testCA struct {
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+}
+
+func newCert(t *testing.T, cn string, notAfter time.Time, parent *testCA, isCA bool) *testCA {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              notAfter,
+		BasicConstraintsValid: true,
+		IsCA:                  isCA,
+	}
+	if isCA {
+		tmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
+	} else {
+		tmpl.DNSNames = []string{cn}
+		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	}
+	signer, signerKey := tmpl, key
+	if parent != nil {
+		signer, signerKey = parent.cert, parent.key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer, &key.PublicKey, signerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testCA{cert: cert, key: key}
+}
+
+func TestFromConnectionStateChainExpiry(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	root := newCert(t, "Test Root", now.Add(30*day), nil, true) // expires first, but is the trust anchor
+	inter := newCert(t, "Test Intermediate", now.Add(40*day), root, true)
+	leaf := newCert(t, "svc.example.com", now.Add(300*day), inter, false)
+
+	roots := x509.NewCertPool()
+	roots.AddCert(root.cert)
+	inters := x509.NewCertPool()
+	inters.AddCert(inter.cert)
+	chains, err := leaf.cert.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inters, DNSName: "svc.example.com", CurrentTime: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, cs := range map[string]tls.ConnectionState{
+		"verified chain":             {PeerCertificates: []*x509.Certificate{leaf.cert, inter.cert}, VerifiedChains: chains},
+		"verified, root sent too":    {PeerCertificates: []*x509.Certificate{leaf.cert, inter.cert, root.cert}, VerifiedChains: chains},
+		"skip-verify, root sent too": {PeerCertificates: []*x509.Certificate{leaf.cert, inter.cert, root.cert}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			info := FromConnectionState(cs, "svc.example.com", now)
+			if want := now.Add(40 * day).Format(time.RFC3339); info.ChainNotAfter != want {
+				t.Fatalf("chain_not_after = %s, want the intermediate's %s (never the root's)", info.ChainNotAfter, want)
+			}
+			if info.ChainMinDays == nil || *info.ChainMinDays != 40 {
+				t.Fatalf("chain_min_days = %v, want 40", info.ChainMinDays)
+			}
+			if info.ChainExpiringSubject != "CN=Test Intermediate" {
+				t.Fatalf("chain_expiring_subject = %q", info.ChainExpiringSubject)
+			}
+			if *info.DaysUntilExpiry != 300 {
+				t.Fatalf("leaf days = %d, want 300", *info.DaysUntilExpiry)
+			}
+			if notAfter, days, subject := info.Expiry(); notAfter != info.ChainNotAfter || *days != 40 || subject != "CN=Test Intermediate" {
+				t.Fatalf("Expiry() = %s %d %s", notAfter, *days, subject)
+			}
+		})
+	}
+
+	// The leaf expiring first is the chain's expiry too; a self-signed leaf
+	// is kept, and so is a leaf the trust store holds itself.
+	self := selfSignedCert(t, now.Add(-time.Hour), now.Add(10*day))
+	for name, cs := range map[string]tls.ConnectionState{
+		"unverified": {PeerCertificates: []*x509.Certificate{self}},
+		"trusted":    {PeerCertificates: []*x509.Certificate{self}, VerifiedChains: [][]*x509.Certificate{{self}}},
+	} {
+		info := FromConnectionState(cs, "", now)
+		if info.ChainNotAfter != info.NotAfter || *info.ChainMinDays != 10 || info.ChainExpiringSubject != info.Subject {
+			t.Fatalf("%s self-signed leaf: chain_not_after %s (leaf %s), days %d, subject %q", name, info.ChainNotAfter, info.NotAfter, *info.ChainMinDays, info.ChainExpiringSubject)
+		}
+	}
 }
 
 func TestExtractFixtures(t *testing.T) {
@@ -136,7 +275,7 @@ func TestFromConnectionState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"not_after"`, `"not_before"`, `"days_until_expiry"`, `"subject"`, `"issuer"`, `"serial_number"`, `"dns_names"`, `"ip_addresses"`, `"peer_certificates"`} {
+	for _, key := range []string{`"not_after"`, `"not_before"`, `"days_until_expiry"`, `"subject"`, `"issuer"`, `"serial_number"`, `"dns_names"`, `"ip_addresses"`, `"peer_certificates"`, `"chain_not_after"`, `"chain_min_days"`, `"chain_expiring_subject"`} {
 		if !strings.Contains(string(raw), key) {
 			t.Errorf("marshalled Info lacks %s: %s", key, raw)
 		}
@@ -180,4 +319,86 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 	ra, _ := json.Marshal(va)
 	rb, _ := json.Marshal(vb)
 	return string(ra) == string(rb)
+}
+
+// crossSign issues a certificate with subject's name and key, signed by
+// signer: a root cross-signed by an older root.
+func crossSign(t *testing.T, subject, signer *testCA, notAfter time.Time) *x509.Certificate {
+	t.Helper()
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               subject.cert.Subject,
+		NotBefore:             time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              notAfter,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer.cert, &subject.key.PublicKey, signer.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+// Without a verified chain (tls_skip_verify) the chain is the issuer path
+// from the leaf, not every presented certificate: a stale cross-signed root
+// the server still sends (ISRG Root X1 by the expired DST Root CA X3) must
+// not drive chain_min_days negative, and neither may an unrelated extra.
+func TestFromConnectionStateUnverifiedChainWalksIssuerPath(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	oldRoot := newCert(t, "Old Root", now.Add(-20*day), nil, true)
+	root := newCert(t, "Test Root X1", now.Add(3000*day), nil, true)
+	expiredCross := crossSign(t, root, oldRoot, now.Add(-16*day))
+	validCross := crossSign(t, root, oldRoot, now.Add(25*day))
+	inter := newCert(t, "Test R3", now.Add(60*day), root, true)
+	leaf := newCert(t, "svc.example.com", now.Add(80*day), inter, false)
+	stray := newCert(t, "Unrelated CA", now.Add(-5*day), nil, true)
+	strayInter := newCert(t, "Stray Intermediate", now.Add(-3*day), stray, true)
+
+	trusted := x509.NewCertPool()
+	trusted.AddCert(root.cert)
+	noRoots := func() *x509.CertPool { return x509.NewCertPool() }
+	withRoot := func() *x509.CertPool { return trusted }
+	defer func(orig func() *x509.CertPool) { trustedRoots = orig }(trustedRoots)
+
+	tests := []struct {
+		name        string
+		presented   []*x509.Certificate
+		roots       func() *x509.CertPool
+		wantSubject string
+		wantDays    int
+	}{
+		{"expired cross-sign of a trusted root is skipped", []*x509.Certificate{leaf.cert, inter.cert, expiredCross}, withRoot, "CN=Test R3", 60},
+		{"expired cross-sign of a presented root is skipped", []*x509.Certificate{leaf.cert, inter.cert, expiredCross, root.cert}, noRoots, "CN=Test R3", 60},
+		{"unrelated presented certificates are ignored", []*x509.Certificate{leaf.cert, strayInter.cert, inter.cert, stray.cert}, noRoots, "CN=Test R3", 60},
+		{"an unexpired cross-sign is on the path", []*x509.Certificate{leaf.cert, inter.cert, validCross}, withRoot, "CN=Test Root X1", 25},
+		{"the walk stops at an issuer not presented", []*x509.Certificate{leaf.cert}, noRoots, "CN=svc.example.com", 80},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trustedRoots = tt.roots
+			info := FromConnectionState(tls.ConnectionState{PeerCertificates: tt.presented}, "svc.example.com", now)
+			if info.ChainExpiringSubject != tt.wantSubject {
+				t.Fatalf("chain_expiring_subject = %q, want %q", info.ChainExpiringSubject, tt.wantSubject)
+			}
+			if info.ChainMinDays == nil || *info.ChainMinDays != tt.wantDays {
+				t.Fatalf("chain_min_days = %v, want %d", info.ChainMinDays, tt.wantDays)
+			}
+		})
+	}
+}
+
+func TestExpirySQLShape(t *testing.T) {
+	notAfter, days, subject := ExpirySQL("c.tls")
+	for _, expr := range []string{notAfter, days, subject} {
+		if !strings.Contains(expr, "c.tls ->> 'chain_not_after'") {
+			t.Errorf("ExpirySQL expression does not branch on chain_not_after: %s", expr)
+		}
+	}
 }

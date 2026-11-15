@@ -9,8 +9,9 @@ import { latestSIPMetrics, sipFacts, sipMediaOutdatedWorkersHint } from '@/lib/s
 import type { CheckResult, Monitor, SIPMonitorConfig } from '@/lib/types';
 
 // Type-specific facts for the sidebar's Server panel: what the database or
-// broker reported about itself, the TCP TLS version, what the SIP server
-// answered. The database and TCP facts are lib/monitor-server-facts.ts, the
+// broker reported about itself, the TCP TLS version, the certificate of an
+// HTTPS or TLS-wrapped TCP check, a ping's loss and round trip, what the SIP
+// server answered. All but the SIP ones are lib/monitor-server-facts.ts, the
 // SIP ones lib/sip-metrics.ts. Interval and timeout
 // live in the page header. Empty when the type has nothing to add, so the
 // panel is not rendered at all.

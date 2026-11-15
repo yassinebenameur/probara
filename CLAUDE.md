@@ -207,10 +207,13 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   stored value", offered only for optional secret fields.
 - **Certificate location in `metrics_data`**: `shared/tlscert` owns the
   certificate snapshot (`Info`, built by `FromConnectionState`) and where it
-  sits (`MetricsPaths`: `http.tls`, `sip.tls`). The alerter's `tls_expiry`
+  sits (`MetricsPaths`: `http.tls`, `sip.tls`, `tcp.tls`). The alerter's `tls_expiry`
   reads through `SQLExpr`, the status page and AI evidence through
   `Extract`; `TestSQLExprMatchesExtract` pins the pair. A new TLS-capable
-  type adds its path there, never a hard-coded `#> '{x,tls}'`.
+  type adds its path there, never a hard-coded `#> '{x,tls}'`. The expiry
+  that counts is always the chain's earliest (leaf + presented
+  intermediates, never a trust-store root; `chainOf`): `Info.Expiry` in Go,
+  `ExpirySQL` in SQL (`TestExpirySQLMatchesExpiry`), never `not_after` alone.
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
@@ -1337,6 +1340,21 @@ or imported groups come back empty. Any other path that creates groups through
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **Ping** (`worker/internal/worker/ping_checker.go`) resolves through the
+  SSRF policy (`netguard.Policy.ResolveAllowed`, via `dialGuard`) and sends
+  only over unprivileged ICMP sockets. Those need the
+  `net.ipv4.ping_group_range` sysctl, set together in Helm
+  (`worker.pingGroupRange`, `workerPodSecurityContext` helper), Compose and
+  the location deploy snippets (`services/locations/deploy.go`). Echo
+  spacing is `models.PingMonitorConfig.PingSchedule` (always fits the
+  timeout); the API's `ValidatePingSchedule` uses the same function.
+- **Failed HTTP response capture** (`http_failure_capture.go`) is always on
+  for non-success results with a response: redact the whole read body
+  (`secretRedactor` + `redactCredentialFields`), then cut by encoded size;
+  `captureMaxBytes` keeps it under 16 KiB, far below the AI evidence's 64 KiB
+  `metrics_data` cutoff. Check results reach Postgres through `pgSafeJSON`/
+  `pgSafeText` (`shared/monitorstate/pgsafe.go`), so NUL or invalid UTF-8 in
+  any checker's text cannot fail an insert.
 - **Path-borne credentials** (`/push/{token}`): the API's request log, panic
   log and HTTP metrics never use `r.URL.Path` raw — logs redact by the
   router's patterns, metrics label by route pattern

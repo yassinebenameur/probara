@@ -230,6 +230,14 @@ export function formatJitter(ms: number | null | undefined): string {
 }
 
 /**
+ * A ping round trip in milliseconds: one decimal below 10 ms (`0.4 ms` on a
+ * LAN), else as formatLatency. Missing or negative is `—`.
+ */
+export function formatRoundTrip(ms: number | null | undefined): string {
+  return formatJitter(ms);
+}
+
+/**
  * A whole count with thousands separators, `12,345`, the same on every
  * browser (toLocaleString would follow the viewer's locale). Missing or
  * non-finite is `—`.

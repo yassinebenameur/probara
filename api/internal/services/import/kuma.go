@@ -770,7 +770,7 @@ func kumaPingConfig(monitor kumaMonitor) (map[string]interface{}, []string, stri
 	}
 	var warnings []string
 	if size := int(monitor.PacketSize); size > 0 && size != kumaDefaultPacketSize {
-		warnings = append(warnings, fmt.Sprintf("the custom ICMP packet size (%d bytes) was dropped - Probara's ping check is not tunable", size))
+		warnings = append(warnings, fmt.Sprintf("the custom ICMP packet size (%d bytes) was dropped - Probara's ping check sends a fixed packet size", size))
 	}
 	return map[string]interface{}{"host": host}, warnings, ""
 }

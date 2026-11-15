@@ -69,7 +69,7 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	// pins this list to shared/models.
 	registry.Register(string(models.MonitorTypePrometheus), NewPrometheusChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register(string(models.MonitorTypeHTTP), NewHTTPChecker(maxBodySizeBytes, blockPrivateIPs, allowedCIDRs))
-	registry.Register(string(models.MonitorTypePing), NewPingChecker())
+	registry.Register(string(models.MonitorTypePing), NewPingChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register(string(models.MonitorTypeDNS), NewDNSChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register(string(models.MonitorTypeGRPC), NewGRPCChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register(string(models.MonitorTypeSIP), NewSIPChecker(blockPrivateIPs, allowedCIDRs))

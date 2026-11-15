@@ -5,6 +5,7 @@ package alerter
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,8 +104,8 @@ func TestEvaluateTLSExpiryOpensAndResolves(t *testing.T) {
 	if threshold != 14 {
 		t.Errorf("threshold_value = %v, want 14", threshold)
 	}
-	if lastError != "tls: expires in 11d (< 14d)" {
-		t.Errorf("last_error = %q, want %q", lastError, "tls: expires in 11d (< 14d)")
+	if !strings.HasPrefix(lastError, "tls: certificate expires on ") || !strings.HasSuffix(lastError, " (in 11d, < 14d)") {
+		t.Errorf("last_error = %q, want the leaf's date and \"(in 11d, < 14d)\"", lastError)
 	}
 
 	// Idempotent: a second pass while still inside the window must not duplicate.
@@ -223,8 +224,8 @@ func TestEvaluateTLSExpirySIPOverTLS(t *testing.T) {
 	`, monitorID).Scan(&lastError); err != nil {
 		t.Fatalf("read tls expiry alert: %v", err)
 	}
-	if lastError != "tls: expires in 6d (< 14d)" {
-		t.Errorf("last_error = %q, want %q", lastError, "tls: expires in 6d (< 14d)")
+	if !strings.HasPrefix(lastError, "tls: certificate expires on ") || !strings.HasSuffix(lastError, " (in 6d, < 14d)") {
+		t.Errorf("last_error = %q, want the leaf's date and \"(in 6d, < 14d)\"", lastError)
 	}
 
 	// A newer plain-SIP row without a certificate does not hide the latest

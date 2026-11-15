@@ -120,6 +120,15 @@ test('certificateExpiryLabel', () => {
   assert.equal(certificateExpiryLabel({}), '');
   assert.equal(certificateExpiryLabel({ days_until_expiry: 1 }), 'expires in 1 day');
   assert.equal(certificateExpiryLabel({ days_until_expiry: -3 }), 'expired 3 days ago');
+  // The chain's earliest expiry wins; an intermediate is named, the leaf not.
+  assert.equal(
+    certificateExpiryLabel({ subject: 'CN=sbc', days_until_expiry: 90, chain_not_after: '2026-11-25T00:00:00Z', chain_min_days: 9, chain_expiring_subject: 'CN=CA 2' }),
+    `intermediate CN=CA 2 expires in 9 days (${formatDate('2026-11-25T00:00:00Z')})`
+  );
+  assert.equal(
+    certificateExpiryLabel({ subject: 'CN=sbc', days_until_expiry: 9, chain_min_days: 9, chain_not_after: '2026-11-25T00:00:00Z', chain_expiring_subject: 'CN=sbc' }),
+    `expires in 9 days (${formatDate('2026-11-25T00:00:00Z')})`
+  );
 });
 
 test('an SRV failover shows the target, the failover and the path tried', () => {

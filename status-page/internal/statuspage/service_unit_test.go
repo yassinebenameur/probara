@@ -184,7 +184,8 @@ func TestService_BatchUptimeSummary_UsesHourlyRollupsAndBoundedRawScan(t *testin
 }
 
 // The status page finds a check's certificate wherever shared/tlscert says it
-// lives: an HTTPS check's http.tls and a SIP-over-TLS check's sip.tls alike.
+// lives: an HTTPS check's http.tls, a SIP-over-TLS check's sip.tls and a
+// TLS-wrapped TCP check's tcp.tls alike, and shows the chain's earliest expiry.
 func TestCurrentStatusApplyCertificate(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -194,6 +195,7 @@ func TestCurrentStatusApplyCertificate(t *testing.T) {
 	}{
 		{name: "http", metrics: `{"http":{"tls":{"not_after":"2027-01-01T00:00:00Z","days_until_expiry":30}}}`, wantDays: intPtr(30), wantNot: "2027-01-01T00:00:00Z"},
 		{name: "sip", metrics: `{"sip":{"method":"OPTIONS","transport":"tls","tls":{"not_after":"2027-02-01T00:00:00Z","days_until_expiry":12}}}`, wantDays: intPtr(12), wantNot: "2027-02-01T00:00:00Z"},
+		{name: "tcp chain expires first", metrics: `{"tcp":{"use_tls":true,"tls":{"not_after":"2027-03-01T00:00:00Z","days_until_expiry":90,"chain_not_after":"2026-12-01T00:00:00Z","chain_min_days":20}}}`, wantDays: intPtr(20), wantNot: "2026-12-01T00:00:00Z"},
 		{name: "sip without tls", metrics: `{"sip":{"method":"OPTIONS","transport":"udp"}}`},
 		{name: "no metrics", metrics: ``},
 		{name: "garbage", metrics: `{"http":"tls"}`},
