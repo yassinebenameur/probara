@@ -13,6 +13,7 @@ func TestFollowUpCapability(t *testing.T) {
 	want := map[string]bool{
 		"discord": true, "email": true, "slack": true, "teams": true,
 		"telegram": true, "twilio_sms": true, "generic_webhook": true,
+		"ntfy": true, "gotify": true,
 		"pagerduty": false, "opsgenie": false,
 	}
 	for typ, follow := range want {
