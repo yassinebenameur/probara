@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/clientip"
 )
 
 // StatusPageConfig contains configuration for the status page service
@@ -34,6 +36,17 @@ type StatusPageConfig struct {
 	// VAPIDSubject is the JWT "sub" claim: a mailto: or https: contact the push
 	// service can reach. Some push services reject a missing or malformed one.
 	VAPIDSubject string
+
+	// Client IP resolution (push rate limit) and HSTS (config_edge.go).
+	EdgeConfig
+	// LegacyTrustedProxy reports that the deprecated
+	// STATUS_PAGE_TRUSTED_PROXY=true stood in for an unset
+	// TRUSTED_PROXY_CIDRS, so TrustedProxyCIDRs trusts every peer (its old
+	// leftmost-X-Forwarded-For behavior). The service logs a warning.
+	LegacyTrustedProxy bool
+	// AppBaseURL is APP_BASE_URL, the operator UI origin. Every page's CSP
+	// frame-ancestors admits it so the template editor can preview pages.
+	AppBaseURL string
 }
 
 // LoadStatusPageConfig loads status page service configuration
@@ -60,6 +73,18 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 	cfg.VAPIDPublicKey = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_PUBLIC_KEY"))
 	cfg.VAPIDPrivateKey = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_PRIVATE_KEY"))
 	cfg.VAPIDSubject = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_SUBJECT"))
+
+	if cfg.EdgeConfig, err = loadEdgeConfig(); err != nil {
+		return nil, err
+	}
+	// STATUS_PAGE_TRUSTED_PROXY=true predates TRUSTED_PROXY_CIDRS and
+	// believed X-Forwarded-For from any peer. Honored only while the new
+	// variable is unset, so an upgrade keeps per-visitor push rate limiting.
+	if len(cfg.TrustedProxyCIDRs) == 0 && strings.EqualFold(strings.TrimSpace(os.Getenv("STATUS_PAGE_TRUSTED_PROXY")), "true") {
+		cfg.TrustedProxyCIDRs = clientip.TrustAll()
+		cfg.LegacyTrustedProxy = true
+	}
+	cfg.AppBaseURL = loadAppBaseURL()
 
 	return cfg, nil
 }

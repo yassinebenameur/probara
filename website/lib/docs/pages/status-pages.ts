@@ -113,6 +113,10 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`custom_footer_html`",
               "Trusted custom footer markup, up to 64 KiB",
             ],
+            [
+              "`csp_mode`",
+              "The page's [Content-Security-Policy](#content-security-policy): `strict`, `compatible`, `off`, or empty for automatic. Set in the template editor's Quick branding panel",
+            ],
           ],
         },
         {
@@ -393,6 +397,10 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "Number of cells in a monitor row or kiosk tile strip for a range name",
             ],
             ["`typeIcon`", "Return the display icon for a monitor type"],
+            [
+              "`cspNonce`",
+              "The current response's [CSP](#content-security-policy) nonce: write `<script nonce=\"{{cspNonce}}\">` so an inline script runs under the `strict` policy",
+            ],
           ],
         },
         {
@@ -406,6 +414,46 @@ export const STATUS_PAGES_PAGE: DocPage = {
           title: "Template functions are an append-only compatibility surface",
           text:
             "Existing function names are retained for published templates. Still, copy the current default source before a major redesign so your template follows the current page-data structure and accessibility conventions.",
+        },
+      ],
+    },
+    {
+      id: "content-security-policy",
+      title: "Content-Security-Policy",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every rendered page carries an enforced `Content-Security-Policy` with a fresh script nonce per response. The cached render keeps a placeholder that is swapped for each response's nonce, so caching and `ETag` revalidation still work; a `304` carries no policy, so the browser keeps the header that matches its cached body. The policy depends on the page's `csp_mode`:",
+        },
+        {
+          type: "table",
+          columns: ["Mode", "What the page may load"],
+          rows: [
+            [
+              "`strict`",
+              "Only `<script>` elements carrying `nonce=\"{{cspNonce}}\"` run, so inline event handlers and unmarked scripts do not. Stylesheets and fonts may also come from any `https:` origin (custom CSS `@import` and `@font-face`), and images from `https:` or `http:` (a remote logo) — none of them can run code. Connections and the push service worker stay on the page's own origin. No plugins, no `<base>` rewriting.",
+            ],
+            [
+              "`compatible`",
+              "Inline scripts and styles, plus scripts, styles, fonts, images, frames and connections from any `https:` or `http:` origin. For pages whose custom HTML or CSS loads analytics, chat widgets or web fonts. On an HTTPS page the browser still refuses `http:` scripts as mixed content.",
+            ],
+            ["`off`", "No resource policy; only `frame-ancestors` is sent."],
+            [
+              "empty (automatic)",
+              "`compatible` while the page has custom CSS, custom head/footer HTML or a published custom template, `strict` otherwise. Customized pages keep working without edits, and an uncustomized page's remote logo still renders under `strict`.",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "In every mode `frame-ancestors` admits only the page's own origin and the operator UI origin (`APP_BASE_URL` on the status service), which the template editor needs to preview the page in an iframe. Other sites can no longer frame a status page; link to it instead. The draft preview route admits any ancestor while `APP_BASE_URL` is unset, so the editor works from whatever host serves the UI.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The built-in template's inline script carries the nonce. To move a customized page to `strict`, add `nonce=\"{{cspNonce}}\"` to every `<script>` in a custom template; custom head and footer HTML may contain the same literal `{{cspNonce}}`, which is replaced too. Then set `csp_mode` to `strict` and check the browser console on the preview.",
         },
       ],
     },

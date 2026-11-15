@@ -35,7 +35,16 @@ export interface StatusPageSettings {
   custom_css?: string;
   custom_head_html?: string;
   custom_footer_html?: string;
+  /**
+   * Public page Content-Security-Policy mode. '' (automatic) is compatible
+   * while the page has custom CSS, custom head/footer HTML or a published
+   * custom template, strict otherwise. Strict runs only scripts carrying
+   * nonce="{{cspNonce}}".
+   */
+  csp_mode?: StatusPageCSPMode;
 }
+
+export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';
 
 export interface StatusPage {
   id: string;

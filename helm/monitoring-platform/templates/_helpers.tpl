@@ -347,3 +347,51 @@ worker.<field> against it. Args (dict): ctx (root context), field.
 {{- end -}}
 {{- $name -}}
 {{- end -}}
+
+{{/*
+Edge env for the workloads browsers reach directly (.component: api or
+status-page), from the top-level trustedProxyCIDRs and security values:
+TRUSTED_PROXY_CIDRS (client-IP resolution) and SECURITY_HSTS_MAX_AGE on both;
+the general rate limit and CORS allowlist on the api; APP_BASE_URL on the
+status page, whose CSP frame-ancestors admits the operator UI (template
+editor preview). The api gets APP_BASE_URL from smtpEnv already.
+*/}}
+{{- define "monitoring-platform.edgeEnv" -}}
+{{- $v := .ctx.Values -}}
+{{- with $v.trustedProxyCIDRs }}
+- name: TRUSTED_PROXY_CIDRS
+  value: {{ join "," . | quote }}
+{{- end }}
+- name: SECURITY_HSTS_MAX_AGE
+  value: {{ include "monitoring-platform.hstsMaxAge" .ctx | quote }}
+{{- if eq .component "api" }}
+- name: API_RATE_LIMIT_PER_MINUTE
+  value: {{ $v.security.apiRateLimitPerMinute | int64 | quote }}
+- name: API_RATE_LIMIT_BURST
+  value: {{ $v.security.apiRateLimitBurst | int64 | quote }}
+{{- with $v.security.apiAllowedOrigins }}
+- name: API_ALLOWED_ORIGINS
+  value: {{ join "," . | quote }}
+{{- end }}
+{{- end }}
+{{- if eq .component "status-page" }}
+{{- with $v.appBaseURL }}
+- name: APP_BASE_URL
+  value: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Effective SECURITY_HSTS_MAX_AGE: security.hstsMaxAge when set, else one year
+when the chart's ingress terminates TLS, else 0 (off).
+*/}}
+{{- define "monitoring-platform.hstsMaxAge" -}}
+{{- if ne (toString .Values.security.hstsMaxAge) "" -}}
+{{- .Values.security.hstsMaxAge | int64 -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.tls -}}
+31536000
+{{- else -}}
+0
+{{- end -}}
+{{- end }}

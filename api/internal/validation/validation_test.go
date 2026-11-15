@@ -401,6 +401,34 @@ func TestValidateStatusPageUpdate(t *testing.T) {
 			errContains: "default_theme must be either dark or light",
 		},
 		{
+			name: "valid csp mode update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					CSPMode: ptr("compatible"),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "automatic csp mode update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					CSPMode: ptr(""),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid csp mode update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					CSPMode: ptr("lax"),
+				},
+			},
+			wantErr:     true,
+			errContains: "csp_mode must be strict, compatible, off",
+		},
+		{
 			name: "valid sections update",
 			req: &models.UpdateStatusPageRequest{
 				Sections: &[]models.StatusPageSection{

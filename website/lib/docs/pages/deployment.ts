@@ -555,6 +555,16 @@ kubectl -n probara get jobs`,
               'The current routing template gives `/` to frontend and `/api` to API; see warning below.',
             ],
             [
+              '`trustedProxyCIDRs`',
+              '`[]`',
+              'CIDRs or IPs of your ingress controller or load balancer, rendered as `TRUSTED_PROXY_CIDRS` into the API and status-page. Only these peers’ forwarding headers resolve [client IPs](/docs/security/#audit-proxy-trust) for audit records, sessions and rate limits. The bundled ingress routes `/api` straight to the API, so with an ingress set this to the ingress controller’s pod CIDR: empty makes every request come from the ingress pod, so all visitors share one per-address rate-limit bucket. The install notes warn when the ingress is on and this is empty.',
+            ],
+            [
+              '`security.hstsMaxAge`, `.apiRateLimitPerMinute`, `.apiRateLimitBurst`, `.apiAllowedOrigins`',
+              'automatic (one year with `ingress.tls`, else off), `600`, `120`, `[]`',
+              '[Security headers and the API rate limit](/docs/security/#edge-controls), rendered into the API (all four) and status-page (HSTS). `appBaseURL` also reaches the status-page, whose CSP lets the operator UI frame the template preview.',
+            ],
+            [
               '`serviceAccount.create`, `.annotations`, `.name`',
               '`true`, `{}`, empty',
               'Workload service account selection.',
@@ -932,7 +942,7 @@ api:
           items: [
             'Pin immutable backend, frontend, local AI, collector, migration, PostgreSQL, and NATS versions.',
             'Use managed/HA PostgreSQL and NATS or define tested backup and restore objectives for embedded state.',
-            'Configure HTTPS, a correct `PUBLIC_BASE_URL` (`api.publicBaseURL`; an `https://` value also turns on `ADMIN_COOKIE_SECURE` in the chart), and trusted reverse-proxy headers.',
+            'Configure HTTPS, a correct `PUBLIC_BASE_URL` (`api.publicBaseURL`; an `https://` value also turns on `ADMIN_COOKIE_SECURE` in the chart), and [trusted proxies](/docs/security/#audit-proxy-trust) (`trustedProxyCIDRs`) so client IPs, rate limits and HSTS see the real client.',
             'Use stable random JWT, encryption, local AI token, OIDC, preview, SMTP, webhook, database, and NATS secrets, sourced [from your secret manager](#external-secrets) rather than written into the values file.',
             'Confirm the cluster CNI enforces the [local AI NetworkPolicy](#helm-values-local-ai), or isolate the service another way.',
             'Align every NATS stream, subject, consumer, and status-update subject across services.',

@@ -158,6 +158,31 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`365`; nonnegative integer; `0` keeps records forever',
               'Compose and Helm expose the audit-retention setting; the API owns pruning.',
             ],
+            [
+              '`TRUSTED_PROXY_CIDRS`',
+              'Empty (trust no proxy); comma-separated CIDRs or bare IPs, IPv4 or IPv6; an invalid entry stops startup',
+              'The reverse proxies whose `X-Forwarded-For` / `X-Real-IP` resolve the [client address](/docs/security/#audit-proxy-trust) for audit records, session IPs and rate limits, and whose `X-Forwarded-Proto: https` earns HSTS. Read by the API and status-page. Compose passes it through from the shell to both; Helm renders the top-level `trustedProxyCIDRs` into both.',
+            ],
+            [
+              '`SECURITY_HSTS_MAX_AGE`',
+              '`0` (off); nonnegative integer seconds',
+              '[HSTS](/docs/security/#edge-controls) max-age for API and status-page responses, sent only on HTTPS requests. Compose defaults to `0`; Helm renders `security.hstsMaxAge`, which when empty is one year with an ingress `tls` block and `0` otherwise.',
+            ],
+            [
+              '`API_RATE_LIMIT_PER_MINUTE`',
+              '`600`; nonnegative integer; `0` disables the limiter',
+              'General [API rate limit](/docs/security/#edge-controls): per validated credential, per client IP only for authentication failures and unauthenticated routes, in memory on each API replica. Compose and Helm (`security.apiRateLimitPerMinute`) wire it.',
+            ],
+            [
+              '`API_RATE_LIMIT_BURST`',
+              '`120`; nonnegative integer',
+              'Bucket size of the same limiter. Compose and Helm (`security.apiRateLimitBurst`) wire it.',
+            ],
+            [
+              '`API_ALLOWED_ORIGINS`',
+              'Empty; comma-separated `scheme://host[:port]`; `*` and paths are refused',
+              'Browser origins allowed credentialed [cross-origin](/docs/security/#passwords-api-keys-sessions) API calls. Empty means the `APP_BASE_URL` origin, or same-origin only when that is unset too. Compose passes it through; Helm renders `security.apiAllowedOrigins`.',
+            ],
           ],
         },
         {
@@ -816,8 +841,13 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             [
               '`STATUS_PAGE_TRUSTED_PROXY`',
-              '`false`',
-              'Honor `X-Forwarded-For` when rate-limiting push subscribes. Off by default because the header is client-settable.',
+              '`false`; deprecated',
+              'Superseded by `TRUSTED_PROXY_CIDRS`, which the status-page reads too (with `SECURITY_HSTS_MAX_AGE`). `true` still trusts `X-Forwarded-For` from every peer for push rate limiting, but only while `TRUSTED_PROXY_CIDRS` is unset, and the service logs a deprecation warning.',
+            ],
+            [
+              '`APP_BASE_URL`',
+              'Empty',
+              'Operator UI origin. Every page’s [CSP](/docs/status-pages/#content-security-policy) `frame-ancestors` admits it so the template editor can preview pages in an iframe. Compose passes it through from the shell (empty by default); Helm renders the top-level `appBaseURL`. Unset, the draft preview route may be framed by any site, so the template editor works from whatever host serves the UI; set it to restrict the preview to that origin.',
             ],
           ],
         },
@@ -850,6 +880,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`NEXT_PUBLIC_STATUS_PAGE_URL`',
               'Empty',
               'Status-page link origin; falls back to the current/relative origin or localhost during local use. Compiled into the client bundle.',
+            ],
+            [
+              '`API_PROXY_TRUST_FORWARDED_FOR`',
+              '`false`',
+              'The `/api` proxy drops a client-sent `X-Forwarded-For` / `X-Real-IP` unless this is `true`; set it only when a proxy you run in front of the UI sets that header, and then list the frontend in the API’s `TRUSTED_PROXY_CIDRS` ([trusted proxies](/docs/security/#audit-proxy-trust)). Runtime; not wired by Compose or Helm (use `frontend.extraEnv`).',
             ],
             [
               '`NEXT_PUBLIC_DEBUG_INGEST_URL`',
@@ -1019,6 +1054,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['Scheduler purge and mesh', 'Code defaults only', 'Code defaults only'],
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],
             ['Status cache, proxy, preview, timeout, update subject', 'Preview only; most defaults', 'Not wired'],
+            ['Trusted proxies, HSTS, API rate limit and CORS allowlist', 'Passed through from the shell to API and status-page (`APP_BASE_URL` to status-page too)', 'Top-level `trustedProxyCIDRs` and `security` block rendered into API and status-page; `appBaseURL` into status-page as well'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
             ['Arbitrary extra environment', 'Requires editing Compose', 'No `extraEnv`; requires chart template change'],
           ],

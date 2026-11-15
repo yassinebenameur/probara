@@ -3,6 +3,18 @@
 
 export const API_PROXY_TARGET = process.env.API_PROXY_TARGET || 'http://localhost:8080';
 
+// The API believes X-Forwarded-For / X-Real-IP only from peers listed in
+// TRUSTED_PROXY_CIDRS (shared/clientip). Next.js keeps a client-sent
+// X-Forwarded-For and fills it from the socket only when it is absent, and a
+// route handler cannot see its own TCP peer, so this proxy cannot tell a
+// browser's forged value from a real one. It drops both headers (the API then
+// records this frontend's address) unless the operator declares, with
+// API_PROXY_TRUST_FORWARDED_FOR=true, that a proxy they run in front of the
+// UI replaces or appends to X-Forwarded-For; only then list the frontend in
+// the API's TRUSTED_PROXY_CIDRS.
+const API_PROXY_TRUST_FORWARDED_FOR = process.env.API_PROXY_TRUST_FORWARDED_FOR === 'true';
+const CLIENT_IP_HEADERS = new Set(['x-forwarded-for', 'x-real-ip']);
+
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
   'keep-alive',
@@ -26,13 +38,21 @@ export function buildTargetUrl(requestUrl: string, prefix: string, path: string[
   return `${API_PROXY_TARGET}/${prefix}/${path.join('/')}${incoming.search || ''}`;
 }
 
-/** The request headers minus the hop-by-hop ones. */
-export function copyHeaders(requestHeaders: Headers): Headers {
+/**
+ * The request headers minus the hop-by-hop ones, and minus the client-IP
+ * headers unless forwarding them is trusted (see
+ * API_PROXY_TRUST_FORWARDED_FOR above).
+ */
+export function copyHeaders(
+  requestHeaders: Headers,
+  trustForwardedFor: boolean = API_PROXY_TRUST_FORWARDED_FOR,
+): Headers {
   const headers = new Headers();
   requestHeaders.forEach((value, key) => {
-    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
-      headers.set(key, value);
-    }
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(lower)) return;
+    if (!trustForwardedFor && CLIENT_IP_HEADERS.has(lower)) return;
+    headers.set(key, value);
   });
   return headers;
 }

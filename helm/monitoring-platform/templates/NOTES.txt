@@ -101,6 +101,14 @@ COMPONENTS DEPLOYED:
 {{- if .Values.frontend.enabled }}
   - Frontend ({{ .Values.frontend.replicas }} replicas)
 {{- end }}
+{{- if and .Values.ingress.enabled (not .Values.trustedProxyCIDRs) }}
+
+WARNING: CLIENT ADDRESSES
+  trustedProxyCIDRs is empty, so the api and status page take the ingress
+  controller pod as every client's address: the audit log records it, all
+  visitors share its per-address rate-limit bucket, and HSTS is never sent.
+  Set trustedProxyCIDRs to the CIDR your ingress controller pods use.
+{{- end }}
 
 ===============================================================================
 

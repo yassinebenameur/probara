@@ -17,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -59,6 +60,8 @@ type statusPageSettingsStored struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+
+	CSPMode string `json:"csp_mode,omitempty"`
 }
 
 type statusPageSectionInput struct {
@@ -156,6 +159,11 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 	if patch.CustomFooterHTML != nil {
 		s.CustomFooterHTML = trimOptionalString(patch.CustomFooterHTML)
 	}
+	if patch.CSPMode != nil {
+		// Validation rejects unknown modes; one here (an old or hand-edited
+		// row) reads as automatic.
+		s.CSPMode, _ = securityheaders.ParseCSPMode(*patch.CSPMode)
+	}
 	return s
 }
 
@@ -183,6 +191,7 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 	defaultTheme := s.DefaultTheme
 	allowThemeToggle := s.AllowThemeToggle
 	enablePushNotifications := s.EnablePushNotifications
+	cspMode := s.CSPMode
 	return &models.StatusPageSettings{
 		ShowMonitorTags:         &showMonitorTags,
 		ShowMonitorURL:          &showMonitorURL,
@@ -199,6 +208,7 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 		CustomCSS:               s.CustomCSS,
 		CustomHeadHTML:          s.CustomHeadHTML,
 		CustomFooterHTML:        s.CustomFooterHTML,
+		CSPMode:                 &cspMode,
 	}
 }
 

@@ -101,3 +101,25 @@ func TestPreviewToken(t *testing.T) {
 		t.Fatal("malformed token must not verify")
 	}
 }
+
+// The default template's inline script carries the nonce, and {{cspNonce}}
+// renders the placeholder the status-page service swaps per response.
+func TestCSPNonceContract(t *testing.T) {
+	if !strings.Contains(DefaultSource, `<script nonce="{{cspNonce}}">`) {
+		t.Fatal("default template script lacks nonce=\"{{cspNonce}}\"")
+	}
+	if n := strings.Count(strings.ToLower(DefaultSource), "<script"); n != strings.Count(DefaultSource, `<script nonce="{{cspNonce}}"`) {
+		t.Fatalf("default template has %d <script> elements; every one needs the nonce", n)
+	}
+	tmpl, err := New("t", `<script nonce="{{cspNonce}}">x()</script>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := tmpl.Execute(&b, nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := `<script nonce="` + NoncePlaceholder + `">`; !strings.Contains(b.String(), want) {
+		t.Fatalf("rendered %q, want it to contain %q", b.String(), want)
+	}
+}

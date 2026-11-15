@@ -474,6 +474,23 @@ or imported groups come back empty. Any other path that creates groups through
   that re-parses the value as config (numeric, boolean-ish or
   space/comma/brace passwords abort startup), and quoting the reference
   silently disables the expansion.
+- **Client IPs come only from `shared/clientip`** (`FromRequest` behind the
+  router-wide resolver middleware, or a `Resolver`): forwarding headers count
+  only from `TRUSTED_PROXY_CIDRS` peers (parsed once in
+  `shared/config/config_edge.go`, api and status-page). Never read
+  `X-Forwarded-For`/`X-Real-IP` in a handler. The web `/api` proxy drops
+  them (`web/lib/api-proxy.ts`) unless `API_PROXY_TRUST_FORWARDED_FOR=true`.
+- **Edge controls**: `shared/securityheaders` owns the headers (API policy,
+  status-page per-page CSP, HSTS only via `IsHTTPS`); `web/next.config.js`
+  mirrors its static values. The API mounts headers, the CORS allowlist
+  (`middleware/cors.go`) and the anonymous rate-limit stage in
+  `useEdgeSecurity` (`api/internal/api/routes_edge.go`); `authMiddleware` is
+  wrapped by `rateLimiter.Authenticate`, which charges validated credentials
+  per credential and only 401s to an address bucket — never refuse before
+  auth on an address bucket. Authenticated routes are read from the router,
+  so new routes need no list. Never echo `Origin` in a handler. The env rides
+  Compose and the chart's `trustedProxyCIDRs` + `security:` block
+  (`monitoring-platform.edgeEnv`) together.
 
 ## MCP server
 
@@ -626,6 +643,14 @@ or imported groups come back empty. Any other path that creates groups through
   and the render cache is empty — exactly when browser notifications matter —
   so the push wake-up sits **above** that guard. Anything hooked in below it
   never fires for the case it was built to serve.
+- **CSP nonce contract**: every rendered page gets an enforced CSP
+  (`status-page/internal/statuspage/csp.go`, modes in
+  `shared/securityheaders`, `csp_mode` setting in the three mirrors).
+  `{{cspNonce}}` renders `statustemplate.NoncePlaceholder`, swapped per
+  response after the cached render; custom head/footer HTML may carry the
+  literal `{{cspNonce}}`. Every inline `<script>` in `default.gohtml` needs
+  `nonce="{{cspNonce}}"` (`TestCSPNonceContract`), and a 304 never carries a
+  CSP.
 
 ## Web UI conventions
 
@@ -908,6 +933,8 @@ or imported groups come back empty. Any other path that creates groups through
   JSON of every type's create and edit round trip (and of a clone for the
   delegated types and http), so a payload change shows up as a test diff;
   a field a form hydrates goes into its type's edit fixture.
+- **CSP**: `web/proxy.ts` sends a report-only nonce CSP (`lib/csp.ts`);
+  no inline `<script>` without the `x-nonce` nonce (`app/layout.tsx`).
 
 ## Build, test, verify
 
@@ -1175,6 +1202,12 @@ or imported groups come back empty. Any other path that creates groups through
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **Path-borne credentials** (`/push/{token}`): the API's request log, panic
+  log and HTTP metrics never use `r.URL.Path` raw — logs redact by the
+  router's patterns, metrics label by route pattern
+  (`api/internal/middleware/route_redaction.go`). Redaction keys on the
+  parameter NAME, so a credential in a path must be a `{…token}`/`{…secret}`
+  parameter, and a handler must not log or echo it.
 
 ## Commits and PRs
 

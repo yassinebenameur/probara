@@ -59,6 +59,9 @@ type StatusPageData struct {
 	CustomCSS        string `json:"-"` // For template use only
 	CustomHeadHTML   string `json:"-"` // For template use only
 	CustomFooterHTML string `json:"-"` // For template use only
+	// CSPMode is the stored csp_mode ("" = automatic); the handler turns it
+	// into the page's Content-Security-Policy (csp.go).
+	CSPMode string `json:"-"`
 	// Published custom template ("" = render with the built-in template).
 	CustomTemplateSource  string `json:"-"` // For template use only
 	CustomTemplateVersion int    `json:"-"` // For template use only
@@ -378,6 +381,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.CustomCSS = settings.CustomCSS
 	page.CustomHeadHTML = settings.CustomHeadHTML
 	page.CustomFooterHTML = settings.CustomFooterHTML
+	page.CSPMode = settings.CSPMode
 
 	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
 		return nil, fmt.Errorf("failed to get custom template: %w", err)

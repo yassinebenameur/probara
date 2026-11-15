@@ -20,6 +20,7 @@ import {
   StatusPageTemplateState,
   StatusPageSettings,
   StatusPageLibraryTemplate,
+  StatusPageCSPMode,
 } from '@/lib/types';
 import {
   getStatusPage,
@@ -51,6 +52,7 @@ import Pill from '@/components/ui/Pill';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Dialog from '@/components/ui/Dialog';
 import Input from '@/components/ui/Input';
+import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
 import { formatDateTime, formatDateTimeFull, formatFileSize } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
@@ -94,6 +96,7 @@ export default function StatusPageTemplatePage() {
   const [brandingCSS, setBrandingCSS] = useState('');
   const [brandingHead, setBrandingHead] = useState('');
   const [brandingFooter, setBrandingFooter] = useState('');
+  const [cspMode, setCspMode] = useState<StatusPageCSPMode>('');
   const [savingBranding, setSavingBranding] = useState(false);
 
   const [libraryItems, setLibraryItems] = useState<StatusPageLibraryTemplate[]>([]);
@@ -108,6 +111,7 @@ export default function StatusPageTemplatePage() {
     setBrandingCSS(settings?.custom_css || '');
     setBrandingHead(settings?.custom_head_html || '');
     setBrandingFooter(settings?.custom_footer_html || '');
+    setCspMode(settings?.csp_mode || '');
   };
 
   const load = useCallback(async () => {
@@ -364,6 +368,7 @@ export default function StatusPageTemplatePage() {
           custom_css: brandingCSS,
           custom_head_html: brandingHead,
           custom_footer_html: brandingFooter,
+          csp_mode: cspMode,
         },
       });
       setStatusPage(updated);
@@ -481,6 +486,23 @@ export default function StatusPageTemplatePage() {
               placeholder={'<div class="links">…</div>'}
               className={`${CODE_AREA} p-3`}
             />
+          </FormField>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <FormField
+            label="Content-Security-Policy"
+            description={
+              'Strict runs only scripts that carry nonce="{{cspNonce}}" (custom templates and the HTML snippets above can use it). ' +
+              'Automatic is compatible while the page has custom CSS, custom HTML or a custom template, strict otherwise. ' +
+              'Off sends no resource policy.'
+            }
+          >
+            <Select value={cspMode} onChange={(e) => setCspMode(e.target.value as StatusPageCSPMode)}>
+              <option value="">Automatic</option>
+              <option value="strict">Strict</option>
+              <option value="compatible">Compatible</option>
+              <option value="off">Off</option>
+            </Select>
           </FormField>
         </div>
         <div className="flex justify-end">
