@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
 	shareddb "github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -177,6 +178,106 @@ func TestIngestPersistsSeriesSamplesAndHeartbeat(t *testing.T) {
 	}
 	if n := countRows(ctx, t, dbClient, `SELECT COUNT(*) FROM check_results WHERE monitor_id = $1`, monitorID); n != 2 {
 		t.Fatalf("heartbeat rows after second report = %d, want 2", n)
+	}
+}
+
+// A transaction that created series and then rolled back must not leave
+// their ids in the series cache: metric_samples has no FK to metric_series,
+// so a cached ghost id turns every later export into orphaned samples that
+// still return 200. The missing-partition retry is the in-tree path where
+// this happens on every first export into a new day's partition.
+func TestIngestRolledBackSeriesAreNotCached(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "tenant-otlp-rollback")
+	agentID := uuid.New().String()
+	monitorID := testutil.InsertAgentMonitor(ctx, t, dbClient, tenantID, "rollback-host", agentID, 60)
+
+	// Ten days back is outside the partitions the migration seeds; drop it
+	// anyway so the test does not depend on that window.
+	sampleTS := time.Now().Add(-10 * 24 * time.Hour).UTC().Truncate(time.Millisecond)
+	day := sampleTS.Truncate(24 * time.Hour)
+	if _, err := dbClient.ExecContext(ctx, `DROP TABLE IF EXISTS metric_samples_`+day.Format("20060102")); err != nil {
+		t.Fatalf("drop partition: %v", err)
+	}
+
+	countOrphans := func() int {
+		return countRows(ctx, t, dbClient, `
+			SELECT COUNT(*) FROM metric_samples ms
+			WHERE NOT EXISTS (SELECT 1 FROM metric_series s WHERE s.id = ms.series_id)`)
+	}
+
+	// One attempt, no retry: the series upsert succeeds inside the
+	// transaction, the sample insert fails, everything rolls back.
+	svc := NewService(dbClient.DB, nil, 2000, 60)
+	_, _, _, _, err := svc.writeBatchOnce(ctx, tenantID, monitorID, cpuPoints(sampleTS))
+	if !metricstore.IsMissingPartitionErr(err) {
+		t.Fatalf("first attempt err = %v, want missing partition", err)
+	}
+	if n := countRows(ctx, t, dbClient, `SELECT COUNT(*) FROM metric_series WHERE monitor_id = $1`, monitorID); n != 0 {
+		t.Fatalf("series rows after rollback = %d, want 0", n)
+	}
+	svc.cache.mu.Lock()
+	cached := len(svc.cache.items)
+	svc.cache.mu.Unlock()
+	if cached != 0 {
+		t.Fatalf("cache entries after rollback = %d, want 0", cached)
+	}
+
+	// The full export path on the same service: writeBatch's first attempt
+	// fails the same way, creates the partition, and retries. Before the
+	// fix the retry read the rolled-back ids from the cache and wrote
+	// orphaned samples without ever registering the series.
+	res, err := svc.Ingest(ctx, tenantID, agentID, digestOf("rollback-1"), buildHostMetrics(sampleTS, 0.42, 123456))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.AcceptedPoints != 2 {
+		t.Fatalf("accepted = %d, want 2", res.AcceptedPoints)
+	}
+	if n := countRows(ctx, t, dbClient, `
+		SELECT COUNT(*) FROM metric_samples ms JOIN metric_series s ON s.id = ms.series_id
+		WHERE s.monitor_id = $1`, monitorID); n != 2 {
+		t.Fatalf("joinable samples = %d, want 2", n)
+	}
+	if n := countOrphans(); n != 0 {
+		t.Fatalf("orphaned samples = %d, want 0", n)
+	}
+
+	// The cache now holds exactly the committed rows, so a later export
+	// (cache hits only) keeps landing on real series.
+	rows, err := dbClient.QueryContext(ctx, `SELECT id, attr_hash FROM metric_series WHERE monitor_id = $1`, monitorID)
+	if err != nil {
+		t.Fatalf("query series: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var hash []byte
+		if err := rows.Scan(&id, &hash); err != nil {
+			t.Fatalf("scan series: %v", err)
+		}
+		if got, ok := svc.cache.get(monitorID, hash); !ok || got != id {
+			t.Fatalf("cache for series %d = (%d, %v)", id, got, ok)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read series: %v", err)
+	}
+	if _, err := svc.Ingest(ctx, tenantID, agentID, digestOf("rollback-2"), buildHostMetrics(sampleTS.Add(time.Minute), 0.5, 234567)); err != nil {
+		t.Fatalf("second Ingest: %v", err)
+	}
+	if n := countRows(ctx, t, dbClient, `
+		SELECT COUNT(*) FROM metric_samples ms JOIN metric_series s ON s.id = ms.series_id
+		WHERE s.monitor_id = $1`, monitorID); n != 4 {
+		t.Fatalf("joinable samples after second export = %d, want 4", n)
+	}
+	if n := countOrphans(); n != 0 {
+		t.Fatalf("orphaned samples after second export = %d, want 0", n)
 	}
 }
 

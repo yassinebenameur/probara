@@ -349,12 +349,24 @@ func (s *Service) writeBatchOnce(ctx context.Context, tenantID, monitorID uuid.U
 	samples := make([]metricstore.Sample, 0, len(points))
 	touched := map[int64]bool{}
 	hours := map[time.Time]bool{}
-	newSeries := 0
+	// resolved holds the series this transaction looked up in the registry.
+	// They reach the shared cache only after Commit: metric_samples has no FK
+	// to metric_series, so an id cached from a rolled-back transaction (missing
+	// partition, cancelled request, commit failure) would let every later
+	// export write samples against a series row that never existed, and
+	// still return 200. The map also keeps a series repeated within one batch
+	// to a single registry round trip and a single count toward the cap.
+	resolved := map[[32]byte]int64{}
 
 	for i := range points {
 		p := &points[i]
 		hash := metricstore.AttrHash(p.MetricName, p.Attributes)
-		id, ok := s.cache.get(monitorID, hash)
+		var hashKey [32]byte
+		copy(hashKey[:], hash)
+		id, ok := resolved[hashKey]
+		if !ok {
+			id, ok = s.cache.get(monitorID, hash)
+		}
 		if !ok {
 			// Cardinality guardrail on the slow path only: a series already
 			// registered keeps flowing even when the monitor is at cap.
@@ -362,7 +374,7 @@ func (s *Service) writeBatchOnce(ctx context.Context, tenantID, monitorID uuid.U
 			if cErr != nil {
 				return 0, 0, "", maxTS, cErr
 			}
-			if count+newSeries >= s.maxSeriesPerMonitor {
+			if count+len(resolved) >= s.maxSeriesPerMonitor {
 				rejected++
 				rejectMsg = fmt.Sprintf("series cardinality cap reached (%d per monitor): dropped new series for %s", s.maxSeriesPerMonitor, p.MetricName)
 				continue
@@ -380,8 +392,7 @@ func (s *Service) writeBatchOnce(ctx context.Context, tenantID, monitorID uuid.U
 			if err != nil {
 				return 0, 0, "", maxTS, err
 			}
-			s.cache.put(monitorID, hash, id)
-			newSeries++
+			resolved[hashKey] = id
 		}
 		samples = append(samples, metricstore.Sample{SeriesID: id, TS: p.TS, Value: p.Value})
 		touched[id] = true
@@ -411,7 +422,14 @@ func (s *Service) writeBatchOnce(ctx context.Context, tenantID, monitorID uuid.U
 	if err := tx.Commit(); err != nil {
 		return 0, 0, "", maxTS, fmt.Errorf("commit otlp ingest transaction: %w", err)
 	}
-	if newSeries > 0 {
+	// Only now are the resolved ids real rows. A concurrent export resolving
+	// the same series blocked on our uncommitted row in the registry upsert
+	// (ON CONFLICT (monitor_id, attr_hash)) and, now that we committed, gets
+	// this same id; had we rolled back, it would insert and cache its own.
+	for hashKey, id := range resolved {
+		s.cache.put(monitorID, hashKey[:], id)
+	}
+	if len(resolved) > 0 {
 		s.invalidateSeriesCount(monitorID)
 	}
 	return len(samples), rejected, rejectMsg, maxTS, nil
