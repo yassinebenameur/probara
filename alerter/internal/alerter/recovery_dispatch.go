@@ -14,6 +14,19 @@ import (
 // this much of the tick's deadline.
 const defaultRecoveryRetryBudget = 15 * time.Second
 
+// recoveryRetryMaxAge stops retrying a recovery notice this long after the
+// alert resolved. Only a permanent provider error ends a retry by itself, so
+// without it a channel that keeps failing transiently would have every such
+// alert re-selected on every tick forever, crowding the sweep's budget, and
+// would then deliver a burst of RESOLVED messages for long-past outages once
+// it came back. 24h matches the NOTIFICATIONS stream's max age, the horizon
+// after which an asynchronously dispatched notice is dropped as well. An
+// expired recovery stays unsent: its notification state keeps its last
+// event, nothing else reads that as pending, and no state transition is
+// needed. The bound is a sweep selection rule, not a claim rule: the
+// immediate notice sent when an alert resolves is always inside it.
+const recoveryRetryMaxAge = 24 * time.Hour
+
 func (a *Alerter) recoveryRetryBudget() time.Duration {
 	if a.recoveryBudget > 0 {
 		return a.recoveryBudget
@@ -48,13 +61,14 @@ func (a *Alerter) dispatchPendingRecoveries(ctx context.Context) error {
 			LEFT JOIN locations sl ON sl.id = al.source_location_id
 			LEFT JOIN locations tl ON tl.id = al.target_location_id
 			WHERE al.status = 'resolved' AND al.id > $1
+			  AND al.resolved_at >= NOW() - make_interval(secs => $3)
 			  AND EXISTS (
 				SELECT 1 FROM alert_notification_states ans
 				JOIN alert_channels ac ON ac.id = ans.channel_id
 				WHERE ans.alert_id = al.id AND ans.last_event_type <> 'resolved'
 				  AND ac.is_active = TRUE)
 			ORDER BY al.id LIMIT $2
-		`, a.recoveryCursor, batchSize)
+		`, a.recoveryCursor, batchSize, recoveryRetryMaxAge.Seconds())
 	if err != nil {
 		return fmt.Errorf("query pending recoveries: %w", err)
 	}
