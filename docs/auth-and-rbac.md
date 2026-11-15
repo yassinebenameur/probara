@@ -174,7 +174,11 @@ first included, gets the ordinary JIT role (default membership or mapped
 roles), and password bootstrap stays open until an active *superadmin*
 exists (not just any active user), so the first superadmin always comes
 from the code-gated form (`oidcauth.Service.ConfigureSetupCode`,
-`adminusers.Service.ConfigureSetupCode`). There is no SSO-only mode that
+`adminusers.Service.ConfigureSetupCode`). With or without a code, both
+paths close for good once any superadmin has existed
+(`admin_bootstrap_closed`, set by a trigger on `admin_users`), so an install
+whose users were all disabled or removed out of band is not reopened to
+whoever holds the code or signs in first. There is no SSO-only mode that
 disables the password form, so such an install cannot be left without a
 way to create an admin; `cmd/admin` remains the break-glass path. The
 DB-side `cmd/admin` tool (`ADMIN_USERNAME`/`ADMIN_PASSWORD`) always upserts

@@ -223,8 +223,10 @@ secrets:
   # canonical key bootstrap_setup_code, api only). Set it when the UI is
   # reachable before you create the first administrator, so nobody else can
   # claim the install; unset leaves that form open until an admin exists.
-  # With only the chart-wide secrets.existingSecret set, the key is optional
-  # in that Secret.
+  # At least 16 characters besides dashes and spaces (case-insensitive), or
+  # the API refuses to start. With only the chart-wide secrets.existingSecret
+  # set, the key is optional in that Secret; a Secret named in
+  # bootstrapSetupCodeExistingSecret must exist and hold the key.
   bootstrapSetupCode: ""
   bootstrapSetupCodeExistingSecret: ""
   bootstrapSetupCodeExistingSecretKey: bootstrap_setup_code

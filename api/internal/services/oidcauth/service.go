@@ -17,6 +17,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -324,6 +325,12 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 		return nil, err
 	}
 
+	// Read outside the transaction: the flag never goes back to false.
+	bootstrapClosed, err := adminusers.SuperadminEverExisted(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read admin bootstrap state: %w", err)
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -334,6 +341,8 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 	// with an unadministrable viewer as its only account. Not with a setup
 	// code: then the local form (which stays open until a superadmin exists)
 	// creates the first superadmin, and SSO users get the ordinary JIT role.
+	// Never once a superadmin has existed: an install whose users were all
+	// disabled is not a new install.
 	var activeAdmins int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_users WHERE disabled_at IS NULL`).Scan(&activeAdmins); err != nil {
 		return nil, fmt.Errorf("failed to count active admins: %w", err)
@@ -346,7 +355,7 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 	if len(mappings) > 0 {
 		platformRole = mappedPlatform
 	}
-	if activeAdmins == 0 && !s.noSSOBootstrap {
+	if activeAdmins == 0 && !s.noSSOBootstrap && !bootstrapClosed {
 		platformRole = auth.PlatformRoleSuperadmin
 	}
 

@@ -29,8 +29,14 @@ type smtpSession struct {
 }
 
 // deadlineFor is the I/O deadline for the next step: the ctx deadline, or
-// smtpMessageTimeout from now when that comes first.
+// smtpMessageTimeout from now when that comes first. A ctx already cancelled
+// (with or without a deadline) gets now: the cancel interrupt pulled the
+// deadline in once, and every step that sets a fresh one must not push it
+// back out.
 func deadlineFor(ctx context.Context) time.Time {
+	if ctx.Err() != nil {
+		return time.Now()
+	}
 	deadline := time.Now().Add(smtpMessageTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		return d

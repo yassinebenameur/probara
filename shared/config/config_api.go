@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/ai"
 )
@@ -60,10 +61,12 @@ type APIConfig struct {
 	// deploy snippets reference. Empty means the locations service default
 	// (the worker image at this build's release version).
 	LocationWorkerImage string
-	// BootstrapSetupCode is BOOTSTRAP_SETUP_CODE: when set, creating the
-	// first administrator requires it, so a freshly published install cannot
-	// be claimed by whoever reaches the UI first. Empty keeps the endpoint
-	// open until the first admin exists.
+	// BootstrapSetupCode is BOOTSTRAP_SETUP_CODE, already normalized
+	// (NormalizeSetupCode): when set, creating the first administrator
+	// requires it, so a freshly published install cannot be claimed by
+	// whoever reaches the UI first. Empty keeps the endpoint open until the
+	// first admin exists. Both the form and the SSO bootstrap decision read
+	// this one value, so they can never disagree about whether a code is set.
 	BootstrapSetupCode string
 	// Mesh knobs mirrored from the scheduler (same env vars) so edge
 	// staleness and probe-now timeouts agree with the actual probe cadence.
@@ -236,7 +239,15 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
 	}
 	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
-	cfg.BootstrapSetupCode = strings.TrimSpace(os.Getenv("BOOTSTRAP_SETUP_CODE"))
+	// A code that normalizes to something short (or to nothing, like "--")
+	// would leave the form guessable or open while SSO bootstrap is off, so
+	// it refuses to start instead.
+	if raw := strings.TrimSpace(os.Getenv("BOOTSTRAP_SETUP_CODE")); raw != "" {
+		cfg.BootstrapSetupCode = NormalizeSetupCode(raw)
+		if n := utf8.RuneCountInString(cfg.BootstrapSetupCode); n < MinSetupCodeLength {
+			return nil, fmt.Errorf("BOOTSTRAP_SETUP_CODE must have at least %d characters besides dashes and spaces, got %d", MinSetupCodeLength, n)
+		}
+	}
 
 	// OTLP_* — ingest guardrails for the OTel metrics endpoint.
 	cfg.OTLPMaxSeriesPerMonitor = 2000
@@ -362,4 +373,21 @@ func loadOIDCConfig(publicBaseURL string) (*OIDCConfig, error) {
 	cfg.JITDefaultTenantID = envOrDefault("OIDC_JIT_DEFAULT_TENANT_ID", "00000000-0000-0000-0000-000000000001")
 
 	return cfg, nil
+}
+
+// MinSetupCodeLength is the shortest BOOTSTRAP_SETUP_CODE the API starts
+// with, counted after NormalizeSetupCode. scripts/install.sh generates 20.
+const MinSetupCodeLength = 16
+
+// NormalizeSetupCode lets an operator type the setup code the way the
+// installer printed it or not: case, dashes and spaces are ignored. The API
+// applies it once to the configured code and to every submitted one.
+func NormalizeSetupCode(code string) string {
+	return strings.ToUpper(strings.Map(func(r rune) rune {
+		switch r {
+		case '-', ' ', '\t':
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(code)))
 }

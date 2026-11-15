@@ -20,6 +20,7 @@ import (
 	adminusers "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/shared/clientip"
+	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -67,29 +68,18 @@ func (h *Handlers) WithAudit(recorder *audit.Recorder) *Handlers {
 }
 
 // WithSetupCode makes first-admin creation require the install's one-time
-// setup code (BOOTSTRAP_SETUP_CODE). Empty keeps it open, as before.
+// setup code (BOOTSTRAP_SETUP_CODE, as config.LoadAPIConfig normalized and
+// length-checked it). Empty keeps it open, as before.
 func (h *Handlers) WithSetupCode(code string) *Handlers {
-	h.setupCode = normalizeSetupCode(code)
+	h.setupCode = config.NormalizeSetupCode(code)
 	return h
-}
-
-// normalizeSetupCode lets an operator type the code the way the installer
-// printed it or not: case, dashes and spaces are ignored.
-func normalizeSetupCode(code string) string {
-	return strings.ToUpper(strings.Map(func(r rune) rune {
-		switch r {
-		case '-', ' ', '\t':
-			return -1
-		}
-		return r
-	}, code))
 }
 
 // setupCodeMatches compares in constant time. Hashing first keeps the
 // comparison independent of the submitted length as well.
 func (h *Handlers) setupCodeMatches(submitted string) bool {
 	want := sha256.Sum256([]byte(h.setupCode))
-	got := sha256.Sum256([]byte(normalizeSetupCode(submitted)))
+	got := sha256.Sum256([]byte(config.NormalizeSetupCode(submitted)))
 	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
 }
 

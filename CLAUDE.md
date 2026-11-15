@@ -545,16 +545,22 @@ or imported groups come back empty. Any other path that creates groups through
   /users/bootstrap/first` needs it (`setup_code`, constant-time compare,
   case/dash-insensitive, same 403 for missing and wrong, never logged), and
   `GET /users/bootstrap/status` reports `setup_code_required`, never the code
-  (`api/internal/handlers/users`). Unset keeps the open first-run form for
+  (`api/internal/handlers/users`). `LoadAPIConfig` normalizes it once
+  (`config.NormalizeSetupCode`) and refuses to start below 16 characters;
+  every consumer reads that value. Unset keeps the open first-run form for
   dev and existing installs. `scripts/install.sh` generates and prints it,
   the release Compose requires it, Helm renders `secrets.bootstrapSetupCode`
-  through `secretEnv` (optional). The login page's field logic lives in
+  through `secretEnv` (`optional` only without a per-field Secret). The login page's field logic lives in
   `web/lib/bootstrap.ts`. With a code set, an SSO sign-in never bootstraps:
   JIT users (the first included) get the ordinary JIT role, and bootstrap
   stays open until an active **superadmin** exists rather than any active
   user (`ConfigureSetupCode` on `oidcauth` and `adminusers`, wired in
   `server.go`; both must follow the same setting). Unset keeps SSO
-  bootstrap parity.
+  bootstrap parity. Either way bootstrap (form and SSO) closes for good once
+  a superadmin has ever existed: `admin_bootstrap_closed`, set by a trigger
+  on `admin_users` (000106), read via `adminusers.SuperadminEverExisted`.
+  Every path that demotes, disables or deletes a user takes
+  `adminusers.LockSuperadmins` first, then counts, in one transaction.
 - **Client IPs come only from `shared/clientip`** (`FromRequest` behind the
   router-wide resolver middleware, or a `Resolver`): forwarding headers count
   only from `TRUSTED_PROXY_CIDRS` peers (parsed once in
@@ -568,9 +574,13 @@ or imported groups come back empty. Any other path that creates groups through
   `useEdgeSecurity` (`api/internal/api/routes_edge.go`); `authMiddleware` is
   wrapped by `rateLimiter.Authenticate`. A presented credential is never
   judged on an address bucket: valid ones spend their own bucket, a signed
-  (even expired) session cookie keys on its user and keeps its 401, and only
-  verified failures (401s, unknown push/collector tokens) are charged to the
-  address afterwards. Address buckets exist only for
+  session cookie keys on its user, an expired one (within the refresh
+  lifetime, with no bearer header) keeps its 401, and only verified
+  failures (401s incl. sign-in, unknown push/collector tokens) are charged
+  to the address afterwards. While that failure bucket is empty, anything
+  needing a lookup (key, token, refresh cookie, sign-in) is refused before
+  the handler; only a live session cookie passes. The cookie check is
+  `classifySessionToken`, unexported in `middleware` -- never authentication. Address buckets exist only for
   `clientip.Attributable` addresses (trusted-proxy-forwarded or public
   peer), IPv6 per /64. Authenticated routes are read from the router (on
   `RawPath`, as chi routes), so new routes need no list. Never echo `Origin` in a handler. The env rides
@@ -696,7 +706,8 @@ or imported groups come back empty. Any other path that creates groups through
   recipient over one reused connection, never falls back to the alert
   default recipients, and reports partial failures as `*mail.DeliveryError`.
   Alert email stays on `SendAlert`. Both run SMTP I/O under a deadline
-  (`smtp_session.go`: the ctx deadline, else 30 s per message).
+  (`smtp_session.go`: the ctx deadline, else 30 s per message; a cancelled
+  ctx means now), and neither fails a send on QUIT once DATA was accepted.
 - **Channel plugins** (`shared/notifications/plugin/builtin/<type>/`,
   registered in `builtin.go`) follow the checklist in the `plugin` package
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and

@@ -14,7 +14,10 @@ import (
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 )
 
-const testSessionSecret = "secret"
+const (
+	testSessionSecret   = "secret"
+	testRefreshLifetime = 30 * 24 * time.Hour
+)
 
 type fakeClock struct{ t time.Time }
 
@@ -24,7 +27,7 @@ func newTestLimiter(perMinute, burst int) (*RateLimiter, *fakeClock) {
 	l := NewRateLimiter(perMinute, burst)
 	clock := &fakeClock{t: time.Unix(1_700_000_000, 0)}
 	l.now = clock.now
-	l.SetSessionSecret(testSessionSecret)
+	l.SetSessionSecret(testSessionSecret, testRefreshLifetime)
 	return l, clock
 }
 
@@ -85,9 +88,15 @@ func fakeAuth(next http.Handler) http.Handler {
 
 // fakeAnonymous answers the unauthenticated routes: push and discovery
 // tokens other than "good" are unknown (404/401), refresh needs the
-// "good-refresh" cookie, everything else is 200.
+// "good-refresh" cookie, a sign-in (POST) needs the "right" password header,
+// everything else is 200.
 func fakeAnonymous(w http.ResponseWriter, r *http.Request) {
 	switch p := r.URL.Path; {
+	case p == loginPath && r.Method == http.MethodPost:
+		if r.Header.Get("X-Test-Password") != "right" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 	case strings.HasPrefix(p, "/api/v1/push/"):
 		if strings.TrimPrefix(p, "/api/v1/push/") != "good" {
 			w.WriteHeader(http.StatusNotFound)
@@ -111,6 +120,14 @@ func fakeAnonymous(w http.ResponseWriter, r *http.Request) {
 // around the auth middleware on routes under /api/v1/ except the
 // unauthenticated groups.
 func testStack(l *RateLimiter) http.Handler {
+	h, _ := countingTestStack(l)
+	return h
+}
+
+// countingTestStack is testStack plus a count of the requests that reached
+// a credential check: the auth middleware or an unauthenticated handler.
+func countingTestStack(l *RateLimiter) (http.Handler, *int) {
+	reached := new(int)
 	isAuth := func(r *http.Request) bool {
 		p := r.URL.Path
 		for _, anon := range []string{"/api/v1/auth/", "/api/v1/oauth/", "/api/v1/push/", "/api/v1/discovery-collectors/"} {
@@ -121,14 +138,22 @@ func testStack(l *RateLimiter) http.Handler {
 		return strings.HasPrefix(p, "/api/v1/")
 	}
 	l.SetRouteClassifier(isAuth)
-	authed := l.Authenticate(fakeAuth)(statusHandler(http.StatusOK))
+	countedAuth := func(next http.Handler) http.Handler {
+		inner := fakeAuth(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*reached++
+			inner.ServeHTTP(w, r)
+		})
+	}
+	authed := l.Authenticate(countedAuth)(statusHandler(http.StatusOK))
 	return l.Anonymous(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isAuth(r) {
 			authed.ServeHTTP(w, r)
 			return
 		}
+		*reached++
 		fakeAnonymous(w, r)
-	}))
+	})), reached
 }
 
 func TestRateLimiterDisabled(t *testing.T) {
@@ -218,11 +243,12 @@ func TestRateLimiterSignedSessionKeyedByUserOnAnonymousRoutes(t *testing.T) {
 
 // The shared-address attack: one client floods sign-in and junk keys from an
 // address many users share. Everyone else's sign-in from that address is
-// limited (it has no other key), but a valid session, a valid refresh, and
-// an expired session cookie's 401 -- which is what makes the client refresh
-// -- all still go through.
-func TestRateLimiterSharedAddressFloodNeverBlocksCredentials(t *testing.T) {
-	l, _ := newTestLimiter(60, 3)
+// limited (it has no other key), and so, until the failure bucket refills,
+// is every credential only a lookup can verify. A valid session and an
+// expired session cookie's 401 -- which is what makes the client refresh --
+// still go through.
+func TestRateLimiterSharedAddressFloodSparesSessions(t *testing.T) {
+	l, clock := newTestLimiter(60, 3)
 	h := testStack(l)
 	const shared = "198.51.100.77"
 
@@ -240,35 +266,190 @@ func TestRateLimiterSharedAddressFloodNeverBlocksCredentials(t *testing.T) {
 	if rec := do(h, withSession(t, anonRequest("/api/v1/monitors", shared), "victim", time.Hour)); rec.Code != http.StatusOK {
 		t.Fatalf("valid session refused from the flooded address: %d", rec.Code)
 	}
-	if rec := do(h, bearer("/api/v1/monitors", shared, "good-key")); rec.Code != http.StatusOK {
-		t.Fatalf("valid API key refused from the flooded address: %d", rec.Code)
-	}
-	refresh := anonRequest(refreshPath, shared)
-	refresh.AddCookie(&http.Cookie{Name: refreshCookieName, Value: "good-refresh"})
-	if rec := do(h, refresh); rec.Code != http.StatusOK {
-		t.Fatalf("valid refresh refused from the flooded address: %d", rec.Code)
-	}
 	for i := 0; i < 3; i++ {
 		rec := do(h, withSession(t, anonRequest("/api/v1/monitors", shared), "victim", -time.Minute))
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("expired session cookie got %d, want 401 so the client refreshes", rec.Code)
 		}
 	}
+
+	// Keys and refresh cookies cannot be told from guesses without a
+	// lookup, so they wait with the flood ...
+	if rec := do(h, bearer("/api/v1/monitors", shared, "good-key")); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("API key from an address with no failure budget left: %d, want 429", rec.Code)
+	}
+	refresh := func() int {
+		req := anonRequest(refreshPath, shared)
+		req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: "good-refresh"})
+		return do(h, req).Code
+	}
+	if code := refresh(); code != http.StatusTooManyRequests {
+		t.Fatalf("refresh from an address with no failure budget left: %d, want 429", code)
+	}
+	// ... and go through once a failure token has refilled.
+	clock.t = clock.t.Add(time.Second)
+	if rec := do(h, bearer("/api/v1/monitors", shared, "good-key")); rec.Code != http.StatusOK {
+		t.Fatalf("valid API key after the refill: %d", rec.Code)
+	}
+	clock.t = clock.t.Add(time.Second)
+	if code := refresh(); code != http.StatusOK {
+		t.Fatalf("valid refresh after the refill: %d", code)
+	}
 }
 
-// Invalid refresh cookies are failures: rotating them buys a fresh
-// credential bucket each time but spends the address's failure bucket.
-func TestRateLimiterInvalidRefreshChargesFailures(t *testing.T) {
+// Once an address has emptied its failure bucket, its guesses stop reaching
+// the handler (no refresh-session, API-key, push or collector token lookup)
+// and random refresh cookies stop minting buckets; a valid session from the
+// same address still reaches the auth middleware and gets through.
+func TestRateLimiterFloodStopsReachingHandler(t *testing.T) {
+	const addr = "198.51.100.90"
+	floods := map[string]func(i int) *http.Request{
+		"refresh cookies": func(i int) *http.Request {
+			req := anonRequest(refreshPath, addr)
+			req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: fmt.Sprintf("guess%d", i)})
+			return req
+		},
+		"push tokens": func(i int) *http.Request {
+			return anonRequest(fmt.Sprintf("/api/v1/push/guess%d", i), addr)
+		},
+		"collector tokens": func(i int) *http.Request {
+			req := anonRequest("/api/v1/discovery-collectors/x/config", addr)
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer guess%d", i))
+			return req
+		},
+		"API keys": func(i int) *http.Request {
+			return bearer("/api/v1/monitors", addr, fmt.Sprintf("guess%d", i))
+		},
+		"sign-ins": func(i int) *http.Request {
+			req := anonRequest(loginPath, addr)
+			req.Method = http.MethodPost
+			return req
+		},
+	}
+	for name, guess := range floods {
+		t.Run(name, func(t *testing.T) {
+			l, _ := newTestLimiter(60, 3)
+			h, reached := countingTestStack(l)
+			for i := 0; i < 50; i++ {
+				do(h, guess(i))
+			}
+			if *reached != 3 {
+				t.Fatalf("%d of 50 guesses reached the handler, want the burst of 3", *reached)
+			}
+			l.mu.Lock()
+			buckets := len(l.buckets)
+			l.mu.Unlock()
+			if buckets > 5 {
+				t.Fatalf("the flood left %d buckets, want only those of the guesses that ran", buckets)
+			}
+			before := *reached
+			if rec := do(h, withSession(t, anonRequest("/api/v1/monitors", addr), "victim", time.Hour)); rec.Code != http.StatusOK {
+				t.Fatalf("valid session from the flooding address: %d", rec.Code)
+			}
+			if *reached != before+1 {
+				t.Fatal("the valid session did not reach the auth middleware")
+			}
+		})
+	}
+}
+
+// A signed but expired session cookie must not shield a bearer credential:
+// the auth middleware falls through from the cookie to the key and looks it
+// up, so the key's failures are charged and, once the bucket is empty,
+// refused before the lookup.
+func TestRateLimiterExpiredCookieDoesNotShieldBearer(t *testing.T) {
+	l, _ := newTestLimiter(60, 2)
+	h, reached := countingTestStack(l)
+	codes := []int{}
+	for i := 0; i < 5; i++ {
+		req := withSession(t, bearer("/api/v1/monitors", "198.51.100.61", fmt.Sprintf("guess%d", i)), "ex-member", -time.Minute)
+		codes = append(codes, do(h, req).Code)
+	}
+	if fmt.Sprint(codes) != fmt.Sprint([]int{401, 401, 429, 429, 429}) {
+		t.Fatalf("expired cookie + random keys = %v, want [401 401 429 429 429]", codes)
+	}
+	if *reached != 2 {
+		t.Fatalf("%d key lookups ran, want 2", *reached)
+	}
+	// The same goes for X-API-Key.
+	req := withSession(t, anonRequest("/api/v1/monitors", "198.51.100.61"), "ex-member", -time.Minute)
+	req.Header.Set("X-API-Key", "guess")
+	if rec := do(h, req); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expired cookie + X-API-Key: %d, want 429", rec.Code)
+	}
+}
+
+// A cookie that expired longer ago than the refresh lifetime can no longer
+// be refreshed: its 401s are ordinary failures.
+func TestRateLimiterLongExpiredCookieIsCharged(t *testing.T) {
 	l, _ := newTestLimiter(60, 2)
 	h := testStack(l)
 	codes := []int{}
 	for i := 0; i < 3; i++ {
+		req := withSession(t, anonRequest("/api/v1/monitors", "198.51.100.62"), "ex-member", -(testRefreshLifetime + time.Hour))
+		codes = append(codes, do(h, req).Code)
+	}
+	if fmt.Sprint(codes) != fmt.Sprint([]int{401, 401, 429}) {
+		t.Fatalf("long-expired cookie = %v, want [401 401 429]", codes)
+	}
+	// Within the lifetime it keeps its 401 however often it is sent.
+	for i := 0; i < 5; i++ {
+		req := withSession(t, anonRequest("/api/v1/monitors", "198.51.100.63"), "member", -(testRefreshLifetime - time.Hour))
+		if rec := do(h, req); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("refreshable cookie request %d: %d, want 401", i, rec.Code)
+		}
+	}
+}
+
+// Failed sign-ins spend the failure bucket, so password guessing is bounded
+// by it as well as by the address bucket, and a sign-in waits while it is
+// empty.
+func TestRateLimiterFailedSignInChargesFailures(t *testing.T) {
+	l, _ := newTestLimiter(60, 3)
+	h := testStack(l)
+	signIn := func(ip, password string) int {
+		req := anonRequest(loginPath, ip)
+		req.Method = http.MethodPost
+		req.Header.Set("X-Test-Password", password)
+		return do(h, req).Code
+	}
+	// Junk keys empty the failure bucket while the address bucket is full.
+	for i := 0; i < 3; i++ {
+		do(h, bearer("/api/v1/monitors", "198.51.100.64", fmt.Sprintf("junk%d", i)))
+	}
+	if code := signIn("198.51.100.64", "right"); code != http.StatusTooManyRequests {
+		t.Fatalf("sign-in while the failure bucket is empty: %d, want 429", code)
+	}
+	// Failed sign-ins empty it too.
+	codes := []int{}
+	for i := 0; i < 3; i++ {
+		codes = append(codes, signIn("198.51.100.65", "wrong"))
+	}
+	if fmt.Sprint(codes) != fmt.Sprint([]int{401, 401, 401}) {
+		t.Fatalf("failed sign-ins = %v", codes)
+	}
+	if rec := do(h, bearer("/api/v1/monitors", "198.51.100.65", "good-k")); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("API key after three failed sign-ins: %d, want 429", rec.Code)
+	}
+}
+
+// Invalid refresh cookies are failures: rotating them buys a fresh
+// credential bucket each time but spends the address's failure bucket, and
+// once that is empty they stop reaching the handler.
+func TestRateLimiterInvalidRefreshChargesFailures(t *testing.T) {
+	l, _ := newTestLimiter(60, 2)
+	h, reached := countingTestStack(l)
+	codes := []int{}
+	for i := 0; i < 4; i++ {
 		req := anonRequest(refreshPath, "198.51.100.5")
 		req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: fmt.Sprintf("guess%d", i)})
 		codes = append(codes, do(h, req).Code)
 	}
-	if codes[0] != http.StatusUnauthorized || codes[1] != http.StatusUnauthorized || codes[2] != http.StatusTooManyRequests {
-		t.Fatalf("refresh guesses = %v, want [401 401 429]", codes)
+	if fmt.Sprint(codes) != fmt.Sprint([]int{401, 401, 429, 429}) {
+		t.Fatalf("refresh guesses = %v, want [401 401 429 429]", codes)
+	}
+	if *reached != 2 {
+		t.Fatalf("%d refresh lookups ran, want 2", *reached)
 	}
 }
 
@@ -357,31 +538,40 @@ func TestRateLimiterExemptRoutesStillChargeFailures(t *testing.T) {
 	}
 }
 
-// Token-path routes: a valid push or collector token is never limited, but
-// an unknown one is a failure, so looping random tokens is bounded.
+// Token-path routes: a valid push or collector token is not limited while
+// the address has failure budget left, but an unknown one is a failure, so
+// looping random tokens is bounded -- and once the budget is gone, every
+// token from that address waits for the refill.
 func TestRateLimiterTokenPathsChargeOnlyFailures(t *testing.T) {
-	l, _ := newTestLimiter(60, 2)
+	l, clock := newTestLimiter(60, 2)
 	h := testStack(l)
 	const addr = "198.51.100.40"
-	codes := []int{}
-	for i := 0; i < 3; i++ {
-		codes = append(codes, do(h, anonRequest(fmt.Sprintf("/api/v1/push/random%d", i), addr)).Code)
-	}
-	if codes[0] != http.StatusNotFound || codes[1] != http.StatusNotFound || codes[2] != http.StatusTooManyRequests {
-		t.Fatalf("random push tokens = %v, want [404 404 429]", codes)
-	}
 	for i := 0; i < 10; i++ {
 		if rec := do(h, anonRequest("/api/v1/push/good", addr)); rec.Code != http.StatusOK {
-			t.Fatalf("valid push token %d refused after the failures: %d", i, rec.Code)
+			t.Fatalf("valid push token %d: %d", i, rec.Code)
 		}
 		req := anonRequest("/api/v1/discovery-collectors/x/config", addr)
 		req.Header.Set("Authorization", "Bearer collector")
 		if rec := do(h, req); rec.Code != http.StatusOK {
-			t.Fatalf("valid collector token %d refused: %d", i, rec.Code)
+			t.Fatalf("valid collector token %d: %d", i, rec.Code)
 		}
+	}
+	codes := []int{}
+	for i := 0; i < 3; i++ {
+		codes = append(codes, do(h, anonRequest(fmt.Sprintf("/api/v1/push/random%d", i), addr)).Code)
+	}
+	if fmt.Sprint(codes) != fmt.Sprint([]int{404, 404, 429}) {
+		t.Fatalf("random push tokens = %v, want [404 404 429]", codes)
 	}
 	if rec := do(h, anonRequest("/api/v1/discovery-collectors/x/config", addr)); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("bad collector token after the failure bucket emptied: %d, want 429", rec.Code)
+	}
+	if rec := do(h, anonRequest("/api/v1/push/good", addr)); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("push token while the failure bucket is empty: %d, want 429", rec.Code)
+	}
+	clock.t = clock.t.Add(time.Second)
+	if rec := do(h, anonRequest("/api/v1/push/good", addr)); rec.Code != http.StatusOK {
+		t.Fatalf("valid push token after the refill: %d", rec.Code)
 	}
 }
 
@@ -505,5 +695,39 @@ func TestRateLimiterSweepsRefilledBuckets(t *testing.T) {
 	defer l.mu.Unlock()
 	if len(l.buckets) != 1 {
 		t.Fatalf("buckets after sweep = %d, want 1", len(l.buckets))
+	}
+}
+
+func TestClassifySessionToken(t *testing.T) {
+	const lifetime = 30 * 24 * time.Hour
+	now := time.Now()
+	token := func(user string, ttl time.Duration) string {
+		t.Helper()
+		v, err := auth.CreateAdminToken(user, "secret", ttl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	fresh := token("u1", time.Hour)
+	expired := token("u2", -time.Minute)
+	ancient := token("u3", -(lifetime + time.Hour))
+
+	if id, state := classifySessionToken(fresh, "secret", now, lifetime); state != sessionLive || id != "u1" {
+		t.Fatalf("fresh token: %q %v", id, state)
+	}
+	if _, err := auth.ParseAdminToken(expired, "secret"); err == nil {
+		t.Fatal("expired token must not authenticate")
+	}
+	if id, state := classifySessionToken(expired, "secret", now, lifetime); state != sessionExpired || id != "u2" {
+		t.Fatalf("expired but refreshable token: %q %v", id, state)
+	}
+	if id, state := classifySessionToken(ancient, "secret", now, lifetime); state != sessionNone || id != "" {
+		t.Fatalf("token expired past the refresh lifetime: %q %v", id, state)
+	}
+	for _, bad := range []struct{ token, secret string }{{fresh, "other"}, {"junk", "secret"}, {"", "secret"}, {fresh, ""}} {
+		if _, state := classifySessionToken(bad.token, bad.secret, now, lifetime); state != sessionNone {
+			t.Fatalf("accepted %q with secret %q", bad.token, bad.secret)
+		}
 	}
 }
