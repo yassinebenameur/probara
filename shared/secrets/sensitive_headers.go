@@ -62,8 +62,9 @@ var syntheticTemplateRef = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}`)
 //     value becomes the {{ref}}. A value that already references a variable
 //     is left alone: the reference is the protection.
 //   - synthetic_api and synthetic_browser: a credential-named plain variable
-//     (`password`, `api_token`, …) moves to `secret_variables` under the same
-//     name, so its {{ref}}s keep resolving (moveSensitiveVariables).
+//     (IsSensitiveVariableName: `password`, `api_key`, `access_token`, …)
+//     moves to `secret_variables` under the same name, so its {{ref}}s keep
+//     resolving (moveSensitiveVariables).
 //
 // The cmd/admin/migrate_sensitive_headers backfill applies this same function
 // to stored rows, so a write and the backfill always agree.
@@ -177,12 +178,20 @@ func normalizeSyntheticAPIHeaders(raw json.RawMessage) (json.RawMessage, bool, e
 		secretVars = map[string]string{}
 	}
 	plainVars, _ := cfg["variables"].(map[string]any)
+	// Case-insensitive: a generated name that differs from an existing one
+	// only by case would be a secret name validation refuses.
 	taken := func(name string) bool {
-		if _, ok := secretVars[name]; ok {
-			return true
+		for existing := range secretVars {
+			if strings.EqualFold(existing, name) {
+				return true
+			}
 		}
-		_, ok := plainVars[name]
-		return ok
+		for existing := range plainVars {
+			if strings.EqualFold(existing, name) {
+				return true
+			}
+		}
+		return false
 	}
 
 	changed := false
@@ -262,13 +271,17 @@ func uniqueVariableName(base string, taken func(string) bool) string {
 }
 
 // moveSensitiveVariables moves credential-named entries of a synthetic
-// journey's plain `variables` (the IsSensitiveHeaderName rule: password,
-// token, secret, …) into `secret_variables` under the same name, so every
-// {{name}} reference keeps resolving while the value becomes encrypted,
-// masked and redacted. The moved value replaces a same-named secret, as a
-// moved header does; an empty value has nothing to protect and stays plain,
-// and a "***" placeholder has nothing behind it there and is dropped, leaving
-// any stored secret of that name as the merge restored it.
+// journey's plain `variables` (IsSensitiveVariableName: `password`,
+// `api_key`, `access_token`, not `token_url`) into `secret_variables` under
+// the same name, so every {{name}} reference keeps resolving while the value
+// becomes encrypted, masked and redacted. The moved value replaces a
+// same-named secret, as a moved header does; an empty value has nothing to
+// protect and stays plain, and a "***" placeholder has nothing behind it
+// there and is dropped, leaving any stored secret of that name as the merge
+// restored it. A name moving would make invalid (unreachable by a {{ref}},
+// or differing only by case from another secret name) stays plain
+// (movableSensitiveVariables), so a write never produces a config
+// validation refuses.
 func moveSensitiveVariables(raw json.RawMessage) (json.RawMessage, bool, error) {
 	if !containsJSONKey(raw, "variables") && !strings.Contains(string(raw), `\u`) {
 		return raw, false, nil
@@ -285,20 +298,16 @@ func moveSensitiveVariables(raw json.RawMessage) (json.RawMessage, bool, error) 
 	if secretVars == nil {
 		secretVars = map[string]string{}
 	}
-	changed := false
-	for name, value := range variables {
-		text, isString := value.(string)
-		if !isString || text == "" || !IsSensitiveHeaderName(name) {
-			continue
-		}
+	movable, _ := movableSensitiveVariables(variables, secretVars)
+	if len(movable) == 0 {
+		return raw, false, nil
+	}
+	for _, name := range movable {
+		text, _ := variables[name].(string)
 		delete(variables, name)
-		changed = true
 		if text != MaskedSecret {
 			secretVars[name] = text
 		}
-	}
-	if !changed {
-		return raw, false, nil
 	}
 	if len(variables) == 0 {
 		delete(cfg, "variables")

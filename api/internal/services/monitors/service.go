@@ -81,6 +81,11 @@ func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming
 		return nil, fmt.Errorf("normalize sensitive headers: %w", err)
 	}
 	if err := validation.ValidateMergedSecretPairs(monitorType, merged); err != nil {
+		if len(existing) == 0 {
+			// Nothing was kept on a create, so the conflict comes from
+			// moving credential-named entries into their secret map.
+			return nil, fmt.Errorf("%w: %v (after moving credential-named headers, metadata or variables into their secret map; rename or remove one of them)", ErrSecretConflict, err)
+		}
 		return nil, fmt.Errorf("%w: %v (a stored secret was kept because the request omitted it; send \"\" to clear it, or leave it out of a submitted secret map)", ErrSecretConflict, err)
 	}
 	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)

@@ -146,12 +146,6 @@ func (r *secretRedactor) redact(text string) string {
 	return text
 }
 
-// contains reports whether text carries any spelling of a secret, under the
-// same whole-token rule redact applies to short secrets.
-func (r *secretRedactor) contains(text string) bool {
-	return r != nil && r.redact(text) != text
-}
-
 // replaceWholeTokens replaces each occurrence of needle in text that is not
 // adjacent, in the original text, to a letter or digit on either side.
 func replaceWholeTokens(text, needle, replacement string) string {
@@ -166,7 +160,7 @@ func replaceWholeTokens(text, needle, replacement string) string {
 		end := start + len(needle)
 		before, _ := utf8.DecodeLastRuneInString(text[:start])
 		after, _ := utf8.DecodeRuneInString(text[end:])
-		if !isWordRune(before) && !isWordRune(after) {
+		if (!isWordRune(before) || endsInEscape(text[:start])) && !isWordRune(after) {
 			b.WriteString(text[last:start])
 			b.WriteString(replacement)
 			last = end
@@ -177,6 +171,21 @@ func replaceWholeTokens(text, needle, replacement string) string {
 	}
 	b.WriteString(text[last:])
 	return b.String()
+}
+
+// trailingEscape matches an escape sequence ending a string: a
+// percent-encoded byte (`%22`), a JSON/Go unicode escape (`\u0022`) or a
+// backslash escape (`\n`, `\"`). Its last character is a letter or digit,
+// but it encodes a separator, so a secret right after one starts a token
+// (`%22123%22`, `pin%3D123`, `"\n123"`).
+var trailingEscape = regexp.MustCompile(`(%[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|\\[^u])$`)
+
+func endsInEscape(prefix string) bool {
+	// The longest escape is six bytes (\uXXXX); look no further back.
+	if len(prefix) > 6 {
+		prefix = prefix[len(prefix)-6:]
+	}
+	return trailingEscape.MatchString(prefix)
 }
 
 func isWordRune(r rune) bool {

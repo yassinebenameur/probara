@@ -535,3 +535,64 @@ export function undefinedRefsWarning(names: string[]): string | undefined {
   const list = names.map((name) => `{{${name}}}`).join(', ');
   return `${list} ${names.length === 1 ? 'is' : 'are'} not defined by any variable or earlier extraction; this step will fail when it runs.`;
 }
+
+// The synthetic-variable credential rule: the name's last segment (split on
+// `_`, `.`, `-`, spaces and camelCase) is a credential word, or its last two
+// segments a credential pair. TS twin of IsSensitiveVariableName in
+// shared/secrets/sensitive_variables.go, which every API write applies (it
+// moves such a plain variable into secret_variables); both test suites assert
+// equality with shared/secrets/testdata/sensitive_variable_names.json. Unlike
+// the header rule, `token_url` or a `forgot_password_link` selector are
+// ordinary variables.
+export const SENSITIVE_VARIABLE_WORDS: readonly string[] = ['password', 'passphrase', 'secret', 'token', 'apikey'];
+export const SENSITIVE_VARIABLE_PAIRS: readonly (readonly [string, string])[] = [['api', 'key']];
+
+const isUpper = (c: string) => c !== c.toLowerCase() && c === c.toUpperCase();
+const isLower = (c: string) => c !== c.toUpperCase() && c === c.toLowerCase();
+const isDigit = (c: string) => c >= '0' && c <= '9';
+
+/** A variable name's lower-case segments (see SENSITIVE_VARIABLE_WORDS). */
+export function variableNameSegments(name: string): string[] {
+  const chars = Array.from(name.trim());
+  const segments: string[] = [];
+  let current = '';
+  chars.forEach((c, i) => {
+    if (c === '_' || c === '.' || c === '-' || /\s/.test(c)) {
+      if (current) segments.push(current);
+      current = '';
+      return;
+    }
+    if (isUpper(c) && current) {
+      const prev = chars[i - 1];
+      const nextLower = i + 1 < chars.length && isLower(chars[i + 1]);
+      if (isLower(prev) || isDigit(prev) || (isUpper(prev) && nextLower)) {
+        segments.push(current);
+        current = '';
+      }
+    }
+    current += c.toLowerCase();
+  });
+  if (current) segments.push(current);
+  return segments;
+}
+
+/** Whether a synthetic variable name names a credential (`password`, `api_key`, `authToken`). */
+export function isSensitiveVariableName(name: string): boolean {
+  const segments = variableNameSegments(name);
+  if (segments.length === 0) return false;
+  const last = segments[segments.length - 1];
+  if (SENSITIVE_VARIABLE_WORDS.includes(last)) return true;
+  if (segments.length < 2) return false;
+  const beforeLast = segments[segments.length - 2];
+  return SENSITIVE_VARIABLE_PAIRS.some(([first, second]) => beforeLast === first && last === second);
+}
+
+const VARIABLE_NAME = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * Whether a plain variable row is saved as a secret variable: a credential
+ * name with a value, which a {{ref}} can reach. The API moves exactly these
+ * on write; the forms show such a row as secret and submit it as one.
+ */
+export const plainVariableGoesSecret = (row: { key: string; value: string }): boolean =>
+  Boolean(row.value) && isSensitiveVariableName(row.key.trim()) && VARIABLE_NAME.test(row.key.trim());

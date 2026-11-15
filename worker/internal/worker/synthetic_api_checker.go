@@ -245,11 +245,14 @@ func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessa
 		}
 
 		// What a redirect off the origin must not carry: the headers that
-		// hold a secret, and, refused outright, a URL or body that does.
-		stepSecrets := newSecretRedactor(syntheticStepSecretValues(config.SecretVariables, vars, sensitive))
+		// reference a secret, and, refused outright, a URL or body template
+		// that does. Decided from the {{refs}} as written, not by searching
+		// the resolved text: a secret value that happens to appear in an
+		// ordinary URL ("health") is not a reference to it.
 		guard := redirectGuard{
-			secretNames:   secretHeaderNames,
-			carriesSecret: stepSecrets.contains(resolvedURL) || (body != nil && stepSecrets.contains(*body)),
+			secretNames: secretHeaderNames,
+			carriesSecret: referencesSecret(step.Request.URL, config.SecretVariables, sensitive) ||
+				(step.Request.Body != nil && referencesSecret(*step.Request.Body, config.SecretVariables, sensitive)),
 		}
 
 		client := &http.Client{
@@ -400,19 +403,6 @@ func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessa
 	}
 }
 
-// syntheticStepSecretValues lists the values a step must keep on its origin:
-// every secret variable and every value extracted as sensitive so far.
-func syntheticStepSecretValues(secretVariables, vars map[string]string, sensitive map[string]bool) []string {
-	values := make([]string, 0, len(secretVariables)+len(sensitive))
-	for _, value := range secretVariables {
-		values = append(values, value)
-	}
-	for name := range sensitive {
-		values = append(values, vars[name])
-	}
-	return values
-}
-
 // secretReferencingHeaders names the step headers whose value references a
 // secret variable or a sensitive extraction, so a redirect off the origin
 // drops them along with the credential-named ones.
@@ -422,16 +412,23 @@ func secretReferencingHeaders(headers, secretVariables map[string]string, sensit
 	}
 	var names []string
 	for name, value := range headers {
-		for _, match := range syntheticTemplateRegex.FindAllStringSubmatch(value, -1) {
-			ref := strings.TrimSpace(match[1])
-			_, secret := secretVariables[ref]
-			if secret || sensitive[ref] {
-				names = append(names, name)
-				break
-			}
+		if referencesSecret(value, secretVariables, sensitive) {
+			names = append(names, name)
 		}
 	}
 	return names
+}
+
+// referencesSecret reports whether a template references, by {{name}}, a
+// secret variable or a value extracted as sensitive by an earlier step.
+func referencesSecret(template string, secretVariables map[string]string, sensitive map[string]bool) bool {
+	for _, match := range syntheticTemplateRegex.FindAllStringSubmatch(template, -1) {
+		ref := strings.TrimSpace(match[1])
+		if _, secret := secretVariables[ref]; secret || sensitive[ref] {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveSyntheticStepURL(baseURL *url.URL, raw string, vars map[string]string) (string, error) {

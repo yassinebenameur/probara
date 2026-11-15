@@ -185,10 +185,15 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   maps (`secrets.NormalizeSensitiveHeaders`, after the merge in
   `prepareConfigForWrite`, which then refuses a merged config that conflicts
   with a kept secret); the `cmd/admin/migrate_sensitive_headers` backfill
-  calls the same function. The credential-name rule is the fixture
-  `shared/secrets/testdata/sensitive_header_names.json`:
-  `IsSensitiveHeaderName` and its TS twin in `web/lib/monitor-form/http.ts`
-  are tested equal to it, and `scripts/kuma-export` calls the Go one. Skip
+  calls the same function, after renaming miscased keys stored before
+  validation refused them. Two name rules, each one fixture in
+  `shared/secrets/testdata/`: headers/metadata use `IsSensitiveHeaderName`
+  (any name containing token/secret/…; TS twin in
+  `web/lib/monitor-form/http.ts`, also called by `scripts/kuma-export`),
+  synthetic variables use `IsSensitiveVariableName` (last name segment only,
+  so `token_url` stays plain; TS twin in `web/lib/monitor-form/synthetic.ts`).
+  Both twins are tested equal to their fixture. A variable move never creates
+  a secret name validation refuses (`movableSensitiveVariables`). Skip
   secret work for a config with no secret key via `secrets.HasSecretValues`
   (byte-level). Keys match exactly while config structs decode
   case-insensitively, so `ValidatorRegistry.Validate` refuses a miscapitalized

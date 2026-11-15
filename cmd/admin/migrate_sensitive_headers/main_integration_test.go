@@ -75,6 +75,13 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 	browserID := insert("synthetic_browser", `{"start_url":"https://x.test/login","variables":{"password":"browser-pw"},"steps":[{"id":"p","action":"fill","selector":"#p","value":"{{password}}"}]}`, false)
 	grpcID := insert("grpc", `{"host":"g.test","metadata":{"authorization":"Bearer g","x-tenant":"t"}}`, false)
 	wsID := insert("websocket", `{"url":"wss://x.test","headers":{"Authorization":"ws"}}`, false)
+	// Keys stored miscased before validation refused them.
+	miscasedHTTPID := insert("http", `{"url":"https://x.test","method":"GET","Headers":{"Authorization":"Bearer miscased","Accept":"*/*"}}`, false)
+	miscasedSynthID := insert("synthetic_api", `{"steps":[{"id":"a","Request":{"method":"GET","url":"https://x.test","Headers":{"X-Api-Key":"miscased-step-key"}}}]}`, false)
+	bothSpellingsID := insert("http", `{"url":"https://x.test","method":"GET","headers":{"Accept":"*/*"},"Headers":{"Cookie":"both=1"}}`, false)
+	conflictID := insert("http", `{"url":"https://x.test","method":"GET","headers":{"Authorization":"Bearer one"},"Headers":{"Authorization":"Bearer two"}}`, false)
+	postgresID := insert("postgres", `{"host":"db.test","Password":"pg-miscased"}`, false)
+	unmovableID := insert("synthetic_api", `{"variables":{"Password":"unmovable-one","password":"unmovable-two"},"steps":[]}`, false)
 
 	var logs []string
 	logf := func(format string, args ...any) {
@@ -85,8 +92,8 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
-	if dry.Processed != 7 || dry.Updated != 6 || dry.Skipped != 1 || dry.Errored != 0 {
-		t.Fatalf("dry run stats = %+v, want processed 7 / updated 6 / skipped 1", dry)
+	if dry.Processed != 14 || dry.Updated != 10 || dry.Skipped != 3 || dry.Conflicted != 1 || dry.Unmovable != 1 || dry.Errored != 0 {
+		t.Fatalf("dry run stats = %+v, want processed 14 / updated 10 / skipped 3 / conflicted 1 / unmovable 1", dry)
 	}
 	if h := readConfig(httpID)["headers"].(map[string]any); h["Authorization"] != "Bearer legacy" {
 		t.Fatalf("dry run wrote the http monitor: %v", h)
@@ -96,7 +103,7 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if applied.Updated != 6 || applied.Errored != 0 {
+	if applied.Updated != 10 || applied.Conflicted != 1 || applied.Errored != 0 {
 		t.Fatalf("apply stats = %+v", applied)
 	}
 
@@ -168,16 +175,75 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 		t.Fatal("a websocket monitor was touched")
 	}
 
+	// Miscased keys are renamed to their exact spelling first, then
+	// normalized and encrypted like any other row.
+	decrypted := func(cfg map[string]any, field, key string) string {
+		t.Helper()
+		values, _ := cfg[field].(map[string]any)
+		ct, _ := values[key].(string)
+		plain, err := enc.Decrypt(ct)
+		if !secrets.LooksLikeEnvelope(ct) || err != nil {
+			t.Fatalf("%s.%s = %q (err %v), want an envelope", field, key, ct, err)
+		}
+		return plain
+	}
+	miscasedHTTP := readConfig(miscasedHTTPID)
+	if _, left := miscasedHTTP["Headers"]; left || miscasedHTTP["headers"].(map[string]any)["Accept"] != "*/*" {
+		t.Fatalf("miscased http after apply = %v", miscasedHTTP)
+	}
+	if decrypted(miscasedHTTP, "secret_headers", "Authorization") != "Bearer miscased" {
+		t.Fatal("miscased Authorization not moved")
+	}
+	miscasedSynth := readConfig(miscasedSynthID)
+	miscasedStep := miscasedSynth["steps"].([]any)[0].(map[string]any)
+	if _, left := miscasedStep["Request"]; left {
+		t.Fatalf("step Request not renamed: %v", miscasedStep)
+	}
+	if miscasedStep["request"].(map[string]any)["headers"].(map[string]any)["X-Api-Key"] != "{{a_x_api_key}}" {
+		t.Fatalf("miscased step header = %v", miscasedStep)
+	}
+	if decrypted(miscasedSynth, "secret_variables", "a_x_api_key") != "miscased-step-key" {
+		t.Fatal("miscased step header not moved")
+	}
+	both := readConfig(bothSpellingsID)
+	if _, left := both["Headers"]; left || both["headers"].(map[string]any)["Accept"] != "*/*" || decrypted(both, "secret_headers", "Cookie") != "both=1" {
+		t.Fatalf("two agreeing spellings were not merged: %v", both)
+	}
+	if conflict := readConfig(conflictID); conflict["Headers"] == nil || conflict["headers"].(map[string]any)["Authorization"] != "Bearer one" {
+		t.Fatalf("a conflicting row was changed: %v", conflict)
+	}
+	pg := readConfig(postgresID)
+	if _, left := pg["Password"]; left {
+		t.Fatalf("postgres Password not renamed: %v", pg)
+	}
+	if ct, _ := pg["password"].(string); !secrets.LooksLikeEnvelope(ct) {
+		t.Fatalf("postgres password = %q, want encrypted", ct)
+	}
+	if vars := readConfig(unmovableID)["variables"].(map[string]any); vars["Password"] != "unmovable-one" || vars["password"] != "unmovable-two" {
+		t.Fatalf("unmovable variables changed: %v", vars)
+	}
+	var reported bool
+	for _, line := range logs {
+		if strings.Contains(line, "[conflict] monitor "+conflictID.String()) && strings.Contains(line, "Headers") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("the conflict was not reported by monitor id: %q", logs)
+	}
+
 	again, err := migrate(ctx, client.DB, enc, true, logf)
 	if err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
-	if again.Updated != 0 || again.Skipped != 7 {
+	if again.Updated != 0 || again.Skipped != 13 || again.Conflicted != 1 {
 		t.Fatalf("second apply stats = %+v, want nothing to do", again)
 	}
 
 	for _, line := range logs {
-		if strings.Contains(line, "legacy") || strings.Contains(line, "literal-key") || strings.Contains(line, "change-me") || strings.Contains(line, "Bearer g") || strings.Contains(line, "browser-pw") || strings.Contains(line, "sid=1") {
+		if strings.Contains(line, "legacy") || strings.Contains(line, "literal-key") || strings.Contains(line, "change-me") || strings.Contains(line, "Bearer g") || strings.Contains(line, "browser-pw") || strings.Contains(line, "sid=1") ||
+			strings.Contains(line, "Bearer miscased") || strings.Contains(line, "miscased-step-key") || strings.Contains(line, "both=1") ||
+			strings.Contains(line, "Bearer one") || strings.Contains(line, "Bearer two") || strings.Contains(line, "pg-miscased") || strings.Contains(line, "unmovable-") {
 			t.Fatalf("a log line carries a secret: %q", line)
 		}
 	}

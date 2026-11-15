@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -86,13 +87,34 @@ func NewSyntheticBrowserChecker(artifactsDir string) *SyntheticBrowserChecker {
 // selectors, errors (an assert_text failure quotes the page text), the final
 // URL and artifact warnings. A failure screenshot is pixels and is not
 // redacted: a secret typed into a field the page renders as text, or shown
-// on the page, can appear in it (password inputs render masked).
+// on the page, can appear in it (password inputs render masked). chromedp's
+// own logging goes through the same redactor (chromedpLogOptions).
 func (c *SyntheticBrowserChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
-	result := c.check(ctx, configRaw, timeoutSeconds)
-	return newSecretRedactor(syntheticSecretValues(configRaw)).redactResult(result)
+	redactor := newSecretRedactor(syntheticSecretValues(configRaw))
+	return redactor.redactResult(c.check(ctx, configRaw, timeoutSeconds, chromedpLogOptions(redactor)))
 }
 
-func (c *SyntheticBrowserChecker) check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
+// chromedpLogOptions routes chromedp's logging through a journey's redactor.
+// By default chromedp writes with log.Printf, and its error paths format raw
+// DevTools traffic (a malformed incoming message with %#v, an event it cannot
+// decode), which can carry page, form or network data holding a secret
+// variable. Its debug log stays off.
+func chromedpLogOptions(r *secretRedactor) []chromedp.ContextOption {
+	sink := func(line string) { log.Print(line) }
+	return []chromedp.ContextOption{
+		chromedp.WithLogf(redactedLogf(r, "synthetic_browser: chromedp: ", sink)),
+		chromedp.WithErrorf(redactedLogf(r, "synthetic_browser: chromedp: ERROR: ", sink)),
+	}
+}
+
+// redactedLogf formats a log line, redacts it and hands it to sink.
+func redactedLogf(r *secretRedactor, prefix string, sink func(string)) func(string, ...any) {
+	return func(format string, args ...any) {
+		sink(prefix + r.redact(fmt.Sprintf(format, args...)))
+	}
+}
+
+func (c *SyntheticBrowserChecker) check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int, browserOpts []chromedp.ContextOption) CheckResult {
 	var config models.SyntheticBrowserMonitorConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		errMsg := fmt.Sprintf("failed to unmarshal synthetic_browser config: %v", err)
@@ -158,7 +180,7 @@ func (c *SyntheticBrowserChecker) check(ctx context.Context, configRaw json.RawM
 	)
 	defer cancelAlloc()
 
-	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx, browserOpts...)
 	defer cancelBrowser()
 
 	runCtx, cancelRun := context.WithTimeout(browserCtx, time.Duration(timeoutSeconds)*time.Second)
@@ -240,7 +262,7 @@ func (c *SyntheticBrowserChecker) check(ctx context.Context, configRaw json.RawM
 
 	if overallStatus != "success" {
 		if config.Artifacts.ScreenshotOnFailure {
-			screenshotPath, screenshotErr := c.captureScreenshotWithFallback(browserCtx, allocCtx, currentURL)
+			screenshotPath, screenshotErr := c.captureScreenshotWithFallback(browserCtx, allocCtx, currentURL, browserOpts)
 			if screenshotErr != nil {
 				artifactMetrics.Warnings = append(artifactMetrics.Warnings, fmt.Sprintf("screenshot capture failed: %v", screenshotErr))
 			} else {
@@ -515,7 +537,7 @@ func captureSyntheticBrowserScreenshot(ctx context.Context, artifactsBaseDir str
 	return relativePath, nil
 }
 
-func (c *SyntheticBrowserChecker) captureScreenshotWithFallback(browserCtx, allocCtx context.Context, currentURL string) (string, error) {
+func (c *SyntheticBrowserChecker) captureScreenshotWithFallback(browserCtx, allocCtx context.Context, currentURL string, browserOpts []chromedp.ContextOption) (string, error) {
 	captureCtx, cancelCapture := context.WithTimeout(browserCtx, 5*time.Second)
 	defer cancelCapture()
 
@@ -528,7 +550,7 @@ func (c *SyntheticBrowserChecker) captureScreenshotWithFallback(browserCtx, allo
 	fallbackCtx, cancelFallback := context.WithTimeout(allocCtx, 10*time.Second)
 	defer cancelFallback()
 
-	fallbackBrowserCtx, cancelFallbackBrowser := chromedp.NewContext(fallbackCtx)
+	fallbackBrowserCtx, cancelFallbackBrowser := chromedp.NewContext(fallbackCtx, browserOpts...)
 	defer cancelFallbackBrowser()
 
 	navigateTo := strings.TrimSpace(currentURL)

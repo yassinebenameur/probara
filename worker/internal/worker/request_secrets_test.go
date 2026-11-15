@@ -234,9 +234,6 @@ func TestSecretRedactor_ShortValues(t *testing.T) {
 			t.Errorf("redact(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if r.contains("error") || !r.contains("k=e") {
-		t.Fatal("contains must follow the same whole-token rule")
-	}
 	// Four characters and up are redacted wherever they occur.
 	if got := newSecretRedactor([]string{"abcd"}).redact("xabcdx"); got != "x"+syntheticRedacted+"x" {
 		t.Fatalf("long secret inside a word = %q", got)
@@ -259,5 +256,87 @@ func TestSyntheticBrowserChecker_RedactsSecretVariables(t *testing.T) {
 	}
 	if strings.Contains(*result.ErrorMessage, "br0wser-secret") || !strings.Contains(*result.ErrorMessage, syntheticRedacted) {
 		t.Fatalf("error leaks the secret: %s", *result.ErrorMessage)
+	}
+}
+
+// TestSecretRedactor_ShortValuesAfterEscapes: a short secret right after an
+// escape sequence is a whole token there, though the escape ends in a letter
+// or digit.
+func TestSecretRedactor_ShortValuesAfterEscapes(t *testing.T) {
+	r := newSecretRedactor([]string{"123"})
+	cases := map[string]string{
+		"q=%22123%22":   "q=%22" + syntheticRedacted + "%22",
+		"pin%3D123":     "pin%3D" + syntheticRedacted,
+		`{"v":"\n123"}`: `{"v":"\n` + syntheticRedacted + `"}`,
+		`""123""`:       `""` + syntheticRedacted + `""`,
+		`a\"123\"`:      `a\"` + syntheticRedacted + `\"`,
+		"id 41234":      "id 41234",
+		"abc123":        "abc123",
+	}
+	for in, want := range cases {
+		if got := r.redact(in); got != want {
+			t.Errorf("redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSyntheticAPIChecker_RedirectFollowsUnreferencedSecretValue: a secret
+// value that merely appears in an ordinary URL is not a reference to the
+// secret, so the redirect is followed; and an ordinary variable that only
+// mentions a credential (`token_url`) is not a secret at all.
+func TestSyntheticAPIChecker_RedirectFollowsUnreferencedSecretValue(t *testing.T) {
+	var reached bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	defer other.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/next", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	for name, config := range map[string]map[string]any{
+		"secret value in an ordinary URL": {
+			"secret_variables": map[string]string{"password": "health"},
+			"steps": []map[string]any{{"id": "s1", "request": map[string]any{
+				"method": "GET", "url": origin.URL + "/health", "headers": map[string]string{"X-Pass": "{{password}}"},
+			}}},
+		},
+		"plain token_url variable": {
+			"variables": map[string]string{"token_url": origin.URL + "/oauth/token"},
+			"steps":     []map[string]any{{"id": "s1", "request": map[string]any{"method": "GET", "url": "{{token_url}}"}}},
+		},
+	} {
+		reached = false
+		raw, _ := json.Marshal(config)
+		result := NewSyntheticAPIChecker(false, nil).Check(context.Background(), raw, 5)
+		if result.Status != "success" || !reached {
+			t.Fatalf("%s: status %s (%v), reached %v; want the redirect followed", name, result.Status, result.ErrorMessage, reached)
+		}
+	}
+
+	// A real reference in the body of a step that re-sends it is refused.
+	config, _ := json.Marshal(map[string]any{
+		"secret_variables": map[string]string{"password": "health"},
+		"steps": []map[string]any{{"id": "s1", "request": map[string]any{
+			"method": "POST", "url": origin.URL + "/login", "body": `{"p":"{{password}}"}`,
+		}}},
+	})
+	reached = false
+	result := NewSyntheticAPIChecker(false, nil).Check(context.Background(), config, 5)
+	if result.Status != "error" || result.ErrorMessage == nil || !strings.Contains(*result.ErrorMessage, "redirect refused") || reached {
+		t.Fatalf("status %s (%v), reached %v; want a refusal", result.Status, result.ErrorMessage, reached)
+	}
+}
+
+// TestRedactedLogf: chromedp's log lines, which can quote raw DevTools
+// traffic, pass through the journey's redactor before reaching the log.
+func TestRedactedLogf(t *testing.T) {
+	var lines []string
+	logf := redactedLogf(newSecretRedactor([]string{"br0wser-secret"}), "chromedp: ", func(line string) { lines = append(lines, line) })
+	logf("ignoring malformed incoming message: %#v", map[string]string{"value": "br0wser-secret"})
+	if len(lines) != 1 || strings.Contains(lines[0], "br0wser-secret") || !strings.HasPrefix(lines[0], "chromedp: ") {
+		t.Fatalf("lines = %q", lines)
+	}
+	if len(chromedpLogOptions(nil)) != 2 {
+		t.Fatal("chromedp needs both its log and error output routed")
 	}
 }

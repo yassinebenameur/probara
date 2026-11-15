@@ -326,3 +326,27 @@ func TestSyntheticBrowserSecretVariablesRoundTrip(t *testing.T) {
 		t.Fatalf("secret_variables = %v after clear, want it removed", v)
 	}
 }
+
+// TestCreateMonitor_UnmovableCredentialVariablesStayPlain: a create whose
+// credential-named variables cannot all become valid secret names (two that
+// differ only by case, one a {{ref}} cannot reach) succeeds with them left
+// plain, instead of failing with a stored-secret conflict on a create.
+func TestCreateMonitor_UnmovableCredentialVariablesStayPlain(t *testing.T) {
+	repo := &copyingRepo{MockRepository: NewMockRepository()}
+	svc := NewService(repo)
+	svc.ConfigureEncryption(testEncryptor(t))
+	for _, config := range []string{
+		`{"variables":{"Password":"a","password":"b"},"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test"}}]}`,
+		`{"variables":{"old password":"a"},"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test"}}]}`,
+	} {
+		if _, err := svc.CreateMonitor(context.Background(), uuid.New(), &models.CreateMonitorRequest{
+			Name: "journey", Type: models.MonitorTypeSyntheticAPI, Config: json.RawMessage(config),
+			IntervalSeconds: 60, TimeoutSeconds: 30,
+		}); err != nil {
+			t.Fatalf("CreateMonitor(%s): %v", config, err)
+		}
+		if _, moved := decodeConfig(t, repo.createdConfig)["secret_variables"]; moved {
+			t.Fatalf("an unmovable variable was moved: %s", repo.createdConfig)
+		}
+	}
+}
