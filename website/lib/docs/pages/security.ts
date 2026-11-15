@@ -401,7 +401,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'paragraph',
           text:
-            'Notification channels (generic webhook, Slack, Discord, Teams, PagerDuty, Opsgenie, Telegram, Twilio) have their own policy, because their destinations are tenant-supplied and the requests leave the API, alerter and worker unattended. It uses the same address table and resolve-then-validate dialer as the monitor guard, but it is on by default and configured separately, so enabling internal monitoring never opens internal notification targets.',
+            'Notification channels (generic webhook, Slack, Discord, Teams, PagerDuty, Opsgenie, Telegram, Twilio, ntfy, Gotify) have their own policy, because their destinations are tenant-supplied and the requests leave the API, alerter and worker unattended. It uses the same address table and resolve-then-validate dialer as the monitor guard, but it is on by default and configured separately, so enabling internal monitoring never opens internal notification targets. A self-hosted ntfy or Gotify server on a private network is the common case for the allow-list below: list just that server\'s address.',
         },
         {
           type: 'table',
