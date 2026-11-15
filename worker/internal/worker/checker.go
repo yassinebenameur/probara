@@ -171,10 +171,14 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 
 	tlsCfg := &tls.Config{}
 	tlsCfg.InsecureSkipVerify = config.TLSSkipVerify != nil && *config.TLSSkipVerify
+	// ServerName stays empty unless tls_server_name pins it: the transport
+	// then fills it per connection from that hop's URL host, so a redirect to
+	// another HTTPS host is verified against its own name. Setting it from
+	// the first URL would make every hop present and verify that one name.
+	// The dial guard dials a resolved IP but the transport layers TLS on top
+	// with the URL host, so SNI is unaffected by it.
 	if config.TLSServerName != nil && strings.TrimSpace(*config.TLSServerName) != "" {
 		tlsCfg.ServerName = strings.TrimSpace(*config.TLSServerName)
-	} else if parsedURL.Hostname() != "" {
-		tlsCfg.ServerName = parsedURL.Hostname()
 	}
 
 	if config.TLSCAPem != nil && strings.TrimSpace(*config.TLSCAPem) != "" {
@@ -316,7 +320,13 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	}
 
 	if resp.TLS != nil {
-		metrics.TLS = tlscert.FromConnectionState(*resp.TLS, tlsCfg.ServerName, time.Now())
+		// resp.TLS is the final hop's connection, so its name is the one that
+		// certificate was verified against.
+		serverName := tlsCfg.ServerName
+		if serverName == "" {
+			serverName = resp.Request.URL.Hostname()
+		}
+		metrics.TLS = tlscert.FromConnectionState(*resp.TLS, serverName, time.Now())
 	}
 
 	if len(config.DisplayFields) > 0 {
