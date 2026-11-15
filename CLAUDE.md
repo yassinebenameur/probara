@@ -299,6 +299,18 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
   cascades only on tenant delete. The label routes are writes (never in
   `postReadPaths`); export is `RequireTenantAdmin`.
+- **Monitor config history**: every path that creates or changes a monitor
+  records a version through `api/internal/services/monitors/versions.go`.
+  `CreateMonitor`/`UpdateMonitor` do it; a write beside them calls
+  `RecordVersion` (member and dependency routes) or `RecordVersionTx`
+  (discovery approval, inside its transaction); a save made of several writes
+  (handler create/update with member and dependency syncs, import, restore)
+  runs under `DeferVersions` and flushes once, so one save is one version. A
+  new monitor write path that skips this leaves a gap in history. Snapshots
+  are masked through the secret registry. A field added to
+  `UpdateMonitorRequest` must also go into `models.MonitorConfigSnapshot`,
+  `loadSnapshot` and `RestoreRequest`, or it is neither versioned nor
+  restored.
 
 ## Monitor import
 

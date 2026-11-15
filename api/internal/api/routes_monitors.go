@@ -100,5 +100,6 @@ func mountMonitorRoutes(r chi.Router, monitorHandlers *monitorhandlers.Handlers,
 		r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
 		// Snooze: quick single-monitor maintenance window
 		r.Post("/{id}/snooze", maintenanceHandlers.SnoozeMonitor)
+		mountMonitorHistoryRoutes(r, monitorHandlers) // configuration history (routes_history.go)
 	})
 }

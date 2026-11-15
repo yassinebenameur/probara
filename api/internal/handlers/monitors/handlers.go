@@ -120,6 +120,11 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One version for the whole save, recorded once members and
+	// dependencies are synced below.
+	r, versions := h.deferVersions(r)
+	defer versions.Flush(r.Context())
+
 	monitor, err := h.service.CreateMonitor(r.Context(), tenantUUID, &req)
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
@@ -184,6 +189,9 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 			monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitor.ID)
 		}
 	}
+
+	h.recordVersion(r.Context(), tenantUUID, monitor.ID)
+	versions.Flush(r.Context())
 
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":  tenantID,
@@ -326,6 +334,12 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One version for the whole save, recorded once members and
+	// dependencies are synced below (also when the dependency sync fails:
+	// what was written is recorded).
+	r, versions := h.deferVersions(r)
+	defer versions.Flush(r.Context())
+
 	monitor, err := h.service.UpdateMonitor(r.Context(), tenantUUID, monitorID, &req)
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
@@ -355,70 +369,7 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 
 	// If this is a group monitor, sync the junction table with the new member list
 	if existingMonitor.Type == models.MonitorTypeGroup && req.Config != nil {
-		var groupConfig models.GroupConfig
-		if err := json.Unmarshal(req.Config, &groupConfig); err == nil {
-			// Convert string IDs to UUIDs
-			newMonitorIDs := make([]uuid.UUID, 0, len(groupConfig.MonitorIDs))
-			for _, idStr := range groupConfig.MonitorIDs {
-				if monitorID, err := uuid.Parse(idStr); err == nil {
-					newMonitorIDs = append(newMonitorIDs, monitorID)
-				}
-			}
-
-			// Get current members
-			currentMembers, err := h.groupService.GetGroupMembers(r.Context(), tenantUUID, monitorID)
-			if err == nil {
-				// Build map of current member IDs
-				currentIDs := make(map[uuid.UUID]bool)
-				for _, member := range currentMembers {
-					currentIDs[member.ID] = true
-				}
-
-				// Build map of new member IDs
-				newIDs := make(map[uuid.UUID]bool)
-				for _, id := range newMonitorIDs {
-					newIDs[id] = true
-				}
-
-				// Find IDs to add (in new but not in current)
-				var toAdd []uuid.UUID
-				for _, id := range newMonitorIDs {
-					if !currentIDs[id] {
-						toAdd = append(toAdd, id)
-					}
-				}
-
-				// Find IDs to remove (in current but not in new)
-				var toRemove []uuid.UUID
-				for _, member := range currentMembers {
-					if !newIDs[member.ID] {
-						toRemove = append(toRemove, member.ID)
-					}
-				}
-
-				// Add new members
-				if len(toAdd) > 0 {
-					if err := h.groupService.AddMonitorsToGroup(r.Context(), tenantUUID, monitorID, toAdd); err != nil {
-						h.logger.WithFields(map[string]interface{}{
-							"error":      err.Error(),
-							"tenant_id":  tenantID,
-							"monitor_id": monitorID,
-						}).Warn("Failed to add monitors to group during update")
-					}
-				}
-
-				// Remove old members
-				if len(toRemove) > 0 {
-					if err := h.groupService.RemoveMonitorsFromGroup(r.Context(), tenantUUID, monitorID, toRemove); err != nil {
-						h.logger.WithFields(map[string]interface{}{
-							"error":      err.Error(),
-							"tenant_id":  tenantID,
-							"monitor_id": monitorID,
-						}).Warn("Failed to remove monitors from group during update")
-					}
-				}
-			}
-		}
+		h.syncGroupMembersFromConfig(r.Context(), tenantUUID, monitorID, req.Config)
 	}
 
 	// Sync dependencies when the payload carries them (nil = unchanged).
@@ -430,6 +381,9 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		}
 		monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitorID)
 	}
+
+	h.recordVersion(r.Context(), tenantUUID, monitorID)
+	versions.Flush(r.Context())
 
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":  tenantID,

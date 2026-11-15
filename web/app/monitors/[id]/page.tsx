@@ -8,6 +8,7 @@ import MonitorDetailOverview from '@/components/monitors/detail/MonitorDetailOve
 import { AlertRoutingNotice } from '@/components/monitors/AlertRoutingBadge';
 import MonitorDetailHistory from '@/components/monitors/detail/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/detail/MonitorDetailJson';
+import MonitorConfigHistory from '@/components/monitors/detail/MonitorConfigHistory';
 import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
 import Page from '@/components/ui/Page';
 import Tabs, { TabPanel, useUrlTab } from '@/components/ui/Tabs';
@@ -49,6 +50,7 @@ export default function EditMonitorPage() {
   const [overviewRange, setOverviewRange] = useState<OverviewTimeRange>('24h');
   const {
     monitor,
+    setMonitor,
     loading,
     saving,
     error,
@@ -118,6 +120,7 @@ export default function EditMonitorPage() {
     { id: 'overview', label: 'Overview' },
     { id: 'history', label: 'History' },
     { id: 'settings', label: 'Settings' },
+    { id: 'changes', label: 'Changes' },
     { id: 'json', label: 'JSON' },
   ] as const;
   const selectedWindowMs =
@@ -276,6 +279,7 @@ export default function EditMonitorPage() {
           loading={saving}
         />
       )}
+      {activeTab === 'changes' && <MonitorConfigHistory monitor={monitor} onRestored={setMonitor} />}
       {activeTab === 'json' && (
         <MonitorDetailJson monitor={monitor} analytics={analytics} />
       )}

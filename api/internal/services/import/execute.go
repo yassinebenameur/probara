@@ -11,11 +11,19 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 )
 
 // ExecuteImport executes the import with the given rows and mapping
 func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *models.ImportExecuteRequest) (*models.ImportExecuteResponse, error) {
+	// Each imported monitor gets one version with source "import", recorded
+	// once a group's members are attached in the second pass. Both paths
+	// (raw config and simple mapping) create through the monitors service,
+	// which queues the versions here.
+	ctx, versions := monitorservice.DeferVersions(monitorservice.WithVersionSource(ctx, monitorservice.VersionSourceImport))
+	defer versions.Flush(ctx)
+
 	results := make([]models.ImportRowResult, len(req.Rows))
 	successCount := 0
 	failedCount := 0

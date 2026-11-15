@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
+	"github.com/yassinebenameur/probara/shared/logger"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -28,6 +29,10 @@ type Service struct {
 	groupResolver  GroupResolver
 	statusNotifier StatusNotifier
 	encryptor      secrets.Encryptor
+	// versions records configuration history (versions.go); nil on
+	// repositories that are not Postgres-backed.
+	versions   *VersionStore
+	versionLog *logger.Logger
 }
 
 type GroupResolver interface {
@@ -40,10 +45,17 @@ type StatusNotifier interface {
 
 // NewService creates a new monitor service
 func NewService(database Repository) *Service {
-	return &Service{
+	svc := &Service{
 		repo:      database,
 		encryptor: secrets.NoOpEncryptor{},
 	}
+	// History lives in the same database as the monitors, so every
+	// Postgres-backed service records it without extra wiring and no write
+	// path can be built without it.
+	if pg, ok := database.(*PostgresRepository); ok {
+		svc.versions = NewVersionStore(pg.db)
+	}
+	return svc
 }
 
 // ConfigureEncryption wires the encryptor used for secret config fields.
@@ -273,6 +285,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
 	}
 
+	s.recordVersion(ctx, tenantID, monitorID, SecretFieldChanges("", nil, req.Type, config))
 	s.maskSecrets(monitor)
 	return monitor, nil
 }
@@ -414,11 +427,13 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		effectiveType = *req.Type
 	}
 
+	var secretChanges []string
 	if len(req.Config) > 0 {
 		config, err := s.prepareConfigForWrite(effectiveType, req.Config, existing.Config)
 		if err != nil {
 			return nil, err
 		}
+		secretChanges = SecretFieldChanges(existing.Type, existing.Config, effectiveType, config)
 		setParts = append(setParts, fmt.Sprintf("config = $%d", argIndex))
 		args = append(args, config)
 		argIndex++
@@ -622,6 +637,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		}
 	}
 
+	s.recordVersion(ctx, tenantID, monitorID, secretChanges)
 	return monitor, nil
 }
 

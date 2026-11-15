@@ -74,6 +74,8 @@ func (h *Handlers) AddMonitorsToGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.recordVersion(r.Context(), tenantUUID, groupID)
+
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":   tenantID,
 		"group_id":    groupID,
@@ -134,6 +136,8 @@ func (h *Handlers) RemoveMonitorsFromGroup(w http.ResponseWriter, r *http.Reques
 		apierrors.WriteInternalError(w, "failed to remove monitors from group")
 		return
 	}
+
+	h.recordVersion(r.Context(), tenantUUID, groupID)
 
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":   tenantID,

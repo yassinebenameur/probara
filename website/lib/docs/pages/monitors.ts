@@ -766,5 +766,46 @@ export const MONITORS_PAGE: DocPage = {
         },
       ],
     },
+    {
+      id: "config-history",
+      title: "Configuration history and restore",
+      intro:
+        "Every save of a monitor is recorded as a version you can view, compare and restore from the monitor's **Changes** tab, the [API](/docs/api/#monitor-endpoints) or [MCP](/docs/mcp/#tools).",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A version is recorded for every save, whatever it came through: the operator UI, the API, MCP, an import (both mapping paths), a Kubernetes discovery approval, a bulk alerting edit, adding or removing group members or dependencies, and a restore. A save that changes nothing records nothing. Each version keeps who made it (the user or API key, by its name at the time, or the system), when, the source, and the fields that changed from the previous version.",
+        },
+        {
+          type: "table",
+          columns: ["Recorded in a version", "Not recorded"],
+          rows: [
+            [
+              "Name, type, `config`, interval, timeout, tags, failure threshold, notification mode and custom channels with their delays, member alert roll-up, dependency suppression, locations and quorum, dependencies, and a group's members",
+              "Pause state (`enabled`: pausing and resuming show in the state timeline and the audit log), the generated push token and agent ID, current state, results, alerts and maintenance windows",
+            ],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "Secret values are never stored in a version, in plain text or encrypted. A version holds the masked config (`***` for a set secret) and the names of the secrets that save set, replaced or cleared, so the diff can say a password changed without showing it.",
+            "Compare a version with the one before it, any other version, or the live monitor. Secret fields read as set, not set, or changed, never as values.",
+            "Restore re-applies every non-secret setting of the version through the same validation and save path as an edit (the SIP test-call rule and the move of credential-named headers into secret fields included) and records a new version that names the one restored. Only the settings that differ are written. A monitor that already matches is left alone.",
+            "Restore keeps the secrets stored now: it never brings back or removes a password, token, connection string, client key, secret header, secret metadata or secret variable, and keeps secret keys added since the version. A secret the version had and the monitor no longer holds, such as a removed secret variable a `{{name}}` step still references, stays empty: the restore still applies everything else and lists the secrets to enter again in Settings.",
+            "Channels, locations, dependencies and group members the version names that no longer exist are left out and reported. The pause state is left as it is.",
+            "Reading history follows monitor read access, so viewers can browse it. Restoring needs write access (and a signed-in tenant admin for a SIP test-call monitor) and is audited as `monitor.restore`.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Bounds",
+          text:
+            "Each monitor keeps its newest 100 versions; older ones are pruned as new ones are recorded. History is deleted with the monitor and with its workspace. It is not backfilled: a monitor's history starts at its first save after the upgrade that introduced it. The one-off [backfill tools](/docs/security/#encryption-at-rest) rewrite stored configs directly and record no version, so the next save's version also shows what they moved.",
+        },
+      ],
+    },
   ],
 };
