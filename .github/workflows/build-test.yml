@@ -201,7 +201,9 @@ jobs:
 
   ai-fast:
     name: AI fast tests
-    runs-on: ubuntu-latest
+    # Pinned: the Python 3.13.3 the AI jobs need has no build for the image
+    # ubuntu-latest now resolves to; move it together with python-version.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: '1'
@@ -240,7 +242,7 @@ jobs:
     name: AI checkpoint validation
     needs: changes
     if: needs.changes.outputs.ai_validation == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # An approved checkpoint adds the held-out reproduction (2000 int8 CPU
     # decisions) on top of the base fetch and composition.
     timeout-minutes: 75
