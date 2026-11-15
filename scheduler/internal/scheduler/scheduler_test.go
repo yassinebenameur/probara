@@ -3,6 +3,7 @@ package scheduler
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,5 +367,68 @@ func TestMonitor_Struct(t *testing.T) {
 	}
 	if m.TimeoutSeconds != 30 {
 		t.Errorf("Monitor TimeoutSeconds = %v, want 30", m.TimeoutSeconds)
+	}
+}
+
+// countingEncryptor counts its uses: the location fast path must not decrypt
+// a config that holds no secret key.
+type countingEncryptor struct{ calls int }
+
+func (e *countingEncryptor) Encrypt(string) (string, error) { e.calls++; return "", nil }
+func (e *countingEncryptor) Decrypt(string) (string, error) { e.calls++; return "", nil }
+
+// TestCreateCheckJob_LocationFastPathSkipsConfigsWithoutSecrets: http is
+// secret-bearing (secret_headers, basic auth) and the most common type, so a
+// location dispatch of an http config without any secret key goes out byte
+// for byte with no decrypt or re-encrypt, while one with a secret header is
+// re-encrypted under the location's key.
+func TestCreateCheckJob_LocationFastPathSkipsConfigsWithoutSecrets(t *testing.T) {
+	locationID := uuid.New()
+	credential := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	platform := &countingEncryptor{}
+	s := &Scheduler{secretsEncryptor: platform}
+
+	plainConfig := []byte(`{"url":"https://example.com","method":"GET","headers":{"Accept":"*/*"}}`)
+	monitor := Monitor{
+		ID: uuid.New(), TenantID: uuid.New(), Type: "http", Config: plainConfig, TimeoutSeconds: 10,
+		LocationCredentials: map[uuid.UUID]string{locationID: credential},
+	}
+	job, err := s.createCheckJob(monitor, locationID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload models.CheckJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload.Config) != string(plainConfig) {
+		t.Fatalf("config without secrets was rewritten: %s", payload.Config)
+	}
+	if platform.calls != 0 {
+		t.Fatalf("platform encryptor used %d times on a config without secrets", platform.calls)
+	}
+
+	s.secretsEncryptor = secrets.NoOpEncryptor{}
+	monitor.Config = []byte(`{"url":"https://example.com","method":"GET","secret_headers":{"Authorization":"Bearer private"}}`)
+	job, err = s.createCheckJob(monitor, locationID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload.Config), "Bearer private") {
+		t.Fatalf("location job carries a plaintext secret header: %s", payload.Config)
+	}
+	enc, err := locationauth.ConfigEncryptor(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := secrets.DecryptMonitorConfig(enc, "http", payload.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plain), `"Authorization":"Bearer private"`) {
+		t.Fatalf("decrypted config = %s", plain)
 	}
 }
