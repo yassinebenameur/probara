@@ -47,6 +47,7 @@ import {
   mapVariablesToRows,
   normalizeAssertionTarget,
   normalizeSyntheticBrowserGuidedTemplate,
+  plainVariableGoesSecret,
   syntheticAssertionOpsByTarget,
 } from './synthetic';
 
@@ -237,6 +238,48 @@ function secretVariablesToSubmit(rows: SecretKV[], stored: boolean): Record<stri
 }
 
 const SYNTHETIC_VARIABLE_NAME = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * The variables and secret variables a synthetic submit carries. Plain rows
+ * with a credential name go to the secret map (plainVariableGoesSecret).
+ */
+function syntheticVariablesToSubmit(
+  plainRows: { key: string; value: string }[],
+  secretRows: SecretKV[],
+  stored: boolean
+): { variables: Record<string, string>; secretVariables?: Record<string, string> } {
+  const variables: Record<string, string> = {};
+  const moved: Record<string, string> = {};
+  for (const row of plainRows) {
+    const key = row.key.trim();
+    if (!key) continue;
+    if (plainVariableGoesSecret(row)) moved[key] = row.value;
+    else variables[key] = row.value;
+  }
+  const secret = secretVariablesToSubmit(secretRows, stored);
+  if (Object.keys(moved).length === 0) return { variables, secretVariables: secret };
+  return { variables, secretVariables: { ...(secret || {}), ...moved } };
+}
+
+/**
+ * An error when two secret variable names (secret rows plus plain rows that
+ * go secret) differ only by case: {{refs}} are case-sensitive, so the API
+ * refuses such a pair.
+ */
+function secretNameCaseError(plain: { key: string; value: string }[], secret: SecretKV[]): string | undefined {
+  const names = [
+    ...secret.map((row) => row.key.trim()),
+    ...plain.filter(plainVariableGoesSecret).map((row) => row.key.trim()),
+  ].filter(Boolean);
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      if (names[i] !== names[j] && names[i].toLowerCase() === names[j].toLowerCase()) {
+        return `"${names[i]}" and "${names[j]}" differ only by case; rename one`;
+      }
+    }
+  }
+  return undefined;
+}
 
 /** A loaded synthetic API config that the Basic editor would hide parts of. */
 export const hasAdvancedSyntheticAPIConfig = (config: SyntheticAPIMonitorConfig): boolean =>
@@ -516,7 +559,8 @@ export function validateMonitorForm(
       (badSecretName
         ? `"${badSecretName.key.trim()}" may only contain letters, digits, '_', '.' and '-'`
         : undefined) ??
-      bothMapsError(form.synthetic_api_variables || [], apiSecretRows);
+      bothMapsError(form.synthetic_api_variables || [], apiSecretRows) ??
+      secretNameCaseError(form.synthetic_api_variables || [], apiSecretRows);
     if (apiSecretError) newErrors.synthetic_api_secret_variables = apiSecretError;
 
     const steps = form.synthetic_api_steps || [];
@@ -706,7 +750,8 @@ export function validateMonitorForm(
         (badBrowserSecretName
           ? `"${badBrowserSecretName.key.trim()}" may only contain letters, digits, '_', '.' and '-'`
           : undefined) ??
-        bothMapsError(form.synthetic_browser_variables || [], browserSecretRows);
+        bothMapsError(form.synthetic_browser_variables || [], browserSecretRows) ??
+        secretNameCaseError(form.synthetic_browser_variables || [], browserSecretRows);
       if (browserSecretError) newErrors.synthetic_browser_secret_variables = browserSecretError;
 
       const steps = form.synthetic_browser_steps || [];
@@ -878,13 +923,11 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
     }
     config = dnsConfig;
   } else if (type === 'synthetic_api') {
-    const variables: Record<string, string> = {};
-    for (const row of form.synthetic_api_variables || []) {
-      const key = row.key.trim();
-      if (key) {
-        variables[key] = row.value;
-      }
-    }
+    const { variables, secretVariables: apiSecretVariables } = syntheticVariablesToSubmit(
+      form.synthetic_api_variables || [],
+      form.synthetic_api_secret_variables || [],
+      form.synthetic_api_secret_variables_stored
+    );
 
     const steps: SyntheticAPIStepConfig[] = [];
     for (const step of form.synthetic_api_steps || []) {
@@ -967,10 +1010,6 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
     if (Object.keys(variables).length > 0) {
       syntheticAPIConfig.variables = variables;
     }
-    const apiSecretVariables = secretVariablesToSubmit(
-      form.synthetic_api_secret_variables || [],
-      form.synthetic_api_secret_variables_stored
-    );
     if (apiSecretVariables) syntheticAPIConfig.secret_variables = apiSecretVariables;
     config = syntheticAPIConfig;
   } else {
@@ -1008,13 +1047,11 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
       }
       config = syntheticBrowserConfig;
     } else {
-      const variables: Record<string, string> = {};
-      for (const row of form.synthetic_browser_variables || []) {
-        const key = row.key.trim();
-        if (key) {
-          variables[key] = row.value;
-        }
-      }
+      const { variables, secretVariables: browserSecretVariables } = syntheticVariablesToSubmit(
+        form.synthetic_browser_variables || [],
+        form.synthetic_browser_secret_variables || [],
+        form.synthetic_browser_secret_variables_stored
+      );
 
       const steps: SyntheticBrowserStepConfig[] = [];
       for (const step of form.synthetic_browser_steps || []) {
@@ -1046,10 +1083,6 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
       if (Object.keys(variables).length > 0) {
         syntheticBrowserConfig.variables = variables;
       }
-      const browserSecretVariables = secretVariablesToSubmit(
-        form.synthetic_browser_secret_variables || [],
-        form.synthetic_browser_secret_variables_stored
-      );
       if (browserSecretVariables) syntheticBrowserConfig.secret_variables = browserSecretVariables;
       config = syntheticBrowserConfig;
     }

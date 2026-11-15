@@ -501,7 +501,7 @@ test('synthetic_api: edit round trip', () => {
   const config: SyntheticAPIMonitorConfig = {
     base_url: 'https://api.example.com',
     failure_mode: 'continue',
-    variables: { token: 'abc' },
+    variables: { tenant: 'abc' },
     steps: [
       {
         id: 'login',
@@ -553,7 +553,7 @@ test('synthetic_api: edit round trip', () => {
         },
       ],
       base_url: 'https://api.example.com',
-      variables: { token: 'abc' },
+      variables: { tenant: 'abc' },
     },
     ...STORED_SCHEDULE,
     ...STORED_ALERTING,

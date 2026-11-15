@@ -11,8 +11,14 @@
 //     (`password`, `api_token`, …) moves to `secret_variables` under the same
 //     name, so its {{ref}}s keep working.
 //
-// It applies exactly the function every write applies, so the backfill and
-// the write path cannot disagree. Moved values are encrypted with the current
+// First it renames keys that were stored miscased before validation refused
+// them (`Headers`, `Variables`, `Metadata`, a step's `Request`/`Headers`,
+// `Basic_Auth_Password`, …) to their exact spelling, for every type with
+// secret fields, merging two spellings when they agree and reporting the
+// monitor when they do not (canonicalizeCredentialKeys). A credential-named
+// variable whose move would create a secret name validation refuses stays
+// plain and is reported. Then it applies exactly the function every write
+// applies, so the backfill and the write path cannot disagree. Moved values are encrypted with the current
 // key; values already in the secret maps keep their envelopes. Soft-deleted
 // monitors are migrated too: their rows stay in the database until purged,
 // and a credential at rest is one whether or not the monitor is listed. Safe
@@ -34,6 +40,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,11 +50,33 @@ import (
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// migratedTypes are the types NormalizeSensitiveHeaders rewrites.
-var migratedTypes = []string{"http", "grpc", "synthetic_api", "synthetic_browser"}
+// migratedTypes are every type with a secret field or a plain credential
+// path: NormalizeSensitiveHeaders rewrites http, grpc and the synthetic
+// types, and any of them may hold a miscased key.
+func migratedTypes() []string {
+	set := map[string]bool{}
+	for t := range secrets.MonitorSecretFields {
+		set[t] = true
+	}
+	for t := range secrets.MonitorSecretMapFields {
+		set[t] = true
+	}
+	for t := range secrets.PlainCredentialPaths {
+		set[t] = true
+	}
+	types := make([]string, 0, len(set))
+	for t := range set {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+	return types
+}
 
+// stats counts rows. Conflicted rows hold two spellings of one key that
+// disagree and are left untouched; Unmovable rows keep a credential-named
+// variable in plain text. Both are logged by monitor id for an operator.
 type stats struct {
-	Processed, Updated, Skipped, Errored int
+	Processed, Updated, Skipped, Errored, Conflicted, Unmovable int
 }
 
 func main() {
@@ -79,9 +109,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
-	fmt.Printf("\nprocessed=%d updated=%d skipped=%d errored=%d dry_run=%v\n",
-		result.Processed, result.Updated, result.Skipped, result.Errored, *dryRun)
-	if result.Errored > 0 {
+	fmt.Printf("\nprocessed=%d updated=%d skipped=%d errored=%d conflicted=%d unmovable=%d dry_run=%v\n",
+		result.Processed, result.Updated, result.Skipped, result.Errored, result.Conflicted, result.Unmovable, *dryRun)
+	if result.Errored > 0 || result.Conflicted > 0 {
 		os.Exit(1)
 	}
 }
@@ -94,7 +124,7 @@ func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool,
 	var result stats
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, type, config FROM monitors WHERE type = ANY($1) ORDER BY created_at`,
-		pq.Array(migratedTypes))
+		pq.Array(migratedTypes()))
 	if err != nil {
 		return result, fmt.Errorf("scan monitors: %w", err)
 	}
@@ -118,17 +148,29 @@ func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool,
 		}
 		result.Processed++
 
-		newRaw, changed, err := migrateConfig(enc, mType, rawJSON)
+		row, err := migrateConfig(enc, mType, rawJSON)
 		if err != nil {
 			logf("[err] monitor %s (type=%s): %v", id, mType, err)
 			result.Errored++
 			continue
 		}
-		if !changed {
+		if len(row.conflicts) > 0 {
+			// Key paths only, never values.
+			logf("[conflict] monitor %s (type=%s): keys spelled in more than one case with different values (%s); fix them by hand, then run again",
+				id, mType, strings.Join(row.conflicts, ", "))
+			result.Conflicted++
+			continue
+		}
+		if len(row.unmovable) > 0 {
+			logf("[warn] monitor %s (type=%s): credential-named variables stay in plain text because moving them would create an invalid secret name (%s); rename them",
+				id, mType, strings.Join(row.unmovable, ", "))
+			result.Unmovable++
+		}
+		if !row.changed {
 			result.Skipped++
 			continue
 		}
-		updates = append(updates, pending{id: id, mType: mType, original: rawJSON, config: newRaw})
+		updates = append(updates, pending{id: id, mType: mType, original: rawJSON, config: row.config})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -138,7 +180,7 @@ func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool,
 
 	for _, u := range updates {
 		if !apply {
-			logf("[dry-run] would move plaintext credentials of monitor %s (type=%s)", u.id, u.mType)
+			logf("[dry-run] would move plaintext credentials or rename miscased keys of monitor %s (type=%s)", u.id, u.mType)
 			result.Updated++
 			continue
 		}
@@ -148,24 +190,54 @@ func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool,
 			continue
 		}
 		result.Updated++
-		logf("[ok] moved plaintext credentials of monitor %s (type=%s)", u.id, u.mType)
+		logf("[ok] moved plaintext credentials or renamed miscased keys of monitor %s (type=%s)", u.id, u.mType)
 	}
 	return result, nil
 }
 
-// migrateConfig normalizes one config and encrypts what moved. Values already
-// in the secret maps keep their envelopes (EncryptMonitorConfig passes them
-// through), so a row is only rewritten when a header actually moved.
-func migrateConfig(enc secrets.Encryptor, monitorType string, raw json.RawMessage) (json.RawMessage, bool, error) {
-	normalized, moved, err := secrets.NormalizeSensitiveHeaders(monitorType, raw)
-	if err != nil || !moved {
-		return raw, false, err
+// rowResult is what migrateConfig decided for one row.
+type rowResult struct {
+	config    json.RawMessage
+	changed   bool
+	conflicts []string
+	unmovable []string
+}
+
+// migrateConfig repairs miscased keys, normalizes the config and encrypts
+// what moved. Values already in the secret maps keep their envelopes
+// (EncryptMonitorConfig passes them through), so a row is only rewritten
+// when a key was renamed or a credential actually moved.
+func migrateConfig(enc secrets.Encryptor, monitorType string, raw json.RawMessage) (rowResult, error) {
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return rowResult{}, fmt.Errorf("decode config: %w", err)
+	}
+	renamed, conflicts := canonicalizeCredentialKeys(monitorType, cfg)
+	if len(conflicts) > 0 {
+		return rowResult{conflicts: conflicts}, nil
+	}
+	canonical := raw
+	if renamed {
+		out, err := json.Marshal(cfg)
+		if err != nil {
+			return rowResult{}, fmt.Errorf("encode config: %w", err)
+		}
+		canonical = out
+	}
+	normalized, moved, err := secrets.NormalizeSensitiveHeaders(monitorType, canonical)
+	if err != nil {
+		return rowResult{}, err
+	}
+	result := rowResult{unmovable: secrets.UnmovableSensitiveVariables(monitorType, normalized)}
+	if !renamed && !moved {
+		return result, nil
 	}
 	encrypted, err := secrets.EncryptMonitorConfig(enc, monitorType, normalized)
 	if err != nil {
-		return nil, false, err
+		return rowResult{}, err
 	}
-	return encrypted, true, nil
+	result.config, result.changed = encrypted, true
+	return result, nil
 }
 
 // writeRow replaces the config only if it is still the one that was read, so
