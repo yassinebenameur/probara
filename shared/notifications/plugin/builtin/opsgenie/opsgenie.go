@@ -291,6 +291,9 @@ func buildCreate(alias, outagePriority string, m present.Message) createRequest 
 	if m.ActionURL != "" {
 		details[m.ActionLabel] = m.ActionURL
 	}
+	if m.AckURL != "" {
+		details[m.AckLabel+" in Probara"] = m.AckURL
+	}
 
 	var desc strings.Builder
 	desc.WriteString(m.Summary)
@@ -301,6 +304,10 @@ func buildCreate(alias, outagePriority string, m present.Message) createRequest 
 	if m.ActionURL != "" {
 		desc.WriteString("\n\n")
 		desc.WriteString(m.ActionURL)
+	}
+	if m.AckURL != "" {
+		desc.WriteString("\n\n")
+		desc.WriteString(m.AckLabel + " in Probara: " + m.AckURL)
 	}
 
 	return createRequest{

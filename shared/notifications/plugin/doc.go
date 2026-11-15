@@ -26,6 +26,10 @@
 //     state behind: a paging plugin resolves the incident its test opened.
 //   - Take its wording from DispatchRequest.View (package present) and own
 //     layout only.
+//   - Render View().AckURL (the signed acknowledge link, set only on pages
+//     that still ask for action) wherever the channel can carry a link: a
+//     button, a masked link or a text line, kept whole within any length
+//     budget (Message.ShortWithin). Never build an action link in a plugin.
 //
 // Paging plugins (PagerDuty, Opsgenie) also advertise CapabilityAcknowledge,
 // so the alerter sends them "acknowledged" once per channel it paged, and
