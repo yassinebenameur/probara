@@ -543,7 +543,7 @@ export const API_PAGE: DocPage = {
             ["`GET /api/v1/alerts/{id}`", "Alert detail; a labelable `triage` also carries `label_context`"],
             [
               "`POST /api/v1/alerts/{id}/acknowledge`",
-              "Mark an open condition acknowledged",
+              "Mark an open condition acknowledged; from then on it sends no reminders or further escalation ([acknowledging](/docs/alerting/#model))",
             ],
             [
               "`GET /api/v1/alert-actions/acknowledge`",
@@ -564,6 +564,22 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/alerts/bulk/resolve`",
               "Write; resolve many open alerts, same body and response shape (reason `not_found` or `already_resolved`), one `alert.resolve` audit event per alert",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/unacknowledge`",
+              "Write; return an acknowledged alert to `active`, resuming its notifications counted from now (HTTP 404 if it is not acknowledged)",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/snooze`",
+              "Write; mute an open alert's reminders and unpaged escalation routes, body `{\"duration_minutes\": N}` or `{\"until\": \"<RFC 3339>\"}` (exactly one, 1 minute to 7 days ahead, else HTTP 400); replaces a running snooze",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/unsnooze`",
+              "Write; end a running snooze now (HTTP 404 if the alert is not snoozed)",
+            ],
+            [
+              "`POST /api/v1/alerts/bulk/unacknowledge`, `/bulk/snooze`, `/bulk/unsnooze`",
+              "Write; the same for many alerts, body `{\"ids\": [...]}` (plus the snooze fields for `/bulk/snooze`), response shaped like bulk acknowledge with reasons `not_found`, `already_resolved`, `not_acknowledged` (unacknowledge) or `not_snoozed` (unsnooze); one `alert.unacknowledge`, `alert.snooze` or `alert.unsnooze` audit event per alert",
             ],
             [
               "`POST /api/v1/alerts/{id}/triage/label`",
@@ -1069,7 +1085,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "`GET /api/v1/alerts/stream` is an authenticated tenant alert stream. The public status-page service exposes a different slug-scoped stream at `/public/status/{slug}/stream`. Use a native EventSource-compatible client where cookie authentication is required, or a streaming HTTP client that can attach the bearer key.",
+            "`GET /api/v1/alerts/stream` is an authenticated tenant alert stream. The public status-page service exposes a different slug-scoped stream at `/public/status/{slug}/stream`. Use a native EventSource-compatible client where cookie authentication is required, or a streaming HTTP client that can attach the bearer key. Event types are `alert_created`, `alert_acknowledged`, `alert_resolved` and `alert_updated` (an unacknowledge, snooze or unsnooze); ignore types you do not handle.",
         },
         {
           type: "code",

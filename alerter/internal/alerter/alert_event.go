@@ -212,16 +212,20 @@ func (a *Alerter) sendChannelNotification(
 			DeliveryKey: deliveryKey,
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
-		messageID := envelope.IdempotencyKey()
-		if eventType == "reminder" {
-			// Distinct reminder rounds must not be coalesced by JetStream.
-			messageID += ":" + now.UTC().Format(time.RFC3339Nano)
-		}
+		// The message id names this claim (its time), not just the event:
+		// the claim in alert_notification_states is what prevents duplicate
+		// sends. An id per event would let JetStream's 2-minute duplicate
+		// window swallow a legitimate second send of the same event (a page
+		// handed back by the worker when an acknowledgement held it, then
+		// re-claimed after an unacknowledge, or the next reminder round)
+		// while the claim commits as sent. PublishJSONUnique turns such a
+		// discard into an error, so the claim rolls back and is retried.
+		messageID := envelope.IdempotencyKey() + ":" + now.UTC().Format(time.RFC3339Nano)
 		headers := map[string][]string{
 			"x-idempotency-key": {envelope.IdempotencyKey()},
 			"Nats-Msg-Id":       {messageID},
 		}
-		return a.nats.PublishJSON(ctx, subject, envelope, headers)
+		return a.nats.PublishJSONUnique(ctx, subject, envelope, headers)
 	}
 
 	configMap := map[string]any{}

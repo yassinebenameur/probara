@@ -108,6 +108,27 @@ func (l *ledger) Record(ctx context.Context, recipient string) error {
 	return err
 }
 
+// Reached reports whether the ledger recorded any recipient of the event
+// (eventKey) for the (alert, channel) pair, i.e. whether some attempt is
+// known to have reached someone. q may be a transaction: it only reads rows
+// that earlier attempts committed through the pool. Before migration 000097
+// nothing can have been recorded, so a missing table reads as false.
+func Reached(ctx context.Context, q DB, alertID, channelID uuid.UUID, eventKey string) (bool, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT 1 FROM alert_notification_recipient_deliveries
+		WHERE alert_id = $1 AND channel_id = $2 AND event_key = $3
+		LIMIT 1`, alertID, channelID, eventKey)
+	if err != nil {
+		if pgerr.IsUndefinedTable(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer rows.Close()
+	reached := rows.Next()
+	return reached, rows.Err()
+}
+
 func hash(recipient string) string {
 	sum := sha256.Sum256([]byte(recipient))
 	return hex.EncodeToString(sum[:])

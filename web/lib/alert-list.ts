@@ -151,17 +151,23 @@ export function alertTone(alert: Alert): TimelineTone {
  * Applies a live stream event to a listed alert. Events are built from core
  * NATS and carry only the alert's identity, status, times and root cause, so
  * everything else a row shows is kept from `prev`: triage (mergeAlertUpdate),
- * the kind and its values, the mesh subject, the acknowledgement time, and,
- * while the alert stays open, its suppression and blast radius. An
- * acknowledgement with no time takes the event's. The user's own
- * acknowledge/resolve returns the whole alert: apply that with
- * mergeAlertUpdate, never this.
+ * the kind and its values, the mesh subject, the acknowledgement (time and
+ * author) unless the alert is active again, and, while the alert stays
+ * open, its suppression and blast radius. An acknowledgement with no time
+ * takes the event's. A snooze end is never kept: the events that carry
+ * none (created, resolved) are ones where it no longer applies. The user's
+ * own actions, and `updated` events, carry the whole alert: apply those
+ * with mergeAlertUpdate, never this.
  */
 export function mergeLiveAlert(prev: Alert | undefined, incoming: Alert): Alert {
   const next: Alert = { ...mergeAlertUpdate(prev, incoming) };
   if (prev) {
     if (!next.kind) next.kind = prev.kind;
-    next.acknowledged_at ??= prev.acknowledged_at;
+    if (next.status !== 'active') {
+      next.acknowledged_at ??= prev.acknowledged_at;
+      next.acknowledged_by ??= prev.acknowledged_by;
+      next.acknowledged_by_user_id ??= prev.acknowledged_by_user_id;
+    }
     next.baseline_latency_ms ??= prev.baseline_latency_ms;
     next.observed_latency_ms ??= prev.observed_latency_ms;
     next.anomaly_score ??= prev.anomaly_score;

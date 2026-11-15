@@ -253,6 +253,38 @@ func (c *Client) Publish(ctx context.Context, subject string, data []byte, heade
 	return nil
 }
 
+// ErrDuplicate is returned by PublishJSONUnique when JetStream answers that it
+// already holds a message with the same Nats-Msg-Id inside the stream's
+// Duplicates window, so this publish stored nothing.
+var ErrDuplicate = errors.New("jetstream discarded the message as a duplicate")
+
+// PublishJSONUnique is PublishJSON for a caller whose message id names one
+// specific send: a JetStream "duplicate" reply means this message was not
+// stored, so it is returned as ErrDuplicate instead of success. Publish
+// treats it as success, which is right for ids meant to collapse retries of
+// the same work, and wrong when the caller commits state on the strength of
+// the message being queued.
+func (c *Client) PublishJSONUnique(ctx context.Context, subject string, v interface{}, headers map[string][]string) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+	msg := &nats.Msg{Subject: subject, Data: data, Header: make(nats.Header)}
+	for k, vals := range headers {
+		if len(vals) > 0 {
+			msg.Header[k] = vals
+		}
+	}
+	ack, err := c.js.PublishMsg(ctx, msg)
+	if err != nil {
+		return fmt.Errorf("failed to publish message: %w", err)
+	}
+	if ack.Duplicate {
+		return ErrDuplicate
+	}
+	return nil
+}
+
 // PublishJSON publishes a JSON-encoded message
 func (c *Client) PublishJSON(ctx context.Context, subject string, v interface{}, headers map[string][]string) error {
 	data, err := json.Marshal(v)

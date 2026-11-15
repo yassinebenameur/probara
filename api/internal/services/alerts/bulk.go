@@ -67,11 +67,12 @@ func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alert
 	now := time.Now()
 	changed, err := collectIDs(s.db.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
-		SET status = 'acknowledged', acknowledged_at = $4, updated_at = $4
+		SET status = 'acknowledged', acknowledged_at = $4, acknowledged_by_user_id = $5, updated_at = $4,
+			first_acknowledged_at = COALESCE(a.first_acknowledged_at, $4)
 		FROM target
 		WHERE a.id = target.id
 		RETURNING a.id
-	`, pq.Array(uuidStrings(ids)), tenantID, pq.Array([]string{"active"}), now))
+	`, pq.Array(uuidStrings(ids)), tenantID, pq.Array([]string{"active"}), now, actingUserID(ctx)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to bulk acknowledge alerts: %w", err)
 	}
@@ -119,8 +120,27 @@ func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs 
 }
 
 // bulkResult reads the changed alerts back in full and explains every
-// requested alert that did not change, both in request order.
+// requested alert that did not change, both in request order, with the
+// acknowledge/resolve reasons.
 func (s *Service) bulkResult(ctx context.Context, tenantID uuid.UUID, requested, changed []uuid.UUID) (*BulkResult, error) {
+	return s.bulkResultWith(ctx, tenantID, requested, changed, triageReason)
+}
+
+// triageReason explains why acknowledge or resolve left an alert in status
+// unchanged ("" = no such alert).
+func triageReason(status models.AlertStatus) string {
+	switch status {
+	case models.AlertStatusAcknowledged:
+		return BulkReasonAlreadyAcknowledged
+	case models.AlertStatusResolved:
+		return BulkReasonAlreadyResolved
+	}
+	return BulkReasonNotFound
+}
+
+// bulkResultWith is bulkResult with the action's own reason for an alert
+// that was found in status but not changed.
+func (s *Service) bulkResultWith(ctx context.Context, tenantID uuid.UUID, requested, changed []uuid.UUID, reasonFor func(models.AlertStatus) string) (*BulkResult, error) {
 	result := &BulkResult{Items: []models.AlertWithDetails{}, Failed: []BulkFailure{}}
 
 	details := make(map[uuid.UUID]models.AlertWithDetails, len(changed))
@@ -189,11 +209,8 @@ func (s *Service) bulkResult(ctx context.Context, tenantID uuid.UUID, requested,
 			continue
 		}
 		reason := BulkReasonNotFound
-		switch statuses[id] {
-		case models.AlertStatusAcknowledged:
-			reason = BulkReasonAlreadyAcknowledged
-		case models.AlertStatusResolved:
-			reason = BulkReasonAlreadyResolved
+		if status, found := statuses[id]; found {
+			reason = reasonFor(status)
 		}
 		result.Failed = append(result.Failed, BulkFailure{ID: id, Reason: reason})
 	}

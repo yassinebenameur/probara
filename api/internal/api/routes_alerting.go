@@ -39,6 +39,13 @@ func mountAlertRoutes(r chi.Router, alertHandlers *alerthandlers.Handlers, aiLab
 		// Bulk triage: per-alert results and one audit event per alert.
 		r.Post("/bulk/acknowledge", alertHandlers.BulkAcknowledgeAlerts)
 		r.Post("/bulk/resolve", alertHandlers.BulkResolveAlerts)
+		// The acknowledge mute: unacknowledge, snooze, unsnooze (single and bulk).
+		r.Post("/{id}/unacknowledge", alertHandlers.UnacknowledgeAlert)
+		r.Post("/{id}/snooze", alertHandlers.SnoozeAlert)
+		r.Post("/{id}/unsnooze", alertHandlers.UnsnoozeAlert)
+		r.Post("/bulk/unacknowledge", alertHandlers.BulkUnacknowledgeAlerts)
+		r.Post("/bulk/snooze", alertHandlers.BulkSnoozeAlerts)
+		r.Post("/bulk/unsnooze", alertHandlers.BulkUnsnoozeAlerts)
 		// Triage training label (audited write; not in postReadPaths).
 		// A corrected label also stops the alert's pending
 		// suspected-cause follow-ups.

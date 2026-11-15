@@ -53,6 +53,26 @@ test('alertSegments: an acknowledged alert is active until its acknowledgement',
   assert.deepEqual(alertSegments(untimed, WINDOW, false).map((s) => s.tone), ['acknowledged']);
 });
 
+test('alertSegments: a snoozed alert is active until its snooze began, then muted', () => {
+  const a = alert('a', 'm', { triggered_at: at(10), snoozed_at: at(40), snoozed_until: at(180) });
+  assert.deepEqual(
+    alertSegments(a, WINDOW, false).map((s) => [s.tone, s.from - T0, s.to - T0]),
+    [
+      ['active', 10 * MIN, 40 * MIN],
+      ['snoozed', 40 * MIN, 120 * MIN],
+    ]
+  );
+  // A snooze that ran out by the window's end draws nothing muted.
+  const over = alert('b', 'm', { snoozed_at: at(40), snoozed_until: at(60) });
+  assert.deepEqual(alertSegments(over, WINDOW, false).map((s) => s.tone), ['active']);
+  // Acknowledgement and suppression win over a snooze.
+  const acked = alert('c', 'm', { status: 'acknowledged', acknowledged_at: at(5), snoozed_until: at(180) });
+  assert.deepEqual(alertSegments(acked, WINDOW, false).map((s) => s.tone), ['acknowledged']);
+  assert.deepEqual(alertSegments(alert('d', 'm', { snoozed_until: at(180) }), WINDOW, true).map((s) => s.tone), ['suppressed']);
+  // Without a start, the whole span is muted.
+  assert.deepEqual(alertSegments(alert('e', 'm', { snoozed_until: at(180) }), WINDOW, false).map((s) => s.tone), ['snoozed']);
+});
+
 test('alertSegments: resolved, suppressed and out-of-window alerts', () => {
   const resolved = alert('a', 'm', { status: 'resolved', triggered_at: at(-20), acknowledged_at: at(5), resolved_at: at(40) });
   assert.deepEqual(

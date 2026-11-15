@@ -38,7 +38,7 @@ interface AlertTimelineProps {
 }
 
 const OPEN_GROUP = 'open';
-const LEGEND: TimelineTone[] = ['active', 'acknowledged', 'suppressed', 'resolved'];
+const LEGEND: TimelineTone[] = ['active', 'snoozed', 'acknowledged', 'suppressed', 'resolved'];
 
 // Label and duration columns are fixed so the overlays (gridlines, the now
 // line) can be placed over the track with one calc().

@@ -44,6 +44,18 @@ export interface Alert {
   // has no triage row; always absent (= unknown) on live stream events, which
   // are built from core NATS, so merge those with mergeAlertUpdate.
   triage?: AlertTriage;
+  // Who acknowledged (with acknowledged_at, when). Absent while not
+  // acknowledged, and for an acknowledgement made with an API key.
+  acknowledged_by_user_id?: string;
+  acknowledged_by?: string;
+  // Set while the open alert is snoozed: until then it sends no reminder and
+  // no further escalation. Absent once the snooze ended (lib/alert-mute
+  // isSnoozed also checks the clock, for a row loaded before it ran out), as
+  // are when the snooze began and who set it (absent for an API key).
+  snoozed_until?: string;
+  snoozed_at?: string;
+  snoozed_by_user_id?: string;
+  snoozed_by?: string;
 }
 
 // --- Automatic alert triage (never delays, routes or suppresses a page) ---
@@ -91,8 +103,13 @@ export interface AlertListResponse {
 /** `GET /alerts?sort=` columns (with `dir=asc|desc`). */
 export type AlertSortColumn = 'triggered_at' | 'status' | 'monitor' | 'duration';
 
-/** Why a bulk acknowledge/resolve left an alert unchanged. */
-export type AlertBulkFailureReason = 'not_found' | 'already_acknowledged' | 'already_resolved';
+/** Why a bulk action left an alert unchanged. */
+export type AlertBulkFailureReason =
+  | 'not_found'
+  | 'already_acknowledged'
+  | 'already_resolved'
+  | 'not_acknowledged'
+  | 'not_snoozed';
 
 /** `POST /alerts/bulk/{acknowledge,resolve}`: per-alert results, never all-or-nothing. */
 export interface AlertBulkResult {
@@ -102,7 +119,8 @@ export interface AlertBulkResult {
   failed: { id: string; reason: AlertBulkFailureReason }[];
 }
 
-export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved';
+/** `updated`: unacknowledged, snoozed or unsnoozed; the event carries the whole alert. */
+export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved' | 'updated';
 
 export interface AlertStreamEvent {
   type: AlertStreamEventType;

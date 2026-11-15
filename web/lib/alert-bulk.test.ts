@@ -6,9 +6,22 @@ import type { Alert } from './types';
 const alert = (id: string, status: Alert['status']) => ({ id, status }) as Alert;
 
 test('bulkTargets sends each action only the alerts it can move', () => {
-  const targets = bulkTargets([alert('a', 'active'), alert('b', 'acknowledged'), alert('c', 'resolved')]);
-  assert.deepEqual(targets.acknowledge, ['a']);
-  assert.deepEqual(targets.resolve, ['a', 'b']);
+  const now = Date.parse('2026-11-15T12:00:00Z');
+  const snoozed = { ...alert('d', 'active'), snoozed_until: '2026-11-15T13:00:00Z' } as Alert;
+  const snoozeOver = { ...alert('e', 'active'), snoozed_until: '2026-11-15T11:00:00Z' } as Alert;
+  const targets = bulkTargets([alert('a', 'active'), alert('b', 'acknowledged'), alert('c', 'resolved'), snoozed, snoozeOver], now);
+  assert.deepEqual(targets.acknowledge, ['a', 'd', 'e']);
+  assert.deepEqual(targets.resolve, ['a', 'b', 'd', 'e']);
+  assert.deepEqual(targets.unacknowledge, ['b']);
+  assert.deepEqual(targets.snooze, ['a', 'e'], 'active and not already snoozed');
+});
+
+test('bulkOutcome words the mute actions', () => {
+  assert.equal(bulkOutcome('snooze', { items: [alert('a', 'active')], failed: [] }).message, '1 alert snoozed');
+  assert.equal(
+    bulkOutcome('unacknowledge', { items: [], failed: [{ id: 'a', reason: 'not_acknowledged' }] }).message,
+    'No alerts unacknowledged: 1 not acknowledged'
+  );
 });
 
 test('bulkOutcome reads a full success', () => {

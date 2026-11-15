@@ -21,6 +21,7 @@ func catalog() []spec {
 		locationTools(),
 		discoveryTools(),
 		alertTools(),
+		alertMuteTools(),
 		incidentTools(),
 		notificationTools(),
 		slaTools(),

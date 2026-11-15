@@ -308,10 +308,13 @@ func SuppressedByDependencyPredicate(alertAlias, monAlias, tenantAlias string) s
 // never had a root cause this is its triggered_at; for one whose root cause
 // cleared it is the end of the grace period, so escalation-tier delays for a
 // late-paging downstream are measured from when it became unexplained rather
-// than firing every tier at once.
+// than firing every tier at once. Coming out of an acknowledgement or a
+// snooze (DispatchResumedAtExpr) restarts it the same way; GREATEST ignores
+// its NULL for an alert never muted.
 func DispatchEligibleSinceExpr(alertAlias, tenantAlias string) string {
 	return `GREATEST(` + alertAlias + `.triggered_at,
-		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at))`
+		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at),
+		` + DispatchResumedAtExpr(alertAlias) + `)`
 }
 
 // ImpactedMonitorsSubquery returns a SQL scalar subquery yielding a JSON array
