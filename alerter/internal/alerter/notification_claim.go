@@ -96,18 +96,27 @@ func (a *Alerter) deliverNotification(
 	// A rolled-back claim is retried by whichever replica claims next; the
 	// key lets that retry skip the recipients this attempt already reached.
 	ctx = withRecipientKey(ctx, notifications.RecipientEventKey(eventType, round))
+	ctx, trace := withSendTrace(ctx)
 	if err := a.sendFunc(ctx, channel, eventType, binding, alert, groupInfo, now); err != nil {
 		if plugin.IsPermanent(err) {
 			// The provider rejected the channel itself (revoked key, deleted
 			// webhook). Keep the claim so the next cycle does not re-send and
 			// fail identically every evaluation interval; the error is still
 			// returned so it is logged.
+			a.recordDelivery(ctx, tx, trace, eventType, alert.ID, channel.ID, err)
 			if cerr := tx.Commit(); cerr != nil {
 				return false, fmt.Errorf("commit notification claim after permanent failure: %w", cerr)
 			}
+			return false, err
 		}
+		// Delivery history: the claim is released for the next cycle's retry,
+		// so the failed attempt is written through the pool after that
+		// rollback, which would otherwise take it along.
+		_ = tx.Rollback()
+		a.recordDelivery(ctx, nil, trace, eventType, alert.ID, channel.ID, err)
 		return false, err
 	}
+	a.recordDelivery(ctx, tx, trace, eventType, alert.ID, channel.ID, nil)
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit notification claim: %w", err)
 	}

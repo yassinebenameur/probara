@@ -129,6 +129,11 @@ func Reached(ctx context.Context, q DB, alertID, channelID uuid.UUID, eventKey s
 	return reached, rows.Err()
 }
 
+// Hash is the key the ledger stores for a recipient, so the delivery history
+// (shared/notifications/deliverylog) can name a recipient the same way
+// without keeping the address.
+func Hash(recipient string) string { return hash(recipient) }
+
 func hash(recipient string) string {
 	sum := sha256.Sum256([]byte(recipient))
 	return hex.EncodeToString(sum[:])

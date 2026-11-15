@@ -30,6 +30,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/queue"
@@ -152,6 +153,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		entry.Error("Unsupported dispatch envelope version; dropping")
 		return nil
 	}
+	record := c.deliveryRecord(entry, envelope, deliveryAttempt(msg)) // delivery history
 
 	p, ok := plugin.DefaultRegistry.Get(envelope.ChannelType)
 	if !ok {
@@ -159,7 +161,9 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// bug — return an error so JetStream retries and the operator notices
 		// the consumer falling behind, then ship the missing plugin.
 		entry.Error("No registered plugin for channel type")
-		return fmt.Errorf("unknown plugin type: %s", envelope.ChannelType)
+		err := fmt.Errorf("unknown plugin type: %s", envelope.ChannelType)
+		record.failed(ctx, deliverylog.OutcomeFailed, deliverylog.ReasonPluginMissing, err)
+		return err
 	}
 
 	channel, err := c.loadChannel(ctx, envelope.ChannelID)
@@ -175,12 +179,14 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	}
 	if !channel.IsActive {
 		entry.Info("Channel deactivated; dropping message")
+		record.dropped(ctx, deliverylog.ReasonChannelInactive)
 		return nil
 	}
 	if channel.Type != envelope.ChannelType {
 		// Edge case: the channel was repurposed (type changed). Drop because
 		// the plugin we'd dispatch to no longer matches the stored config.
 		entry.WithField("current_type", channel.Type).Warn("Channel type changed since publish; dropping message")
+		record.dropped(ctx, deliverylog.ReasonChannelChanged)
 		return nil
 	}
 
@@ -214,6 +220,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			entry.WithError(err).Error("Failed to release a muted notification claim")
 			return err
 		}
+		record.droppedTx(ctx, tx, deliverylog.ReasonMuted)
 		if err := tx.Commit(); err != nil {
 			entry.WithError(err).Error("Failed to commit a released notification claim")
 			return err
@@ -227,6 +234,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// have yet as a no-op, so a late trigger would open an incident that
 		// nothing ever closes.
 		entry.Info("Alert resolved since publish; dropping superseded event")
+		record.dropped(ctx, supersededReason(alertStatus))
 		return nil
 	}
 
@@ -234,14 +242,17 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	if len(channel.Config) > 0 {
 		if err := json.Unmarshal(channel.Config, &configMap); err != nil {
 			entry.WithError(err).Error("Failed to decode channel config")
+			record.failed(ctx, deliverylog.OutcomePermanentFailure, deliverylog.ReasonInvalidConfig, err)
 			return nil
 		}
 	}
 	configMap, err = secrets.DecryptConfig(c.encryptor, p.Manifest(), configMap)
 	if err != nil {
 		entry.WithError(err).Error("Failed to decrypt channel config")
+		record.failed(ctx, deliverylog.OutcomeFailed, "", err)
 		return err
 	}
+	record.channelLoaded(p.Manifest(), configMap)
 
 	attempt := deliveryAttempt(msg)
 	alertID, alertErr := uuid.Parse(envelope.AlertID)
@@ -255,6 +266,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		if alertErr == nil && channelErr == nil {
 			recipients = recipientledger.For(c.db, alertID, channelID, deliveryKey)
 		}
+		recipients = record.track(recipients)
 		return p.Send(ctx, plugin.DispatchRequest{
 			Channel: plugin.ChannelRef{
 				ID:     envelope.ChannelID,
@@ -268,6 +280,12 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		})
 	}
 	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
+	// Delivery history: Send is done, so the alert lock goes first (tx only
+	// ever rolls back on this path) and the row is written through the pool.
+	if tx != nil {
+		_ = tx.Rollback()
+	}
+	record.finished(ctx, err)
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted

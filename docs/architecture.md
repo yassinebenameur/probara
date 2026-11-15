@@ -149,6 +149,16 @@ claim, so a retry on any replica or worker reaches only the rest; the
 dispatch envelope's `delivery_key` names the event (and reminder round) those
 rows belong to.
 
+The notification delivery history, `alert_notification_deliveries`
+(migration 000107), has one writer package, `shared/notifications/deliverylog`,
+and three callers: the alerter's `deliverNotification` (synchronous sends; in
+the claim transaction when the claim commits, through the pool after it rolls
+back), the worker's notification consumer (every attempt and every event it
+drops; through the pool, except the muted drop that commits with its claim
+release), and the API's channel test send. Errors are sanitized and
+recipients masked before they are written. The API reads it per alert and per
+channel; the scheduler's retention cleanup deletes rows older than 90 days.
+
 Pages (created and reminder notifications) on chat, email, SMS and webhook
 channels carry a signed acknowledge link minted where they are sent (alerter,
 worker; API test sends never). Paging channels do not. It opens the operator UI's `/alert-action` page, which calls the

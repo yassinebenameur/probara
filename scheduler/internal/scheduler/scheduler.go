@@ -463,7 +463,8 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 
 	// Mesh results and metric samples follow data_retention_days (0 = keep
 	// forever); raw check results ignore it and use the fixed hour-aligned
-	// horizon (pruneTenantCheckResults).
+	// horizon (pruneTenantCheckResults). The notification delivery history
+	// is kept a fixed 90 days for everyone (retention_deliveries.go).
 	stores := []struct {
 		name  string
 		prune func(ctx context.Context, tenantID uuid.UUID, tenantDays int) (int64, error)
@@ -478,6 +479,7 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 			func(ctx context.Context, _ int) (time.Time, error) { return s.checkResultsPruneCutoff(ctx) }},
 		{"mesh_probe_results", s.pruneTenantMeshResults, tenantDaysCutoff},
 		{"metric_samples", s.pruneTenantMetricSamples, tenantDaysCutoff},
+		{"alert_notification_deliveries", s.pruneTenantDeliveries, deliveriesCutoff},
 	}
 	var totalDeleted int64
 	backlogged := make(map[string]int)

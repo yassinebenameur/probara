@@ -62,6 +62,29 @@ func RetryAfterDelay(err error) (time.Duration, bool) {
 	return 0, false
 }
 
+type responseStatusError struct {
+	err    error
+	status int
+}
+
+func (e *responseStatusError) Error() string { return e.err.Error() }
+func (e *responseStatusError) Unwrap() error { return e.err }
+
+func withResponseStatus(err error, status int) error {
+	return &responseStatusError{err: err, status: status}
+}
+
+// ResponseStatus returns the provider's HTTP status when err came from
+// CheckResponse (the notification delivery history records it). A plugin
+// that flattens several recipients' errors into one loses it.
+func ResponseStatus(err error) (int, bool) {
+	var r *responseStatusError
+	if errors.As(err, &r) {
+		return r.status, true
+	}
+	return 0, false
+}
+
 // maxRetryAfter caps a provider's Retry-After so one hostile or confused
 // endpoint cannot park a notification for hours.
 const maxRetryAfter = 10 * time.Minute
@@ -75,7 +98,7 @@ func CheckResponse(resp *http.Response, service string) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	err := fmt.Errorf("%s returned status %d%s", service, resp.StatusCode, bodyExcerpt(resp.Body))
+	err := withResponseStatus(fmt.Errorf("%s returned status %d%s", service, resp.StatusCode, bodyExcerpt(resp.Body)), resp.StatusCode)
 	switch {
 	case resp.StatusCode == http.StatusTooManyRequests:
 		if d, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {

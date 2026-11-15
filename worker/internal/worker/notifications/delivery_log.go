@@ -1,0 +1,142 @@
+package notifications
+
+import (
+	"context"
+	"database/sql"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
+
+	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+)
+
+// deliveryRecord is one dispatch message's row in the delivery history
+// (shared/notifications/deliverylog): the consumer creates it per message,
+// fills in the channel's secrets and recipient ledger as it learns them, and
+// calls exactly one of dropped, droppedTx or finished at the outcome. Every
+// write is best effort: a failure is logged and the message is handled as
+// if nothing was recorded.
+type deliveryRecord struct {
+	c         *Consumer
+	entry     *logrus.Entry
+	alertID   uuid.UUID
+	channelID uuid.UUID
+	valid     bool
+	eventType string
+	key       string
+	attempt   int
+	started   time.Time
+
+	secrets    []string
+	recipients *deliverylog.Tracker
+}
+
+func (c *Consumer) deliveryRecord(entry *logrus.Entry, envelope notifications.DispatchEnvelope, attempt int) *deliveryRecord {
+	alertID, aerr := uuid.Parse(envelope.AlertID)
+	channelID, cerr := uuid.Parse(envelope.ChannelID)
+	return &deliveryRecord{
+		c:         c,
+		entry:     entry,
+		alertID:   alertID,
+		channelID: channelID,
+		valid:     aerr == nil && cerr == nil,
+		eventType: envelope.EventType,
+		key:       envelope.RecipientKey(),
+		attempt:   attempt,
+		started:   time.Now(),
+	}
+}
+
+// channelLoaded notes the decrypted channel config's secret values, masked
+// out of any stored error.
+func (r *deliveryRecord) channelLoaded(manifest plugin.Manifest, config map[string]any) {
+	r.secrets = deliverylog.SecretValues(manifest, config)
+}
+
+// track wraps the send's recipient ledger so the history gets one row per
+// recipient this attempt tried. A nil ledger stays nil (untracked).
+func (r *deliveryRecord) track(ledger plugin.RecipientLedger) plugin.RecipientLedger {
+	if ledger == nil {
+		return nil
+	}
+	r.recipients = deliverylog.Track(ledger)
+	return r.recipients
+}
+
+func (r *deliveryRecord) row(outcome deliverylog.Outcome, reason deliverylog.Reason, err error) deliverylog.Attempt {
+	return deliverylog.Attempt{
+		AlertID:     r.alertID,
+		ChannelID:   r.channelID,
+		EventType:   r.eventType,
+		DeliveryKey: r.key,
+		Path:        deliverylog.PathAsync,
+		Number:      r.attempt,
+		Outcome:     outcome,
+		Reason:      reason,
+		Err:         err,
+		Secrets:     r.secrets,
+		Duration:    time.Since(r.started),
+		Recipients:  r.recipients,
+	}
+}
+
+// dropped records an event the consumer decided not to send, through the
+// pool.
+func (r *deliveryRecord) dropped(ctx context.Context, reason deliverylog.Reason) {
+	r.write(ctx, nil, r.row(deliverylog.OutcomeDropped, reason, nil))
+}
+
+// droppedTx records a drop inside tx, the alert-lock transaction that also
+// hands the claim back and then commits, so the row and the claim agree.
+func (r *deliveryRecord) droppedTx(ctx context.Context, tx *sql.Tx, reason deliverylog.Reason) {
+	r.write(ctx, tx, r.row(deliverylog.OutcomeDropped, reason, nil))
+}
+
+// failed records an attempt that failed before reaching the plugin's Send.
+func (r *deliveryRecord) failed(ctx context.Context, outcome deliverylog.Outcome, reason deliverylog.Reason, err error) {
+	r.write(ctx, nil, r.row(outcome, r.finalReason(outcome, reason), err))
+}
+
+// finished records the plugin's Send result, through the pool: the lock
+// transaction around Send always rolls back.
+func (r *deliveryRecord) finished(ctx context.Context, sendErr error) {
+	outcome, reason := deliverylog.SendOutcome(sendErr)
+	r.write(ctx, nil, r.row(outcome, r.finalReason(outcome, reason), sendErr))
+}
+
+// finalReason marks a transient failure on the last delivery JetStream will
+// make: nothing retries it, so "failed" alone would read as pending.
+func (r *deliveryRecord) finalReason(outcome deliverylog.Outcome, reason deliverylog.Reason) deliverylog.Reason {
+	if outcome == deliverylog.OutcomeFailed && reason == "" && r.attempt >= MaxDeliver {
+		return deliverylog.ReasonRetriesExhausted
+	}
+	return reason
+}
+
+// supersededReason names why eventSuperseded dropped an event, from the
+// alert status it read: resolved, or (for an acknowledgement) unacknowledged.
+// A deleted alert reads as "" and leaves no row to write.
+func supersededReason(alertStatus string) deliverylog.Reason {
+	if alertStatus == "resolved" {
+		return deliverylog.ReasonResolved
+	}
+	return deliverylog.ReasonUnacknowledged
+}
+
+func (r *deliveryRecord) write(ctx context.Context, tx *sql.Tx, a deliverylog.Attempt) {
+	if r == nil || !r.valid || r.c.db == nil {
+		return
+	}
+	var err error
+	if tx != nil {
+		err = deliverylog.RecordTx(ctx, tx, a)
+	} else {
+		err = deliverylog.Record(ctx, r.c.db, a)
+	}
+	if err != nil {
+		r.entry.WithError(err).Warn("Failed to record notification delivery")
+	}
+}

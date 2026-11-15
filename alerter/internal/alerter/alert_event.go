@@ -225,6 +225,7 @@ func (a *Alerter) sendChannelNotification(
 			"x-idempotency-key": {envelope.IdempotencyKey()},
 			"Nats-Msg-Id":       {messageID},
 		}
+		traceQueued(ctx) // the delivery worker records this send
 		return a.nats.PublishJSONUnique(ctx, subject, envelope, headers)
 	}
 
@@ -245,6 +246,7 @@ func (a *Alerter) sendChannelNotification(
 		// send rolls that back, and the progress must survive it.
 		recipients = recipientledger.For(a.db, alert.ID, channel.ID, deliveryKey)
 	}
+	recipients = traceSend(ctx, recipients, p.Manifest(), configMap) // delivery history
 	return p.Send(ctx, plugin.DispatchRequest{
 		Channel: plugin.ChannelRef{
 			ID:     channel.ID.String(),

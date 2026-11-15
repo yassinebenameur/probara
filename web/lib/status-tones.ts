@@ -401,3 +401,24 @@ export const TONE_DOT: Record<StatusTone, string> = {
   info: 'bg-sky-500',
   neutral: 'bg-slate-500',
 };
+
+// ── Notification deliveries ──────────────────────────────────────────────
+
+/**
+ * A delivery attempt's pill. A drop is a deliberate non-send (the alert
+ * resolved first, an acknowledgement held it, the channel was switched off),
+ * so it is neutral, never a failure colour. A transient failure is amber while
+ * a retry is still coming and red once the worker gave up.
+ */
+export function deliveryOutcomeTone(outcome: string | null | undefined, reason?: string | null): StatusTone {
+  switch (outcome) {
+    case 'delivered':
+      return 'success';
+    case 'failed':
+      return reason === 'retries_exhausted' ? 'danger' : 'warning';
+    case 'permanent_failure':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}

@@ -586,6 +586,10 @@ export const API_PAGE: DocPage = {
               "Write; confirm or correct a ready triage as an [AI label](#ai-labels)",
             ],
             [
+              "`GET /api/v1/alerts/{id}/deliveries`",
+              "The alert's [notification delivery history](/docs/alerting/#delivery-history) across its channels, oldest first; `page`, `page_size` (default 50, max 200)",
+            ],
+            [
               "`GET /api/v1/alert-channels`",
               "List configured channels",
             ],
@@ -607,7 +611,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/alert-channels/{id}/test`",
-              "Send a real test notification",
+              "Send a real test notification; recorded in the channel's delivery history as a test",
+            ],
+            [
+              "`GET /api/v1/alert-channels/{id}/deliveries`",
+              "The channel's delivery history, test sends included, newest first; `outcome` (comma-separated: `delivered`, `failed`, `permanent_failure`, `dropped`), `page`, `page_size` (default 50, max 200)",
             ],
             [
               "`GET /api/v1/alert-channel-plugins`",
@@ -638,6 +646,11 @@ export const API_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Alert reads (list, detail, recent alerts, and the acknowledge and resolve responses) and the `alerts[]` of `GET /incidents/{id}` include a read-only `triage` object when the alert has a triage row. The object is omitted when there is no row, and stream events never carry it. Fields that do not apply are `null`: `id`, `status` (`pending`, `ready`, `failed`, `skipped`), `hypothesis` (catalogue key) and `title`, `confidence` (`low`, `medium`, `high`) and `summary` when ready, `skip_reason` (`resolved`, `cooldown`, `not_modeled`, `disabled`) when skipped, `error_message` (a fixed string) when failed, `created_at` (claim time), `completed_at`, `labelled`, and `labelable` (ready and at least one decision was sent to the model). Only `GET /alerts/{id}` adds `label_context`, in the same shape as an incident analysis's, when the triage is labelable.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Delivery history rows carry `id`, `alert_id` (`null` for a test send), `channel_id`, `channel_name`, `channel_type`, `event_type`, `recipient` (masked, per recipient on SMS, else `null`), `attempt`, `path` (`sync`: the alerter, or the API for a test; `async`: a delivery worker), `test`, `outcome` (`delivered`, `failed`, `permanent_failure`, `dropped`), `reason` (`resolved`, `unacknowledged`, `muted`, `channel_inactive`, `channel_changed`, `egress_blocked`, `invalid_config`, `plugin_missing`, `retries_exhausted`, or `null`; treat unknown values as text), `error` (sanitized), `provider_status`, `duration_ms`, `alert_kind`, `monitor_name` and `created_at`; a page has `items`, `page`, `page_size` and `total`. An alert or channel of another workspace is a `404`. Channel reads (list, detail and the update response) add `last_delivered_at`, `last_failed_at` and `failing`: a failure in the last 24 hours with no success since, test sends included.",
         },
       ],
     },
