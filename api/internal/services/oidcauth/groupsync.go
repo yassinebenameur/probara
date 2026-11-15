@@ -12,6 +12,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/shared/auth"
 )
 
@@ -224,6 +225,15 @@ func (s *Service) syncMappedRoles(ctx context.Context, user *models.AdminUser, g
 	}
 	defer tx.Rollback()
 
+	// A sync that may demote takes the superadmin-set lock first (before the
+	// row lock, the order every path uses), so the last-superadmin check
+	// below cannot race another demotion or deletion.
+	if wantPlatform == auth.PlatformRoleMember {
+		if err := adminusers.LockSuperadmins(ctx, tx); err != nil {
+			return nil, fmt.Errorf("failed to lock superadmins for group sync: %w", err)
+		}
+	}
+
 	// Lock the user row so concurrent logins of the same user serialize.
 	var curPlatform string
 	if err := tx.QueryRowContext(ctx, `
@@ -255,11 +265,8 @@ func (s *Service) syncMappedRoles(ctx context.Context, user *models.AdminUser, g
 	}
 
 	if wantPlatform == auth.PlatformRoleMember && curPlatform == auth.PlatformRoleSuperadmin {
-		var otherSuperadmins int
-		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM admin_users
-			WHERE platform_role = $1 AND disabled_at IS NULL AND id <> $2
-		`, auth.PlatformRoleSuperadmin, user.ID).Scan(&otherSuperadmins); err != nil {
+		_, otherSuperadmins, err := adminusers.OtherActiveSuperadmins(ctx, tx, user.ID)
+		if err != nil {
 			return nil, fmt.Errorf("failed to count superadmins for group sync: %w", err)
 		}
 		if otherSuperadmins == 0 {

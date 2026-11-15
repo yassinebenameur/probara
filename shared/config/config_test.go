@@ -67,12 +67,38 @@ func TestLoadAPIConfigBootstrapSetupCode(t *testing.T) {
 	if cfg.BootstrapSetupCode != "" {
 		t.Fatalf("default setup code = %q, want empty", cfg.BootstrapSetupCode)
 	}
-	t.Setenv("BOOTSTRAP_SETUP_CODE", " ABCD-EFGH ")
+	// Stored normalized, so every consumer sees the same value.
+	t.Setenv("BOOTSTRAP_SETUP_CODE", " abcd-efgh jklm-npqr-stuv ")
 	if cfg, err = LoadAPIConfig(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BootstrapSetupCode != "ABCD-EFGH" {
+	if cfg.BootstrapSetupCode != "ABCDEFGHJKLMNPQRSTUV" {
 		t.Fatalf("setup code = %q", cfg.BootstrapSetupCode)
+	}
+	t.Setenv("BOOTSTRAP_SETUP_CODE", "ABCD-EFGH-JKLM-NPQR")
+	if cfg, err = LoadAPIConfig(); err != nil || cfg.BootstrapSetupCode != "ABCDEFGHJKLMNPQR" {
+		t.Fatalf("16-character code: %v %q", err, cfg.BootstrapSetupCode)
+	}
+	// Set but too short, or nothing but separators: refuse to start rather
+	// than run with a guessable or empty code.
+	for _, bad := range []string{"--", "- -", "ABCD-EFGH", "ABCD-EFGH-JKLM-NPQ"} {
+		t.Setenv("BOOTSTRAP_SETUP_CODE", bad)
+		if _, err := LoadAPIConfig(); err == nil || !strings.Contains(err.Error(), "BOOTSTRAP_SETUP_CODE") {
+			t.Fatalf("%q: LoadAPIConfig error = %v, want a BOOTSTRAP_SETUP_CODE error", bad, err)
+		}
+	}
+}
+
+func TestNormalizeSetupCode(t *testing.T) {
+	for in, want := range map[string]string{
+		"ABCD-EFGH-JKLM-NPQR-STUV":    "ABCDEFGHJKLMNPQRSTUV",
+		" abcd efgh\tjklm-npqr-stuv ": "ABCDEFGHJKLMNPQRSTUV",
+		"--":                          "",
+		"":                            "",
+	} {
+		if got := NormalizeSetupCode(in); got != want {
+			t.Errorf("NormalizeSetupCode(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

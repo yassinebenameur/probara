@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -23,7 +24,7 @@ import (
 func useEdgeSecurity(r chi.Router, cfg *config.APIConfig, log *logger.Logger) *apimiddleware.RateLimiter {
 	limiter := apimiddleware.NewRateLimiter(cfg.RateLimitPerMinute, cfg.RateLimitBurst)
 	if limiter != nil {
-		limiter.SetSessionSecret(cfg.AdminJWTSecret)
+		limiter.SetSessionSecret(cfg.AdminJWTSecret, time.Duration(cfg.AdminRefreshTTLDays)*24*time.Hour)
 		if mux, ok := r.(*chi.Mux); ok {
 			limiter.SetRouteClassifier(authRouteClassifier(mux, limiter))
 		}

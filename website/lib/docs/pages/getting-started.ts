@@ -238,7 +238,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
           tone: "warning",
           title: "Bootstrap closes after first use",
           text:
-            "The public first-user endpoint is only valid while no users exist. Treat initial bootstrap as an installation step, not a recurring user-management path. Without a setup code, whoever reaches the UI first can claim it: set `BOOTSTRAP_SETUP_CODE` (Helm: `secrets.bootstrapSetupCode`) on any install that is reachable by others before you create the first administrator.",
+            "The public first-user endpoint is only valid while no users exist, and never again once a superadministrator has existed. Treat initial bootstrap as an installation step, not a recurring user-management path. Without a setup code, whoever reaches the UI first can claim it: set `BOOTSTRAP_SETUP_CODE` (Helm: `secrets.bootstrapSetupCode`) on any install that is reachable by others before you create the first administrator.",
         },
         {
           type: "paragraph",

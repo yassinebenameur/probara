@@ -151,7 +151,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`BOOTSTRAP_SETUP_CODE`',
               'Empty',
-              'One-time code the first-administrator form asks for, so a reachable install cannot be claimed by whoever gets there first. Compared in constant time, ignoring case, spaces and dashes; missing and wrong codes get the same 403 and are logged without the submitted value. Empty leaves the form open until an administrator exists. Has no effect afterwards. The release installer generates one; Compose passes it through; Helm: `secrets.bootstrapSetupCode` or an existing Secret with key `bootstrap_setup_code`.',
+              'One-time code the first-administrator form asks for, so a reachable install cannot be claimed by whoever gets there first. At least 16 characters besides spaces and dashes, or the API refuses to start. Compared in constant time, ignoring case, spaces and dashes; missing and wrong codes get the same 403 and are logged without the submitted value. Empty leaves the form open until an administrator exists. Has no effect once a superadministrator has existed: bootstrap never reopens after that. The release installer generates one; Compose passes it through; Helm: `secrets.bootstrapSetupCode` or an existing Secret with key `bootstrap_setup_code`.',
             ],
             [
               '`ADMIN_BCRYPT_COST`',

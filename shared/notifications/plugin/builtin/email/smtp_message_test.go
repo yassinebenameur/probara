@@ -170,6 +170,8 @@ type fakeSMTPOptions struct {
 	dropAtMail    int      // close the connection on the Nth MAIL, unanswered
 	busyAtMail    int      // answer the Nth MAIL with 421 and close
 	dropAfterData int      // record the Nth message, then close without the 250
+	silentAtMail  int      // never answer the Nth MAIL
+	quitReply     string   // answer QUIT with this ("" = 221); "silent" never answers
 }
 
 type fakeSMTP struct {
@@ -275,6 +277,9 @@ func startFakeSMTP(t *testing.T, opts fakeSMTPOptions) *fakeSMTP {
 							write("421 too many messages, closing")
 							return
 						}
+						if n == opts.silentAtMail {
+							continue
+						}
 						cur = smtpTransaction{conn: connNo}
 						write("250 ok")
 					case "RCPT":
@@ -292,7 +297,14 @@ func startFakeSMTP(t *testing.T, opts fakeSMTPOptions) *fakeSMTP {
 						inData = true
 						write("354 send it")
 					case "QUIT":
-						write("221 bye")
+						switch opts.quitReply {
+						case "":
+							write("221 bye")
+						case "silent":
+							continue
+						default:
+							write(opts.quitReply)
+						}
 						return
 					default:
 						write("250 ok")
@@ -570,6 +582,65 @@ func TestSMTPMailer_SilentServerIsBounded(t *testing.T) {
 	within("default bound, alert path", 3*time.Second, func() error {
 		return mailer.SendAlert(context.Background(), sampleEvent(), Templates{}, []string{"ops@example.com"})
 	})
+}
+
+// Once the relay has accepted an alert (DATA answered 250), a QUIT that
+// fails or never gets its reply must not fail the send: the caller would
+// retry and the alert would go out twice.
+func TestSMTPMailer_SendAlertIgnoresQuitFailureAfterData(t *testing.T) {
+	saved := smtpMessageTimeout
+	smtpMessageTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { smtpMessageTimeout = saved })
+
+	for name, reply := range map[string]string{"QUIT refused": "500 no", "QUIT unanswered": "silent"} {
+		t.Run(name, func(t *testing.T) {
+			f := startFakeSMTP(t, fakeSMTPOptions{quitReply: reply})
+			mailer := newTestMailer(t, f, SMTPParams{})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			start := time.Now()
+			if err := mailer.SendAlert(ctx, sampleEvent(), Templates{}, []string{"ops@example.com"}); err != nil {
+				t.Fatalf("SendAlert after an accepted DATA = %v, want nil", err)
+			}
+			if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
+				t.Errorf("SendAlert took %v waiting for QUIT", elapsed)
+			}
+			if got := f.delivered(); len(got) != 1 {
+				t.Errorf("delivered = %v, want exactly one message", got)
+			}
+		})
+	}
+}
+
+// A cancelled ctx without a deadline must keep the connection deadline at
+// now: a step that set a fresh 30 s deadline would undo the cancel interrupt
+// and block on a silent relay until it ran out.
+func TestDeadlineForCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if d := deadlineFor(ctx); time.Until(d) < smtpMessageTimeout-time.Second {
+		t.Fatalf("live ctx deadline in %v, want about %v", time.Until(d), smtpMessageTimeout)
+	}
+	cancel()
+	if d := deadlineFor(ctx); d.After(time.Now()) {
+		t.Fatalf("cancelled ctx deadline is %v in the future", time.Until(d))
+	}
+
+	f := startFakeSMTP(t, fakeSMTPOptions{silentAtMail: 1})
+	mailer := newTestMailer(t, f, SMTPParams{})
+	ctx, cancel = context.WithCancel(context.Background())
+	session, err := mailer.openSMTPSession(ctx)
+	if err != nil {
+		t.Fatalf("openSMTPSession: %v", err)
+	}
+	defer session.close()
+	cancel() // between steps: nothing in flight to interrupt
+	start := time.Now()
+	if _, err := session.send(ctx, "noreply@probara.example.com", []string{"a@example.com"}, "Subject: s\r\n\r\nt"); err == nil {
+		t.Fatal("send on a cancelled ctx succeeded")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("send on a cancelled ctx took %v", elapsed)
+	}
 }
 
 // headerLines returns the raw lines (first plus continuations) of one header.

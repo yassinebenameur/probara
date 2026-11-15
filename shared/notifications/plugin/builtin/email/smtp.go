@@ -209,7 +209,11 @@ func (m *SMTPMailer) deliver(ctx context.Context, message string, to []string) e
 		session.close()
 		return err
 	}
-	return session.quit(ctx)
+	// The relay accepted the message. A QUIT that fails or times out changes
+	// nothing about that, and returning its error would read as transient:
+	// the alerter or worker would retry and send the alert twice.
+	_ = session.quit(ctx)
+	return nil
 }
 
 // deliveredDespite reports a template failure on a message that already went

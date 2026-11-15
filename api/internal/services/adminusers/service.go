@@ -40,8 +40,7 @@ type repository interface {
 	CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error)
 	UpdateUser(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error)
 	RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error
-	CountActiveAdmins(ctx context.Context, superadminsOnly bool) (int, error)
-	IsLastActiveSuperadmin(ctx context.Context, userID uuid.UUID) (bool, error)
+	BootstrapClosed(ctx context.Context, untilSuperadmin bool) (bool, error)
 	DeleteUser(ctx context.Context, userID uuid.UUID) error
 	AttachMemberships(ctx context.Context, users []models.AdminUser) error
 }
@@ -73,6 +72,8 @@ func NewService(dbClient *db.Client, bcryptCost int) *Service {
 // ConfigureSetupCode tells the service whether a setup code gates first-admin
 // creation (BOOTSTRAP_SETUP_CODE is set). Then bootstrap is open until an
 // active superadmin exists; otherwise, as before, until any active user does.
+// Either way it closes for good once a superadmin has ever existed
+// (SuperadminEverExisted).
 func (s *Service) ConfigureSetupCode(required bool) {
 	s.bootstrapUntilSuperadmin = required
 }
@@ -156,15 +157,15 @@ func (s *Service) CreateUser(ctx context.Context, req *models.CreateAdminUserReq
 	return &users[0], nil
 }
 
-// HasActiveUsers reports whether first-admin bootstrap is closed: at least
-// one active user exists, or with a setup code configured, at least one
-// active superadmin.
+// HasActiveUsers reports whether first-admin bootstrap is closed: a
+// superadmin has ever existed, or at least one active user exists (with a
+// setup code configured, at least one active superadmin).
 func (s *Service) HasActiveUsers(ctx context.Context) (bool, error) {
-	count, err := s.repo.CountActiveAdmins(ctx, s.bootstrapUntilSuperadmin)
+	closed, err := s.repo.BootstrapClosed(ctx, s.bootstrapUntilSuperadmin)
 	if err != nil {
-		return false, fmt.Errorf("failed to count active admin users: %w", err)
+		return false, fmt.Errorf("failed to check admin bootstrap state: %w", err)
 	}
-	return count > 0, nil
+	return closed, nil
 }
 
 // CreateFirstUser creates the first admin user (as superadmin) only while
@@ -220,16 +221,9 @@ func (s *Service) UpdateUser(ctx context.Context, userID uuid.UUID, req *models.
 		if !auth.ValidPlatformRole(*req.PlatformRole) {
 			return nil, fmt.Errorf("invalid platform role %q", *req.PlatformRole)
 		}
-		// Demoting the last active superadmin would orphan the install.
-		if *req.PlatformRole == auth.PlatformRoleMember {
-			isLast, err := s.repo.IsLastActiveSuperadmin(ctx, userID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to check superadmin count: %w", err)
-			}
-			if isLast {
-				return nil, ErrCannotDemoteLastAdmin
-			}
-		}
+		// Demoting the last active superadmin would orphan the install; the
+		// repository refuses it (ErrCannotDemoteLastAdmin) under the
+		// superadmin-set lock, in the transaction that writes the role.
 	}
 
 	if req.Memberships != nil {
@@ -242,8 +236,11 @@ func (s *Service) UpdateUser(ctx context.Context, userID uuid.UUID, req *models.
 
 	user, err := s.repo.UpdateUser(ctx, userID, username, normalizeEmail(req.Email), passwordHash, req.PlatformRole, req.Memberships, time.Now())
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			return nil, ErrUserNotFound
+		case errors.Is(err, ErrCannotDemoteLastAdmin):
+			return nil, err
 		}
 		return nil, mapUserWriteError(err)
 	}
@@ -267,17 +264,14 @@ func (s *Service) DeleteUser(ctx context.Context, actorUserID, targetUserID uuid
 		return ErrCannotDeleteSelf
 	}
 
-	isLast, err := s.repo.IsLastActiveSuperadmin(ctx, targetUserID)
-	if err != nil {
-		return fmt.Errorf("failed to check superadmin count: %w", err)
-	}
-	if isLast {
-		return ErrCannotDeleteLastUser
-	}
-
+	// The repository refuses to delete the last active superadmin
+	// (ErrCannotDeleteLastUser) under the superadmin-set lock.
 	if err := s.repo.DeleteUser(ctx, targetUserID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			return ErrUserNotFound
+		case errors.Is(err, ErrCannotDeleteLastUser):
+			return err
 		}
 		return fmt.Errorf("failed to delete admin user: %w", err)
 	}
@@ -409,6 +403,14 @@ func (r *sqlRepository) CreateUser(ctx context.Context, id uuid.UUID, username s
 }
 
 func (r *sqlRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error) {
+	// The flag only ever goes from false to true, and only when a
+	// superadmin appears, which the statement below also guards against, so
+	// checking it first leaves no window.
+	if ever, err := SuperadminEverExisted(ctx, r.db); err != nil {
+		return nil, err
+	} else if ever {
+		return nil, sql.ErrNoRows
+	}
 	query := `
 		WITH inserted AS (
 			INSERT INTO admin_users (id, username, password_hash, platform_role, created_at, updated_at)
@@ -444,6 +446,19 @@ func (r *sqlRepository) UpdateUser(ctx context.Context, userID uuid.UUID, userna
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	if platformRole != nil && *platformRole != auth.PlatformRoleSuperadmin {
+		if err := LockSuperadmins(ctx, tx); err != nil {
+			return nil, fmt.Errorf("failed to lock superadmins: %w", err)
+		}
+		isSuperadmin, others, err := OtherActiveSuperadmins(ctx, tx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check superadmin count: %w", err)
+		}
+		if isSuperadmin && others == 0 {
+			return nil, ErrCannotDemoteLastAdmin
+		}
+	}
 
 	row := tx.QueryRowContext(ctx, `
 		UPDATE admin_users
@@ -497,37 +512,44 @@ func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uui
 	return err
 }
 
-func (r *sqlRepository) CountActiveAdmins(ctx context.Context, superadminsOnly bool) (int, error) {
-	var count int
-	if err := r.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM admin_users
-		WHERE disabled_at IS NULL AND (NOT $1::bool OR platform_role = 'superadmin')
-	`, superadminsOnly).Scan(&count); err != nil {
-		return 0, err
+func (r *sqlRepository) BootstrapClosed(ctx context.Context, untilSuperadmin bool) (bool, error) {
+	if ever, err := SuperadminEverExisted(ctx, r.db); err != nil || ever {
+		return ever, err
 	}
-	return count, nil
-}
-
-func (r *sqlRepository) IsLastActiveSuperadmin(ctx context.Context, userID uuid.UUID) (bool, error) {
-	var targetIsSuperadmin bool
-	var otherSuperadmins int
-	err := r.db.QueryRowContext(ctx, `
-		SELECT
-			EXISTS (SELECT 1 FROM admin_users WHERE id = $1 AND platform_role = 'superadmin' AND disabled_at IS NULL),
-			(SELECT COUNT(*) FROM admin_users WHERE id <> $1 AND platform_role = 'superadmin' AND disabled_at IS NULL)
-	`, userID).Scan(&targetIsSuperadmin, &otherSuperadmins)
-	if err != nil {
+	var exists bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM admin_users
+			WHERE disabled_at IS NULL AND (NOT $1::bool OR platform_role = 'superadmin')
+		)
+	`, untilSuperadmin).Scan(&exists); err != nil {
 		return false, err
 	}
-	return targetIsSuperadmin && otherSuperadmins == 0, nil
+	return exists, nil
 }
 
 func (r *sqlRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error {
-	result, err := r.db.ExecContext(ctx, `DELETE FROM admin_users WHERE id = $1`, userID)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := LockSuperadmins(ctx, tx); err != nil {
+		return fmt.Errorf("failed to lock superadmins: %w", err)
+	}
+	isSuperadmin, others, err := OtherActiveSuperadmins(ctx, tx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to check superadmin count: %w", err)
+	}
+	if isSuperadmin && others == 0 {
+		return ErrCannotDeleteLastUser
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM admin_users WHERE id = $1`, userID)
 	if err != nil {
 		return err
 	}
-
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return err
@@ -535,8 +557,7 @@ func (r *sqlRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error 
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
-
-	return nil
+	return tx.Commit()
 }
 
 func (r *sqlRepository) AttachMemberships(ctx context.Context, users []models.AdminUser) error {

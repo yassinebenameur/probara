@@ -99,10 +99,12 @@ spec:
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
         {{- end }}
-        {{- /* First-admin setup code; optional in a chart-wide existing Secret
-        so installs whose Secret predates it keep starting (form stays open). */}}
+        {{- /* First-admin setup code. Optional only in the chart-wide or
+        chart-managed Secret, so installs whose Secret predates it keep
+        starting (form stays open); a Secret named for it alone must exist,
+        or a typo would start the API with no code and an open form. */}}
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.bootstrapSetupCode "secret" .Values.secrets.bootstrapSetupCodeExistingSecret) }}
-        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "BOOTSTRAP_SETUP_CODE" "key" "bootstrap_setup_code" "secret" .Values.secrets.bootstrapSetupCodeExistingSecret "secretKey" .Values.secrets.bootstrapSetupCodeExistingSecretKey "optional" true) | nindent 8 }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "BOOTSTRAP_SETUP_CODE" "key" "bootstrap_setup_code" "secret" .Values.secrets.bootstrapSetupCodeExistingSecret "secretKey" .Values.secrets.bootstrapSetupCodeExistingSecretKey "optional" (not .Values.secrets.bootstrapSetupCodeExistingSecret)) | nindent 8 }}
         {{- end }}
         {{- with (include "monitoring-platform.publicNatsUrl" .) }}
         - name: PUBLIC_NATS_URL

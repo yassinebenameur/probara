@@ -634,7 +634,7 @@ helm lint ./helm/monitoring-platform \\
             ],
             [
               'Email fails with `i/o timeout`',
-              'The SMTP server accepted the connection but did not finish a message within 30 seconds, the bound every send applies to connecting, greeting, authentication and each message',
+              'The SMTP server accepted the connection but did not answer in time. Alert email is bounded by the dispatch that sends it: the worker’s 15-second dispatch timeout with `ALERTER_ASYNC_DISPATCH=true`, otherwise the alerter’s evaluation cycle (`ALERT_EVAL_INTERVAL_SECONDS`, default 30). Transactional mail (invites, resets, subscriber mail, reports) allows 30 seconds per message. Either way no single step (connect, greeting, authentication, a message) waits more than 30 seconds',
               'Check that the host and port reach a responsive relay and that nothing between drops the session; a relay that greets slowly fails the same way.',
             ],
             [

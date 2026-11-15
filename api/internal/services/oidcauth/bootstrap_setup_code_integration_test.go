@@ -101,3 +101,36 @@ func TestSetupCodeKeepsSSOFromBootstrapping(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// Without a setup code, the first SSO user on an empty install becomes
+// superadmin -- but only on a new install: once a superadmin has existed, an
+// install whose users were all disabled (out of band) hands the next SSO
+// sign-in the ordinary JIT role.
+func TestSSOBootstrapClosesOnceASuperadminExisted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires Docker")
+	}
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "sso-tenant")
+	oidcSvc := newTestService(dbClient, tenantID, true)
+	first, err := oidcSvc.ResolveUser(ctx, &Claims{Issuer: testIssuer, Subject: "sub-first", Email: "first@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("ResolveUser: %v", err)
+	}
+	if first.User.PlatformRole != auth.PlatformRoleSuperadmin {
+		t.Fatalf("first SSO user on a new install = %q, want superadmin", first.User.PlatformRole)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE admin_users SET disabled_at = NOW()`); err != nil {
+		t.Fatal(err)
+	}
+	next, err := oidcSvc.ResolveUser(ctx, &Claims{Issuer: testIssuer, Subject: "sub-next", Email: "next@example.com", EmailVerified: true})
+	if err != nil {
+		t.Fatalf("ResolveUser: %v", err)
+	}
+	if next.User.PlatformRole != auth.PlatformRoleMember {
+		t.Fatalf("SSO user after every user was disabled = %q, want member", next.User.PlatformRole)
+	}
+}
