@@ -141,7 +141,8 @@ const (
 	KindTLSExpiry      = "tls_expiry"
 	// KindDomainExpiry: a domain registration is inside its expiry window.
 	// MetricValue is the days left (negative once expired), ThresholdValue
-	// the warning window in days, as for KindTLSExpiry.
+	// the warning window in days, as for KindTLSExpiry. A nil MetricValue
+	// means the expiry date could not be determined (LastError says why).
 	KindDomainExpiry = "domain_expiry"
 	// KindLocationOffline: a check location stopped reporting. The location
 	// is named by SourceLocationID/SourceLocationName.

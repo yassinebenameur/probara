@@ -192,6 +192,18 @@ export function thresholdTone(value: number | null | undefined, warn?: number, m
   return 'good';
 }
 
+/**
+ * Days left before an expiry (a domain registration) against its warning
+ * window: bad once expired, warn inside the window, good beyond it. Matches
+ * when the alerter opens a domain_expiry alert.
+ */
+export function expiryDaysTone(days: number | null | undefined, warnDays: number): UptimeTone {
+  if (days === null || days === undefined || !Number.isFinite(days)) return 'none';
+  if (days < 0) return 'bad';
+  if (days < warnDays) return 'warn';
+  return 'good';
+}
+
 // ── Monitor status ───────────────────────────────────────────────────────
 
 export const MONITOR_STATUS_LABEL: Record<MonitorDisplayStatus, string> = {

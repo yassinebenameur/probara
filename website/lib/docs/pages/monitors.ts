@@ -40,7 +40,7 @@ export const MONITORS_PAGE: DocPage = {
             [
               "`interval_seconds`",
               "Time between scheduled runs or expected passive reports",
-              "10–86,400 seconds",
+              "10–86,400 seconds (at least 3,600 for [domain monitors](#domain), 60 for SIP test calls)",
             ],
             [
               "`timeout_seconds`",
@@ -117,6 +117,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`sip`", "SIP `OPTIONS` ping, `REGISTER` auth probe, or `INVITE` test call (PDD, answer, ACK/BYE)", "Yes"],
             ["`websocket`", "WebSocket upgrade and optional message exchange", "Yes"],
             ["`prometheus`", "PromQL instant query compared against a numeric threshold", "Yes"],
+            ["`domain`", "[Domain registration expiry](#domain) through RDAP, with WHOIS as the fallback", "Yes"],
             ["`redis`", "Redis authentication, `PING`, and optional role", "Yes"],
             ["`postgres`", "PostgreSQL connect and optional query assertion", "Yes"],
             ["`mysql`", "MySQL connect and optional query assertion", "Yes"],
@@ -424,6 +425,58 @@ export const MONITORS_PAGE: DocPage = {
           title: "Prefer a numeric query plus a Probara threshold",
           text:
             "A PromQL filter such as `up == 0` returns an empty vector when everything is healthy, which then falls under `no_data_status`. Querying the numeric value and expressing the threshold in Probara is easier to read and preview.",
+        },
+      ],
+    },
+    {
+      id: "domain",
+      title: "Domain expiry monitors",
+      intro:
+        "A domain monitor watches when a domain's registration expires and opens a `domain_expiry` alert before it lapses. The worker asks the registry over RDAP and falls back to WHOIS for registries without RDAP, or without an expiry date in it.",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Field", "Purpose"],
+          rows: [
+            ["`domain`", "Required. The name to watch, without scheme, port or path. A subdomain is watched through its registered domain (`www.shop.example.co.uk` checks `example.co.uk`), found with the ICANN section of the public suffix list; a platform suffix such as `github.io` counts as the platform's own domain. Internationalized names are looked up in punycode. IP addresses and bare top-level domains or public suffixes are refused."],
+            ["`min_days_valid`", "Warning window in days, 0 to 3650, default 30: a registration with fewer days left opens a `domain_expiry` alert. 0 alerts only once it has expired."],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The schedule has a floor of one hour (`interval_seconds` of at least 3600, refused below by the API and the form), because registries rate-limit lookups and a registration date moves in days. The form starts at once a day with a 30 s timeout and marks the monitor down at the first failed check, since a failure is an expired or unregistered name that a second lookup would only confirm. **Test lookup** in the form asks the registry through a worker without saving.",
+        },
+        {
+          type: "table",
+          columns: ["Lookup result", "Check", "Alert"],
+          rows: [
+            ["Expiry known, outside the window", "`success`", "Any open `domain_expiry` alert resolves"],
+            ["Expiry known, inside the window", "`success` (the monitor stays up)", "`domain_expiry` with the days left, the date and the registrar"],
+            ["Expired, in redemption or pending delete", "`failure`", "Availability alert, and `domain_expiry` reads as expired"],
+            ["Not registered (RDAP 404 or a WHOIS \"no match\")", "`failure`", "Availability alert"],
+            ["Expiry cannot be determined", "`success`, with `unknown_reason`", "`domain_expiry` with no value, once it persists (below)"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "An undetermined expiry is not an outage of the domain, so it never fails the check, and it is not left silent either. It happens when the registry publishes no expiration date (DENIC, for `.de`, publishes none at all), when neither RDAP nor WHOIS is known for the TLD, when a WHOIS answer cannot be parsed, or when every lookup fails. The monitor page then shows **expiry unknown** and the reason. A recorded expiry keeps counting for 7 days, so a registry outage or a rate limit does not lose it; once no lookup in the last 7 days found a date and at least two lookups could not determine one, the alerter opens a `domain_expiry` alert without a value (\"Domain Expiry Unknown\") that resolves when a date is read again.",
+        },
+        {
+          type: "list",
+          items: [
+            "RDAP servers come from the IANA bootstrap registry. Workers ship a snapshot of it and refresh it from `data.iana.org` once a day in the background; a worker that cannot reach IANA, such as one at a private location with restricted egress, keeps using the snapshot. Only `https` RDAP servers are used; a TLD whose registry lists plain `http` only falls back to WHOIS.",
+            "WHOIS asks `whois.iana.org` which server holds the TLD (cached for a day), asks that server, and follows one registrar referral when a thin registry's answer has no expiry date: at most three queries, all to port 43 of a hostname. Dates are read from the formats the common registries use; a day/month-ambiguous date such as `03/04/2027` is not guessed at and reads as unknown.",
+            "Lookups always refuse private, loopback, link-local and other reserved destinations, even on a worker with `HTTP_BLOCK_PRIVATE_IPS=false`: every server is chosen by the bootstrap data or by a remote referral, never by the monitor, so an answer cannot steer the worker into its own network. `HTTP_ALLOWED_CIDRS` still admits ranges you trust. RDAP redirects are followed only to `https` on a hostname and the default port, at most three hops; WHOIS referrals must name a hostname.",
+            "RDAP gets at most two thirds of the timeout when WHOIS may still have to answer. Responses are capped at 1 MiB (RDAP) and 256 KiB (WHOIS).",
+            "A worker at a private location needs outbound HTTPS to the registries' RDAP servers and TCP 43 to their WHOIS servers.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every lookup records `metrics_data.domain`: `domain` (the registered name looked up), `expires_at`, `days_until_expiry`, `registered_at`, `updated_at`, `registrar`, `statuses`, `registered` (`false` when the registry does not hold the name, absent when no registry answered), `source` (`rdap` or `whois`), `server`, `rdap_error` (why RDAP did not answer when WHOIS did) and `unknown_reason`. The monitor page's Registration panel shows the latest.",
         },
       ],
     },

@@ -50,6 +50,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateTLSExpiry(ctx); err != nil {
 		a.logger.WithError(err).Error("TLS expiry evaluation failed")
 	}
+	// Domain expiry is advisory in the same way.
+	if err := a.evaluateDomainExpiry(ctx); err != nil {
+		a.logger.WithError(err).Error("Domain expiry evaluation failed")
+	}
 	if err := a.evaluateMeshEdges(ctx); err != nil {
 		return err
 	}

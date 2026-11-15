@@ -82,6 +82,7 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	registry.Register(string(models.MonitorTypeTCP), NewTCPChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register(string(models.MonitorTypeMySQL), NewMySQLChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register(string(models.MonitorTypeWebSocket), NewWebSocketChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register(string(models.MonitorTypeDomain), NewDomainChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register(models.MonitorTypeMeshProbe, NewMeshChecker(blockPrivateIPs, allowedCIDRs))
 
 	return registry

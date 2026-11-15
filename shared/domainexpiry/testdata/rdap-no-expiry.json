@@ -1,0 +1,71 @@
+{
+  "objectClassName": "domain",
+  "ldhName": "example.org.uk",
+  "status": [
+    "server delete prohibited",
+    "server transfer prohibited",
+    "server update prohibited"
+  ],
+  "events": [
+    {
+      "eventAction": "registration",
+      "eventDate": "1995-03-12T00:00:00Z"
+    },
+    {
+      "eventAction": "last changed",
+      "eventDate": "2017-11-02T11:05:21Z"
+    },
+    {
+      "eventAction": "last update of RDAP database",
+      "eventDate": "2026-11-15T20:59:58.22Z"
+    }
+  ],
+  "entities": [
+    {
+      "objectClassName": "entity",
+      "roles": [
+        "registrar"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Nominet UK"
+          ]
+        ]
+      ]
+    },
+    {
+      "objectClassName": "entity",
+      "roles": [
+        "registrant"
+      ],
+      "vcardArray": [
+        "vcard",
+        [
+          [
+            "version",
+            {},
+            "text",
+            "4.0"
+          ],
+          [
+            "fn",
+            {},
+            "text",
+            "Example Holder"
+          ]
+        ]
+      ]
+    }
+  ]
+}

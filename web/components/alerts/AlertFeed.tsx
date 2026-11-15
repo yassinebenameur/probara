@@ -149,6 +149,13 @@ function kindDetail(alert: Alert): string | null {
       alert.threshold_value != null ? ` (threshold ${Math.round(alert.threshold_value)}d)` : ''
     }`;
   }
+  if (alert.kind === 'domain_expiry') {
+    if (alert.metric_value == null) return 'expiry date unknown';
+    if (alert.metric_value < 0) return `expired ${Math.round(-alert.metric_value)}d ago`;
+    return `expires in ${Math.round(alert.metric_value)}d${
+      alert.threshold_value != null ? ` (threshold ${Math.round(alert.threshold_value)}d)` : ''
+    }`;
+  }
   return null;
 }
 
@@ -444,6 +451,11 @@ export default function AlertFeed({
               {alert.kind === 'tls_expiry' && (
                 <KindTag title="TLS certificate is inside its expiry warning window — the endpoint itself is still up">
                   certificate
+                </KindTag>
+              )}
+              {alert.kind === 'domain_expiry' && (
+                <KindTag title="Domain registration is inside its expiry warning window, or its expiry date could not be determined">
+                  domain
                 </KindTag>
               )}
             </div>

@@ -48,9 +48,10 @@ export function alertCondition(alert: Alert): string {
         : 'certificate is about to expire';
     case 'domain_expiry':
       if (alert.metric_value != null && alert.metric_value < 0) return 'domain registration has expired';
+      // No value: the alerter could not determine the expiry date.
       return alert.metric_value != null
         ? `domain registration expires in ${Math.round(alert.metric_value)}d`
-        : 'domain registration is about to expire';
+        : 'domain expiry date could not be determined';
     case 'mesh_edge':
       return 'path is down';
     case 'location_offline':
