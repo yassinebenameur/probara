@@ -243,7 +243,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An empty installation configured for [OIDC](/docs/administration/#oidc) can also bootstrap through the first successful just-in-time OIDC login. Subsequent user and tenant access is governed by platform roles and tenant memberships.",
+            "An empty installation configured for [OIDC](/docs/administration/#oidc) can also bootstrap through the first successful just-in-time OIDC login, unless `BOOTSTRAP_SETUP_CODE` is set: then SSO users are always created as ordinary members, and the first superadministrator must come from the first-administrator form with the code, after which it can promote SSO users. Subsequent user and tenant access is governed by platform roles and tenant memberships.",
         },
       ],
     },

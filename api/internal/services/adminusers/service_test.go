@@ -24,6 +24,8 @@ type mockRepository struct {
 	countActiveAdminsFn       func(ctx context.Context) (int, error)
 	isLastActiveSuperadminFn  func(ctx context.Context, userID uuid.UUID) (bool, error)
 	deleteUserFn              func(ctx context.Context, userID uuid.UUID) error
+	// untilSuperadmin records the bootstrap scope the service last asked for.
+	untilSuperadmin bool
 }
 
 func (m *mockRepository) ListUsers(ctx context.Context, page, pageSize int) ([]models.AdminUser, int, error) {
@@ -47,7 +49,8 @@ func (m *mockRepository) CreateUser(ctx context.Context, id uuid.UUID, username 
 	return nil, nil
 }
 
-func (m *mockRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+func (m *mockRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error) {
+	m.untilSuperadmin = untilSuperadmin
 	if m.createFirstUserFn != nil {
 		return m.createFirstUserFn(ctx, id, username, passwordHash, now)
 	}
@@ -68,7 +71,8 @@ func (m *mockRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uu
 	return nil
 }
 
-func (m *mockRepository) CountActiveAdmins(ctx context.Context) (int, error) {
+func (m *mockRepository) CountActiveAdmins(ctx context.Context, superadminsOnly bool) (int, error) {
+	m.untilSuperadmin = superadminsOnly
 	if m.countActiveAdminsFn != nil {
 		return m.countActiveAdminsFn(ctx)
 	}
@@ -359,6 +363,35 @@ func TestService_CreateFirstUser(t *testing.T) {
 			t.Fatal("expected error when bootstrapping without a password")
 		}
 	})
+}
+
+// With a setup code configured, bootstrap stays open until an active
+// superadmin exists (an SSO member does not close it); without one, until any
+// active user exists, as before. The SQL guard itself is covered by the oidcauth
+// integration test that runs both services against Postgres.
+func TestService_BootstrapScopeFollowsSetupCode(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		repo := &mockRepository{
+			createFirstUserFn: func(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+				return &models.AdminUser{ID: id, Username: username}, nil
+			},
+		}
+		svc := &Service{repo: repo, bcryptCost: 4}
+		svc.ConfigureSetupCode(required)
+		if _, err := svc.HasActiveUsers(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if repo.untilSuperadmin != required {
+			t.Fatalf("setup code %v: status counted superadmins only = %v", required, repo.untilSuperadmin)
+		}
+		repo.untilSuperadmin = !required
+		if _, err := svc.CreateFirstUser(context.Background(), &models.CreateAdminUserRequest{Username: "admin", Password: strPtr("very-secure-password")}); err != nil {
+			t.Fatal(err)
+		}
+		if repo.untilSuperadmin != required {
+			t.Fatalf("setup code %v: create guarded on superadmins only = %v", required, repo.untilSuperadmin)
+		}
+	}
 }
 
 func TestService_UpdateUser_PasswordResetRevokesSessions(t *testing.T) {

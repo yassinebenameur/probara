@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bootstrapRequestBody, bootstrapView } from './bootstrap';
+import { bootstrapRequestBody, bootstrapView, ssoButtonVisible } from './bootstrap';
 
 test('the setup code field appears only when the API requires it', () => {
   assert.deepEqual(bootstrapView({ has_admin_users: false, setup_code_required: true }), {
@@ -32,4 +32,14 @@ test('the request carries the setup code only when required', () => {
     username: 'admin',
     password: 'pw',
   });
+});
+
+test('SSO stays offered during first-admin setup only when a setup code is required', () => {
+  const login = bootstrapView({ has_admin_users: true });
+  const openSetup = bootstrapView({ has_admin_users: false });
+  const codedSetup = bootstrapView({ has_admin_users: false, setup_code_required: true });
+  assert.equal(ssoButtonVisible(login, true), true);
+  assert.equal(ssoButtonVisible(openSetup, true), false);
+  assert.equal(ssoButtonVisible(codedSetup, true), true);
+  assert.equal(ssoButtonVisible(codedSetup, false), false);
 });

@@ -302,7 +302,7 @@ export const SECURITY_PAGE: DocPage = {
             [
               '`BOOTSTRAP_SETUP_CODE`',
               'API only, until the first administrator exists',
-              'Gates first-administrator creation on a reachable install. Useless once that account exists; remove or rotate it freely. OIDC just-in-time login on an empty install is a separate path that the code does not gate, so keep the IdP restricted until the first administrator exists.',
+              'Gates first-administrator creation on a reachable install. While it is set, an SSO sign-in never becomes the first superadministrator: just-in-time users are ordinary members, and the first-administrator form stays open until a superadministrator exists. Useless once that account exists; remove or rotate it freely, but removing it brings back SSO bootstrap on an install that still has no superadministrator.',
             ],
             [
               '`NATS_LOCATION_AUTH_ISSUER_SEED`',

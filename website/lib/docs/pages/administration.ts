@@ -114,7 +114,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "On an empty installation, the public bootstrap status and first-user endpoints allow exactly the initial account to be created. That first active account is a superadministrator. With `BOOTSTRAP_SETUP_CODE` set on the API, the first-user endpoint also requires that code (missing and wrong codes get the same 403), and the status endpoint reports that one is required, never the code itself. OIDC just-in-time login can also initialize the first superadministrator on an empty installation, and an operator with database access can create or recover one at any time with [`go run ./cmd/admin`](/docs/operations/#database-migrations).",
+            "On an empty installation, the public bootstrap status and first-user endpoints allow exactly the initial account to be created. That first active account is a superadministrator. With `BOOTSTRAP_SETUP_CODE` set on the API, the first-user endpoint also requires that code (missing and wrong codes get the same 403), and the status endpoint reports that one is required, never the code itself. Bootstrap then stays open until an active superadministrator exists, not merely any user, because SSO sign-ins no longer create one. OIDC just-in-time login can also initialize the first superadministrator on an empty installation, and an operator with database access can create or recover one at any time with [`go run ./cmd/admin`](/docs/operations/#database-migrations).",
         },
         {
           type: "table",
@@ -243,7 +243,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "An unverified email is not trusted for account linking.",
             "A subject already bound to another account is refused.",
             "When just-in-time provisioning is enabled, new users receive the configured default platform/tenant membership rather than arbitrary claims-based privilege — unless OIDC group mappings exist, in which case mapped roles replace the JIT defaults.",
-            "On an empty installation, the first successful JIT login becomes the initial superadministrator.",
+            "On an empty installation, the first successful JIT login becomes the initial superadministrator, unless `BOOTSTRAP_SETUP_CODE` is set. With a setup code, every JIT user, the first included, gets the ordinary JIT role (default membership, or the mapped roles when group mappings exist); create the first superadministrator through the first-administrator form with the code, then promote SSO users. The login page keeps the SSO button available during that setup so those members can sign in.",
           ],
         },
         {

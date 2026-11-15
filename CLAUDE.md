@@ -528,8 +528,12 @@ or imported groups come back empty. Any other path that creates groups through
   dev and existing installs. `scripts/install.sh` generates and prints it,
   the release Compose requires it, Helm renders `secrets.bootstrapSetupCode`
   through `secretEnv` (optional). The login page's field logic lives in
-  `web/lib/bootstrap.ts`. OIDC just-in-time first login is a separate path
-  the code does not gate.
+  `web/lib/bootstrap.ts`. With a code set, an SSO sign-in never bootstraps:
+  JIT users (the first included) get the ordinary JIT role, and bootstrap
+  stays open until an active **superadmin** exists rather than any active
+  user (`ConfigureSetupCode` on `oidcauth` and `adminusers`, wired in
+  `server.go`; both must follow the same setting). Unset keeps SSO
+  bootstrap parity.
 - **Client IPs come only from `shared/clientip`** (`FromRequest` behind the
   router-wide resolver middleware, or a `Resolver`): forwarding headers count
   only from `TRUSTED_PROXY_CIDRS` peers (parsed once in

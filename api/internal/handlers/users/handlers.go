@@ -19,6 +19,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	adminusers "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -218,7 +219,7 @@ func (h *Handlers) BootstrapFirstUser(w http.ResponseWriter, r *http.Request) {
 	// the same answer; the log never carries the submitted value.
 	if h.setupCode != "" && !h.setupCodeMatches(body.SetupCode) {
 		h.logger.WithFields(map[string]any{
-			"remote_addr":     r.RemoteAddr,
+			"client_ip":       clientip.FromRequest(r),
 			"setup_code_sent": strings.TrimSpace(body.SetupCode) != "",
 		}).Warn("First-admin bootstrap refused: invalid or missing setup code")
 		apierrors.WriteForbiddenError(w, "invalid or missing setup code")
