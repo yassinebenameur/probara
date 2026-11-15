@@ -93,16 +93,24 @@ func (r *Resolver) Trusts(addr netip.Addr) bool {
 // Resolve returns the client address for req, without a port. When
 // RemoteAddr is not an IP (in-process requests, tests) it is returned as is.
 func (r *Resolver) Resolve(req *http.Request) string {
+	ip, _ := r.resolve(req)
+	return ip
+}
+
+// resolve is Resolve plus whether the address came from a trusted proxy's
+// forwarding header rather than being the TCP peer itself.
+func (r *Resolver) resolve(req *http.Request) (string, bool) {
 	peer, ok := parseHostPort(req.RemoteAddr)
 	if !ok {
-		return remoteHost(req.RemoteAddr)
+		return remoteHost(req.RemoteAddr), false
 	}
 	if !r.Trusts(peer) {
-		return peer.String()
+		return peer.String(), false
 	}
 
 	if hops := forwardedFor(req.Header); len(hops) > 0 {
 		client := peer
+		forwarded := false
 		for i := len(hops) - 1; i >= 0; i-- {
 			hop, ok := parseHostPort(hops[i])
 			if !ok {
@@ -111,41 +119,78 @@ func (r *Resolver) Resolve(req *http.Request) string {
 				break
 			}
 			client = hop
+			forwarded = true
 			if !r.Trusts(hop) {
 				break
 			}
 		}
-		return client.String()
+		return client.String(), forwarded
 	}
 
 	if xri, ok := parseHostPort(strings.TrimSpace(req.Header.Get("X-Real-IP"))); ok {
-		return xri.String()
+		return xri.String(), true
 	}
-	return peer.String()
+	return peer.String(), false
 }
 
 // Middleware resolves the client address once per request and stores it in
-// the request context for FromRequest/FromContext. RemoteAddr is left as the
-// TCP peer.
+// the request context for FromRequest/FromContext/Attributable. RemoteAddr is
+// left as the TCP peer.
 func (r *Resolver) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		ctx := WithClientIP(req.Context(), r.Resolve(req))
+		ip, forwarded := r.resolve(req)
+		ctx := context.WithValue(req.Context(), ctxKey{}, resolved{ip: ip, forwarded: forwarded})
 		next.ServeHTTP(w, req.WithContext(ctx))
 	})
 }
 
 type ctxKey struct{}
 
-// WithClientIP returns ctx carrying ip as the resolved client address.
+// resolved is what Middleware stores: the address and whether a trusted
+// proxy's forwarding header supplied it.
+type resolved struct {
+	ip        string
+	forwarded bool
+}
+
+// WithClientIP returns ctx carrying ip as the resolved client address, as if
+// it were the TCP peer (not forwarded).
 func WithClientIP(ctx context.Context, ip string) context.Context {
-	return context.WithValue(ctx, ctxKey{}, ip)
+	return context.WithValue(ctx, ctxKey{}, resolved{ip: ip})
 }
 
 // FromContext returns the address stored by Middleware or WithClientIP.
 func FromContext(ctx context.Context) (string, bool) {
-	ip, ok := ctx.Value(ctxKey{}).(string)
-	return ip, ok
+	v, ok := ctx.Value(ctxKey{}).(resolved)
+	return v.ip, ok
 }
+
+// Attributable reports whether the resolved client address identifies one
+// client well enough to key a per-address limit on. It does when a trusted
+// proxy forwarded it, or when it is the TCP peer and a public address. A
+// loopback, private (RFC 1918, fc00::/7), link-local or shared (100.64/10)
+// peer that is not a trusted proxy is usually a hop we cannot see through
+// -- the frontend's /api proxy, an ingress pod, a NAT gateway -- and keying
+// on it would pool every visitor behind it into one bucket.
+func Attributable(req *http.Request) bool {
+	v, ok := req.Context().Value(ctxKey{}).(resolved)
+	if !ok {
+		v = resolved{ip: remoteHost(req.RemoteAddr)}
+	}
+	if v.forwarded {
+		return true
+	}
+	a, err := netip.ParseAddr(v.ip)
+	if err != nil {
+		return false
+	}
+	a = normalize(a)
+	return !(a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsUnspecified() || sharedAddressSpace.Contains(a))
+}
+
+// sharedAddressSpace is RFC 6598 carrier-grade NAT space, also used by some
+// cluster networks: an address in it is shared by design.
+var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
 
 // FromRequest returns the resolved client address for a request that passed
 // through Middleware. Outside it, it falls back to the RemoteAddr host and

@@ -172,8 +172,11 @@ services:
       # rate limits (comma-separated CIDRs or IPs; empty = the TCP peer only;
       # set the same value on status-page). HSTS max-age in seconds: 0 (off)
       # for local HTTP, and it is only ever sent on HTTPS requests. The general
-      # rate limit is per validated credential (per client IP only for auth
-      # failures and unauthenticated routes), per api replica; 0 disables it.
+      # rate limit is per credential, per api replica; 0 disables it. Per
+      # client address it covers anonymous calls and failed credentials only
+      # from a public peer or a trusted proxy's client, so in this stack (the
+      # UI's /api proxy and the Docker gateway are private peers) it limits
+      # credentials only.
       # API_ALLOWED_ORIGINS lists the browser origins allowed credentialed
       # CORS (empty = APP_BASE_URL's origin, else same-origin only).
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"

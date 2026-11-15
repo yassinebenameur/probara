@@ -200,12 +200,39 @@ export const SECURITY_PAGE: DocPage = {
         {
           type: 'list',
           items: [
-            'The API has a general rate limit: token buckets of `API_RATE_LIMIT_PER_MINUTE` (default 600) with `API_RATE_LIMIT_BURST` (default 120). On authenticated routes a request whose credential validates spends from that credential’s bucket — API key, MCP grant, or session user — and never from an address bucket, so users behind one NAT or proxy do not share one and a valid credential is never refused because of other traffic from the same address.',
-            'Per-address buckets, keyed by client address resolved through the [trusted proxy list](#audit-proxy-trust), apply only to two things: authentication failures, and unauthenticated routes (sign-in, refresh, `/auth/me`, OIDC start and callback, OAuth registration and token, bootstrap). A 401 on an authenticated route spends from the address’s failure bucket, and once it is empty further failures from that address are answered `429`, so guessing API keys cannot buy unlimited database lookups. On unauthenticated routes every request spends from the address bucket whatever headers it carries; only a session cookie whose signature verifies moves it to that user’s bucket. Which routes are authenticated is read from the router, so a new unauthenticated route is limited without being listed.',
+            'The API has a general rate limit: token buckets of `API_RATE_LIMIT_PER_MINUTE` (default 600) with `API_RATE_LIMIT_BURST` (default 120). A request that presents a credential is never judged on an address bucket. A credential that validates spends from its own bucket — API key, MCP grant, or session user. A session cookie the API signed keys the request by its user even on unauthenticated routes and even once expired, and an expired one always gets its `401`, so the UI refreshes instead of being sent to sign in. `/auth/refresh` with a refresh cookie is keyed on that cookie.',
+            'Address buckets apply to two things only: unauthenticated requests that present no credential (sign-in, bootstrap, OIDC start and callback, OAuth registration and token, discovery documents), and verified failures — a `401` on an authenticated route, a `401` from `/auth/refresh`, or a `401`/`404` for an unknown push or discovery-collector token. Failures spend from the address’s failure bucket after the answer is known, and once it is empty further failures from that address are answered `429`, so guessing keys or tokens cannot buy unlimited database lookups. Which routes are authenticated is read from the router, so a new unauthenticated route is limited without being listed.',
+            'An address bucket is used only when the address identifies a client: it was forwarded by a peer in `TRUSTED_PROXY_CIDRS`, or it is the TCP peer and a public address. A loopback, private (RFC 1918, `fc00::/7`), link-local or shared-space (`100.64.0.0/10`) peer that is not a trusted proxy usually stands for many people — the UI’s `/api` proxy, an ingress pod, a NAT gateway — so its traffic skips the address buckets rather than letting one client empty a bucket everyone shares. The API logs a warning at startup when the limiter is on and the list is empty. IPv6 addresses share a bucket per `/64`.',
             'Over the limit the API answers `429 Too Many Requests` with `Retry-After` in seconds. `0` disables the limiter.',
-            'Exempt, because machines call them at a steady rate from shared addresses and they have their own bounds: health and metrics probes, `/static` downloads, push heartbeats (`/api/v1/push/{token}`, one per monitor interval), discovery collectors (`/api/v1/discovery-collectors`, integration token), and — for credentials that validate — OTLP export (limited per monitor by `OTLP_MONITOR_RATE_PER_MIN`) and the alert stream. Failed authentication on those authenticated routes still spends from the failure bucket. The MCP endpoint is not charged itself; each tool call it dispatches is charged to the caller’s credential.',
-            'Buckets live in memory on each API replica, so the effective cluster-wide ceiling is the limit times the replica count, and a restart resets them. Behind a proxy that is not in `TRUSTED_PROXY_CIDRS`, every anonymous visitor and every authentication failure shares the proxy’s address buckets; the API logs a warning at startup when the limiter is on and the list is empty. List your ingress there.',
+            'Not limited here, because machines call them at a steady rate from shared addresses and they have their own bounds: health and metrics probes, `/static` downloads, valid push heartbeats (`/api/v1/push/{token}`, one per monitor interval) and discovery-collector calls (integration token), and — for credentials that validate — OTLP export (limited per monitor by `OTLP_MONITOR_RATE_PER_MIN`) and the alert stream. Their failures are charged as above. The MCP endpoint is not charged itself; each tool call it dispatches is charged to the caller’s credential.',
+            'Buckets live in memory on each API replica, so the effective cluster-wide ceiling is the limit times the replica count, and a restart resets them. When the map of buckets is full, buckets that have refilled are dropped first and then the least recently used, so filling it never resets a bucket in use.',
             'The limiter bounds request volume; it is not an account lockout for password guessing.',
+          ],
+        },
+        {
+          type: 'table',
+          columns: ['Deployment', 'What the API rate limit covers'],
+          rows: [
+            [
+              'No proxy, clients connect to the API directly',
+              'Everything: credentials per credential, and anonymous requests and failures per client address — for public clients. Clients on a private network (an internal deployment, an office LAN) get no address limits; their credentials are still limited.',
+            ],
+            [
+              'Compose (`docker-compose.yml`) and `make start-all-local`',
+              'Browsers reach the API through the UI’s `/api` proxy or from the Docker gateway, both private peers, so only credential limits apply: each session, refresh token and API key has its own bucket. Sign-in, anonymous calls and failed credentials are not limited per address.',
+            ],
+            [
+              'Release Compose with its edge proxy',
+              'The edge proxy writes the client address and the API trusts the Compose network, so everything is limited, per real client. Where Docker’s userland proxy rewrites source addresses (Docker Desktop, rootless), every client arrives as the gateway and shares one address bucket; credentials are still limited separately.',
+            ],
+            [
+              'Helm, `trustedProxyCIDRs` empty (the default)',
+              'Requests arrive from the ingress controller pod, a private peer: credential limits only. The install notes warn about this.',
+            ],
+            [
+              'Helm with `trustedProxyCIDRs` set to the ingress pod CIDR',
+              'Everything, per real client, including internal users with private addresses behind the ingress.',
+            ],
           ],
         },
         {

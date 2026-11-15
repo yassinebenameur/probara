@@ -140,6 +140,9 @@ func TestAuthRouteClassifierMatchesRouter(t *testing.T) {
 	}{
 		{http.MethodGet, "/api/v1/monitors", true},
 		{http.MethodGet, "/api/v1/monitors/7d0c1c55-0000-0000-0000-000000000000", true},
+		// chi matches on RawPath: an escaped slash stays inside the
+		// parameter, so this is still the authenticated monitor route.
+		{http.MethodGet, "/api/v1/monitors/a%2Fb", true},
 		{http.MethodPost, "/api/v1/otlp/v1/metrics", true},
 		{http.MethodGet, "/api/v1/alerts/stream", true},
 		{http.MethodGet, "/api/v1/oauth/grants", true},
@@ -190,5 +193,28 @@ func TestAuthRouteClassifierCoversEveryAuthenticatedRoute(t *testing.T) {
 	})
 	if checked < 100 {
 		t.Fatalf("only %d authenticated routes walked; the walk is not seeing the protected group", checked)
+	}
+}
+
+// With no trusted proxy, traffic from a private peer (the frontend's /api
+// proxy, an ingress pod) is not pooled into one address bucket: a flood of
+// junk keys and anonymous calls from it is never answered 429.
+func TestAPIRateLimitSkipsUnattributablePeer(t *testing.T) {
+	h := newEdgeTestServer(t, func(cfg *config.APIConfig) {
+		cfg.RateLimitPerMinute = 60
+		cfg.RateLimitBurst = 2
+	})
+	for i := 0; i < 6; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/monitors", nil)
+		req.RemoteAddr = "10.0.0.9:5000"
+		req.Header.Set("Authorization", "Bearer junk")
+		if rec := httptest.NewRecorder(); func() int { h.ServeHTTP(rec, req); return rec.Code }() != http.StatusUnauthorized {
+			t.Fatalf("junk key %d from a private peer: %d, want 401", i, rec.Code)
+		}
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/status", nil)
+		req.RemoteAddr = "10.0.0.9:5000"
+		if rec := httptest.NewRecorder(); func() int { h.ServeHTTP(rec, req); return rec.Code }() != http.StatusOK {
+			t.Fatalf("anonymous call %d from a private peer: %d, want 200", i, rec.Code)
+		}
 	}
 }

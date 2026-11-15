@@ -557,7 +557,7 @@ kubectl -n probara get jobs`,
             [
               '`trustedProxyCIDRs`',
               '`[]`',
-              'CIDRs or IPs of your ingress controller or load balancer, rendered as `TRUSTED_PROXY_CIDRS` into the API and status-page. Only these peers’ forwarding headers resolve [client IPs](/docs/security/#audit-proxy-trust) for audit records, sessions and rate limits. The bundled ingress routes `/api` straight to the API, so with an ingress set this to the ingress controller’s pod CIDR: empty makes every request come from the ingress pod, so all visitors share one per-address rate-limit bucket. The install notes warn when the ingress is on and this is empty.',
+              'CIDRs or IPs of your ingress controller or load balancer, rendered as `TRUSTED_PROXY_CIDRS` into the API and status-page. Only these peers’ forwarding headers resolve [client IPs](/docs/security/#audit-proxy-trust) for audit records, sessions and rate limits. The bundled ingress routes `/api` straight to the API, so with an ingress set this to the ingress controller’s pod CIDR: empty makes every request come from the ingress pod, a private peer, so the API rate limit applies per credential only and sign-in, anonymous calls and failed credentials are not limited per address ([what is limited where](/docs/security/#edge-controls)). The install notes warn when the ingress is on and this is empty.',
             ],
             [
               '`security.hstsMaxAge`, `.apiRateLimitPerMinute`, `.apiRateLimitBurst`, `.apiAllowedOrigins`',

@@ -249,9 +249,11 @@ appBaseURL: ""
 # status-page.
 #
 # Empty (the default) trusts no proxy: the client is the TCP peer. Behind the
-# bundled ingress that peer is the ingress controller pod, so every visitor
-# shares one per-address rate-limit bucket and the audit log records the
-# ingress -- set this to the pod CIDR your ingress controller runs in, e.g.
+# bundled ingress that peer is the ingress controller pod, a private address
+# standing for every visitor: the API rate limit then applies per credential
+# only (no per-address limit on sign-in, anonymous calls or failed
+# credentials) and the audit log records the ingress -- set this to the pod
+# CIDR your ingress controller runs in, e.g.
 # ["10.0.0.0/8"]. List only proxies you run: a range that also holds clients
 # lets those clients choose their address. The bundled ingress sends /api
 # straight to the api; the frontend's /api proxy drops X-Forwarded-For unless
@@ -269,11 +271,13 @@ security:
   # from a trustedProxyCIDRs peer -- so list your ingress there.
   hstsMaxAge: ""
   # General API rate limit (API_RATE_LIMIT_PER_MINUTE / _BURST): one token
-  # bucket per validated credential (API key, MCP grant, session user); per
-  # client IP only for authentication failures and unauthenticated routes.
-  # Kept in memory on each api replica -- the effective cluster-wide ceiling
-  # is this times api.replicas. 0 disables it. Push heartbeats, discovery
-  # collectors, probes, and validated OTLP export and alert streams are exempt.
+  # bucket per credential (API key, MCP grant, session user, refresh token);
+  # per client address only for anonymous requests and verified failures, and
+  # only when the address names a client (forwarded by a trustedProxyCIDRs
+  # peer, or a public peer). Kept in memory on each api replica -- the
+  # effective cluster-wide ceiling is this times api.replicas. 0 disables it.
+  # Probes, valid push and discovery-collector tokens, and validated OTLP
+  # export and alert streams are not limited.
   apiRateLimitPerMinute: 600
   apiRateLimitBurst: 120
   # Browser origins allowed credentialed cross-origin API calls

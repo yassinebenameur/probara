@@ -485,10 +485,14 @@ or imported groups come back empty. Any other path that creates groups through
   mirrors its static values. The API mounts headers, the CORS allowlist
   (`middleware/cors.go`) and the anonymous rate-limit stage in
   `useEdgeSecurity` (`api/internal/api/routes_edge.go`); `authMiddleware` is
-  wrapped by `rateLimiter.Authenticate`, which charges validated credentials
-  per credential and only 401s to an address bucket — never refuse before
-  auth on an address bucket. Authenticated routes are read from the router,
-  so new routes need no list. Never echo `Origin` in a handler. The env rides
+  wrapped by `rateLimiter.Authenticate`. A presented credential is never
+  judged on an address bucket: valid ones spend their own bucket, a signed
+  (even expired) session cookie keys on its user and keeps its 401, and only
+  verified failures (401s, unknown push/collector tokens) are charged to the
+  address afterwards. Address buckets exist only for
+  `clientip.Attributable` addresses (trusted-proxy-forwarded or public
+  peer), IPv6 per /64. Authenticated routes are read from the router (on
+  `RawPath`, as chi routes), so new routes need no list. Never echo `Origin` in a handler. The env rides
   Compose and the chart's `trustedProxyCIDRs` + `security:` block
   (`monitoring-platform.edgeEnv`) together.
 

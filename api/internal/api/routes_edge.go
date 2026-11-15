@@ -28,7 +28,7 @@ func useEdgeSecurity(r chi.Router, cfg *config.APIConfig, log *logger.Logger) *a
 			limiter.SetRouteClassifier(authRouteClassifier(mux, limiter))
 		}
 		if len(cfg.TrustedProxyCIDRs) == 0 {
-			log.Warn("API rate limiting is on but TRUSTED_PROXY_CIDRS is empty: anonymous requests and authentication failures are limited per TCP peer, which behind a proxy or ingress is shared by every client; list your proxies in TRUSTED_PROXY_CIDRS")
+			log.Warn("API rate limiting is on but TRUSTED_PROXY_CIDRS is empty: anonymous requests and authentication failures arriving from private, loopback or shared-address peers (a frontend proxy, an ingress, a NAT gateway) are not limited per address, because those peers stand for many clients; list your proxies in TRUSTED_PROXY_CIDRS to limit the real clients behind them")
 		}
 	}
 	r.Use(securityheaders.API(clientip.NewResolver(cfg.TrustedProxyCIDRs), cfg.HSTSMaxAge))
@@ -63,7 +63,13 @@ func authRouteClassifier(mux *chi.Mux, limiter *apimiddleware.RateLimiter) func(
 		if strings.TrimSuffix(r.URL.Path, "/") == mcpRoute {
 			return true
 		}
-		pattern := mux.Find(chi.NewRouteContext(), r.Method, r.URL.Path)
+		// chi routes on the escaped path when there is one, so a %2F inside
+		// a parameter does not split it; classify the same way.
+		path := r.URL.RawPath
+		if path == "" {
+			path = r.URL.Path
+		}
+		pattern := mux.Find(chi.NewRouteContext(), r.Method, path)
 		return pattern != "" && authed[r.Method+" "+normalizeRoutePattern(pattern)]
 	}
 }

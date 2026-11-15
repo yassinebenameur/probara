@@ -171,7 +171,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`API_RATE_LIMIT_PER_MINUTE`',
               '`600`; nonnegative integer; `0` disables the limiter',
-              'General [API rate limit](/docs/security/#edge-controls): per validated credential, per client IP only for authentication failures and unauthenticated routes, in memory on each API replica. Compose and Helm (`security.apiRateLimitPerMinute`) wire it.',
+              'General [API rate limit](/docs/security/#edge-controls): per credential; per client address only for anonymous requests and verified failures, and only when the address names a client (a public peer, or forwarded by a trusted proxy). In memory on each API replica. Compose and Helm (`security.apiRateLimitPerMinute`) wire it.',
             ],
             [
               '`API_RATE_LIMIT_BURST`',

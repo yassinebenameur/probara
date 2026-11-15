@@ -2,8 +2,12 @@ package middleware
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"math"
 	"net/http"
+	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,26 +23,38 @@ import (
 
 // RateLimiter is the API's general request limiter: in-memory token buckets
 // (API_RATE_LIMIT_PER_MINUTE, API_RATE_LIMIT_BURST), so the limit applies per
-// API replica. Which bucket a request spends from depends on the route, never
-// on an unverified header:
+// API replica. A presented credential is never judged on an address bucket,
+// because one address is often many people (an office NAT, the frontend's
+// /api proxy, an ingress pod):
 //
-//   - Authenticated routes (those behind AuthMiddleware, wrapped by
-//     Authenticate): a request whose credential validates spends from that
-//     credential's bucket -- API key id, MCP grant (the granting user,
-//     via=mcp), or session user. It never touches an address bucket, so a
-//     valid credential is never refused because of other traffic from the
-//     same address. A request that fails authentication (401) spends from
-//     its address's failure bucket instead; once that is empty the failure
-//     is answered 429, so guessing keys cannot buy unlimited lookups.
-//   - Every other route (Anonymous, router-wide): the client address bucket
-//     (clientip.FromRequest, which honors only TRUSTED_PROXY_CIDRS), whatever
-//     headers the request carries. A session cookie whose JWT verifies keys
-//     the request by its user instead, so signed-in users behind one proxy
-//     do not share /auth/me and /auth/refresh capacity.
+//   - Authenticated routes (behind AuthMiddleware, wrapped by Authenticate):
+//     a request whose credential validates spends from that credential's
+//     bucket -- API key id, MCP grant (the granting user, via=mcp), or session
+//     user. A request answered 401 spends from its address's auth-failure
+//     bucket afterwards, and once that is empty its 401 becomes a 429, so
+//     guessing keys cannot buy unlimited lookups -- except when it carried a
+//     session cookie this server signed (only expired): that 401 always goes
+//     out, so the client refreshes.
+//   - The refresh route with a refresh cookie: keyed on a hash of the cookie;
+//     a 401 (the cookie was not valid) is a failure charged as above.
+//   - Token-path routes (push heartbeats, discovery collectors): a valid
+//     token is not limited here; a 401/404 answer is a failure charged as
+//     above.
+//   - Every other route (Anonymous, router-wide): a session cookie this
+//     server signed keys the request by its user; otherwise the client
+//     address bucket.
 //
-// The classification comes from the real router (SetRouteClassifier), so a
-// new unauthenticated route is limited by address without being listed here.
-// It bounds request volume; it is not an account lockout.
+// Address buckets -- the anonymous bucket and the auth-failure bucket -- are
+// used only for attributable addresses (clientip.Attributable): forwarded by
+// a trusted proxy, or a public TCP peer. A private peer we cannot see through
+// would pool every visitor behind it into one bucket that a single attacker
+// could empty for everyone, so its traffic skips the address buckets (the
+// credential buckets still apply). IPv6 addresses share a bucket per /64.
+//
+// The authenticated-route classification comes from the real router
+// (SetRouteClassifier), so a new unauthenticated route is limited by address
+// without being listed here. It bounds request volume; it is not an account
+// lockout.
 type RateLimiter struct {
 	limit rate.Limit
 	burst int
@@ -47,12 +63,13 @@ type RateLimiter struct {
 	// isAuthRoute reports whether a request's route is behind Authenticate.
 	// Nil treats every route as anonymous.
 	isAuthRoute func(*http.Request) bool
-	// sessionSecret verifies admin_access cookies on anonymous routes.
+	// sessionSecret verifies admin_access cookies.
 	sessionSecret string
 
-	mu        sync.Mutex
-	buckets   map[string]*rateBucket
-	lastSweep time.Time
+	mu         sync.Mutex
+	buckets    map[string]*rateBucket
+	lastSweep  time.Time
+	maxBuckets int
 }
 
 type rateBucket struct {
@@ -60,9 +77,17 @@ type rateBucket struct {
 	seen time.Time
 }
 
-// rateLimiterMaxBuckets caps the bucket map between sweeps; past it the map
-// is reset wholesale, which only ever errs toward allowing requests.
+// rateLimiterMaxBuckets caps the bucket map. Past it, buckets that have
+// refilled are dropped first (a fresh bucket behaves identically), then the
+// least recently used, so filling the map never resets an active bucket.
 const rateLimiterMaxBuckets = 100_000
+
+// Credential carriers the limiter reads (the auth handlers own them).
+const (
+	sessionCookieName = "admin_access"
+	refreshCookieName = "admin_refresh"
+	refreshPath       = "/api/v1/auth/refresh"
+)
 
 // NewRateLimiter returns a limiter refilling perMinute tokens a minute with
 // room for burst. perMinute <= 0 disables it: the returned nil limiter's
@@ -75,10 +100,11 @@ func NewRateLimiter(perMinute, burst int) *RateLimiter {
 		burst = 1
 	}
 	return &RateLimiter{
-		limit:   rate.Limit(float64(perMinute) / 60),
-		burst:   burst,
-		now:     time.Now,
-		buckets: make(map[string]*rateBucket),
+		limit:      rate.Limit(float64(perMinute) / 60),
+		burst:      burst,
+		now:        time.Now,
+		buckets:    make(map[string]*rateBucket),
+		maxBuckets: rateLimiterMaxBuckets,
 	}
 }
 
@@ -90,8 +116,8 @@ func (l *RateLimiter) SetRouteClassifier(isAuthRoute func(*http.Request) bool) {
 	}
 }
 
-// SetSessionSecret lets anonymous routes key a verified session cookie by
-// its user (ADMIN_JWT_SECRET).
+// SetSessionSecret lets the limiter recognize session cookies this server
+// signed (ADMIN_JWT_SECRET).
 func (l *RateLimiter) SetSessionSecret(secret string) {
 	if l != nil {
 		l.sessionSecret = secret
@@ -99,22 +125,29 @@ func (l *RateLimiter) SetSessionSecret(secret string) {
 }
 
 // rateLimitExempt lists the routes whose validated callers are not limited
-// here: health and metrics probes, static downloads, push heartbeats (token
-// in the URL), OTLP export (OTLP_MONITOR_RATE_PER_MIN per monitor), discovery
-// collectors (integration token) and the long-lived alert stream. On an
-// authenticated route the exemption covers only requests that authenticate;
-// their failures still spend from the address failure bucket.
+// here: health and metrics probes, static downloads, OTLP export
+// (OTLP_MONITOR_RATE_PER_MIN per monitor) and the long-lived alert stream.
+// On an authenticated route the exemption covers only requests that
+// authenticate; their failures still spend from the failure bucket.
 func rateLimitExempt(path string) bool {
 	switch path {
 	case "/healthz", "/readyz", "/metrics", "/api/v1/alerts/stream":
 		return true
 	}
-	for _, prefix := range []string{"/static/", "/api/v1/push/", "/api/v1/otlp/", "/api/v1/discovery-collectors/"} {
+	for _, prefix := range []string{"/static/", "/api/v1/otlp/"} {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+// tokenPathRoute reports the unauthenticated routes that carry their own
+// credential (a token in the path, or a collector token): machines call them
+// at a steady rate, often from shared addresses, so a valid token is never
+// limited here, but a 401/404 answer is a failure.
+func tokenPathRoute(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/push/") || strings.HasPrefix(path, "/api/v1/discovery-collectors/")
 }
 
 // mcpEndpointUncharged: the MCP endpoint authenticates each request, but
@@ -124,7 +157,8 @@ func mcpEndpointUncharged(path string) bool {
 	return strings.TrimSuffix(path, "/") == mcpEndpointPath
 }
 
-// identityKey is the bucket key for an authenticated request.
+// identityKey is the bucket key for an authenticated request, or "" when it
+// carries no identity (nothing to charge).
 func identityKey(r *http.Request) string {
 	ctx := r.Context()
 	if keyID, ok := ctxpkg.GetAPIKeyID(ctx); ok && keyID != "" {
@@ -136,45 +170,125 @@ func identityKey(r *http.Request) string {
 		}
 		return "user:" + adminID
 	}
-	return "ip:" + clientip.FromRequest(r)
+	return ""
 }
 
-// anonymousKey keys a request on an unauthenticated route: its verified
-// session user, else its address.
-func (l *RateLimiter) anonymousKey(r *http.Request) string {
-	if l.sessionSecret != "" {
-		if c, err := r.Cookie("admin_access"); err == nil && c.Value != "" {
-			if claims, err := auth.ParseAdminToken(c.Value, l.sessionSecret); err == nil && claims.AdminID != "" {
-				return "user:" + claims.AdminID
-			}
+// signedSessionUser returns the user of a session cookie this server signed,
+// expired or not.
+func (l *RateLimiter) signedSessionUser(r *http.Request) (string, bool) {
+	if l.sessionSecret == "" {
+		return "", false
+	}
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil || c.Value == "" {
+		return "", false
+	}
+	return auth.AdminIDFromSignedToken(c.Value, l.sessionSecret)
+}
+
+// addressKey returns the client address's bucket key with prefix, or false
+// when the address is not attributable (see RateLimiter).
+func addressKey(prefix string, r *http.Request) (string, bool) {
+	if !clientip.Attributable(r) {
+		return "", false
+	}
+	return prefix + bucketAddress(clientip.FromRequest(r)), true
+}
+
+// bucketAddress groups IPv6 clients by /64: one host is usually handed a
+// whole /64, so per-address buckets would let it rotate to a fresh one on
+// every request.
+func bucketAddress(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	a = a.WithZone("").Unmap()
+	if a.Is6() {
+		if p, err := a.Prefix(64); err == nil {
+			return p.String()
 		}
 	}
-	return "ip:" + clientip.FromRequest(r)
+	return a.String()
+}
+
+func hashCredential(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:16])
 }
 
 // Anonymous is the router-wide stage: it limits every request whose route is
-// not behind Authenticate, by anonymousKey.
+// not behind Authenticate.
 func (l *RateLimiter) Anonymous(next http.Handler) http.Handler {
 	if l == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if rateLimitExempt(r.URL.Path) || (l.isAuthRoute != nil && l.isAuthRoute(r)) {
+		path := r.URL.Path
+		if rateLimitExempt(path) || (l.isAuthRoute != nil && l.isAuthRoute(r)) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if ok, wait := l.take(l.anonymousKey(r)); !ok {
-			writeRateLimited(w, wait)
+		if tokenPathRoute(path) {
+			l.serveChargingFailures(w, r, next)
 			return
+		}
+		if path == refreshPath {
+			if c, err := r.Cookie(refreshCookieName); err == nil && c.Value != "" {
+				if ok, wait := l.take("refresh:" + hashCredential(c.Value)); !ok {
+					writeRateLimited(w, wait)
+					return
+				}
+				l.serveChargingFailures(w, r, next)
+				return
+			}
+		}
+		key, ok := "", false
+		if user, signed := l.signedSessionUser(r); signed {
+			key, ok = "user:"+user, true
+		} else {
+			key, ok = addressKey("ip:", r)
+		}
+		if ok {
+			if allowed, wait := l.take(key); !allowed {
+				writeRateLimited(w, wait)
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
+// serveChargingFailures runs next with its response held. A 401 or 404 --
+// the presented token or cookie was not valid -- spends from the address's
+// auth-failure bucket, and is answered 429 once that is empty. Any other
+// answer goes out unchanged and uncharged.
+func (l *RateLimiter) serveChargingFailures(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	held := &heldResponse{header: http.Header{}}
+	next.ServeHTTP(held, r)
+	if held.status == http.StatusUnauthorized || held.status == http.StatusNotFound {
+		if ok, wait := l.chargeFailure(r); !ok {
+			writeRateLimited(w, wait)
+			return
+		}
+	}
+	held.flush(w)
+}
+
+// chargeFailure spends one token from the address's auth-failure bucket. An
+// unattributable address has no such bucket and is always allowed.
+func (l *RateLimiter) chargeFailure(r *http.Request) (bool, time.Duration) {
+	key, ok := addressKey("authfail:", r)
+	if !ok {
+		return true, 0
+	}
+	return l.take(key)
+}
+
 // Authenticate wraps the authentication middleware. A request it lets
-// through is charged to its credential; a request it answers 401 is charged
-// to the address failure bucket, and turned into a 429 once that is empty.
-// Nothing is refused before authentication has run.
+// through is charged to its credential; a request it answers 401 is a
+// failure (serveChargingFailures), unless it carried a session cookie this
+// server signed. Nothing is refused before authentication has run.
 func (l *RateLimiter) Authenticate(authenticate func(http.Handler) http.Handler) func(http.Handler) http.Handler {
 	if l == nil {
 		return authenticate
@@ -203,9 +317,11 @@ func (g *authGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header()[k] = v
 		}
 		if !rateLimitExempt(ar.URL.Path) && !mcpEndpointUncharged(ar.URL.Path) {
-			if ok, wait := g.l.take(identityKey(ar)); !ok {
-				writeRateLimited(w, wait)
-				return
+			if key := identityKey(ar); key != "" {
+				if ok, wait := g.l.take(key); !ok {
+					writeRateLimited(w, wait)
+					return
+				}
 			}
 		}
 		g.next.ServeHTTP(w, ar)
@@ -214,9 +330,13 @@ func (g *authGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if held.status == http.StatusUnauthorized {
-		if ok, wait := g.l.take("authfail:" + clientip.FromRequest(r)); !ok {
-			writeRateLimited(w, wait)
-			return
+		// An expired session cookie of ours is not a guess: its 401 is what
+		// makes the client refresh, so it must never become a 429.
+		if _, signed := g.l.signedSessionUser(r); !signed {
+			if ok, wait := g.l.chargeFailure(r); !ok {
+				writeRateLimited(w, wait)
+				return
+			}
 		}
 	}
 	held.flush(w)
@@ -233,7 +353,8 @@ func (l *RateLimiter) IsAuthenticate(mw func(http.Handler) http.Handler) bool {
 	return ok
 }
 
-// heldResponse buffers the auth middleware's own (failure) response.
+// heldResponse buffers a response until the limiter decides whether to send
+// it or answer 429 instead.
 type heldResponse struct {
 	header http.Header
 	status int
@@ -285,6 +406,9 @@ func (l *RateLimiter) bucket(key string, now time.Time) *rate.Limiter {
 	l.sweepLocked(now)
 	b, ok := l.buckets[key]
 	if !ok {
+		if len(l.buckets) >= l.maxBuckets {
+			l.evictLocked(now)
+		}
 		b = &rateBucket{lim: rate.NewLimiter(l.limit, l.burst)}
 		l.buckets[key] = b
 	}
@@ -295,7 +419,7 @@ func (l *RateLimiter) bucket(key string, now time.Time) *rate.Limiter {
 // sweepLocked drops buckets idle long enough to have refilled completely: a
 // fresh bucket behaves identically, so forgetting them changes nothing.
 func (l *RateLimiter) sweepLocked(now time.Time) {
-	if now.Sub(l.lastSweep) < time.Minute && len(l.buckets) < rateLimiterMaxBuckets {
+	if now.Sub(l.lastSweep) < time.Minute {
 		return
 	}
 	l.lastSweep = now
@@ -305,8 +429,37 @@ func (l *RateLimiter) sweepLocked(now time.Time) {
 			delete(l.buckets, key)
 		}
 	}
-	if len(l.buckets) >= rateLimiterMaxBuckets {
-		l.buckets = make(map[string]*rateBucket)
+}
+
+// evictLocked makes room in a full map without resetting anyone's limit
+// more than it must: buckets that have refilled go first (dropping one
+// changes nothing), then the least recently used until a tenth of the cap is
+// free. A bucket in active use is the last to go, so flooding the map with
+// new keys cannot be used to wipe one's own or someone else's spent tokens.
+func (l *RateLimiter) evictLocked(now time.Time) {
+	for key, b := range l.buckets {
+		if b.lim.TokensAt(now) >= float64(l.burst) {
+			delete(l.buckets, key)
+		}
+	}
+	target := l.maxBuckets - l.maxBuckets/10
+	if target >= l.maxBuckets {
+		target = l.maxBuckets - 1
+	}
+	if len(l.buckets) <= target {
+		return
+	}
+	type aged struct {
+		key  string
+		seen time.Time
+	}
+	all := make([]aged, 0, len(l.buckets))
+	for key, b := range l.buckets {
+		all = append(all, aged{key, b.seen})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].seen.Before(all[j].seen) })
+	for _, a := range all[:len(all)-target] {
+		delete(l.buckets, a.key)
 	}
 }
 

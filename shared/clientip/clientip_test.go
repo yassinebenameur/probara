@@ -143,3 +143,44 @@ func TestMiddlewareAndFromRequest(t *testing.T) {
 		t.Fatalf("FromRequest outside middleware = %q", got)
 	}
 }
+
+// An address keys a per-address limit only when it names one client: a
+// trusted proxy forwarded it, or it is a public TCP peer. A private,
+// loopback, link-local or shared-space peer we cannot see through does not.
+func TestAttributable(t *testing.T) {
+	cases := []struct {
+		name, trusted, remote, xff string
+		want                       bool
+	}{
+		{name: "public peer", remote: "203.0.113.7:1", want: true},
+		{name: "public IPv6 peer", remote: "[2001:db8::7]:1", want: true},
+		{name: "private peer, no trust (frontend proxy, ingress pod)", remote: "10.0.0.5:1", want: false},
+		{name: "loopback peer", remote: "127.0.0.1:1", want: false},
+		{name: "IPv6 ULA peer", remote: "[fd00::5]:1", want: false},
+		{name: "link-local peer", remote: "[fe80::1]:1", want: false},
+		{name: "shared address space peer", remote: "100.64.1.2:1", want: false},
+		{name: "private peer ignores XFF it is not trusted for", remote: "10.0.0.5:1", xff: "203.0.113.7", want: false},
+		{name: "trusted proxy forwards a public client", trusted: "10.0.0.0/8", remote: "10.0.0.5:1", xff: "203.0.113.7", want: true},
+		{name: "trusted proxy forwards a private client", trusted: "10.0.0.0/8", remote: "10.0.0.5:1", xff: "192.168.1.20", want: true},
+		{name: "trusted proxy without a header", trusted: "10.0.0.0/8", remote: "10.0.0.5:1", want: false},
+		{name: "trusted proxy with an unreadable hop", trusted: "10.0.0.0/8", remote: "10.0.0.5:1", xff: "nonsense", want: false},
+		{name: "non-IP remote", remote: "pipe", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got bool
+			h := mustResolver(t, tc.trusted).Middleware(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+				got = Attributable(req)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = tc.remote
+			if tc.xff != "" {
+				req.Header.Set("X-Forwarded-For", tc.xff)
+			}
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			if got != tc.want {
+				t.Fatalf("Attributable = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
