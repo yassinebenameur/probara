@@ -329,3 +329,34 @@ func TestSend_SuspectedCauseEvent(t *testing.T) {
 		t.Fatalf("body = %s", gotBody)
 	}
 }
+
+// A relapse page arrives as a created event whose idempotency key names the
+// relapse, so a receiver deduplicating by key does not drop it as a retry of
+// the first page; the body carries relapse_count.
+func TestSend_RelapsePageHasItsOwnIdempotencyKey(t *testing.T) {
+	var gotBody []byte
+	var gotEvtType, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEvtType = r.Header.Get(eventTypeHeader)
+		gotKey = r.Header.Get(idempotencyHdr)
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := sampleEvent()
+	event.Alert.RelapseCount = 2
+	if err := New().Send(context.Background(), plugin.DispatchRequest{
+		Channel:   plugin.ChannelRef{ID: "c-1", Config: map[string]any{"url": srv.URL}},
+		Event:     event,
+		EventType: "created",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if gotEvtType != "created" || gotKey != "a-1:c-1:created:relapse-2" {
+		t.Fatalf("headers: type=%q key=%q", gotEvtType, gotKey)
+	}
+	if !strings.Contains(string(gotBody), `"relapse_count":2`) {
+		t.Fatalf("body = %s", gotBody)
+	}
+}

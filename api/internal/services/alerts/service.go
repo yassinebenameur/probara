@@ -69,6 +69,7 @@ var alertDetailSelect = `
 		CASE WHEN a.status IN ('active', 'acknowledged') AND ` + alertrouting.SnoozedPredicate("a") + ` THEN a.snoozed_at END,
 		CASE WHEN a.status IN ('active', 'acknowledged') AND ` + alertrouting.SnoozedPredicate("a") + ` THEN a.snoozed_by_user_id END,
 		CASE WHEN a.status IN ('active', 'acknowledged') AND ` + alertrouting.SnoozedPredicate("a") + ` THEN snoozeby.username END,
+		a.relapse_count, a.reopened_at,
 		` + triageview.Columns + `
 	FROM alerts a
 	LEFT JOIN monitors m ON a.monitor_id = m.id
@@ -134,6 +135,7 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 		&alert.SuppressionReason, &alert.ImpactedCount,
 		&alert.AcknowledgedByUserID, &alert.AcknowledgedBy, &alert.SnoozedUntil,
 		&alert.SnoozedAt, &alert.SnoozedByUserID, &alert.SnoozedBy,
+		&alert.RelapseCount, &alert.ReopenedAt,
 	}, triage.Dest()...)...)
 	if err != nil {
 		return nil, err
@@ -248,11 +250,19 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 }
 
 // GetAlert retrieves an alert by ID. A labelable triage also carries its
-// label context (the triage label dialog reads it from this route only).
+// label context (the triage label dialog reads it from this route only), and
+// a relapsed alert its relapse history.
 func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
 	alert, err := s.getAlert(ctx, tenantID, alertID)
 	if err != nil {
 		return nil, err
+	}
+	if alert.RelapseCount > 0 {
+		relapses, err := s.loadRelapses(ctx, tenantID, alertID)
+		if err != nil {
+			return nil, err
+		}
+		alert.Relapses = relapses
 	}
 	if alert.Triage != nil && alert.Triage.Labelable {
 		labelContext, err := triageview.LoadLabelContext(ctx, s.db, tenantID, alert.Triage.ID)
@@ -262,6 +272,33 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 		alert.Triage.LabelContext = labelContext
 	}
 	return alert, nil
+}
+
+// loadRelapses reads an alert's relapse history, oldest first.
+func (s *Service) loadRelapses(ctx context.Context, tenantID, alertID uuid.UUID) ([]models.AlertRelapse, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.relapse_number, r.recovered_at, r.reopened_at
+		FROM alert_relapses r
+		JOIN alerts a ON a.id = r.alert_id
+		WHERE r.alert_id = $1 AND a.tenant_id = $2
+		ORDER BY r.relapse_number
+	`, alertID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load alert relapses: %w", err)
+	}
+	defer rows.Close()
+	var relapses []models.AlertRelapse
+	for rows.Next() {
+		var r models.AlertRelapse
+		if err := rows.Scan(&r.Number, &r.RecoveredAt, &r.ReopenedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan alert relapse: %w", err)
+		}
+		relapses = append(relapses, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating alert relapses: %w", err)
+	}
+	return relapses, nil
 }
 
 // getAlert retrieves an alert by ID with its compact triage.
@@ -361,17 +398,34 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	return alerts, nil
 }
 
+// firstAckEpisodeStartSet is the SET item that records, with the first
+// acknowledgement, when the paging episode it answered began: the trigger, or
+// the relapse reopen it followed. SET expressions read the row as it was, so
+// it sees first_acknowledged_at before the same statement sets it. SLA time
+// to acknowledge is first_acknowledged_at minus this, so a first
+// acknowledgement given during a relapse is not stretched across the
+// recovered gap. alias qualifies the alerts row ("" for none).
+func firstAckEpisodeStartSet(alias string) string {
+	if alias != "" {
+		alias += "."
+	}
+	return `first_ack_episode_started_at = CASE WHEN ` + alias + `first_acknowledged_at IS NULL
+				THEN COALESCE(` + alias + `reopened_at, ` + alias + `triggered_at) ELSE ` + alias + `first_ack_episode_started_at END`
+}
+
 // AcknowledgeAlert marks an alert as acknowledged, by the acting user
 // (actingUserID). From then on the alerter sends it no reminder and no
 // further escalation (shared/alertrouting mute.go). The first acknowledgement
-// is also kept in first_acknowledged_at, which an unacknowledge never clears:
-// SLA reports measure time to acknowledge from it.
+// is also kept in first_acknowledged_at, which neither an unacknowledge nor a
+// relapse reopen ever clears: SLA reports measure time to acknowledge from it
+// (firstAckEpisodeStartSet).
 func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
 	now := time.Now()
 	query := `
 		UPDATE alerts
 		SET status = 'acknowledged', acknowledged_at = $1, acknowledged_by_user_id = $4, updated_at = $1,
-			first_acknowledged_at = COALESCE(first_acknowledged_at, $1)
+			first_acknowledged_at = COALESCE(first_acknowledged_at, $1),
+			` + firstAckEpisodeStartSet("") + `
 		WHERE id = $2 AND tenant_id = $3 AND status = 'active'
 		RETURNING id
 	`
@@ -434,7 +488,7 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 			triggered_at, acknowledged_at, resolved_at, failure_count,
 			last_error, kind, baseline_latency_ms, observed_latency_ms, anomaly_score,
 			metric_name, metric_value, threshold_value,
-			root_cause_monitor_id, root_cause_down_since, created_at, updated_at
+			root_cause_monitor_id, root_cause_down_since, relapse_count, reopened_at, created_at, updated_at
 		FROM alerts
 		WHERE tenant_id = $1 AND monitor_id = $2 AND status IN ('active', 'acknowledged')
 		ORDER BY triggered_at DESC
@@ -447,7 +501,7 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
 		&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
-		&alert.RootCauseMonitorID, &alert.RootCauseDownSince,
+		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RelapseCount, &alert.ReopenedAt,
 		&alert.CreatedAt, &alert.UpdatedAt,
 	)
 

@@ -68,8 +68,9 @@ func (a *Alerter) evaluateMeshEdges(ctx context.Context) error {
 	return a.dispatchOpenMeshAlerts(ctx)
 }
 
-// openMeshEdgeAlerts creates one alert per down edge without an open alert.
-// Race-safe across replicas via idx_alerts_one_open_mesh_edge.
+// openMeshEdgeAlerts creates one alert per down edge without an open alert,
+// or reopens the edge's recent one (relapse.go). Race-safe across replicas
+// via idx_alerts_one_open_mesh_edge.
 func (a *Alerter) openMeshEdgeAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT ms.tenant_id, ms.source_location_id, ms.target_location_id,
@@ -119,23 +120,51 @@ func (a *Alerter) openMeshEdgeAlert(ctx context.Context, e meshEdgeSubject) erro
 		lastError = &e.lastError.String
 	}
 
-	err := a.db.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
-			triggered_at, failure_count, last_error, source_location_id, target_location_id,
-			created_at, updated_at)
-		VALUES ($1, $2, NULL, 'mesh_edge', 'active', NOW(), $3, $4, $5, $6, NOW(), NOW())
-		ON CONFLICT (source_location_id, target_location_id)
-			WHERE kind = 'mesh_edge' AND status IN ('active', 'acknowledged') DO NOTHING
-		RETURNING id
-	`, uuid.New(), e.tenantID, e.failCount, lastError, e.sourceID, e.targetID).Scan(&e.alertID)
-	if err == sql.ErrNoRows {
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin mesh edge alert transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	reopened, err := reopenRecentAlertTx(ctx, tx,
+		alertIdentity{tenantID: e.tenantID, kind: notifications.KindMeshEdge, sourceLocationID: e.sourceID, targetLocationID: e.targetID},
+		[]alertColumn{{"failure_count", e.failCount}, {"last_error", lastError}})
+	if errors.Is(err, errAlertAlreadyOpen) {
 		return nil // another replica won the race
 	}
 	if err != nil {
-		return fmt.Errorf("insert mesh edge alert: %w", err)
+		return err
+	}
+	if reopened != nil {
+		e.alertID = reopened.id
+		if err := a.noteRelapseTx(ctx, tx, e.tenantID, reopened); err != nil {
+			return err
+		}
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
+				triggered_at, failure_count, last_error, source_location_id, target_location_id,
+				created_at, updated_at)
+			VALUES ($1, $2, NULL, 'mesh_edge', 'active', NOW(), $3, $4, $5, $6, NOW(), NOW())
+			ON CONFLICT (source_location_id, target_location_id)
+				WHERE kind = 'mesh_edge' AND status IN ('active', 'acknowledged') DO NOTHING
+			RETURNING id
+		`, uuid.New(), e.tenantID, e.failCount, lastError, e.sourceID, e.targetID).Scan(&e.alertID)
+		if err == sql.ErrNoRows {
+			return nil // another replica won the race
+		}
+		if err != nil {
+			return fmt.Errorf("insert mesh edge alert: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit mesh edge alert transaction: %w", err)
 	}
 
 	record := e.record(time.Now())
+	if reopened != nil {
+		reopened.apply(&record)
+	}
 	a.publishAlertEvent(ctx, "created", e.binding(), &record, nil)
 	return nil
 }

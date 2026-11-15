@@ -95,10 +95,13 @@ func TestBuildAlertEvent_SuspectedCause(t *testing.T) {
 	}
 }
 
-// openAlertEventDue must agree with the created/reminder predicates of
-// claimNotificationTx: created only before any send and once the escalation
-// delay has passed; reminder only on an unresolved slot whose last send is at
-// least one interval old, and never with reminders off.
+// openAlertEventDue must agree with the created/relapsed/reminder predicates
+// of claimNotificationTx: created only before any send and once the
+// escalation delay has passed; relapsed only on a slot that heard the
+// recovery of an alert that has since reopened (the dispatch loops see only
+// open alerts), once the delay has passed again; reminder only on an
+// unresolved slot whose last send is at least one interval old, and never
+// with reminders off.
 func TestOpenAlertEventDue(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	interval := 10 * time.Minute
@@ -120,7 +123,10 @@ func TestOpenAlertEventDue(t *testing.T) {
 		{"reminder at interval", sent("created", 10*time.Minute), time.Hour, 0, interval, "reminder"},
 		{"reminder after a reminder", sent("reminder", 11*time.Minute), time.Hour, 0, interval, "reminder"},
 		{"reminders off", sent("created", time.Hour), time.Hour, 0, 0, ""},
-		{"resolved slot never reminds", sent("resolved", time.Hour), time.Hour, 0, interval, ""},
+		{"resolved slot never reminds; on a reopened alert it is due the relapse notice", sent("resolved", time.Hour), time.Hour, 0, interval, "relapsed"},
+		{"relapse notice waits for the delay from the reopen", sent("resolved", time.Hour), 4 * time.Minute, 5 * time.Minute, interval, ""},
+		{"relapsed slot reminds like a page", sent("relapsed", 11*time.Minute), time.Hour, 0, interval, "reminder"},
+		{"relapsed slot never re-sends the notice", sent("relapsed", time.Minute), time.Hour, 0, interval, ""},
 		{"sent slot never re-creates", sent("created", time.Minute), time.Hour, 0, interval, ""},
 	}
 	for _, tt := range tests {

@@ -10,7 +10,8 @@
 //
 // Event types: created, reminder, resolved, acknowledged (paging channels
 // only) and suspected_cause, the opt-in follow-up carrying a local AI
-// triage's named cause (channels advertising plugin.CapabilityFollowUp).
+// triage's named cause (channels advertising plugin.CapabilityFollowUp). A
+// created event of a reopened alert is a relapse notice (relapse.go).
 package present
 
 import (
@@ -154,6 +155,9 @@ func BuildWith(event notifications.AlertEvent, eventType string, opts Options) M
 	}
 	m.Title = m.Label + ": " + m.MonitorName
 	m.Summary = summaryFor(alert, eventType, resolved, elapsed)
+	if isRelapsePage(alert, eventType, resolved) {
+		m.Summary = relapseLead(alert) + " " + m.Summary
+	}
 	m.Metric = metricFor(alert, resolved)
 	if eventType == EventSuspectedCause && !resolved {
 		// A follow-up to a page already delivered: it keeps what tells the
@@ -371,6 +375,13 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		// title already starts with the label.
 		return ToneInfo, "AI TRIAGE"
 	}
+	if isRelapsePage(alert, eventType, resolved) {
+		// The kind's page tone, under one word every channel shows.
+		firstPage := alert
+		firstPage.RelapseCount = 0
+		tone, _ := toneFor(firstPage, EventCreated, false)
+		return tone, "RELAPSED"
+	}
 	// Degradations that are not hard outages read as warnings, not failures.
 	switch {
 	case alert.IsLatencyAnomaly():
@@ -415,6 +426,9 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 	}
 	if eventType == EventSuspectedCause {
 		return "Suspected Cause"
+	}
+	if isRelapsePage(alert, eventType, alert.Status == "resolved") {
+		return relapseLabel(alert)
 	}
 	switch {
 	case alert.IsLatencyAnomaly():
@@ -668,6 +682,7 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 	if !alert.TriggeredAt.IsZero() {
 		rows = append(rows, Row{Label: "Triggered", Value: HumanTime(alert.TriggeredAt)})
 	}
+	rows = append(rows, relapseRows(alert)...)
 	if alert.ResolvedAt != nil {
 		rows = append(rows, Row{Label: "Resolved", Value: HumanTime(*alert.ResolvedAt)})
 	}

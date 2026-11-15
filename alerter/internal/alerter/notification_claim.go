@@ -29,6 +29,11 @@ import (
 // releases the claim, so a transient channel error still retries on the next
 // cycle exactly as it did before; a plugin.Permanent error keeps the claim.
 //
+// eventType alertrouting.EventRelapsed is the relapse notice to a route that
+// heard the recovery a reopen interrupted. It is claimed under its own name
+// (once per reopen) and sent as "created": plugins see a new page whose
+// Alert.RelapseCount > 0, so a paging provider re-triggers.
+//
 // It returns true only when this call actually sent.
 func (a *Alerter) deliverNotification(
 	ctx context.Context,
@@ -63,11 +68,22 @@ func (a *Alerter) deliverNotification(
 	// too, so the mute read here is the committed truth for the whole send:
 	// an acknowledgement that commits first stops this page or reminder, and
 	// one that comes later waits for it.
+	//
+	// So is a relapse reopen: the relapse count read here names the paging
+	// episode this send belongs to (the event, the recipient-ledger key and
+	// the receivers' idempotency key carry it), and a reopen waits for a
+	// resolve being sent, so the recovery notice always precedes the relapse
+	// notice. A resolve not yet claimed when the reopen commits finds the
+	// alert open here and is dropped: "recovered" must never follow
+	// "relapsed".
 	var status string
 	var resolvedAt *time.Time
 	var snoozed bool
-	if err := tx.QueryRowContext(ctx, `SELECT al.status, al.resolved_at, `+alertrouting.SnoozedPredicate("al")+`
-		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT al.status, al.resolved_at, `+alertrouting.SnoozedPredicate("al")+`,
+			al.relapse_count, al.reopened_at,
+			(SELECT r.recovered_at FROM alert_relapses r WHERE r.alert_id = al.id AND r.relapse_number = al.relapse_count)
+		FROM alerts al WHERE al.id = $1 FOR SHARE OF al`, alert.ID).Scan(&status, &resolvedAt, &snoozed,
+		&alert.RelapseCount, &alert.ReopenedAt, &alert.LastRecoveredAt); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
 	}
 	if (eventType == "resolved") != (status == "resolved") {
@@ -95,8 +111,12 @@ func (a *Alerter) deliverNotification(
 
 	// A rolled-back claim is retried by whichever replica claims next; the
 	// key lets that retry skip the recipients this attempt already reached.
-	ctx = withRecipientKey(ctx, notifications.RecipientEventKey(eventType, round))
-	if err := a.sendFunc(ctx, channel, eventType, binding, alert, groupInfo, now); err != nil {
+	ctx = withRecipientKey(ctx, notifications.RecipientEventKeyFor(eventType, round, alert.RelapseCount))
+	sendType := eventType
+	if eventType == alertrouting.EventRelapsed {
+		sendType = "created"
+	}
+	if err := a.sendFunc(ctx, channel, sendType, binding, alert, groupInfo, now); err != nil {
 		if plugin.IsPermanent(err) {
 			// The provider rejected the channel itself (revoked key, deleted
 			// webhook). Keep the claim so the next cycle does not re-send and
@@ -137,9 +157,16 @@ type dispatchGate struct {
 //
 //   - acknowledged or snoozed (gate.Muted)                        -> ""
 //   - no state yet and the delay has passed                       -> "created"
+//   - the route heard a recovery (state says resolved) that a
+//     reopen interrupted, and the delay has passed               -> "relapsed"
 //   - already sent, not resolved, interval elapsed since the last
-//     send and since the alert came out of a mute                 -> "reminder"
+//     send and since the alert came out of a mute or reopened     -> "reminder"
 //   - otherwise                                                   -> ""
+//
+// Only an open alert is dispatched, and only a reopen leaves an open alert
+// with a route at 'resolved', so that state means "relapsed since". Its delay
+// counts from the reopen like a first page's from the trigger
+// (DispatchEligibleSinceExpr restarts at reopened_at).
 func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, now time.Time, reminderInterval time.Duration, gate dispatchGate) string {
 	if gate.Muted {
 		return ""
@@ -148,6 +175,10 @@ func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, 
 	case state == nil:
 		if alertAge >= delay {
 			return "created"
+		}
+	case state.LastEventType == "resolved":
+		if alertAge >= delay {
+			return alertrouting.EventRelapsed
 		}
 	case state.LastEventType != "resolved" && reminderInterval > 0 && now.Sub(state.LastSentAt) >= reminderInterval &&
 		(gate.ResumedAt.IsZero() || now.Sub(gate.ResumedAt) >= reminderInterval):
@@ -163,6 +194,9 @@ func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, 
 // after our commit sees the slot taken:
 //
 //   - created:  insert wins; any existing row means someone already fired.
+//   - relapsed: update wins only while the row says resolved (the route
+//     heard the recovery a reopen interrupted). It moves the row to
+//     'relapsed', so it wins once per reopen and reminders count from it.
 //   - reminder: update wins only when the row is not resolved and
 //     last_sent_at is at least reminderInterval old, and so is the alert's
 //     way out of its last mute (alertrouting.DispatchResumedAtExpr), so an
@@ -178,7 +212,8 @@ func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, 
 //
 // The acknowledge/snooze mute is not repeated here: deliverNotification
 // applies it (alertrouting.MuteHolds) to the row it holds FOR SHARE in the
-// same tx, before claiming.
+// same tx, before claiming. Neither is the alert's status: a relapsed claim
+// is only attempted on an open alert, which deliverNotification checked.
 //
 // Returns true when a row came back, i.e. the caller owns the send. For a
 // reminder it also returns the last_sent_at the claim replaced: the round's
@@ -195,6 +230,13 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 				alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at
 			) VALUES ($1, $2, $3, 'created', NOW(), NOW())
 			ON CONFLICT (alert_id, channel_id) DO NOTHING
+			RETURNING alert_id`
+	case alertrouting.EventRelapsed:
+		query = `
+			UPDATE alert_notification_states
+			SET last_sent_at = $3::timestamptz, last_event_type = 'relapsed', updated_at = NOW()
+			WHERE alert_id = $1 AND channel_id = $2
+			  AND last_event_type = 'resolved'
 			RETURNING alert_id`
 	case "reminder":
 		if reminderInterval <= 0 {

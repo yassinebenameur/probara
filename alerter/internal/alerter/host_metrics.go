@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -251,23 +252,49 @@ func (a *Alerter) loadHostMetricConfigs(ctx context.Context) ([]hostMetricConfig
 }
 
 // openHostMetricAlert opens a host_metric alert for one breaching series if
-// one is not already open. Idempotent via the (monitor_id, kind,
-// metric_name) partial unique index, so it is safe across alerter replicas.
+// one is not already open, or reopens that series' recent one (relapse.go).
+// Idempotent via the (monitor_id, kind, metric_name) partial unique index, so
+// it is safe across alerter replicas.
 func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, b breachingSeries) error {
-	var alertID uuid.UUID
-	err := a.db.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
-			triggered_at, failure_count, metric_name, metric_value, threshold_value,
-			created_at, updated_at)
-		VALUES ($1, $2, $3, 'host_metric', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
-		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
-		RETURNING id
-	`, uuid.New(), c.tenantID, c.monitorID, b.seriesKey, b.value, b.threshold).Scan(&alertID)
-	if err == sql.ErrNoRows {
-		return nil // already open
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin host metric alert transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	reopened, err := reopenRecentAlertTx(ctx, tx,
+		alertIdentity{tenantID: c.tenantID, kind: notifications.KindHostMetric, monitorID: c.monitorID, metricName: b.seriesKey},
+		[]alertColumn{{"metric_value", b.value}, {"threshold_value", b.threshold}})
+	if errors.Is(err, errAlertAlreadyOpen) {
+		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("insert host metric alert: %w", err)
+		return err
+	}
+	var alertID uuid.UUID
+	if reopened != nil {
+		alertID = reopened.id
+		if err := a.noteRelapseTx(ctx, tx, c.tenantID, reopened); err != nil {
+			return err
+		}
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
+				triggered_at, failure_count, metric_name, metric_value, threshold_value,
+				created_at, updated_at)
+			VALUES ($1, $2, $3, 'host_metric', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
+			ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
+			RETURNING id
+		`, uuid.New(), c.tenantID, c.monitorID, b.seriesKey, b.value, b.threshold).Scan(&alertID)
+		if err == sql.ErrNoRows {
+			return nil // already open
+		}
+		if err != nil {
+			return fmt.Errorf("insert host metric alert: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit host metric alert transaction: %w", err)
 	}
 
 	seriesKey := b.seriesKey
@@ -277,6 +304,9 @@ func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, b
 		ID: alertID, TenantID: c.tenantID, MonitorID: c.monitorID,
 		Kind: notifications.KindHostMetric, TriggeredAt: time.Now(),
 		MetricName: &seriesKey, MetricValue: &value, ThresholdValue: &threshold,
+	}
+	if reopened != nil {
+		reopened.apply(&record)
 	}
 	binding := alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)

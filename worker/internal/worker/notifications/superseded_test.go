@@ -44,28 +44,40 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 		alertStatus string // "" = alert row gone
 		snoozed     bool
 		wantSend    bool
+		// rowRelapse is the alert's relapse_count now; the envelope was
+		// published in episode 0.
+		rowRelapse int
 	}{
-		{"created", "resolved", false, false},
-		{"reminder", "resolved", false, false},
-		{"acknowledged", "resolved", false, false},
-		{"created", "", false, false},
-		{"created", "active", false, true},
-		{"reminder", "active", false, true},
-		{"acknowledged", "acknowledged", false, true},
-		{"suspected_cause", "resolved", false, false},
-		{"suspected_cause", "active", false, true},
-		{"resolved", "resolved", false, true}, // resolves are never superseded
+		{"created", "resolved", false, false, 0},
+		{"reminder", "resolved", false, false, 0},
+		{"acknowledged", "resolved", false, false, 0},
+		{"created", "", false, false, 0},
+		{"created", "active", false, true, 0},
+		{"reminder", "active", false, true, 0},
+		{"acknowledged", "acknowledged", false, true, 0},
+		{"suspected_cause", "resolved", false, false, 0},
+		{"suspected_cause", "active", false, true, 0},
+		{"resolved", "resolved", false, true, 0},
+		{"resolved", "", false, true, 0}, // alert history deleted: the recovery still goes out
+		// Reopened as a relapse since publish: the resolve is dropped (its
+		// claim handed back when it reached nobody, a no-op here: the
+		// envelope carries no claim time), and so is anything else from the
+		// episode that recovered.
+		{"resolved", "active", false, false, 1},
+		{"resolved", "resolved", false, false, 1},
+		{"created", "active", false, false, 1},
+		{"reminder", "active", false, false, 1},
 		// Acknowledged or snoozed since publish: the mute holds the page and
 		// the reminder, never the follow-up or the provider acknowledgement.
-		{"created", "acknowledged", false, false},
-		{"reminder", "acknowledged", false, false},
-		{"suspected_cause", "acknowledged", false, true},
-		{"created", "active", true, false},
-		{"reminder", "active", true, false},
-		{"suspected_cause", "active", true, true},
-		{"acknowledged", "acknowledged", true, true},
+		{"created", "acknowledged", false, false, 0},
+		{"reminder", "acknowledged", false, false, 0},
+		{"suspected_cause", "acknowledged", false, true, 0},
+		{"created", "active", true, false, 0},
+		{"reminder", "active", true, false, 0},
+		{"suspected_cause", "active", true, true, 0},
+		{"acknowledged", "acknowledged", true, true, 0},
 		// Unacknowledged since publish: the provider must not be told to stop.
-		{"acknowledged", "active", false, false},
+		{"acknowledged", "active", false, false, 0},
 	}
 	for _, tc := range cases {
 		name := tc.eventType + "/" + tc.alertStatus
@@ -84,21 +96,21 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 			mock.ExpectQuery(regexp.QuoteMeta(`FROM alert_channels`)).WithArgs(channelID).
 				WillReturnRows(sqlmock.NewRows([]string{"name", "type", "config", "is_active"}).
 					AddRow("pager", supersededStubType, []byte(`{}`), true))
-			if tc.eventType != "resolved" {
-				mock.ExpectBegin()
-				q := mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID)
-				if tc.alertStatus == "" {
-					q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}))
-				} else {
-					q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}).AddRow(tc.alertStatus, tc.snoozed))
-				}
-				if muted := tc.alertStatus != "" && tc.alertStatus != "resolved" && tc.eventType != "acknowledged" && !tc.wantSend; muted {
-					// The held event's claim is handed back (a no-op here:
-					// the envelope carries no claim time) and committed.
-					mock.ExpectCommit()
-				} else {
-					mock.ExpectRollback()
-				}
+			mock.ExpectBegin()
+			q := mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID)
+			if tc.alertStatus == "" {
+				q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}))
+			} else {
+				q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.alertStatus, tc.snoozed, tc.rowRelapse))
+			}
+			muted := tc.alertStatus != "" && tc.alertStatus != "resolved" && tc.rowRelapse == 0 &&
+				tc.eventType != "acknowledged" && tc.eventType != "resolved" && !tc.wantSend
+			if droppedResolve := tc.eventType == "resolved" && !tc.wantSend; muted || droppedResolve {
+				// The held event's claim is handed back (a no-op here:
+				// the envelope carries no claim time) and committed.
+				mock.ExpectCommit()
+			} else {
+				mock.ExpectRollback()
 			}
 
 			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
@@ -167,7 +179,7 @@ func TestHandle_DropsTriggerQueuedBeforeAck(t *testing.T) {
 					AddRow("pager", tc.channelType, []byte(`{}`), true))
 			mock.ExpectBegin()
 			mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID).
-				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}).AddRow(tc.alertStatus, false))
+				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.alertStatus, false, 0))
 			if tc.alertStatus == "acknowledged" {
 				mock.ExpectCommit()
 			} else {

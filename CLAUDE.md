@@ -696,7 +696,9 @@ or imported groups come back empty. Any other path that creates groups through
   published with `queue.PublishJSONUnique`, so JetStream's duplicate window
   never swallows a re-page while its claim commits.
   SLA time to acknowledge reads `first_acknowledged_at` (set once by the API,
-  never cleared), not `acknowledged_at`, which an unacknowledge clears.
+  never cleared), not `acknowledged_at`, which an unacknowledge clears,
+  measured from `first_ack_episode_started_at` (set with it:
+  `firstAckEpisodeStartSet` in `api/internal/services/alerts`).
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
   skips notifications, so it is not an error to log.
 - **Incident recovery entries have one writer**: `shared/incidentrecovery`.
@@ -713,10 +715,26 @@ or imported groups come back empty. Any other path that creates groups through
   acknowledgement or snooze: the acknowledge, snooze and resolve UPDATEs
   wait for an in-flight send, and a page or reminder still queued when they
   commit is dropped under the same lock (`alertrouting.MuteHolds`), as is an
-  acknowledgement queued before an unacknowledge.
+  acknowledgement queued before an unacknowledge. Resolves take the lock
+  too, so a relapse reopen waits for a resolve being sent and a resolve
+  still queued when it commits is dropped (`releaseSupersededResolveClaim`
+  hands its claim back to `created` only when it provably reached nobody),
+  as is any event of an earlier episode (`relapse_count`).
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.
+- **Relapse reopen** (off unless `tenants.alert_reopen_cooldown_minutes` is
+  set): the rule is `shared/alertrouting/relapse.go`; every alert kind's
+  opener calls `reopenRecentAlertTx` (`alerter/internal/alerter/relapse.go`)
+  before its INSERT, and a new kind's opener must too. Only the alerter's
+  `resolveAlert` sets `auto_resolved`, so a manual resolve never reopens.
+  `reopened_at` restarts the delay and reminder clocks
+  (`DispatchResumedAtExpr`). A route at `resolved` on an open alert is due
+  one `relapsed` claim (sent as `created` with `relapse_count`), in
+  `openAlertEventDue` and
+  `claimNotificationTx` together (`TestRelapsePreFilterMatchesClaim`); the
+  episode rides the ledger and idempotency keys
+  (`notifications.RecipientEventKeyFor`, `notifications.IdempotencyKey`).
 - **Alert wording lives in `shared/notifications/present`**, for every
   channel. `present.Build` turns an event into one `Message` (label, summary,
   metric, facts, deep link, tone); plugins reach it via
@@ -751,7 +769,7 @@ or imported groups come back empty. Any other path that creates groups through
 - **Fan-out progress is durable, per recipient.** Every real send sets
   `DispatchRequest.Recipients` (`shared/notifications/recipientledger`, table
   `alert_notification_recipient_deliveries`) from the pool, never the claim or
-  lock transaction (both roll back), keyed by `notifications.RecipientEventKey`:
+  lock transaction (both roll back), keyed by `notifications.RecipientEventKeyFor`:
   the event type, plus for reminders the `last_sent_at` the reminder claim
   replaced (`claimNotificationTx`), carried to the worker as
   `DispatchEnvelope.DeliveryKey`. A deliberate re-send of an event needs a key

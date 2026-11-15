@@ -9,12 +9,17 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 )
 
 // ErrChannelNotFound is returned by Update when a requested channel_id does
 // not exist or does not belong to the tenant. The handler maps this to HTTP 400.
 var ErrChannelNotFound = errors.New("channel not found")
+
+// ErrInvalidSetting wraps an out-of-range setting value Update refuses before
+// writing anything. The handler maps it to HTTP 400.
+var ErrInvalidSetting = errors.New("invalid notification setting")
 
 // ChannelAssignment describes a channel in the workspace default routing list.
 type ChannelAssignment struct {
@@ -45,6 +50,12 @@ type Settings struct {
 	// still down.
 	DependencySuppressionEnabled      bool `json:"dependency_suppression_enabled"`
 	DependencySuppressionGraceSeconds int  `json:"dependency_suppression_grace_seconds"`
+
+	// AlertReopenCooldownMinutes is relapse reopen (shared/alertrouting
+	// relapse.go): when an alert the alerter resolved on its own fails again
+	// within this many minutes, it reopens (relapse_count + 1) instead of a
+	// new alert opening. 0 is off (the default); 1-1440 otherwise.
+	AlertReopenCooldownMinutes int `json:"alert_reopen_cooldown_minutes"`
 }
 
 // MaxDependencySuppressionGraceSeconds bounds the grace period at one day: a
@@ -65,6 +76,10 @@ type UpdateRequest struct {
 
 	DependencySuppressionEnabled      *bool `json:"dependency_suppression_enabled,omitempty"`
 	DependencySuppressionGraceSeconds *int  `json:"dependency_suppression_grace_seconds,omitempty"`
+
+	// AlertReopenCooldownMinutes: 0 turns relapse reopen off, 1-1440 sets
+	// the cooldown.
+	AlertReopenCooldownMinutes *int `json:"alert_reopen_cooldown_minutes,omitempty"`
 }
 
 // Service provides workspace notification settings CRUD.
@@ -80,12 +95,14 @@ func (s *Service) Get(ctx context.Context, tenantID uuid.UUID) (*Settings, error
 		SELECT alert_reminder_seconds, auto_create_incident,
 			latency_anomaly_enabled, latency_baseline_window_hours, latency_anomaly_sensitivity,
 			latency_anomaly_min_breach_seconds, latency_anomaly_min_delta_pct,
-			dependency_suppression_enabled, dependency_suppression_grace_seconds
+			dependency_suppression_enabled, dependency_suppression_grace_seconds,
+			alert_reopen_cooldown_minutes
 		FROM tenants WHERE id = $1
 	`, tenantID).Scan(&settings.AlertReminderSeconds, &settings.AutoCreateIncident,
 		&settings.LatencyAnomalyEnabled, &settings.LatencyBaselineWindowHours, &settings.LatencyAnomalySensitivity,
 		&settings.LatencyAnomalyMinBreachSeconds, &settings.LatencyAnomalyMinDeltaPct,
-		&settings.DependencySuppressionEnabled, &settings.DependencySuppressionGraceSeconds); err != nil {
+		&settings.DependencySuppressionEnabled, &settings.DependencySuppressionGraceSeconds,
+		&settings.AlertReopenCooldownMinutes); err != nil {
 		return nil, fmt.Errorf("load tenant alert settings: %w", err)
 	}
 
@@ -115,6 +132,12 @@ func (s *Service) Get(ctx context.Context, tenantID uuid.UUID) (*Settings, error
 // When DefaultChannels is non-nil (including an empty slice), the entire
 // default-channel list is replaced atomically.
 func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequest) (*Settings, error) {
+	if req.AlertReopenCooldownMinutes != nil &&
+		(*req.AlertReopenCooldownMinutes < 0 || *req.AlertReopenCooldownMinutes > alertrouting.MaxReopenCooldownMinutes) {
+		return nil, fmt.Errorf("%w: alert_reopen_cooldown_minutes must be between 0 (off) and %d",
+			ErrInvalidSetting, alertrouting.MaxReopenCooldownMinutes)
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin settings transaction: %w", err)
@@ -168,7 +191,8 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 		req.LatencyAnomalyEnabled != nil || req.LatencyBaselineWindowHours != nil ||
 		req.LatencyAnomalySensitivity != nil || req.LatencyAnomalyMinBreachSeconds != nil ||
 		req.LatencyAnomalyMinDeltaPct != nil ||
-		req.DependencySuppressionEnabled != nil || req.DependencySuppressionGraceSeconds != nil {
+		req.DependencySuppressionEnabled != nil || req.DependencySuppressionGraceSeconds != nil ||
+		req.AlertReopenCooldownMinutes != nil {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE tenants SET
 				alert_reminder_seconds = COALESCE($1, alert_reminder_seconds),
@@ -180,12 +204,14 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 				latency_anomaly_min_delta_pct = COALESCE($7, latency_anomaly_min_delta_pct),
 				dependency_suppression_enabled = COALESCE($9, dependency_suppression_enabled),
 				dependency_suppression_grace_seconds = COALESCE($10, dependency_suppression_grace_seconds),
+				alert_reopen_cooldown_minutes = COALESCE($11, alert_reopen_cooldown_minutes),
 				updated_at = NOW()
 			WHERE id = $8
 		`, req.AlertReminderSeconds, req.AutoCreateIncident,
 			req.LatencyAnomalyEnabled, req.LatencyBaselineWindowHours, req.LatencyAnomalySensitivity,
 			req.LatencyAnomalyMinBreachSeconds, req.LatencyAnomalyMinDeltaPct, tenantID,
-			req.DependencySuppressionEnabled, req.DependencySuppressionGraceSeconds); err != nil {
+			req.DependencySuppressionEnabled, req.DependencySuppressionGraceSeconds,
+			req.AlertReopenCooldownMinutes); err != nil {
 			return nil, fmt.Errorf("update tenant alert settings: %w", err)
 		}
 	}

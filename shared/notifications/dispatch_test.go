@@ -90,3 +90,42 @@ func TestDispatchEnvelope_RecipientKey(t *testing.T) {
 		t.Fatalf("key = %q, want the alerter's delivery_key", got)
 	}
 }
+
+// A relapse's page, acknowledgement and resolve are new events: their ledger
+// and idempotency keys carry the episode, so neither the recipient ledger nor
+// a deduplicating receiver mistakes them for the first episode's. Episode 0
+// keeps the keys written before relapses existed.
+func TestKeysCarryTheRelapseEpisode(t *testing.T) {
+	round := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		event   string
+		relapse int
+		want    string
+	}{
+		{"created", 0, "created"},
+		{"resolved", 0, "resolved"},
+		{"created", 2, "created:relapse-2"},
+		{"relapsed", 1, "relapsed:relapse-1"},
+		{"resolved", 3, "resolved:relapse-3"},
+		{"acknowledged", 1, "acknowledged:relapse-1"},
+		{"reminder", 0, "reminder:2026-11-01T10:00:00Z"},
+		{"reminder", 2, "reminder:2026-11-01T10:00:00Z"},
+	} {
+		if got := RecipientEventKeyFor(tc.event, round, tc.relapse); got != tc.want {
+			t.Errorf("RecipientEventKeyFor(%q, relapse %d) = %q, want %q", tc.event, tc.relapse, got, tc.want)
+		}
+	}
+
+	first := DispatchEnvelope{ChannelID: "c1", AlertID: "a1", EventType: "created"}
+	relapse := first
+	relapse.Event.Alert.RelapseCount = 1
+	if first.IdempotencyKey() != "a1:c1:created" {
+		t.Fatalf("episode 0 key changed: %q", first.IdempotencyKey())
+	}
+	if relapse.IdempotencyKey() != "a1:c1:created:relapse-1" {
+		t.Fatalf("relapse key = %q", relapse.IdempotencyKey())
+	}
+	if got := relapse.RecipientKey(); got != "created:relapse-1" {
+		t.Fatalf("fallback recipient key = %q", got)
+	}
+}

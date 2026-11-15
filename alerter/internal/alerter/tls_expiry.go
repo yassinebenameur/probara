@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -199,26 +200,54 @@ func (a *Alerter) openTLSExpiryAlert(ctx context.Context, c tlsExpiryConfig, day
 	threshold := float64(c.minDays)
 	lastError := fmt.Sprintf("tls: expires in %dd (< %dd)", days, c.minDays)
 
-	var alertID uuid.UUID
-	err := a.db.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
-			triggered_at, failure_count, last_error, metric_value, threshold_value,
-			created_at, updated_at)
-		VALUES ($1, $2, $3, 'tls_expiry', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
-		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
-		RETURNING id
-	`, uuid.New(), c.tenantID, c.monitorID, lastError, value, threshold).Scan(&alertID)
-	if err == sql.ErrNoRows {
-		return nil // already open
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tls expiry alert transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	reopened, err := reopenRecentAlertTx(ctx, tx,
+		alertIdentity{tenantID: c.tenantID, kind: notifications.KindTLSExpiry, monitorID: c.monitorID},
+		[]alertColumn{{"last_error", lastError}, {"metric_value", value}, {"threshold_value", threshold}})
+	if errors.Is(err, errAlertAlreadyOpen) {
+		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("insert tls expiry alert: %w", err)
+		return err
+	}
+	var alertID uuid.UUID
+	if reopened != nil {
+		alertID = reopened.id
+		if err := a.noteRelapseTx(ctx, tx, c.tenantID, reopened); err != nil {
+			return err
+		}
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
+				triggered_at, failure_count, last_error, metric_value, threshold_value,
+				created_at, updated_at)
+			VALUES ($1, $2, $3, 'tls_expiry', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
+			ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
+			RETURNING id
+		`, uuid.New(), c.tenantID, c.monitorID, lastError, value, threshold).Scan(&alertID)
+		if err == sql.ErrNoRows {
+			return nil // already open
+		}
+		if err != nil {
+			return fmt.Errorf("insert tls expiry alert: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tls expiry alert transaction: %w", err)
 	}
 
 	record := alertRecord{
 		ID: alertID, TenantID: c.tenantID, MonitorID: c.monitorID,
 		Kind: notifications.KindTLSExpiry, TriggeredAt: time.Now(), LastError: &lastError,
 		MetricValue: &value, ThresholdValue: &threshold,
+	}
+	if reopened != nil {
+		reopened.apply(&record)
 	}
 	binding := alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)

@@ -104,7 +104,8 @@ export function alertToast(type: AlertStreamEventType, alert: Alert): AlertToast
       alert.kind === 'location_offline' ||
       (alert.kind === 'domain_expiry' && alert.metric_value != null && alert.metric_value < 0);
     return {
-      title: 'Alert triggered',
+      // A reopened alert (relapse) arrives as "created" with its relapse count.
+      title: (alert.relapse_count ?? 0) > 0 ? 'Alert relapsed' : 'Alert triggered',
       message: `${subject} ${alertCondition(alert)}`,
       type: severe ? 'error' : 'warning',
       group: 'alert-created',

@@ -1,6 +1,9 @@
 package notifications
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // DispatchEnvelope is the wire format for async notification dispatch.
 //
@@ -49,7 +52,7 @@ func (e DispatchEnvelope) RecipientKey() string {
 	if e.DeliveryKey != "" {
 		return e.DeliveryKey
 	}
-	return RecipientEventKey(e.EventType, e.Event.Timestamp)
+	return RecipientEventKeyFor(e.EventType, e.Event.Timestamp, e.Event.Alert.RelapseCount)
 }
 
 // RecipientEventKey names one event of one (alert, channel) pair in the
@@ -70,9 +73,35 @@ func RecipientEventKey(eventType string, round time.Time) string {
 	return eventType
 }
 
+// RecipientEventKeyFor is RecipientEventKey within one paging episode of
+// the alert: relapse is the alert's relapse_count when the event was claimed.
+// A reopened alert sends its page, acknowledgement and resolve again, once
+// per episode, so every key but a reminder's (already unique per round)
+// carries the episode from the first relapse on. Episode 0 keeps the plain
+// key, so ledger entries written before relapses existed still match.
+func RecipientEventKeyFor(eventType string, round time.Time, relapse int) string {
+	key := RecipientEventKey(eventType, round)
+	if relapse > 0 && key == eventType {
+		key += ":relapse-" + strconv.Itoa(relapse)
+	}
+	return key
+}
+
 // IdempotencyKey returns the deterministic key the alerter sets as the
 // x-idempotency-key NATS header and webhook plugins forward as
 // X-Probara-Idempotency-Key, so receivers can dedupe retried deliveries.
 func (e DispatchEnvelope) IdempotencyKey() string {
-	return e.AlertID + ":" + e.ChannelID + ":" + e.EventType
+	return IdempotencyKey(e.AlertID, e.ChannelID, e.EventType, e.Event.Alert.RelapseCount)
+}
+
+// IdempotencyKey is the receiver-facing key of one event of one alert on one
+// channel: "alert:channel:event", plus ":relapse-N" for an event of the
+// alert's Nth relapse, whose page and resolve are new events a receiver must
+// not discard as retries of the first episode's.
+func IdempotencyKey(alertID, channelID, eventType string, relapse int) string {
+	key := alertID + ":" + channelID + ":" + eventType
+	if relapse > 0 {
+		key += ":relapse-" + strconv.Itoa(relapse)
+	}
+	return key
 }

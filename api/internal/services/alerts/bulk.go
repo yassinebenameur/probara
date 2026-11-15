@@ -68,7 +68,8 @@ func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alert
 	changed, err := collectIDs(s.db.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
 		SET status = 'acknowledged', acknowledged_at = $4, acknowledged_by_user_id = $5, updated_at = $4,
-			first_acknowledged_at = COALESCE(a.first_acknowledged_at, $4)
+			first_acknowledged_at = COALESCE(a.first_acknowledged_at, $4),
+			`+firstAckEpisodeStartSet("a")+`
 		FROM target
 		WHERE a.id = target.id
 		RETURNING a.id

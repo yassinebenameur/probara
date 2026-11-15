@@ -34,6 +34,9 @@ type AlertDetails struct {
 	RootCauseMonitorID   *string    `json:"root_cause_monitor_id,omitempty"`
 	RootCauseMonitorName *string    `json:"root_cause_monitor_name,omitempty"`
 	RootCauseDownSince   *time.Time `json:"root_cause_down_since,omitempty"`
+	// A reopened alert (relapse) arrives as "created" with these set.
+	RelapseCount int        `json:"relapse_count,omitempty"`
+	ReopenedAt   *time.Time `json:"reopened_at,omitempty"`
 }
 
 // Subscriber listens for alert events from NATS and broadcasts to SSE clients
@@ -171,6 +174,8 @@ func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertW
 			ResolvedAt:   event.Alert.ResolvedAt,
 			FailureCount: event.Alert.FailureCount,
 			LastError:    event.Alert.LastError,
+			RelapseCount: event.Alert.RelapseCount,
+			ReopenedAt:   event.Alert.ReopenedAt,
 			CreatedAt:    event.Alert.TriggeredAt,
 			UpdatedAt:    event.Timestamp,
 		},

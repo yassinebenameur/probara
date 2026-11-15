@@ -2,10 +2,11 @@
 
 import { CSSProperties, KeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { AlarmClock, AlarmClockOff, Bell, BellOff, Check, ChevronDown, CircleCheck, Network, PencilLine, Tag, Undo2, UserCheck } from 'lucide-react';
+import { AlarmClock, AlarmClockOff, Bell, BellOff, Check, ChevronDown, CircleCheck, Network, PencilLine, Repeat, Tag, Undo2, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
 import { acknowledgeAlert, labelAlertTriage, resolveAlert, snoozeAlert, unacknowledgeAlert, unsnoozeAlert } from '@/lib/api';
 import { isSnoozed, notificationState } from '@/lib/alert-mute';
+import { relapseChip, relapseLine, relapseTitle } from '@/lib/alert-relapse';
 import { labelErrorMessage } from '@/lib/ai-labels';
 import { buildTriageLabelRequest, triageMenuCopy, triagePresentation } from '@/lib/ai-triage';
 import { formatClock, formatDate, formatDateTime, formatDateTimeFull, pluralize } from '@/lib/format';
@@ -387,6 +388,7 @@ export default function AlertFeed({
     const kids = folded?.get(alert.id) ?? [];
     const snoozed = isSnoozed(alert, now.getTime());
     const acked = alert.status === 'acknowledged';
+    const relapsed = relapseChip(alert);
     const triggered = new Date(alert.triggered_at);
     // Under a time heading the date is already said; elsewhere an alert from
     // another day shows its date, since a bare clock time would mislead.
@@ -399,7 +401,8 @@ export default function AlertFeed({
       triagePresentation(alert.triage).visible ||
       (repeat && repeat.nth > 1) ||
       acked ||
-      snoozed;
+      snoozed ||
+      relapsed !== null;
     const flashing = flashClass?.(alert.id) || '';
 
     return (
@@ -550,6 +553,16 @@ export default function AlertFeed({
                     Snoozed until {formatDateTime(alert.snoozed_until)}
                   </span>
                 )}
+                {relapsed && (
+                  // Amber like "likely caused by": worth a look, not an outage of its own.
+                  <span
+                    className={`${CHIP} bg-amber-500/[0.15] text-amber-300`}
+                    title={relapseTitle(alert, alert.reopened_at ? formatDateTime(alert.reopened_at) : null)}
+                  >
+                    <Repeat className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    {relapsed}
+                  </span>
+                )}
                 <TriagePill triage={alert.triage} />
                 {repeat && repeat.nth > 1 && (
                   <span className={`${CHIP} bg-well-hover text-slate-400`} title={`${pluralize(repeat.total, 'alert')} for ${subject} in this range`}>
@@ -661,6 +674,22 @@ export default function AlertFeed({
               <h3 className={`mb-2.5 ${SECTION_LABEL}`}>Lifecycle</h3>
               <DetailList>
                 <DetailRow label="Triggered">{formatDateTimeFull(alert.triggered_at)}</DetailRow>
+                {relapsed && (
+                  <DetailRow label="Relapses">
+                    {/* The history comes with a single-alert read; the list carries the count and last reopen. */}
+                    {alert.relapses && alert.relapses.length > 0 ? (
+                      <ul>
+                        {alert.relapses.map((r) => (
+                          <li key={r.number} title={formatDateTimeFull(r.reopened_at)}>
+                            {relapseLine(r)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      `${alert.relapse_count}, last reopened ${alert.reopened_at ? formatDateTimeFull(alert.reopened_at) : '—'}`
+                    )}
+                  </DetailRow>
+                )}
                 <DetailRow label="Acknowledged" tone={alert.acknowledged_at ? 'default' : 'note'}>
                   {alert.acknowledged_at
                     ? `${formatDateTimeFull(alert.acknowledged_at)}${alert.acknowledged_by ? ` by ${alert.acknowledged_by}` : ''}`

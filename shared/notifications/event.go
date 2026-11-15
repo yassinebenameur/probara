@@ -90,6 +90,16 @@ type AlertDetails struct {
 	// alert's own value (active or acknowledged): receivers branch on the
 	// event type, never on status.
 	SuspectedCause *SuspectedCause `json:"suspected_cause,omitempty"`
+
+	// Relapse annotation: set once the alert has reopened within its
+	// workspace's reopen cooldown (shared/alertrouting relapse.go).
+	// RelapseCount is how many times it reopened and names the paging
+	// episode an event belongs to (0 = the first); ReopenedAt is the latest
+	// reopen and LastRecoveredAt the recovery that reopen interrupted. A
+	// relapse notice is a "created" event with RelapseCount > 0.
+	RelapseCount    int        `json:"relapse_count,omitempty"`
+	ReopenedAt      *time.Time `json:"reopened_at,omitempty"`
+	LastRecoveredAt *time.Time `json:"last_recovered_at,omitempty"`
 }
 
 // SuspectedCause is a triage's named cause as a follow-up carries it.

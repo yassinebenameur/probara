@@ -57,6 +57,11 @@ type alertRecord struct {
 	TargetLocationName *string
 	// SuspectedCause is set only for the "suspected_cause" follow-up.
 	SuspectedCause *notifications.SuspectedCause
+	// Relapse annotation (notifications.AlertDetails): set by a reopen, and
+	// for every send by deliverNotification from the row it locks.
+	RelapseCount    int
+	ReopenedAt      *time.Time
+	LastRecoveredAt *time.Time
 }
 
 type alertChannel struct {
@@ -128,10 +133,14 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 // neither publish nor notify, and this is not an error worth logging.
 var errAlertAlreadyResolved = errors.New("alert already resolved")
 
+// resolveAlert is the alerter's own resolve. It marks the alert
+// auto_resolved, which is what lets a relapse within the tenant's reopen
+// cooldown reopen it (relapse.go); a manual resolve in the API leaves the
+// flag FALSE.
 func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time) (time.Time, error) {
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1
+		SET status = 'resolved', resolved_at = $1, auto_resolved = TRUE, updated_at = $1
 		WHERE id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING resolved_at
 	`
@@ -330,6 +339,9 @@ func buildAlertEvent(eventType string, binding alertSubject, alert *alertRecord,
 			TargetLocationID:     uuidStr(alert.TargetLocationID),
 			TargetLocationName:   alert.TargetLocationName,
 			SuspectedCause:       alert.SuspectedCause,
+			RelapseCount:         alert.RelapseCount,
+			ReopenedAt:           alert.ReopenedAt,
+			LastRecoveredAt:      alert.LastRecoveredAt,
 		},
 	}
 }

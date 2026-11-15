@@ -128,6 +128,27 @@ migration 000101) restart the escalation-delay and reminder clocks.
 for SLA time to acknowledge; `snoozed_at` / `snoozed_by_user_id` record the
 running snooze for display.
 
+Relapse reopen (off unless a workspace sets `alert_reopen_cooldown_minutes`,
+migration 000105; rule in `shared/alertrouting/relapse.go`): every alert
+kind's opener first tries `reopenRecentAlertTx`
+(`alerter/internal/alerter/relapse.go`), one guarded UPDATE that reopens the
+subject's latest alert when the alerter itself resolved it (`auto_resolved`)
+within the cooldown: `relapse_count` + 1, `reopened_at`, a row in
+`alert_relapses`, the episode's ack and snooze cleared (`first_acknowledged_at`
+kept). Only when it finds nothing does the opener INSERT; the one-open-alert
+indexes make the pair race-safe across replicas. A reopen is published to the
+alert stream as `created` with the relapse count and adds an "Alert relapsed"
+entry to linked open incidents; it never touches state intervals or downtime.
+Each reopen is a paging episode: `reopened_at` restarts the delay and reminder
+clocks (`DispatchResumedAtExpr`), a route whose row says `resolved` is due
+one `relapsed` claim (sent to plugins as `created` with `relapse_count`), and
+the episode is part of the recipient-ledger and idempotency keys. Both the
+alerter claim and the async worker hold the alert row `FOR SHARE` for every
+event, resolves included, so a reopen waits for a resolve being sent; a
+resolve still queued when the reopen commits is dropped, and the worker hands
+its claim back (to `created`) when it provably reached nobody, so the
+relapse's resolve reaches that route.
+
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.
 An empty group's old availability alert is resolved; group timeline integration

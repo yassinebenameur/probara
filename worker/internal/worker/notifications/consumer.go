@@ -188,17 +188,17 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	// send. Resolution is an UPDATE of that row, so it waits until this send
 	// has finished, and the resolve it then publishes is delivered after it.
 	// Without the lock a trigger that passed the check could still reach the
-	// provider after a concurrent worker delivered the resolve. Resolves need
-	// no lock: they are only published once the resolution committed.
-	var tx *sql.Tx
-	if envelope.EventType != "resolved" {
-		tx, err = c.db.BeginTx(ctx, nil)
-		if err != nil {
-			entry.WithError(err).Error("Failed to begin alert lock")
-			return err
-		}
-		defer func() { _ = tx.Rollback() }()
+	// provider after a concurrent worker delivered the resolve. Resolves take
+	// it too: a relapse reopen is an UPDATE of the row as well, so it waits
+	// for a resolve being delivered, and a resolve still queued when the
+	// reopen commits is dropped under the lock ("recovered" must never reach
+	// a route after "relapsed").
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		entry.WithError(err).Error("Failed to begin alert lock")
+		return err
 	}
+	defer func() { _ = tx.Rollback() }()
 	superseded, muted, alertStatus, err := eventSuperseded(ctx, tx, envelope)
 	if err != nil {
 		entry.WithError(err).Error("Failed to load alert status")
@@ -221,12 +221,28 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		entry.WithField("alert_status", alertStatus).Info("Alert acknowledged or snoozed since publish; dropping held event")
 		return nil
 	}
+	if superseded && envelope.EventType == "resolved" {
+		// Only a reopen supersedes a resolve. A route this recovery provably
+		// never reached hands its claim back under the same lock
+		// (releaseSupersededResolveClaim), so it hears the relapse's resolve.
+		if err := releaseSupersededResolveClaim(ctx, tx, envelope, deliveryAttempt(msg)); err != nil {
+			entry.WithError(err).Error("Failed to release a superseded resolve claim")
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			entry.WithError(err).Error("Failed to commit a released resolve claim")
+			return err
+		}
+		entry.WithField("alert_status", alertStatus).Info("Alert reopened since publish; dropping superseded resolve")
+		return nil
+	}
 	if superseded {
 		// A retried trigger/reminder/ack must never land after the resolve:
 		// PagerDuty and Opsgenie accept a resolve for an alert they do not
 		// have yet as a no-op, so a late trigger would open an incident that
-		// nothing ever closes.
-		entry.Info("Alert resolved since publish; dropping superseded event")
+		// nothing ever closes. One published before a relapse reopen belongs
+		// to the episode that recovered; the relapse pages on its own.
+		entry.Info("Alert resolved or reopened since publish; dropping superseded event")
 		return nil
 	}
 
@@ -250,7 +266,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// A redelivery may reach another worker, or this one after a
 		// restart; the ledger lets it skip the recipients an earlier attempt
 		// already reached. It writes through the pool, never tx: tx only
-		// holds the alert lock and always rolls back.
+		// holds the alert lock and rolls back after a send.
 		var recipients plugin.RecipientLedger
 		if alertErr == nil && channelErr == nil {
 			recipients = recipientledger.For(c.db, alertID, channelID, deliveryKey)
@@ -285,14 +301,16 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 
 // eventSuperseded reports whether envelope describes an alert state the
 // alert has since left: any non-resolve event for an alert that is now
-// resolved (or deleted), or an acknowledgement of an alert unacknowledged
-// since. JetStream redelivers failed messages on a backoff,
-// so a created/reminder/acknowledged/suspected_cause message can outlive the
-// resolve the alerter published after it; delivering it then would reopen the alert on
-// the provider side. Resolves always go through (tx is nil for them). For
-// every other event it reads the status FOR SHARE inside tx, and the caller
-// keeps tx open until the send returns, so an acknowledge, snooze or resolve
-// committed after this check waits for the send.
+// resolved (or deleted), an acknowledgement of an alert unacknowledged
+// since, a resolve of an alert that reopened as a relapse since (it is open
+// again), and any event published in an earlier paging episode (the alert's
+// relapse_count passed the event's). JetStream redelivers failed messages on
+// a backoff, so a created/reminder/acknowledged/suspected_cause message can
+// outlive the resolve the alerter published after it; delivering it then
+// would reopen the alert on the provider side. It reads the status FOR SHARE
+// inside tx, and the caller keeps tx open until the send returns, so an
+// acknowledge, snooze, resolve or reopen committed after this check waits for
+// the send.
 //
 // muted is set (with superseded false) when the alert is still open but
 // acknowledged or snoozed and the event is one the mute holds
@@ -300,21 +318,28 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 // when it is safe, hands its claim back (releaseMutedClaim), because the
 // mute is temporary.
 func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded, muted bool, status string, err error) {
-	if envelope.EventType == "resolved" {
-		return false, false, "", nil
-	}
 	alertID, err := uuid.Parse(envelope.AlertID)
 	if err != nil {
 		return false, false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
 	}
 	var snoozed bool
-	err = tx.QueryRowContext(ctx, `SELECT al.status, `+alertrouting.SnoozedPredicate("al")+`
-		FROM alerts al WHERE al.id = $1 FOR SHARE`, alertID).Scan(&status, &snoozed)
+	var relapseCount int
+	err = tx.QueryRowContext(ctx, `SELECT al.status, `+alertrouting.SnoozedPredicate("al")+`, al.relapse_count
+		FROM alerts al WHERE al.id = $1 FOR SHARE`, alertID).Scan(&status, &snoozed, &relapseCount)
 	if errors.Is(err, sql.ErrNoRows) {
-		return true, false, "", nil
+		// Deleted with its alert history: nothing left to tell.
+		return envelope.EventType != "resolved", false, "", nil
 	}
 	if err != nil {
 		return false, false, "", err
+	}
+	if relapseCount > envelope.Event.Alert.RelapseCount {
+		return true, false, status, nil
+	}
+	if envelope.EventType == "resolved" {
+		// Resolves are published only once the resolution committed, so an
+		// open alert here reopened since.
+		return status != "resolved", false, status, nil
 	}
 	if status == "resolved" {
 		return true, false, status, nil
@@ -345,6 +370,10 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 // The row is matched only while it still records exactly this claim (its
 // time is the event's timestamp, the claim's `now`).
 //
+// A held relapse notice goes out as a page too ("created" with a relapse
+// count), claimed by moving the route's row from 'resolved' to 'relapsed';
+// handing it back moves the row back, so the notice is due again.
+//
 // A held reminder keeps its claim: its next round counts from the later of
 // the last send and the way out of the mute, which comes after this claim,
 // so the earlier last_sent_at would change nothing.
@@ -364,10 +393,63 @@ func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.D
 	if err != nil || reached {
 		return err
 	}
+	if envelope.Event.Alert.RelapseCount > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE alert_notification_states
+			SET last_event_type = 'resolved', updated_at = NOW()
+			WHERE alert_id = $1 AND channel_id = $2
+			  AND last_event_type = 'relapsed' AND last_sent_at = $3::timestamptz`,
+			alertID, channelID, envelope.Event.Timestamp); err != nil {
+			return err
+		}
+	}
 	_, err = tx.ExecContext(ctx, `
 		DELETE FROM alert_notification_states
 		WHERE alert_id = $1 AND channel_id = $2
 		  AND last_event_type = 'created' AND last_sent_at = $3::timestamptz`,
+		alertID, channelID, envelope.Event.Timestamp)
+	return err
+}
+
+// releaseSupersededResolveClaim hands back the alerter's claim on a resolve
+// dropped because the alert reopened as a relapse since it was published,
+// inside tx (which still holds the alert row FOR SHARE). The alerter
+// committed the route's row as 'resolved' when it published, but the route
+// never heard that recovery, so its provider still has the alert open. Left
+// 'resolved', the route would read as one that heard it: it would get the
+// relapse notice only after its escalation delay from the reopen, and if the
+// relapse recovered first it would get no resolve at all (the alerter sends
+// one only to rows not already 'resolved'), leaving the provider's alert open
+// for good. Moved back to 'created' it counts as still paged, as on the sync
+// path where a resolve not sent before the reopen stays unclaimed: reminders
+// resume from the reopen and the relapse's resolve reaches it.
+//
+// Like releaseMutedClaim, only a resolve that provably reached nobody is
+// handed back (first delivery attempt, nothing in the recipient ledger for
+// its key); one that may have reached the provider keeps 'resolved', so the
+// route hears the relapse notice instead. The row is matched only while it
+// still records exactly this claim (its time is the event's timestamp).
+func releaseSupersededResolveClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope, attempt int) error {
+	if attempt > 1 || envelope.Event.Timestamp.IsZero() {
+		return nil
+	}
+	alertID, err := uuid.Parse(envelope.AlertID)
+	if err != nil {
+		return fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+	}
+	channelID, err := uuid.Parse(envelope.ChannelID)
+	if err != nil {
+		return fmt.Errorf("invalid channel id %q: %w", envelope.ChannelID, err)
+	}
+	reached, err := recipientledger.Reached(ctx, tx, alertID, channelID, envelope.RecipientKey())
+	if err != nil || reached {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE alert_notification_states
+		SET last_event_type = 'created', updated_at = NOW()
+		WHERE alert_id = $1 AND channel_id = $2
+		  AND last_event_type = 'resolved' AND last_sent_at = $3::timestamptz`,
 		alertID, channelID, envelope.Event.Timestamp)
 	return err
 }

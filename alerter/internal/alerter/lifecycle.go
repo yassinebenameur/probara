@@ -282,10 +282,11 @@ func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 }
 
 // openAlertsForDownMonitors creates the single outage alert for each down
-// monitor without one. The partial unique index idx_alerts_one_open_per_monitor
-// makes this race-safe across alerter replicas. Monitors in an active
-// maintenance window are skipped; if still down when the window ends, the next
-// tick opens the alert.
+// monitor without one, or reopens the one that recovered less than the
+// tenant's reopen cooldown ago (relapse.go). The partial unique index
+// idx_alerts_one_open_per_monitor makes this race-safe across alerter
+// replicas. Monitors in an active maintenance window are skipped; if still
+// down when the window ends, the next tick opens the alert.
 func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT m.id, m.tenant_id, m.name, m.consecutive_failures,
@@ -393,20 +394,36 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 		failingLocations = dm.failingLocations
 	}
 
-	var alertID uuid.UUID
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
-			triggered_at, failure_count, last_error, root_cause_monitor_id, root_cause_down_since,
-			failing_locations, created_at, updated_at)
-		VALUES ($1, $2, $3, 'availability', 'active', NOW(), $4, $5, $6, $7, $8, NOW(), NOW())
-		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
-		RETURNING id
-	`, uuid.New(), dm.tenantID, dm.id, dm.failCount, lastError, rootCauseID, rootCauseDownSince, failingLocations).Scan(&alertID)
-	if err == sql.ErrNoRows {
+	reopened, err := reopenRecentAlertTx(ctx, tx, alertIdentity{tenantID: dm.tenantID, kind: notifications.KindAvailability, monitorID: dm.id},
+		[]alertColumn{
+			{"failure_count", dm.failCount}, {"last_error", lastError},
+			{"root_cause_monitor_id", rootCauseID}, {"root_cause_down_since", rootCauseDownSince},
+			{"root_cause_cleared_at", nil}, {"failing_locations", failingLocations},
+		})
+	if errors.Is(err, errAlertAlreadyOpen) {
 		return nil // another replica won the race
 	}
 	if err != nil {
-		return fmt.Errorf("insert outage alert: %w", err)
+		return err
+	}
+	var alertID uuid.UUID
+	if reopened != nil {
+		alertID = reopened.id
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
+				triggered_at, failure_count, last_error, root_cause_monitor_id, root_cause_down_since,
+				failing_locations, created_at, updated_at)
+			VALUES ($1, $2, $3, 'availability', 'active', NOW(), $4, $5, $6, $7, $8, NOW(), NOW())
+			ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
+			RETURNING id
+		`, uuid.New(), dm.tenantID, dm.id, dm.failCount, lastError, rootCauseID, rootCauseDownSince, failingLocations).Scan(&alertID)
+		if err == sql.ErrNoRows {
+			return nil // another replica won the race
+		}
+		if err != nil {
+			return fmt.Errorf("insert outage alert: %w", err)
+		}
 	}
 
 	var autoIncident bool
@@ -421,6 +438,11 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 			return err
 		}
 	}
+	if reopened != nil {
+		if err := a.noteRelapseTx(ctx, tx, dm.tenantID, reopened); err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit outage alert transaction: %w", err)
@@ -432,7 +454,12 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 		RootCauseMonitorID: rootCauseID, RootCauseMonitorName: rootCauseName, RootCauseDownSince: rootCauseDownSince,
 		FailingLocations: parseFailingLocations(dm.failingLocations),
 	}
+	if reopened != nil {
+		reopened.apply(&record)
+	}
 	binding := alertSubject{MonitorID: dm.id, TenantID: dm.tenantID, MonitorName: dm.name}
+	// A reopen is published as "created" too (with its relapse count): for
+	// the live alert stream it is an alert opening.
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
 	return nil
 }
