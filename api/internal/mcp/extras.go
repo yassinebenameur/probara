@@ -133,7 +133,8 @@ func waitForAlertEventsTool() *mcp.Tool {
 		Name:  "wait_for_alert_events",
 		Title: "Wait for alert events",
 		Description: "Listen to the workspace's live alert stream and return the alert events (created, " +
-			"acknowledged, resolved) that arrive within the timeout. Returns as soon as one arrives, or an empty " +
+			"acknowledged, resolved, and updated for an unacknowledge, snooze or unsnooze) that arrive within " +
+			"the timeout. Returns as soon as one arrives, or an empty " +
 			"list when the window passes quietly. Use it to watch a fix land or an outage unfold.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",

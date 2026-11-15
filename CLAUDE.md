@@ -613,6 +613,16 @@ or imported groups come back empty. Any other path that creates groups through
   encode the same due rules; change them together.
   The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
   never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
+- **Acknowledge and snooze mute an alert** (no setting): it then sends only
+  its resolve notice and the `acknowledged` event to paging channels. The
+  rule is `shared/alertrouting/mute.go` (`MutedPredicate`, `MuteHolds`,
+  `DispatchResumedAtExpr`), applied by `openAlertEventDue` (pre-filter, also
+  mesh), `deliverNotification` (claim) and the worker's `eventSuperseded`;
+  change all three together (`TestMutePreFilterMatchesClaim` pins the
+  alerter pair). Unack/unsnooze restart the delay and reminder clocks
+  (`DispatchEligibleSinceExpr`, the reminder claim). A held page or
+  follow-up the worker drops hands its claim back (`releaseMutedClaim`), or
+  the route is never paged after an unack.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
   skips notifications, so it is not an error to log.
 - **Incident recovery entries have one writer**: `shared/incidentrecovery`.
@@ -625,8 +635,9 @@ or imported groups come back empty. Any other path that creates groups through
 - **Delivery ordering rests on row locks — keep them.** The async worker
   holds the alert row `FOR SHARE` from its status check through `Send`
   (`eventSuperseded` in `worker/internal/worker/notifications/consumer.go`),
-  so a trigger never reaches a provider after its resolve, and
-  `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff.
+  so a trigger never reaches a provider after its resolve, nor after an
+  acknowledgement (the mute drops it); `ackOvertaken` is the backstop that
+  re-acknowledges a trigger that still lands after one.
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.

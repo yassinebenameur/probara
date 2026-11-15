@@ -344,14 +344,17 @@ function AlertsView() {
   // keeps what the event never carries) and flashes when its status changes
   // (useRowFlash); a new one joins the set, takes its place in the feed, and
   // flashes.
+  // An `updated` event (unacknowledge, snooze, unsnooze) carries the whole
+  // alert, so it replaces the row like the user's own action does.
   const { flash } = rowFlash;
   const handleLiveAlert = useCallback(
-    (alert: Alert) => {
+    (alert: Alert, whole: boolean) => {
+      const merge = whole ? mergeAlertUpdate : mergeLiveAlert;
       const known = alertsRef.current.some((a) => a.id === alert.id);
       setAlerts((prev) =>
         prev.some((a) => a.id === alert.id)
-          ? prev.map((a) => (a.id === alert.id ? mergeLiveAlert(a, alert) : a))
-          : [...prev, mergeLiveAlert(undefined, alert)]
+          ? prev.map((a) => (a.id === alert.id ? merge(a, alert) : a))
+          : [...prev, merge(undefined, alert)]
       );
       // After the row mounts, so the animation starts on screen.
       if (!known) window.requestAnimationFrame(() => flash(alert.id));
@@ -361,9 +364,12 @@ function AlertsView() {
 
   useEffect(() => {
     return subscribe((event) => {
-      handleLiveAlert(event.alert);
+      const whole = event.type === 'updated';
+      handleLiveAlert(event.alert, whole);
       setFocused((f) =>
-        f?.alert && f.alert.id === event.alert.id ? { ...f, alert: mergeLiveAlert(f.alert, event.alert) } : f
+        f?.alert && f.alert.id === event.alert.id
+          ? { ...f, alert: (whole ? mergeAlertUpdate : mergeLiveAlert)(f.alert, event.alert) }
+          : f
       );
       void loadCounts();
     });

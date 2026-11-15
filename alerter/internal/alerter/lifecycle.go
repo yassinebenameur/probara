@@ -74,7 +74,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 // openAlertDispatchablePredicate is the WHERE body (aliases al, m, te) that
 // decides whether an open alert may notify right now: dispatchOpenAlerts
 // (escalation tiers, reminders) and dispatchSuspectedCauses share it, so an
-// advisory follow-up is muted exactly when a reminder would be.
+// advisory follow-up is muted exactly when a reminder would be. The
+// acknowledge/snooze mute is not part of it: dispatchOpenAlerts applies that
+// per channel in openAlertEventDue, and dispatchSuspectedCauses adds
+// alertrouting.MutedPredicate itself.
 func openAlertDispatchablePredicate() string {
 	return `al.status IN ('active', 'acknowledged')
 		  AND m.deleted_at IS NULL
@@ -543,7 +546,9 @@ func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID
 // visible, and the root cause's own notification lists it under "also
 // affecting"; if the upstream recovers and the downstream is still down after
 // the grace period, it pages as a normal DOWN with escalation tiers counted
-// from that moment.
+// from that moment. An acknowledged or snoozed alert sends neither tiers nor
+// reminders (dispatchGate); once unacknowledged or unsnoozed both resume,
+// counted from that moment too.
 func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.kind, al.triggered_at, al.failure_count, al.last_error,
@@ -552,7 +557,8 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			al.metric_name, al.metric_value, al.threshold_value, al.failing_locations,
 			te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
-			CASE WHEN al.kind = 'availability' THEN `+alertrouting.ImpactedMonitorsSubquery("al.monitor_id")+` END
+			CASE WHEN al.kind = 'availability' THEN `+alertrouting.ImpactedMonitorsSubquery("al.monitor_id")+` END,
+			`+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		JOIN tenants te ON te.id = al.tenant_id
@@ -569,10 +575,12 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		monitorName     string
 		reminderSeconds int
 		eligibleSince   time.Time
+		gate            dispatchGate
 	}
 	var open []openAlert
 	for rows.Next() {
 		var oa openAlert
+		var resumedAt sql.NullTime
 		var lastError sql.NullString
 		var rcID uuid.NullUUID
 		var rcDownSince sql.NullTime
@@ -586,9 +594,10 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			&rcID, &rcDownSince, &rcName,
 			&baseline, &observed, &score,
 			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds,
-			&oa.eligibleSince, &impacted); err != nil {
+			&oa.eligibleSince, &impacted, &oa.gate.Muted, &resumedAt); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
+		oa.gate.ResumedAt = resumedAt.Time
 		if lastError.Valid {
 			oa.record.LastError = &lastError.String
 		}
@@ -628,7 +637,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 				continue
 			}
 			state := getNotificationState(states, oa.record.ID, target.channel.ID)
-			if event := openAlertEventDue(state, alertAge, target.delay, now, reminderInterval); event != "" {
+			if event := openAlertEventDue(state, alertAge, target.delay, now, reminderInterval, oa.gate); event != "" {
 				a.fireChannel(ctx, event, binding, &oa.record, target.channel, now, reminderInterval)
 			}
 		}

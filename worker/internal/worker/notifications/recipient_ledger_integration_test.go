@@ -182,10 +182,10 @@ var ackFanoutStub = &ackFanoutPlugin{}
 
 func init() { plugin.Register(ackFanoutStub) }
 
-// The acknowledgement re-sent after an overtaking trigger must reach every
-// recipient again: the original ack already recorded them all under
-// "acknowledged", and it was a no-op at the provider. A redelivery of the
-// trigger still skips whoever either send already reached.
+// An acknowledgement that overtook a trigger on its retry backoff reaches
+// everyone once, and the late trigger is then dropped (acknowledging mutes
+// the alert), so the provider never opens an incident that would need
+// acknowledging again and no recipient hears the page after the ack.
 func TestHandle_OvertakenAckReachesRecipientsTheFirstAckReached(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -228,17 +228,11 @@ func TestHandle_OvertakenAckReachesRecipientsTheFirstAckReached(t *testing.T) {
 	}
 	ackFanoutStub.assertTexts(t, "acknowledged", 1)
 
-	// The late trigger lands; its re-ack misses one recipient.
-	flaky := "acknowledged|" + fanoutRecipients[2]
-	ackFanoutStub.failing[flaky] = true
-	if err := worker.handle(ctx, message("created", 1)); err == nil {
-		t.Fatalf("partial re-ack must ask for a redelivery")
+	// The late trigger lands on an acknowledged alert: dropped, and nobody
+	// is acknowledged a second time.
+	if err := worker.handle(ctx, message("created", 1)); err != nil {
+		t.Fatalf("late trigger: %v", err)
 	}
-	ackFanoutStub.assertTexts(t, "created", 1)
-	ackFanoutStub.failing[flaky] = false
-	if err := worker.handle(ctx, message("created", 2)); err != nil {
-		t.Fatalf("trigger redelivery: %v", err)
-	}
-	ackFanoutStub.assertTexts(t, "created", 1)
-	ackFanoutStub.assertTexts(t, "acknowledged", 2)
+	ackFanoutStub.assertTexts(t, "created", 0)
+	ackFanoutStub.assertTexts(t, "acknowledged", 1)
 }

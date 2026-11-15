@@ -61,17 +61,22 @@ export const ALERTING_PAGE: DocPage = {
             ["`active`", "Condition is open and unacknowledged"],
             [
               "`acknowledged`",
-              "An operator has acknowledged the alert; the underlying condition remains open",
+              "An operator has acknowledged the alert; the underlying condition remains open, and its notifications have stopped except the recovery notice",
             ],
             ["`resolved`", "Alert lifecycle is closed"],
           ],
         },
         {
           type: "callout",
-          tone: "warning",
-          title: "Acknowledgement does not silence reminders",
+          tone: "info",
+          title: "Acknowledging stops the alert's notifications",
           text:
-            "Acknowledging records operator ownership but leaves the condition open. Reminder notifications to chat, email, SMS and webhook channels continue at the configured interval until resolution or until reminders are disabled. Paging channels (PagerDuty, Opsgenie / JSM) are the exception: they receive the acknowledgement itself and never receive reminders, because the provider runs its own escalation.",
+            "Once an alert is acknowledged, the only notification still sent for it is the recovery notice when it resolves: no reminders, no first page to an escalation route whose delay had not run out yet, no suspected-cause follow-up. Paging channels (PagerDuty, Opsgenie / JSM) that were already paged receive the acknowledgement itself, so the provider stops its own escalation. This applies to every workspace, alert kind and route; there is no setting. **Unacknowledge** returns the alert to `active`: reminders and the routes not paged yet resume, with their reminder interval and escalation delay counted from the unacknowledge, so nothing fires in a burst and no route is paged twice. A provider already told about the acknowledgement stays acknowledged there; acknowledging again tells it once more.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Snooze** mutes an open alert the same way without acknowledging it: for 1, 4 or 24 hours, or until a chosen time (1 minute to 7 days ahead). The alert stays `active` (it counts as active and open), its recovery notice is still sent, and a paging channel is not told anything. Snoozing again replaces the end; **End snooze** cancels it early. When it ends, by itself or early, reminders and unpaged routes resume counted from that moment, as after an unacknowledge. A snooze is per alert and writes no maintenance window, so it never counts as planned downtime in SLA reports; to silence a monitor rather than one alert, [snooze the monitor](#maintenance). Alert reads report `snoozed_until` only while the snooze holds, and `acknowledged_by` / `acknowledged_by_user_id` with `acknowledged_at` (absent for an API-key acknowledgement). Unacknowledging clears the acknowledgement time, so SLA reports count an alert as acknowledged only while it is (or was when it resolved).",
         },
         {
           type: "paragraph",
@@ -96,7 +101,7 @@ export const ALERTING_PAGE: DocPage = {
             "A check failure first passes through the monitor's consecutive-failure confirmation and, when locations are selected, its [location failure quorum](/docs/locations/#assignment). A check's `error` and `failure` are both failing evidence, including a check's own assertions: a SIP test call failing a [call-quality](/docs/monitors/#network-protocols) threshold (`max_loss_pct`, `min_mos`, …) is a failure like any other, while its `warn_*` thresholds only add warnings to the check and never alert.",
             "The alerter opens an availability alert only when effective state is `down`, the monitor is enabled, and maintenance/rollup rules do not mute it.",
             "The initial notification is sent through eligible routes after each route's configured delay.",
-            "While the condition remains down, reminders are sent at the tenant reminder interval.",
+            "While the condition remains down, reminders are sent at the tenant reminder interval, unless the alert is acknowledged or snoozed.",
             "When the monitor is fully `up`, the alert resolves and resolution notifications go only to channels that previously received that alert.",
           ],
         },
@@ -139,7 +144,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
+            "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open, and not acknowledged or snoozed, when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
         },
         {
           type: "callout",
@@ -310,7 +315,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: if an operator acknowledges while a paging trigger is still waiting on a retry, the acknowledgement that went ahead is a no-op at the provider, so the worker acknowledges again right after the late trigger lands, and the incident does not keep escalating.",
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: a page, reminder or follow-up still waiting on a retry when the alert is acknowledged or snoozed is dropped instead of delivered, and one already being delivered holds the alert, so acknowledging waits for it. A dropped page counts as never sent, so after an unacknowledge that route is paged again.",
         },
         {
           type: "callout",
@@ -656,7 +661,7 @@ export const ALERTING_PAGE: DocPage = {
             ["Less than 3 minutes since that channel's page", "Waits, so it reads as a follow-up"],
             ["Triage and the channel's page both more than an hour old", "Not sent"],
             ["Alert resolved, monitor in maintenance, member of a roll-up group, or dependency-suppressed (muted exactly like a reminder)", "Not sent"],
-            ["Alert acknowledged", "Sent: the hint helps whoever is working it"],
+            ["Alert acknowledged or snoozed", "Not sent; it can still go out after an unacknowledge or the end of the snooze, within the hour above"],
             ["Mesh-edge alert, or triage skipped (cooldown, resolved)", "Not sent: there is no ready triage"],
             ["`LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` on the alerter", "Not sent, including from triages that were already ready"],
             ["PagerDuty or Opsgenie / JSM channel", "Not sent (chat, email, SMS and webhook channels get it)"],

@@ -2,9 +2,10 @@
 
 import { CSSProperties, KeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Bell, BellOff, Check, ChevronDown, CircleCheck, Network, PencilLine, Tag, UserCheck } from 'lucide-react';
+import { AlarmClock, AlarmClockOff, Bell, BellOff, Check, ChevronDown, CircleCheck, Network, PencilLine, Tag, Undo2, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
-import { acknowledgeAlert, labelAlertTriage, resolveAlert } from '@/lib/api';
+import { acknowledgeAlert, labelAlertTriage, resolveAlert, unacknowledgeAlert, unsnoozeAlert } from '@/lib/api';
+import { isSnoozed, notificationState } from '@/lib/alert-mute';
 import { labelErrorMessage } from '@/lib/ai-labels';
 import { buildTriageLabelRequest, triageMenuCopy, triagePresentation } from '@/lib/ai-triage';
 import { formatClock, formatDate, formatDateTime, formatDateTimeFull, pluralize } from '@/lib/format';
@@ -28,6 +29,7 @@ import { useOptionalAlertEvents } from '@/components/alerts/AlertStreamProvider'
 import type { AlertSelection } from '@/components/alerts/useAlertSelection';
 import TriagePill from '@/components/alerts/TriagePill';
 import TriageLabelDialog from '@/components/alerts/TriageLabelDialog';
+import SnoozeAlertDialog from '@/components/alerts/SnoozeAlertDialog';
 import { DetailList, DetailRow } from '@/components/monitors/MonitorFactsCard';
 import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
@@ -212,8 +214,9 @@ export default function AlertFeed({
   selection,
   flashClass,
 }: AlertFeedProps) {
-  const [processing, setProcessing] = useState<{ id: string; action: 'ack' | 'resolve' | 'label' } | null>(null);
+  const [processing, setProcessing] = useState<{ id: string; action: 'ack' | 'resolve' | 'label' | 'unack' | 'unsnooze' } | null>(null);
   const [labelling, setLabelling] = useState<{ alert: Alert; mode: 'prompt' | 'correct' } | null>(null);
+  const [snoozing, setSnoozing] = useState<Alert | null>(null);
   // Screen-reader echo of the user's own ack/resolve; sighted users see the
   // row change (and flash), so there is no success toast. `seq` alternates a
   // trailing no-break space so a repeat of the same text still changes the
@@ -254,6 +257,33 @@ export default function AlertFeed({
     } finally {
       setProcessing(null);
     }
+  };
+
+  // Unacknowledge and ending a snooze resume the alert's notifications,
+  // counted from now; like acknowledge, the row changes in place.
+  const handleMuteChange = async (alert: Alert, action: 'unack' | 'unsnooze') => {
+    try {
+      setProcessing({ id: alert.id, action });
+      stream?.markLocalAction(alert.id);
+      const updated = await (action === 'unack' ? unacknowledgeAlert(alert.id) : unsnoozeAlert(alert.id));
+      onAlertUpdate?.(updated);
+      setAnnouncement(
+        `Alert for ${alertSubject(updated)} ${action === 'unack' ? 'unacknowledged' : 'no longer snoozed'}; notifications resume`
+      );
+    } catch (err) {
+      setAnnouncement('');
+      showToast(errorMessage(err, action === 'unack' ? 'Failed to unacknowledge alert' : 'Failed to end the snooze'), 'error');
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  const handleSnoozed = (updated: Alert) => {
+    setSnoozing(null);
+    onAlertUpdate?.(updated);
+    setAnnouncement(
+      `Alert for ${alertSubject(updated)} snoozed${updated.snoozed_until ? ` until ${formatDateTime(updated.snoozed_until)}` : ''}`
+    );
   };
 
   // A / R act on the row that has focus (its link, buttons or box), so the
@@ -355,6 +385,8 @@ export default function AlertFeed({
     const reason = alert.last_error ? shortFailureReason(alert.last_error) || alert.last_error : null;
     const repeat = occurrence?.get(alert.id);
     const kids = folded?.get(alert.id) ?? [];
+    const snoozed = isSnoozed(alert, now.getTime());
+    const acked = alert.status === 'acknowledged';
     const triggered = new Date(alert.triggered_at);
     // Under a time heading the date is already said; elsewhere an alert from
     // another day shows its date, since a bare clock time would mislead.
@@ -365,7 +397,9 @@ export default function AlertFeed({
       (alert.suppression_reason === 'dependency' && !alert.root_cause_monitor_name) ||
       (alert.impacted_count ?? 0) > 0 ||
       triagePresentation(alert.triage).visible ||
-      (repeat && repeat.nth > 1);
+      (repeat && repeat.nth > 1) ||
+      acked ||
+      snoozed;
     const flashing = flashClass?.(alert.id) || '';
 
     return (
@@ -496,6 +530,26 @@ export default function AlertFeed({
                     Affects {pluralize(alert.impacted_count ?? 0, 'monitor')}
                   </span>
                 )}
+                {acked && (
+                  <span
+                    className={`${CHIP} bg-well-hover text-slate-400`}
+                    title={`Acknowledged${alert.acknowledged_by ? ` by ${alert.acknowledged_by}` : ''}${
+                      alert.acknowledged_at ? ` ${formatDateTime(alert.acknowledged_at)}` : ''
+                    }: no reminders or further escalation; the recovery notice is still sent`}
+                  >
+                    <BellOff className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    Notifications stopped
+                  </span>
+                )}
+                {snoozed && alert.snoozed_until && (
+                  <span
+                    className={`${CHIP} bg-well-hover text-slate-400`}
+                    title="Reminders and escalation steps not sent yet wait until then; the recovery notice is still sent"
+                  >
+                    <AlarmClock className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    Snoozed until {formatDateTime(alert.snoozed_until)}
+                  </span>
+                )}
                 <TriagePill triage={alert.triage} />
                 {repeat && repeat.nth > 1 && (
                   <span className={`${CHIP} bg-well-hover text-slate-400`} title={`${pluralize(repeat.total, 'alert')} for ${subject} in this range`}>
@@ -552,11 +606,26 @@ export default function AlertFeed({
               ) : (
                 <span className={PRIMARY_SLOT} aria-hidden="true" />
               ))}
-            {canWrite && (alert.status === 'active' || alert.triage?.labelable) ? (
+            {canWrite && (open || alert.triage?.labelable) ? (
               <RowMenu label={`More actions for ${subject}`} disabled={busy}>
                 {alert.status === 'active' && (
                   <RowMenuItem icon={<CircleCheck strokeWidth={1.75} />} onSelect={() => void handleResolve(alert.id)}>
                     Resolve
+                  </RowMenuItem>
+                )}
+                {acked && (
+                  <RowMenuItem icon={<Undo2 strokeWidth={1.75} />} onSelect={() => void handleMuteChange(alert, 'unack')}>
+                    Unacknowledge
+                  </RowMenuItem>
+                )}
+                {alert.status === 'active' && !snoozed && (
+                  <RowMenuItem icon={<AlarmClock strokeWidth={1.75} />} onSelect={() => setSnoozing(alert)}>
+                    Snooze…
+                  </RowMenuItem>
+                )}
+                {snoozed && (
+                  <RowMenuItem icon={<AlarmClockOff strokeWidth={1.75} />} onSelect={() => void handleMuteChange(alert, 'unsnooze')}>
+                    End snooze
                   </RowMenuItem>
                 )}
                 {alert.triage?.labelable && alert.triage.labelled && (
@@ -593,8 +662,19 @@ export default function AlertFeed({
               <DetailList>
                 <DetailRow label="Triggered">{formatDateTimeFull(alert.triggered_at)}</DetailRow>
                 <DetailRow label="Acknowledged" tone={alert.acknowledged_at ? 'default' : 'note'}>
-                  {alert.acknowledged_at ? formatDateTimeFull(alert.acknowledged_at) : 'Not acknowledged'}
+                  {alert.acknowledged_at
+                    ? `${formatDateTimeFull(alert.acknowledged_at)}${alert.acknowledged_by ? ` by ${alert.acknowledged_by}` : ''}`
+                    : 'Not acknowledged'}
                 </DetailRow>
+                {open && (
+                  <DetailRow label="Notifications" tone={notificationState(alert, now.getTime()) === 'notifying' ? 'default' : 'note'}>
+                    {notificationState(alert, now.getTime()) === 'acknowledged'
+                      ? 'Stopped by the acknowledgement; only the recovery notice is sent'
+                      : snoozed && alert.snoozed_until
+                        ? `Snoozed until ${formatDateTimeFull(alert.snoozed_until)}`
+                        : 'Reminders and escalation as configured'}
+                  </DetailRow>
+                )}
                 <DetailRow label="Resolved" tone={alert.resolved_at ? 'default' : 'note'}>
                   {alert.resolved_at ? formatDateTimeFull(alert.resolved_at) : 'Ongoing'}
                 </DetailRow>
@@ -757,6 +837,7 @@ export default function AlertFeed({
           <kbd className={KBD}>↓</kbd> move
         </p>
       )}
+      {snoozing && <SnoozeAlertDialog alert={snoozing} onClose={() => setSnoozing(null)} onSnoozed={handleSnoozed} />}
       {labelling && (
         <TriageLabelDialog
           alert={labelling.alert}

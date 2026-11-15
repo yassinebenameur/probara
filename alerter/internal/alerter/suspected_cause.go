@@ -94,7 +94,9 @@ func (a *Alerter) runSuspectedCauses(ctx context.Context) error {
 //   - the channel is active and its plugin advertises
 //     plugin.CapabilityFollowUp (paging tools do not);
 //   - the alert is not muted: openAlertDispatchablePredicate, shared with
-//     reminders (maintenance, roll-up, dependency suppression).
+//     reminders (maintenance, roll-up, dependency suppression), and not
+//     acknowledged or snoozed (alertrouting.MutedPredicate; the claim
+//     re-checks it under the row lock).
 //
 // The send goes through fireChannel → deliverNotification, whose one-shot
 // claim on suspected_cause_sent_at makes replicas safe, and whose FOR SHARE
@@ -147,6 +149,7 @@ func (a *Alerter) dispatchSuspectedCauses(ctx context.Context) error {
 		  -- Go would let a batch of them hide routed ones until they aged out.
 		  AND `+alertrouting.RoutesToChannelPredicate("m", "ac.id")+`
 		  AND `+openAlertDispatchablePredicate()+`
+		  AND NOT `+alertrouting.MutedPredicate("al")+`
 		-- Round robin from the pair after the last one attempted: a provider
 		-- that hangs until the budget runs out must not be retried first
 		-- every tick, hiding every other workspace's follow-ups behind it.

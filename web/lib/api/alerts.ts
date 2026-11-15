@@ -56,6 +56,25 @@ export async function resolveAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/resolve`);
 }
 
+// The acknowledge mute: an acknowledged or snoozed alert sends nothing but its
+// resolve notice. Unacknowledging or ending a snooze resumes reminders and
+// unfired escalation tiers, counted from then.
+export async function unacknowledgeAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/unacknowledge`);
+}
+
+/** One of `duration_minutes` or `until` (ISO), 1 minute to 7 days ahead. */
+export async function snoozeAlert(
+  id: string,
+  body: { duration_minutes: number } | { until: string }
+): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/snooze`, body);
+}
+
+export async function unsnoozeAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/unsnooze`);
+}
+
 // Bulk triage (writes; at most 500 ids). Never all-or-nothing: `items` are
 // the alerts changed, `failed` the rest with a reason.
 export async function bulkAcknowledgeAlerts(ids: string[]): Promise<AlertBulkResult> {

@@ -44,6 +44,14 @@ export interface Alert {
   // has no triage row; always absent (= unknown) on live stream events, which
   // are built from core NATS, so merge those with mergeAlertUpdate.
   triage?: AlertTriage;
+  // Who acknowledged (with acknowledged_at, when). Absent while not
+  // acknowledged, and for an acknowledgement made with an API key.
+  acknowledged_by_user_id?: string;
+  acknowledged_by?: string;
+  // Set while the open alert is snoozed: until then it sends nothing but its
+  // resolve notice. Absent once the snooze ended (lib/alert-list isSnoozed
+  // also checks the clock, for a row loaded before it ran out).
+  snoozed_until?: string;
 }
 
 // --- Automatic alert triage (never delays, routes or suppresses a page) ---
@@ -102,7 +110,8 @@ export interface AlertBulkResult {
   failed: { id: string; reason: AlertBulkFailureReason }[];
 }
 
-export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved';
+/** `updated`: unacknowledged, snoozed or unsnoozed; the event carries the whole alert. */
+export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved' | 'updated';
 
 export interface AlertStreamEvent {
   type: AlertStreamEventType;

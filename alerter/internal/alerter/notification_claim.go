@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
@@ -57,15 +58,27 @@ func (a *Alerter) deliverNotification(
 	// An exclusive lock would also conflict with the share lock the async
 	// worker holds through its provider call, stalling this loop (and every
 	// other channel of the alert) on webhook latency.
+	//
+	// Acknowledge, unacknowledge, snooze and unsnooze are UPDATEs of this row
+	// too, so the mute read here is the committed truth for the whole send:
+	// an acknowledgement that commits first stops this page or reminder, and
+	// one that comes later waits for it.
 	var status string
 	var resolvedAt *time.Time
-	if err := tx.QueryRowContext(ctx, `SELECT status, resolved_at FROM alerts WHERE id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt); err != nil {
+	var snoozed bool
+	if err := tx.QueryRowContext(ctx, `SELECT al.status, al.resolved_at, `+alertrouting.SnoozedPredicate("al")+`
+		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
 	}
 	if (eventType == "resolved") != (status == "resolved") {
 		return false, nil
 	}
 	if eventType == "acknowledged" && status != "acknowledged" {
+		return false, nil
+	}
+	if alertrouting.MuteHolds(eventType, status == "acknowledged", snoozed) {
+		// Muted since the caller's pre-filter read the alert. Nothing is
+		// claimed, so the event is due again once the mute lifts.
 		return false, nil
 	}
 	if eventType == "resolved" {
@@ -101,23 +114,43 @@ func (a *Alerter) deliverNotification(
 	return true, nil
 }
 
+// dispatchGate is an open alert's acknowledge/snooze mute as the dispatch
+// query read it (shared/alertrouting mute.go): the pre-filter's copy of what
+// deliverNotification re-reads under the row lock.
+type dispatchGate struct {
+	// Muted is alertrouting.MutedPredicate: acknowledged, or snoozed.
+	Muted bool
+	// ResumedAt is alertrouting.DispatchResumedAtExpr: the last unacknowledge
+	// or snooze end; zero when the alert was never muted that way.
+	ResumedAt time.Time
+}
+
 // openAlertEventDue is the in-memory pre-filter for an open alert's channel:
-// which event, if any, is due now. It mirrors the created and reminder
-// predicates of claimNotificationTx, which stays the authority (a second
-// replica can pass this filter and still lose the claim); change them
-// together. alertAge counts from when the alert became eligible to dispatch,
-// delay is the channel's escalation delay.
+// which event, if any, is due now. It mirrors deliverNotification's mute
+// check and the created and reminder predicates of claimNotificationTx,
+// which stay the authority (a second replica can pass this filter and still
+// lose the claim); change them together. alertAge counts from when the alert
+// became eligible to dispatch (alertrouting.DispatchEligibleSinceExpr, which
+// already restarts at gate.ResumedAt), delay is the channel's escalation
+// delay. The delay is this filter's rule alone: the created claim does not
+// re-check it.
 //
-//   - no state yet and the delay has passed          -> "created"
-//   - already sent, not resolved, interval elapsed   -> "reminder"
-//   - otherwise                                      -> ""
-func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, now time.Time, reminderInterval time.Duration) string {
+//   - acknowledged or snoozed (gate.Muted)                        -> ""
+//   - no state yet and the delay has passed                       -> "created"
+//   - already sent, not resolved, interval elapsed since the last
+//     send and since the alert came out of a mute                 -> "reminder"
+//   - otherwise                                                   -> ""
+func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, now time.Time, reminderInterval time.Duration, gate dispatchGate) string {
+	if gate.Muted {
+		return ""
+	}
 	switch {
 	case state == nil:
 		if alertAge >= delay {
 			return "created"
 		}
-	case state.LastEventType != "resolved" && reminderInterval > 0 && now.Sub(state.LastSentAt) >= reminderInterval:
+	case state.LastEventType != "resolved" && reminderInterval > 0 && now.Sub(state.LastSentAt) >= reminderInterval &&
+		(gate.ResumedAt.IsZero() || now.Sub(gate.ResumedAt) >= reminderInterval):
 		return "reminder"
 	}
 	return ""
@@ -131,7 +164,9 @@ func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, 
 //
 //   - created:  insert wins; any existing row means someone already fired.
 //   - reminder: update wins only when the row is not resolved and
-//     last_sent_at is at least reminderInterval old.
+//     last_sent_at is at least reminderInterval old, and so is the alert's
+//     way out of its last mute (alertrouting.DispatchResumedAtExpr), so an
+//     unacknowledge or a snooze end restarts the reminder clock.
 //   - resolved: insert or update wins unless the row already says resolved.
 //   - acknowledged: update wins once (acknowledged_sent_at IS NULL) on an
 //     existing, unresolved row; it leaves last_event_type alone so reminders
@@ -140,6 +175,10 @@ func openAlertEventDue(state *notificationState, alertAge, delay time.Duration, 
 //
 // The one-shot columns never touch last_event_type or last_sent_at, so the
 // created/reminder/resolved timing is identical with or without them.
+//
+// The acknowledge/snooze mute is not repeated here: deliverNotification
+// applies it (alertrouting.MuteHolds) to the row it holds FOR SHARE in the
+// same tx, before claiming.
 //
 // Returns true when a row came back, i.e. the caller owns the send. For a
 // reminder it also returns the last_sent_at the claim replaced: the round's
@@ -172,6 +211,10 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			  AND prev.alert_id = s.alert_id AND prev.channel_id = s.channel_id
 			  AND s.last_event_type <> 'resolved'
 			  AND s.last_sent_at <= $3::timestamptz - ($4::double precision * INTERVAL '1 second')
+			  AND NOT EXISTS (
+				SELECT 1 FROM alerts al
+				WHERE al.id = s.alert_id
+				  AND ` + alertrouting.DispatchResumedAtExpr("al") + ` > $3::timestamptz - ($4::double precision * INTERVAL '1 second'))
 			RETURNING s.alert_id, prev.last_sent_at`
 		args = append(args, reminderInterval.Seconds())
 	case "resolved":

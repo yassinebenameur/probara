@@ -72,6 +72,21 @@ type AlertWithDetails struct {
 	// Triage is the alert's automatic AI triage (read-only). Absent when
 	// the alert has no triage row, and always absent on SSE events.
 	Triage *AlertTriage `json:"triage,omitempty"`
+	// AcknowledgedByUserID / AcknowledgedBy name the user who acknowledged
+	// (with AcknowledgedAt, when). Absent while not acknowledged, and for an
+	// acknowledgement made with an API key.
+	AcknowledgedByUserID *uuid.UUID `json:"acknowledged_by_user_id,omitempty"`
+	AcknowledgedBy       *string    `json:"acknowledged_by,omitempty"`
+	// SnoozedUntil is set while the open alert is snoozed: until then it
+	// sends nothing but its resolve notice. Absent once the snooze ended.
+	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
+}
+
+// SnoozeAlertRequest is the body of POST /alerts/{id}/snooze: exactly one of
+// Until or DurationMinutes.
+type SnoozeAlertRequest struct {
+	Until           *time.Time `json:"until,omitempty"`
+	DurationMinutes *int       `json:"duration_minutes,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts

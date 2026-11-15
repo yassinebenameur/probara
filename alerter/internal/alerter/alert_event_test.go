@@ -124,7 +124,7 @@ func TestOpenAlertEventDue(t *testing.T) {
 		{"sent slot never re-creates", sent("created", time.Minute), time.Hour, 0, interval, ""},
 	}
 	for _, tt := range tests {
-		if got := openAlertEventDue(tt.state, tt.alertAge, tt.delay, now, tt.interval); got != tt.want {
+		if got := openAlertEventDue(tt.state, tt.alertAge, tt.delay, now, tt.interval, dispatchGate{}); got != tt.want {
 			t.Errorf("%s: openAlertEventDue = %q, want %q", tt.name, got, tt.want)
 		}
 	}

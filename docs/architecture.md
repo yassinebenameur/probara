@@ -111,6 +111,17 @@ Routing comes from monitor overrides or workspace defaults; maintenance,
 group rollup, and dependency suppression determine which channels may fire.
 Escalation delays and reminders are tracked per alert/channel.
 
+An acknowledged or snoozed open alert is muted: it sends only its resolve
+notice (plus the `acknowledged` event to paging channels already paged). The
+mute is defined once in `shared/alertrouting` (`mute.go`: `MutedPredicate`,
+`MuteHolds`, `DispatchResumedAtExpr`) and checked three times: the alerter's
+pre-filter (`openAlertEventDue`, lifecycle and mesh dispatch), its claim
+(`deliverNotification`, under the alert row's `FOR SHARE` lock), and the
+async worker (`eventSuperseded`, same lock), which drops a page, reminder or
+follow-up queued before the ack or snooze and hands its claim back.
+Unacknowledge (`unacknowledged_at`) and the end of a snooze (`snoozed_until`,
+migration 000101) restart the escalation-delay and reminder clocks.
+
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.
 An empty group's old availability alert is resolved; group timeline integration
@@ -261,7 +272,7 @@ reads it in one place, the opt-in `dispatchSuspectedCauses` phase
 ready triage naming a catalogue cause at medium or high confidence that no
 operator corrected, sent through `deliverNotification` with a one-shot claim on
 `alert_notification_states.suspected_cause_sent_at`. It is muted by the same
-predicate as reminders, targets only plugins advertising `CapabilityFollowUp`
+predicate as reminders, and by acknowledgement and snooze, targets only plugins advertising `CapabilityFollowUp`
 (not PagerDuty or Opsgenie), runs last in the tick on its own time budget so
 the recovery sweep keeps its share, and stops under `LOCAL_AI_DISABLED=true` or
 `AI_TRIAGE_ENABLED=false`. The alerter reads the catalogue only and never calls
