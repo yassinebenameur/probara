@@ -21,6 +21,18 @@ export function bootstrapView(status: BootstrapStatus): BootstrapView {
   return { mode: 'bootstrap', setupCodeRequired: status.setup_code_required === true };
 }
 
+/**
+ * Whether the login page offers SSO. Normally only on the sign-in form: on an
+ * install without a setup code, the first SSO sign-in would become the first
+ * superadmin. With a setup code it never does (SSO users are ordinary
+ * members), and SSO members may already exist while the first-admin form is
+ * still shown, so the button stays available for them.
+ */
+export function ssoButtonVisible(view: BootstrapView, oidcEnabled: boolean): boolean {
+  if (!oidcEnabled) return false;
+  return view.mode === 'login' || view.setupCodeRequired;
+}
+
 /** The POST /users/bootstrap/first body; the code is sent only when required. */
 export function bootstrapRequestBody(
   username: string,

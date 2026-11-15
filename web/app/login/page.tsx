@@ -10,6 +10,7 @@ import { getOidcStatus } from "@/lib/api";
 import {
   bootstrapRequestBody,
   bootstrapView,
+  ssoButtonVisible,
   type BootstrapStatus,
 } from "@/lib/bootstrap";
 import type { OidcStatus } from "@/lib/types";
@@ -399,7 +400,7 @@ function LoginPageInner() {
                   : "Continue to dashboard"}
             </Button>
 
-            {oidc.enabled && authMode === "login" && (
+            {ssoButtonVisible({ mode: authMode, setupCodeRequired }, oidc.enabled) && (
               <>
                 <div className="flex items-center gap-3">
                   <div className="h-px flex-1 bg-divider" />

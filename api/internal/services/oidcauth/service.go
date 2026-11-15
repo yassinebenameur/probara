@@ -62,11 +62,25 @@ type Service struct {
 	// Provider discovery is lazy so the API boots while the IdP is down.
 	mu       sync.Mutex
 	provider *oidc.Provider
+
+	// noSSOBootstrap is set when BOOTSTRAP_SETUP_CODE gates first-admin
+	// creation: an SSO sign-in must then never become the first superadmin,
+	// or anyone the IdP admits could claim the install without the code.
+	noSSOBootstrap bool
 }
 
 // NewService creates an OIDC auth service.
 func NewService(cfg config.OIDCConfig, dbClient *db.Client, log *logger.Logger) *Service {
 	return &Service{cfg: cfg, db: dbClient, log: log}
+}
+
+// ConfigureSetupCode tells the service whether a setup code gates first-admin
+// creation. When it does, JIT provisioning on an install without admins
+// creates an ordinary member like any later JIT user; the first superadmin
+// comes from the local first-admin form (adminusers keeps it open until one
+// exists) and can then promote SSO users.
+func (s *Service) ConfigureSetupCode(required bool) {
+	s.noSSOBootstrap = required
 }
 
 // Enabled reports whether OIDC SSO is configured.
@@ -189,7 +203,8 @@ func (s *Service) CompleteFlow(ctx context.Context, code string, flow *FlowState
 //     identity → link the identity to that account;
 //  3. JIT provisioning (when enabled) — new member with the default
 //     membership, or superadmin when the install has no active admins
-//     (bootstrap parity so a fresh OIDC-only install is administrable);
+//     (bootstrap parity so a fresh OIDC-only install is administrable) and no
+//     setup code gates first-admin creation;
 //  4. otherwise ErrNotProvisioned.
 //
 // When group→role mappings exist (any oidc_group_mappings rows), the IdP is
@@ -316,7 +331,9 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 	defer tx.Rollback()
 
 	// Bootstrap parity: an install with zero active admins must not end up
-	// with an unadministrable viewer as its only account.
+	// with an unadministrable viewer as its only account. Not with a setup
+	// code: then the local form (which stays open until a superadmin exists)
+	// creates the first superadmin, and SSO users get the ordinary JIT role.
 	var activeAdmins int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_users WHERE disabled_at IS NULL`).Scan(&activeAdmins); err != nil {
 		return nil, fmt.Errorf("failed to count active admins: %w", err)
@@ -329,7 +346,7 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 	if len(mappings) > 0 {
 		platformRole = mappedPlatform
 	}
-	if activeAdmins == 0 {
+	if activeAdmins == 0 && !s.noSSOBootstrap {
 		platformRole = auth.PlatformRoleSuperadmin
 	}
 

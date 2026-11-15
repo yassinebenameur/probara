@@ -37,10 +37,10 @@ type repository interface {
 	ListUsers(ctx context.Context, page, pageSize int) ([]models.AdminUser, int, error)
 	GetUser(ctx context.Context, userID uuid.UUID) (*models.AdminUser, error)
 	CreateUser(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error)
-	CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error)
+	CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error)
 	UpdateUser(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error)
 	RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error
-	CountActiveAdmins(ctx context.Context) (int, error)
+	CountActiveAdmins(ctx context.Context, superadminsOnly bool) (int, error)
 	IsLastActiveSuperadmin(ctx context.Context, userID uuid.UUID) (bool, error)
 	DeleteUser(ctx context.Context, userID uuid.UUID) error
 	AttachMemberships(ctx context.Context, users []models.AdminUser) error
@@ -54,6 +54,12 @@ type sqlRepository struct {
 type Service struct {
 	repo       repository
 	bcryptCost int
+	// bootstrapUntilSuperadmin keeps first-admin bootstrap open until an
+	// active superadmin exists, instead of until any active user exists. Set
+	// when BOOTSTRAP_SETUP_CODE gates the form: SSO sign-ins then create
+	// ordinary members (oidcauth), and the local form must stay available to
+	// create the first superadmin.
+	bootstrapUntilSuperadmin bool
 }
 
 // NewService creates a new admin users service.
@@ -62,6 +68,13 @@ func NewService(dbClient *db.Client, bcryptCost int) *Service {
 		repo:       &sqlRepository{db: dbClient},
 		bcryptCost: bcryptCost,
 	}
+}
+
+// ConfigureSetupCode tells the service whether a setup code gates first-admin
+// creation (BOOTSTRAP_SETUP_CODE is set). Then bootstrap is open until an
+// active superadmin exists; otherwise, as before, until any active user does.
+func (s *Service) ConfigureSetupCode(required bool) {
+	s.bootstrapUntilSuperadmin = required
 }
 
 // ListUsers returns paginated admin users with memberships.
@@ -143,17 +156,19 @@ func (s *Service) CreateUser(ctx context.Context, req *models.CreateAdminUserReq
 	return &users[0], nil
 }
 
-// HasActiveUsers reports whether at least one active admin user exists.
+// HasActiveUsers reports whether first-admin bootstrap is closed: at least
+// one active user exists, or with a setup code configured, at least one
+// active superadmin.
 func (s *Service) HasActiveUsers(ctx context.Context) (bool, error) {
-	count, err := s.repo.CountActiveAdmins(ctx)
+	count, err := s.repo.CountActiveAdmins(ctx, s.bootstrapUntilSuperadmin)
 	if err != nil {
 		return false, fmt.Errorf("failed to count active admin users: %w", err)
 	}
 	return count > 0, nil
 }
 
-// CreateFirstUser creates the first admin user (as superadmin) only when no
-// active admin exists.
+// CreateFirstUser creates the first admin user (as superadmin) only while
+// bootstrap is open (see HasActiveUsers).
 func (s *Service) CreateFirstUser(ctx context.Context, req *models.CreateAdminUserRequest) (*models.AdminUser, error) {
 	if req == nil {
 		return nil, fmt.Errorf("create request is required")
@@ -167,7 +182,7 @@ func (s *Service) CreateFirstUser(ctx context.Context, req *models.CreateAdminUs
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	user, err := s.repo.CreateFirstUser(ctx, uuid.New(), strings.TrimSpace(req.Username), passwordHash, time.Now())
+	user, err := s.repo.CreateFirstUser(ctx, uuid.New(), strings.TrimSpace(req.Username), passwordHash, time.Now(), s.bootstrapUntilSuperadmin)
 	if err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -393,13 +408,14 @@ func (r *sqlRepository) CreateUser(ctx context.Context, id uuid.UUID, username s
 	return user, nil
 }
 
-func (r *sqlRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+func (r *sqlRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error) {
 	query := `
 		WITH inserted AS (
 			INSERT INTO admin_users (id, username, password_hash, platform_role, created_at, updated_at)
 			SELECT $1, $2, $3, 'superadmin', $4, $4
 			WHERE NOT EXISTS (
-				SELECT 1 FROM admin_users WHERE disabled_at IS NULL
+				SELECT 1 FROM admin_users
+				WHERE disabled_at IS NULL AND (NOT $7::bool OR platform_role = 'superadmin')
 			)
 			RETURNING id, username, email, platform_role, external_subject, created_at, updated_at, last_login_at, disabled_at
 		),
@@ -418,7 +434,7 @@ func (r *sqlRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, usern
 		FROM inserted
 	`
 
-	row := r.db.QueryRowContext(ctx, query, id, username, passwordHash, now, defaultTenantID, defaultTenantName)
+	row := r.db.QueryRowContext(ctx, query, id, username, passwordHash, now, defaultTenantID, defaultTenantName, untilSuperadmin)
 	return scanUser(row)
 }
 
@@ -481,9 +497,12 @@ func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uui
 	return err
 }
 
-func (r *sqlRepository) CountActiveAdmins(ctx context.Context) (int, error) {
+func (r *sqlRepository) CountActiveAdmins(ctx context.Context, superadminsOnly bool) (int, error) {
 	var count int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_users WHERE disabled_at IS NULL`).Scan(&count); err != nil {
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM admin_users
+		WHERE disabled_at IS NULL AND (NOT $1::bool OR platform_role = 'superadmin')
+	`, superadminsOnly).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
