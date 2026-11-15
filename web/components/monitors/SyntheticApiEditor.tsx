@@ -114,7 +114,7 @@ export default function SyntheticApiEditor({
           rows={form.synthetic_api_variables}
           onChange={(rows) => patch({ synthetic_api_variables: rows })}
           error={errors.synthetic_api_variables}
-          hint={<>Use <code>{'{{variable_name}}'}</code> in URLs, headers, and request bodies.</>}
+          hint={<>Use <code>{'{{variable_name}}'}</code> in URLs, headers, request bodies, and assertion values.</>}
         />
       )}
 

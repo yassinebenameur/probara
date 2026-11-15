@@ -61,7 +61,7 @@ func TestSyntheticAssertionValueTypes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assertion := models.SyntheticAPIAssertionConfig{Target: tc.target, Op: tc.op, Path: tc.path, Value: json.RawMessage(tc.value)}
-			failures, err := evaluateSyntheticAssertions([]models.SyntheticAPIAssertionConfig{assertion}, resp, body)
+			failures, err := evaluateSyntheticAssertions([]models.SyntheticAPIAssertionConfig{assertion}, resp, body, nil, nil)
 			if err != nil {
 				t.Fatalf("evaluate: %v", err)
 			}
