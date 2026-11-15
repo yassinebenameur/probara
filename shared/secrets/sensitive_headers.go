@@ -61,6 +61,12 @@ var syntheticTemplateRef = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}`)
 //     {{ref}}) becomes a generated `secret_variables` entry, and the header
 //     value becomes the {{ref}}. A value that already references a variable
 //     is left alone: the reference is the protection.
+//   - synthetic_api and synthetic_browser: a credential-named plain variable
+//     (`password`, `api_token`, …) moves to `secret_variables` under the same
+//     name, so its {{ref}}s keep resolving (moveSensitiveVariables).
+//
+// The cmd/admin/migrate_sensitive_headers backfill applies this same function
+// to stored rows, so a write and the backfill always agree.
 //
 // Run it after MergeMonitorConfigSecrets: an absent secret map must first be
 // restored from storage, or the moved header would read as an explicit edit
@@ -77,7 +83,17 @@ func NormalizeSensitiveHeaders(monitorType string, raw json.RawMessage) (json.Ra
 	case "grpc":
 		return moveSensitiveKeys(raw, "metadata", "secret_metadata")
 	case "synthetic_api":
-		return normalizeSyntheticAPIHeaders(raw)
+		out, headersMoved, err := normalizeSyntheticAPIHeaders(raw)
+		if err != nil {
+			return nil, false, err
+		}
+		out, varsMoved, err := moveSensitiveVariables(out)
+		if err != nil {
+			return nil, false, err
+		}
+		return out, headersMoved || varsMoved, nil
+	case "synthetic_browser":
+		return moveSensitiveVariables(raw)
 	default:
 		return raw, false, nil
 	}
@@ -245,17 +261,16 @@ func uniqueVariableName(base string, taken func(string) bool) string {
 	}
 }
 
-// MoveSensitiveVariables moves credential-named entries of a synthetic API
+// moveSensitiveVariables moves credential-named entries of a synthetic
 // journey's plain `variables` (the IsSensitiveHeaderName rule: password,
 // token, secret, …) into `secret_variables` under the same name, so every
 // {{name}} reference keeps resolving while the value becomes encrypted,
-// masked and redacted. A name already in secret_variables keeps the secret
-// value (the one the worker already used) and the plain copy is dropped; an
-// empty plain value has nothing to protect and stays. Only the
-// cmd/admin/migrate_sensitive_headers backfill applies it: on the write path
-// a variable's name says too little to silently reclassify it.
-func MoveSensitiveVariables(monitorType string, raw json.RawMessage) (json.RawMessage, bool, error) {
-	if monitorType != "synthetic_api" || len(raw) == 0 {
+// masked and redacted. The moved value replaces a same-named secret, as a
+// moved header does; an empty value has nothing to protect and stays plain,
+// and a "***" placeholder has nothing behind it there and is dropped, leaving
+// any stored secret of that name as the merge restored it.
+func moveSensitiveVariables(raw json.RawMessage) (json.RawMessage, bool, error) {
+	if !containsJSONKey(raw, "variables") && !strings.Contains(string(raw), `\u`) {
 		return raw, false, nil
 	}
 	cfg, err := unmarshalConfigMap(raw)
@@ -276,11 +291,11 @@ func MoveSensitiveVariables(monitorType string, raw json.RawMessage) (json.RawMe
 		if !isString || text == "" || !IsSensitiveHeaderName(name) {
 			continue
 		}
-		if _, exists := secretVars[name]; !exists {
-			secretVars[name] = text
-		}
 		delete(variables, name)
 		changed = true
+		if text != MaskedSecret {
+			secretVars[name] = text
+		}
 	}
 	if !changed {
 		return raw, false, nil
@@ -288,7 +303,11 @@ func MoveSensitiveVariables(monitorType string, raw json.RawMessage) (json.RawMe
 	if len(variables) == 0 {
 		delete(cfg, "variables")
 	}
-	cfg["secret_variables"] = secretVars
+	if len(secretVars) == 0 {
+		delete(cfg, "secret_variables")
+	} else {
+		cfg["secret_variables"] = secretVars
+	}
 	out, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, false, fmt.Errorf("secrets: encode monitor config: %w", err)

@@ -1,5 +1,6 @@
 import {
   CheckResult,
+  MASKED_SECRET,
   SyntheticAPIAssertionConfig,
   SyntheticAPIAssertionTarget,
   SyntheticAPIExtractConfig,
@@ -72,6 +73,8 @@ export type SyntheticBrowserGuidedDraft = {
   expected_url: string;
   username: string;
   password: string;
+  /** Edit mode: a stored password sits behind the mask; blank keeps it. */
+  password_stored?: boolean;
 };
 
 export const mapVariablesToRows = (variables?: Record<string, string>): SyntheticVarKV[] => {
@@ -375,28 +378,36 @@ export const defaultSyntheticBrowserGuidedDraft = (
 export const normalizeSyntheticBrowserGuidedTemplate = (value: string): SyntheticBrowserGuidedTemplate =>
   value === 'login_flow' ? 'login_flow' : 'homepage_smoke';
 
+/**
+ * The guided journey. The password is a secret variable (encrypted, masked
+ * on read, redacted from results): typed, it submits as is; left blank over
+ * a stored one, it submits "***" to keep it.
+ */
 export const buildSyntheticBrowserGuidedDraft = (draft: SyntheticBrowserGuidedDraft): {
   startURL: string;
   variables: Record<string, string>;
+  secretVariables: Record<string, string>;
   steps: SyntheticBrowserStepDraft[];
 } => {
   const template = normalizeSyntheticBrowserGuidedTemplate(draft.template);
   const startURL = draft.start_url.trim();
   const variables: Record<string, string> = {};
+  const secretVariables: Record<string, string> = {};
   const username = draft.username.trim();
-  const password = draft.password.trim();
+  const password = draft.password.trim() ? draft.password.trim() : draft.password_stored ? MASKED_SECRET : '';
 
   if (username) {
     variables.username = username;
   }
   if (password) {
-    variables.password = password;
+    secretVariables.password = password;
   }
 
   if (template === 'homepage_smoke') {
     return {
       startURL,
       variables,
+      secretVariables,
       steps: [
         {
           ...defaultSyntheticBrowserStep(1),
@@ -464,5 +475,63 @@ export const buildSyntheticBrowserGuidedDraft = (draft: SyntheticBrowserGuidedDr
     }
   );
 
-  return { startURL, variables, steps };
+  return { startURL, variables, secretVariables, steps };
 };
+
+// {{name}}, the worker's template syntax (syntheticTemplateRegex in
+// worker/internal/worker/synthetic_api_checker.go).
+const TEMPLATE_REF = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
+
+/** The {{names}} text references, in order, without duplicates. */
+export function templateRefs(text: string): string[] {
+  const names: string[] = [];
+  for (const match of text.matchAll(TEMPLATE_REF)) {
+    if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
+
+const definedNames = (...lists: { key: string }[][]): Set<string> =>
+  new Set(lists.flat().map((row) => row.key.trim()).filter(Boolean));
+
+const missingRefs = (texts: string[], defined: Set<string>): string[] =>
+  templateRefs(texts.join('\n')).filter((name) => !defined.has(name));
+
+/**
+ * Per API step, the {{names}} its URL, header values or body reference that
+ * nothing defines before it: no variable, no secret variable, no extraction
+ * of an earlier step. The worker fails such a step, so the form warns; it
+ * does not block the save. Assertion values are left out: an undefined name
+ * there is compared as literal text on purpose.
+ */
+export function undefinedSyntheticAPIRefs(
+  variables: { key: string }[],
+  secretVariables: { key: string }[],
+  steps: SyntheticAPIStepDraft[]
+): string[][] {
+  const defined = definedNames(variables, secretVariables);
+  return steps.map((step) => {
+    const missing = missingRefs([step.url, step.body, ...step.headers.map((h) => h.value)], defined);
+    for (const extract of step.extracts) {
+      if (extract.name.trim()) defined.add(extract.name.trim());
+    }
+    return missing;
+  });
+}
+
+/** Per browser step, the {{names}} its URL, selector or value reference that no variable defines. */
+export function undefinedSyntheticBrowserRefs(
+  variables: { key: string }[],
+  secretVariables: { key: string }[],
+  steps: SyntheticBrowserStepDraft[]
+): string[][] {
+  const defined = definedNames(variables, secretVariables);
+  return steps.map((step) => missingRefs([step.url, step.selector, step.value], defined));
+}
+
+/** The warning a step shows for its undefined references, or undefined. */
+export function undefinedRefsWarning(names: string[]): string | undefined {
+  if (names.length === 0) return undefined;
+  const list = names.map((name) => `{{${name}}}`).join(', ');
+  return `${list} ${names.length === 1 ? 'is' : 'are'} not defined by any variable or earlier extraction; this step will fail when it runs.`;
+}

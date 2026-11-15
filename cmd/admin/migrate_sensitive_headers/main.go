@@ -7,14 +7,17 @@
 //   - grpc: a sensitive `metadata` key moves to `secret_metadata`.
 //   - synthetic_api: a literal sensitive step header becomes a generated
 //     `secret_variables` entry and the header becomes its {{ref}}.
-//   - synthetic_api: a credential-named plain variable (`password`,
-//     `api_token`, …) moves to `secret_variables` under the same name, so
-//     its {{ref}}s keep working (secrets.MoveSensitiveVariables).
+//   - synthetic_api and synthetic_browser: a credential-named plain variable
+//     (`password`, `api_token`, …) moves to `secret_variables` under the same
+//     name, so its {{ref}}s keep working.
 //
-// Moved values are encrypted with the current key; values already in the
-// secret maps keep their envelopes. Deleted monitors are skipped. Safe to run
-// multiple times: a second run finds nothing to do. Values never reach the
-// log, only monitor ids.
+// It applies exactly the function every write applies, so the backfill and
+// the write path cannot disagree. Moved values are encrypted with the current
+// key; values already in the secret maps keep their envelopes. Soft-deleted
+// monitors are migrated too: their rows stay in the database until purged,
+// and a credential at rest is one whether or not the monitor is listed. Safe
+// to run multiple times: a second run finds nothing to do. Values never
+// reach the log, only monitor ids.
 //
 // Usage:
 //
@@ -39,9 +42,8 @@ import (
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// migratedTypes are the types NormalizeSensitiveHeaders and
-// MoveSensitiveVariables rewrite.
-var migratedTypes = []string{"http", "grpc", "synthetic_api"}
+// migratedTypes are the types NormalizeSensitiveHeaders rewrites.
+var migratedTypes = []string{"http", "grpc", "synthetic_api", "synthetic_browser"}
 
 type stats struct {
 	Processed, Updated, Skipped, Errored int
@@ -84,13 +86,14 @@ func main() {
 	}
 }
 
-// migrate walks every live monitor of a migrated type. Without apply it only
+// migrate walks every monitor of a migrated type, soft-deleted ones included.
+// Without apply it only
 // counts and logs what would change (by monitor id; values never reach the
 // log).
 func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool, logf func(string, ...any)) (stats, error) {
 	var result stats
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, type, config FROM monitors WHERE type = ANY($1) AND deleted_at IS NULL ORDER BY created_at`,
+		`SELECT id, type, config FROM monitors WHERE type = ANY($1) ORDER BY created_at`,
 		pq.Array(migratedTypes))
 	if err != nil {
 		return result, fmt.Errorf("scan monitors: %w", err)
@@ -154,12 +157,8 @@ func migrate(ctx context.Context, db *sql.DB, enc secrets.Encryptor, apply bool,
 // in the secret maps keep their envelopes (EncryptMonitorConfig passes them
 // through), so a row is only rewritten when a header actually moved.
 func migrateConfig(enc secrets.Encryptor, monitorType string, raw json.RawMessage) (json.RawMessage, bool, error) {
-	normalized, headersMoved, err := secrets.NormalizeSensitiveHeaders(monitorType, raw)
-	if err != nil {
-		return raw, false, err
-	}
-	normalized, variablesMoved, err := secrets.MoveSensitiveVariables(monitorType, normalized)
-	if err != nil || (!headersMoved && !variablesMoved) {
+	normalized, moved, err := secrets.NormalizeSensitiveHeaders(monitorType, raw)
+	if err != nil || !moved {
 		return raw, false, err
 	}
 	encrypted, err := secrets.EncryptMonitorConfig(enc, monitorType, normalized)
@@ -175,7 +174,7 @@ func migrateConfig(enc secrets.Encryptor, monitorType string, raw json.RawMessag
 func writeRow(ctx context.Context, db *sql.DB, id uuid.UUID, original, newRaw json.RawMessage) error {
 	res, err := db.ExecContext(ctx,
 		`UPDATE monitors SET config = $1, updated_at = NOW()
-		 WHERE id = $2 AND deleted_at IS NULL AND config = $3::jsonb`,
+		 WHERE id = $2 AND config = $3::jsonb`,
 		[]byte(newRaw), id, []byte(original))
 	if err != nil {
 		return err
@@ -185,7 +184,7 @@ func writeRow(ctx context.Context, db *sql.DB, id uuid.UUID, original, newRaw js
 		return err
 	}
 	if n != 1 {
-		return errors.New("monitor changed or was deleted since it was read; run again")
+		return errors.New("monitor changed or was purged since it was read; run again")
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ import { SecretKV, plainRowsFromMap, secretRowsFromMap } from './secret-map';
 /** A request header row; `secret` rows submit to `secret_headers`. */
 export type HeaderKV = SecretKV;
 
-const SENSITIVE_HEADER_EXACT = new Set([
+export const SENSITIVE_HEADER_EXACT: ReadonlySet<string> = new Set([
   'authorization',
   'proxy-authorization',
   'cookie',
@@ -15,15 +15,16 @@ const SENSITIVE_HEADER_EXACT = new Set([
   'api-key',
   'x-auth-token',
 ]);
-const SENSITIVE_HEADER_MARKERS = ['token', 'secret', 'password', 'apikey', 'api-key'];
+export const SENSITIVE_HEADER_MARKERS: readonly string[] = ['token', 'secret', 'password', 'apikey', 'api-key'];
 
 /**
  * Whether a header name conventionally carries a credential. TS twin of
  * IsSensitiveHeaderName in shared/secrets/sensitive_headers.go: the API moves
  * such headers into the encrypted `secret_headers` map on every write, so the
- * form shows them as secret (locked on) to match. Keep the two rules in step;
- * shared/secrets/testdata/sensitive_header_names.json is read by both test
- * suites (lib/monitor-form-http.test.ts here) and pins the pair.
+ * form shows them as secret (locked on) to match. The exact names and markers
+ * are the ones listed in shared/secrets/testdata/sensitive_header_names.json;
+ * both test suites (lib/monitor-form-http.test.ts here) assert equality with
+ * it, so the twins cannot drift.
  */
 export const isSensitiveHeaderName = (name: string): boolean => {
   const n = name.trim().toLowerCase();

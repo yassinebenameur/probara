@@ -99,6 +99,7 @@ test('a clone of any type carries no masked secret', () => {
     ['http', { url: 'https://h', method: 'GET', secret_headers: { Authorization: '***' }, basic_auth_username: 'u', basic_auth_password: '***' }],
     ['grpc', { host: 'g', metadata: { 'x-tenant': 'a' }, secret_metadata: { authorization: '***' } }],
     ['synthetic_api', { steps: [], secret_variables: { token: '***' } }],
+    ['synthetic_browser', { start_url: 'https://b', steps: [], secret_variables: { password: '***' } }],
   ];
   for (const [type, config] of masked) {
     const source = {

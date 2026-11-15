@@ -155,9 +155,9 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	}
 
 	var redirectsFollowed int
-	secretHeaderNames := make([]string, 0, len(config.SecretHeaders))
+	guard := redirectGuard{secretNames: make([]string, 0, len(config.SecretHeaders))}
 	for name := range config.SecretHeaders {
-		secretHeaderNames = append(secretHeaderNames, name)
+		guard.secretNames = append(guard.secretNames, name)
 	}
 	client := &http.Client{
 		Timeout: timeout,
@@ -169,8 +169,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
 			redirectsFollowed = len(via)
-			stripCredentialsOnRedirect(req, via, secretHeaderNames)
-			return nil
+			return guard.check(req, via)
 		},
 	}
 
@@ -289,7 +288,9 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	if err != nil {
 		errorReason := "unknown"
 		errStr := err.Error()
-		if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline") {
+		if errors.Is(err, errRedirectRefused) {
+			errorReason = "redirect"
+		} else if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline") {
 			errorReason = "timeout"
 		} else if strings.Contains(errStr, "no such host") || strings.Contains(errStr, "DNS") {
 			errorReason = "dns"

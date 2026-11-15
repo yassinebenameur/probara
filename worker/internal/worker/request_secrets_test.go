@@ -213,3 +213,51 @@ func TestSecretRedactor_Encodings(t *testing.T) {
 		t.Fatalf("%d forms per secret, want a small bounded set", n)
 	}
 }
+
+// TestSecretRedactor_ShortValues: a secret under four characters is redacted
+// only where it stands as a whole token, so it cannot turn every matching
+// letter of a message into [REDACTED].
+func TestSecretRedactor_ShortValues(t *testing.T) {
+	r := newSecretRedactor([]string{"e", "42"})
+	cases := map[string]string{
+		"error: expected 200":      "error: expected 200",
+		"e":                        syntheticRedacted,
+		"https://x.test/?k=e&n=42": "https://x.test/?k=" + syntheticRedacted + "&n=" + syntheticRedacted,
+		"status 420, code 4242":    "status 420, code 4242",
+		"value 42.":                "value " + syntheticRedacted + ".",
+		"e e":                      syntheticRedacted + " " + syntheticRedacted,
+		"ee":                       "ee",
+		"ünicode e":                "ünicode " + syntheticRedacted,
+	}
+	for in, want := range cases {
+		if got := r.redact(in); got != want {
+			t.Errorf("redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if r.contains("error") || !r.contains("k=e") {
+		t.Fatal("contains must follow the same whole-token rule")
+	}
+	// Four characters and up are redacted wherever they occur.
+	if got := newSecretRedactor([]string{"abcd"}).redact("xabcdx"); got != "x"+syntheticRedacted+"x" {
+		t.Fatalf("long secret inside a word = %q", got)
+	}
+}
+
+// TestSyntheticBrowserChecker_RedactsSecretVariables: a browser journey's
+// secret variables are redacted from what it reports, here an invalid
+// start_url error that quotes the resolved URL. It fails before any browser
+// starts, so it runs without Chromium.
+func TestSyntheticBrowserChecker_RedactsSecretVariables(t *testing.T) {
+	config, _ := json.Marshal(map[string]any{
+		"start_url":        "https://x.test/%zz{{pw}}",
+		"secret_variables": map[string]string{"pw": "br0wser-secret"},
+		"steps":            []map[string]any{{"id": "a", "action": "goto", "url": "https://x.test"}},
+	})
+	result := NewSyntheticBrowserChecker(t.TempDir()).Check(context.Background(), config, 5)
+	if result.ErrorMessage == nil || !strings.Contains(*result.ErrorMessage, "invalid start_url") {
+		t.Fatalf("error = %v, want the start_url parse error", result.ErrorMessage)
+	}
+	if strings.Contains(*result.ErrorMessage, "br0wser-secret") || !strings.Contains(*result.ErrorMessage, syntheticRedacted) {
+		t.Fatalf("error leaks the secret: %s", *result.ErrorMessage)
+	}
+}

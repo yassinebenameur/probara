@@ -244,6 +244,14 @@ func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessa
 			req.Header.Set(k, v)
 		}
 
+		// What a redirect off the origin must not carry: the headers that
+		// hold a secret, and, refused outright, a URL or body that does.
+		stepSecrets := newSecretRedactor(syntheticStepSecretValues(config.SecretVariables, vars, sensitive))
+		guard := redirectGuard{
+			secretNames:   secretHeaderNames,
+			carriesSecret: stepSecrets.contains(resolvedURL) || (body != nil && stepSecrets.contains(*body)),
+		}
+
 		client := &http.Client{
 			Timeout:   time.Duration(stepTimeout) * time.Second,
 			Transport: transport,
@@ -263,8 +271,7 @@ func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessa
 			if maxRedirects >= 0 && len(via) > maxRedirects {
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
-			stripCredentialsOnRedirect(req, via, secretHeaderNames)
-			return nil
+			return guard.check(req, via)
 		}
 
 		resp, err := client.Do(req)
@@ -391,6 +398,19 @@ func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessa
 		ErrorMessage: errPtr,
 		MetricsData:  metricsData,
 	}
+}
+
+// syntheticStepSecretValues lists the values a step must keep on its origin:
+// every secret variable and every value extracted as sensitive so far.
+func syntheticStepSecretValues(secretVariables, vars map[string]string, sensitive map[string]bool) []string {
+	values := make([]string, 0, len(secretVariables)+len(sensitive))
+	for _, value := range secretVariables {
+		values = append(values, value)
+	}
+	for name := range sensitive {
+		values = append(values, vars[name])
+	}
+	return values
 }
 
 // secretReferencingHeaders names the step headers whose value references a

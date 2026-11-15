@@ -243,3 +243,86 @@ func TestSyntheticAPIStepCredentialIsMovedToSecretVariables(t *testing.T) {
 		t.Fatalf("read config leaks a secret: %s", created.Config)
 	}
 }
+
+// TestCredentialNamedVariablesAreMovedOnWrite: an API/MCP create that puts a
+// password in plain synthetic `variables` gets it encrypted and masked, for
+// API and browser journeys alike: the write path applies the backfill's rule.
+func TestCredentialNamedVariablesAreMovedOnWrite(t *testing.T) {
+	enc := testEncryptor(t)
+	for _, tc := range []struct {
+		monitorType models.MonitorType
+		config      string
+	}{
+		{models.MonitorTypeSyntheticAPI, `{"variables":{"user":"u","password":"pw-1"},"steps":[{"id":"a","request":{"method":"POST","url":"https://x.test","body":"{{password}}"}}]}`},
+		{models.MonitorTypeSyntheticBrowser, `{"start_url":"https://x.test/login","variables":{"user":"u","password":"pw-1"},"steps":[{"id":"p","action":"fill","selector":"#p","value":"{{password}}"}]}`},
+	} {
+		t.Run(string(tc.monitorType), func(t *testing.T) {
+			repo := &copyingRepo{MockRepository: NewMockRepository()}
+			svc := NewService(repo)
+			svc.ConfigureEncryption(enc)
+			created, err := svc.CreateMonitor(context.Background(), uuid.New(), &models.CreateMonitorRequest{
+				Name: "journey", Type: tc.monitorType, Config: json.RawMessage(tc.config),
+				IntervalSeconds: 60, TimeoutSeconds: 30,
+			})
+			if err != nil {
+				t.Fatalf("CreateMonitor: %v", err)
+			}
+			stored := decodeConfig(t, repo.createdConfig)
+			if vars := stored["variables"].(map[string]any); len(vars) != 1 || vars["user"] != "u" {
+				t.Fatalf("stored variables = %v, want only user", vars)
+			}
+			ct, _ := stored["secret_variables"].(map[string]any)["password"].(string)
+			if plain, err := enc.Decrypt(ct); !secrets.LooksLikeEnvelope(ct) || err != nil || plain != "pw-1" {
+				t.Fatalf("secret password stored as %q (plain %q, err %v)", ct, plain, err)
+			}
+			if strings.Contains(string(created.Config), "pw-1") {
+				t.Fatalf("read config leaks the password: %s", created.Config)
+			}
+		})
+	}
+}
+
+// TestSyntheticBrowserSecretVariablesRoundTrip: create, masked read, an
+// update that round-trips the mask keeps the stored password, "" clears it.
+func TestSyntheticBrowserSecretVariablesRoundTrip(t *testing.T) {
+	enc := testEncryptor(t)
+	repo := &copyingRepo{MockRepository: NewMockRepository()}
+	svc := NewService(repo)
+	svc.ConfigureEncryption(enc)
+	ctx := context.Background()
+	tenantID := uuid.New()
+	const base = `"start_url":"https://x.test/login","steps":[{"id":"p","action":"fill","selector":"#p","value":"{{password}}"}]`
+
+	created, err := svc.CreateMonitor(ctx, tenantID, &models.CreateMonitorRequest{
+		Name: "login", Type: models.MonitorTypeSyntheticBrowser,
+		Config:          json.RawMessage(`{` + base + `,"secret_variables":{"password":"pw-1"}}`),
+		IntervalSeconds: 60, TimeoutSeconds: 30,
+	})
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	if read := decodeConfig(t, created.Config)["secret_variables"].(map[string]any); read["password"] != secrets.MaskedSecret {
+		t.Fatalf("read secret_variables = %v, want masked", read)
+	}
+
+	repo.monitors[created.ID].Config = append(json.RawMessage(nil), repo.createdConfig...)
+	if _, err := svc.UpdateMonitor(ctx, tenantID, created.ID, &models.UpdateMonitorRequest{
+		Config: json.RawMessage(`{` + base + `,"secret_variables":{"password":"***"}}`),
+	}); err != nil {
+		t.Fatalf("UpdateMonitor (keep): %v", err)
+	}
+	ct := decodeConfig(t, repo.lastUpdateConfig)["secret_variables"].(map[string]any)["password"].(string)
+	if plain, _ := enc.Decrypt(ct); plain != "pw-1" {
+		t.Fatalf("\"***\" did not keep the password: %q", plain)
+	}
+
+	repo.monitors[created.ID].Config = append(json.RawMessage(nil), repo.lastUpdateConfig...)
+	if _, err := svc.UpdateMonitor(ctx, tenantID, created.ID, &models.UpdateMonitorRequest{
+		Config: json.RawMessage(`{` + base + `,"secret_variables":{"password":""}}`),
+	}); err != nil {
+		t.Fatalf("UpdateMonitor (clear): %v", err)
+	}
+	if v, present := decodeConfig(t, repo.lastUpdateConfig)["secret_variables"]; present {
+		t.Fatalf("secret_variables = %v after clear, want it removed", v)
+	}
+}

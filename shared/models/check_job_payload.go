@@ -186,6 +186,8 @@ type SyntheticBrowserMonitorConfig struct {
 	Variables   map[string]string            `json:"variables,omitempty"`
 	Artifacts   SyntheticBrowserArtifacts    `json:"artifacts,omitempty"`
 	Steps       []SyntheticBrowserStepConfig `json:"steps"`
+	// SecretVariables: see SyntheticAPIMonitorConfig.SecretVariables.
+	SecretVariables map[string]string `json:"secret_variables,omitempty"`
 }
 
 type SyntheticBrowserArtifacts struct {

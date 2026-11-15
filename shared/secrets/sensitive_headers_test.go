@@ -3,6 +3,7 @@ package secrets
 import (
 	"encoding/json"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -16,11 +17,28 @@ func TestIsSensitiveHeaderName_SharedFixture(t *testing.T) {
 		t.Fatalf("read fixture: %v", err)
 	}
 	var fixture struct {
+		Exact     []string `json:"exact"`
+		Markers   []string `json:"markers"`
 		Sensitive []string `json:"sensitive"`
 		Plain     []string `json:"plain"`
 	}
 	if err := json.Unmarshal(raw, &fixture); err != nil {
 		t.Fatalf("decode fixture: %v", err)
+	}
+	// The rule itself is the fixture: the exact names and the markers must be
+	// those listed, so neither twin can add or drop one unnoticed.
+	exact := make([]string, 0, len(sensitiveHeaderExact))
+	for name := range sensitiveHeaderExact {
+		exact = append(exact, name)
+	}
+	sort.Strings(exact)
+	wantExact := append([]string(nil), fixture.Exact...)
+	sort.Strings(wantExact)
+	if strings.Join(exact, ",") != strings.Join(wantExact, ",") {
+		t.Fatalf("exact names = %v, fixture has %v", exact, wantExact)
+	}
+	if strings.Join(sensitiveHeaderMarkers, ",") != strings.Join(fixture.Markers, ",") {
+		t.Fatalf("markers = %v, fixture has %v", sensitiveHeaderMarkers, fixture.Markers)
 	}
 	if len(fixture.Sensitive) == 0 || len(fixture.Plain) == 0 {
 		t.Fatal("fixture is empty")
@@ -137,8 +155,8 @@ func TestHasSecretValues(t *testing.T) {
 		{"grpc", `{"host":"x","secret_metadata":{"a":"b"}}`, true},
 		{"synthetic_api", `{"variables":{"a":"b"},"steps":[]}`, false},
 		{"synthetic_api", `{"secret_variables":{"a":"b"},"steps":[]}`, true},
-		// Types outside the request-credential registry stay on the fast path.
-		{"synthetic_browser", `{"secret_variables":{"a":"b"},"steps":[]}`, false},
+		{"synthetic_browser", `{"secret_variables":{"a":"b"},"steps":[]}`, true},
+		{"synthetic_browser", `{"variables":{"a":"b"},"steps":[]}`, false},
 		{"ping", `{"host":"secret_headers"}`, false},
 		{"redis", `{"host":"x"}`, false},
 		{"redis", `{"host":"x","password":"p"}`, true},
@@ -196,6 +214,12 @@ func TestRequestSecretFieldsLifecycle(t *testing.T) {
 			create:      `{"steps":[],"secret_variables":{"password":"pw"}}`,
 			update:      `{"steps":[],"secret_variables":{}}`,
 			wantAbsent:  []string{"secret_variables.password"},
+		},
+		{
+			monitorType: "synthetic_browser",
+			create:      `{"start_url":"https://x.test","steps":[],"secret_variables":{"password":"pw1"}}`,
+			update:      `{"start_url":"https://x.test","steps":[],"secret_variables":{"password":"***"}}`,
+			wantPlain:   map[string]string{"secret_variables.password": "pw1"},
 		},
 	}
 	for _, tc := range cases {
@@ -286,42 +310,50 @@ func TestNormalizeSensitiveHeaders_GRPCMetadata(t *testing.T) {
 	}
 }
 
-func TestMoveSensitiveVariables(t *testing.T) {
-	in := json.RawMessage(`{"steps":[],"variables":{"username":"u","password":"pw","api_token":"","x":"1"},"secret_variables":{"session_secret":"enc"}}`)
-	out, changed, err := MoveSensitiveVariables("synthetic_api", in)
-	if err != nil || !changed {
-		t.Fatalf("MoveSensitiveVariables: changed=%v err=%v", changed, err)
-	}
-	var cfg struct {
-		Variables       map[string]string `json:"variables"`
-		SecretVariables map[string]string `json:"secret_variables"`
-	}
-	if err := json.Unmarshal(out, &cfg); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	// An empty credential-named value has nothing to protect and stays.
-	if len(cfg.Variables) != 3 || cfg.Variables["username"] != "u" || cfg.Variables["x"] != "1" || cfg.Variables["api_token"] != "" {
-		t.Fatalf("variables = %v", cfg.Variables)
-	}
-	if cfg.SecretVariables["password"] != "pw" || cfg.SecretVariables["session_secret"] != "enc" {
-		t.Fatalf("secret_variables = %v", cfg.SecretVariables)
+// TestNormalizeSensitiveHeaders_CredentialNamedVariables: every write moves
+// a credential-named plain synthetic variable into secret_variables, for API
+// and browser journeys alike, the same rule the backfill applies to stored
+// rows.
+func TestNormalizeSensitiveHeaders_CredentialNamedVariables(t *testing.T) {
+	for _, monitorType := range []string{"synthetic_api", "synthetic_browser"} {
+		t.Run(monitorType, func(t *testing.T) {
+			in := json.RawMessage(`{"steps":[],"variables":{"username":"u","password":"pw","api_token":"","x":"1"},"secret_variables":{"session_secret":"enc"}}`)
+			out, changed, err := NormalizeSensitiveHeaders(monitorType, in)
+			if err != nil || !changed {
+				t.Fatalf("NormalizeSensitiveHeaders: changed=%v err=%v", changed, err)
+			}
+			var cfg struct {
+				Variables       map[string]string `json:"variables"`
+				SecretVariables map[string]string `json:"secret_variables"`
+			}
+			if err := json.Unmarshal(out, &cfg); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			// An empty credential-named value has nothing to protect and stays.
+			if len(cfg.Variables) != 3 || cfg.Variables["username"] != "u" || cfg.Variables["x"] != "1" || cfg.Variables["api_token"] != "" {
+				t.Fatalf("variables = %v", cfg.Variables)
+			}
+			if cfg.SecretVariables["password"] != "pw" || cfg.SecretVariables["session_secret"] != "enc" {
+				t.Fatalf("secret_variables = %v", cfg.SecretVariables)
+			}
+			if again, changed, _ := NormalizeSensitiveHeaders(monitorType, out); changed || string(again) != string(out) {
+				t.Fatalf("second pass changed the config: %s", again)
+			}
+		})
 	}
 
-	// A name already secret keeps its secret value; the plain copy goes.
-	both := json.RawMessage(`{"steps":[],"variables":{"password":"plain"},"secret_variables":{"password":"enc"}}`)
-	out, changed, _ = MoveSensitiveVariables("synthetic_api", both)
-	if !changed || strings.Contains(string(out), "plain") || !strings.Contains(string(out), `"password":"enc"`) {
-		t.Fatalf("collision handling: changed=%v out=%s", changed, out)
+	// A moved value replaces a same-named secret, as a moved header does; a
+	// placeholder is dropped and leaves the stored secret alone.
+	out, _, _ := NormalizeSensitiveHeaders("synthetic_api", json.RawMessage(`{"steps":[],"variables":{"password":"new"},"secret_variables":{"password":"enc-old"}}`))
+	if !strings.Contains(string(out), `"password":"new"`) || strings.Contains(string(out), "enc-old") || strings.Contains(string(out), `"variables"`) {
+		t.Fatalf("replace: %s", out)
 	}
-
-	if _, changed, _ := MoveSensitiveVariables("synthetic_api", out); changed {
-		t.Fatal("second pass changed the config")
+	out, _, _ = NormalizeSensitiveHeaders("synthetic_browser", json.RawMessage(`{"steps":[],"variables":{"password":"***"},"secret_variables":{"password":"enc-old"}}`))
+	if strings.Contains(string(out), "***") || !strings.Contains(string(out), `"password":"enc-old"`) {
+		t.Fatalf("placeholder: %s", out)
 	}
-	if _, changed, _ := MoveSensitiveVariables("http", in); changed {
-		t.Fatal("non-synthetic type changed")
-	}
-	if _, changed, _ := MoveSensitiveVariables("synthetic_browser", in); changed {
-		t.Fatal("synthetic_browser has no secret_variables and must not change")
+	if _, changed, _ := NormalizeSensitiveHeaders("http", json.RawMessage(`{"url":"https://x","variables":{"password":"p"}}`)); changed {
+		t.Fatal("http has no variables to move")
 	}
 }
 

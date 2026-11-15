@@ -104,8 +104,16 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
       initialSyntheticBrowserConfig?.variables?.username ||
       initialSyntheticBrowserConfig?.variables?.email ||
       '',
+    // The password is a secret variable; a legacy config kept it in plain
+    // `variables`, which loads as typed and is saved back as a secret.
     password: initialSyntheticBrowserConfig?.variables?.password || '',
+    password_stored: false,
   };
+  const storedBrowserPassword = initialSyntheticBrowserConfig?.secret_variables?.password;
+  if (storedBrowserPassword !== undefined) {
+    initialSyntheticBrowserGuided.password = storedBrowserPassword === MASKED_SECRET ? '' : storedBrowserPassword;
+    initialSyntheticBrowserGuided.password_stored = storedBrowserPassword === MASKED_SECRET && isEditMode;
+  }
 
   return {
     name: sourceName,
@@ -165,6 +173,8 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     synthetic_browser_device: initialSyntheticBrowserConfig?.device || 'Desktop Chrome',
     synthetic_browser_failure_mode: initialSyntheticBrowserConfig?.failure_mode || 'fail_fast',
     synthetic_browser_variables: mapVariablesToRows(initialSyntheticBrowserConfig?.variables),
+    synthetic_browser_secret_variables: secretRowsFromMap(initialSyntheticBrowserConfig?.secret_variables, isEditMode) as SecretKV[],
+    synthetic_browser_secret_variables_stored: storedKeys(initialSyntheticBrowserConfig?.secret_variables),
     synthetic_browser_steps: mapSyntheticBrowserStepsToDraft(initialSyntheticBrowserConfig?.steps),
     synthetic_browser_screenshot_on_failure: initialSyntheticBrowserConfig?.artifacts?.screenshot_on_failure ?? true,
     synthetic_browser_trace_on_failure: initialSyntheticBrowserConfig?.artifacts?.trace_on_failure ?? false,
@@ -178,6 +188,7 @@ export function initialMonitorFormState(monitor?: Monitor, initialData?: CreateM
     synthetic_browser_guided_expected_url: initialSyntheticBrowserGuided.expected_url,
     synthetic_browser_guided_username: initialSyntheticBrowserGuided.username,
     synthetic_browser_guided_password: initialSyntheticBrowserGuided.password,
+    synthetic_browser_guided_password_stored: initialSyntheticBrowserGuided.password_stored,
     interval_seconds: sourceIntervalSeconds,
     timeout_seconds: sourceTimeoutSeconds,
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
@@ -242,6 +253,7 @@ export const hasAdvancedSyntheticAPIConfig = (config: SyntheticAPIMonitorConfig)
 /** A loaded synthetic browser config that the Basic editor would hide parts of. */
 export const hasAdvancedSyntheticBrowserConfig = (config: SyntheticBrowserMonitorConfig): boolean =>
   Object.keys(config.variables || {}).length > 0 ||
+  Object.keys(config.secret_variables || {}).length > 0 ||
   Boolean(config.device) ||
   (config.steps || []).some((step) => Boolean(step.timeout_seconds));
 
@@ -257,6 +269,7 @@ export const syntheticBrowserGuidedDraftFromForm = (form: MonitorFormState): Syn
   expected_url: form.synthetic_browser_guided_expected_url,
   username: form.synthetic_browser_guided_username,
   password: form.synthetic_browser_guided_password,
+  password_stored: form.synthetic_browser_guided_password_stored,
 });
 
 /** Leaving guided for expert: the guided journey becomes the expert fields. */
@@ -268,6 +281,7 @@ export const syntheticBrowserGuidedToExpertFields = (form: MonitorFormState): Pa
     synthetic_browser_failure_mode: 'fail_fast',
     synthetic_browser_steps: next.steps,
     synthetic_browser_variables: mapVariablesToRows(next.variables),
+    synthetic_browser_secret_variables: secretRowsFromMap(next.secretVariables, form.synthetic_browser_guided_password_stored),
     synthetic_browser_screenshot_on_failure: true,
     synthetic_browser_trace_on_failure: false,
     synthetic_browser_har_on_failure: false,
@@ -344,6 +358,7 @@ export const syntheticBrowserTemplateFields = (template: 'login_flow' | 'homepag
       synthetic_browser_device: 'Desktop Chrome',
       synthetic_browser_failure_mode: 'fail_fast',
       synthetic_browser_variables: [{ key: '', value: '' }],
+      synthetic_browser_secret_variables: [],
       synthetic_browser_steps: [
         { ...defaultSyntheticBrowserStep(1), id: 'open', action: 'goto', url: 'https://app.example.com' },
         { ...defaultSyntheticBrowserStep(2), id: 'hero_visible', action: 'assert_visible', selector: 'main' },
@@ -359,10 +374,8 @@ export const syntheticBrowserTemplateFields = (template: 'login_flow' | 'homepag
     synthetic_browser_start_url: 'https://app.example.com/login',
     synthetic_browser_device: 'Desktop Chrome',
     synthetic_browser_failure_mode: 'fail_fast',
-    synthetic_browser_variables: [
-      { key: 'email', value: 'monitor@example.com' },
-      { key: 'password', value: 'change-me' },
-    ],
+    synthetic_browser_variables: [{ key: 'email', value: 'monitor@example.com' }],
+    synthetic_browser_secret_variables: [{ key: 'password', value: 'change-me', secret: true }],
     synthetic_browser_steps: [
       { ...defaultSyntheticBrowserStep(1), id: 'open_login', action: 'goto', url: 'https://app.example.com/login' },
       { ...defaultSyntheticBrowserStep(2), id: 'fill_email', action: 'fill', selector: '[name=email]', value: '{{email}}' },
@@ -684,6 +697,17 @@ export function validateMonitorForm(
           break;
         }
       }
+      const browserSecretRows = form.synthetic_browser_secret_variables || [];
+      const badBrowserSecretName = browserSecretRows.find(
+        (row) => row.key.trim() && !SYNTHETIC_VARIABLE_NAME.test(row.key.trim())
+      );
+      const browserSecretError =
+        secretRowsError(browserSecretRows, 'Secret variables', () => true) ??
+        (badBrowserSecretName
+          ? `"${badBrowserSecretName.key.trim()}" may only contain letters, digits, '_', '.' and '-'`
+          : undefined) ??
+        bothMapsError(form.synthetic_browser_variables || [], browserSecretRows);
+      if (browserSecretError) newErrors.synthetic_browser_secret_variables = browserSecretError;
 
       const steps = form.synthetic_browser_steps || [];
       if (steps.length === 0) {
@@ -979,6 +1003,9 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
       if (Object.keys(guided.variables).length > 0) {
         syntheticBrowserConfig.variables = guided.variables;
       }
+      if (Object.keys(guided.secretVariables).length > 0 || form.synthetic_browser_secret_variables_stored) {
+        syntheticBrowserConfig.secret_variables = guided.secretVariables;
+      }
       config = syntheticBrowserConfig;
     } else {
       const variables: Record<string, string> = {};
@@ -1019,6 +1046,11 @@ export function buildMonitorFormConfig(type: MonitorType, form: MonitorFormState
       if (Object.keys(variables).length > 0) {
         syntheticBrowserConfig.variables = variables;
       }
+      const browserSecretVariables = secretVariablesToSubmit(
+        form.synthetic_browser_secret_variables || [],
+        form.synthetic_browser_secret_variables_stored
+      );
+      if (browserSecretVariables) syntheticBrowserConfig.secret_variables = browserSecretVariables;
       config = syntheticBrowserConfig;
     }
   }

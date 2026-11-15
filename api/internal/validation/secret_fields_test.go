@@ -49,6 +49,14 @@ func TestRequestSecretFieldValidation(t *testing.T) {
 			`{"variables":{"host":"x"},"secret_variables":{"token":"***"},"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test/{{host}}","headers":{"Authorization":"Bearer {{token}}"}}},{"id":"b","request":{"method":"GET","url":"https://x.test/{{ session }}"},"extract":[{"name":"session","from":"json","path":"s"}]}]}`, ""},
 		{"synthetic api variable in both maps", &SyntheticAPIConfigValidator{},
 			`{"variables":{"token":"a"},"secret_variables":{"token":"b"},"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test"}}]}`, "both variables and secret_variables"},
+		{"synthetic api secret names differing by case", &SyntheticAPIConfigValidator{},
+			`{"secret_variables":{"Token":"a","token":"b"},"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test"}}]}`, "differ only by case"},
+		{"synthetic browser secret password", &SyntheticBrowserConfigValidator{},
+			`{"start_url":"https://x.test/login","variables":{"username":"u"},"secret_variables":{"password":"***"},"steps":[{"id":"p","action":"fill","selector":"#p","value":"{{password}}"}]}`, ""},
+		{"synthetic browser variable in both maps", &SyntheticBrowserConfigValidator{},
+			`{"start_url":"https://x.test","variables":{"password":"a"},"secret_variables":{"password":"b"},"steps":[{"id":"a","action":"goto","url":"https://x.test"}]}`, "both variables and secret_variables"},
+		{"synthetic browser secret names differing by case", &SyntheticBrowserConfigValidator{},
+			`{"start_url":"https://x.test","secret_variables":{"PW":"a","pw":"b"},"steps":[{"id":"a","action":"goto","url":"https://x.test"}]}`, "differ only by case"},
 		{"synthetic api padded secret name", &SyntheticAPIConfigValidator{},
 			`{"secret_variables":{" token":"b"},"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test"}}]}`, "may only contain"},
 		{"synthetic api bad secret name", &SyntheticAPIConfigValidator{},
@@ -85,6 +93,17 @@ func TestSecretKeySpelling(t *testing.T) {
 		{models.MonitorTypeWebSocket, `{"url":"wss://x.test","HEADERS":{"a":"b"}}`, `must be spelled "headers"`},
 		{models.MonitorTypeGRPC, `{"host":"g.test","Secret_Metadata":{"a":"b"}}`, `must be spelled "secret_metadata"`},
 		{models.MonitorTypeHTTP, `{"url":"https://x.test","method":"GET","basic_auth_username":"u","basic_auth_password":"pw"}`, ""},
+		// Plain keys the header move reads: a miscased spelling would carry a
+		// credential past it in plain text, at every level the worker decodes.
+		{models.MonitorTypeHTTP, `{"url":"https://x.test","method":"GET","Headers":{"Authorization":"Bearer x"}}`, `"Headers" must be spelled "headers"`},
+		{models.MonitorTypeGRPC, `{"host":"g.test","Metadata":{"authorization":"Bearer x"}}`, `"Metadata" must be spelled "metadata"`},
+		{models.MonitorTypeSyntheticAPI, `{"Variables":{"password":"p"},"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test"}}]}`, `"Variables" must be spelled "variables"`},
+		{models.MonitorTypeSyntheticAPI, `{"Steps":[{"id":"a","request":{"method":"GET","url":"https://x.test"}}]}`, `"Steps" must be spelled "steps"`},
+		{models.MonitorTypeSyntheticAPI, `{"steps":[{"id":"a","Request":{"method":"GET","url":"https://x.test"}}]}`, `"steps[0].Request" must be spelled "steps[0].request"`},
+		{models.MonitorTypeSyntheticAPI, `{"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test"}},{"id":"b","request":{"method":"GET","url":"https://x.test","Headers":{"Authorization":"x"}}}]}`, `"steps[1].request.Headers" must be spelled "steps[1].request.headers"`},
+		{models.MonitorTypeSyntheticBrowser, `{"start_url":"https://x.test","Variables":{"password":"p"},"steps":[{"id":"a","action":"goto","url":"https://x.test"}]}`, `"Variables" must be spelled "variables"`},
+		{models.MonitorTypeSyntheticBrowser, `{"start_url":"https://x.test","Secret_Variables":{"password":"p"},"steps":[{"id":"a","action":"goto","url":"https://x.test"}]}`, `"Secret_Variables" must be spelled "secret_variables"`},
+		{models.MonitorTypeSyntheticAPI, `{"variables":{"a":"b"},"steps":[{"id":"a","request":{"method":"GET","url":"https://x.test","headers":{"Accept":"*/*"}}}]}`, ""},
 		// Types without secrets are left to their own validator.
 		{models.MonitorTypePing, `{"host":"x.test","Password":"pw"}`, ""},
 	}
@@ -119,6 +138,7 @@ func TestValidateMergedSecretPairs(t *testing.T) {
 		{models.MonitorTypeGRPC, `{"host":"g.test","metadata":{"Tenant":"a"},"secret_metadata":{"tenant":"enc"}}`, "both metadata and secret_metadata"},
 		{models.MonitorTypeSyntheticAPI, `{"variables":{"token":"a"},"secret_variables":{"token":"enc"},"steps":[]}`, "both variables and secret_variables"},
 		{models.MonitorTypeHTTP, `{"url":"https://x.test","method":"GET","headers":{"Accept":"*/*"},"secret_headers":{"Authorization":"enc"}}`, ""},
+		{models.MonitorTypeSyntheticBrowser, `{"start_url":"https://x.test","variables":{"pw":"a"},"secret_variables":{"pw":"enc"},"steps":[]}`, "both variables and secret_variables"},
 		{models.MonitorTypePing, `{"host":"x"}`, ""},
 	}
 	for _, tc := range cases {

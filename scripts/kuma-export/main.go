@@ -36,6 +36,8 @@ import (
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // kumaSecretFields hold nothing but a credential, so they are dropped whole
@@ -52,18 +54,6 @@ var kumaSecretFields = []string{
 	"mqttPassword",
 	"pushToken",
 }
-
-// kumaSensitiveHeaders mirrors the importer's own rule. Redaction removes the
-// credential, not the field, so a monitor's harmless headers survive.
-var kumaSensitiveHeaders = map[string]bool{
-	"authorization":       true,
-	"proxy-authorization": true,
-	"cookie":              true,
-	"x-api-key":           true,
-	"x-auth-token":        true,
-}
-
-var kumaSensitiveHeaderMarkers = []string{"token", "secret", "apikey", "api-key", "password"}
 
 func main() {
 	if err := run(); err != nil {
@@ -555,7 +545,10 @@ func stripURLPassword(conn string) string {
 }
 
 // stripSensitiveHeaders drops credential-bearing entries from Kuma's
-// JSON-encoded headers column, keeping the rest.
+// JSON-encoded headers column, keeping the rest. Credential names follow
+// secrets.IsSensitiveHeaderName, the rule the importer and the API apply.
+// Redaction removes the credential, not the field, so a monitor's harmless
+// headers survive.
 func stripSensitiveHeaders(encoded string) string {
 	var headers map[string]interface{}
 	if err := json.Unmarshal([]byte(encoded), &headers); err != nil {
@@ -564,7 +557,7 @@ func stripSensitiveHeaders(encoded string) string {
 	}
 
 	for name := range headers {
-		if isSensitiveHeader(name) {
+		if secrets.IsSensitiveHeaderName(name) {
 			delete(headers, name)
 		}
 	}
@@ -577,19 +570,6 @@ func stripSensitiveHeaders(encoded string) string {
 		return ""
 	}
 	return string(rewritten)
-}
-
-func isSensitiveHeader(name string) bool {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	if kumaSensitiveHeaders[lower] {
-		return true
-	}
-	for _, marker := range kumaSensitiveHeaderMarkers {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func truncate(text string) string {

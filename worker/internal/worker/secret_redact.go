@@ -10,7 +10,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // secretRedactor scrubs known secret values from text a check reports. A
@@ -22,33 +24,47 @@ import (
 // (request credentials it sent, say, before storing a response excerpt) can
 // build one with newSecretRedactor and call redact or redactResult.
 type secretRedactor struct {
-	needles []string
+	needles []redactNeedle
 }
 
+// redactNeedle is one spelling of one secret. A spelling of a short secret
+// (secretMinSubstringRunes) is only replaced where it stands as a whole token.
+type redactNeedle struct {
+	text      string
+	tokenOnly bool
+}
+
+// secretMinSubstringRunes is the shortest secret replaced wherever it occurs.
+// A shorter one ("e", "42") would turn every matching letter or digit of a
+// message into [REDACTED] and wreck it, so it is replaced only where it makes
+// up a whole token: a whole string, or a run bounded by anything but a letter
+// or digit (`?key=abc&x` loses `abc`, `error` keeps its `e`). The same text
+// inside a longer word stays visible; that is the documented limit.
+const secretMinSubstringRunes = 4
+
 // newSecretRedactor returns nil when there is nothing to redact, and a nil
-// redactor passes everything through. Every non-empty value is redacted,
-// however short: these are configured credentials, not guesses. Besides each
-// value verbatim it matches the forms a value takes on its way into reported
-// text (secretValueForms), longest first so a value never leaves a fragment of
-// a longer one behind.
+// redactor passes everything through. Besides each value verbatim it matches
+// the forms a value takes on its way into reported text (secretValueForms),
+// longest first so a value never leaves a fragment of a longer one behind.
 func newSecretRedactor(values []string) *secretRedactor {
 	seen := map[string]bool{}
-	var needles []string
+	var needles []redactNeedle
 	for _, value := range values {
 		if value == "" {
 			continue
 		}
+		short := utf8.RuneCountInString(value) < secretMinSubstringRunes
 		for _, form := range secretValueForms(value) {
 			if form != "" && !seen[form] {
 				seen[form] = true
-				needles = append(needles, form)
+				needles = append(needles, redactNeedle{text: form, tokenOnly: short})
 			}
 		}
 	}
 	if len(needles) == 0 {
 		return nil
 	}
-	sort.SliceStable(needles, func(i, j int) bool { return len(needles[i]) > len(needles[j]) })
+	sort.SliceStable(needles, func(i, j int) bool { return len(needles[i].text) > len(needles[j].text) })
 	return &secretRedactor{needles: needles}
 }
 
@@ -118,11 +134,53 @@ func (r *secretRedactor) redact(text string) string {
 		return text
 	}
 	for _, needle := range r.needles {
-		if strings.Contains(text, needle) {
-			text = strings.ReplaceAll(text, needle, syntheticRedacted)
+		if !strings.Contains(text, needle.text) {
+			continue
+		}
+		if needle.tokenOnly {
+			text = replaceWholeTokens(text, needle.text, syntheticRedacted)
+		} else {
+			text = strings.ReplaceAll(text, needle.text, syntheticRedacted)
 		}
 	}
 	return text
+}
+
+// contains reports whether text carries any spelling of a secret, under the
+// same whole-token rule redact applies to short secrets.
+func (r *secretRedactor) contains(text string) bool {
+	return r != nil && r.redact(text) != text
+}
+
+// replaceWholeTokens replaces each occurrence of needle in text that is not
+// adjacent, in the original text, to a letter or digit on either side.
+func replaceWholeTokens(text, needle, replacement string) string {
+	var b strings.Builder
+	last := 0
+	for from := 0; from <= len(text)-len(needle); {
+		i := strings.Index(text[from:], needle)
+		if i < 0 {
+			break
+		}
+		start := from + i
+		end := start + len(needle)
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if !isWordRune(before) && !isWordRune(after) {
+			b.WriteString(text[last:start])
+			b.WriteString(replacement)
+			last = end
+			from = end
+		} else {
+			from = start + 1
+		}
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // redactResult scrubs the error message and every string in the metrics

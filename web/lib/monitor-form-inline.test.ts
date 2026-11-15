@@ -28,9 +28,9 @@ import type {
 // MonitorForm's own types: http, ping, dns, synthetic_api, synthetic_browser.
 // The edit round trips pin that every stored field survives a save; the
 // secret-bearing fields (http secret_headers + basic_auth_password, synthetic
-// API secret_variables: shared/secrets MonitorSecretFields and
+// secret_variables: shared/secrets MonitorSecretFields and
 // MonitorSecretMapFields) have their own tests at the end, pinning the merge
-// contract. synthetic_browser has no monitor secret.
+// contract; synthetic_browser secret_variables (its login password) too.
 
 /** A fresh create: the form starts on http, then the operator picks `type`. */
 function freshCreate(type: CreateMonitorRequest['type'], patch: Partial<MonitorFormState> = {}): MonitorFormState {
@@ -688,8 +688,9 @@ const GUIDED_LOGIN_CONFIG = {
     { id: 'assert_url', action: 'assert_url', value: '/dashboard' },
   ],
   artifacts: { screenshot_on_failure: true, trace_on_failure: false, har_on_failure: false },
-  // Not a monitor secret: synthetic variables are stored and served in plain text.
-  variables: { username: 'robot@example.com', password: 's3cret' },
+  variables: { username: 'robot@example.com' },
+  // The password is a secret variable: encrypted, masked, redacted from results.
+  secret_variables: { password: 's3cret' },
 };
 
 test('synthetic_browser: create from a filled guided login flow', () => {
@@ -729,7 +730,8 @@ test('synthetic_browser: create from an expert template, customized', () => {
       { id: 'assert_url', action: 'assert_url', value: '/dashboard' },
     ],
     artifacts: { screenshot_on_failure: true, trace_on_failure: true, har_on_failure: false },
-    variables: { email: 'monitor@example.com', password: 'change-me' },
+    variables: { email: 'monitor@example.com' },
+    secret_variables: { password: 'change-me' },
   });
 });
 
@@ -940,4 +942,49 @@ test('synthetic_api secrets: edit keeps, drops and validates secret variables', 
     validateMonitorForm('synthetic_api', form, false).synthetic_api_secret_variables,
     '"email" is both a variable and a secret variable'
   );
+});
+
+test('synthetic_browser secrets: a guided edit keeps the stored password', () => {
+  const monitor = storedMonitor('synthetic_browser', {
+    ...GUIDED_LOGIN_CONFIG,
+    secret_variables: { password: MASKED_SECRET },
+  } as SyntheticBrowserMonitorConfig);
+  const form = initialMonitorFormState(monitor);
+  assert.equal(form.synthetic_browser_guided_password, '');
+  assert.equal(form.synthetic_browser_guided_password_stored, true);
+  const login: MonitorFormState = { ...form, synthetic_browser_guided_template: 'login_flow' };
+  const built = buildMonitorFormRequest('synthetic_browser', login, true).config as SyntheticBrowserMonitorConfig;
+  assert.deepEqual(built.secret_variables, { password: MASKED_SECRET });
+  assert.ok(built.steps.some((step) => step.id === 'fill_password'));
+
+  // Switching to expert carries the stored password as a kept secret row.
+  const expert = { ...login, ...syntheticBrowserGuidedToExpertFields(login) };
+  const expertBuilt = buildMonitorFormRequest('synthetic_browser', expert, false).config as SyntheticBrowserMonitorConfig;
+  assert.deepEqual(expertBuilt.secret_variables, { password: MASKED_SECRET });
+});
+
+test('synthetic_browser secrets: a legacy plain password loads as typed and saves as a secret', () => {
+  const monitor = storedMonitor('synthetic_browser', {
+    ...GUIDED_LOGIN_CONFIG,
+    variables: { username: 'robot@example.com', password: 'legacy' },
+    secret_variables: undefined,
+  } as unknown as SyntheticBrowserMonitorConfig);
+  const form: MonitorFormState = { ...initialMonitorFormState(monitor), synthetic_browser_guided_template: 'login_flow' };
+  const built = buildMonitorFormRequest('synthetic_browser', form, true).config as SyntheticBrowserMonitorConfig;
+  assert.deepEqual(built.variables, { username: 'robot@example.com' });
+  assert.deepEqual(built.secret_variables, { password: 'legacy' });
+});
+
+test('synthetic_browser secrets: a clone never submits the masked password', () => {
+  const monitor = storedMonitor('synthetic_browser', {
+    ...GUIDED_LOGIN_CONFIG,
+    secret_variables: { password: MASKED_SECRET },
+  } as SyntheticBrowserMonitorConfig);
+  const form = initialMonitorFormState(undefined, buildClonedMonitorInitialData(monitor));
+  assert.equal(form.synthetic_browser_secret_variables[0].hasStoredValue, false);
+  assert.equal(
+    validateMonitorForm('synthetic_browser', form, false).synthetic_browser_secret_variables,
+    'Secret variables must have both a name and a value'
+  );
+  assert.equal(form.synthetic_browser_guided_password_stored, false);
 });

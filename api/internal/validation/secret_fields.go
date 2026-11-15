@@ -115,9 +115,20 @@ func validateGRPCMetadata(config sharedmodels.GRPCMonitorConfig) error {
 var syntheticVariableName = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 
 // validateSyntheticVariables checks a variables/secret_variables pair: secret
-// names are usable in a {{ref}}, and no name is in both maps (the worker
-// would silently pick one).
+// names are usable in a {{ref}}, no name is in both maps (the worker would
+// silently pick one), and no two secret names differ only by case: {{refs}}
+// are case-sensitive but the write-only merge matches a "***" key to its
+// stored value case-insensitively, so `Token` and `token` could swap values
+// on a masked round trip.
 func validateSyntheticVariables(variables, secretVariables map[string]string) error {
+	folded := make(map[string]string, len(secretVariables))
+	for name := range secretVariables {
+		lower := strings.ToLower(name)
+		if prev, dup := folded[lower]; dup {
+			return fmt.Errorf("secret_variables %q and %q differ only by case; rename one", prev, name)
+		}
+		folded[lower] = name
+	}
 	for name := range secretVariables {
 		trimmed := strings.TrimSpace(name)
 		if trimmed == "" {
@@ -133,31 +144,88 @@ func validateSyntheticVariables(variables, secretVariables map[string]string) er
 	return nil
 }
 
-// validateSecretKeySpelling refuses a top-level config key that matches one of
-// the type's registered secret fields (shared/secrets MonitorSecretFields /
-// MonitorSecretMapFields) case-insensitively but not exactly. Config structs
-// decode case-insensitively, so the validators and the worker would honour
-// `Basic_Auth_Password`, while encryption, masking and the write-only merge
-// match keys exactly and would store and return it in plaintext. Generic over
-// the registry, so a newly registered secret is covered without code here.
+// validateSecretKeySpelling refuses a config key that matches a registered
+// secret field (shared/secrets MonitorSecretFields / MonitorSecretMapFields),
+// or one of the plain keys the write path reads credentials from
+// (secrets.PlainCredentialPaths: http `headers`, grpc `metadata`, synthetic
+// `variables`, a synthetic API step's `request` and its `headers`),
+// case-insensitively but not exactly. Config structs decode keys
+// case-insensitively, so the validators and the worker would honour
+// `Basic_Auth_Password` or `Headers`, while encryption, masking, the
+// write-only merge and the header move match keys exactly and would store,
+// return and dispatch that credential in plain text. Generic over both
+// registries, so a newly registered secret or path is covered without code
+// here.
 func validateSecretKeySpelling(monitorType models.MonitorType, config json.RawMessage) error {
-	if !secrets.HasMonitorSecrets(string(monitorType)) || len(config) == 0 {
+	paths := secrets.PlainCredentialPaths[string(monitorType)]
+	if (!secrets.HasMonitorSecrets(string(monitorType)) && len(paths) == 0) || len(config) == 0 {
 		return nil
 	}
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(config, &keys); err != nil {
+	var root any
+	if err := json.Unmarshal(config, &root); err != nil {
+		return nil // not JSON: the type's validator reports it
+	}
+	top, ok := root.(map[string]any)
+	if !ok {
 		return nil // not an object: the type's validator reports it
 	}
 	fields := append(append([]string(nil), secrets.MonitorSecretFields[string(monitorType)]...),
 		secrets.MonitorSecretMapFields[string(monitorType)]...)
-	for key := range keys {
-		for _, field := range fields {
-			if key != field && strings.EqualFold(key, field) {
-				return fmt.Errorf("config key %q must be spelled %q", key, field)
-			}
+	for _, field := range fields {
+		if err := refuseMiscasedKey(top, field, ""); err != nil {
+			return err
+		}
+	}
+	for _, path := range paths {
+		if err := refuseMiscasedPath(top, path, ""); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// refuseMiscasedPath walks path from node, refusing a miscased spelling of
+// each key on it. "*" descends into every element of an array.
+func refuseMiscasedPath(node any, path []string, where string) error {
+	if len(path) == 0 {
+		return nil
+	}
+	if path[0] == "*" {
+		items, _ := node.([]any)
+		for i, item := range items {
+			if err := refuseMiscasedPath(item, path[1:], fmt.Sprintf("%s[%d]", where, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	object, ok := node.(map[string]any)
+	if !ok {
+		return nil
+	}
+	key := path[0]
+	if err := refuseMiscasedKey(object, key, where); err != nil {
+		return err
+	}
+	return refuseMiscasedPath(object[key], path[1:], joinKeyPath(where, key))
+}
+
+// refuseMiscasedKey refuses a key of object that spells key in another case.
+// where is the object's own path, for the message.
+func refuseMiscasedKey(object map[string]any, key, where string) error {
+	for candidate := range object {
+		if candidate != key && strings.EqualFold(candidate, key) {
+			return fmt.Errorf("config key %q must be spelled %q", joinKeyPath(where, candidate), joinKeyPath(where, key))
+		}
+	}
+	return nil
+}
+
+func joinKeyPath(where, key string) string {
+	if where == "" {
+		return key
+	}
+	return where + "." + key
 }
 
 // ValidateMergedSecretPairs re-runs the plain/secret pair rules on a config
@@ -184,6 +252,12 @@ func ValidateMergedSecretPairs(monitorType models.MonitorType, config json.RawMe
 		return validateHeaderPair("metadata", cfg.Metadata, "secret_metadata", cfg.SecretMetadata)
 	case models.MonitorTypeSyntheticAPI:
 		var cfg sharedmodels.SyntheticAPIMonitorConfig
+		if err := json.Unmarshal(config, &cfg); err != nil {
+			return nil
+		}
+		return validateSyntheticVariables(cfg.Variables, cfg.SecretVariables)
+	case models.MonitorTypeSyntheticBrowser:
+		var cfg sharedmodels.SyntheticBrowserMonitorConfig
 		if err := json.Unmarshal(config, &cfg); err != nil {
 			return nil
 		}

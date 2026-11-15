@@ -457,6 +457,9 @@ export interface SyntheticBrowserMonitorConfig {
   variables?: Record<string, string>;
   artifacts?: SyntheticBrowserArtifacts;
   steps: SyntheticBrowserStepConfig[];
+  // Write-only {{name}} values (a login password): read back as "***",
+  // redacted from results.
+  secret_variables?: Record<string, string>;
 }
 
 export type MonitorConfig =

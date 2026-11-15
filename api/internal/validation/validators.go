@@ -819,6 +819,9 @@ func (v *SyntheticBrowserConfigValidator) ValidateConfig(configRaw json.RawMessa
 			return fmt.Errorf("variables cannot contain empty keys")
 		}
 	}
+	if err := validateSyntheticVariables(config.Variables, config.SecretVariables); err != nil {
+		return err
+	}
 
 	stepIDs := make(map[string]bool, len(config.Steps))
 	for i, step := range config.Steps {

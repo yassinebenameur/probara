@@ -835,3 +835,41 @@ func TestKumaHTTPConfig_CredentialHeadersAndAuthMethods(t *testing.T) {
 		}
 	})
 }
+
+// TestParseKumaExport_BasicAuthWithoutPasswordImportsDisabled:
+// scripts/kuma-export redacts basic_auth_pass and keeps the username. Such a
+// monitor would send "user:" on every check and alert, so it is created
+// disabled with a note to re-enter the password, as database monitors are.
+func TestParseKumaExport_BasicAuthWithoutPasswordImportsDisabled(t *testing.T) {
+	backup := `{"version":"2.0.0","monitorList":[
+		{"id":1,"name":"Redacted","type":"http","active":true,"url":"https://api.example.com/health","method":"get","interval":60,"maxredirects":10,"basic_auth_user":"svc"},
+		{"id":2,"name":"Full","type":"http","active":true,"url":"https://api.example.com/health","method":"get","interval":60,"maxredirects":10,"basic_auth_user":"svc","basic_auth_pass":"pw"}
+	]}`
+	preview, err := (&Service{}).ParseFile([]byte(backup), "kuma-export.json")
+	if err != nil {
+		t.Fatalf("ParseFile() error = %v", err)
+	}
+
+	redacted := kumaRowByName(t, preview, "Redacted")
+	config := kumaConfig(t, redacted)
+	if config["basic_auth_username"] != "svc" {
+		t.Fatalf("username = %v, want it kept", config["basic_auth_username"])
+	}
+	if _, present := config["basic_auth_password"]; present {
+		t.Fatalf("an empty password must not be imported: %v", config)
+	}
+	if redacted.Fields["enabled"] != false {
+		t.Fatalf("enabled = %v, want the monitor created disabled", redacted.Fields["enabled"])
+	}
+	if !hasWarning(redacted.Warnings, "re-enter the basic auth password") {
+		t.Fatalf("missing password is not reported: %v", redacted.Warnings)
+	}
+	if !hasWarning(preview.Warnings, "1 monitor(s) were imported disabled") {
+		t.Fatalf("summary does not count it: %v", preview.Warnings)
+	}
+
+	full := kumaRowByName(t, preview, "Full")
+	if full.Fields["enabled"] != true || hasWarning(full.Warnings, "re-enter the basic auth password") {
+		t.Fatalf("a monitor with its password must import enabled: %v %v", full.Fields["enabled"], full.Warnings)
+	}
+}

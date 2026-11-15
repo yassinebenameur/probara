@@ -72,8 +72,8 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   monitor config secrets remain masked for every identity.
 - `/monitors/test` remains available to viewers for caller-supplied configs,
   but using saved secrets (`monitor_id` with a secret-bearing monitor type,
-  which includes http, grpc and synthetic_api, whether or not that monitor
-  holds a secret) requires write capability. The saved and requested monitor types must
+  which includes http, grpc, synthetic_api and synthetic_browser, whether or
+  not that monitor holds a secret) requires write capability. The saved and requested monitor types must
   match. Test requests cannot supply ciphertext envelopes directly: use
   write-only placeholders for existing credentials.
 - `RequireTenantAdmin`: API key create/revoke, tenant settings mutation,

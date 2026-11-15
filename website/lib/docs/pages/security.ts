@@ -308,6 +308,13 @@ go run ./cmd/admin/reencrypt_monitor_configs`,
 go run ./cmd/admin/encrypt_existing_channels`,
         },
         {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrade every worker first, private-location workers included',
+          text:
+            'HTTP headers and basic auth, gRPC metadata and synthetic variables that carry credentials now live in secret maps (`secret_headers`, `basic_auth_password`, `secret_metadata`, `secret_variables`), and the API moves them there on every save. A worker older than this release ignores those maps and sends the request without its credentials, so the monitor fails. Upgrade every platform and private-location worker before upgrading the API and scheduler, saving monitors, or running the backfill below. Nothing enforces the order.',
+        },
+        {
           type: 'code',
           language: 'bash',
           title: 'Move plaintext request credentials into secrets (once, after upgrading)',
@@ -317,7 +324,7 @@ go run ./cmd/admin/migrate_sensitive_headers`,
         {
           type: 'paragraph',
           text:
-            'Monitors saved before HTTP, gRPC and synthetic API request credentials became [secrets](/docs/monitors/#secrets) keep them in plain text until their next save. `migrate_sensitive_headers` moves them for every monitor at once, with the current key: credential-named HTTP `headers` into `secret_headers`, gRPC `metadata` into `secret_metadata`, literal credential headers of synthetic API steps into generated `secret_variables` (the header becomes the `{{reference}}`), and credential-named synthetic API `variables` such as `password` into `secret_variables` under the same name. It logs monitor ids, never values, skips deleted monitors and rows edited while it runs (run it again for those), and a second run finds nothing to do. Upgrade every worker, private-location workers included, before saving monitors or running it: an older worker ignores the secret maps and would send these requests without their credentials.',
+            'Monitors saved before HTTP, gRPC and synthetic request credentials became [secrets](/docs/monitors/#secrets) keep them in plain text until their next save. `migrate_sensitive_headers` moves them for every monitor at once, with the current key: credential-named HTTP `headers` into `secret_headers`, gRPC `metadata` into `secret_metadata`, literal credential headers of synthetic API steps into generated `secret_variables` (the header becomes the `{{reference}}`), and credential-named synthetic API and browser `variables` such as `password` into `secret_variables` under the same name. It applies the same rule every save applies. Soft-deleted monitors are migrated too, since their rows stay at rest until purged. It logs monitor ids, never values, skips rows edited while it runs (run it again for those), and a second run finds nothing to do. Run it only after every worker is upgraded (see above).',
         },
         {
           type: 'list',

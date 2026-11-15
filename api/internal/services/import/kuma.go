@@ -469,6 +469,7 @@ func translateKumaMonitor(monitor kumaMonitor, notifierNames map[string]string) 
 	switch kumaType {
 	case "http", "keyword", "json-query":
 		config, warnings, reason = kumaHTTPConfig(monitor, kumaType)
+		disable = kumaBasicAuthPasswordMissing(config)
 	case "grpc-keyword":
 		config, warnings, reason = kumaGRPCConfig(monitor)
 	case "port":
@@ -605,6 +606,10 @@ func kumaHTTPConfig(monitor kumaMonitor, kumaType string) (map[string]interface{
 			config["basic_auth_username"] = user
 			if pass != "" {
 				config["basic_auth_password"] = pass
+			} else {
+				// scripts/kuma-export redacts the password and keeps the
+				// username; an enabled monitor would send "user:" and alert.
+				warnings = append(warnings, kumaBasicAuthPasswordWarning)
 			}
 			// Authorization is a sensitive name, so it can only be here.
 			for name := range secretHeaders {
@@ -697,6 +702,18 @@ func kumaHTTPConfig(monitor kumaMonitor, kumaType string) (map[string]interface{
 	}
 
 	return config, warnings, ""
+}
+
+// kumaBasicAuthPasswordWarning names a basic-auth username imported without
+// its password; such a monitor is created disabled, as database monitors are.
+const kumaBasicAuthPasswordWarning = "the basic auth password was not imported, so this monitor was created disabled - re-enter the basic auth password and enable it"
+
+// kumaBasicAuthPasswordMissing reports a translated http config that carries a
+// basic-auth username but no password.
+func kumaBasicAuthPasswordMissing(config map[string]interface{}) bool {
+	_, hasUser := config["basic_auth_username"]
+	_, hasPassword := config["basic_auth_password"]
+	return hasUser && !hasPassword
 }
 
 // kumaBasicAuth returns the monitor's basic-auth pair when Uptime Kuma would
@@ -1209,7 +1226,8 @@ func summarizeKumaTranslation(mapped []*kumaMapped, skipped []models.ImportSkipp
 				notifications++
 			case strings.HasPrefix(warning, "renamed from"):
 				renamed++
-			case strings.HasPrefix(warning, "the database password was not imported"):
+			case strings.HasPrefix(warning, "the database password was not imported"),
+				warning == kumaBasicAuthPasswordWarning:
 				disabled++
 			}
 		}
@@ -1225,7 +1243,7 @@ func summarizeKumaTranslation(mapped []*kumaMapped, skipped []models.ImportSkipp
 	}
 	if disabled > 0 {
 		warnings = append(warnings, fmt.Sprintf(
-			"%d database monitor(s) were imported disabled because their password was not carried over",
+			"%d monitor(s) were imported disabled because their password was not carried over",
 			disabled))
 	}
 

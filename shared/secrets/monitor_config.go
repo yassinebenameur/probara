@@ -40,14 +40,30 @@ var MonitorSecretFields = map[string][]string{
 // `secret_headers`, `metadata` / `secret_metadata`), and
 // NormalizeSensitiveHeaders moves credential-named entries into the secret
 // side on every write. A secret nested deeper than a top-level key (a
-// synthetic step's header) is never registered as a nested path: it is
-// written as a {{name}} reference to the top-level `secret_variables` map,
-// which the worker resolves and then redacts from everything a check reports.
+// synthetic step's header, a browser step's fill value) is never registered
+// as a nested path: it is written as a {{name}} reference to the top-level
+// `secret_variables` map, which the worker resolves and then redacts from
+// everything a check reports.
 var MonitorSecretMapFields = map[string][]string{
-	"websocket":     {"headers"},
-	"http":          {"secret_headers"},
-	"grpc":          {"secret_metadata"},
-	"synthetic_api": {"secret_variables"},
+	"websocket":         {"headers"},
+	"http":              {"secret_headers"},
+	"grpc":              {"secret_metadata"},
+	"synthetic_api":     {"secret_variables"},
+	"synthetic_browser": {"secret_variables"},
+}
+
+// PlainCredentialPaths lists, per type, the plain config keys
+// NormalizeSensitiveHeaders reads to find credentials, as paths from the
+// config root ("*" is every element of an array). Config structs decode keys
+// case-insensitively but the normalization matches them exactly, so a key on
+// one of these paths spelled in another case (`Headers`, a step's `Request`)
+// would carry a credential past it in plain text; validation refuses one
+// (validateSecretKeySpelling in api/internal/validation).
+var PlainCredentialPaths = map[string][][]string{
+	"http":              {{"headers"}},
+	"grpc":              {{"metadata"}},
+	"synthetic_api":     {{"variables"}, {"steps"}, {"steps", "*", "request"}, {"steps", "*", "request", "headers"}},
+	"synthetic_browser": {{"variables"}},
 }
 
 // HasMonitorSecrets reports whether a monitor type carries secret config fields.
