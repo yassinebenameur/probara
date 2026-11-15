@@ -75,6 +75,7 @@ import (
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/bootstrap"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -127,9 +128,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	r.Use(apimiddleware.RecoveryMiddleware(log))
 	r.Use(apimiddleware.LoggingMiddleware(log))
 	r.Use(apimiddleware.MetricsMiddleware(cfg.ServiceName))
-	r.Use(middleware.RealIP)
+	// Client address for audit, session IPs and rate limits: forwarding
+	// headers count only from TRUSTED_PROXY_CIDRS peers (shared/clientip).
+	r.Use(clientip.NewResolver(cfg.TrustedProxyCIDRs).Middleware)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
+	// Edge security (routes_edge.go): headers, CORS allowlist, anonymous rate limit.
+	rateLimiter := useEdgeSecurity(r, cfg, log)
 
 	// Health and metrics endpoints (no auth required)
 	healthHandlers := NewHandlers(cfg, log, metricsRegistry, dbClient)
@@ -205,6 +210,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
 	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret)
+	authMiddleware = rateLimiter.Authenticate(authMiddleware) // per-credential rate limit (routes_edge.go)
 	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL)
 	mcpHandler := mcpserver.NewHandler(log, oauthHandlers.ResourceMetadataURL)
 	mountOAuthDiscoveryRoutes(r, oauthHandlers)

@@ -1830,7 +1830,7 @@
   {{end}}
 
   {{if .CustomFooterHTML}}{{.CustomFooterHTML}}
-  {{end}}<script>
+  {{end}}<script nonce="{{cspNonce}}">
     (function () {
       const body = document.body;
       const defaultTheme = body.dataset.defaultTheme === 'light' ? 'light' : 'dark';

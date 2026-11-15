@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
@@ -34,6 +35,9 @@ type Handlers struct {
 	// routes 404.
 	pushStore   *pushStore
 	pushLimiter *pushRateLimiter
+	// clientIPs keys pushLimiter: forwarding headers count only from
+	// TRUSTED_PROXY_CIDRS peers, so a visitor cannot spoof a fresh bucket.
+	clientIPs *clientip.Resolver
 }
 
 // NewHandlers creates a new status page handlers
@@ -46,7 +50,15 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		cache:       cache,
 		pushStore:   pushes,
 		pushLimiter: newPushRateLimiter(),
+		clientIPs:   newClientIPResolver(cfg),
 	}
+}
+
+func newClientIPResolver(cfg *config.StatusPageConfig) *clientip.Resolver {
+	if cfg == nil {
+		return clientip.NewResolver(nil)
+	}
+	return clientip.NewResolver(cfg.TrustedProxyCIDRs)
 }
 
 // HandleStatusPage handles GET /public/status/{slug} and GET /public/status/{slug}/data
@@ -114,20 +126,21 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	// concurrent waiter is collapsed onto. A timeout still bounds the load.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), statusPageBuildTimeout)
 	defer cancel()
-	html, etag, err := h.cache.Get(slug, func() (string, error) {
+	page, etag, err := h.cache.GetPage(slug, func() (renderedPage, error) {
 		data, err := h.service.GetStatusPageBySlug(ctx, slug)
 		if err != nil {
-			return "", err
+			return renderedPage{}, err
 		}
 		data.PushPublicKey = h.webPushPublicKey()
-		page, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
+		html, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
 		if customErr != nil {
 			h.logger.WithFields(map[string]interface{}{
 				"error": customErr.Error(),
 				"slug":  slug,
 			}).Warn("Custom status page template failed; serving built-in template")
 		}
-		return page, err
+		csp := pageCSPFor(data, h.appBaseURL(), strings.TrimSpace(data.CustomTemplateSource) != "")
+		return renderedPage{html: html, csp: csp}, err
 	})
 	if err != nil {
 		h.writeStatusPageError(w, slug, err, "Failed to build status page")
@@ -143,10 +156,21 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The CSP (and its per-response nonce) goes only on a full response; see
+	// pageCSP.apply for why a 304 must not carry one.
+	html := page.csp.apply(w.Header(), page.html)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := w.Write([]byte(html)); err != nil {
 		h.logger.WithError(err).Error("Failed to write status page response")
 	}
+}
+
+// appBaseURL is APP_BASE_URL, the operator UI origin allowed to frame pages.
+func (h *Handlers) appBaseURL() string {
+	if h.config == nil {
+		return ""
+	}
+	return h.config.AppBaseURL
 }
 
 func (h *Handlers) apiProxyEnabled() bool {
@@ -219,6 +243,15 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 			return
 		}
 	}
+
+	// The template editor frames this route. Without APP_BASE_URL the
+	// service cannot name the editor's origin, so any ancestor may frame the
+	// preview (it shows only data the live page already publishes).
+	csp := pageCSPFor(data, h.appBaseURL(), hasDraft || strings.TrimSpace(data.CustomTemplateSource) != "")
+	if h.appBaseURL() == "" {
+		csp.frameAncestors = []string{"*"}
+	}
+	html = csp.apply(w.Header(), html)
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex")

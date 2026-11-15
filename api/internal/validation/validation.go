@@ -10,6 +10,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
 
 const (
@@ -522,6 +523,11 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 	}
 	if settings.CustomFooterHTML != nil && len(*settings.CustomFooterHTML) > 64*1024 {
 		return fmt.Errorf("custom_footer_html must be 64KB or less")
+	}
+	if settings.CSPMode != nil {
+		if _, ok := securityheaders.ParseCSPMode(*settings.CSPMode); !ok {
+			return fmt.Errorf("csp_mode must be strict, compatible, off, or empty for automatic")
+		}
 	}
 	return nil
 }

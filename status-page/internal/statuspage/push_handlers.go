@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -41,11 +40,6 @@ const (
 	// unbounded storage.
 	pushSubscriptionCapEnvVar  = "STATUS_PAGE_PUSH_MAX_SUBSCRIPTIONS_PER_PAGE"
 	defaultPushSubscriptionCap = 10000
-
-	// pushTrustProxyEnvVar opts into reading X-Forwarded-For for rate-limit
-	// keying. Off by default: trusting a client-settable header would make
-	// the limiter free to bypass by anyone who can spoof it.
-	pushTrustProxyEnvVar = "STATUS_PAGE_TRUSTED_PROXY"
 
 	// Rate limit per client IP. Subscribing is a once-per-browser action, so
 	// this is generous for real use and still bounds abuse.
@@ -139,7 +133,7 @@ func (h *Handlers) HandlePushSubscribe(w http.ResponseWriter, r *http.Request, s
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
-	if !h.pushLimiter.allow(clientIP(r, pushTrustProxy())) {
+	if !h.pushLimiter.allow(h.clientIPs.Resolve(r)) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
@@ -211,7 +205,7 @@ func (h *Handlers) HandlePushUnsubscribe(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
-	if !h.pushLimiter.allow(clientIP(r, pushTrustProxy())) {
+	if !h.pushLimiter.allow(h.clientIPs.Resolve(r)) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
@@ -297,27 +291,6 @@ func decodePushBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
-}
-
-// clientIP keys the rate limiter. X-Forwarded-For is honoured only behind an
-// explicit opt-in, because it is client-settable.
-func clientIP(r *http.Request, trustProxy bool) string {
-	if trustProxy {
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			if first := strings.TrimSpace(strings.Split(fwd, ",")[0]); first != "" {
-				return first
-			}
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-func pushTrustProxy() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv(pushTrustProxyEnvVar)), "true")
 }
 
 func pushSubscriptionCap() int {

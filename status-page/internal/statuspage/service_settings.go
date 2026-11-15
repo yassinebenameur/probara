@@ -6,6 +6,8 @@ package statuspage
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
 
 type statusPageSettingsPatch struct {
@@ -26,6 +28,8 @@ type statusPageSettingsPatch struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+
+	CSPMode *string `json:"csp_mode,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -46,6 +50,9 @@ type statusPageSettingsStored struct {
 	CustomCSS        string
 	CustomHeadHTML   string
 	CustomFooterHTML string
+
+	// CSPMode is the stored csp_mode; "" is automatic (securityheaders).
+	CSPMode string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -129,6 +136,10 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	}
 	if patch.CustomFooterHTML != nil {
 		stored.CustomFooterHTML = strings.TrimSpace(*patch.CustomFooterHTML)
+	}
+	if patch.CSPMode != nil {
+		// An unknown value reads as automatic; ResolveCSPMode decides.
+		stored.CSPMode, _ = securityheaders.ParseCSPMode(*patch.CSPMode)
 	}
 	return stored
 }

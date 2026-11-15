@@ -180,6 +180,23 @@ services:
       # One-time code required to create the first administrator. Empty (the
       # development default) leaves that form open until an admin exists.
       BOOTSTRAP_SETUP_CODE: "${BOOTSTRAP_SETUP_CODE:-}"
+      # Edge security. TRUSTED_PROXY_CIDRS: the reverse proxies whose
+      # X-Forwarded-For / X-Real-IP are believed for audit, session IPs and
+      # rate limits (comma-separated CIDRs or IPs; empty = the TCP peer only;
+      # set the same value on status-page). HSTS max-age in seconds: 0 (off)
+      # for local HTTP, and it is only ever sent on HTTPS requests. The general
+      # rate limit is per credential, per api replica; 0 disables it. Per
+      # client address it covers anonymous calls and failed credentials only
+      # from a public peer or a trusted proxy's client, so in this stack (the
+      # UI's /api proxy and the Docker gateway are private peers) it limits
+      # credentials only.
+      # API_ALLOWED_ORIGINS lists the browser origins allowed credentialed
+      # CORS (empty = APP_BASE_URL's origin, else same-origin only).
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
+      API_RATE_LIMIT_PER_MINUTE: "${API_RATE_LIMIT_PER_MINUTE:-600}"
+      API_RATE_LIMIT_BURST: "${API_RATE_LIMIT_BURST:-120}"
+      API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -359,6 +376,14 @@ services:
       STATUS_PAGE_VAPID_PUBLIC_KEY: "${STATUS_PAGE_VAPID_PUBLIC_KEY:-}"
       STATUS_PAGE_VAPID_PRIVATE_KEY: "${STATUS_PAGE_VAPID_PRIVATE_KEY:-}"
       STATUS_PAGE_VAPID_SUBJECT: "${STATUS_PAGE_VAPID_SUBJECT:-}"
+      # Same TRUSTED_PROXY_CIDRS and HSTS max-age as on api (the push rate
+      # limit keys on the resolved client address). APP_BASE_URL, the
+      # operator UI origin, joins every page's CSP frame-ancestors; empty
+      # (the default) lets any site frame the draft preview route, so the
+      # template editor works from whatever host serves the UI.
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+      SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
     ports:
       - "8082:8082"
       - "9093:9093"

@@ -159,18 +159,88 @@ export const SECURITY_PAGE: DocPage = {
             'Session cookies are HttpOnly and SameSite=Lax. Their Secure attribute is controlled by `ADMIN_COOKIE_SECURE`, which defaults to false. Production HTTPS deployments must set it to true (the Helm chart does so when `api.publicBaseURL` is an `https://` origin, or through `api.cookieSecure`) and preserve one stable JWT secret across API replicas.',
         },
         {
-          type: 'callout',
-          tone: 'warning',
-          title: 'CORS currently reflects arbitrary Origin values',
+          type: 'paragraph',
           text:
-            'Authenticated API and alert SSE paths echo a supplied `Origin` and set `Access-Control-Allow-Credentials: true`; there is no configured origin allowlist. SameSite=Lax provides some browser protection, but keep API traffic same-origin behind the frontend/reverse proxy or add explicit trusted-origin enforcement.',
+            'Cross-origin browser access is an allowlist: only origins in `API_ALLOWED_ORIGINS` get `Access-Control-Allow-Origin` (with credentials) and preflight answers; every other `Origin` gets no CORS headers, so the browser withholds the response. Unset, the one allowed origin is that of `APP_BASE_URL` (the operator UI), and without that the API serves same-origin callers only, which is all the bundled UI needs because it calls the API through its own `/api` path. `*` is refused. The public OAuth/MCP discovery and token routes keep a wildcard policy without credentials.',
+        },
+      ],
+    },
+    {
+      id: 'edge-controls',
+      title: 'Security headers and rate limits',
+      blocks: [
+        {
+          type: 'table',
+          columns: ['Surface', 'Headers'],
+          rows: [
+            [
+              'API',
+              '`X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, a `Permissions-Policy` that denies camera, microphone, geolocation, payment and USB, `X-Frame-Options: DENY` and `Content-Security-Policy: default-src \'none\'; frame-ancestors \'none\'` on every response.',
+            ],
+            [
+              'Operator UI',
+              'The same `nosniff`, `Referrer-Policy`, `Permissions-Policy` and `X-Frame-Options: DENY`. A nonce-based Content-Security-Policy (`\'strict-dynamic\'`, `frame-ancestors \'none\'`, `object-src \'none\'`, and a `frame-src` of the UI itself, any `https:` origin and the configured status-page origin, so the template editor can preview status pages) ships **report-only** for this release: violations appear in the browser console but nothing is blocked.',
+            ],
+            [
+              'Status pages',
+              '`nosniff`, the same `Referrer-Policy` and `Permissions-Policy` on every response; each rendered page adds an enforced `Content-Security-Policy` with a per-response script nonce, chosen by the page’s [CSP mode](/docs/status-pages/#content-security-policy), whose `frame-ancestors` admits only the page’s own origin and the operator UI (`APP_BASE_URL`), for the template editor’s preview.',
+            ],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            '`Referrer-Policy` is `strict-origin-when-cross-origin` rather than `no-referrer`: no path ever reaches another origin, and the browser still sends a real `Origin` on a page’s own form and `fetch` posts, which the status page’s push subscription and the MCP consent checks require.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'HSTS (`Strict-Transport-Security: max-age=…`, without `includeSubDomains`) is off until `SECURITY_HSTS_MAX_AGE` is positive, and even then the API and status page send it only on HTTPS requests: TLS terminated by the service, or `X-Forwarded-Proto: https` from a peer in `TRUSTED_PROXY_CIDRS`. A forwarding header from any other peer never counts. Compose defaults to off; Helm turns it on (one year) when the chart’s ingress has `tls` configured. The operator UI cannot see whether a request came through a trusted proxy, so it sends no HSTS itself; behind the bundled ingress the API’s responses on the same host carry it, otherwise set it at your TLS proxy.',
+        },
+        {
+          type: 'list',
+          items: [
+            'The API has a general rate limit: token buckets of `API_RATE_LIMIT_PER_MINUTE` (default 600) with `API_RATE_LIMIT_BURST` (default 120). A request that presents a credential is never judged on an address bucket. A credential that validates spends from its own bucket — API key, MCP grant, or session user. A session cookie the API signed keys the request by its user even on unauthenticated routes and even once expired, and an expired one always gets its `401`, so the UI refreshes instead of being sent to sign in. `/auth/refresh` with a refresh cookie is keyed on that cookie.',
+            'Address buckets apply to two things only: unauthenticated requests that present no credential (sign-in, bootstrap, OIDC start and callback, OAuth registration and token, discovery documents), and verified failures — a `401` on an authenticated route, a `401` from `/auth/refresh`, or a `401`/`404` for an unknown push or discovery-collector token. Failures spend from the address’s failure bucket after the answer is known, and once it is empty further failures from that address are answered `429`, so guessing keys or tokens cannot buy unlimited database lookups. Which routes are authenticated is read from the router, so a new unauthenticated route is limited without being listed.',
+            'An address bucket is used only when the address identifies a client: it was forwarded by a peer in `TRUSTED_PROXY_CIDRS`, or it is the TCP peer and a public address. A loopback, private (RFC 1918, `fc00::/7`), link-local or shared-space (`100.64.0.0/10`) peer that is not a trusted proxy usually stands for many people — the UI’s `/api` proxy, an ingress pod, a NAT gateway — so its traffic skips the address buckets rather than letting one client empty a bucket everyone shares. The API logs a warning at startup when the limiter is on and the list is empty. IPv6 addresses share a bucket per `/64`.',
+            'Over the limit the API answers `429 Too Many Requests` with `Retry-After` in seconds. `0` disables the limiter.',
+            'Not limited here, because machines call them at a steady rate from shared addresses and they have their own bounds: health and metrics probes, `/static` downloads, valid push heartbeats (`/api/v1/push/{token}`, one per monitor interval) and discovery-collector calls (integration token), and — for credentials that validate — OTLP export (limited per monitor by `OTLP_MONITOR_RATE_PER_MIN`) and the alert stream. Their failures are charged as above. The MCP endpoint is not charged itself; each tool call it dispatches is charged to the caller’s credential.',
+            'Buckets live in memory on each API replica, so the effective cluster-wide ceiling is the limit times the replica count, and a restart resets them. When the map of buckets is full, buckets that have refilled are dropped first and then the least recently used, so filling it never resets a bucket in use.',
+            'The limiter bounds request volume; it is not an account lockout for password guessing.',
+          ],
+        },
+        {
+          type: 'table',
+          columns: ['Deployment', 'What the API rate limit covers'],
+          rows: [
+            [
+              'No proxy, clients connect to the API directly',
+              'Everything: credentials per credential, and anonymous requests and failures per client address — for public clients. Clients on a private network (an internal deployment, an office LAN) get no address limits; their credentials are still limited.',
+            ],
+            [
+              'Compose (`docker-compose.yml`) and `make start-all-local`',
+              'Browsers reach the API through the UI’s `/api` proxy or from the Docker gateway, both private peers, so only credential limits apply: each session, refresh token and API key has its own bucket. Sign-in, anonymous calls and failed credentials are not limited per address.',
+            ],
+            [
+              'Release Compose with its edge proxy',
+              'The edge proxy writes the client address and the API trusts the Compose network, so everything is limited, per real client. Where Docker’s userland proxy rewrites source addresses (Docker Desktop, rootless), every client arrives as the gateway and shares one address bucket; credentials are still limited separately.',
+            ],
+            [
+              'Helm, `trustedProxyCIDRs` empty (the default)',
+              'Requests arrive from the ingress controller pod, a private peer: credential limits only. The install notes warn about this.',
+            ],
+            [
+              'Helm with `trustedProxyCIDRs` set to the ingress pod CIDR',
+              'Everything, per real client, including internal users with private addresses behind the ingress.',
+            ],
+          ],
         },
         {
           type: 'callout',
-          tone: 'warning',
-          title: 'Edge controls are still required',
+          tone: 'info',
+          title: 'Keep ingress limits too',
           text:
-            'The application does not provide a general login/API rate limiter or a complete production security-header policy. Apply rate limits, request-size limits, HSTS, CSP where compatible, frame protection, content-type protection, and trusted proxy/header rules at the ingress or reverse proxy.',
+            'The application limits are per replica and in memory. Keep request-size limits, connection limits, and a coarse per-address rate limit at the ingress or reverse proxy as the first line of defense.',
         },
       ],
     },
@@ -439,7 +509,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Stored endpoints must be `https` and must match `STATUS_PAGE_PUSH_ENDPOINT_ALLOWLIST` (default: the Google, Mozilla, Microsoft, and Apple push services). Matching is on a dot boundary, so `fcm.googleapis.com.attacker.example` does not match `fcm.googleapis.com`.',
             'Setting the allowlist to `*` disables the check for a self-hosted push service and re-opens this surface; restrict egress by network policy if you do.',
             'Request bodies are capped, subscriptions are rate limited per client IP, and each page has a subscription cap so the table cannot grow without bound.',
-            '`X-Forwarded-For` is honored for rate-limit keying only when `STATUS_PAGE_TRUSTED_PROXY=true`, because the header is client-settable.',
+            'The rate-limit key is the client address resolved through the [trusted proxy list](#audit-proxy-trust) (`TRUSTED_PROXY_CIDRS`), so a visitor cannot rotate `X-Forwarded-For` to get a fresh bucket. The older `STATUS_PAGE_TRUSTED_PROXY=true` still works while `TRUSTED_PROXY_CIDRS` is unset, but it trusts every peer and logs a deprecation warning.',
             'Subscriptions store only the opaque browser endpoint and its public keys — no visitor identity, no email address, and no page-visit history.',
           ],
         },
@@ -565,11 +635,20 @@ go run ./cmd/admin/encrypt_existing_channels`,
           ],
         },
         {
-          type: 'callout',
-          tone: 'warning',
-          title: 'X-Forwarded-For is trusted without a proxy allowlist',
+          type: 'paragraph',
           text:
-            'Audit and session code use the first `X-Forwarded-For` value when present. Ensure the public edge strips client-supplied forwarding headers and writes the canonical client address; never expose API directly behind an untrusted pass-through proxy.',
+            'The IP in audit records and admin sessions, the API rate-limit address buckets, and the status page push rate-limit key come from one resolver. Forwarding headers are client-settable, so they count only when the TCP peer is listed in `TRUSTED_PROXY_CIDRS` (comma-separated CIDRs or bare IPs, IPv4 or IPv6, read by the API and status-page services; Helm: `trustedProxyCIDRs`).',
+        },
+        {
+          type: 'list',
+          items: [
+            'Unset (the default), no proxy is trusted: the recorded address is the TCP peer, and `X-Forwarded-For` / `X-Real-IP` are ignored. Behind a proxy this records the proxy, not the visitor, so set the list in any deployment that has one.',
+            'From a trusted peer, `X-Forwarded-For` is read right to left. Each proxy appends the address it received the connection from, so the first entry outside the list is the client, and anything a client prepended to the left of it is ignored. An entry that is not an IP address ends the walk at the nearest address that could be checked.',
+            '`X-Real-IP` is used only when a trusted peer sent no `X-Forwarded-For`. If every hop is trusted, the leftmost entry is used.',
+            'Your proxies must append to `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`, the ingress-nginx and Traefik defaults) rather than pass a client value through unchanged.',
+            'List only proxies you operate. A range that also contains clients, such as a whole VPC that users connect from, lets those clients forge their address. In Kubernetes this is usually the pod CIDR of the ingress controller; the chart default is empty and its install notes warn when the ingress is on and the list is empty.',
+            'The operator UI’s own `/api` proxy cannot see its TCP peer, and Next.js keeps a client-sent `X-Forwarded-For`, so it drops `X-Forwarded-For` and `X-Real-IP` before calling the API: UI traffic that reaches the API through it is recorded with the frontend’s address. If a proxy you run sets or appends the header in front of the UI, set `API_PROXY_TRUST_FORWARDED_FOR=true` on the frontend and list both that proxy and the frontend in `TRUSTED_PROXY_CIDRS`. With the bundled Helm ingress, `/api` goes straight to the API, so this does not apply.',
+          ],
         },
       ],
     },
@@ -595,7 +674,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             ],
             [
               'Ingress',
-              'HTTPS-only, HSTS, trusted proxy headers, body/time limits, rate limiting, origin policy, SSE buffering disabled where required, and separate routing for public status pages.',
+              'HTTPS-only, HSTS, trusted proxy headers (append to `X-Forwarded-For`; list the ingress in `TRUSTED_PROXY_CIDRS`), body/time limits, a coarse rate limit in front of the application one, SSE buffering disabled where required, and separate routing for public status pages.',
             ],
             [
               'Workers',
@@ -629,6 +708,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Confirm notification egress cannot reach internal metadata/control-plane addresses.',
             'Test location disable/revocation and ensure one location cannot consume another location’s jobs.',
             'Validate audit capture, drop warnings, retention, export restrictions, and external log durability.',
+            'Check the [security headers](#edge-controls) on API, UI, and status-page responses through the real ingress, including HSTS on HTTPS and `429` with `Retry-After` from the API limiter, and that a forged `X-Forwarded-For` does not change the IP in a new audit record.',
             'Restore a database backup with the complete keyring and verify encrypted channels, monitors, and locations.',
             'Scan images/dependencies and run Go race tests, frontend production builds, Helm lint, and integration tests before release.',
           ],

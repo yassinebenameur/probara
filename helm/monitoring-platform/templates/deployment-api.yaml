@@ -141,6 +141,7 @@ spec:
         {{- with (include "monitoring-platform.smtpEnv" .) }}
         {{- . | nindent 8 }}
         {{- end }}
+        {{- include "monitoring-platform.edgeEnv" (dict "ctx" . "component" "api") | nindent 8 }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

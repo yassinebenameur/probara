@@ -70,3 +70,18 @@ func TestParseStatusPageSettings_PushNotificationsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The read mirror understands csp_mode as the API writes it; an unknown
+// value reads as automatic.
+func TestParseStatusPageSettings_CSPMode(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"csp_mode":"compatible"}`: "compatible",
+		`{"csp_mode":"off"}`:        "off",
+		`{"csp_mode":"bogus"}`:      "",
+		`{}`:                        "",
+	} {
+		if got := parseStatusPageSettings([]byte(raw)).CSPMode; got != want {
+			t.Errorf("%s: CSPMode = %q, want %q", raw, got, want)
+		}
+	}
+}

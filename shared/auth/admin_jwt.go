@@ -60,3 +60,30 @@ func ParseAdminToken(tokenString, secret string) (*AdminClaims, error) {
 
 	return claims, nil
 }
+
+// AdminIDFromSignedToken returns the admin ID of an admin JWT whose
+// signature, issuer and audience verify, whether or not it has expired. It
+// never authenticates a request: the API's rate limiter uses it to tell a
+// session cookie this server issued (key the request on its user, and let an
+// expired one reach its 401 so the client refreshes) from a forged value.
+func AdminIDFromSignedToken(tokenString, secret string) (string, bool) {
+	if tokenString == "" || secret == "" {
+		return "", false
+	}
+	claims := &AdminClaims{}
+	_, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return []byte(secret), nil
+	}, jwt.WithoutClaimsValidation())
+	if err != nil || claims.AdminID == "" || claims.Issuer != "probara-api" {
+		return "", false
+	}
+	for _, aud := range claims.Audience {
+		if aud == "admin" {
+			return claims.AdminID, true
+		}
+	}
+	return "", false
+}

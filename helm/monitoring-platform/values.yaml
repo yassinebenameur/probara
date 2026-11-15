@@ -280,6 +280,54 @@ extraEnv: []
 appBaseURL: ""
 
 # =============================================================================
+# TRUSTED PROXIES (client IP resolution)
+# =============================================================================
+# CIDRs or bare IPs of the reverse proxies in front of the api and status-page
+# (ingress controller pods, a cloud load balancer). Only these peers'
+# X-Forwarded-For / X-Real-IP resolve the client address for the audit log,
+# session IPs and rate limits, and only their X-Forwarded-Proto: https earns
+# HSTS. X-Forwarded-For is walked right to left; the first address outside
+# this list is the client. Rendered as TRUSTED_PROXY_CIDRS into api and
+# status-page.
+#
+# Empty (the default) trusts no proxy: the client is the TCP peer. Behind the
+# bundled ingress that peer is the ingress controller pod, a private address
+# standing for every visitor: the API rate limit then applies per credential
+# only (no per-address limit on sign-in, anonymous calls or failed
+# credentials) and the audit log records the ingress -- set this to the pod
+# CIDR your ingress controller runs in, e.g.
+# ["10.0.0.0/8"]. List only proxies you run: a range that also holds clients
+# lets those clients choose their address. The bundled ingress sends /api
+# straight to the api; the frontend's /api proxy drops X-Forwarded-For unless
+# frontend.extraEnv sets API_PROXY_TRUST_FORWARDED_FOR=true.
+trustedProxyCIDRs: []
+
+# =============================================================================
+# BROWSER / EDGE SECURITY
+# =============================================================================
+security:
+  # Strict-Transport-Security max-age in seconds for api and status-page
+  # (SECURITY_HSTS_MAX_AGE). Empty = automatic: 31536000 (one year) when
+  # ingress.enabled and ingress.tls is set, else 0 (off). The header is only
+  # ever sent on HTTPS requests -- TLS at the pod, or X-Forwarded-Proto: https
+  # from a trustedProxyCIDRs peer -- so list your ingress there.
+  hstsMaxAge: ""
+  # General API rate limit (API_RATE_LIMIT_PER_MINUTE / _BURST): one token
+  # bucket per credential (API key, MCP grant, session user, refresh token);
+  # per client address only for anonymous requests and verified failures, and
+  # only when the address names a client (forwarded by a trustedProxyCIDRs
+  # peer, or a public peer). Kept in memory on each api replica -- the
+  # effective cluster-wide ceiling is this times api.replicas. 0 disables it.
+  # Probes, valid push and discovery-collector tokens, and validated OTLP
+  # export and alert streams are not limited.
+  apiRateLimitPerMinute: 600
+  apiRateLimitBurst: 120
+  # Browser origins allowed credentialed cross-origin API calls
+  # (API_ALLOWED_ORIGINS). Empty: the appBaseURL origin when set, else
+  # same-origin only, which is all the bundled frontend needs.
+  apiAllowedOrigins: []
+
+# =============================================================================
 # SMTP (builtin email notification channels)
 # =============================================================================
 # Process-level mail transport for email alert channels. Rendered into the

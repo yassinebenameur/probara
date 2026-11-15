@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -82,6 +83,20 @@ func (c *apiClient) doRetry(ctx context.Context, method, path string, in, out an
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
+	// Seeding outruns the API's general rate limit; wait out the 429 it
+	// answers with and send the same request again.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		wait := time.Second
+		if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
+			wait = time.Duration(s) * time.Second
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		return c.doRetry(ctx, method, path, in, out, retry)
+	}
 	if resp.StatusCode == http.StatusUnauthorized && retry && c.bearer == "" {
 		if err := c.login(ctx); err != nil {
 			return err

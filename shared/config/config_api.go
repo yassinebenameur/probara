@@ -75,6 +75,10 @@ type APIConfig struct {
 	// minute (excess gets 429 + Retry-After, which the collector retries).
 	OTLPMaxSeriesPerMonitor int
 	OTLPMonitorRatePerMin   int
+	// Client IP resolution, security headers, CORS and the general rate
+	// limit (config_edge.go).
+	EdgeConfig
+	APIEdgeConfig
 }
 
 // LoadAPIConfig loads API service configuration
@@ -274,6 +278,13 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, err
 	}
 	cfg.NotificationEgressConfig = egressCfg
+
+	if cfg.EdgeConfig, err = loadEdgeConfig(); err != nil {
+		return nil, err
+	}
+	if cfg.APIEdgeConfig, err = loadAPIEdgeConfig(cfg.AppBaseURL); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
 }
