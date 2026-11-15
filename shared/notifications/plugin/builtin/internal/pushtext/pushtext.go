@@ -25,6 +25,11 @@ type Link struct {
 // is added here once.
 func Links(m present.Message) []Link {
 	var out []Link
+	// Acknowledge first: it is the action a page asks for, and clients that
+	// cap the number of links keep the head of the list.
+	if m.AckURL != "" {
+		out = append(out, Link{Label: label(m.AckLabel, present.AckLabel), URL: m.AckURL})
+	}
 	if m.ActionURL != "" {
 		out = append(out, Link{Label: label(m.ActionLabel, "Open in Probara"), URL: m.ActionURL})
 	}

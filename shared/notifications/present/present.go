@@ -97,6 +97,10 @@ type Message struct {
 
 	ActionURL   string
 	ActionLabel string
+	// AckURL is the signed one-click acknowledge link and AckLabel its
+	// caption. Set only on created and reminder pages; see ackFor.
+	AckURL   string
+	AckLabel string
 
 	AlertID   string
 	TenantID  string
@@ -109,6 +113,13 @@ type Message struct {
 // set (dispatch requests carry both). appBaseURL is the public operator-UI
 // origin; empty omits the deep link.
 func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message {
+	return BuildWith(event, eventType, Options{AppBaseURL: appBaseURL})
+}
+
+// BuildWith is Build with the delivery context a real send has: the channel
+// and the link signer, which add the acknowledge link (Options).
+func BuildWith(event notifications.AlertEvent, eventType string, opts Options) Message {
+	appBaseURL := opts.AppBaseURL
 	if eventType == "" {
 		eventType = event.Type
 	}
@@ -180,6 +191,7 @@ func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message
 
 	m.Rows = detailRows(alert, elapsed)
 	m.ActionURL, m.ActionLabel = actionFor(alert, appBaseURL)
+	m.AckURL, m.AckLabel = ackFor(event, eventType, resolved, opts)
 	return m
 }
 
@@ -235,15 +247,26 @@ func followedUpPage(alert notifications.AlertDetails) string {
 // the alert's own workspace.
 func suspectedCauseAction(event notifications.AlertEvent, appBaseURL string) (string, string) {
 	base := strings.TrimRight(strings.TrimSpace(appBaseURL), "/")
-	id := strings.TrimSpace(event.Alert.ID)
-	if base == "" || id == "" {
+	path := AlertPath(event.Alert.ID, event.TenantID)
+	if base == "" || path == "" {
 		return "", ""
 	}
+	return base + path, "Review the triage"
+}
+
+// AlertPath is the operator-UI path that opens one alert on the Alerts page
+// in its workspace (web/lib/alert-links.ts parses it), or "" without an
+// alert ID.
+func AlertPath(alertID, tenantID string) string {
+	id := strings.TrimSpace(alertID)
+	if id == "" {
+		return ""
+	}
 	q := url.Values{"alert": {id}}
-	if tenant := strings.TrimSpace(event.TenantID); tenant != "" {
+	if tenant := strings.TrimSpace(tenantID); tenant != "" {
 		q.Set("tenant", tenant)
 	}
-	return base + "/alerts?" + q.Encode(), "Review the triage"
+	return "/alerts?" + q.Encode()
 }
 
 // Severity maps the tone onto the three-level scale paging providers use.
@@ -294,22 +317,9 @@ func (m Message) MetricLine() string {
 }
 
 // Short renders a compact plain-text form for length-limited channels (SMS,
-// push): title, summary, and the deep link when configured.
-func (m Message) Short() string {
-	var b strings.Builder
-	b.WriteString(m.StatusWord)
-	b.WriteString(" · ")
-	b.WriteString(m.Title)
-	if m.Summary != "" {
-		b.WriteString("\n")
-		b.WriteString(m.Summary)
-	}
-	if m.ActionURL != "" {
-		b.WriteString("\n")
-		b.WriteString(m.ActionURL)
-	}
-	return b.String()
-}
+// push): title, summary, the deep link and the acknowledge link when
+// configured. ShortWithin bounds it.
+func (m Message) Short() string { return m.ShortWithin(0) }
 
 // Facts returns the label/value pairs chat layouts show as fields: the
 // metric, the detail rows, root cause, failing locations and blast radius, in

@@ -449,8 +449,9 @@ or imported groups come back empty. Any other path that creates groups through
   it; `docker-compose.release.yml` passes it to all three.
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
   `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
-  deep links to notifications (every channel, via `plugin.Configure`) —
-  unset omits them, never a guessed host.
+  deep links and, with `PROBARA_SECRETS_KEY`, acknowledge links to
+  notifications (every channel, via `plugin.Configure`) — unset omits them,
+  never a guessed host.
 - **Notification egress**: the same three workloads read
   `NOTIFICATION_BLOCK_PRIVATE_IPS` (default **true**) /
   `NOTIFICATION_ALLOWED_CIDRS` (`loadNotificationEgressConfig`); each main
@@ -738,6 +739,18 @@ or imported groups come back empty. Any other path that creates groups through
   inherits the first send's recipients and reaches nobody. A multi-recipient
   plugin skips what it reports delivered and records each acceptance (the
   `plugin` doc; `twilio` does).
+- **Acknowledge links come from `present`, never a plugin.** `ackFor`
+  (`present/ack.go`) puts the signed link on `Message.AckURL` for
+  created/reminder pages, minted by
+  `plugin.Runtime.Links` (`shared/actionlink`, HKDF of `PROBARA_SECRETS_KEY`,
+  installed by `bootstrap.ConfigureNotifications`) and bound to the channel;
+  no key or no `APP_BASE_URL` means no link, and `View()` never passes the
+  signer on test sends. The token rides in the URL fragment
+  (`/alert-action#…`) and the `X-Action-Token` header, never a URL path, so
+  request logs and metric labels cannot record it; the public API routes are
+  `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
+  Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
+  link when it has one.
 
 ## Status pages
 

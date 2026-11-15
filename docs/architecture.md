@@ -132,6 +132,14 @@ claim, so a retry on any replica or worker reaches only the rest; the
 dispatch envelope's `delivery_key` names the event (and reminder round) those
 rows belong to.
 
+Pages (created and reminder notifications) on chat, email, SMS and webhook
+channels carry a signed acknowledge link minted where they are sent (alerter,
+worker; API test sends never). Paging channels do not. It opens the operator UI's `/alert-action` page, which calls the
+API's public `/api/v1/alert-actions/acknowledge` (GET describes, POST
+acknowledges through the alerts service). The token is stateless
+(`shared/actionlink`, keyed from `PROBARA_SECRETS_KEY`), so the API needs no
+shared state with the senders beyond that keyring.
+
 ## Storage and maintenance
 
 Migrations live in `shared/db/migrations/`. The database stores tenants,

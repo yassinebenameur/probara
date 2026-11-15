@@ -241,6 +241,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		oidcService.ConfigureSetupCode(cfg.BootstrapSetupCode != "")
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
 		mountAuthRoutes(r, authHandlers, adminUsersHandlers)
+		mountAlertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_alertactions.go)
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {

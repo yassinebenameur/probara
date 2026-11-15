@@ -94,6 +94,11 @@ export const API_PAGE: DocPage = {
                 "Used only in `/api/v1/push/{token}`. No cookie or bearer key is required because possession of the URL token authorizes a heartbeat.",
             },
             {
+              term: "Acknowledge link token",
+              description:
+                "Used only on `/api/v1/alert-actions/acknowledge`, sent in the `X-Action-Token` header. It comes from a notification's [acknowledge link](/docs/alerting/#acknowledge-links) and authorizes acknowledging that one alert for 72 hours.",
+            },
+            {
               term: "MCP access token",
               description:
                 "`Bearer pbm_at_…`, issued to an AI agent by the [MCP sign-in](/docs/mcp/#authentication). Valid only on `/api/v1/mcp`: every tool call there runs as one of the routes below with the same checks. A direct REST call with it returns 401.",
@@ -539,6 +544,14 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/alerts/{id}/acknowledge`",
               "Mark an open condition acknowledged",
+            ],
+            [
+              "`GET /api/v1/alert-actions/acknowledge`",
+              "Public; token in `X-Action-Token`. Describes the alert a notification's [acknowledge link](/docs/alerting/#acknowledge-links) names and never changes it: `state` `pending`, `already` or `resolved` (HTTP 200) with `alert` (`subject`, `label`, `status`, `triggered_at`, `acknowledged_at`, and `open_path`, the alert's relative Alerts-page link) and `expires_at`, `expired` (410) or `invalid` (404) with nothing else",
+            ],
+            [
+              "`POST /api/v1/alert-actions/acknowledge`",
+              "Public; token in `X-Action-Token`. Acknowledges that alert: `acknowledged` or, for an alert already acknowledged, `already` (both 200), `resolved` (409), `expired` (410), `invalid` (404). Only a POST that acknowledges (or fails with a server error) is audited, as `alert.acknowledge`",
             ],
             [
               "`POST /api/v1/alerts/{id}/resolve`",

@@ -287,7 +287,7 @@ export const SECURITY_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY*`',
               'API, scheduler, worker, alerter, maintenance CLIs',
-              'Historical versions are needed to open existing ciphertext.',
+              'Historical versions are needed to open existing ciphertext. Acknowledge links in notifications are signed with a key derived from the current version; removing a version revokes the links it signed.',
             ],
             [
               '`OIDC_CLIENT_SECRET`',
@@ -590,6 +590,11 @@ go run ./cmd/admin/migrate_sensitive_headers`,
               term: 'AI training labels',
               description:
                 'A label is copied server-side from the decision snapshot the worker stored when the analysis or alert triage completed (dependency pairs: evidence recomputed at labelling time); client-supplied evidence is rejected. It holds the evidence counters and booleans, catalogue keys, opaque decision IDs, the monitor and incident IDs the UI names decisions with, and the labelling user ID. It never holds names or free text. Labels are kept until the workspace is deleted: `data_retention_days` does not prune them, and they survive monitor purges and incident deletion.',
+            },
+            {
+              term: 'Acknowledge links',
+              description:
+                'Pages on chat, email, SMS and webhook channels carry a [one-click acknowledge link](/docs/alerting/#acknowledge-links) to a confirm page in the operator UI. Its token binds the workspace, the alert, the channel it was delivered on and an expiry 72 hours after the notification was built, under a truncated HMAC-SHA256 whose key is derived (HKDF-SHA256, purpose-specific) from the current `PROBARA_SECRETS_KEY` version; nothing is stored server side. It authorizes acknowledging that one alert and nothing else, and verification is constant time. Loading the page only reads; the acknowledgement is a separate POST on a button press, so link scanners and previewers cannot trigger it. The token sits in the URL fragment, which browsers never send, and reaches the API in the `X-Action-Token` header, so it appears in no URL a server, proxy or `Referer` sees and in none of the API\'s request logs or metric labels. Malformed, forged, wrong-action and other-workspace tokens all get the same 404 answer, and forged ones are refused before any database access. Removing the key version that signed a link, or deleting the channel it went to, revokes it; there is no other way to revoke one link early. The use that acknowledges is audited as `alert.acknowledge` attributed to the channel\'s link; repeat uses of the same link write nothing.',
             },
             {
               term: 'Suspected-cause follow-ups',

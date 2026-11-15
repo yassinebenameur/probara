@@ -238,7 +238,7 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`slack`",
               "HTTPS `webhook_url` on `slack.com` or a subdomain of it",
-              "Slack incoming webhook (Block Kit, with an open-the-monitor button when `APP_BASE_URL` is set)",
+              "Slack incoming webhook (Block Kit, with an open-the-monitor button when `APP_BASE_URL` is set, and an [Acknowledge](#acknowledge-links) button on pages)",
             ],
             [
               "`discord`",
@@ -268,7 +268,7 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`twilio_sms`",
               "`account_sid`, optional `api_key_sid`, `auth_token` (API key secret or account token), `from` number or Messaging Service SID, up to 10 E.164 `to` numbers",
-              "One SMS per recipient per event, the short form of the alert plus the deep link",
+              "One SMS per recipient per event, the short form of the alert plus the deep link, or on pages the [acknowledge link](#acknowledge-links) in its place",
             ],
             [
               "`ntfy`",
@@ -283,14 +283,14 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`generic_webhook`",
               "HTTPS `url`, optional `hmac_secret`, optional custom headers encoded as JSON (stored encrypted and write-only; leaving the field blank on edit keeps them, **Remove stored value** deletes them)",
-              "Structured Probara event JSON",
+              "Structured Probara event JSON; pages add `alert.links.acknowledge` ([acknowledge links](#acknowledge-links))",
             ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
+            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not. Pages also carry a one-click [acknowledge link](#acknowledge-links) on every channel except PagerDuty and Opsgenie.",
         },
         {
           type: "table",
@@ -357,7 +357,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
+            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. A page (created or reminder) also carries an **Acknowledge** button, which then leads and the open-the-monitor button sits beside it, and the plain-text part carries the same [acknowledge link](#acknowledge-links). `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
         },
         {
           type: "table",
@@ -380,7 +380,52 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
+            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, `ack_url` and `ack_label` (the [acknowledge link](#acknowledge-links), empty when the email carries none), and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out, once: the failure is logged (and returned by a test send, so you see it there) but never retried, because retrying would only mail the whole `to` list the same fallback again. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
+        },
+      ],
+    },
+    {
+      id: "acknowledge-links",
+      title: "Acknowledge from a notification",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every page — the `created` notification and each `reminder` — carries a signed one-click acknowledge link on chat, email, SMS and webhook channels. PagerDuty and Opsgenie never carry it: acknowledge in the paging tool there. The link opens a page in the operator UI that works without signing in: it shows the monitor, what kind of alert it is, its state and since when, and an **Acknowledge alert** button. Opening the link never acknowledges anything; only pressing the button does, because mail scanners and chat link previews open every link they see. The acknowledgement is the same as one made on the Alerts page: the alert's state and time, the live alert stream and the acknowledgement sent to PagerDuty and Opsgenie all follow from it.",
+        },
+        {
+          type: "list",
+          items: [
+            "The link acknowledges, and nothing else: it cannot resolve the alert or change anything about it, its monitor or its routing.",
+            "It is valid for 72 hours from when the notification was built. Each reminder carries a fresh link.",
+            "Resolve notices, acknowledgement notices, suspected-cause follow-ups and channel test sends carry no link. An acknowledged alert stops sending reminders (only its resolve notice follows), so nothing sent after an acknowledgement carries one; links already delivered still open the page, which then says the alert is already acknowledged.",
+            "It needs both `APP_BASE_URL` (the link points at the operator UI) and `PROBARA_SECRETS_KEY` (it is signed with a key derived from it). Without either, notifications carry no acknowledge link.",
+            "Opening a link for an alert someone already acknowledged says so; that is not an error. A resolved alert, an expired link and an invalid link each get their own message. Every state offers an **Open in Probara** link onward, to that alert on the Alerts page (or to the Alerts page when the link is expired or invalid), which works for anyone signed in to the workspace.",
+            "The audit log records the use that acknowledged as `alert.acknowledge` on the alert (repeat uses of a link write nothing), with the actor shown as `link sent to <channel name>` and `details.via` `acknowledge_link`, `details.channel_id` and `details.channel_name`.",
+          ],
+        },
+        {
+          type: "table",
+          columns: ["Channel", "How the link appears"],
+          rows: [
+            ["Email", "Primary **Acknowledge** button, and an `Acknowledge:` line in the plain-text part"],
+            ["Slack", "**Acknowledge** button before the open-the-monitor button"],
+            ["Microsoft Teams", "**Acknowledge** action on both the Adaptive Card and the legacy MessageCard"],
+            ["Discord", "Bold **Acknowledge** link in the embed text (plain webhooks cannot post buttons)"],
+            ["Telegram", "**Acknowledge** link above the open-the-monitor link"],
+            ["SMS (Twilio)", "Last line, `Acknowledge: <link>`, in place of the open-the-monitor link (a text without an acknowledge link keeps that one). The link is never cut: a long alert text is shortened instead. Expect a page to take more than one SMS segment"],
+            ["Generic webhook", "`alert.links.acknowledge`; the field is absent when the delivery carries no link"],
+            ["ntfy", "**Acknowledge** action button, first of the notification's actions"],
+            ["Gotify", "`Acknowledge: <link>` line under the message body"],
+            ["PagerDuty, Opsgenie / JSM", "None: acknowledge in the paging tool"],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Anyone holding the notification can acknowledge",
+          text:
+            "The link is the credential: whoever has the message (a forwarded email, a shared chat channel, an SMS) can acknowledge that one alert for 72 hours, without an account. They learn only the alert's monitor or location name, kind, state and times. Deleting the channel revokes every link it delivered. The link carries its token after a `#`, which browsers never send to a server; a mail security gateway that rewrites links must keep that part, or the page reports the link as not valid. See [security](/docs/security/#notifications-integrations-ai).",
         },
       ],
     },
