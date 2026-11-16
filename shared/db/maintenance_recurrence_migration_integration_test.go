@@ -19,7 +19,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
-// Migrations 000112 (recurrence + occurrences) and 000113 (target history +
+// Migrations 000109 (recurrence + occurrences) and 000110 (target history +
 // soft delete) walk down and back up as a rollback and re-upgrade would:
 // existing one-off windows survive both ways and are backfilled into
 // exactly one occurrence each.
@@ -51,14 +51,14 @@ func TestMaintenanceRecurrenceMigrationsUpDownUp(t *testing.T) {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	// The version just below 000112, whatever number it has.
+	// The version just below 000109, whatever number it has.
 	var before uint
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if n, err := strconv.Atoi(e.Name()[:6]); err == nil && n < 112 && uint(n) > before {
+		if n, err := strconv.Atoi(e.Name()[:6]); err == nil && n < 109 && uint(n) > before {
 			before = uint(n)
 		}
 	}
@@ -100,7 +100,7 @@ func TestMaintenanceRecurrenceMigrationsUpDownUp(t *testing.T) {
 		}
 	}
 
-	migrateTo(113)
+	migrateTo(110)
 	checkBackfill()
 
 	// A repeating window and a deleted one, then down: the repeating one
@@ -128,7 +128,7 @@ func TestMaintenanceRecurrenceMigrationsUpDownUp(t *testing.T) {
 		t.Fatal("maintenance_window_occurrences survived the down migration")
 	}
 
-	migrateTo(113)
+	migrateTo(110)
 	spans[repeating] = [2]time.Time{now.Add(time.Hour), now.Add(150 * time.Minute)}
 	exec(`INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id) VALUES ($1, $2)`, repeating, monitor)
 	checkBackfill()

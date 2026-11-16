@@ -12,7 +12,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
-// Monitor configuration history (monitor_config_versions, migration 000111).
+// Monitor configuration history (monitor_config_versions, migration 000108).
 //
 // Every save of a monitor records a version: CreateMonitor and UpdateMonitor
 // call recordVersion, so the HTTP handlers, bulk edits, the importer and MCP

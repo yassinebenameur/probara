@@ -15,7 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
-// Migration 000115 adds recovery confirmation (docs/state-semantics.md S-T7):
+// Migration 000111 adds recovery confirmation (docs/state-semantics.md S-T7):
 // monitors.recovery_threshold (default 1, 1-10), and the consecutive_successes
 // counters and recovery_pending memory on monitors and monitor_location_state. This walks it down and back
 // up through golang-migrate, with an existing monitor taking the default.
@@ -36,8 +36,8 @@ func TestRecoveryThresholdMigrationUpDownUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Not m.Close(): the driver would close dbc.DB, which cleanup owns.
-	if err := m.Migrate(115); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate to 115: %v", err)
+	if err := m.Migrate(111); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate to 111: %v", err)
 	}
 
 	checkUp := func(phase string) {
@@ -77,7 +77,7 @@ func TestRecoveryThresholdMigrationUpDownUp(t *testing.T) {
 	checkUp("up")
 
 	if err := m.Steps(-1); err != nil {
-		t.Fatalf("down 000115: %v", err)
+		t.Fatalf("down 000111: %v", err)
 	}
 	for _, probe := range []string{
 		`SELECT recovery_threshold FROM monitors LIMIT 1`,
@@ -87,12 +87,12 @@ func TestRecoveryThresholdMigrationUpDownUp(t *testing.T) {
 		`SELECT recovery_pending FROM monitor_location_state LIMIT 1`,
 	} {
 		if _, err := dbc.ExecContext(ctx, probe); err == nil {
-			t.Errorf("down 000115 kept a column: %s", probe)
+			t.Errorf("down 000111 kept a column: %s", probe)
 		}
 	}
 
 	if err := m.Steps(1); err != nil {
-		t.Fatalf("re-up 000115: %v", err)
+		t.Fatalf("re-up 000111: %v", err)
 	}
 	checkUp("re-up")
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
-// Migrations 000116 (report schedules, deliveries, unsubscribes) and 000117
+// Migrations 000112 (report schedules, deliveries, unsubscribes) and 000113
 // (sla_reports.issued_by_schedule) walk up, down and up again; tenant
 // deletion cascades through the new tables.
 func TestSLAReportScheduleMigrationsUpDownUp(t *testing.T) {
@@ -62,14 +62,14 @@ func TestSLAReportScheduleMigrationsUpDownUp(t *testing.T) {
 	columnExists := func() bool {
 		return exists(`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sla_reports' AND column_name = 'issued_by_schedule')`)
 	}
-	// The version just below 000116, whatever number it has.
+	// The version just below 000112, whatever number it has.
 	var before uint
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if n, err := strconv.Atoi(e.Name()[:6]); err == nil && n < 116 && uint(n) > before {
+		if n, err := strconv.Atoi(e.Name()[:6]); err == nil && n < 112 && uint(n) > before {
 			before = uint(n)
 		}
 	}
@@ -105,7 +105,7 @@ func TestSLAReportScheduleMigrationsUpDownUp(t *testing.T) {
 		}
 	}
 
-	migrateTo(117)
+	migrateTo(113)
 	seed()
 
 	migrateTo(before)
@@ -118,7 +118,7 @@ func TestSLAReportScheduleMigrationsUpDownUp(t *testing.T) {
 		t.Fatal("sla_reports.issued_by_schedule survived the down migration")
 	}
 
-	migrateTo(117)
+	migrateTo(113)
 	if !tableExists("sla_report_schedules") || !columnExists() {
 		t.Fatal("re-upgrade did not recreate the schema")
 	}

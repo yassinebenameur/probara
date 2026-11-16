@@ -47,7 +47,7 @@ import (
 )
 
 // MaxRecipients bounds one schedule's recipient list (also a CHECK in
-// migration 000116).
+// migration 000112).
 const MaxRecipients = 50
 
 var ErrNotFound = errors.New("not found")

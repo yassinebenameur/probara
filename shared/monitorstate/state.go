@@ -20,7 +20,7 @@ const (
 
 // Recovery threshold bounds (S-T7): passing checks in a row a down stream
 // needs before it is up again. 1 is single-sample recovery; the column CHECK
-// (migration 000115) and the API validator enforce the same range.
+// (migration 000111) and the API validator enforce the same range.
 const (
 	MinRecoveryThreshold = 1
 	MaxRecoveryThreshold = 10
