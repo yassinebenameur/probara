@@ -15,10 +15,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
+	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 )
@@ -32,6 +34,51 @@ type versionHistory interface {
 	InTx(ctx context.Context, fn func(ctx context.Context) error) error
 	PlanRestore(ctx context.Context, tenantID, monitorID uuid.UUID, version models.MonitorConfigSnapshot, current *models.MonitorConfigSnapshot) (*monitorservice.RestorePlan, error)
 	ValidateMergedConfig(ctx context.Context, tenantID, monitorID uuid.UUID, monitorType models.MonitorType, config json.RawMessage) error
+	LockMonitors(ctx context.Context, tenantID uuid.UUID, write, read []uuid.UUID) error
+	CaptureBaseline(ctx context.Context, tenantID, monitorID uuid.UUID)
+}
+
+// lockForSave takes a save's row locks before its first write, in the
+// documented lock order (api/internal/dbtx): write are the monitors the save
+// changes, read those it adds edges to (dependency targets, group members).
+// Unparseable ids are left to validation.
+func (h *Handlers) lockForSave(ctx context.Context, tenantID uuid.UUID, write []uuid.UUID, read []string) error {
+	history := h.history()
+	if history == nil {
+		return nil
+	}
+	targets := make([]uuid.UUID, 0, len(read))
+	for _, raw := range read {
+		if id, err := uuid.Parse(raw); err == nil {
+			targets = append(targets, id)
+		}
+	}
+	return history.LockMonitors(ctx, tenantID, write, targets)
+}
+
+// captureBaseline keeps a monitor's configuration before a save's first
+// write when it has no history yet (monitorservice.CaptureBaseline).
+func (h *Handlers) captureBaseline(ctx context.Context, tenantID, monitorID uuid.UUID) {
+	if history := h.history(); history != nil {
+		history.CaptureBaseline(ctx, tenantID, monitorID)
+	}
+}
+
+// groupMembersError is a group member a save cannot add (unknown, deleted,
+// another tenant's, or nesting the group in itself): a validation error, and
+// nothing of the save is kept.
+type groupMembersError struct{ err error }
+
+func (e *groupMembersError) Error() string { return "invalid group members: " + e.err.Error() }
+func (e *groupMembersError) Unwrap() error { return e.err }
+
+// groupMemberIDs reads config.monitor_ids, the members a group save names.
+func groupMemberIDs(config json.RawMessage) []string {
+	var groupConfig models.GroupConfig
+	if len(config) == 0 || json.Unmarshal(config, &groupConfig) != nil {
+		return nil
+	}
+	return groupConfig.MonitorIDs
 }
 
 // groupCycleChecker is implemented by the groups service.
@@ -90,8 +137,9 @@ func (h *Handlers) recordVersion(ctx context.Context, tenantID, monitorID uuid.U
 
 // syncGroupMembersFromConfig makes a group's monitor_groups rows match the
 // config.monitor_ids of an update (membership is the junction table, never
-// the config). It stops at the first failure; a PATCH logs it and keeps the
-// update, a restore fails as a whole.
+// the config). A member it cannot add is a groupMembersError: the caller
+// fails the whole save inside its transaction, so the config and the
+// membership never disagree.
 func (h *Handlers) syncGroupMembersFromConfig(ctx context.Context, tenantUUID, monitorID uuid.UUID, config json.RawMessage) error {
 	var groupConfig models.GroupConfig
 	if err := json.Unmarshal(config, &groupConfig); err != nil {
@@ -134,6 +182,10 @@ func (h *Handlers) syncGroupMembersFromConfig(ctx context.Context, tenantUUID, m
 
 	if len(toAdd) > 0 {
 		if err := h.groupService.AddMonitorsToGroup(ctx, tenantUUID, monitorID, toAdd); err != nil {
+			if errors.Is(err, monitorservice.ErrMonitorNotFound) || errors.Is(err, groupservice.ErrNotGroup) ||
+				errors.Is(err, groupservice.ErrGroupCycleDetected) {
+				return &groupMembersError{err: err}
+			}
 			return fmt.Errorf("add monitors to group: %w", err)
 		}
 	}
@@ -304,6 +356,12 @@ func (h *Handlers) DiffMonitorVersion(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
+// writeConflict answers a save that lost a deadlock or serialization
+// failure twice (dbtx.ErrConflict): nothing was written.
+func writeConflict(w http.ResponseWriter) {
+	apierrors.WriteError(w, http.StatusServiceUnavailable, "conflict", dbtx.ErrConflict.Error())
+}
+
 // restoreRefusal is a restore the request cannot have, answered with a
 // status and message instead of a 500.
 type restoreRefusal struct {
@@ -352,8 +410,21 @@ func (h *Handlers) RestoreMonitorVersion(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			return err
 		}
+		// A version of another type is refused: its secret fields would
+		// resolve against the current type's stored secrets of the same
+		// name (a redis password kept for a postgres monitor).
+		if stored.Snapshot.Type != current.Type {
+			return &restoreRefusal{status: http.StatusBadRequest, code: "validation_error",
+				msg: fmt.Sprintf("version %d cannot be restored: it is a %s monitor and this monitor is now %s; a restore never changes the type",
+					version, stored.Snapshot.Type, current.Type)}
+		}
 		snapshot, dropped, err := store.LiveReferences(ctx, tenantUUID, stored.Snapshot)
 		if err != nil {
+			return err
+		}
+		// Row locks before the first write, in lock order: this monitor, and
+		// the targets of the dependency and member edges it may write.
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{existing.ID}, append(append([]string{}, snapshot.DependsOnIDs...), snapshot.MemberIDs...)); err != nil {
 			return err
 		}
 		cycles, err := h.dropCycles(ctx, tenantUUID, existing.ID, &snapshot)
@@ -422,9 +493,14 @@ func (h *Handlers) RestoreMonitorVersion(w http.ResponseWriter, r *http.Request)
 	})
 	if err != nil {
 		var refusal *restoreRefusal
+		var members *groupMembersError
 		switch {
 		case errors.As(err, &refusal):
 			apierrors.WriteError(w, refusal.status, refusal.code, refusal.msg)
+		case errors.As(err, &members):
+			apierrors.WriteValidationError(w, fmt.Sprintf("version %d was not restored: %s; nothing changed", version, members.Error()))
+		case dbtx.IsConflict(err):
+			writeConflict(w)
 		case errors.Is(err, monitorservice.ErrVersionNotFound):
 			h.writeVersionError(w, err, existing.ID)
 		case errors.Is(err, depservice.ErrDependencyCycle), errors.Is(err, depservice.ErrMonitorNotFound):

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/services/monitors"
@@ -240,7 +241,14 @@ func (s *Service) UpdateAlertChannel(ctx context.Context, tenantID, channelID uu
 // it from their custom channels (ON DELETE CASCADE), a change made outside
 // a save, so each gets a system configuration version in the same
 // transaction.
+//
+// The versions are recorded set-based, and a recording failure never fails
+// the delete. A deadlock is retried once.
 func (s *Service) DeleteAlertChannel(ctx context.Context, tenantID, channelID uuid.UUID) error {
+	return dbtx.Retry(ctx, func() error { return s.deleteAlertChannelOnce(ctx, tenantID, channelID) })
+}
+
+func (s *Service) deleteAlertChannelOnce(ctx context.Context, tenantID, channelID uuid.UUID) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -270,6 +278,8 @@ func (s *Service) DeleteAlertChannel(ctx context.Context, tenantID, channelID uu
 		return fmt.Errorf("failed to list monitors routing to the channel: %w", err)
 	}
 
+	versions := monitors.PrepareSystemVersionsTx(ctx, tx, tenantID, affected)
+
 	res, err := tx.ExecContext(ctx, `DELETE FROM alert_channels WHERE id = $1 AND tenant_id = $2`, channelID, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to delete alert channel: %w", err)
@@ -281,9 +291,7 @@ func (s *Service) DeleteAlertChannel(ctx context.Context, tenantID, channelID uu
 	if rowsAffected == 0 {
 		return ErrAlertChannelNotFound
 	}
-	if err := monitors.RecordSystemVersionsTx(ctx, tx, s.db, tenantID, affected); err != nil {
-		return err
-	}
+	versions.RecordTx(ctx, tx)
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}

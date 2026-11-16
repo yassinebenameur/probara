@@ -181,12 +181,16 @@ func (s *Service) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, mon
 // configuration version write made with the ctx it passes commits together
 // or not at all (api/internal/dbtx). Inside an outer save it joins it.
 // Without a Postgres-backed repository (unit tests) fn runs as is.
+//
+// When it opens the transaction, a deadlock or serialization failure runs fn
+// once more, then comes back wrapped in dbtx.ErrConflict (handlers answer
+// 503: nothing was saved). fn must therefore only write through ctx.
 func (s *Service) InTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	if s.versions == nil {
 		return fn(ctx)
 	}
-	return dbtx.Run(ctx, s.versions.db, func(ctx context.Context, _ *sql.Tx) error {
-		return fn(ctx)
+	return dbtx.RunRetry(ctx, s.versions.db, func(ctx context.Context, _ *sql.Tx) error {
+		return fn(withSaveScope(ctx))
 	})
 }
 
@@ -454,6 +458,17 @@ func OnlyPause(req *models.UpdateMonitorRequest) bool {
 }
 
 func (s *Service) updateMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, req *models.UpdateMonitorRequest) (*models.Monitor, error) {
+	// Lock the row first (lock order, api/internal/dbtx; a no-op when the
+	// caller already did, together with the save's other monitors), then
+	// keep the configuration before any write as the baseline of a monitor
+	// without history.
+	if err := s.LockMonitors(ctx, tenantID, []uuid.UUID{monitorID}, nil); err != nil {
+		return nil, err
+	}
+	if !OnlyPause(req) {
+		s.CaptureBaseline(ctx, tenantID, monitorID)
+	}
+
 	// Load straight from the repo: the stored (unmasked) config is needed to
 	// resolve write-only secret placeholders in the incoming config.
 	existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
@@ -742,25 +757,38 @@ func effectiveLocationQuorum(requested *int, locationCount int) int {
 // depending on it lose it from their settings, so each gets a system
 // version in the same transaction.
 func (s *Service) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error {
-	return s.InTx(ctx, func(ctx context.Context) error {
-		if err := s.repo.Delete(ctx, tenantID, monitorID); err != nil {
-			return err
-		}
-		return s.recordDeleteCascade(ctx, tenantID, []uuid.UUID{monitorID})
+	return s.deleteMonitors(ctx, tenantID, []uuid.UUID{monitorID}, func(ctx context.Context) error {
+		return s.repo.Delete(ctx, tenantID, monitorID)
 	})
 }
 
-// recordDeleteCascade records system versions for the monitors whose
-// settings named the deleted ones (see DeleteMonitor).
-func (s *Service) recordDeleteCascade(ctx context.Context, tenantID uuid.UUID, deleted []uuid.UUID) error {
-	if s.versions == nil {
+// deleteMonitors runs a delete in one transaction: the deleted rows are
+// locked in id order, the affected groups and dependents are prepared for
+// their system versions (set-based, see SystemVersions), the delete runs,
+// and the versions are recorded; a recording failure never fails the delete.
+func (s *Service) deleteMonitors(ctx context.Context, tenantID uuid.UUID, deleted []uuid.UUID, del func(ctx context.Context) error) error {
+	return s.InTx(ctx, func(ctx context.Context) error {
+		if err := s.LockMonitors(ctx, tenantID, deleted, nil); err != nil {
+			return err
+		}
+		tx, inTx := dbtx.From(ctx)
+		var cascade *SystemVersions
+		if s.versions != nil && inTx {
+			if affected, err := s.versions.MonitorsAffectedByDelete(ctx, tenantID, deleted); err == nil {
+				cascade = PrepareSystemVersionsTx(ctx, tx, tenantID, affected)
+			} else {
+				s.versionLogger().WithFields(map[string]interface{}{"error": err.Error(), "tenant_id": tenantID}).
+					Error("Failed to find monitors affected by a delete")
+			}
+		}
+		if err := del(ctx); err != nil {
+			return err
+		}
+		if cascade != nil {
+			cascade.RecordTx(ctx, tx)
+		}
 		return nil
-	}
-	affected, err := s.versions.MonitorsAffectedByDelete(ctx, tenantID, deleted)
-	if err != nil {
-		return err
-	}
-	return s.versions.recordSystem(ctx, tenantID, affected)
+	})
 }
 
 // ValidateMergedConfig validates config the way a save of it would store it
@@ -836,14 +864,49 @@ func (s *Service) BulkDeleteMonitors(
 		return 0, err
 	}
 	var deleted int64
-	err := s.InTx(ctx, func(ctx context.Context) error {
+	err := s.deleteMonitors(ctx, tenantID, monitorIDs, func(ctx context.Context) error {
 		var err error
-		if deleted, err = s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs); err != nil {
-			return err
-		}
-		return s.recordDeleteCascade(ctx, tenantID, monitorIDs)
+		deleted, err = s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs)
+		return err
 	})
 	return deleted, err
+}
+
+// BulkAlertingBatchSize bounds the monitors one transaction of a bulk
+// alerting edit changes, so the row locks it holds (which result ingest of
+// those monitors waits on) stay short.
+const BulkAlertingBatchSize = 100
+
+// ErrChannelsNotInTenant reports a bulk edit naming a channel that is not
+// one of the tenant's.
+var ErrChannelsNotInTenant = errors.New("one or more channels not found")
+
+// verifyChannels refuses channel ids that are not the tenant's (the
+// repository would only refuse them on write, after earlier monitors of the
+// edit were changed). Without a Postgres-backed repository it checks nothing.
+func (s *Service) verifyChannels(ctx context.Context, tenantID uuid.UUID, channelIDs []string) error {
+	if s.versions == nil {
+		return nil
+	}
+	parsed := make([]uuid.UUID, 0, len(channelIDs))
+	for _, id := range channelIDs {
+		channelID, err := uuid.Parse(id)
+		if err != nil {
+			return fmt.Errorf("%w: invalid channel_id %q", ErrChannelsNotInTenant, id)
+		}
+		parsed = append(parsed, channelID)
+	}
+	parsed = sortedIDs(parsed)
+	var count int
+	if err := dbtx.Of(ctx, s.versions.db).QueryRowContext(ctx, `
+		SELECT count(*) FROM alert_channels WHERE id = ANY($1) AND tenant_id = $2
+	`, pq.Array(parsed), tenantID).Scan(&count); err != nil {
+		return fmt.Errorf("verify channels: %w", err)
+	}
+	if count != len(parsed) {
+		return ErrChannelsNotInTenant
+	}
+	return nil
 }
 
 // BulkUpdateAlerting applies alerting fields to many monitors in a tenant-scoped way.
@@ -863,10 +926,9 @@ func (s *Service) BulkUpdateAlerting(
 		return 0, err
 	}
 
-	// The updates below are one UpdateMonitor each, with no transaction, so
-	// the test-call gate UpdateMonitor applies would only stop the edit at
-	// the first call monitor, after the earlier rows were written. Refuse
-	// the whole edit up front instead: a 403 then means nothing changed.
+	// Everything a request can get wrong is checked up front, so a 403 or a
+	// 400 means nothing changed: the test-call gate (UpdateMonitor would only
+	// stop at the first call monitor) and the channels.
 	for _, monitorID := range monitorIDs {
 		existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
 		if err != nil {
@@ -877,25 +939,48 @@ func (s *Service) BulkUpdateAlerting(
 		}
 	}
 
-	// One transaction for the whole edit: every monitor and its version, or
-	// nothing.
-	err := s.InTx(ctx, func(ctx context.Context) error {
-		for _, monitorID := range monitorIDs {
-			req := &models.UpdateMonitorRequest{
-				ConsecutiveFailuresThreshold: threshold,
-				NotificationMode:             mode,
-				NotificationChannels:         channels,
-			}
-			if _, err := s.updateMonitor(ctx, tenantID, monitorID, req); err != nil {
-				return fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
-			}
+	if len(channels) > 0 {
+		ids := make([]string, 0, len(channels))
+		for _, channel := range channels {
+			ids = append(ids, channel.ChannelID)
 		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
+		if err := s.verifyChannels(ctx, tenantID, ids); err != nil {
+			return 0, err
+		}
 	}
-	return len(monitorIDs), nil
+
+	// Batches of BulkAlertingBatchSize monitors in ascending id order, one
+	// transaction each with its rows locked first (lock order,
+	// api/internal/dbtx): every monitor of a batch and its version, or none
+	// of them. Batches commit one after the other, so a failure part-way
+	// (only an infrastructure or concurrency error once the checks above
+	// passed) leaves the earlier batches applied; the count says how many.
+	ordered := sortedIDs(monitorIDs)
+	updated := 0
+	for start := 0; start < len(ordered); start += BulkAlertingBatchSize {
+		batch := ordered[start:min(start+BulkAlertingBatchSize, len(ordered))]
+		err := s.InTx(ctx, func(ctx context.Context) error {
+			if err := s.LockMonitors(ctx, tenantID, batch, nil); err != nil {
+				return err
+			}
+			for _, monitorID := range batch {
+				req := &models.UpdateMonitorRequest{
+					ConsecutiveFailuresThreshold: threshold,
+					NotificationMode:             mode,
+					NotificationChannels:         channels,
+				}
+				if _, err := s.updateMonitor(ctx, tenantID, monitorID, req); err != nil {
+					return fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return updated, err
+		}
+		updated += len(batch)
+	}
+	return updated, nil
 }
 
 // generatePushToken generates a unique token for push monitors

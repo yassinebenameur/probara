@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -14,6 +15,10 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
+
+// ErrRestoreTypeChanged refuses restoring a version whose monitor type
+// differs from the monitor's current one.
+var ErrRestoreTypeChanged = errors.New("a restore never changes the monitor type")
 
 // RestorePlan is the update that re-applies a version, and what it cannot
 // bring back.
@@ -55,17 +60,17 @@ func planRestore(version models.MonitorConfigSnapshot, current *models.MonitorCo
 			plan.Changed = true
 		}
 	}
+	// A version of another type is refused before planning (the handler):
+	// its secrets would resolve against the current type's stored ones.
 	if version.Type != current.Type {
-		typ := version.Type
-		req.Type = &typ
-		plan.Changed = true
+		return nil, ErrRestoreTypeChanged
 	}
 
 	isGroup := version.Type == models.MonitorTypeGroup
-	configDiffers := !bytes.Equal(version.Config, current.Config) || version.Type != current.Type
+	configDiffers := !bytes.Equal(version.Config, current.Config)
 	membersDiffer := isGroup && !reflect.DeepEqual(version.MemberIDs, current.MemberIDs)
 	if configDiffers || membersDiffer {
-		config, reenter, err := restoreConfig(string(version.Type), version.Config, stored, version.Type == current.Type)
+		config, reenter, err := restoreConfig(string(version.Type), version.Config, stored)
 		if err != nil {
 			return nil, err
 		}
@@ -150,17 +155,20 @@ var plainSecretTwin = map[string]string{"headers": "secret_headers", "metadata":
 //   - a registry secret field in the version is sent as "***": the stored
 //     value is kept, and nothing is written when none is stored ("" would
 //     clear it, a literal would replace it);
-//   - every value of a registry secret map is sent as "***", and when the
-//     type is unchanged the keys stored now that the version lacks are added
-//     as "***", because a submitted secret map is edited per key;
+//   - every value of a registry secret map is sent as "***", and the keys
+//     stored now that the version lacks are added as "***", because a
+//     submitted secret map is edited per key;
 //   - a plain credential entry (a credential-named header, metadata key or
 //     variable) takes the value stored now under the same name, or is left
 //     out: moving it on save would replace a stored secret;
-//   - a miscased spelling of a secret key is dropped.
+//   - a miscased spelling of a secret key is dropped;
+//   - a URL whose credentials the version masked (a userinfo password, a
+//     credential-named query parameter) takes the stored URL when that is
+//     the same URL masked, and otherwise loses the masked parts.
 //
 // It also returns the secrets the version had that the monitor no longer
 // holds, which the restore leaves empty.
-func restoreConfig(monitorType string, versionConfig, stored json.RawMessage, sameType bool) (json.RawMessage, []string, error) {
+func restoreConfig(monitorType string, versionConfig, stored json.RawMessage) (json.RawMessage, []string, error) {
 	value, err := decodeJSONValue(versionConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decode version config: %w", err)
@@ -209,11 +217,9 @@ func restoreConfig(monitorType string, versionConfig, stored json.RawMessage, sa
 			}
 			entries[key] = secrets.MaskedSecret
 		}
-		if sameType {
-			for key := range live {
-				if _, found := lookupKeyFold(entries, key); !found {
-					entries[key] = secrets.MaskedSecret
-				}
+		for key := range live {
+			if _, found := lookupKeyFold(entries, key); !found {
+				entries[key] = secrets.MaskedSecret
 			}
 		}
 	}
@@ -237,6 +243,8 @@ func restoreConfig(monitorType string, versionConfig, stored json.RawMessage, sa
 		reenter[where+"."+name] = struct{}{}
 	})
 
+	restoreURLs(cfg, storedCfg, "", reenter)
+
 	out, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -259,4 +267,48 @@ func lookupKeyFold(values map[string]any, key string) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// restoreURLs replaces, at any depth of a version's config, each URL whose
+// credentials the snapshot masked (secrets.MaskURLCredentials): with the
+// stored value at the same place when that masks to the same URL (the
+// credential kept), otherwise with the URL without the masked parts, which
+// is reported to enter again. It edits node in place and returns it.
+func restoreURLs(node, stored any, where string, reenter map[string]struct{}) any {
+	switch value := node.(type) {
+	case string:
+		stripped, masked := secrets.StripMaskedURLCredentials(value)
+		if !masked {
+			return value
+		}
+		if storedString, ok := stored.(string); ok {
+			if remasked, _ := secrets.MaskURLCredentials(storedString); remasked == value {
+				return storedString
+			}
+		}
+		reenter[where+" (URL credentials)"] = struct{}{}
+		return stripped
+	case map[string]any:
+		storedMap, _ := stored.(map[string]any)
+		for key, child := range value {
+			path := key
+			if where != "" {
+				path = where + "." + key
+			}
+			value[key] = restoreURLs(child, storedMap[key], path, reenter)
+		}
+		return value
+	case []any:
+		storedItems, _ := stored.([]any)
+		for i, child := range value {
+			var storedChild any
+			if i < len(storedItems) {
+				storedChild = storedItems[i]
+			}
+			value[i] = restoreURLs(child, storedChild, fmt.Sprintf("%s[%d]", where, i), reenter)
+		}
+		return value
+	default:
+		return node
+	}
 }

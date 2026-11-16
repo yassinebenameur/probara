@@ -193,12 +193,43 @@ func TestMonitorConfigVersions_BaselineCascadesAndAtomicity_Integration(t *testi
 		t.Fatalf("a failed save left its update or version behind (name %q)", monitor.Name)
 	}
 
-	// Bulk edits are one save: a refused monitor leaves every other alone.
+	// A bulk edit naming an unknown channel is refused before any write.
 	if _, err := svc.BulkUpdateAlerting(session, tenant, []uuid.UUID{created.ID, legacy}, nil, &mode,
-		[]models.MonitorChannelAssignment{{ChannelID: uuid.NewString()}}); err == nil || !strings.Contains(err.Error(), "channel") {
+		[]models.MonitorChannelAssignment{{ChannelID: uuid.NewString()}}); !errors.Is(err, monitorservice.ErrChannelsNotInTenant) {
 		t.Fatalf("bulk edit with a missing channel = %v", err)
 	}
-	if len(versionRows(t, ctx, db, created.ID)) != count {
-		t.Fatal("a failed bulk edit recorded a version")
+	// A batch failing after its first monitor was written rolls back as a
+	// whole: the first monitor's routing and version are undone too.
+	first, second := created.ID, legacy
+	if strings.Compare(first.String(), second.String()) > 0 {
+		first, second = second, first
+	}
+	var channel2 uuid.UUID
+	if err := db.QueryRowContext(ctx, `INSERT INTO alert_channels (tenant_id, name, type, config) VALUES ($1, 'ops2', 'webhook', '{}') RETURNING id`, tenant).Scan(&channel2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE FUNCTION refuse_monitor() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$;
+		CREATE TRIGGER refuse_monitor BEFORE UPDATE ON monitors FOR EACH ROW
+			WHEN (OLD.id = '`+second.String()+`' AND NEW.consecutive_failures_threshold = 9) EXECUTE FUNCTION refuse_monitor();
+	`); err != nil {
+		t.Fatal(err)
+	}
+	firstVersions := len(versionRows(t, ctx, db, first))
+	nine := 9
+	updated, err := svc.BulkUpdateAlerting(session, tenant, []uuid.UUID{second, first}, &nine, &mode,
+		[]models.MonitorChannelAssignment{{ChannelID: channel2.String()}})
+	if err == nil || updated != 0 {
+		t.Fatalf("bulk edit with a failing second monitor = %d, %v", updated, err)
+	}
+	var threshold int
+	var firstMode string
+	if err := db.QueryRowContext(ctx, `SELECT consecutive_failures_threshold, notification_mode FROM monitors WHERE id = $1`, first).Scan(&threshold, &firstMode); err != nil {
+		t.Fatal(err)
+	}
+	var routed int
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM monitor_channels WHERE monitor_id = $1 AND channel_id = $2`, first, channel2).Scan(&routed)
+	if threshold == 9 || routed != 0 || len(versionRows(t, ctx, db, first)) != firstVersions {
+		t.Fatalf("the failed batch kept its first write: threshold %d, mode %s, routed %d", threshold, firstMode, routed)
 	}
 }

@@ -302,20 +302,23 @@ when a boundary or messaging contract moves. The rules that are easy to break:
 - **Monitor config history**: every path that creates or changes a monitor
   records a version through `api/internal/services/monitors/versions.go`,
   inside the save's transaction (`api/internal/dbtx` carries it through the
-  monitors, groups and dependencies services; `Service.InTx`).
-  `CreateMonitor`/`UpdateMonitor` do it; a write beside them calls
-  `RecordVersion` (member and dependency routes) or `RecordVersionTx`
+  monitors, groups and dependencies services; `Service.InTx`, which retries a
+  deadlock once). `CreateMonitor`/`UpdateMonitor` do it; a write beside them
+  calls `RecordVersion` (member and dependency routes) or `RecordVersionTx`
   (discovery approval); a change made outside a save (location, channel or
-  monitor delete) calls `RecordSystemVersionsTx`; a save made of several
-  writes (handler create/update/restore, import row) runs in one `InTx` under
-  `DeferVersions` and flushes before commit, so one save is one version. A
-  monitor without history gets a baseline from the committed row on its
-  first recorded change. Snapshots are masked with
-  `secrets.MaskStoredMonitorConfig`; restore never writes a secret from a
-  version (`restoreConfig`). A new top-level setting accepted by
-  `UpdateMonitorRequest` is one `snapshotColumns` entry
-  (`versions_fields.go`) plus its `models.MonitorConfigSnapshot` field, or it
-  is neither versioned nor restored.
+  monitor delete) uses the set-based `PrepareSystemVersionsTx` (before its
+  writes) and `RecordTx` (after), which only log failures. A save of an
+  existing monitor calls `CaptureBaseline` before its first write; nothing in
+  a save may use a second pool connection. **Lock order** (doc in
+  `api/internal/dbtx`): monitor rows in ascending id order first
+  (`LockMonitorsTx`: FOR UPDATE for monitors changed, FOR KEY SHARE for edge
+  targets), then version advisory locks in ascending id order. Snapshots are
+  masked with `secrets.MaskStoredMonitorConfig`; restore never writes a
+  secret from a version (`restoreConfig`) and refuses another type. A new
+  top-level setting accepted by `UpdateMonitorRequest` is one
+  `snapshotColumns` entry (`versions_fields.go`) plus its
+  `models.MonitorConfigSnapshot` field, or it is neither versioned nor
+  restored.
 
 ## Monitor import
 

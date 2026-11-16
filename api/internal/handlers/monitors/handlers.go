@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -124,6 +125,17 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 	// dependencies, and its first version, recorded once they are synced.
 	var monitor *models.Monitor
 	_, err := h.inSave(r.Context(), func(ctx context.Context) error {
+		// The targets of the new monitor's member and dependency edges are
+		// locked before the first write (lock order, api/internal/dbtx).
+		var targets []string
+		if req.Type == models.MonitorTypeGroup {
+			targets = groupMemberIDs(req.Config)
+		} else {
+			targets = req.DependsOnIDs
+		}
+		if err := h.lockForSave(ctx, tenantUUID, nil, targets); err != nil {
+			return err
+		}
 		var err error
 		if monitor, err = h.service.CreateMonitor(ctx, tenantUUID, &req); err != nil {
 			return err
@@ -186,6 +198,10 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, monitorservice.ErrSecretConflict) {
 			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -343,19 +359,31 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 	var monitor *models.Monitor
 	var dependencyErr error
 	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		// Row locks before the first write, in lock order: this monitor,
+		// and the targets of the member and dependency edges it may add.
+		var targets []string
+		if existingMonitor.Type == models.MonitorTypeGroup {
+			targets = groupMemberIDs(req.Config)
+		} else if req.DependsOnIDs != nil {
+			targets = *req.DependsOnIDs
+		}
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{monitorID}, targets); err != nil {
+			return err
+		}
+		if !monitorservice.OnlyPause(&req) {
+			h.captureBaseline(ctx, tenantUUID, monitorID)
+		}
 		var err error
 		if monitor, err = h.service.UpdateMonitor(ctx, tenantUUID, monitorID, &req); err != nil {
 			return err
 		}
 
-		// If this is a group monitor, sync the junction table with the new member list
+		// If this is a group monitor, sync the junction table with the new
+		// member list. A member that cannot be added fails the whole save,
+		// so the config never names members monitor_groups lacks.
 		if existingMonitor.Type == models.MonitorTypeGroup && req.Config != nil {
 			if err := h.syncGroupMembersFromConfig(ctx, tenantUUID, monitorID, req.Config); err != nil {
-				h.logger.WithFields(map[string]interface{}{
-					"error":      err.Error(),
-					"tenant_id":  tenantID,
-					"monitor_id": monitorID,
-				}).Warn("Failed to sync group members during update")
+				return err
 			}
 		}
 
@@ -376,6 +404,15 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
+		var members *groupMembersError
+		if errors.As(err, &members) {
+			apierrors.WriteValidationError(w, members.Error()+"; nothing was saved")
+			return
+		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
+			return
+		}
 		if dependencyErr != nil {
 			h.writeDependencyError(w, tenantUUID, monitorID, dependencyErr)
 			return
@@ -435,6 +472,10 @@ func (h *Handlers) DeleteMonitor(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteNotFoundError(w, "monitor not found")
 			return
 		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":      err.Error(),
 			"tenant_id":  tenantID,
@@ -485,6 +526,10 @@ func (h *Handlers) BulkDeleteMonitors(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrMonitorsNotInTenant) {
 			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{

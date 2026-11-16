@@ -28,90 +28,140 @@ type versionDB interface {
 }
 
 // loadSnapshot reads a live monitor's configuration as a masked, canonical
-// snapshot. found is false for a missing, deleted or foreign monitor. Every
-// query is tenant-scoped, the junction tables through the row they point at.
+// snapshot. found is false for a missing, deleted or foreign monitor.
 func loadSnapshot(ctx context.Context, q db.Querier, tenantID, monitorID uuid.UUID) (*models.MonitorConfigSnapshot, bool, error) {
-	snapshot := &models.MonitorConfigSnapshot{}
-	var config []byte
-	var tags []string
-	columns := []string{"type", "config", "tags", "notification_mode", "location_quorum"}
-	dest := []any{&snapshot.Type, &config, pq.Array(&tags), &snapshot.NotificationMode, &snapshot.LocationQuorum}
+	snapshots, err := loadSnapshots(ctx, q, tenantID, []uuid.UUID{monitorID})
+	if err != nil {
+		return nil, false, err
+	}
+	snapshot, found := snapshots[monitorID]
+	return snapshot, found, nil
+}
+
+// loadSnapshots reads the live monitors' configurations as masked, canonical
+// snapshots, keyed by id, in five queries whatever the count. Missing,
+// deleted and foreign monitors are absent. Every query is tenant-scoped, the
+// junction tables through the row they point at.
+func loadSnapshots(ctx context.Context, q db.Querier, tenantID uuid.UUID, monitorIDs []uuid.UUID) (map[uuid.UUID]*models.MonitorConfigSnapshot, error) {
+	out := make(map[uuid.UUID]*models.MonitorConfigSnapshot, len(monitorIDs))
+	if len(monitorIDs) == 0 {
+		return out, nil
+	}
+	ids := pq.Array(monitorIDs)
+	columns := []string{"id", "type", "config", "tags", "notification_mode", "location_quorum"}
 	for _, c := range snapshotColumns {
 		columns = append(columns, c.name)
-		dest = append(dest, c.dest(snapshot))
 	}
-	err := q.QueryRowContext(ctx, `
+	rows, err := q.QueryContext(ctx, `
 		SELECT `+strings.Join(columns, ", ")+`
 		FROM monitors
-		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-	`, monitorID, tenantID).Scan(dest...)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	}
+		WHERE id = ANY($1) AND tenant_id = $2 AND deleted_at IS NULL
+	`, ids, tenantID)
 	if err != nil {
-		return nil, false, fmt.Errorf("load monitor for version: %w", err)
-	}
-	// Masked through the secret registry and the credential name rules,
-	// after folding miscased keys and moving plain credentials as a save
-	// would: a row stored before those rules ran can hold a credential in a
-	// plain header, and a version must never hold one.
-	masked, err := secrets.MaskStoredMonitorConfig(string(snapshot.Type), config)
-	if err != nil {
-		return nil, false, fmt.Errorf("mask monitor config for version: %w", err)
-	}
-	if snapshot.Config, err = canonicalJSON(masked); err != nil {
-		return nil, false, fmt.Errorf("canonicalize monitor config for version: %w", err)
-	}
-	snapshot.Tags = tags
-
-	rows, err := q.QueryContext(ctx, `
-		SELECT mc.channel_id::text, mc.delay_seconds
-		FROM monitor_channels mc
-		JOIN alert_channels ac ON ac.id = mc.channel_id AND ac.tenant_id = $2
-		WHERE mc.monitor_id = $1
-	`, monitorID, tenantID)
-	if err != nil {
-		return nil, false, fmt.Errorf("load monitor channels for version: %w", err)
+		return nil, fmt.Errorf("load monitors for version: %w", err)
 	}
 	for rows.Next() {
-		var channel models.MonitorSnapshotChannel
-		if err := rows.Scan(&channel.ChannelID, &channel.DelaySeconds); err != nil {
-			rows.Close()
-			return nil, false, fmt.Errorf("scan monitor channel for version: %w", err)
+		snapshot := &models.MonitorConfigSnapshot{}
+		var id uuid.UUID
+		var config []byte
+		var tags []string
+		dest := []any{&id, &snapshot.Type, &config, pq.Array(&tags), &snapshot.NotificationMode, &snapshot.LocationQuorum}
+		for _, c := range snapshotColumns {
+			dest = append(dest, c.dest(snapshot))
 		}
-		snapshot.NotificationChannels = append(snapshot.NotificationChannels, channel)
+		if err := rows.Scan(dest...); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan monitor for version: %w", err)
+		}
+		// Masked through the secret registry and the credential name rules,
+		// after folding miscased keys and moving plain credentials as a save
+		// would: a row stored before those rules ran can hold a credential
+		// in a plain header, and a version must never hold one.
+		masked, err := secrets.MaskStoredMonitorConfig(string(snapshot.Type), config)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("mask monitor config for version: %w", err)
+		}
+		if snapshot.Config, err = canonicalJSON(masked); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("canonicalize monitor config for version: %w", err)
+		}
+		snapshot.Tags = tags
+		out[id] = snapshot
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
-	idQueries := []struct {
-		target *[]string
+	channels, err := q.QueryContext(ctx, `
+		SELECT mc.monitor_id, mc.channel_id::text, mc.delay_seconds
+		FROM monitor_channels mc
+		JOIN alert_channels ac ON ac.id = mc.channel_id AND ac.tenant_id = $2
+		WHERE mc.monitor_id = ANY($1)
+	`, ids, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load monitor channels for version: %w", err)
+	}
+	for channels.Next() {
+		var id uuid.UUID
+		var channel models.MonitorSnapshotChannel
+		if err := channels.Scan(&id, &channel.ChannelID, &channel.DelaySeconds); err != nil {
+			channels.Close()
+			return nil, fmt.Errorf("scan monitor channel for version: %w", err)
+		}
+		if snapshot := out[id]; snapshot != nil {
+			snapshot.NotificationChannels = append(snapshot.NotificationChannels, channel)
+		}
+	}
+	channels.Close()
+	if err := channels.Err(); err != nil {
+		return nil, err
+	}
+
+	relations := []struct {
+		target func(*models.MonitorConfigSnapshot) *[]string
 		query  string
 	}{
-		{&snapshot.LocationIDs, `
-			SELECT ml.location_id::text FROM monitor_locations ml
+		{func(s *models.MonitorConfigSnapshot) *[]string { return &s.LocationIDs }, `
+			SELECT ml.monitor_id, ml.location_id::text FROM monitor_locations ml
 			JOIN locations l ON l.id = ml.location_id AND l.tenant_id = $2 AND l.deleted_at IS NULL
-			WHERE ml.monitor_id = $1`},
-		{&snapshot.DependsOnIDs, `
-			SELECT md.depends_on_id::text FROM monitor_dependencies md
+			WHERE ml.monitor_id = ANY($1)`},
+		{func(s *models.MonitorConfigSnapshot) *[]string { return &s.DependsOnIDs }, `
+			SELECT md.monitor_id, md.depends_on_id::text FROM monitor_dependencies md
 			JOIN monitors m ON m.id = md.depends_on_id AND m.tenant_id = $2 AND m.deleted_at IS NULL
-			WHERE md.monitor_id = $1`},
-		{&snapshot.MemberIDs, `
-			SELECT mg.monitor_id::text FROM monitor_groups mg
+			WHERE md.monitor_id = ANY($1)`},
+		{func(s *models.MonitorConfigSnapshot) *[]string { return &s.MemberIDs }, `
+			SELECT mg.group_id, mg.monitor_id::text FROM monitor_groups mg
 			JOIN monitors m ON m.id = mg.monitor_id AND m.tenant_id = $2 AND m.deleted_at IS NULL
-			WHERE mg.group_id = $1`},
+			WHERE mg.group_id = ANY($1)`},
 	}
-	for _, iq := range idQueries {
-		ids, err := queryStrings(ctx, q, iq.query, monitorID, tenantID)
+	for _, rel := range relations {
+		rows, err := q.QueryContext(ctx, rel.query, ids, tenantID)
 		if err != nil {
-			return nil, false, fmt.Errorf("load monitor relations for version: %w", err)
+			return nil, fmt.Errorf("load monitor relations for version: %w", err)
 		}
-		*iq.target = ids
+		for rows.Next() {
+			var id uuid.UUID
+			var value string
+			if err := rows.Scan(&id, &value); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan monitor relation for version: %w", err)
+			}
+			if snapshot := out[id]; snapshot != nil {
+				target := rel.target(snapshot)
+				*target = append(*target, value)
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
-	normalizeSnapshot(snapshot)
-	return snapshot, true, nil
+	for _, snapshot := range out {
+		normalizeSnapshot(snapshot)
+	}
+	return out, nil
 }
 
 func queryStrings(ctx context.Context, q db.Querier, query string, args ...any) ([]string, error) {
@@ -179,151 +229,6 @@ func decodeJSONValue(raw []byte) (any, error) {
 	return value, nil
 }
 
-// RecordVersionTx records a version inside the caller's transaction, for
-// paths that create or change monitors through the repository instead of the
-// service (discovery approval, beside CreateInTx). The source is set
-// explicitly; the actor comes from ctx. Unlike the service path it returns
-// its error, so the caller's transaction rolls back with it.
-func RecordVersionTx(ctx context.Context, tx *sql.Tx, tenantID, monitorID uuid.UUID, source string) error {
-	_, err := recordVersionTx(ctx, tx, nil, tenantID, monitorID, versionMetaFromContext(WithVersionSource(ctx, source), nil))
-	return err
-}
-
-// RecordSystemVersionsTx records, inside the caller's transaction, a
-// version with source and actor "system" for each monitor whose settings a
-// change outside a save just rewrote: a deleted location, channel or member
-// monitor. Without it the next save, whoever makes it, would be credited
-// with that change. pool reads the monitors' committed state for the
-// baseline of a monitor without history (see recordVersionTx). Each monitor
-// is recorded under a savepoint; the first failure is returned.
-func RecordSystemVersionsTx(ctx context.Context, tx *sql.Tx, pool db.Querier, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
-	meta := versionMeta{source: VersionSourceSystem, actor: versionActor{typ: VersionActorSystem}}
-	for _, monitorID := range monitorIDs {
-		if err := dbtx.Savepoint(ctx, tx, "monitor_config_version", func() error {
-			_, err := recordVersionTx(ctx, tx, pool, tenantID, monitorID, meta)
-			return err
-		}); err != nil {
-			return fmt.Errorf("record system version of monitor %s: %w", monitorID, err)
-		}
-	}
-	return nil
-}
-
-// recordVersionTx snapshots the monitor and inserts the next version unless
-// it would repeat the latest one, then prunes beyond MaxVersionsPerMonitor.
-// It returns the recorded version, or 0 when nothing was recorded.
-//
-// A monitor without any version yet (one that predates history) first gets
-// a baseline: its configuration before this save, read through pool — a
-// connection outside the save's transaction, which still sees the committed
-// state — recorded as version 1 with source "baseline", so the first change
-// after the upgrade can be compared and undone. A monitor created by this
-// save has no committed row there, and its creation is version 1. pool is
-// nil where no baseline can exist (discovery creates the monitor).
-func recordVersionTx(ctx context.Context, tx versionDB, pool db.Querier, tenantID, monitorID uuid.UUID, meta versionMeta) (int, error) {
-	// Serialize version numbering per monitor for the rest of the
-	// transaction. A transaction-scoped advisory lock rather than a lock on
-	// the monitors row, which the scheduler and result ingest update
-	// constantly. Taken before the snapshot is read, so concurrent saves
-	// record in commit order, each crediting its own change.
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('monitor_config_versions:' || $1::text, 0))`, monitorID); err != nil {
-		return 0, fmt.Errorf("lock monitor versions: %w", err)
-	}
-	snapshot, found, err := loadSnapshot(ctx, tx, tenantID, monitorID)
-	if err != nil || !found {
-		return 0, err
-	}
-	encoded, err := json.Marshal(snapshot)
-	if err != nil {
-		return 0, err
-	}
-
-	latest := 0
-	var latestRaw []byte
-	err = tx.QueryRowContext(ctx, `
-		SELECT version, snapshot FROM monitor_config_versions
-		WHERE tenant_id = $1 AND monitor_id = $2 ORDER BY version DESC LIMIT 1
-	`, tenantID, monitorID).Scan(&latest, &latestRaw)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("load latest monitor version: %w", err)
-	}
-
-	var previous *models.MonitorConfigSnapshot
-	if latest > 0 {
-		if previous, err = decodeStoredSnapshot(latestRaw); err != nil {
-			return 0, err
-		}
-	} else if pool != nil {
-		baseline, existed, err := loadSnapshot(ctx, pool, tenantID, monitorID)
-		if err != nil {
-			return 0, fmt.Errorf("load baseline: %w", err)
-		}
-		if existed {
-			previous = baseline
-		}
-	}
-	if previous != nil {
-		previousEncoded, err := json.Marshal(previous)
-		if err != nil {
-			return 0, err
-		}
-		if bytes.Equal(previousEncoded, encoded) && len(meta.secretChanges) == 0 {
-			return 0, nil
-		}
-		if latest == 0 {
-			baselineMeta := versionMeta{source: VersionSourceBaseline, actor: versionActor{typ: VersionActorSystem}}
-			if err := insertVersion(ctx, tx, tenantID, monitorID, 1, previousEncoded, []string{}, baselineMeta); err != nil {
-				return 0, err
-			}
-			latest = 1
-		}
-	}
-
-	changedFields := []string{}
-	if previous != nil {
-		changes, err := diffSnapshots(previous, snapshot)
-		if err != nil {
-			return 0, err
-		}
-		for _, change := range changes {
-			changedFields = append(changedFields, change.Path)
-		}
-	}
-	next := latest + 1
-	if err := insertVersion(ctx, tx, tenantID, monitorID, next, encoded, changedFields, meta); err != nil {
-		return 0, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM monitor_config_versions
-		WHERE tenant_id = $1 AND monitor_id = $2 AND version <= $3
-	`, tenantID, monitorID, next-MaxVersionsPerMonitor); err != nil {
-		return 0, fmt.Errorf("prune monitor versions: %w", err)
-	}
-	return next, nil
-}
-
-func insertVersion(ctx context.Context, tx versionDB, tenantID, monitorID uuid.UUID, version int, snapshot []byte, changedFields []string, meta versionMeta) error {
-	secretChanges := meta.secretChanges
-	if secretChanges == nil {
-		secretChanges = []string{}
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO monitor_config_versions
-			(tenant_id, monitor_id, version, snapshot, changed_fields, changed_secret_fields,
-			 actor_type, actor_id, actor_label, source, restored_from)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::text, $8::uuid,
-			COALESCE(CASE $7::text
-				WHEN 'user' THEN (SELECT username FROM admin_users WHERE id = $8::uuid)
-				WHEN 'api_key' THEN (SELECT name FROM api_keys WHERE id = $8::uuid)
-			END, ''),
-			$9, $10)
-	`, tenantID, monitorID, version, snapshot, pq.Array(changedFields), pq.Array(secretChanges),
-		meta.actor.typ, meta.actor.id, meta.source, meta.restoredFrom); err != nil {
-		return fmt.Errorf("insert monitor version: %w", err)
-	}
-	return nil
-}
-
 // VersionStore reads and writes monitor configuration history. Every query
 // is scoped to a tenant, and runs in the transaction ctx carries, if any
 // (api/internal/dbtx).
@@ -338,64 +243,6 @@ func NewVersionStore(database db.DB) *VersionStore {
 
 func (v *VersionStore) conn(ctx context.Context) dbtx.Conn {
 	return dbtx.Of(ctx, v.db)
-}
-
-// record writes a version in the save's transaction (or its own), under a
-// savepoint: a failure to record rolls back the version only, never the save
-// it describes.
-func (v *VersionStore) record(ctx context.Context, tenantID, monitorID uuid.UUID, meta versionMeta) (int, error) {
-	// A baseline is only told apart from the save inside the save's own
-	// transaction: after a commit, the pool sees the saved state. Recorded
-	// outside one (a deferred batch flushed after the fact), a monitor
-	// without history starts at its current state instead.
-	var pool db.Querier
-	if _, ok := dbtx.From(ctx); ok {
-		pool = v.db
-	}
-	version := 0
-	err := dbtx.Run(ctx, v.db, func(ctx context.Context, tx *sql.Tx) error {
-		return dbtx.Savepoint(ctx, tx, "monitor_config_version", func() error {
-			var err error
-			version, err = recordVersionTx(ctx, tx, pool, tenantID, monitorID, meta)
-			return err
-		})
-	})
-	if err != nil {
-		return 0, err
-	}
-	return version, nil
-}
-
-// MonitorsAffectedByDelete lists the live monitors of the tenant whose
-// recorded settings name one of the monitors being deleted: groups holding
-// them as members and monitors depending on them.
-func (v *VersionStore) MonitorsAffectedByDelete(ctx context.Context, tenantID uuid.UUID, deleted []uuid.UUID) ([]uuid.UUID, error) {
-	ids, err := queryStrings(ctx, v.conn(ctx), `
-		SELECT DISTINCT m.id::text FROM monitors m
-		WHERE m.tenant_id = $1 AND m.deleted_at IS NULL AND m.id <> ALL($2::uuid[]) AND (
-			EXISTS (SELECT 1 FROM monitor_groups mg WHERE mg.group_id = m.id AND mg.monitor_id = ANY($2::uuid[]))
-			OR EXISTS (SELECT 1 FROM monitor_dependencies md WHERE md.monitor_id = m.id AND md.depends_on_id = ANY($2::uuid[])))
-		ORDER BY 1
-	`, tenantID, pq.Array(deleted))
-	if err != nil {
-		return nil, fmt.Errorf("find monitors affected by delete: %w", err)
-	}
-	out := make([]uuid.UUID, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, uuid.MustParse(id))
-	}
-	return out, nil
-}
-
-// recordSystem records system versions for monitors in the transaction ctx
-// carries (or its own).
-func (v *VersionStore) recordSystem(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
-	if len(monitorIDs) == 0 {
-		return nil
-	}
-	return dbtx.Run(ctx, v.db, func(ctx context.Context, tx *sql.Tx) error {
-		return RecordSystemVersionsTx(ctx, tx, v.db, tenantID, monitorIDs)
-	})
 }
 
 const versionSummaryColumns = `version, source, actor_type, actor_id, actor_label, restored_from,

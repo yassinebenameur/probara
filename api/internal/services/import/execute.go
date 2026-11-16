@@ -190,9 +190,14 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 	}, nil
 }
 
-// transactor is implemented by the Postgres-backed monitors service.
+// transactor and monitorLocker are implemented by the Postgres-backed
+// monitors service.
 type transactor interface {
 	InTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+type monitorLocker interface {
+	LockMonitors(ctx context.Context, tenantID uuid.UUID, write, read []uuid.UUID) error
 }
 
 // saveRow runs one row's creation as one save: the monitor, its group
@@ -439,6 +444,13 @@ func (s *Service) syncGroupMembers(ctx context.Context, tenantID, groupID uuid.U
 		parsed = append(parsed, id)
 	}
 
+	// The members are locked in lock order before their edges are written
+	// (api/internal/dbtx), as every save adding edges does.
+	if locker, ok := s.monitorService.(monitorLocker); ok {
+		if err := locker.LockMonitors(ctx, tenantID, nil, parsed); err != nil {
+			return fmt.Errorf("failed to attach group members: %w", err)
+		}
+	}
 	if err := s.groupService.AddMonitorsToGroup(ctx, tenantID, groupID, parsed); err != nil {
 		return fmt.Errorf("failed to attach group members: %w", err)
 	}

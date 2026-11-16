@@ -44,9 +44,9 @@ func historyTools() []spec {
 		{
 			Name:  "restore_monitor_version",
 			Title: "Restore monitor version",
-			Description: "Re-apply a version's configuration (name, type, config, schedule, alerting, channels, " +
+			Description: "Re-apply a version's configuration (name, config, schedule, alerting, channels, " +
 				"locations, dependencies, group members) to the monitor through the normal update path, recorded as " +
-				"a new version, all or nothing. Secrets are never restored or removed: every secret keeps its current " +
+				"a new version, all or nothing; a version of another monitor type is refused. Secrets are never restored or removed: every secret keeps its current " +
 				"value, and secrets the version had that the monitor no longer holds are listed in secrets_to_reenter; " +
 				"a version that cannot be valid without them, or that conflicts with a secret held now, is refused " +
 				"with nothing changed. Channels, locations and monitors that no longer exist, and dependencies or " +

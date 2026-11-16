@@ -62,3 +62,31 @@ func TestWalkPlainCredentials(t *testing.T) {
 		t.Fatalf("visited %v", got)
 	}
 }
+
+func TestMaskURLCredentials(t *testing.T) {
+	cases := map[string]string{
+		"https://ops:p-1@api.example/x?token=p-2&page=2#top": "https://ops:***@api.example/x?token=***&page=2#top",
+		"wss://h.example/ws?access_token=p-1&api_key=p-2":    "wss://h.example/ws?access_token=***&api_key=***",
+		"https://ops@h.example/?token={{tok}}":               "https://ops@h.example/?token={{tok}}",
+		"https://h.example/?token_url=https://x&q=1":         "https://h.example/?token_url=https://x&q=1",
+		"not a url, token=p-1":                               "not a url, token=p-1",
+	}
+	for in, want := range cases {
+		got, _ := MaskURLCredentials(in)
+		if got != want {
+			t.Fatalf("MaskURLCredentials(%q) = %q, want %q", in, got, want)
+		}
+	}
+	stripped, changed := StripMaskedURLCredentials("https://ops:***@h.example/x?token=***&page=2")
+	if !changed || stripped != "https://ops@h.example/x?page=2" {
+		t.Fatalf("strip = %q %v", stripped, changed)
+	}
+	// Snapshots mask URL credentials for every type, nested ones included.
+	out, _ := MaskStoredMonitorConfig("synthetic_api", json.RawMessage(`{"base_url":"https://u:p-1@h","steps":[{"id":"a","request":{"method":"GET","url":"https://h/x?apikey=p-2"}}]}`))
+	if strings.Contains(string(out), "p-1") || strings.Contains(string(out), "p-2") {
+		t.Fatalf("URL credentials survived: %s", out)
+	}
+	if out, _ := MaskStoredMonitorConfig("ping", json.RawMessage(`{"host":"h"}`)); string(out) != `{"host":"h"}` {
+		t.Fatalf("ping = %s", out)
+	}
+}

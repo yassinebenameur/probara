@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -18,6 +21,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
+	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
@@ -217,5 +221,134 @@ func TestRestoreIsAllOrNothing_Integration(t *testing.T) {
 	}
 	if cfg, _ := h.storedConfig(pg.ID); cfg["host"] != "db.example" || h.versionCount(pg.ID) != versions {
 		t.Fatalf("a refused restore wrote something: %v", cfg)
+	}
+}
+
+// A restore that fails after its first write leaves nothing behind: the
+// update it applied and its version roll back together.
+func TestRestoreFailingAfterAWriteRollsBack_Integration(t *testing.T) {
+	h, cleanup := newHistoryHarness(t, "history-restore-late-failure")
+	defer cleanup()
+	var a, b models.Monitor
+	for _, m := range []*models.Monitor{&a, &b} {
+		_ = json.Unmarshal(h.call("POST", "/", map[string]any{"name": uuid.NewString()[:8], "type": "http", "interval_seconds": 60, "timeout_seconds": 10,
+			"config": map[string]any{"url": "https://x.example", "method": "GET", "expected_status": 200}}, http.StatusCreated), m)
+	}
+	base := "/" + a.ID.String()
+	h.call("PATCH", base, map[string]any{"name": "renamed", "depends_on_ids": []string{b.ID.String()}}, http.StatusOK)
+	h.call("PATCH", base, map[string]any{"name": "renamed again", "depends_on_ids": []string{}}, http.StatusOK)
+	versions := h.versionCount(a.ID)
+	// The name is written first; the dependency edge then fails.
+	if _, err := h.db.ExecContext(h.ctx, `
+		CREATE FUNCTION refuse_edges() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'edges refused'; END $$;
+		CREATE TRIGGER refuse_edges BEFORE INSERT ON monitor_dependencies FOR EACH ROW EXECUTE FUNCTION refuse_edges();
+	`); err != nil {
+		t.Fatal(err)
+	}
+	body := string(h.call("POST", base+"/versions/2/restore", nil, http.StatusInternalServerError))
+	if !strings.Contains(body, "nothing changed") {
+		t.Fatalf("failure answer = %s", body)
+	}
+	var name string
+	_ = h.db.QueryRowContext(h.ctx, `SELECT name FROM monitors WHERE id = $1`, a.ID).Scan(&name)
+	if name != "renamed again" || h.versionCount(a.ID) != versions {
+		t.Fatalf("a failed restore kept its write: name %q, versions %d", name, h.versionCount(a.ID))
+	}
+
+	// A version of another type is refused before anything is written.
+	h.call("PATCH", base, map[string]any{"type": "tcp", "config": map[string]any{"host": "x.example", "port": 443}}, http.StatusOK)
+	body = string(h.call("POST", base+"/versions/1/restore", nil, http.StatusBadRequest))
+	if !strings.Contains(body, "never changes the type") {
+		t.Fatalf("type refusal = %s", body)
+	}
+}
+
+// A group save naming a member it cannot add fails as a whole: the config,
+// the removals and the version are all left as they were.
+func TestGroupSaveWithAnUnknownMemberSavesNothing_Integration(t *testing.T) {
+	h, cleanup := newHistoryHarness(t, "history-group-members")
+	defer cleanup()
+	a := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, "a")
+	b := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, "b")
+	c := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, "c")
+	gone := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, "gone")
+	if _, err := h.db.ExecContext(h.ctx, `UPDATE monitors SET deleted_at = NOW() WHERE id = $1`, gone); err != nil {
+		t.Fatal(err)
+	}
+	var group models.Monitor
+	_ = json.Unmarshal(h.call("POST", "/", map[string]any{"name": "edge", "type": "group", "interval_seconds": 60, "timeout_seconds": 10,
+		"config": map[string]any{"monitor_ids": []string{a.String(), b.String(), c.String()}}}, http.StatusCreated), &group)
+	versions := h.versionCount(group.ID)
+	body := string(h.call("PATCH", "/"+group.ID.String(), map[string]any{
+		"config": map[string]any{"monitor_ids": []string{a.String(), gone.String()}}}, http.StatusBadRequest))
+	if !strings.Contains(body, gone.String()) || !strings.Contains(body, "nothing was saved") {
+		t.Fatalf("refusal = %s", body)
+	}
+	var members int
+	_ = h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM monitor_groups WHERE group_id = $1`, group.ID).Scan(&members)
+	cfg, _ := h.storedConfig(group.ID)
+	if members != 3 || len(cfg["monitor_ids"].([]any)) != 3 || h.versionCount(group.ID) != versions {
+		t.Fatalf("a refused group save kept something: %d members, config %v", members, cfg)
+	}
+}
+
+// A save never needs a second pool connection: with one connection for the
+// requests, a create and a first update after the upgrade (which records a
+// baseline) succeed.
+func TestSavesRunOnOneConnection_Integration(t *testing.T) {
+	h, cleanup := newHistoryHarness(t, "history-one-connection")
+	defer cleanup()
+	legacy := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, "legacy")
+	// The test database setup keeps connections of its own checked out;
+	// the requests below get exactly one.
+	h.db.DB.SetMaxOpenConns(h.db.DB.Stats().InUse + 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.call("POST", "/", map[string]any{"name": "fresh", "type": "http", "interval_seconds": 60, "timeout_seconds": 10,
+			"config": map[string]any{"url": "https://f.example", "method": "GET", "expected_status": 200}}, http.StatusCreated)
+		h.call("PATCH", "/"+legacy.String(), map[string]any{"name": "legacy renamed"}, http.StatusOK)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a save waited for a second connection")
+	}
+	h.db.DB.SetMaxOpenConns(25)
+	var sources string
+	_ = h.db.QueryRowContext(h.ctx, `SELECT string_agg(source, ',' ORDER BY version) FROM monitor_config_versions WHERE monitor_id = $1`, legacy).Scan(&sources)
+	if sources != "baseline,ui" && sources != "baseline,api" {
+		t.Fatalf("legacy versions = %s", sources)
+	}
+}
+
+// A PATCH adding a dependency races a location delete that locks both
+// monitors: one lock order, so both succeed.
+func TestDependencyPatchRacingLocationDelete_Integration(t *testing.T) {
+	h, cleanup := newHistoryHarness(t, "history-dependency-race")
+	defer cleanup()
+	locations := locationservice.NewService(h.db)
+	for round := 0; round < 8; round++ {
+		m := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, fmt.Sprintf("m-%d", round))
+		x := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, fmt.Sprintf("x-%d", round))
+		location, err := locations.Create(h.ctx, h.tenant, &models.CreateLocationRequest{Name: fmt.Sprintf("loc-%d", round)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.db.ExecContext(h.ctx, `INSERT INTO monitor_locations (monitor_id, location_id) VALUES ($1, $3), ($2, $3)`, m, x, location.ID); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		var deleteErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			h.call("PATCH", "/"+m.String(), map[string]any{"name": "dep", "depends_on_ids": []string{x.String()}}, http.StatusOK)
+		}()
+		go func() { defer wg.Done(); _, deleteErr = locations.Delete(h.ctx, h.tenant, location.ID) }()
+		wg.Wait()
+		if deleteErr != nil {
+			t.Fatalf("location delete: %v", deleteErr)
+		}
 	}
 }

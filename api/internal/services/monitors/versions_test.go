@@ -171,7 +171,7 @@ func TestRestoreConfig_NeverWritesASecretFromAVersion(t *testing.T) {
 		`"headers":{"Authorization":"Bearer leaked","Accept":"json"},"Basic_Auth_Password":"leaked-2",` +
 		`"secret_headers":{"X-Old":"leaked-3"}}`)
 	stored := json.RawMessage(`{"url":"https://b","basic_auth_username":"ops","basic_auth_password":"env-pw","secret_headers":{"Authorization":"env-auth"}}`)
-	out, reenter, err := restoreConfig("http", versionConfig, stored, true)
+	out, reenter, err := restoreConfig("http", versionConfig, stored)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,12 +191,24 @@ func TestRestoreConfig_NeverWritesASecretFromAVersion(t *testing.T) {
 
 	// An emptied secret keeps the stored one; a removed secret variable and
 	// a plain credential nothing stored backs are reported.
-	out, reenter, _ = restoreConfig("postgres", json.RawMessage(`{"host":"db","connection_string":"","password":"***"}`), json.RawMessage(`{"host":"db","connection_string":"env"}`), true)
+	out, reenter, _ = restoreConfig("postgres", json.RawMessage(`{"host":"db","connection_string":"","password":"***"}`), json.RawMessage(`{"host":"db","connection_string":"env"}`))
 	if decodeConfigMap(out)["connection_string"] != "***" || strings.Join(reenter, ",") != "password" {
 		t.Fatalf("postgres restore = %s, %v", out, reenter)
 	}
+	// A masked URL credential keeps the stored one when the URL is the same,
+	// and is left out (and reported) when it is not.
+	out, reenter, _ = restoreConfig("http", json.RawMessage(`{"url":"https://ops:***@a.example/x?token=***"}`),
+		json.RawMessage(`{"url":"https://ops:pw@a.example/x?token=tk"}`))
+	if decodeConfigMap(out)["url"] != "https://ops:pw@a.example/x?token=tk" || len(reenter) != 0 {
+		t.Fatalf("same URL restore = %s, %v", out, reenter)
+	}
+	out, reenter, _ = restoreConfig("http", json.RawMessage(`{"url":"https://ops:***@a.example/x?token=***"}`),
+		json.RawMessage(`{"url":"https://b.example/"}`))
+	if decodeConfigMap(out)["url"] != "https://ops@a.example/x" || strings.Join(reenter, ",") != "url (URL credentials)" {
+		t.Fatalf("changed URL restore = %s, %v", out, reenter)
+	}
 	_, reenter, _ = restoreConfig("synthetic_api", json.RawMessage(`{"secret_variables":{"token":"***","user":"***"},"variables":{"api_key":"***"},"steps":[]}`),
-		json.RawMessage(`{"secret_variables":{"USER":"env"},"steps":[]}`), true)
+		json.RawMessage(`{"secret_variables":{"USER":"env"},"steps":[]}`))
 	if strings.Join(reenter, ",") != "secret_variables.token,variables.api_key" {
 		t.Fatalf("synthetic reenter = %v", reenter)
 	}

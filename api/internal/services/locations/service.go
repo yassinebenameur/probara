@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/services/monitors"
@@ -330,22 +331,41 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID uuid.UUID, re
 // quorum is clamped to its remaining location count, and monitors dropping
 // to zero locations restart the legacy state machine from 'unknown'.
 // Returns how many monitors were affected.
+//
+// The affected monitors are locked in id order (lock order,
+// api/internal/dbtx) and each gets a system configuration version,
+// recorded set-based so a location used by thousands of monitors stays a
+// short transaction; a recording failure never fails the delete. A deadlock
+// is retried once.
 func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (int, error) {
+	var affected int
+	err := dbtx.Retry(ctx, func() error {
+		var err error
+		affected, err = s.deleteOnce(ctx, tenantID, locationID)
+		return err
+	})
+	return affected, err
+}
+
+func (s *Service) deleteOnce(ctx context.Context, tenantID, locationID uuid.UUID) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.ExecContext(ctx, `
-		UPDATE locations SET deleted_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-	`, locationID, tenantID)
-	if err != nil {
+	// The location row is locked the way the soft delete below would lock
+	// it (FOR NO KEY UPDATE, which a save attaching a monitor to it does not
+	// wait on), so nothing changes before the monitors are locked and their
+	// baselines read.
+	var found uuid.UUID
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id FROM locations WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL FOR NO KEY UPDATE
+	`, locationID, tenantID).Scan(&found); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
 		return 0, fmt.Errorf("failed to delete location: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return 0, ErrNotFound
 	}
 
 	// S-O1 (docs/state-semantics.md): lock every affected monitor row, in
@@ -355,10 +375,10 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 	// to a re-upsert of the just-removed location's state.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id FROM monitors
-		WHERE id IN (SELECT monitor_id FROM monitor_locations WHERE location_id = $1)
+		WHERE id IN (SELECT monitor_id FROM monitor_locations WHERE location_id = $1) AND tenant_id = $2
 		ORDER BY id
 		FOR UPDATE
-	`, locationID)
+	`, locationID, tenantID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to lock affected monitors: %w", err)
 	}
@@ -374,6 +394,17 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("error iterating affected monitors: %w", err)
+	}
+
+	// Before the first change to them: the baselines of affected monitors
+	// without history.
+	versions := monitors.PrepareSystemVersionsTx(ctx, tx, tenantID, affected)
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE locations SET deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+	`, locationID, tenantID); err != nil {
+		return 0, fmt.Errorf("failed to delete location: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -444,9 +475,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 	// The affected monitors' location settings changed outside a save:
 	// record that as a system version, or the next save would be credited
 	// with it.
-	if err := monitors.RecordSystemVersionsTx(ctx, tx, s.db, tenantID, affected); err != nil {
-		return 0, err
-	}
+	versions.RecordTx(ctx, tx)
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit transaction: %w", err)

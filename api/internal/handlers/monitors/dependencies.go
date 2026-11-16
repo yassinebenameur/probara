@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
@@ -137,6 +138,12 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 
 	// The edge and the monitor's version, in one transaction.
 	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		// Both ends locked in lock order before the edge changes
+		// (api/internal/dbtx).
+		if err := h.lockForSave(ctx, tenantUUID, nil, []string{monitorID.String(), dependsOnID.String()}); err != nil {
+			return err
+		}
+		h.captureBaseline(ctx, tenantUUID, monitorID)
 		var err error
 		if op == "add" {
 			err = h.dependencyService.AddDependency(ctx, tenantUUID, monitorID, dependsOnID)
@@ -179,6 +186,8 @@ func (h *Handlers) syncDependencies(ctx context.Context, tenantUUID, monitorID u
 // writeDependencyError maps a syncDependencies failure to an HTTP response.
 func (h *Handlers) writeDependencyError(w http.ResponseWriter, tenantUUID, monitorID uuid.UUID, err error) {
 	switch {
+	case dbtx.IsConflict(err):
+		writeConflict(w)
 	case errors.Is(err, depservice.ErrDependencyCycle):
 		apierrors.WriteError(w, http.StatusConflict, "dependency_cycle", err.Error())
 	case errors.Is(err, depservice.ErrMonitorNotFound):

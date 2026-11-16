@@ -3,10 +3,12 @@ package monitors
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -69,11 +71,26 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteNotFoundError(w, "one or more monitors not found")
 			return
 		}
+		if errors.Is(err, monitorservice.ErrChannelsNotInTenant) {
+			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		// Batches commit one after the other (BulkAlertingBatchSize): say
+		// how many monitors the earlier ones changed.
+		partial := ""
+		if updated > 0 {
+			partial = fmt.Sprintf(" after updating %d of %d monitors", updated, len(monitorIDs))
+		}
+		if dbtx.IsConflict(err) {
+			apierrors.WriteError(w, http.StatusServiceUnavailable, "conflict", dbtx.ErrConflict.Error()+partial)
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     msg,
 			"tenant_id": tenantID,
+			"updated":   updated,
 		}).Error("Failed to bulk update alerting")
-		apierrors.WriteInternalError(w, "failed to bulk update alerting")
+		apierrors.WriteInternalError(w, "failed to bulk update alerting"+partial)
 		return
 	}
 
