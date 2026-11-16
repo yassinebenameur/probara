@@ -29,6 +29,7 @@ type MonitorConfigSnapshot struct {
 	TimeoutSeconds               int                      `json:"timeout_seconds"`
 	Tags                         []string                 `json:"tags"`
 	ConsecutiveFailuresThreshold int                      `json:"consecutive_failures_threshold"`
+	RecoveryThreshold            int                      `json:"recovery_threshold"`
 	NotificationMode             string                   `json:"notification_mode"`
 	NotificationChannels         []MonitorSnapshotChannel `json:"notification_channels"`
 	MemberAlertRollup            string                   `json:"member_alert_rollup"`

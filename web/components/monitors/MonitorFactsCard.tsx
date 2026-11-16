@@ -141,6 +141,11 @@ export default function MonitorFactsCard({
             </DetailRow>
           )
         )}
+        {!isGroup && (monitor.recovery_threshold ?? 1) > 1 && (
+          <DetailRow label="Recovers after">
+            {pluralize(monitor.recovery_threshold ?? 1, 'passing check')}
+          </DetailRow>
+        )}
         {routing && (
           <DetailRow label="Notifies" tone={routing.warning ? 'warning' : 'default'}>
             {routing.text}

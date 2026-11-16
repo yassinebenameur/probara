@@ -95,8 +95,8 @@ func TestSavesTouchingSeveralMonitorsDoNotDeadlock_Integration(t *testing.T) {
 		race(t, ctx, db, 5, func(round int) []func() error {
 			a, b := 2+round%3, 5+round%3
 			return []func() error{
-				func() error { _, err := svc.BulkUpdateAlerting(ctx, tenant, ids[:30], &a, nil, nil); return err },
-				func() error { _, err := svc.BulkUpdateAlerting(ctx, tenant, ids[10:], &b, nil, nil); return err },
+				func() error { _, err := svc.BulkUpdateAlerting(ctx, tenant, ids[:30], &a, nil, nil, nil); return err },
+				func() error { _, err := svc.BulkUpdateAlerting(ctx, tenant, ids[10:], &b, nil, nil, nil); return err },
 			}
 		})
 	})
@@ -112,7 +112,10 @@ func TestSavesTouchingSeveralMonitorsDoNotDeadlock_Integration(t *testing.T) {
 			}
 			threshold := 1 + round
 			return []func() error{
-				func() error { _, err := svc.BulkUpdateAlerting(ctx, tenant, ids, &threshold, nil, nil); return err },
+				func() error {
+					_, err := svc.BulkUpdateAlerting(ctx, tenant, ids, &threshold, nil, nil, nil)
+					return err
+				},
 				func() error { _, err := locations.Delete(ctx, tenant, location.ID); return err },
 			}
 		})

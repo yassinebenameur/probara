@@ -244,6 +244,9 @@ func (s *Service) parsePortableExport(data []byte) ([]models.ImportRow, bool, er
 		if monitor.ConsecutiveFailuresThreshold > 0 {
 			fields["consecutive_failures_threshold"] = monitor.ConsecutiveFailuresThreshold
 		}
+		if monitor.RecoveryThreshold > 0 {
+			fields["recovery_threshold"] = monitor.RecoveryThreshold
+		}
 
 		rows = append(rows, models.ImportRow{
 			Index:  i,

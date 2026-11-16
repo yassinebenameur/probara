@@ -16,6 +16,7 @@ import ChannelPicker from '@/components/channels/ChannelPicker';
 import Callout from '@/components/ui/Callout';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import { notifyModeChange } from '@/lib/monitor-form/common';
+import { formatDuration } from '@/lib/format';
 import { FormRow } from './form-kit';
 // Links inside running text are underlined: colour alone is not enough to
 // tell them from the sentence around them (WCAG 1.4.1).
@@ -83,6 +84,16 @@ interface AlertingSectionProps {
   onThresholdChange: (n: number) => void;
   /** Lowest "mark down after" a type allows (domain monitors: 2). */
   minThreshold?: number;
+  /** "Mark up after": passes in a row before a down monitor is up again. Omit to hide (groups). */
+  recoveryThreshold?: number;
+  onRecoveryThresholdChange?: (n: number) => void;
+  /**
+   * How the passes that confirm a recovery arrive: `recheck` (active checks,
+   * rechecked fast while recovering), `interval` (SIP test calls and domain
+   * monitors, whose interval is a rate limit and is never shortened) or
+   * `reports` (push and agent, at the sender's pace).
+   */
+  recoveryPace?: RecoveryPace;
   mode: NotificationMode;
   onModeChange: (m: NotificationMode) => void;
   customChannels: ChannelAssignment[];
@@ -105,6 +116,27 @@ function graceLabel(seconds: number): string {
   return `after ${seconds}s`;
 }
 
+type RecoveryPace = 'recheck' | 'interval' | 'reports';
+
+// Unconfirmed passes are still downtime, so say what the setting costs: the
+// time from the first pass to the confirming one, at the pace passes arrive.
+// Active checks recheck at the suspect cadence while recovering (the
+// scheduler's FastRecheckInterval, never slower than the interval).
+function recoveryHint(threshold: number, intervalSeconds: number, pace: RecoveryPace): string {
+  if (threshold <= 1) return 'Up again on the first passing check.';
+  const extra = threshold - 1;
+  switch (pace) {
+    case 'reports':
+      return `Stays down until ${threshold} reports in a row arrive on time. They come at the sender's pace: at the expected interval that adds about ${formatDuration(extra * intervalSeconds)} of downtime.`;
+    case 'interval':
+      return `Stays down until ${threshold} checks in a row pass, one per interval (this type is never rechecked faster): about ${formatDuration(extra * intervalSeconds)} more downtime.`;
+    default: {
+      const recheck = Math.min(intervalSeconds, 20);
+      return `Stays down until ${threshold} checks in a row pass. A recovering monitor is rechecked every ${formatDuration(recheck)}, so that adds about ${formatDuration(extra * recheck)} of downtime.`;
+    }
+  }
+}
+
 function detectionHint(threshold: number, intervalSeconds: number): string {
   const recheck = Math.min(intervalSeconds, 20);
   // Worst case: a full interval passes before the first failure is observed,
@@ -116,6 +148,7 @@ function detectionHint(threshold: number, intervalSeconds: number): string {
 
 export function AlertingSection({
   isGroup, intervalSeconds, threshold, onThresholdChange, minThreshold = 1,
+  recoveryThreshold, onRecoveryThresholdChange, recoveryPace = 'recheck',
   mode, onModeChange, customChannels, onCustomChannelsChange,
   rollup, onRollupChange,
   dependencySuppression, onDependencySuppressionChange, hasDependencies,
@@ -242,6 +275,28 @@ export function AlertingSection({
               {Array.from({ length: 11 - minThreshold }, (_, i) => i + minThreshold).map((n) => (
                 <option key={n} value={n}>
                   {n} failed check{n === 1 ? '' : 's'}
+                </option>
+              ))}
+            </select>
+          )}
+        />
+      )}
+
+      {!isGroup && recoveryThreshold !== undefined && onRecoveryThresholdChange && (
+        <FormRow
+          title="Mark up after"
+          description={recoveryHint(recoveryThreshold, intervalSeconds, recoveryPace)}
+          control={({ titleId, descriptionId }) => (
+            <select
+              aria-labelledby={titleId}
+              aria-describedby={descriptionId}
+              className="input input-sm !w-44"
+              value={recoveryThreshold}
+              onChange={(e) => onRecoveryThresholdChange(Number(e.target.value))}
+            >
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>
+                  {n} passing check{n === 1 ? '' : 's'}
                 </option>
               ))}
             </select>

@@ -74,6 +74,10 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
   // overwrite the range the picker now shows.
   const analyticsRequestRef = useRef(0);
   const historyAnalyticsRequestRef = useRef(0);
+  // Every write of `monitor` takes a ticket; a quiet re-read applies only if
+  // nothing wrote since it started, so a late response can never undo a
+  // pause, a save or a switch to another monitor.
+  const monitorRequestRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -95,12 +99,26 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
     try {
       setLoading(true);
       setError('');
+      const requestID = ++monitorRequestRef.current;
       const data = await getMonitor(id);
-      setMonitor(data);
+      if (monitorRequestRef.current === requestID) setMonitor(data);
     } catch (err) {
       setError(errorMessage(err, 'Failed to load monitor'));
     } finally {
       setLoading(false);
+    }
+  }, [id]);
+
+  // Re-reads the monitor without the loading state, for the poll: a new check
+  // can move the server's state (a recovery confirmed, a quorum verdict), and
+  // the badge and recovery progress follow that state, not the last check.
+  const refreshMonitorQuietly = useCallback(async () => {
+    const requestID = ++monitorRequestRef.current;
+    try {
+      const data = await getMonitor(id);
+      if (monitorRequestRef.current === requestID) setMonitor(data);
+    } catch {
+      // Keep what is shown; the next new result retries.
     }
   }, [id]);
 
@@ -274,7 +292,11 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
       }
       isPollingRef.current = true;
       try {
+        const newestBefore = resultsRef.current?.results?.[0]?.created_at;
         await loadResults({ silent: true });
+        if (resultsRef.current?.results?.[0]?.created_at !== newestBefore) {
+          await refreshMonitorQuietly();
+        }
       } finally {
         isPollingRef.current = false;
       }
@@ -296,7 +318,7 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [activeTab, loadResults, monitor?.type]);
+  }, [activeTab, loadResults, refreshMonitorQuietly, monitor?.type]);
 
   useEffect(() => {
     if (activeTab !== 'history') {
@@ -309,7 +331,9 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
   const handleSubmit = async (data: UpdateMonitorRequest) => {
     try {
       setSaving(true);
+      monitorRequestRef.current++;
       const updated = await updateMonitor(id, data);
+      monitorRequestRef.current++;
       setMonitor(updated);
       showToast('Monitor updated successfully', 'success');
       loadResults();
@@ -393,7 +417,9 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
     const next = !monitor.enabled;
     setTogglingEnabled(true);
     try {
+      monitorRequestRef.current++;
       const updated = await toggleMonitorEnabled(monitor.id, next);
+      monitorRequestRef.current++;
       // Keep the detail-only fields (locations, routing) the update
       // response may not embed.
       setMonitor((prev) => (prev ? { ...prev, enabled: updated.enabled ?? next } : updated));

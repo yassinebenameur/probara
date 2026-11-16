@@ -1549,6 +1549,13 @@ or imported groups come back empty. Any other path that creates groups through
   (`api/internal/middleware/route_redaction.go`). Redaction keys on the
   parameter NAME, so a credential in a path must be a `{…token}`/`{…secret}`
   parameter, and a handler must not log or echo it.
+- **Recovery confirmation** (S-T7): every writer of monitor or location
+  state carries `consecutive_successes` and `recovery_pending` with the
+  rest (reset with the failures; a down stream going `unknown` or moving
+  to other locations keeps owing its confirmation — `AfterSilence`,
+  `SetLocations`). Which monitors never get a fast recheck (suspect or
+  recovering) is one table, `monitorstate.FastRecheckExempt`; a new type
+  whose interval floor is a rate limit goes there.
 
 ## Commits and PRs
 

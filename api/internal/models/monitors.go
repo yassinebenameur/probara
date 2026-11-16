@@ -62,6 +62,8 @@ type Monitor struct {
 	MemberIDs                    []uuid.UUID                `json:"member_ids,omitempty"`     // Populated for group monitors
 	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
+	RecoveryThreshold            int                        `json:"recovery_threshold"`    // Passing checks in a row before a down monitor is up again (S-T7), 1-10
+	ConsecutiveSuccesses         int                        `json:"consecutive_successes"` // Read-only: passes so far toward that confirmation; non-zero only while down
 	NotificationMode             string                     `json:"notification_mode"`
 	MemberAlertRollup            string                     `json:"member_alert_rollup"`    // 'per_monitor' | 'group'; only meaningful for group monitors
 	DependencySuppression        string                     `json:"dependency_suppression"` // 'inherit' | 'on' | 'off': page when an upstream dependency is down? 'inherit' follows the workspace setting
@@ -91,6 +93,7 @@ type CreateMonitorRequest struct {
 	Enabled                      *bool                      `json:"enabled,omitempty"`
 	Tags                         []string                   `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
+	RecoveryThreshold            *int                       `json:"recovery_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
@@ -110,6 +113,7 @@ type UpdateMonitorRequest struct {
 	Enabled                      *bool                      `json:"enabled,omitempty"`
 	Tags                         *[]string                  `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
+	RecoveryThreshold            *int                       `json:"recovery_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`

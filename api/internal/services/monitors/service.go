@@ -248,6 +248,10 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	if req.ConsecutiveFailuresThreshold != nil {
 		consecutiveFailuresThreshold = *req.ConsecutiveFailuresThreshold
 	}
+	recoveryThreshold := 1 // DB default: single-sample recovery (S-T7)
+	if req.RecoveryThreshold != nil {
+		recoveryThreshold = *req.RecoveryThreshold
+	}
 	notificationMode := "default" // DB default
 	if req.NotificationMode != nil {
 		notificationMode = *req.NotificationMode
@@ -283,6 +287,7 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		CreatedAt:                    now,
 		UpdatedAt:                    now,
 		ConsecutiveFailuresThreshold: consecutiveFailuresThreshold,
+		RecoveryThreshold:            recoveryThreshold,
 		NotificationMode:             notificationMode,
 		MemberAlertRollup:            memberAlertRollup,
 		DependencySuppression:        dependencySuppression,
@@ -551,6 +556,14 @@ func (s *Service) updateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	// A new recovery threshold applies from the next passing check; passes
+	// already counted toward a recovery in progress are kept (S-T7).
+	if req.RecoveryThreshold != nil {
+		setParts = append(setParts, fmt.Sprintf("recovery_threshold = $%d", argIndex))
+		args = append(args, *req.RecoveryThreshold)
+		argIndex++
+	}
+
 	if req.NotificationMode != nil {
 		setParts = append(setParts, fmt.Sprintf("notification_mode = $%d", argIndex))
 		args = append(args, *req.NotificationMode)
@@ -658,6 +671,7 @@ func (s *Service) updateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		monitor.Enabled = *req.Enabled
 		if existing.Enabled != *req.Enabled {
 			monitor.CurrentState = "unknown"
+			monitor.ConsecutiveSuccesses = 0
 		}
 	}
 
@@ -921,6 +935,7 @@ func (s *Service) BulkUpdateAlerting(
 	tenantID uuid.UUID,
 	monitorIDs []uuid.UUID,
 	threshold *int,
+	recoveryThreshold *int,
 	mode *string,
 	channels []models.MonitorChannelAssignment,
 ) (int, error) {
@@ -975,6 +990,7 @@ func (s *Service) BulkUpdateAlerting(
 			for _, monitorID := range batch {
 				req := &models.UpdateMonitorRequest{
 					ConsecutiveFailuresThreshold: threshold,
+					RecoveryThreshold:            recoveryThreshold,
 					NotificationMode:             mode,
 					NotificationChannels:         channels,
 				}

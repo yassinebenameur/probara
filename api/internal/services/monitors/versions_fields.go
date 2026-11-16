@@ -21,6 +21,10 @@ var snapshotColumns = []snapshotColumn{
 		func(r *models.UpdateMonitorRequest, v *int) { r.TimeoutSeconds = v }),
 	column("consecutive_failures_threshold", func(s *models.MonitorConfigSnapshot) *int { return &s.ConsecutiveFailuresThreshold },
 		func(r *models.UpdateMonitorRequest, v *int) { r.ConsecutiveFailuresThreshold = v }),
+	// The setting only: consecutive_successes and recovery_pending are
+	// runtime state and never versioned.
+	column("recovery_threshold", func(s *models.MonitorConfigSnapshot) *int { return &s.RecoveryThreshold },
+		func(r *models.UpdateMonitorRequest, v *int) { r.RecoveryThreshold = v }),
 	column("member_alert_rollup", func(s *models.MonitorConfigSnapshot) *string { return &s.MemberAlertRollup },
 		func(r *models.UpdateMonitorRequest, v *string) { r.MemberAlertRollup = v }),
 	column("dependency_suppression", func(s *models.MonitorConfigSnapshot) *string { return &s.DependencySuppression },

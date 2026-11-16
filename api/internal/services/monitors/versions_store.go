@@ -203,6 +203,12 @@ func normalizeSnapshot(snapshot *models.MonitorConfigSnapshot) {
 	if len(snapshot.Config) == 0 {
 		snapshot.Config = json.RawMessage("{}")
 	}
+	// A version recorded before recovery confirmation existed has no
+	// recovery_threshold: that monitor recovered on one pass, which is 1, so
+	// it neither shows as a change nor restores an invalid 0.
+	if snapshot.RecoveryThreshold < 1 {
+		snapshot.RecoveryThreshold = 1
+	}
 }
 
 // canonicalJSON re-encodes a JSON document with sorted object keys and the

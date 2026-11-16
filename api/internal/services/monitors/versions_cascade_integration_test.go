@@ -194,7 +194,7 @@ func TestMonitorConfigVersions_BaselineCascadesAndAtomicity_Integration(t *testi
 	}
 
 	// A bulk edit naming an unknown channel is refused before any write.
-	if _, err := svc.BulkUpdateAlerting(session, tenant, []uuid.UUID{created.ID, legacy}, nil, &mode,
+	if _, err := svc.BulkUpdateAlerting(session, tenant, []uuid.UUID{created.ID, legacy}, nil, nil, &mode,
 		[]models.MonitorChannelAssignment{{ChannelID: uuid.NewString()}}); !errors.Is(err, monitorservice.ErrChannelsNotInTenant) {
 		t.Fatalf("bulk edit with a missing channel = %v", err)
 	}
@@ -217,7 +217,7 @@ func TestMonitorConfigVersions_BaselineCascadesAndAtomicity_Integration(t *testi
 	}
 	firstVersions := len(versionRows(t, ctx, db, first))
 	nine := 9
-	updated, err := svc.BulkUpdateAlerting(session, tenant, []uuid.UUID{second, first}, &nine, &mode,
+	updated, err := svc.BulkUpdateAlerting(session, tenant, []uuid.UUID{second, first}, &nine, nil, &mode,
 		[]models.MonitorChannelAssignment{{ChannelID: channel2.String()}})
 	if err == nil || updated != 0 {
 		t.Fatalf("bulk edit with a failing second monitor = %d, %v", updated, err)

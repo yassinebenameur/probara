@@ -20,6 +20,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -33,23 +34,24 @@ const (
 	meshBatchTickerInterval        = 10 * time.Second
 
 	// suspectRecheckInterval is the fast cadence used while a monitor is in the
-	// suspect state, confirming or clearing a potential outage (spec §5).
-	suspectRecheckInterval = 20 * time.Second
+	// suspect state, confirming or clearing a potential outage (spec §5), and
+	// while it is down confirming a recovery (S-T7).
+	suspectRecheckInterval = monitorstate.FastRecheckInterval
 )
 
 // nextCheckDelay returns how long after now the monitor should run again.
-// Only 'suspect' (temporal, mid-confirmation) gets the fast recheck;
+// Only 'suspect' (temporal, mid-confirmation) and a recovering monitor (down
+// while passes are counted toward confirming its recovery, S-T7) get the
+// fast recheck;
 // 'degraded' (spatial: some locations down, below quorum) can persist
-// indefinitely and runs at the normal interval. Side-effecting checks (SIP
-// INVITE test calls) never get the fast recheck (S-A9): their interval floor
-// (models.SIPCallMinIntervalSeconds) is the call-rate limit, and a 20 s
-// recheck would also overlap a call that can run 24 s (timeout plus teardown
-// reserve). IsSIPCallConfig reads only non-secret fields, so the encrypted
-// config answers the same.
+// indefinitely and runs at the normal interval. Monitors whose schedule
+// floor is a rate limit never get the fast recheck: SIP INVITE test calls
+// (S-A9) and domain monitors — the one table is
+// monitorstate.FastRecheckExempt.
 func nextCheckDelay(m Monitor) time.Duration {
 	interval := time.Duration(m.IntervalSeconds) * time.Second
-	if m.CurrentState == "suspect" && suspectRecheckInterval < interval &&
-		!models.IsSIPCallConfig(m.Type, m.Config) {
+	if (m.CurrentState == "suspect" || m.Recovering) && suspectRecheckInterval < interval &&
+		!monitorstate.FastRecheckExempt(m.Type, m.Config) {
 		return suspectRecheckInterval
 	}
 	return interval
@@ -64,6 +66,9 @@ type Monitor struct {
 	IntervalSeconds int
 	TimeoutSeconds  int
 	CurrentState    string
+	// Recovering: down while a stream counts passes toward confirming its
+	// recovery (monitorstate.RecoveringPredicate).
+	Recovering bool
 	// DueAt is the next_run_at this dispatch serves (NULL for a row that
 	// never had one): the slot behind each job's Nats-Msg-Id.
 	DueAt sql.NullTime
@@ -602,7 +607,8 @@ func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.U
 // fetchDueMonitors fetches monitors that are due to run within a transaction
 func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize int) ([]Monitor, error) {
 	query := `
-		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state, next_run_at
+		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state, next_run_at,
+			` + monitorstate.RecoveringPredicate("monitors") + `
 		FROM monitors
 		WHERE enabled = true
 		  AND deleted_at IS NULL
@@ -625,7 +631,7 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 
 		err := rows.Scan(
 			&m.ID, &m.TenantID, &m.Type, &m.Config,
-			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState, &m.DueAt,
+			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState, &m.DueAt, &m.Recovering,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan monitor: %w", err)

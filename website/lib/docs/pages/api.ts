@@ -386,7 +386,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/monitors/bulk/alerting`",
-              "Update notification routing for selected monitors",
+              "Update the failure threshold, recovery threshold and notification routing for selected monitors",
             ],
             [
               "`POST /api/v1/monitors/bulk/delete`",

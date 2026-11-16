@@ -202,7 +202,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "For a single execution stream, `failure` and `error` outcomes increment the [consecutive-failure counter](/docs/monitors/#scheduling-and-state). Before the configured threshold the monitor is `suspect`; at the threshold it is `down`. A successful result resets the counter and returns the state to `up`.",
+            "For a single execution stream, `failure` and `error` outcomes increment the [consecutive-failure counter](/docs/monitors/#scheduling-and-state). Before the configured threshold the monitor is `suspect`; at the threshold it is `down`. A successful result resets the counter and returns the state to `up`, except from `down`, which needs the monitor's `recovery_threshold` successes in a row (default 1) and stays `down` until then.",
         },
         {
           type: "paragraph",

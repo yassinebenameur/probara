@@ -66,13 +66,13 @@ func TestSetEnabledResetsStateAndWritesTimeline_Integration(t *testing.T) {
 		t.Fatalf("insert location: %v", err)
 	}
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, consecutive_failures, last_check_at)
-		VALUES ($1, $2, $3, 'down', 3, NOW())
+		INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, consecutive_failures, consecutive_successes, last_check_at)
+		VALUES ($1, $2, $3, 'down', 3, 1, NOW())
 	`, monitorID, locationID, tenantID); err != nil {
 		t.Fatalf("insert location state: %v", err)
 	}
 	if _, err := dbClient.ExecContext(ctx, `
-		UPDATE monitors SET current_state = 'down', consecutive_failures = 3 WHERE id = $1
+		UPDATE monitors SET current_state = 'down', consecutive_failures = 3, recovery_threshold = 3, consecutive_successes = 2 WHERE id = $1
 	`, monitorID); err != nil {
 		t.Fatalf("force down state: %v", err)
 	}
@@ -85,14 +85,16 @@ func TestSetEnabledResetsStateAndWritesTimeline_Integration(t *testing.T) {
 	}
 	var enabled bool
 	var state string
-	var fails int
+	var fails, successes int
 	if err := dbClient.QueryRowContext(ctx, `
-		SELECT enabled, current_state, consecutive_failures FROM monitors WHERE id = $1
-	`, monitorID).Scan(&enabled, &state, &fails); err != nil {
+		SELECT enabled, current_state, consecutive_failures, consecutive_successes FROM monitors WHERE id = $1
+	`, monitorID).Scan(&enabled, &state, &fails, &successes); err != nil {
 		t.Fatalf("query monitor: %v", err)
 	}
-	if enabled || state != "unknown" || fails != 0 {
-		t.Fatalf("after pause: enabled=%v state=%s fails=%d, want false/unknown/0 [S-P2]", enabled, state, fails)
+	// A pause also drops a recovery in progress: the resumed monitor starts
+	// from unknown, where the first pass is up (S-T7).
+	if enabled || state != "unknown" || fails != 0 || successes != 0 {
+		t.Fatalf("after pause: enabled=%v state=%s fails=%d successes=%d, want false/unknown/0/0 [S-P2, S-T7]", enabled, state, fails, successes)
 	}
 	var locStates int
 	if err := dbClient.QueryRowContext(ctx, `

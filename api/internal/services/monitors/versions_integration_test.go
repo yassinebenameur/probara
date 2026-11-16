@@ -265,7 +265,7 @@ func TestMonitorConfigVersions_Integration(t *testing.T) {
 
 	// Bulk edits record a version per monitor.
 	threshold := 5
-	if _, err := svc.BulkUpdateAlerting(ctx, tenant, []uuid.UUID{created.ID, second.ID}, &threshold, nil, nil); err != nil {
+	if _, err := svc.BulkUpdateAlerting(ctx, tenant, []uuid.UUID{created.ID, second.ID}, &threshold, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if versionCount(t, ctx, db, created.ID) != 5 || versionCount(t, ctx, db, second.ID) != 2 {

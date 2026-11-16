@@ -93,6 +93,8 @@ export interface MonitorLocationStatus {
   name: string;
   connected: boolean;
   current_state: 'unknown' | 'up' | 'suspect' | 'down';
+  /** Passes so far toward confirming this location's recovery; non-zero only while down. */
+  consecutive_successes?: number;
   last_latency_ms?: number;
   last_check_at?: string;
 }

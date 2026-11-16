@@ -460,6 +460,10 @@ func (s *Service) deleteOnce(ctx context.Context, tenantID, locationID uuid.UUID
 			SET location_quorum = GREATEST(1, LEAST(m.location_quorum, sub.remaining)),
 				current_state = CASE WHEN sub.remaining = 0 THEN 'unknown' ELSE m.current_state END,
 				consecutive_failures = CASE WHEN sub.remaining = 0 THEN 0 ELSE m.consecutive_failures END,
+				consecutive_successes = CASE WHEN sub.remaining = 0 THEN 0 ELSE m.consecutive_successes END,
+				-- Back on the default fleet, a monitor that was down still
+				-- owes a recovery confirmation (S-T7).
+				recovery_pending = CASE WHEN sub.remaining = 0 THEN m.current_state = 'down' OR m.recovery_pending ELSE m.recovery_pending END,
 				updated_at = NOW()
 			FROM (
 				SELECT m2.id, COUNT(ml.location_id)::int AS remaining
@@ -476,6 +480,39 @@ func (s *Service) deleteOnce(ctx context.Context, tenantID, locationID uuid.UUID
 
 	if err := monitorstate.RecordIntervalsTx(ctx, tx, resetIDs, monitorstate.StateUnknown, monitorstate.IntervalReasonLocationChange); err != nil {
 		return 0, err
+	}
+
+	// Monitors still down with other locations left: the deleted location no
+	// longer counts toward the display-only recovery progress (S-T7). Only a
+	// down aggregate has progress, so a location under thousands of healthy
+	// monitors adds one query here, not thousands. The rows are already
+	// locked above; this writes only the state counter, never a version.
+	recount, err := tx.QueryContext(ctx, `
+		SELECT id FROM monitors
+		WHERE id = ANY($1) AND current_state = 'down'
+		  AND EXISTS (SELECT 1 FROM monitor_locations ml WHERE ml.monitor_id = monitors.id)
+		ORDER BY id
+	`, pq.Array(affected))
+	if err != nil {
+		return 0, fmt.Errorf("find monitors to recount: %w", err)
+	}
+	var recountIDs []uuid.UUID
+	for recount.Next() {
+		var id uuid.UUID
+		if err := recount.Scan(&id); err != nil {
+			recount.Close()
+			return 0, fmt.Errorf("scan monitor to recount: %w", err)
+		}
+		recountIDs = append(recountIDs, id)
+	}
+	recount.Close()
+	if err := recount.Err(); err != nil {
+		return 0, fmt.Errorf("iterate monitors to recount: %w", err)
+	}
+	for _, monitorID := range recountIDs {
+		if err := monitorstate.RefreshRecoveryProgressTx(ctx, tx, monitorID); err != nil {
+			return 0, err
+		}
 	}
 
 	// The affected monitors' location settings changed outside a save:

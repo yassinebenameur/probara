@@ -285,6 +285,7 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, row mod
 		Enabled:                      &enabled,
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
+		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
 	}
 
 	return s.monitorService.CreateMonitor(ctx, tenantID, req)
@@ -346,6 +347,7 @@ func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUI
 		Enabled:                      &enabled,
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
+		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
 	}
 
 	return s.monitorService.CreateMonitor(ctx, tenantID, req)
@@ -408,6 +410,7 @@ func (s *Service) createGroupMonitor(ctx context.Context, tenantID uuid.UUID, ro
 		Enabled:                      &enabled,
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
+		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
 	}
 
 	monitor, err := s.monitorService.CreateMonitor(ctx, tenantID, req)
@@ -520,6 +523,7 @@ func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uui
 		Enabled:                      &enabled,
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
+		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
 	}
 
 	monitor, err := s.monitorService.CreateMonitor(ctx, tenantID, req)
