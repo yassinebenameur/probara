@@ -292,7 +292,8 @@ func monitorTools() []spec {
 		{
 			Name:  "preview_monitor_import",
 			Title: "Preview monitor import",
-			Description: "Parse an import file (Probara export YAML/JSON, Uptime Kuma backup JSON, or CSV) without " +
+			Description: "Parse an import file (Probara export YAML/JSON, Uptime Kuma backup JSON, Better Stack or " +
+				"UptimeRobot API JSON, Gatus config YAML, or CSV) without " +
 				"creating anything. Returns rows, a suggested field mapping and type mapping, warnings and skipped " +
 				"records. Pass its rows and suggested_mapping to import_monitors.",
 			Method: http.MethodPost, Route: "/monitors/import/preview",

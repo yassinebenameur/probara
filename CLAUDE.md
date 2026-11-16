@@ -386,13 +386,18 @@ schema + warnings + skipped rows; `parse.go`), then `ExecuteImport`
 - **Raw path** (`useRawConfig`): rows carry an already-typed nested `config`
   object. Supports every registry type, resolves group members by name in a
   second pass, and validates through `validation.DefaultRegistry` before
-  create. Both recognized schemas take this path.
+  create. Every recognized schema takes this path.
 - **Simple path**: generic CSV/JSON/YAML field mapping. Only http, ping, dns,
   grpc and group; everything else is skipped.
 
 Adding a foreign source format means one adapter returning a `parsedSource`
 (see `parsePortableExport` and `parseKumaExport`), hooked into `parseJSON` or
-`parseYAML`. Build `ImportRow.Fields` **directly** — going through
+`parseYAML` before the generic wrappers. Better Stack, UptimeRobot and Gatus
+(`betterstack.go`, `uptimerobot.go`, `gatus.go`) build on `foreign.go`, whose
+`finish` registry-validates every translated row (rejects become
+`SkippedRows`) and assembles names and groups; each has a fixture and golden in
+`testdata/` and a row in the detection matrix (`foreign_test.go`).
+Build `ImportRow.Fields` **directly** — going through
 `flattenMap` dot-flattens the nested `config` and silently drops you onto the
 simple path. Records you refuse to translate go in `SkippedRows`, never as
 rows: `detectAndSuggestTypes` defaults unknown types to `http` and the UI

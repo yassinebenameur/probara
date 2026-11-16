@@ -1,0 +1,469 @@
+{
+  "schema": "gatus_config",
+  "warnings": [
+    "7 Gatus record(s) could not be imported: it expects the connection to fail ([CONNECTED] == false), which Probara cannot express - importing it would alert backwards; it expects a DNS answer code other than NOERROR, which Probara cannot express - its DNS check fails unless the query succeeds; UDP checks are not implemented; SSH checks are not implemented; the target host comes from the environment ($API_HOST), which only Gatus resolves; DNS record type SRV is not supported (Probara resolves A, AAAA, CNAME, TXT, MX and NS); the external endpoint has no heartbeat interval, so there is no expected check-in to watch - Probara's push monitor needs one",
+    "2 monitor(s) will be created disabled until a credential or placeholder is completed - see their notes",
+    "1 monitor(s) were renamed to keep names unique",
+    "Gatus alerting providers and endpoint alerts were not migrated - attach Probara alert channels after import (alert failure and success thresholds were kept as each monitor's down and recovery thresholds)",
+    "Gatus maintenance windows were not migrated - recreate them as Probara maintenance windows"
+  ],
+  "rows": [
+    {
+      "index": 0,
+      "fields": {
+        "config": {
+          "expected_statuses": [
+            200
+          ],
+          "max_latency_ms": 299,
+          "method": "GET",
+          "tls_min_days_valid": 2,
+          "url": "https://example.org/health"
+        },
+        "consecutive_failures_threshold": 4,
+        "enabled": true,
+        "interval_seconds": 30,
+        "name": "frontend",
+        "recovery_threshold": 3,
+        "timeout_seconds": 10,
+        "type": "http"
+      },
+      "warnings": [
+        "Gatus failed the check once the certificate had less time left than the condition allowed; Probara raises a TLS expiry alert at 2 days while the check keeps passing",
+        "its domain expiration check became the separate \"example.org domain expiry\" domain monitor"
+      ]
+    },
+    {
+      "index": 1,
+      "fields": {
+        "config": {
+          "domain": "example.org",
+          "min_days_valid": 30
+        },
+        "consecutive_failures_threshold": 2,
+        "enabled": true,
+        "interval_seconds": 86400,
+        "name": "example.org domain expiry",
+        "timeout_seconds": 30,
+        "type": "domain"
+      },
+      "warnings": [
+        "created from the domain expiration check of \"frontend\"; Gatus failed the check inside the window, while Probara raises a domain expiry alert and the check keeps passing"
+      ]
+    },
+    {
+      "index": 2,
+      "fields": {
+        "config": {
+          "body": "{\"probe\": true}",
+          "expected_status_ranges": [
+            {
+              "max": 201,
+              "min": 200
+            }
+          ],
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json_assertions": [
+            {
+              "op": "equals",
+              "path": "status",
+              "value": "UP"
+            },
+            {
+              "op": "number_gt",
+              "path": "data.items.0.id",
+              "value": "0"
+            },
+            {
+              "op": "number_gte",
+              "path": "data.items.#",
+              "value": "1"
+            },
+            {
+              "op": "regex",
+              "path": "version",
+              "value": "(?s)^2\\..*$"
+            }
+          ],
+          "method": "POST",
+          "secret_headers": {
+            "Authorization": "Bearer gatus-static-token"
+          },
+          "url": "https://api.example.org/v1/status"
+        },
+        "consecutive_failures_threshold": 2,
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "api-status",
+        "recovery_threshold": 1,
+        "timeout_seconds": 5,
+        "type": "http"
+      },
+      "warnings": [
+        "the condition on len([BODY].data.items) now counts the items of a JSON array; on a string field it would not match",
+        "the condition \"has([BODY].errors) == false\" was dropped, so this monitor checks less than Gatus did: the absence of a JSON field cannot be asserted",
+        "the condition \"[IP] == 203.0.113.5\" was dropped, so this monitor checks less than Gatus did: the resolved IP address cannot be asserted"
+      ]
+    },
+    {
+      "index": 3,
+      "fields": {
+        "config": {
+          "body_assertions": [
+            {
+              "op": "contains",
+              "value": "\u003ctitle\u003eExample\u003c/title\u003e"
+            }
+          ],
+          "expected_status_ranges": [
+            {
+              "max": 399,
+              "min": 100
+            }
+          ],
+          "method": "GET",
+          "url": "https://staging.example.org/health"
+        },
+        "enabled": true,
+        "interval_seconds": 300,
+        "name": "staging / frontend",
+        "timeout_seconds": 10,
+        "type": "http"
+      },
+      "warnings": [
+        "renamed from \"frontend\" to keep monitor names unique"
+      ]
+    },
+    {
+      "index": 4,
+      "fields": {
+        "config": {
+          "body": "{\"query\":\"{ users { id } }\\n\"}",
+          "expected_statuses": [
+            200
+          ],
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "json_assertions": [
+            {
+              "op": "equals",
+              "path": "data.users.0.id",
+              "value": "1"
+            }
+          ],
+          "method": "POST",
+          "url": "https://graphql.example.org/graphql"
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "graphql",
+        "timeout_seconds": 10,
+        "type": "http"
+      }
+    },
+    {
+      "index": 5,
+      "fields": {
+        "config": {
+          "host": "192.0.2.1",
+          "max_rtt_ms": 49
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "icmp-gateway",
+        "timeout_seconds": 10,
+        "type": "ping"
+      }
+    },
+    {
+      "index": 6,
+      "fields": {
+        "config": {
+          "host": "db.example.org",
+          "port": 5432
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "postgres-port",
+        "timeout_seconds": 10,
+        "type": "tcp"
+      },
+      "warnings": [
+        "the condition \"[RESPONSE_TIME] \u003c 100\" was dropped, so this monitor checks less than Gatus did: Probara's TCP monitor has no response-time threshold"
+      ]
+    },
+    {
+      "index": 7,
+      "fields": {
+        "config": {
+          "host": "mail.example.org",
+          "port": 465,
+          "tls_min_days_valid": 7,
+          "tls_skip_verify": true,
+          "use_tls": true
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "smtps",
+        "timeout_seconds": 10,
+        "type": "tcp"
+      },
+      "warnings": [
+        "Gatus failed the check once the certificate had less time left than the condition allowed; Probara raises a TLS expiry alert at 7 days while the check keeps passing"
+      ]
+    },
+    {
+      "index": 8,
+      "fields": {
+        "config": {
+          "expected_answers": [
+            "192.0.2.80"
+          ],
+          "host": "example.org",
+          "nameserver": "8.8.8.8",
+          "record_type": "A"
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "dns-example",
+        "timeout_seconds": 10,
+        "type": "dns"
+      },
+      "warnings": [
+        "the expected DNS answer must be among the records returned; Gatus compared it with the whole answer"
+      ]
+    },
+    {
+      "index": 9,
+      "fields": {
+        "config": {
+          "expected_substring": "pong",
+          "max_latency_ms": 999,
+          "send_message": "ping",
+          "url": "wss://echo.example.org/socket"
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "websocket-echo",
+        "timeout_seconds": 10,
+        "type": "websocket"
+      }
+    },
+    {
+      "index": 10,
+      "fields": {
+        "config": {
+          "host": "grpc.example.org",
+          "port": 443,
+          "use_tls": true
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "grpc-health",
+        "timeout_seconds": 10,
+        "type": "grpc"
+      }
+    },
+    {
+      "index": 11,
+      "fields": {
+        "config": {
+          "expected_statuses": [
+            200
+          ],
+          "method": "GET",
+          "secret_headers": {
+            "X-Api-Key": "${PARTNER_TOKEN}"
+          },
+          "url": "https://partner.example.org/health?key=${PARTNER_KEY}"
+        },
+        "enabled": false,
+        "interval_seconds": 60,
+        "name": "partner-api",
+        "timeout_seconds": 10,
+        "type": "http"
+      },
+      "warnings": [
+        "it uses environment variables that only Gatus resolves ($PARTNER_KEY in the URL; $PARTNER_TOKEN in the X-Api-Key header); they were kept verbatim, so the monitor was created disabled - replace them with real values and enable it"
+      ]
+    },
+    {
+      "index": 12,
+      "fields": {
+        "config": {
+          "basic_auth_password": "gatus-url-pass",
+          "basic_auth_username": "monitor",
+          "expected_statuses": [
+            200
+          ],
+          "method": "GET",
+          "url": "https://intranet.example.org/"
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "intranet",
+        "timeout_seconds": 10,
+        "type": "http"
+      }
+    },
+    {
+      "index": 13,
+      "fields": {
+        "config": {
+          "expected_statuses": [
+            200
+          ],
+          "method": "GET",
+          "url": "https://old.example.org"
+        },
+        "enabled": false,
+        "interval_seconds": 60,
+        "name": "old-site",
+        "timeout_seconds": 10,
+        "type": "http"
+      }
+    },
+    {
+      "index": 14,
+      "fields": {
+        "config": {
+          "expected_statuses": [
+            200
+          ],
+          "method": "GET",
+          "url": "https://secure.example.org/api"
+        },
+        "enabled": false,
+        "interval_seconds": 60,
+        "name": "oauth-api",
+        "timeout_seconds": 10,
+        "type": "http"
+      },
+      "warnings": [
+        "the endpoint's authentication (OAuth2 client credentials) has no equivalent, so this monitor was created disabled - set its credentials (headers or basic auth) and enable it"
+      ]
+    },
+    {
+      "index": 15,
+      "fields": {
+        "config": {
+          "expected_interval_seconds": 86400,
+          "grace_period_seconds": 0
+        },
+        "consecutive_failures_threshold": 4,
+        "enabled": true,
+        "interval_seconds": 86400,
+        "name": "nightly-backup",
+        "recovery_threshold": 3,
+        "type": "push"
+      },
+      "warnings": [
+        "Probara issues its own push token, so results must be sent to this monitor's push URL instead of Gatus's external endpoint API"
+      ]
+    },
+    {
+      "index": 16,
+      "fields": {
+        "config": {
+          "monitor_ids": []
+        },
+        "enabled": true,
+        "group_members": [
+          "frontend",
+          "api-status"
+        ],
+        "interval_seconds": 60,
+        "name": "core",
+        "type": "group"
+      }
+    },
+    {
+      "index": 17,
+      "fields": {
+        "config": {
+          "monitor_ids": []
+        },
+        "enabled": true,
+        "group_members": [
+          "staging / frontend"
+        ],
+        "interval_seconds": 60,
+        "name": "staging",
+        "type": "group"
+      }
+    },
+    {
+      "index": 18,
+      "fields": {
+        "config": {
+          "monitor_ids": []
+        },
+        "enabled": true,
+        "group_members": [
+          "icmp-gateway",
+          "postgres-port",
+          "smtps",
+          "dns-example"
+        ],
+        "interval_seconds": 60,
+        "name": "network",
+        "type": "group"
+      }
+    },
+    {
+      "index": 19,
+      "fields": {
+        "config": {
+          "monitor_ids": []
+        },
+        "enabled": true,
+        "group_members": [
+          "nightly-backup"
+        ],
+        "interval_seconds": 60,
+        "name": "jobs",
+        "type": "group"
+      }
+    }
+  ],
+  "skipped_rows": [
+    {
+      "name": "closed-telnet",
+      "source_type": "tcp",
+      "reason": "it expects the connection to fail ([CONNECTED] == false), which Probara cannot express - importing it would alert backwards"
+    },
+    {
+      "name": "decommissioned-host",
+      "source_type": "dns",
+      "reason": "it expects a DNS answer code other than NOERROR, which Probara cannot express - its DNS check fails unless the query succeeds"
+    },
+    {
+      "name": "syslog",
+      "source_type": "udp",
+      "reason": "UDP checks are not implemented"
+    },
+    {
+      "name": "bastion",
+      "source_type": "ssh",
+      "reason": "SSH checks are not implemented"
+    },
+    {
+      "name": "env-host",
+      "source_type": "https",
+      "reason": "the target host comes from the environment ($API_HOST), which only Gatus resolves"
+    },
+    {
+      "name": "sip-srv",
+      "source_type": "dns",
+      "reason": "DNS record type SRV is not supported (Probara resolves A, AAAA, CNAME, TXT, MX and NS)"
+    },
+    {
+      "name": "ci-results",
+      "source_type": "external-endpoint",
+      "reason": "the external endpoint has no heartbeat interval, so there is no expected check-in to watch - Probara's push monitor needs one"
+    }
+  ]
+}

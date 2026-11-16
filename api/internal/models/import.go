@@ -10,6 +10,9 @@ const (
 
 	ImportSchemaPortableMonitorExport = "portable_monitor_export"
 	ImportSchemaUptimeKumaExport      = "uptime_kuma_export"
+	ImportSchemaBetterStackExport     = "better_stack_export"
+	ImportSchemaUptimeRobotExport     = "uptimerobot_export"
+	ImportSchemaGatusConfig           = "gatus_config"
 )
 
 // ImportRow represents a single row from the imported file.

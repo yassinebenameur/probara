@@ -14,6 +14,7 @@ import { FOCUS_RING } from '@/components/ui/focus';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import { previewImport, executeImport } from '@/lib/api';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import { IMPORT_SOURCES, importSourceFor } from '@/lib/import-sources';
 import type {
   ImportPreviewResponse,
   ImportRow,
@@ -27,7 +28,7 @@ import { SELECTED_SEGMENT } from '@/components/ui/roving';
 
 // Recognized schemas arrive pre-translated: every field is already mapped, so
 // the mapping step is informational rather than something to fill in.
-const PRE_MAPPED_SCHEMAS: string[] = [IMPORT_SCHEMA_PORTABLE, IMPORT_SCHEMA_UPTIME_KUMA];
+const PRE_MAPPED_SCHEMAS: string[] = [IMPORT_SCHEMA_PORTABLE, ...IMPORT_SOURCES.map((source) => source.schema)];
 
 // Preview and result tables sort locally (the wizard's data never leaves
 // this page, so the order is not kept in the URL). '#' is the file order.
@@ -44,8 +45,13 @@ function describeSource(preview: ImportPreviewResponse): string {
       return `${preview.total_rows} monitors from a portable YAML export`;
     case IMPORT_SCHEMA_UPTIME_KUMA:
       return `${preview.total_rows} monitors translated from an Uptime Kuma export`;
-    default:
+    default: {
+      const source = importSourceFor(preview.schema);
+      if (source) {
+        return `${preview.total_rows} monitors translated from a ${source.label} export`;
+      }
       return `${preview.total_rows} rows in ${preview.format.toUpperCase()} format`;
+    }
   }
 }
 
@@ -687,6 +693,9 @@ export default function ImportPage() {
     return undefined;
   };
 
+  // What a recognized foreign source's translation covers (lib/import-sources).
+  const sourceNote = importSourceFor(previewData?.schema)?.previewNote;
+
   return (
     <Page width="wide">
       <PageHeader
@@ -723,6 +732,15 @@ export default function ImportPage() {
                   <span className="w-12 flex-shrink-0 font-medium text-slate-200">CSV</span>
                   <span>Header row followed by data rows</span>
                 </li>
+              </ul>
+              <h3 className="mb-2 mt-4 text-ui font-medium text-white">Migrating from another tool</h3>
+              <ul className="space-y-1 text-xs text-slate-400">
+                {IMPORT_SOURCES.map((source) => (
+                  <li key={source.schema} className="flex items-start gap-2">
+                    <span className="w-24 flex-shrink-0 font-medium text-slate-200">{source.label}</span>
+                    <span>{source.exportHint}</span>
+                  </li>
+                ))}
               </ul>
             </div>
           </div>
@@ -769,6 +787,13 @@ export default function ImportPage() {
                   Uptime Kuma notifications are never migrated and no credential is imported. Check the per-monitor
                   notes on the review step, then attach Probara alert channels once the monitors exist.
                 </p>
+              </Callout>
+            )}
+
+            {sourceNote && (
+              <Callout tone="info">
+                <p>{sourceNote.translated}</p>
+                <p className="mt-2 text-ui text-slate-400">{sourceNote.notMigrated}</p>
               </Callout>
             )}
 

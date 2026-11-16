@@ -1,0 +1,387 @@
+{
+  "schema": "better_stack_export",
+  "warnings": [
+    "4 Better Stack record(s) could not be imported: an SMTP server check would degrade to a bare TCP connect; a Playwright scenario cannot be translated - recreate it as a synthetic_browser monitor with steps; UDP checks are not implemented; none of the group's monitors could be imported, so the group would have been empty",
+    "1 monitor(s) were renamed to keep names unique",
+    "Better Stack regions were not migrated: Probara checks run from your own workers - assign locations after import",
+    "Better Stack notification settings, escalation policies and on-call routing were not migrated - attach Probara alert channels after import",
+    "Better Stack maintenance windows were not migrated - recreate them as Probara maintenance windows"
+  ],
+  "rows": [
+    {
+      "index": 0,
+      "fields": {
+        "config": {
+          "headers": {
+            "X-Env": "prod"
+          },
+          "method": "GET",
+          "secret_headers": {
+            "Authorization": "Bearer bs-secret-token"
+          },
+          "tls_min_days_valid": 14,
+          "url": "https://www.example.com/"
+        },
+        "consecutive_failures_threshold": 3,
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "Marketing site",
+        "recovery_threshold": 4,
+        "timeout_seconds": 15,
+        "type": "http"
+      },
+      "warnings": [
+        "Better Stack's 120s confirmation period became 3 consecutive failing checks",
+        "Better Stack's 180s recovery period became 4 consecutive passing checks",
+        "its domain expiration check became the separate \"example.com domain expiry\" domain monitor"
+      ]
+    },
+    {
+      "index": 1,
+      "fields": {
+        "config": {
+          "domain": "example.com",
+          "min_days_valid": 60
+        },
+        "consecutive_failures_threshold": 2,
+        "enabled": true,
+        "interval_seconds": 86400,
+        "name": "example.com domain expiry",
+        "timeout_seconds": 30,
+        "type": "domain"
+      },
+      "warnings": [
+        "created from the domain expiration check of \"Marketing site\"; Probara raises a domain expiry alert inside the window while the check keeps passing, as Better Stack notifies"
+      ]
+    },
+    {
+      "index": 2,
+      "fields": {
+        "config": {
+          "basic_auth_password": "bs-basic-pass",
+          "basic_auth_username": "probe",
+          "body": "{\"dry_run\": true}",
+          "expected_statuses": [
+            200,
+            204
+          ],
+          "follow_redirects": false,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://api.example.com/v1/orders"
+        },
+        "consecutive_failures_threshold": 1,
+        "enabled": true,
+        "interval_seconds": 30,
+        "name": "Checkout API",
+        "timeout_seconds": 10,
+        "type": "http"
+      },
+      "warnings": [
+        "the ipv4-only setting was dropped - Probara resolves the host normally",
+        "its domain expiration check is covered by the \"example.com domain expiry\" domain monitor"
+      ]
+    },
+    {
+      "index": 3,
+      "fields": {
+        "config": {
+          "body_assertions": [
+            {
+              "op": "contains",
+              "value": "Documentation"
+            }
+          ],
+          "method": "GET",
+          "url": "http://docs.example.com/"
+        },
+        "consecutive_failures_threshold": 1,
+        "enabled": true,
+        "interval_seconds": 180,
+        "name": "Docs keyword",
+        "timeout_seconds": 30,
+        "type": "http"
+      },
+      "warnings": [
+        "the disabled SSL verification was dropped because the monitor targets a plain http:// URL",
+        "the SSL expiration alert was dropped because the monitor targets a plain http:// URL"
+      ]
+    },
+    {
+      "index": 4,
+      "fields": {
+        "config": {
+          "body_assertions": [
+            {
+              "op": "not_contains",
+              "value": "Scheduled maintenance"
+            }
+          ],
+          "method": "GET",
+          "url": "https://www.example.com/status"
+        },
+        "consecutive_failures_threshold": 1,
+        "enabled": true,
+        "interval_seconds": 300,
+        "name": "Maintenance banner absent",
+        "timeout_seconds": 30,
+        "type": "http"
+      },
+      "warnings": [
+        "its domain expiration check is covered by the \"example.com domain expiry\" domain monitor"
+      ]
+    },
+    {
+      "index": 5,
+      "fields": {
+        "config": {
+          "host": "203.0.113.10"
+        },
+        "consecutive_failures_threshold": 3,
+        "enabled": true,
+        "interval_seconds": 30,
+        "name": "Gateway ping",
+        "timeout_seconds": 2,
+        "type": "ping"
+      },
+      "warnings": [
+        "Better Stack's 60s confirmation period became 3 consecutive failing checks"
+      ]
+    },
+    {
+      "index": 6,
+      "fields": {
+        "config": {
+          "host": "db.example.com",
+          "port": 5432
+        },
+        "consecutive_failures_threshold": 1,
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "Postgres port",
+        "timeout_seconds": 5,
+        "type": "tcp"
+      }
+    },
+    {
+      "index": 7,
+      "fields": {
+        "config": {
+          "expected_answers": [
+            "192.0.2.10"
+          ],
+          "host": "example.com",
+          "nameserver": "1.1.1.1",
+          "record_type": "A"
+        },
+        "consecutive_failures_threshold": 1,
+        "enabled": true,
+        "interval_seconds": 120,
+        "name": "Resolver",
+        "timeout_seconds": 3,
+        "type": "dns"
+      },
+      "warnings": [
+        "the DNS check was imported as an A-record lookup of example.com on 1.1.1.1; change the record type if Better Stack checked another",
+        "the expected answer \"192.0.2.10\" must be one of the A records returned; verify it matches what Better Stack checked"
+      ]
+    },
+    {
+      "index": 8,
+      "fields": {
+        "config": {
+          "basic_auth_username": "admin",
+          "method": "GET",
+          "url": "https://admin.example.com/"
+        },
+        "consecutive_failures_threshold": 1,
+        "enabled": false,
+        "interval_seconds": 180,
+        "name": "Paused admin",
+        "timeout_seconds": 30,
+        "type": "http"
+      },
+      "warnings": [
+        "the basic auth password was not in the export, so this monitor was created disabled - re-enter the basic auth password and enable it"
+      ]
+    },
+    {
+      "index": 9,
+      "fields": {
+        "config": {
+          "method": "GET",
+          "url": "https://status.example.com/"
+        },
+        "consecutive_failures_threshold": 1,
+        "enabled": true,
+        "interval_seconds": 180,
+        "name": "Status page",
+        "timeout_seconds": 30,
+        "type": "http"
+      },
+      "warnings": [
+        "it belongs to Better Stack monitor group 999, which is not in this file - include GET /api/v2/monitor-groups to keep the grouping"
+      ]
+    },
+    {
+      "index": 10,
+      "fields": {
+        "config": {
+          "method": "GET",
+          "url": "https://www.example.com/health"
+        },
+        "consecutive_failures_threshold": 1,
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "Health",
+        "timeout_seconds": 15,
+        "type": "http"
+      }
+    },
+    {
+      "index": 11,
+      "fields": {
+        "config": {
+          "method": "GET",
+          "url": "https://internal.example.com/health"
+        },
+        "consecutive_failures_threshold": 10,
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "Internal / Health",
+        "recovery_threshold": 10,
+        "timeout_seconds": 59,
+        "type": "http"
+      },
+      "warnings": [
+        "Better Stack's 1800s confirmation period spans 31 checks at this interval; Probara's maximum of 10 consecutive failing checks was used",
+        "Better Stack's 900s recovery period spans 16 checks at this interval; Probara's maximum of 10 consecutive passing checks was used",
+        "the 120s timeout was lowered to 59s to stay below the check interval",
+        "renamed from \"Health\" to keep monitor names unique"
+      ]
+    },
+    {
+      "index": 12,
+      "fields": {
+        "config": {
+          "expected_interval_seconds": 86400,
+          "grace_period_seconds": 3600
+        },
+        "enabled": true,
+        "interval_seconds": 86400,
+        "name": "Nightly backup",
+        "type": "push"
+      },
+      "warnings": [
+        "Probara issues its own push token, so this heartbeat's URL is different from the Better Stack one - repoint whatever sends the heartbeat"
+      ]
+    },
+    {
+      "index": 13,
+      "fields": {
+        "config": {
+          "expected_interval_seconds": 300,
+          "grace_period_seconds": 60
+        },
+        "enabled": false,
+        "interval_seconds": 300,
+        "name": "Queue drain",
+        "type": "push"
+      },
+      "warnings": [
+        "Probara issues its own push token, so this heartbeat's URL is different from the Better Stack one - repoint whatever sends the heartbeat"
+      ]
+    },
+    {
+      "index": 14,
+      "fields": {
+        "config": {
+          "expected_interval_seconds": 86400,
+          "grace_period_seconds": 0
+        },
+        "enabled": true,
+        "interval_seconds": 86400,
+        "name": "Weekly report",
+        "type": "push"
+      },
+      "warnings": [
+        "the check interval of 604800s is outside Probara's range and was changed to 86400s",
+        "Probara issues its own push token, so this heartbeat's URL is different from the Better Stack one - repoint whatever sends the heartbeat"
+      ]
+    },
+    {
+      "index": 15,
+      "fields": {
+        "config": {
+          "monitor_ids": []
+        },
+        "enabled": true,
+        "group_members": [
+          "Marketing site",
+          "Checkout API",
+          "Health"
+        ],
+        "interval_seconds": 60,
+        "name": "Public web",
+        "type": "group"
+      }
+    },
+    {
+      "index": 16,
+      "fields": {
+        "config": {
+          "monitor_ids": []
+        },
+        "enabled": true,
+        "group_members": [
+          "Postgres port",
+          "Resolver",
+          "Internal / Health"
+        ],
+        "interval_seconds": 60,
+        "name": "Internal",
+        "type": "group"
+      }
+    },
+    {
+      "index": 17,
+      "fields": {
+        "config": {
+          "monitor_ids": []
+        },
+        "enabled": true,
+        "group_members": [
+          "Nightly backup",
+          "Queue drain"
+        ],
+        "interval_seconds": 60,
+        "name": "Batch jobs",
+        "type": "group"
+      }
+    }
+  ],
+  "skipped_rows": [
+    {
+      "name": "Mail relay",
+      "source_type": "smtp",
+      "reason": "an SMTP server check would degrade to a bare TCP connect"
+    },
+    {
+      "name": "Signup journey",
+      "source_type": "playwright",
+      "reason": "a Playwright scenario cannot be translated - recreate it as a synthetic_browser monitor with steps"
+    },
+    {
+      "name": "StatsD UDP",
+      "source_type": "udp",
+      "reason": "UDP checks are not implemented"
+    },
+    {
+      "name": "Retired",
+      "source_type": "group",
+      "reason": "none of the group's monitors could be imported, so the group would have been empty"
+    }
+  ]
+}
