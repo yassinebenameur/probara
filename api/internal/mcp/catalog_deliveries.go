@@ -14,7 +14,9 @@ func deliveryTools() []spec {
 		"egress policy refused the address, invalid_config); dropped (a queued event deliberately not sent: " +
 		"reason resolved = the alert resolved first, unacknowledged = an acknowledgement notice after an " +
 		"unacknowledge, muted = held by an acknowledgement or snooze and not sent again, muted_requeued = a held page that " +
-		"reached nobody, sent once the mute lifts, channel_inactive, channel_changed). " +
+		"reached nobody, sent once the mute lifts, reopened = a recovery notice dropped because the alert " +
+		"relapsed and is open again, earlier_episode = queued before the alert relapsed, channel_inactive, " +
+		"channel_changed). event_type relapsed is a relapse notice (sent to the channel as a page). " +
 		"Drops are not failures."
 	return []spec{
 		{

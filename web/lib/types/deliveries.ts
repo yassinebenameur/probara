@@ -17,7 +17,9 @@ export type DeliveryReason =
   | 'egress_blocked'
   | 'invalid_config'
   | 'plugin_missing'
-  | 'retries_exhausted';
+  | 'retries_exhausted'
+  | 'reopened'
+  | 'earlier_episode';
 
 export interface NotificationDelivery {
   id: string;

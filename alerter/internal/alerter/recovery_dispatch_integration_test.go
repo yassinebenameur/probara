@@ -67,7 +67,7 @@ func TestRecoveryDispatchDoesNotStarveFreshOutagesOrLaterRecoveries(t *testing.T
 		alert := openDownAlert(ctx, t, database, tenant, monitor)
 		mustExec(ctx, t, database, `INSERT INTO alert_notification_states
 			(alert_id, channel_id, last_sent_at, last_event_type) VALUES ($1, $2, NOW(), 'created')`, alert, channel)
-		if _, err := a.resolveAlert(ctx, alert, time.Now()); err != nil {
+		if _, err := a.resolveAlert(ctx, alert, resolvedRecovered); err != nil {
 			t.Fatal(err)
 		}
 		setStateForTest(ctx, t, database, monitor, "up", time.Now())
@@ -129,7 +129,7 @@ func TestRecoveryDispatchSkipsRecoveriesPastMaxAge(t *testing.T) {
 		alertID := openDownAlert(ctx, t, database, tenantID, monitorID)
 		mustExec(ctx, t, database, `INSERT INTO alert_notification_states
 			(alert_id, channel_id, last_sent_at, last_event_type) VALUES ($1, $2, $3, 'created')`, alertID, channelID, resolvedAt.Add(-time.Hour))
-		if _, err := a.resolveAlert(ctx, alertID, resolvedAt); err != nil {
+		if _, err := a.resolveAlertAt(ctx, alertID, resolvedAt, resolvedRecovered, ""); err != nil {
 			t.Fatal(err)
 		}
 		return alertID
@@ -173,7 +173,7 @@ func TestRecoveryDispatchRecoversCrashAfterResolutionCommit(t *testing.T) {
 		(alert_id, channel_id, last_sent_at, last_event_type) VALUES ($1, $2, NOW(), 'created')`, alertID, channelID)
 	a := newIntegrationAlerter(database)
 	resolvedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
-	if _, err := a.resolveAlert(ctx, alertID, resolvedAt); err != nil {
+	if _, err := a.resolveAlertAt(ctx, alertID, resolvedAt, resolvedRecovered, ""); err != nil {
 		t.Fatal(err)
 	}
 	// No notifyFiredChannels call: simulate a process dying after commit.

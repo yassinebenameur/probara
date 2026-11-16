@@ -115,6 +115,17 @@ const (
 	// ReasonRetriesExhausted (failed): the worker's last delivery attempt
 	// failed; nothing retries it.
 	ReasonRetriesExhausted Reason = "retries_exhausted"
+	// ReasonReopened (dropped): a recovery notice queued before the alert
+	// relapsed (reopened within the workspace's reopen cooldown) while it is
+	// open again: "recovered" must not follow "relapsed". When it provably
+	// reached no one, the channel still counts as paged and hears the
+	// relapse's own recovery. Paging channels still get it: it closes only
+	// the earlier episode's incident.
+	ReasonReopened Reason = "reopened"
+	// ReasonEarlierEpisode (dropped): a page, reminder, acknowledgement or
+	// follow-up queued before the alert relapsed, so it belongs to the
+	// episode that recovered; the relapse notifies on its own.
+	ReasonEarlierEpisode Reason = "earlier_episode"
 )
 
 // Path says which delivery path made the attempt.

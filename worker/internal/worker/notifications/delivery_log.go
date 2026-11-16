@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
@@ -38,13 +39,19 @@ type deliveryRecord struct {
 func (c *Consumer) deliveryRecord(entry *logrus.Entry, envelope notifications.DispatchEnvelope, attempt int) *deliveryRecord {
 	alertID, aerr := uuid.Parse(envelope.AlertID)
 	channelID, cerr := uuid.Parse(envelope.ChannelID)
+	eventType := envelope.EventType
+	if envelope.Event.Alert.RelapseNotice {
+		// Sent as a page, recorded as what it is (the alerter's sync path
+		// records its claim, "relapsed", the same way).
+		eventType = alertrouting.EventRelapsed
+	}
 	return &deliveryRecord{
 		c:         c,
 		entry:     entry,
 		alertID:   alertID,
 		channelID: channelID,
 		valid:     aerr == nil && cerr == nil,
-		eventType: envelope.EventType,
+		eventType: eventType,
 		key:       envelope.RecipientKey(),
 		attempt:   attempt,
 		started:   time.Now(),
@@ -138,9 +145,10 @@ func (r *deliveryRecord) finalReason(outcome deliverylog.Outcome, reason deliver
 }
 
 // mutedReason tells, after releaseMutedClaim, whether the held page's route
-// is due again once the mute lifts (no claim row left for the pair: handed
-// back) or still counts as notified (a reminder, a page that may have
-// reached the provider, or a claim that moved on). It reads inside tx, which
+// is due again once the mute lifts (no claim row left for the pair, or, for
+// a relapse notice, the row back at an earlier episode: handed back) or
+// still counts as notified (a reminder, a page that may have reached the
+// provider, or a claim that moved on). It reads inside tx, which
 // still holds the alert row, so no claim moved meanwhile, under a savepoint
 // so a failed read can never abort the transaction that commits the hand-back;
 // on any error it says "muted", the reading that promises nothing.
@@ -157,8 +165,8 @@ func mutedReason(ctx context.Context, tx *sql.Tx, envelope notifications.Dispatc
 	}
 	var claimed bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS (
-		SELECT 1 FROM alert_notification_states WHERE alert_id = $1 AND channel_id = $2)`,
-		alertID, channelID).Scan(&claimed)
+		SELECT 1 FROM alert_notification_states WHERE alert_id = $1 AND channel_id = $2 AND paged_relapse >= $3)`,
+		alertID, channelID, envelope.Event.Alert.PagedRelapse).Scan(&claimed)
 	if err != nil {
 		_, _ = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT delivery_log_muted`)
 		return deliverylog.ReasonMuted

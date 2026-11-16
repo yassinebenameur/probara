@@ -129,6 +129,36 @@ export const ALERTING_PAGE: DocPage = {
       ],
     },
     {
+      id: "relapses",
+      title: "Flapping: reopening relapsed alerts",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A flapping target recovers and fails again over and over, and by default every new failure opens a new alert and pages again. A workspace can instead reopen the alert that just recovered: set **Reopen relapses within** on the Settings page (`alert_reopen_cooldown_minutes` in the [notification settings](#routing), 1 to 1,440 minutes; 0, the default, is off). When an alert resolved because its condition cleared (the monitor came back up, the latency or metric returned to normal with fresh readings, the certificate was renewed, the mesh path recovered, the location sent heartbeats again) fails again within that many minutes of the resolve, that same alert reopens instead of a new one opening. It applies to every alert kind, matched by the alert's subject: the monitor and kind, plus the metric series for a host-metric alert, the location pair for a mesh alert and the location for an offline-location alert. Only the subject's latest alert can reopen. An alert someone resolved by hand never does, nor one the alerter closed because its subject left evaluation: a paused, disabled or deleted monitor, a group left without enabled members, a removed metric rule, TLS threshold or latency detection, host readings gone stale, a latency alert closed because there were too few successful checks to judge (a slow service that went hard down), a location that stopped counting as offline only because it was disabled and re-enabled, a mesh path or location removed or disabled, or a domain alert switching between \"expiry unknown\" and a dated warning (each form only ever reopens as itself). The subject failing again then opens a new alert, so pausing and resuming a monitor never counts as a relapse.",
+        },
+        {
+          type: "list",
+          items: [
+            "The reopened alert is `active` again, keeps its first `triggered_at`, and counts the relapse: `relapse_count` goes up by one and `reopened_at` is set. Alert reads report both; `GET /alerts/{id}` and the MCP `get_alert` tool also list the relapse history (`relapses`: each relapse's number, the recovery it interrupted and when it reopened). The Alerts page marks the alert **Relapsed ×N**.",
+            "A reopened alert starts unacknowledged and unsnoozed: the earlier acknowledgement and snooze belonged to the episode that recovered. Its first acknowledgement is kept for [SLA reports](/docs/slas/), which measure time to acknowledge from it.",
+            "Each channel paged before the relapse is told once that the alert relapsed: a page worded **Relapsed — down again 4m after recovering, relapse #2** (in each alert kind's own terms), with the [acknowledge link](#acknowledge-links) like any page. This includes a channel whose earlier recovery notice never went out. A channel paged for the first time during a relapse (an escalation route whose delay had not run out before) gets an ordinary page that lists the relapse count among its details. Escalation delays and reminders count from the reopen, as after an unacknowledge, so an escalation route waits its full delay again and the next reminder comes one interval after the relapse notice. Acknowledging or snoozing the relapsed alert holds the relapse notice like any page; the suspected-cause follow-up still goes out as for any acknowledged or snoozed alert. The notice appears in the [delivery history](#delivery-history) as its own event, **Relapse notice**. Its acknowledge link is bound to the alert, not the episode, so a link from an earlier page of the same alert, still inside its 72 hours, acknowledges the relapse too.",
+            "PagerDuty and Opsgenie open a new incident for each relapse: the trigger uses its own dedup key or alias (`probara:<alert>:relapse-N`, `probara-<alert>-relapse-N`; the first episode keeps `probara:<alert>` / `probara-<alert>`), and the relapse notice first resolves or closes that channel's previous incident. Both providers fold a trigger with the key of an incident that is still open into it and do not notify again, and an acknowledged one stays acknowledged, so reusing the key would leave a relapse unpaged whenever the earlier recovery had not reached the provider. Acknowledge and resolve go to the incident of the channel's latest page the provider actually received (a page claimed but not yet delivered opens nothing), so a late recovery notice closes only the incident it was for. A relapse notice that is dropped (the alert recovered or was acknowledged before it went out) or fails for good still closes the earlier incident on its own, so no PagerDuty or Opsgenie incident is left escalating after its outage recovered.",
+            "A recovery notice that had not gone out yet when the alert relapsed is dropped while the alert is open again, so a chat, email, SMS or webhook channel is never told \"recovered\" after the alert failed again; PagerDuty and Opsgenie still receive it, since it closes only the earlier incident. Once the alert has recovered again, a recovery notice still queued from an earlier episode is delivered: a channel whose escalation delay outlasted the relapse heard neither the relapse nor its recovery, and that notice is the one that tells it.",
+            "The relapse adds an **Alert relapsed** entry to the timeline of every open incident linked to the alert. For the alert kinds that open automatic incidents (availability and latency), it joins the monitor's open automatic incident, or opens a new one if that was resolved meanwhile; each recovery writes its own **All linked alerts recovered** entry. Status pages, uptime and SLA availability are unaffected: they come from the monitor's state history, never from alerts.",
+            "A relapse keeps the alert's [triage](#ai-triage): an alert is triaged at most once, so no new triage runs for the relapse, and no channel receives the suspected-cause follow-up twice.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "A relapsed alert spans its gaps",
+          text:
+            "The alert's duration on the Alerts page and in notifications runs from its first trigger to its last recovery, recovered gaps included, and a flapping outage counts as one alert in SLA alert counts. Downtime itself is measured from the monitor's state history and never includes the gaps.",
+        },
+      ],
+    },
+    {
       id: "routing",
       title: "Default and custom notification routing",
       blocks: [
@@ -215,6 +245,10 @@ export const ALERTING_PAGE: DocPage = {
               "Defaults to 3,600; set 0 to disable reminders",
             ],
             [
+              "`alert_reopen_cooldown_minutes`",
+              "Defaults to 0 (off); 1 to 1,440 reopens an alert that fails again this soon after it recovered ([relapses](#relapses))",
+            ],
+            [
               "`auto_create_incident`",
               "Defaults to false; verified for availability and latency-anomaly opening paths",
             ],
@@ -269,12 +303,12 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`pagerduty`",
               "32-character Events API v2 `routing_key`, `region` `us` or `eu`",
-              "Triggers, acknowledges and resolves one PagerDuty alert per Probara alert (`dedup_key` `probara:<alert id>`)",
+              "Triggers, acknowledges and resolves one PagerDuty alert per Probara alert (`dedup_key` `probara:<alert id>`), and one more per [relapse](#relapses) (`probara:<alert id>:relapse-N`)",
             ],
             [
               "`opsgenie`",
               "Integration `api_key`, `site` `us`, `eu` or `jsm` (Jira Service Management), outage `priority` `P1`–`P5`",
-              "Creates, acknowledges and closes one alert per Probara alert (alias `probara-<alert id>`). Degradations are sent one level below the outage priority, never above `P3`",
+              "Creates, acknowledges and closes one alert per Probara alert (alias `probara-<alert id>`), and one more per [relapse](#relapses) (`probara-<alert id>-relapse-N`). Degradations are sent one level below the outage priority, never above `P3`",
             ],
             [
               "`telegram`",
@@ -312,7 +346,7 @@ export const ALERTING_PAGE: DocPage = {
           type: "table",
           columns: ["Event", "Chat, email, SMS, push, webhook", "PagerDuty, Opsgenie / JSM"],
           rows: [
-            ["`created`", "Message", "Trigger / create"],
+            ["`created`", "Message; a [relapse](#relapses) notice is a `created` event with `relapse_count` above 0", "Trigger / create"],
             ["`reminder`", "Message at the reminder interval", "Skipped — the provider escalates and re-notifies on its own"],
             ["`acknowledged`", "Not sent", "Acknowledge, once per paged channel"],
             ["`suspected_cause`", "One follow-up message per paged channel when triage names a cause ([opt-in](#ai-triage))", "Not sent: their APIs add content by re-triggering, and an advisory hint must never re-page"],
@@ -322,7 +356,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
+            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key (`alert:channel:event`; events of a [relapsed](#relapses) alert end in `:relapse-N`, since its page and recovery are new events, and carry `alert.relapse_count`; the relapse notice itself is a `created` event with `alert.relapse_notice` set). Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
         },
         {
           type: "list",
@@ -336,7 +370,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once, recorded in the [delivery history](#delivery-history), and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: a page or reminder still waiting on a retry when the alert is acknowledged or snoozed is dropped instead of delivered, and one already being delivered holds the alert, so acknowledging waits for it. A dropped page counts as never sent only when no earlier attempt can have been accepted (every earlier attempt failed before connecting, was refused by the egress policy, or got an error status back), so after an unacknowledge that route is paged again. Otherwise (a timeout after the request was sent, a worker stopped mid-send, an SMS that reached some recipients) it still counts as paged, so that route gets the acknowledgement and the recovery notice. A delivery retried after the alerter lost track of whether it was queued is collapsed by the broker instead of being sent twice.",
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once, recorded in the [delivery history](#delivery-history), and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: a page or reminder still waiting on a retry when the alert is acknowledged or snoozed is dropped instead of delivered, and one already being delivered holds the alert, so acknowledging waits for it. A dropped page counts as never sent only when no earlier attempt can have been accepted (every earlier attempt failed before connecting, was refused by the egress policy, or got an error status back), so after an unacknowledge that route is paged again. Otherwise (a timeout after the request was sent, a worker stopped mid-send, an SMS that reached some recipients) it still counts as paged, so that route gets the acknowledgement and the recovery notice. A delivery retried after the alerter lost track of whether it was queued is collapsed by the broker instead of being sent twice. A [relapse](#relapses) is ordered the same way: a recovery notice still waiting on a retry when the alert reopens is dropped while the alert stays open (except on PagerDuty and Opsgenie, where it closes only the earlier incident), and one already being delivered holds the reopen for at most a second; past that the reopen waits for the next evaluation. A dropped recovery notice that no earlier attempt can have delivered (by the same test as a held page) leaves the route counted as still paged, so it also hears the relapse's own recovery if the relapse ends before the route's escalation delay. Once the alert has recovered again, a recovery notice still queued from an earlier episode is delivered.",
         },
         {
           type: "callout",
@@ -385,6 +419,8 @@ export const ALERTING_PAGE: DocPage = {
             ["Not sent", "`unacknowledged`", "A queued acknowledgement notice whose alert was unacknowledged before it went out. A later acknowledgement is sent again."],
             ["Not sent", "`muted_requeued`", "A queued page whose alert was acknowledged or snoozed before it went out, and that provably reached no one (every earlier attempt failed before connecting, was refused by the egress policy or got an error status back). It is sent again once the alert is unacknowledged or the snooze ends."],
             ["Not sent", "`muted`", "A queued page or reminder held the same way that is not sent again: a reminder resumes with its next round once the mute lifts, and a page an earlier attempt may have delivered (a timeout after sending, an SMS that reached some numbers) still counts as sent, so the channel gets the acknowledgement and the recovery notice instead."],
+            ["Not sent", "`reopened`", "A queued recovery notice whose alert [relapsed](#relapses) and is open again before it went out: \"recovered\" must not follow \"relapsed\". When no earlier attempt can have delivered it, the channel still counts as paged and hears the relapse's own recovery. PagerDuty and Opsgenie are not affected: their notice closes only the earlier incident and is sent."],
+            ["Not sent", "`earlier_episode`", "A queued page, reminder, acknowledgement or follow-up from before the alert [relapsed](#relapses); the relapse notifies on its own."],
             ["Not sent", "`channel_inactive`", "The channel was deactivated after the event was queued."],
             ["Not sent", "`channel_changed`", "The channel's type changed after the event was queued."],
           ],

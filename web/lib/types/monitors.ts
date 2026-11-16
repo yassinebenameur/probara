@@ -34,6 +34,9 @@ export interface NotificationSettings {
   // upstream dependency is down, and for the grace period after it recovers.
   dependency_suppression_enabled: boolean;
   dependency_suppression_grace_seconds: number;
+  // Relapse reopen: an alert that recovered on its own and fails again
+  // within this many minutes reopens instead of a new one opening. 0 = off.
+  alert_reopen_cooldown_minutes: number;
 }
 
 export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry' | 'domain_expiry' | 'location_offline';

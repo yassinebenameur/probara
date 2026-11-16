@@ -488,14 +488,14 @@ func TestClaimSuspectedCause(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback() }()
-		ok, _, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0)
+		claim, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-		return ok
+		return claim.claimed
 	}
 	if claim(uuid.New()) {
 		t.Fatal("claimed a channel that was never paged")

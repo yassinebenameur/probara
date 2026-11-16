@@ -28,6 +28,9 @@ func TestMuteHolds(t *testing.T) {
 		{"resolved", false, true, false},
 		{"acknowledged", true, false, false},
 		{"acknowledged", true, true, false},
+		{EventRelapsed, false, false, false},
+		{EventRelapsed, true, false, true},
+		{EventRelapsed, false, true, true},
 	} {
 		if got := MuteHolds(tc.event, tc.acked, tc.snoozed); got != tc.want {
 			t.Errorf("MuteHolds(%q, acked=%v, snoozed=%v) = %v, want %v", tc.event, tc.acked, tc.snoozed, got, tc.want)
@@ -40,7 +43,7 @@ func TestMuteFragments(t *testing.T) {
 		!strings.Contains(got, "COALESCE(al.snoozed_until > NOW(), FALSE)") {
 		t.Fatalf("MutedPredicate = %s", got)
 	}
-	if got := DispatchResumedAtExpr("a"); got != "GREATEST(a.unacknowledged_at, a.snoozed_until)" {
+	if got := DispatchResumedAtExpr("a"); got != "GREATEST(a.unacknowledged_at, a.snoozed_until, a.reopened_at)" {
 		t.Fatalf("DispatchResumedAtExpr = %s", got)
 	}
 }

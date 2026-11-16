@@ -611,7 +611,7 @@ export const API_PAGE: DocPage = {
               "`GET /api/v1/alerts/stream`",
               "Authenticated server-sent event stream",
             ],
-            ["`GET /api/v1/alerts/{id}`", "Alert detail; a labelable `triage` also carries `label_context`"],
+            ["`GET /api/v1/alerts/{id}`", "Alert detail; a labelable `triage` also carries `label_context`, and a [relapsed](/docs/alerting/#relapses) alert its `relapses` history (`number`, `recovered_at`, `reopened_at`). Every alert read reports `relapse_count` and, once it relapsed, `reopened_at`"],
             [
               "`POST /api/v1/alerts/{id}/acknowledge`",
               "Mark an open condition acknowledged; from then on it sends no reminders or further escalation ([acknowledging](/docs/alerting/#model))",
@@ -626,7 +626,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/alerts/{id}/resolve`",
-              "Manually close an alert lifecycle",
+              "Manually close an alert lifecycle; a manually resolved alert never reopens as a [relapse](/docs/alerting/#relapses)",
             ],
             [
               "`POST /api/v1/alerts/bulk/acknowledge`",
@@ -698,11 +698,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/notification-settings`",
-              "Read tenant defaults, reminders, anomaly and auto-incident settings",
+              "Read tenant defaults, reminders, anomaly and auto-incident settings, and the relapse reopen cooldown (`alert_reopen_cooldown_minutes`)",
             ],
             [
               "`PUT /api/v1/notification-settings`",
-              "Replace tenant notification settings",
+              "Replace tenant notification settings; fields left out keep their value. `alert_reopen_cooldown_minutes` outside 0-1,440 is refused with 400",
             ],
           ],
         },
@@ -721,7 +721,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery history rows carry `id`, `alert_id` (`null` for a test send), `channel_id`, `channel_name`, `channel_type`, `event_type`, `recipient` (masked, per recipient on SMS, else `null`), `attempt`, `path` (`sync`: the alerter, or the API for a test; `async`: a delivery worker), `test`, `outcome` (`delivered`, `failed`, `permanent_failure`, `dropped`), `reason` (`resolved`, `unacknowledged`, `muted`, `muted_requeued`, `channel_inactive`, `channel_changed`, `egress_blocked`, `invalid_config`, `plugin_missing`, `retries_exhausted`, or `null`; treat unknown values as text), `error` (sanitized), `provider_status`, `duration_ms`, `alert_kind`, `monitor_name`, `source_location_name` and `target_location_name` (an offline-location or mesh-edge alert's subject) and `created_at`; a page has `items`, `page`, `page_size` and `total`. An alert or channel of another workspace is a `404`. Channel reads (list, detail and the update response) add `last_delivered_at`, `last_failed_at` and `failing`: a failure in the last 24 hours with no success since, test sends included.",
+            "Delivery history rows carry `id`, `alert_id` (`null` for a test send), `channel_id`, `channel_name`, `channel_type`, `event_type`, `recipient` (masked, per recipient on SMS, else `null`), `attempt`, `path` (`sync`: the alerter, or the API for a test; `async`: a delivery worker), `test`, `outcome` (`delivered`, `failed`, `permanent_failure`, `dropped`), `reason` (`resolved`, `unacknowledged`, `muted`, `muted_requeued`, `channel_inactive`, `channel_changed`, `egress_blocked`, `invalid_config`, `plugin_missing`, `retries_exhausted`, `reopened`, `earlier_episode`, or `null`; treat unknown values as text), `error` (sanitized), `provider_status`, `duration_ms`, `alert_kind`, `monitor_name`, `source_location_name` and `target_location_name` (an offline-location or mesh-edge alert's subject) and `created_at`; a page has `items`, `page`, `page_size` and `total`. An alert or channel of another workspace is a `404`. Channel reads (list, detail and the update response) add `last_delivered_at`, `last_failed_at` and `failing`: a failure in the last 24 hours with no success since, test sends included.",
         },
       ],
     },

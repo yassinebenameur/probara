@@ -101,3 +101,10 @@ test('listSubjects', () => {
   assert.equal(listSubjects(['A', 'A', 'B']), 'A and B');
   assert.equal(listSubjects(['A', 'B', 'C', 'D']), 'A, B and 2 more');
 });
+
+test('a reopened alert toasts as a relapse', () => {
+  const toast = alertToast('created', alert({ relapse_count: 2, monitor_name: 'Orders API' }));
+  assert.equal(toast?.title, 'Alert relapsed');
+  assert.equal(toast?.message, 'Orders API is down');
+  assert.equal(alertToast('created', alert({ relapse_count: 0, monitor_name: 'Orders API' }))?.title, 'Alert triggered');
+});
