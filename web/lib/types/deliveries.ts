@@ -11,6 +11,7 @@ export type DeliveryReason =
   | 'resolved'
   | 'unacknowledged'
   | 'muted'
+  | 'muted_requeued'
   | 'channel_inactive'
   | 'channel_changed'
   | 'egress_blocked'
@@ -40,6 +41,9 @@ export interface NotificationDelivery {
   duration_ms: number | null;
   alert_kind: string | null;
   monitor_name: string | null;
+  /** A monitor-less alert's subject: the offline location, or a mesh edge's two ends. */
+  source_location_name: string | null;
+  target_location_name: string | null;
   created_at: string;
 }
 

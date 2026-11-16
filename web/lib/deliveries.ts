@@ -36,7 +36,11 @@ const REASON: Record<string, ReasonCopy> = {
   },
   muted: {
     label: 'Held by acknowledgement or snooze',
-    hint: 'A page or reminder queued before the alert was acknowledged or snoozed. A page that had reached no one goes out again once the mute lifts.',
+    hint: 'A page or reminder queued before the alert was acknowledged or snoozed. Not sent again: a reminder resumes with the next round once the mute lifts, and a page that an earlier attempt may have delivered still counts as sent, so this channel gets the acknowledgement and the recovery notice.',
+  },
+  muted_requeued: {
+    label: 'Held until the mute lifts',
+    hint: 'A page queued before the alert was acknowledged or snoozed, that provably reached no one. It is sent again once the alert is unacknowledged or the snooze ends.',
   },
   channel_inactive: {
     label: 'Channel deactivated',
@@ -95,10 +99,17 @@ export function deliveryPathLabel(d: Pick<NotificationDelivery, 'path' | 'test'>
   return d.path === 'async' ? 'Delivery worker' : 'Alerter';
 }
 
-/** What the alert was about, for the per-channel list: its monitor, else its kind. */
-export function deliveryAlertSubject(d: Pick<NotificationDelivery, 'monitor_name' | 'alert_kind' | 'test'>): string {
+/**
+ * What the alert was about, for the per-channel list: its monitor, else the
+ * location it is about (offline location, mesh edge), else its kind.
+ */
+export function deliveryAlertSubject(
+  d: Pick<NotificationDelivery, 'monitor_name' | 'alert_kind' | 'test' | 'source_location_name' | 'target_location_name'>
+): string {
   if (d.test) return 'Test notification';
   if (d.monitor_name) return d.monitor_name;
+  if (d.source_location_name && d.target_location_name) return `Mesh: ${d.source_location_name} → ${d.target_location_name}`;
+  if (d.source_location_name && d.alert_kind === 'location_offline') return `${d.source_location_name} offline`;
   return `${String(d.alert_kind || 'alert').replace(/_/g, ' ')} alert`;
 }
 

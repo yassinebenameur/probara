@@ -359,6 +359,10 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		case alert.IsDomainExpiry():
 			return ToneUp, "DOMAIN RENEWED"
 		case alert.IsLocationOffline():
+			if locationClosedWithoutRecovery(alert) {
+				// Nothing came back: the alert just stopped applying.
+				return ToneInfo, "CLOSED"
+			}
 			return ToneUp, "BACK ONLINE"
 		}
 		return ToneUp, "RECOVERED"
@@ -441,6 +445,9 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 	case alert.IsLocationOffline():
 		switch eventType {
 		case EventResolved:
+			if locationClosedWithoutRecovery(alert) {
+				return "Location Alert Closed"
+			}
 			return "Location Back Online"
 		case EventReminder:
 			return "Location Still Offline"
@@ -552,6 +559,14 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 	case alert.IsLocationOffline():
 		name := locationName(alert)
 		if resolved {
+			switch alert.ResolveReason {
+			case notifications.ResolveReasonManual:
+				return fmt.Sprintf("An operator closed the alert for location %s. If it is still not reporting, a new alert opens.", name)
+			case notifications.ResolveReasonLocationDisabled:
+				return fmt.Sprintf("Location %s was disabled, so it is no longer expected to report.", name)
+			case notifications.ResolveReasonLocationDeleted:
+				return fmt.Sprintf("Location %s was deleted.", name)
+			}
 			if outage != "" {
 				return fmt.Sprintf("Location %s is reporting again after %s offline.", name, outage)
 			}
@@ -661,6 +676,14 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 	}
 	if alert.IsLocationOffline() {
 		rows = append(rows, Row{Label: "Location", Value: locationName(alert)})
+		// While it is open: when the location went quiet and what that
+		// strands. Once closed, the summary says what happened instead.
+		if alert.ResolvedAt == nil {
+			if alert.LocationLastSeenAt != nil {
+				rows = append(rows, Row{Label: "Last heartbeat", Value: HumanTime(*alert.LocationLastSeenAt)})
+			}
+			rows = append(rows, Row{Label: "Monitors", Value: locationMonitorsValue(alert)})
+		}
 	}
 	if name := strings.TrimSpace(alert.PolicyName); name != "" {
 		rows = append(rows, Row{Label: "Alert rule", Value: name})
@@ -855,6 +878,33 @@ func meshPath(alert notifications.AlertDetails) string {
 		return "on " + name
 	}
 	return "between locations"
+}
+
+// locationClosedWithoutRecovery reports whether a resolved location_offline
+// alert closed for a reason other than the location reporting again.
+func locationClosedWithoutRecovery(alert notifications.AlertDetails) bool {
+	switch alert.ResolveReason {
+	case notifications.ResolveReasonLocationDisabled, notifications.ResolveReasonLocationDeleted,
+		notifications.ResolveReasonManual:
+		return true
+	}
+	return false
+}
+
+// locationMonitorsValue is the blast radius of an offline location: the
+// monitors that run from it, and how many of those run nowhere else (they
+// get no fresh checks at all and go unknown, S-F2).
+func locationMonitorsValue(alert notifications.AlertDetails) string {
+	total, only := alert.LocationMonitorCount, alert.LocationOnlyMonitorCount
+	switch {
+	case total == 0:
+		return "none run from it"
+	case only == 0:
+		return fmt.Sprintf("%d, all also run from another location", total)
+	case only == total:
+		return fmt.Sprintf("%d, none with another location", total)
+	}
+	return fmt.Sprintf("%d, %d with no other location", total, only)
 }
 
 // locationName is a location_offline alert's subject: the Source location

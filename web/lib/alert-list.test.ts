@@ -117,6 +117,7 @@ test('alertTone: what the alert is now', () => {
   assert.equal(alertTone(alert('a', 'm', { snoozed_until: new Date(Date.now() + 3_600_000).toISOString() })), 'snoozed');
   assert.equal(alertTone(alert('a', 'm', { snoozed_until: new Date(Date.now() - 60_000).toISOString() })), 'active');
   assert.equal(alertTone(alert('a', 'm', { status: 'resolved', resolved_at: at(9), suppression_reason: 'dependency' })), 'resolved');
+  assert.equal(alertTone(alert('a', 'm', { kind: 'mesh_edge', suppression_reason: 'location_offline' })), 'suppressed');
 });
 
 test('mergeLiveAlert keeps what a stream event never carries', () => {

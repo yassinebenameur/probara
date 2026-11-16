@@ -66,8 +66,10 @@ func (a *Alerter) deliverNotification(
 	var status string
 	var resolvedAt *time.Time
 	var snoozed bool
-	if err := tx.QueryRowContext(ctx, `SELECT al.status, al.resolved_at, `+alertrouting.SnoozedPredicate("al")+`
-		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed); err != nil {
+	var resumedAt, acknowledgedAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT al.status, al.resolved_at, `+alertrouting.SnoozedPredicate("al")+`,
+			`+alertrouting.DispatchResumedAtExpr("al")+`, al.acknowledged_at
+		FROM alerts al WHERE al.id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt, &snoozed, &resumedAt, &acknowledgedAt); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
 	}
 	if (eventType == "resolved") != (status == "resolved") {
@@ -96,6 +98,7 @@ func (a *Alerter) deliverNotification(
 	// A rolled-back claim is retried by whichever replica claims next; the
 	// key lets that retry skip the recipients this attempt already reached.
 	ctx = withRecipientKey(ctx, notifications.RecipientEventKey(eventType, round))
+	ctx = withDispatchRound(ctx, dispatchRound(eventType, round, resumedAt.Time, acknowledgedAt.Time))
 	ctx, trace := withSendTrace(ctx)
 	if err := a.sendFunc(ctx, channel, eventType, binding, alert, groupInfo, now); err != nil {
 		if plugin.IsPermanent(err) {
@@ -273,6 +276,60 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 		return false, time.Time{}, fmt.Errorf("claim %s notification: %w", eventType, err)
 	}
 	return true, round, nil
+}
+
+// dispatchRound names which occurrence of eventType a claim sends, for the
+// async dispatch message id (sendChannelNotification). It is built from data
+// a rolled-back claim finds again on its retry, so JetStream's duplicate
+// window collapses a publish whose claim never committed (lost PubAck, failed
+// commit, crash) instead of queueing a second message for the slot, and that
+// changes exactly when a second send is legitimate:
+//
+//   - created: the alert's way out of its last mute (resumedAt), which an
+//     unacknowledge or snooze end moves: a page the worker handed back is
+//     re-paged under a new id, even inside the duplicate window.
+//   - reminder: the round, the last_sent_at the claim replaced.
+//   - acknowledged: the acknowledgement time; a re-acknowledge after an
+//     unacknowledge is a new one.
+//   - resolved, suspected_cause: once per alert and channel, no round.
+func dispatchRound(eventType string, round, resumedAt, acknowledgedAt time.Time) string {
+	stamp := func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.UTC().Format(time.RFC3339Nano)
+	}
+	switch eventType {
+	case "created":
+		return stamp(resumedAt)
+	case "reminder":
+		return stamp(round)
+	case "acknowledged":
+		return stamp(acknowledgedAt)
+	}
+	return ""
+}
+
+type dispatchRoundCtx struct{}
+
+// withDispatchRound hands sendChannelNotification the claim's dispatchRound,
+// without widening sendFunc.
+func withDispatchRound(ctx context.Context, round string) context.Context {
+	return context.WithValue(ctx, dispatchRoundCtx{}, round)
+}
+
+// dispatchMessageID is the async dispatch Nats-Msg-Id: the idempotency key,
+// plus the claim's round when it has one. A send that bypassed the claim
+// (none attached) keys a reminder by now, as before, so rounds never merge.
+func dispatchMessageID(ctx context.Context, key, eventType string, now time.Time) string {
+	round, ok := ctx.Value(dispatchRoundCtx{}).(string)
+	if !ok && eventType == "reminder" {
+		round = now.UTC().Format(time.RFC3339Nano)
+	}
+	if round == "" {
+		return key
+	}
+	return key + ":" + round
 }
 
 type recipientKeyCtx struct{}

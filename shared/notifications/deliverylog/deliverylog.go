@@ -83,8 +83,14 @@ const (
 	// was unacknowledged before it went out.
 	ReasonUnacknowledged Reason = "unacknowledged"
 	// ReasonMuted (dropped): a page or reminder held because the alert was
-	// acknowledged or snoozed after it was queued.
+	// acknowledged or snoozed after it was queued, and the route still counts
+	// as notified: a reminder (the next round follows the mute), or a page
+	// an earlier attempt may have delivered, so it gets the acknowledgement
+	// and the recovery notice instead of a second page.
 	ReasonMuted Reason = "muted"
+	// ReasonMutedRequeued (dropped): a held page that provably reached nobody;
+	// its claim was handed back, so it is paged once the mute lifts.
+	ReasonMutedRequeued Reason = "muted_requeued"
 	// ReasonChannelInactive (dropped): the channel was deactivated after the
 	// event was queued.
 	ReasonChannelInactive Reason = "channel_inactive"

@@ -380,6 +380,7 @@ function alertTitle(alert: Alert): string {
   if (alert.source_location_name && alert.target_location_name) {
     return `${alert.source_location_name} to ${alert.target_location_name}`;
   }
+  if (alert.kind === 'location_offline' && alert.source_location_name) return `Location ${alert.source_location_name}`;
   return 'Alert';
 }
 
@@ -480,7 +481,7 @@ export function buildActivityTimeline(input: BuildActivityTimelineInput): Activi
           ? `Lasted ${formatDurationBetween(alert.triggered_at, alert.resolved_at, now)}`
           : '',
       reason: alert.status === 'resolved' ? undefined : alert.last_error || undefined,
-      href: alert.monitor_id ? `/monitors/${alert.monitor_id}` : undefined,
+      href: alert.monitor_id ? `/monitors/${alert.monitor_id}` : alert.kind === 'location_offline' ? '/locations' : undefined,
       occurredAt: event.at,
     });
   }

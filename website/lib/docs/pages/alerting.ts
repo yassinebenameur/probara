@@ -53,6 +53,11 @@ export const ALERTING_PAGE: DocPage = {
               "An HTTPS or SIP-over-TLS monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
               "A renewed certificate is observed, or the threshold is removed",
             ],
+            [
+              "`location_offline`",
+              "A check location that has reported before sends no worker heartbeat for 180 seconds ([details](/docs/locations/#heartbeats)); always on, routed to the default channels",
+              "The location reports again, or is disabled or deleted; the closing notification says which",
+            ],
           ],
         },
         {
@@ -326,7 +331,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once, recorded in the [delivery history](#delivery-history), and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: a page or reminder still waiting on a retry when the alert is acknowledged or snoozed is dropped instead of delivered, and one already being delivered holds the alert, so acknowledging waits for it. A dropped page that reached nobody (its first attempt) counts as never sent, so after an unacknowledge that route is paged again; one dropped on a retry still counts as paged, since an earlier attempt may have reached the provider or some recipients, so that route still gets the acknowledgement and the recovery notice.",
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once, recorded in the [delivery history](#delivery-history), and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: a page or reminder still waiting on a retry when the alert is acknowledged or snoozed is dropped instead of delivered, and one already being delivered holds the alert, so acknowledging waits for it. A dropped page counts as never sent only when no earlier attempt can have been accepted (every earlier attempt failed before connecting, was refused by the egress policy, or got an error status back), so after an unacknowledge that route is paged again. Otherwise (a timeout after the request was sent, a worker stopped mid-send, an SMS that reached some recipients) it still counts as paged, so that route gets the acknowledgement and the recovery notice. A delivery retried after the alerter lost track of whether it was queued is collapsed by the broker instead of being sent twice.",
         },
         {
           type: "callout",
@@ -373,7 +378,8 @@ export const ALERTING_PAGE: DocPage = {
             ["Rejected", "`invalid_config`", "The stored channel configuration could not be read. Not retried; save the channel again."],
             ["Not sent", "`resolved`", "A queued page, reminder, acknowledgement or follow-up whose alert resolved before it went out. Sending it would reopen the alert at the provider, so it is dropped; the recovery notice goes out instead."],
             ["Not sent", "`unacknowledged`", "A queued acknowledgement notice whose alert was unacknowledged before it went out. A later acknowledgement is sent again."],
-            ["Not sent", "`muted`", "A queued page or reminder whose alert was acknowledged or snoozed before it went out. A page that had reached no one goes out again once the mute lifts."],
+            ["Not sent", "`muted_requeued`", "A queued page whose alert was acknowledged or snoozed before it went out, and that provably reached no one (every earlier attempt failed before connecting, was refused by the egress policy or got an error status back). It is sent again once the alert is unacknowledged or the snooze ends."],
+            ["Not sent", "`muted`", "A queued page or reminder held the same way that is not sent again: a reminder resumes with its next round once the mute lifts, and a page an earlier attempt may have delivered (a timeout after sending, an SMS that reached some numbers) still counts as sent, so the channel gets the acknowledgement and the recovery notice instead."],
             ["Not sent", "`channel_inactive`", "The channel was deactivated after the event was queued."],
             ["Not sent", "`channel_changed`", "The channel's type changed after the event was queued."],
           ],
@@ -381,7 +387,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An alert's attempts, across all its channels and in the order they happened, are under **Notifications** in its details on the Alerts page. A channel's attempts, newest first and filterable by outcome, are under **Recent deliveries** on the channel's page. There is no workspace-wide list. A channel is flagged **Failing**, in the channel list and on its page, when a delivery to it failed (transiently or for good) in the last 24 hours and none has succeeded since; test sends count both ways, so a successful test after a fix clears the flag. A partly failed SMS send counts as a failure, and a not-sent row counts as neither. The same data is in the API (`GET /alerts/{id}/deliveries`, `GET /alert-channels/{id}/deliveries`, `failing`, `last_delivered_at` and `last_failed_at` on channels) and the [MCP tools](/docs/mcp/).",
+            "An alert's attempts, across all its channels and in the order they happened, are under **Notifications** in its details on the Alerts page. A channel's attempts, newest first and filterable by outcome, are under **Recent deliveries** on the channel's page. Offline-location and mesh-edge alerts are recorded like monitor alerts and are named by their locations. There is no workspace-wide list. A channel is flagged **Failing**, in the channel list and on its page, when a delivery to it failed (transiently or for good) in the last 24 hours and none has succeeded since; test sends count both ways, so a successful test after a fix clears the flag. A partly failed SMS send counts as a failure, and a not-sent row counts as neither. The same data is in the API (`GET /alerts/{id}/deliveries`, `GET /alert-channels/{id}/deliveries`, `failing`, `last_delivered_at` and `last_failed_at` on channels) and the [MCP tools](/docs/mcp/).",
         },
         {
           type: "callout",
@@ -554,6 +560,11 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
+            "A check location that stops reporting opens one `location_offline` alert, routed to the tenant default channels like mesh alerts. It names the location, its last heartbeat, and how many monitors run from it and how many of those have no other location. There is no setting: every location that has reported at least once in the last 7 days is covered, with a fixed 180-second threshold. Resolving it by hand sends a \"closed by an operator\" notice; if the location is still silent, a new alert opens on the next evaluation. While one of its locations is disconnected and its offline alert is about to open or open, a mesh edge's alert stays open but sends nothing and reads as suppressed (`suppression_reason` `location_offline`), so a dead site pages once instead of once per path; see [heartbeats](/docs/locations/#heartbeats).",
+        },
+        {
+          type: "paragraph",
+          text:
             "An HTTPS or SIP-over-TLS monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
         },
         {
@@ -561,7 +572,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "info",
           title: "Automatic incident coverage is specific",
           text:
-            "The verified automatic-incident paths cover availability and latency anomaly alerts. Do not assume the tenant switch automatically creates incidents for every host-metric, mesh-edge, or TLS-expiry alert.",
+            "The verified automatic-incident paths cover availability and latency anomaly alerts. Do not assume the tenant switch automatically creates incidents for every host-metric, mesh-edge, TLS-expiry, or offline-location alert.",
         },
       ],
     },

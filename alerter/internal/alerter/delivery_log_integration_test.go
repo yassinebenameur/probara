@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	shareddb "github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/secrets"
@@ -249,5 +250,56 @@ func TestDeliveryHistoryRecordsEachRecipientOnce(t *testing.T) {
 	}
 	if len(byHash) != len(fanoutRecipients) {
 		t.Fatalf("rows keyed by %d recipients, want %d", len(byHash), len(fanoutRecipients))
+	}
+}
+
+// Monitor-less alerts are recorded like any other: the offline-location page
+// and the mesh-edge page each leave a row on the default channel, and the
+// per-channel read names their locations instead of a monitor.
+func TestDeliveryHistoryRecordsLocationAndMeshAlerts(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "delivery-locations")
+	channelID := insertDefaultChannel(ctx, t, dbClient, tenantID, "ops", 0)
+	alive := insertLocationSeen(ctx, t, dbClient, tenantID, "alive", dur(5*time.Second))
+	peer := insertLocationSeen(ctx, t, dbClient, tenantID, "peer", dur(5*time.Second))
+	insertLocationSeen(ctx, t, dbClient, tenantID, "dead", dur(10*time.Minute))
+	insertMeshEdgeState(ctx, t, dbClient, tenantID, alive, peer, "down", 3, "dial tcp: i/o timeout")
+
+	a, _ := newMeshAlerter(dbClient)
+	if err := a.evaluateLocationOffline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.evaluateMeshEdges(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := deliverylog.ListForChannel(ctx, dbClient, tenantID, channelID, nil, 1, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]deliverylog.Delivery{}
+	for _, d := range page.Items {
+		if d.AlertKind != nil {
+			kinds[*d.AlertKind] = d
+		}
+	}
+	offline, ok := kinds["location_offline"]
+	if !ok || offline.Outcome != deliverylog.OutcomeDelivered || offline.EventType != "created" ||
+		offline.MonitorName != nil || str(offline.SourceLocationName) != "dead" {
+		t.Fatalf("location_offline row = %+v (all: %+v)", offline, page.Items)
+	}
+	mesh, ok := kinds["mesh_edge"]
+	if !ok || mesh.Outcome != deliverylog.OutcomeDelivered || mesh.MonitorName != nil ||
+		str(mesh.SourceLocationName) != "alive" || str(mesh.TargetLocationName) != "peer" {
+		t.Fatalf("mesh_edge row = %+v (all: %+v)", mesh, page.Items)
+	}
+	if offline.AlertID == nil {
+		t.Fatal("location_offline row lost its alert")
+	}
+	alertPage, err := deliverylog.ListForAlert(ctx, dbClient, tenantID, *offline.AlertID, 1, 50)
+	if err != nil || alertPage.Total != 1 {
+		t.Fatalf("per-alert read of a monitor-less alert = %+v, %v", alertPage, err)
 	}
 }

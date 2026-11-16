@@ -117,3 +117,48 @@ func TestLedgerWithoutTableReportsNothingDelivered(t *testing.T) {
 		t.Fatalf("Record without the table must report the failure")
 	}
 }
+
+// The attempt marker makes an event "possibly reached" on its own, is
+// created once (a second attempt finds it), never reads as a recipient, and
+// clears without touching recipient rows.
+func TestAttemptMarker(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "marker")
+	alertID, channelID := insertAlertAndChannel(ctx, t, db, tenantID)
+
+	reached := func(key string) bool {
+		t.Helper()
+		ok, err := recipientledger.Reached(ctx, db, alertID, channelID, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if reached("created") {
+		t.Fatal("a fresh event must not read as reached")
+	}
+	if created, err := recipientledger.MarkAttempt(ctx, db, alertID, channelID, "created"); err != nil || !created {
+		t.Fatalf("first MarkAttempt = %v, %v; want created", created, err)
+	}
+	if created, err := recipientledger.MarkAttempt(ctx, db, alertID, channelID, "created"); err != nil || created {
+		t.Fatalf("second MarkAttempt = %v, %v; want the earlier marker kept", created, err)
+	}
+	if !reached("created") || reached("resolved") {
+		t.Fatal("the marker must make only its own event reached")
+	}
+	ledger := recipientledger.For(db, alertID, channelID, "created")
+	if done, err := ledger.Delivered(ctx, []string{"attempt", "+15557654321"}); err != nil || len(done) != 0 {
+		t.Fatalf("Delivered = %v, %v; the marker is not a recipient", done, err)
+	}
+	if err := ledger.Record(ctx, "+15557654321"); err != nil {
+		t.Fatal(err)
+	}
+	if err := recipientledger.ClearAttempt(ctx, db, alertID, channelID, "created"); err != nil {
+		t.Fatal(err)
+	}
+	if !reached("created") {
+		t.Fatal("clearing the marker must leave the recorded recipient")
+	}
+}

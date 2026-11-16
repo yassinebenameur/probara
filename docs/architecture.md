@@ -14,7 +14,7 @@ website (`website/`) are separate applications.
 | `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
-| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
+| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, mesh, and offline-location alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
 | `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
 | `ai-service/` | Local CPU inference (Python, FastAPI) for incident analysis, automatic alert triage and dependency suggestions: authenticated `/v1/decisions` returning probabilities over the closed choices in `shared/ai/catalogue.json`; bundled fine-tuned Laya head, offline | None: no PostgreSQL, NATS or egress. Called only by the API and the database-connected worker |
 | `cmd/discovery-collector` | Namespaced read-only Kubernetes inventory collection; complete snapshot uploads | Kubernetes API reads; HTTPS to Probara only |
@@ -120,13 +120,35 @@ times: the alerter's pre-filter (`openAlertEventDue`, lifecycle and mesh
 dispatch), its claim (`deliverNotification`, under the alert row's
 `FOR SHARE` lock), and the async worker (`eventSuperseded`, same lock), which
 drops a page or reminder queued before the ack or snooze and hands a page's
-claim back when it provably reached nobody. Dispatch message ids are unique
-per claim, so a re-page is never discarded as a JetStream duplicate.
+claim back when it provably reached nobody: the worker writes a page attempt
+marker into the recipient ledger before the send and clears it only when the
+plugin's error proves nothing was accepted (`plugin.IsNotDelivered`). The
+dispatch message id is the idempotency key plus what identifies the claimed
+occurrence (`dispatchRound`: the alert's resume clock for a page, the round
+for a reminder, the acknowledgement time for an ack), so a publish whose
+claim rolled back is collapsed by JetStream on retry, while a re-page after
+an unacknowledge or snooze end gets a new id.
 Unacknowledge (`unacknowledged_at`) and the end of a snooze (`snoozed_until`,
 migration 000101) restart the escalation-delay and reminder clocks.
 `first_acknowledged_at` (migration 000102) keeps the first acknowledgement
 for SLA time to acknowledge; `snoozed_at` / `snoozed_by_user_id` record the
 running snooze for display.
+
+Monitor-less alerts route to the tenant defaults through
+`alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
+S-F6 in [state semantics](state-semantics.md)), one alert per check location
+that reported within 7 days and has sent no heartbeat for 180 seconds. The
+alerter reads `locations.last_seen_at`, which the scheduler's heartbeat
+consumer writes, so it holds the locations that went quiet together with the
+installation's newest heartbeat (that path or the database is at fault, not
+every site) for up to 15 minutes, and opens none after its own restart until
+a heartbeat lands later than its start. From the moment a location misses its
+one-minute connected window its mesh edges stay open but do not dispatch
+(`SuppressedByOfflineLocationPredicate`) while its alert is about to open or
+open; the location's alert is the page. The alerter exports the bounded
+gauges `probara_alerter_locations{state}`,
+`probara_alerter_location_offline_guard{reason}` and
+`probara_alerter_location_offline_guard_limit_seconds{reason}`.
 
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.

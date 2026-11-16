@@ -108,10 +108,48 @@ func (l *ledger) Record(ctx context.Context, recipient string) error {
 	return err
 }
 
-// Reached reports whether the ledger recorded any recipient of the event
-// (eventKey) for the (alert, channel) pair, i.e. whether some attempt is
-// known to have reached someone. q may be a transaction: it only reads rows
-// that earlier attempts committed through the pool. Before migration 000097
+// attemptMarker is the recipient_hash of the channel-level "possibly reached"
+// marker (MarkAttempt). It is not a SHA-256 hex digest, so it can never
+// collide with a recipient's row, and Delivered never matches it.
+const attemptMarker = "attempt"
+
+// MarkAttempt records, through the pool, that a send of the event is about to
+// leave for the (alert, channel) pair, before the provider is called, so the
+// marker survives a crash or a rolled-back transaction: from then on the event
+// counts as possibly reached until ClearAttempt proves otherwise. It reports
+// whether this call created the marker (false when an earlier attempt's is
+// still there).
+func MarkAttempt(ctx context.Context, db DB, alertID, channelID uuid.UUID, eventKey string) (bool, error) {
+	res, err := db.ExecContext(ctx, `
+		INSERT INTO alert_notification_recipient_deliveries (alert_id, channel_id, event_key, recipient_hash)
+		SELECT a.id, c.id, $3, $4
+		FROM alerts a
+		JOIN alert_channels c ON c.id = $2 AND c.tenant_id = a.tenant_id
+		WHERE a.id = $1
+		ON CONFLICT DO NOTHING`,
+		alertID, channelID, eventKey, attemptMarker)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// ClearAttempt removes the event's marker: the attempt that created it
+// failed in a way that proves nothing was accepted (plugin.IsNotDelivered),
+// or the alert resolved and the marker has served its purpose.
+func ClearAttempt(ctx context.Context, db DB, alertID, channelID uuid.UUID, eventKey string) error {
+	_, err := db.ExecContext(ctx, `
+		DELETE FROM alert_notification_recipient_deliveries
+		WHERE alert_id = $1 AND channel_id = $2 AND event_key = $3 AND recipient_hash = $4`,
+		alertID, channelID, eventKey, attemptMarker)
+	return err
+}
+
+// Reached reports whether the event (eventKey) possibly reached anyone on
+// the (alert, channel) pair: an attempt marker (MarkAttempt) or a recipient
+// recorded delivered. q may be a transaction: it only reads rows that
+// earlier attempts committed through the pool. Before migration 000097
 // nothing can have been recorded, so a missing table reads as false.
 func Reached(ctx context.Context, q DB, alertID, channelID uuid.UUID, eventKey string) (bool, error) {
 	rows, err := q.QueryContext(ctx, `

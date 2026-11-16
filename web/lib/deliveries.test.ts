@@ -12,7 +12,7 @@ import {
 import { deliveryOutcomeTone } from './status-tones';
 
 test('drops are neutral and never worded as failures', () => {
-  for (const reason of ['resolved', 'unacknowledged', 'muted', 'channel_inactive', 'channel_changed']) {
+  for (const reason of ['resolved', 'unacknowledged', 'muted', 'muted_requeued', 'channel_inactive', 'channel_changed']) {
     assert.equal(deliveryOutcomeTone('dropped', reason), 'neutral', reason);
     assert.equal(deliveryOutcomeLabel({ outcome: 'dropped', reason }), 'Not sent');
     const label = deliveryReasonLabel(reason) ?? '';
@@ -43,8 +43,17 @@ test('events, subjects and details', () => {
   assert.equal(deliveryEventLabel({ event_type: 'created', test: false }), 'Page');
   assert.equal(deliveryEventLabel({ event_type: 'created', test: true }), 'Test notification');
   assert.equal(deliveryEventLabel({ event_type: 'brand_new', test: false }), 'Brand new');
-  assert.equal(deliveryAlertSubject({ monitor_name: 'API', alert_kind: 'availability', test: false }), 'API');
-  assert.equal(deliveryAlertSubject({ monitor_name: null, alert_kind: 'mesh_edge', test: false }), 'mesh edge alert');
+  const none = { source_location_name: null, target_location_name: null };
+  assert.equal(deliveryAlertSubject({ ...none, monitor_name: 'API', alert_kind: 'availability', test: false }), 'API');
+  assert.equal(deliveryAlertSubject({ ...none, monitor_name: null, alert_kind: 'mesh_edge', test: false }), 'mesh edge alert');
+  assert.equal(
+    deliveryAlertSubject({ monitor_name: null, alert_kind: 'location_offline', test: false, source_location_name: 'Paris', target_location_name: null }),
+    'Paris offline'
+  );
+  assert.equal(
+    deliveryAlertSubject({ monitor_name: null, alert_kind: 'mesh_edge', test: false, source_location_name: 'Paris', target_location_name: 'Oslo' }),
+    'Mesh: Paris → Oslo'
+  );
   assert.equal(
     deliveryDetail({ recipient: '********4321', provider_status: 401, error: 'twilio returned status 401' }),
     '********4321 · HTTP 401 · twilio returned status 401'

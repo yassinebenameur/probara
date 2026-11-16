@@ -55,6 +55,13 @@ type alertRecord struct {
 	SourceLocationName *string
 	TargetLocationID   *uuid.UUID
 	TargetLocationName *string
+	// Offline-location annotation (Kind == "location_offline"); the location
+	// itself rides in SourceLocationID/Name and MonitorID is the zero UUID.
+	LocationLastSeenAt       *time.Time
+	LocationMonitorCount     int
+	LocationOnlyMonitorCount int
+	// ResolveReason is alerts.resolve_reason (notifications.ResolveReason*).
+	ResolveReason string
 	// SuspectedCause is set only for the "suspected_cause" follow-up.
 	SuspectedCause *notifications.SuspectedCause
 }
@@ -129,9 +136,16 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 var errAlertAlreadyResolved = errors.New("alert already resolved")
 
 func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time) (time.Time, error) {
+	return a.resolveAlertWithReason(ctx, alertID, now, "")
+}
+
+// resolveAlertWithReason is resolveAlert recording why the alert closed in
+// alerts.resolve_reason ("" leaves it NULL).
+func (a *Alerter) resolveAlertWithReason(ctx context.Context, alertID uuid.UUID, now time.Time, reason string) (time.Time, error) {
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1
+		SET status = 'resolved', resolved_at = $1, updated_at = $1,
+			resolve_reason = NULLIF($3, '')
 		WHERE id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING resolved_at
 	`
@@ -145,7 +159,7 @@ func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.
 	}()
 
 	var resolvedAt time.Time
-	if err := tx.QueryRowContext(ctx, query, now, alertID).Scan(&resolvedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, query, now, alertID, reason).Scan(&resolvedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return time.Time{}, errAlertAlreadyResolved
 		}
@@ -212,21 +226,16 @@ func (a *Alerter) sendChannelNotification(
 			DeliveryKey: deliveryKey,
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
-		// The message id names this claim (its time), not just the event:
-		// the claim in alert_notification_states is what prevents duplicate
-		// sends. An id per event would let JetStream's 2-minute duplicate
-		// window swallow a legitimate second send of the same event (a page
-		// handed back by the worker when an acknowledgement held it, then
-		// re-claimed after an unacknowledge, or the next reminder round)
-		// while the claim commits as sent. PublishJSONUnique turns such a
-		// discard into an error, so the claim rolls back and is retried.
-		messageID := envelope.IdempotencyKey() + ":" + now.UTC().Format(time.RFC3339Nano)
+		// One message per claimed occurrence (dispatchRound): a retry of a
+		// claim that never committed republishes the same id, and JetStream's
+		// duplicate reply then means "already queued", which is success.
+		messageID := dispatchMessageID(ctx, envelope.IdempotencyKey(), eventType, now)
 		headers := map[string][]string{
 			"x-idempotency-key": {envelope.IdempotencyKey()},
 			"Nats-Msg-Id":       {messageID},
 		}
 		traceQueued(ctx) // the delivery worker records this send
-		return a.nats.PublishJSONUnique(ctx, subject, envelope, headers)
+		return a.nats.PublishJSON(ctx, subject, envelope, headers)
 	}
 
 	configMap := map[string]any{}
@@ -332,6 +341,11 @@ func buildAlertEvent(eventType string, binding alertSubject, alert *alertRecord,
 			TargetLocationID:     uuidStr(alert.TargetLocationID),
 			TargetLocationName:   alert.TargetLocationName,
 			SuspectedCause:       alert.SuspectedCause,
+
+			LocationLastSeenAt:       alert.LocationLastSeenAt,
+			LocationMonitorCount:     alert.LocationMonitorCount,
+			LocationOnlyMonitorCount: alert.LocationOnlyMonitorCount,
+			ResolveReason:            alert.ResolveReason,
 		},
 	}
 }

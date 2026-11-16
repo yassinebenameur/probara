@@ -132,7 +132,16 @@ func TestSendOutcome(t *testing.T) {
 			t.Errorf("SendOutcome(%v) = (%s, %s), want (%s, %s)", tc.err, o, r, tc.outcome, tc.reason)
 		}
 	}
-	if s, ok := plugin.ResponseStatus(rejected); !ok || s != http.StatusUnauthorized {
-		t.Errorf("ResponseStatus = (%d, %v), want 401", s, ok)
+	// CheckResponse carries both the status and the proof nothing was
+	// accepted (the page marker relies on the latter).
+	if s, ok := plugin.ResponseStatus(rejected); !ok || s != http.StatusUnauthorized || !plugin.IsNotDelivered(rejected) || !plugin.IsPermanent(rejected) {
+		t.Errorf("ResponseStatus = (%d, %v), not delivered %v, want 401 and both marks", s, ok, plugin.IsNotDelivered(rejected))
+	}
+	retried := plugin.CheckResponse(&http.Response{StatusCode: http.StatusTooManyRequests, Body: http.NoBody, Header: http.Header{"Retry-After": {"5"}}}, "stub")
+	if s, ok := plugin.ResponseStatus(retried); !ok || s != http.StatusTooManyRequests || !plugin.IsNotDelivered(retried) {
+		t.Errorf("429: ResponseStatus = (%d, %v), not delivered %v", s, ok, plugin.IsNotDelivered(retried))
+	}
+	if d, ok := plugin.RetryAfterDelay(retried); !ok || d.Seconds() != 5 {
+		t.Errorf("429 retry-after = %v %v", d, ok)
 	}
 }

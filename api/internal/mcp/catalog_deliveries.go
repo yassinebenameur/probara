@@ -13,7 +13,8 @@ func deliveryTools() []spec {
 		"the channel type); permanent_failure (not retried; reason egress_blocked when the notification " +
 		"egress policy refused the address, invalid_config); dropped (a queued event deliberately not sent: " +
 		"reason resolved = the alert resolved first, unacknowledged = an acknowledgement notice after an " +
-		"unacknowledge, muted = held by an acknowledgement or snooze, channel_inactive, channel_changed). " +
+		"unacknowledge, muted = held by an acknowledgement or snooze and not sent again, muted_requeued = a held page that " +
+		"reached nobody, sent once the mute lifts, channel_inactive, channel_changed). " +
 		"Drops are not failures."
 	return []spec{
 		{
@@ -31,7 +32,7 @@ func deliveryTools() []spec {
 			Name:  "list_channel_deliveries",
 			Title: "List alert channel deliveries",
 			Description: "One alert channel's notification attempts, test sends included, newest first, with each " +
-				"alert's kind and monitor name. Use it to see why a channel stopped delivering; get_alert_channel " +
+				"alert's kind and monitor name (or location names for offline-location and mesh alerts). Use it to see why a channel stopped delivering; get_alert_channel " +
 				"carries the failing flag (a failure in the last 24 hours with no success since). " + rows,
 			Method: http.MethodGet, Route: "/alert-channels/{id}/deliveries",
 			PathDocs: map[string]string{"id": "Alert channel ID."},

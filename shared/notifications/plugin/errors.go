@@ -17,6 +17,13 @@ import (
 //   - RetryAfter: the provider asked for a specific delay (HTTP 429 with a
 //     Retry-After header). The consumer redelivers after that delay.
 //   - anything else: transient, redelivered on the default backoff schedule.
+//
+// Independently, NotDelivered marks an error that proves the provider
+// accepted nothing: the request never left (dial or DNS failure, egress
+// refused, a request that could not be built) or the provider answered with
+// a non-2xx status. A timeout after the request was written is ambiguous and
+// is never marked. The delivery worker relies on it to tell a page that may
+// have reached someone from one that certainly did not.
 
 type permanentError struct{ err error }
 
@@ -35,6 +42,27 @@ func Permanent(err error) error {
 func IsPermanent(err error) bool {
 	var p *permanentError
 	return errors.As(err, &p)
+}
+
+type notDeliveredError struct{ err error }
+
+func (e *notDeliveredError) Error() string { return e.err.Error() }
+func (e *notDeliveredError) Unwrap() error { return e.err }
+
+// NotDelivered marks err as proof that nothing was accepted. Nil stays nil.
+// It composes with Permanent and RetryAfter (wrap it first).
+func NotDelivered(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &notDeliveredError{err: err}
+}
+
+// IsNotDelivered reports whether err (or anything it wraps, including one
+// error of a joined set) was marked NotDelivered.
+func IsNotDelivered(err error) bool {
+	var n *notDeliveredError
+	return errors.As(err, &n)
 }
 
 type retryAfterError struct {
@@ -98,7 +126,9 @@ func CheckResponse(resp *http.Response, service string) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	err := withResponseStatus(fmt.Errorf("%s returned status %d%s", service, resp.StatusCode, bodyExcerpt(resp.Body)), resp.StatusCode)
+	// An answer that is not 2xx is the provider saying it took nothing. The
+	// status rides along for the delivery history (ResponseStatus).
+	err := NotDelivered(withResponseStatus(fmt.Errorf("%s returned status %d%s", service, resp.StatusCode, bodyExcerpt(resp.Body)), resp.StatusCode))
 	switch {
 	case resp.StatusCode == http.StatusTooManyRequests:
 		if d, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {

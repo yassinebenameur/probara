@@ -42,9 +42,14 @@ type Delivery struct {
 	// AlertKind and MonitorName describe the alert for the per-channel view;
 	// MonitorName is null for alerts without a monitor (mesh edges) and
 	// both are null for a test send.
-	AlertKind   *string   `json:"alert_kind"`
-	MonitorName *string   `json:"monitor_name"`
-	CreatedAt   time.Time `json:"created_at"`
+	AlertKind   *string `json:"alert_kind"`
+	MonitorName *string `json:"monitor_name"`
+	// SourceLocationName and TargetLocationName name a monitor-less alert's
+	// subject: the location of a location_offline alert, the two ends of a
+	// mesh_edge alert.
+	SourceLocationName *string   `json:"source_location_name"`
+	TargetLocationName *string   `json:"target_location_name"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // Page is one page of deliveries.
@@ -67,13 +72,15 @@ type Querier interface {
 const selectColumns = `
 	d.id, d.alert_id, d.channel_id, c.name, c.type, d.event_type, d.recipient,
 	d.attempt, d.path, d.is_test, d.outcome, d.reason, d.error, d.provider_status,
-	d.duration_ms, a.kind, m.name, d.created_at`
+	d.duration_ms, a.kind, m.name, ls.name, lt.name, d.created_at`
 
 const fromJoins = `
 	FROM alert_notification_deliveries d
 	JOIN alert_channels c ON c.id = d.channel_id
 	LEFT JOIN alerts a ON a.id = d.alert_id
-	LEFT JOIN monitors m ON m.id = a.monitor_id`
+	LEFT JOIN monitors m ON m.id = a.monitor_id
+	LEFT JOIN locations ls ON ls.id = a.source_location_id
+	LEFT JOIN locations lt ON lt.id = a.target_location_id`
 
 // ListForAlert returns one alert's attempts across its channels in the order
 // they happened. Test sends have no alert, so they never appear here.
@@ -263,12 +270,12 @@ func clampPage(page, pageSize int) (int, int) {
 func scan(rows *sql.Rows) (Delivery, error) {
 	var d Delivery
 	var alertID uuid.NullUUID
-	var recipient, reason, errText, alertKind, monitorName sql.NullString
+	var recipient, reason, errText, alertKind, monitorName, sourceName, targetName sql.NullString
 	var status, duration sql.NullInt64
 	var path, outcome string
 	if err := rows.Scan(&d.ID, &alertID, &d.ChannelID, &d.ChannelName, &d.ChannelType, &d.EventType, &recipient,
 		&d.Attempt, &path, &d.Test, &outcome, &reason, &errText, &status,
-		&duration, &alertKind, &monitorName, &d.CreatedAt); err != nil {
+		&duration, &alertKind, &monitorName, &sourceName, &targetName, &d.CreatedAt); err != nil {
 		return Delivery{}, fmt.Errorf("scan delivery: %w", err)
 	}
 	d.Path, d.Outcome = Path(path), Outcome(outcome)
@@ -283,6 +290,8 @@ func scan(rows *sql.Rows) (Delivery, error) {
 	d.Error = nullString(errText)
 	d.AlertKind = nullString(alertKind)
 	d.MonitorName = nullString(monitorName)
+	d.SourceLocationName = nullString(sourceName)
+	d.TargetLocationName = nullString(targetName)
 	if status.Valid {
 		n := int(status.Int64)
 		d.ProviderStatus = &n

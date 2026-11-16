@@ -71,7 +71,7 @@ export function MonitorLocationStrip({ locations, quorum }: MonitorLocationStrip
                   {stateLabel(loc.current_state)}
                 </span>
                 {loc.last_check_at && <RelativeTime value={loc.last_check_at} className="truncate" />}
-                {!loc.connected && <span className="ml-auto shrink-0 text-amber-300">worker offline</span>}
+                {!loc.connected && <span className="ml-auto shrink-0 text-amber-300">worker disconnected</span>}
               </div>
             </li>
           );

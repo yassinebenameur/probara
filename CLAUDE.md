@@ -237,7 +237,12 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   silences its whole membership — reachability reports it
   (`group_rollup_paused`), dispatch still does it. The package doc, the
   fragments' comments and `annotateOpenAlertRootCauses` (the grace clock)
-  cover the rest.
+  cover the rest. Monitor-less alerts (mesh edges, `location_offline`) route
+  through `TenantTargetsSQL`, the tenant defaults without a monitor
+  (`TestTenantTargetsSQLMatchesDefaults`), and a mesh edge with a location
+  that stopped reporting dispatches nothing
+  (`SuppressedByOfflineLocationPredicate`, `suppression_reason`
+  `location_offline`).
 - **Status page settings live in THREE mirrors**, all of which must change
   together for a new setting to survive a round trip:
   `api/internal/models/statuspages.go` (`StatusPageSettings`, the wire type),
@@ -685,16 +690,21 @@ or imported groups come back empty. Any other path that creates groups through
   paging channels and the `suspected_cause` follow-up still go out. The
   rule is `shared/alertrouting/mute.go` (`MutedPredicate`, `MuteHolds`,
   `DispatchResumedAtExpr`), applied by `openAlertEventDue` (pre-filter, also
-  mesh), `deliverNotification` (claim) and the worker's `eventSuperseded`;
+  mesh, location offline), `deliverNotification` (claim) and the worker's `eventSuperseded`;
   change all three together (`TestMutePreFilterMatchesClaim` pins the
   alerter pair). Unack/unsnooze restart the delay and reminder clocks
   (`DispatchEligibleSinceExpr`, the reminder claim). A held page the worker
   drops hands its claim back (`releaseMutedClaim`) only when it provably
-  reached nobody (first attempt, empty recipient ledger); otherwise the
-  route keeps counting as paged so it hears the ack and the resolve.
-  Dispatch message ids are per claim (`sendChannelNotification`) and
-  published with `queue.PublishJSONUnique`, so JetStream's duplicate window
-  never swallows a re-page while its claim commits.
+  reached nobody: no page attempt marker and no recipient in the ledger
+  (`recipientledger.MarkAttempt`, written before the send, cleared only on
+  `plugin.IsNotDelivered`; `worker/.../page_marker.go`), never by delivery
+  count; otherwise the route keeps counting as paged so it hears the ack
+  and the resolve. Dispatch message ids are the idempotency key plus the
+  claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
+  finds again on retry (the resume clock for a page, the round for a
+  reminder, `acknowledged_at` for an ack, nothing for resolve and
+  follow-up), so JetStream's duplicate window collapses a retried publish
+  ("duplicate" is success) yet queues a re-page after an unack or snooze end.
   SLA time to acknowledge reads `first_acknowledged_at` (set once by the API,
   never cleared), not `acknowledged_at`, which an unacknowledge clears.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
@@ -730,6 +740,17 @@ or imported groups come back empty. Any other path that creates groups through
   a new kind rewrites the CHECK in one migration and adds its constant, its
   wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
   (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last).
+- **Location liveness** (S-F6) is `shared/monitorstate/freshness.go`:
+  offline is `LocationOfflinePredicate`, disconnected
+  `LocationDisconnectedPredicate`, each with a Go twin
+  (`TestLocationPredicatesMatchGo` pins both at the boundaries), connected
+  `LocationConnected`. The alerter's `location_offline` evaluator
+  (`alerter/internal/alerter/location_offline.go`), the mesh hold, the API's
+  `connected`/`offline` and the UI's wording (`locationConnection` in
+  `web/lib/status-tones.ts`) all read them; never re-derive one from
+  `last_seen_at`. The evaluator's guard (`locationOfflineHold`) holds the
+  locations that went quiet together with the newest heartbeat, at most
+  15 minutes, and everything just after startup (database clock).
 - **Transactional mail** (invites, resets, subscriber mail, reports) goes
   through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
   MIME builder; `Message.Validate` is the header-injection guard and accepts
@@ -779,9 +800,11 @@ or imported groups come back empty. Any other path that creates groups through
   let a failed write fail a delivery (`RecordTx` uses a savepoint), and never
   store raw error text: `deliverylog` sanitizes it and masks the channel's
   secrets (`SecretValues`). Fan-out rows follow the recipient ledger
-  (`deliverylog.Track`), one per recipient an attempt tried. A new drop or
-  failure cause is a `Reason*` constant plus its wording in `web/lib/deliveries.ts`
-  and the alerting docs.
+  (`deliverylog.Track`), one per recipient an attempt tried. A held page's
+  row says `muted_requeued` when `releaseMutedClaim` handed its claim back and
+  `muted` when it kept it (`mutedReason`, read in the same tx), so change them
+  together. A new drop or failure cause is a `Reason*` constant plus its
+  wording in `web/lib/deliveries.ts` and the alerting docs.
 
 ## Status pages
 
