@@ -1343,18 +1343,30 @@ or imported groups come back empty. Any other path that creates groups through
 - **Ping** (`worker/internal/worker/ping_checker.go`) resolves through the
   SSRF policy (`netguard.Policy.ResolveAllowed`, via `dialGuard`) and sends
   only over unprivileged ICMP sockets. Those need the
-  `net.ipv4.ping_group_range` sysctl, set together in Helm
-  (`worker.pingGroupRange`, `workerPodSecurityContext` helper), Compose and
-  the location deploy snippets (`services/locations/deploy.go`). Echo
-  spacing is `models.PingMonitorConfig.PingSchedule` (always fits the
-  timeout); the API's `ValidatePingSchedule` uses the same function.
+  `net.ipv4.ping_group_range` sysctl: Helm sets it (`worker.pingGroupRange`,
+  per-location override, `workerPodSecurityContext` helper); Docker 20.10+
+  has it by default, and Compose and the location Docker snippets must
+  never set it (a user-namespaced container refuses to start with it;
+  `dockerDeploySnippets` test). Echo spacing and the prober's deadline are
+  `models.PingMonitorConfig.PingSchedule` over the time left after
+  resolving; the API's `ValidatePingSchedule` uses the same function.
 - **Failed HTTP response capture** (`http_failure_capture.go`) is always on
   for non-success results with a response: redact the whole read body
   (`secretRedactor` + `redactCredentialFields`), then cut by encoded size;
   `captureMaxBytes` keeps it under 16 KiB, far below the AI evidence's 64 KiB
-  `metrics_data` cutoff. Check results reach Postgres through `pgSafeJSON`/
-  `pgSafeText` (`shared/monitorstate/pgsafe.go`), so NUL or invalid UTF-8 in
-  any checker's text cannot fail an insert.
+  `metrics_data` cutoff. Reads of many rows never ship it: the API's list,
+  batch and snapshot reads go through `listMetricsDataSQL`
+  (`services/results/failure_capture.go`, leaves
+  `http.failure_response_omitted`), the status page and AI evidence drop
+  `{http,failure_response}`; only `GetMonitorResult` returns it. A new
+  bulk `metrics_data` read must do the same. Check results reach Postgres
+  through `pgSafeJSON`/`pgSafeText` (`shared/monitorstate/pgsafe.go`), so
+  NUL or invalid UTF-8 in any checker's text cannot fail an insert.
+- **Which certificate a `tls_expiry` alert is about** rides its
+  `last_error` (`notifications.FormatTLSExpiryError` /
+  `ParseTLSExpiryError`, the alerts row carries it to every event);
+  `present` names an intermediate from it, and `web/lib/tls-cert.ts` is the
+  twin (`shared/notifications/testdata/tls_expiry_errors.json` pins both).
 - **Path-borne credentials** (`/push/{token}`): the API's request log, panic
   log and HTTP metrics never use `r.URL.Path` raw — logs redact by the
   router's patterns, metrics label by route pattern

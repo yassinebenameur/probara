@@ -36,6 +36,8 @@ type PingChecker struct {
 
 	// run is the prober; a test seam (production: pro-bing).
 	run func(ctx context.Context, req pingRequest) (pingStats, error)
+	// resolveHook replaces resolve in tests (a slow lookup).
+	resolveHook func(ctx context.Context, host string) (net.IP, error)
 }
 
 // NewPingChecker creates a ping checker that enforces the worker's
@@ -49,7 +51,7 @@ type pingRequest struct {
 	ip       net.IP
 	count    int
 	interval time.Duration
-	timeout  time.Duration
+	timeout  time.Duration // when the prober stops: PingSchedule's deadline
 }
 
 // pingStats is what a run observed.
@@ -96,15 +98,32 @@ func (c *PingChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	ip, err := c.resolve(checkCtx, strings.TrimSpace(cfg.Host))
+	resolve := c.resolve
+	if c.resolveHook != nil {
+		resolve = c.resolveHook
+	}
+	ip, err := resolve(checkCtx, strings.TrimSpace(cfg.Host))
 	if err != nil {
 		// A refused address is the checker's policy and a failed lookup was
 		// always an error here: neither is evidence about the target.
 		return pingError(err.Error())
 	}
 
-	count, interval := cfg.PingSchedule(timeout)
-	stats, err := c.run(checkCtx, pingRequest{ip: ip, count: count, interval: interval, timeout: timeout})
+	// The echoes are spaced in the time resolving left, not the whole
+	// timeout: a slow lookup must not push the last echo past the deadline.
+	// The prober stops at the schedule's deadline, so a lost echo holds this
+	// worker slot for the reply wait, not for the monitor's whole timeout.
+	budget := timeout
+	if dl, ok := checkCtx.Deadline(); ok {
+		budget = time.Until(dl)
+	}
+	count, interval, deadline := cfg.PingSchedule(budget)
+	if deadline <= 0 {
+		return pingError("ping failed: the timeout ran out while resolving the host")
+	}
+	runCtx, cancelRun := context.WithTimeout(checkCtx, deadline)
+	defer cancelRun()
+	stats, err := c.run(runCtx, pingRequest{ip: ip, count: count, interval: interval, timeout: deadline})
 	if err != nil {
 		if isPingSocketDenied(err) {
 			return pingError(pingSocketDenied)

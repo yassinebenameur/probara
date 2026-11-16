@@ -142,7 +142,7 @@ test('serverFacts: the certificate row names an intermediate that expires first,
 });
 
 test('serverFacts: a ping reports loss, round trip and a shortened echo gap', () => {
-  const facts = serverFacts(monitor('ping', { host: 'gw', max_rtt_ms: 5 }), [
+  const facts = serverFacts(monitor('ping', { host: 'gw', interval_ms: 1000, max_rtt_ms: 5 }), [
     result('a', { ping: { sent: 3, received: 2, loss_pct: 33.33, interval_ms: 250, rtt_min_ms: 0.42, rtt_avg_ms: 6.25, rtt_max_ms: 12.1 } }),
   ]);
   assert.deepEqual(facts, [

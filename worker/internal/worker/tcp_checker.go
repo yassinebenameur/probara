@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -23,9 +22,6 @@ import (
 type TCPChecker struct {
 	blockPrivateIPs bool
 	allowedCIDRs    []*net.IPNet
-	// rootCAs verifies the server's chain; nil is the system store. Tests
-	// set it, there is no per-monitor CA.
-	rootCAs *x509.CertPool
 }
 
 // NewTCPChecker creates a new TCP connect checker.
@@ -91,7 +87,12 @@ func (c *TCPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	if useTLS {
 		// The SNI and verification name is tls_server_name or the host; the
 		// guard dialled a vetted IP, so the name never re-resolves here.
-		tlsCfg := &tls.Config{ServerName: config.ServerName(), RootCAs: c.rootCAs}
+		roots, err := config.RootCAs()
+		if err != nil {
+			errMsg := err.Error()
+			return CheckResult{Status: "error", ErrorMessage: &errMsg}
+		}
+		tlsCfg := &tls.Config{ServerName: config.ServerName(), RootCAs: roots}
 		if config.TLSSkipVerify != nil && *config.TLSSkipVerify {
 			tlsCfg.InsecureSkipVerify = true
 		}

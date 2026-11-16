@@ -50,7 +50,7 @@ export default function PingEditor({
           onChange={(v) => onChange({ ping_interval_ms: v })}
           placeholder={String(PING_DEFAULT_INTERVAL_MS)}
           error={errors.ping_interval_ms}
-          hint="Defaults to 1000, shortened when the timeout is too short to fit every echo."
+          hint={`Defaults to ${PING_DEFAULT_INTERVAL_MS}; shortened when the timeout cannot fit every echo and a 1-second wait for the last reply.`}
           className="input tabular-nums"
         />
         <FormInput

@@ -102,12 +102,19 @@ func captureFailureResponse(resp *http.Response, body []byte, readCapped bool, c
 	if len(body) == 0 {
 		return out
 	}
+	size := fmt.Sprintf("%d bytes", len(body))
+	if readCapped {
+		size = "more than " + size
+	}
+	// The transport decodes gzip only when it asked for it itself; a monitor
+	// that sets Accept-Encoding gets the encoded bytes, which are neither
+	// readable nor redactable. They are described, never stored.
+	if enc := strings.TrimSpace(resp.Header.Get("Content-Encoding")); !resp.Uncompressed && enc != "" && !strings.EqualFold(enc, "identity") {
+		out.BodyNote, _ = truncateJSONString(fmt.Sprintf("encoded body not stored (%s, %s)", enc, size), captureStatusLineMax)
+		return out
+	}
 	if mediaType, binary := binaryBody(resp.Header.Get("Content-Type"), body); binary {
-		size := fmt.Sprintf("%d bytes", len(body))
-		if readCapped {
-			size = "more than " + size
-		}
-		out.BodyNote = fmt.Sprintf("binary body not stored (%s, %s)", mediaType, size)
+		out.BodyNote, _ = truncateJSONString(fmt.Sprintf("binary body not stored (%s, %s)", mediaType, size), captureStatusLineMax)
 		return out
 	}
 

@@ -51,35 +51,34 @@ func TestPingMonitorConfigValidate(t *testing.T) {
 
 func intp(n int) *int { return &n }
 
-// The schedule always fits the timeout: a default interval shrinks, the last
-// reply keeps PingReplyWaitMs (or half a short timeout).
+// The schedule always fits its budget: a gap shrinks, the last reply keeps
+// PingReplyWaitMs (or half a short budget), and the prober stops right
+// after it.
 func TestPingSchedule(t *testing.T) {
 	cases := []struct {
 		name         string
 		cfg          PingMonitorConfig
-		timeout      time.Duration
+		budget       time.Duration
 		wantCount    int
 		wantInterval time.Duration
+		wantDeadline time.Duration
 	}{
-		{"defaults fit a 10s timeout", PingMonitorConfig{}, 10 * time.Second, 3, time.Second},
-		{"defaults fit exactly in 3s", PingMonitorConfig{}, 3 * time.Second, 3, time.Second},
-		{"defaults squeezed into 2s", PingMonitorConfig{}, 2 * time.Second, 3, 500 * time.Millisecond},
-		{"defaults squeezed into 1s", PingMonitorConfig{}, time.Second, 3, 250 * time.Millisecond},
-		{"one echo keeps its interval", PingMonitorConfig{Count: intp(1)}, time.Second, 1, time.Second},
-		{"explicit interval squeezed too", PingMonitorConfig{Count: intp(5), IntervalMs: intp(2000)}, 5 * time.Second, 5, time.Second},
-		{"ten echoes in 1s", PingMonitorConfig{Count: intp(10)}, time.Second, 10, 55 * time.Millisecond},
+		{"defaults under a 10s timeout", PingMonitorConfig{}, 10 * time.Second, 3, 250 * time.Millisecond, 1500 * time.Millisecond},
+		{"defaults fit a 1s timeout", PingMonitorConfig{}, time.Second, 3, 250 * time.Millisecond, time.Second},
+		{"explicit gap kept when it fits", PingMonitorConfig{IntervalMs: intp(1000)}, 3 * time.Second, 3, time.Second, 3 * time.Second},
+		{"explicit gap squeezed into 2s", PingMonitorConfig{IntervalMs: intp(1000)}, 2 * time.Second, 3, 500 * time.Millisecond, 2 * time.Second},
+		{"one echo waits one second", PingMonitorConfig{Count: intp(1)}, 10 * time.Second, 1, 250 * time.Millisecond, time.Second},
+		{"one echo under a short budget", PingMonitorConfig{Count: intp(1)}, 600 * time.Millisecond, 1, 250 * time.Millisecond, 600 * time.Millisecond},
+		{"ten echoes in 1s", PingMonitorConfig{Count: intp(10)}, time.Second, 10, 55 * time.Millisecond, 995 * time.Millisecond},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			count, interval := tc.cfg.PingSchedule(tc.timeout)
-			if count != tc.wantCount || interval != tc.wantInterval {
-				t.Fatalf("PingSchedule(%s) = %d, %s; want %d, %s", tc.timeout, count, interval, tc.wantCount, tc.wantInterval)
+			count, interval, deadline := tc.cfg.PingSchedule(tc.budget)
+			if count != tc.wantCount || interval != tc.wantInterval || deadline != tc.wantDeadline {
+				t.Fatalf("PingSchedule(%s) = %d, %s, %s; want %d, %s, %s", tc.budget, count, interval, deadline, tc.wantCount, tc.wantInterval, tc.wantDeadline)
 			}
-			if count > 1 {
-				wait := tc.timeout - time.Duration(count-1)*interval
-				if wait < min(PingReplyWaitMs*time.Millisecond, tc.timeout/2) {
-					t.Fatalf("last reply gets %s", wait)
-				}
+			if deadline > tc.budget {
+				t.Fatalf("deadline %s past the budget", deadline)
 			}
 		})
 	}

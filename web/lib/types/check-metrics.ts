@@ -75,6 +75,8 @@ export interface HTTPMetrics {
   display_values?: HTTPDisplayValue[];
   /** The redacted response of a failed check (worker http_failure_capture.go). */
   failure_response?: HTTPFailureResponse;
+  /** Set by list reads in place of failure_response (fetch the result alone for it). */
+  failure_response_omitted?: boolean;
 }
 
 export interface HTTPFailureResponse {

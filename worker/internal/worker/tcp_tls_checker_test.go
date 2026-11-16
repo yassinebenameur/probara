@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"math/big"
 	"net"
 	"strconv"
@@ -89,6 +90,10 @@ func startTLSListener(t *testing.T, chain ...*tcpTestCert) (string, int) {
 	return host, port
 }
 
+func caPEM(ca *tcpTestCert) string {
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der}))
+}
+
 func errText(msg *string) string {
 	if msg == nil {
 		return ""
@@ -107,11 +112,8 @@ func TestTCPChecker_TLSRecordsCertificateAndChain(t *testing.T) {
 	leaf := issueTCPTestCert(t, "imap.example.test", time.Now().Add(200*day+time.Hour), inter, false)
 	host, port := startTLSListener(t, leaf, inter)
 
-	checker := NewTCPChecker(false, nil)
-	checker.rootCAs = x509.NewCertPool()
-	checker.rootCAs.AddCert(root.cert)
-	res := checker.Check(context.Background(), tcpConfig(t, map[string]any{
-		"host": host, "port": port, "use_tls": true,
+	res := NewTCPChecker(false, nil).Check(context.Background(), tcpConfig(t, map[string]any{
+		"host": host, "port": port, "use_tls": true, "tls_ca_pem": caPEM(root),
 		"tls_server_name": "imap.example.test", "tls_min_days_valid": 14,
 	}), 5)
 	if res.Status != "success" {
@@ -130,7 +132,7 @@ func TestTCPChecker_TLSRecordsCertificateAndChain(t *testing.T) {
 }
 
 // Verification is on by default: the system store does not know the test
-// root, and the wrong server name fails even with the right one.
+// root (tls_ca_pem adds it), and the wrong server name fails even with it.
 func TestTCPChecker_TLSVerificationFailures(t *testing.T) {
 	day := 24 * time.Hour
 	root := issueTCPTestCert(t, "Test Root", time.Now().Add(3650*day), nil, true)
@@ -144,11 +146,8 @@ func TestTCPChecker_TLSVerificationFailures(t *testing.T) {
 		t.Fatalf("unknown root: status = %q (%s), want failure", res.Status, errText(res.ErrorMessage))
 	}
 
-	checker := NewTCPChecker(false, nil)
-	checker.rootCAs = x509.NewCertPool()
-	checker.rootCAs.AddCert(root.cert)
-	res = checker.Check(context.Background(), tcpConfig(t, map[string]any{
-		"host": host, "port": port, "use_tls": true, "tls_server_name": "other.example.test",
+	res = NewTCPChecker(false, nil).Check(context.Background(), tcpConfig(t, map[string]any{
+		"host": host, "port": port, "use_tls": true, "tls_ca_pem": caPEM(root), "tls_server_name": "other.example.test",
 	}), 5)
 	if res.Status != "failure" {
 		t.Fatalf("name mismatch: status = %q (%s), want failure", res.Status, errText(res.ErrorMessage))

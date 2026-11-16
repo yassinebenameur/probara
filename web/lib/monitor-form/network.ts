@@ -97,6 +97,7 @@ export function initialTcpFormState(monitor?: Monitor, initialData?: CreateMonit
     tls_skip_verify: existingConfig?.tls_skip_verify ?? initialTcpConfig?.tls_skip_verify ?? false,
     tls_min_days_valid: String(existingConfig?.tls_min_days_valid ?? initialTcpConfig?.tls_min_days_valid ?? ''),
     tls_server_name: existingConfig?.tls_server_name ?? initialTcpConfig?.tls_server_name ?? '',
+    tls_ca_pem: existingConfig?.tls_ca_pem ?? initialTcpConfig?.tls_ca_pem ?? '',
   };
 }
 
@@ -111,6 +112,10 @@ export function tcpTlsErrors(form: TcpFormState): Record<string, string> {
   }
   if (/\s/.test(form.tls_server_name.trim())) {
     errors.tls_server_name = 'Must be a hostname or IP address';
+  }
+  const pem = form.tls_ca_pem.trim();
+  if (pem && !/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(pem)) {
+    errors.tls_ca_pem = 'Must be PEM certificates (-----BEGIN CERTIFICATE----- …)';
   }
   return errors;
 }
@@ -134,6 +139,9 @@ export function buildTcpRequest(form: TcpFormState): CreateMonitorRequest {
   }
   if (form.use_tls && form.tls_server_name.trim()) {
     config.tls_server_name = form.tls_server_name.trim();
+  }
+  if (form.use_tls && form.tls_ca_pem.trim()) {
+    config.tls_ca_pem = form.tls_ca_pem.trim();
   }
 
   return buildScheduledMonitorRequest('tcp', config, form);

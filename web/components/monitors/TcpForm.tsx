@@ -169,6 +169,24 @@ export default function TcpForm({
             </FormField>
           </div>
         )}
+
+        {formData.use_tls && (
+          <FormField label="Custom CA bundle (PEM)" error={errors.tls_ca_pem}>
+            {(control) => (
+              <>
+                <textarea
+                  {...control}
+                  rows={4}
+                  value={formData.tls_ca_pem}
+                  onChange={(e) => setFormData({ ...formData, tls_ca_pem: e.target.value })}
+                  placeholder={'-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----'}
+                  className="input min-h-[80px] font-mono"
+                />
+                <FieldHint>Trusted root CAs for a private CA, besides the system store</FieldHint>
+              </>
+            )}
+          </FormField>
+        )}
       </FormPanel>
 
       <ScheduleSection

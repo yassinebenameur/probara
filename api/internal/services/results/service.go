@@ -188,7 +188,7 @@ func (s *Service) GetMonitorMetricsSnapshots(ctx context.Context, tenantID, moni
 				AND metrics_data IS NOT NULL
 			ORDER BY date_bin($4::interval, created_at, $3::timestamptz), created_at DESC, id DESC
 		)
-		SELECT p.created_at, cr.metrics_data::text
+		SELECT p.created_at, `+listMetricsDataSQL("cr.metrics_data")+`
 		FROM picked p
 		JOIN check_results cr ON cr.id = p.id
 		ORDER BY p.created_at ASC
@@ -339,7 +339,7 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 
 	if since != nil {
 		query = `
-			SELECT cr.id, cr.status, cr.result_source, cr.http_status, cr.latency_ms, cr.error_message, cr.created_at, COALESCE(cr.metrics_data::text, ''),
+			SELECT cr.id, cr.status, cr.result_source, cr.http_status, cr.latency_ms, cr.error_message, cr.created_at, ` + listMetricsDataSQL("cr.metrics_data") + `,
 				cr.location_id, l.name
 			FROM check_results cr
 			LEFT JOIN locations l ON l.id = cr.location_id
@@ -350,7 +350,7 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 		args = []interface{}{monitorID, tenantID, *since, limit}
 	} else {
 		query = `
-			SELECT cr.id, cr.status, cr.result_source, cr.http_status, cr.latency_ms, cr.error_message, cr.created_at, COALESCE(cr.metrics_data::text, ''),
+			SELECT cr.id, cr.status, cr.result_source, cr.http_status, cr.latency_ms, cr.error_message, cr.created_at, ` + listMetricsDataSQL("cr.metrics_data") + `,
 				cr.location_id, l.name
 			FROM check_results cr
 			LEFT JOIN locations l ON l.id = cr.location_id

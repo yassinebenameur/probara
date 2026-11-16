@@ -50,19 +50,20 @@ func pingMetricsOf(t *testing.T, res CheckResult) pingMetrics {
 func ms(n float64) time.Duration { return time.Duration(n * float64(time.Millisecond)) }
 
 // A bare host (every ping monitor saved before echoes were counted) sends
-// three echoes a second apart, and one lost echo of three does not fail it:
-// only total loss did before, and only total loss does by default.
+// three echoes 250 ms apart and stops a second after the last one, never at
+// the monitor's timeout; one lost echo of three does not fail it: only
+// total loss did before, and only total loss does by default.
 func TestPingChecker_DefaultsSendThreeEchoes(t *testing.T) {
 	f := &fakePinger{stats: pingStats{sent: 3, received: 2, min: ms(10), avg: ms(12.5), max: ms(15)}}
 	res := pingCheckerWith(f, false).Check(context.Background(), json.RawMessage(`{"host":"192.0.2.10"}`), 10)
 	if res.Status != "success" {
 		t.Fatalf("status = %q (%s), want success", res.Status, errText(res.ErrorMessage))
 	}
-	if f.got == nil || f.got.count != 3 || f.got.interval != time.Second || f.got.timeout != 10*time.Second || f.got.ip.String() != "192.0.2.10" {
-		t.Fatalf("request = %+v", f.got)
+	if f.got == nil || f.got.count != 3 || f.got.interval != 250*time.Millisecond || f.got.timeout != 1500*time.Millisecond || f.got.ip.String() != "192.0.2.10" {
+		t.Fatalf("request = %+v, want 3 echoes 250ms apart stopping after 1.5s", f.got)
 	}
 	m := pingMetricsOf(t, res)
-	if m.Sent != 3 || m.Received != 2 || m.LossPct != 33.33 || m.IntervalMs != 1000 || *m.RTTMinMs != 10 || *m.RTTAvgMs != 12.5 || *m.RTTMaxMs != 15 || m.IP != "192.0.2.10" {
+	if m.Sent != 3 || m.Received != 2 || m.LossPct != 33.33 || m.IntervalMs != 250 || *m.RTTMinMs != 10 || *m.RTTAvgMs != 12.5 || *m.RTTMaxMs != 15 || m.IP != "192.0.2.10" {
 		t.Fatalf("metrics = %+v", m)
 	}
 	if res.LatencyMs == nil || *res.LatencyMs != 12 {
@@ -70,19 +71,37 @@ func TestPingChecker_DefaultsSendThreeEchoes(t *testing.T) {
 	}
 }
 
-// A monitor saved with a 1 s timeout keeps working after the upgrade: the
-// echoes are squeezed to fit, never sent past the timeout.
+// A monitor saved with a 1 s timeout and a slow explicit gap keeps working
+// after the upgrade: the echoes are squeezed to fit, never sent past it.
 func TestPingChecker_ShortTimeoutCompressesInterval(t *testing.T) {
 	f := &fakePinger{stats: pingStats{sent: 3, received: 3, avg: ms(1)}}
-	res := pingCheckerWith(f, false).Check(context.Background(), json.RawMessage(`{"host":"192.0.2.10"}`), 1)
+	res := pingCheckerWith(f, false).Check(context.Background(), json.RawMessage(`{"host":"192.0.2.10","interval_ms":1000}`), 1)
 	if res.Status != "success" {
 		t.Fatalf("status = %q (%s)", res.Status, errText(res.ErrorMessage))
 	}
-	if f.got.count != 3 || f.got.interval != 250*time.Millisecond || f.got.timeout != time.Second {
-		t.Fatalf("request = %+v, want 3 echoes 250ms apart inside 1s", f.got)
+	if f.got.count != 3 || f.got.interval < 240*time.Millisecond || f.got.interval > 250*time.Millisecond || f.got.timeout > time.Second {
+		t.Fatalf("request = %+v, want 3 echoes ~250ms apart inside 1s", f.got)
 	}
-	if m := pingMetricsOf(t, res); m.IntervalMs != 250 {
+	if m := pingMetricsOf(t, res); m.IntervalMs != f.got.interval.Milliseconds() {
 		t.Fatalf("interval_ms = %d, want the interval actually used", m.IntervalMs)
+	}
+}
+
+// Spacing comes from the time resolving left: after 0.8 s of a 2 s timeout
+// went to DNS, every echo and its reply wait still end inside the timeout.
+func TestPingChecker_SlowResolutionShrinksSchedule(t *testing.T) {
+	f := &fakePinger{stats: pingStats{sent: 3, received: 3, avg: ms(1)}}
+	c := pingCheckerWith(f, false)
+	c.resolveHook = func(ctx context.Context, host string) (net.IP, error) {
+		time.Sleep(800 * time.Millisecond)
+		return net.ParseIP("192.0.2.10"), nil
+	}
+	res := c.Check(context.Background(), json.RawMessage(`{"host":"slow.example","interval_ms":500}`), 2)
+	if res.Status != "success" {
+		t.Fatalf("status = %q (%s)", res.Status, errText(res.ErrorMessage))
+	}
+	if f.got.timeout > 1200*time.Millisecond || 2*f.got.interval >= f.got.timeout {
+		t.Fatalf("request = %+v, want a schedule inside the 1.2s left", f.got)
 	}
 }
 

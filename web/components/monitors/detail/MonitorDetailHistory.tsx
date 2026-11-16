@@ -11,9 +11,11 @@ import EmptyState from '@/components/ui/EmptyState';
 import TableSkeleton from '@/components/ui/TableSkeleton';
 import { bucketFailedChecks, Stat, StatStrip, UptimeTrace } from '../MonitorAnalyticsOverview';
 import FailureResponse from './FailureResponse';
-import { failureResponseOf } from '@/lib/http-capture';
+import { hasFailureResponse } from '@/lib/http-capture';
 
 interface MonitorDetailHistoryProps {
+  /** For fetching a failed check's captured response when it is opened. */
+  monitorId: string;
   /** Raw results of the last 7 days. */
   results: CheckResult[];
   /**
@@ -33,6 +35,7 @@ interface MonitorDetailHistoryProps {
 const FAILURE_LIMIT = 15;
 
 export default function MonitorDetailHistory({
+  monitorId,
   results,
   analytics,
   slaTarget,
@@ -144,7 +147,6 @@ export default function MonitorDetailHistory({
             {recentFailures.map(({ run, truncated }) => {
               const failure = run.latest;
               const span = describeRun(run, { truncated });
-              const capture = failureResponseOf(failure);
               return (
                 <li key={failure.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5">
                   <span
@@ -181,7 +183,7 @@ export default function MonitorDetailHistory({
                   {span.duration && (
                     <span className="ml-auto shrink-0 text-xs tabular-nums text-slate-500">{span.duration}</span>
                   )}
-                  {capture && <FailureResponse capture={capture} />}
+                  {hasFailureResponse(failure) && <FailureResponse monitorId={monitorId} result={failure} />}
                 </li>
               );
             })}

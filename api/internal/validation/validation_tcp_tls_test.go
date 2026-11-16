@@ -17,6 +17,8 @@ func TestValidateMonitor_TCPCertificateFields(t *testing.T) {
 		{config: `{"host":"imap.example.com","port":993,"tls_min_days_valid":14}`, errContains: "tls_min_days_valid requires use_tls"},
 		{config: `{"host":"imap.example.com","port":993,"use_tls":true,"tls_min_days_valid":-1}`, errContains: "tls_min_days_valid must be 0 or greater"},
 		{config: `{"host":"10.0.0.5","port":993,"use_tls":true,"tls_server_name":"bad name"}`, errContains: "tls_server_name must be a valid hostname or IP address"},
+		{config: `{"host":"10.0.0.5","port":993,"use_tls":true,"tls_ca_pem":"nope"}`, errContains: "tls_ca_pem must be valid PEM encoded certificates"},
+		{config: `{"host":"10.0.0.5","port":993,"tls_ca_pem":"nope"}`, errContains: "tls_ca_pem requires use_tls"},
 	}
 	for _, tt := range tests {
 		err := ValidateMonitor(&models.CreateMonitorRequest{

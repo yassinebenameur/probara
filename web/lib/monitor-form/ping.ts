@@ -1,14 +1,14 @@
 import type { PingMonitorConfig } from '../types';
 
 // The ping monitor's echo settings in MonitorForm's state: text fields, empty
-// meaning "absent" so the server's defaults apply (3 echoes a second apart,
+// meaning "absent" so the server's defaults apply (3 echoes 250 ms apart,
 // failing only when every echo is lost). The bounds mirror Go
 // models.PingMonitorConfig.Validate; the API also checks that the echoes fit
 // the timeout.
 
 export const PING_DEFAULT_COUNT = 3;
 export const PING_MAX_COUNT = 10;
-export const PING_DEFAULT_INTERVAL_MS = 1000;
+export const PING_DEFAULT_INTERVAL_MS = 250;
 export const PING_MIN_INTERVAL_MS = 200;
 export const PING_MAX_INTERVAL_MS = 10000;
 

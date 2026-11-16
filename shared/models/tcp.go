@@ -1,6 +1,7 @@
 package models
 
 import (
+	"crypto/x509"
 	"fmt"
 	"net"
 	"strings"
@@ -21,6 +22,9 @@ type TCPMonitorConfig struct {
 	TLSMinDaysValid *int `json:"tls_min_days_valid,omitempty"`
 	// TLSServerName overrides the SNI and verification name (default: host).
 	TLSServerName *string `json:"tls_server_name,omitempty"`
+	// TLSCAPem adds PEM-encoded CA certificates to the system trust store
+	// (a private CA), as HTTP's tls_ca_pem: public material, not a secret.
+	TLSCAPem *string `json:"tls_ca_pem,omitempty"`
 }
 
 // TLSEnabled reports whether the check completes a TLS handshake.
@@ -75,5 +79,29 @@ func (c TCPMonitorConfig) Validate() error {
 			return fmt.Errorf("tls_server_name must be a valid hostname or IP address")
 		}
 	}
+	if c.TLSCAPem != nil && strings.TrimSpace(*c.TLSCAPem) != "" {
+		if !c.TLSEnabled() {
+			return fmt.Errorf("tls_ca_pem requires use_tls")
+		}
+		if !x509.NewCertPool().AppendCertsFromPEM([]byte(*c.TLSCAPem)) {
+			return fmt.Errorf("tls_ca_pem must be valid PEM encoded certificates")
+		}
+	}
 	return nil
+}
+
+// RootCAs is the trust store the handshake verifies against: nil (the
+// system store) without tls_ca_pem, else the system store plus those CAs.
+func (c TCPMonitorConfig) RootCAs() (*x509.CertPool, error) {
+	if c.TLSCAPem == nil || strings.TrimSpace(*c.TLSCAPem) == "" {
+		return nil, nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM([]byte(*c.TLSCAPem)) {
+		return nil, fmt.Errorf("tls_ca_pem: failed to parse PEM")
+	}
+	return pool, nil
 }

@@ -41,6 +41,7 @@ import TableSkeleton from '@/components/ui/TableSkeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import TypeBadge from '@/components/ui/TypeBadge';
 import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
+import { commonName, tlsExpiryCertificate } from '@/lib/tls-cert';
 
 /** What the feed needs to know about an alert's monitor (from the monitors list). */
 export interface FeedMonitor {
@@ -145,7 +146,10 @@ function kindDetail(alert: Alert): string | null {
     }`;
   }
   if (alert.kind === 'tls_expiry' && alert.metric_value != null) {
-    return `expires in ${Math.round(alert.metric_value)}d${
+    // An intermediate that expires first is named, as the notification does.
+    const cert = tlsExpiryCertificate(alert.last_error);
+    const which = cert?.intermediate ? `intermediate ${commonName(cert.subject) || 'certificate'} ` : '';
+    return `${which}expires in ${Math.round(alert.metric_value)}d${
       alert.threshold_value != null ? ` (threshold ${Math.round(alert.threshold_value)}d)` : ''
     }`;
   }

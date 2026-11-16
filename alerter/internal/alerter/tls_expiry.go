@@ -243,24 +243,15 @@ func (a *Alerter) openTLSExpiryAlert(ctx context.Context, c tlsExpiryConfig, cer
 
 // tlsExpiryMessage is the alert's last_error, which every notification and
 // the alerts page print: which certificate of the chain expires, and when.
-// The subject is the server's own text (certificate fields), never a URL
-// or secret.
+// It is also how present learns whether the certificate is an intermediate
+// (notifications.TLSExpiryCertificate reads it back), so it goes through the
+// shared formatter.
 func tlsExpiryMessage(cert certExpiry, minDays int) string {
-	which := "certificate"
-	if !cert.leaf {
-		which = "intermediate certificate"
-	}
-	if cert.subject != "" {
-		which += " " + cert.subject
-	}
-	when := ""
-	if !cert.notAfter.IsZero() {
-		when = " on " + cert.notAfter.UTC().Format("2006-01-02")
-	}
-	if cert.days < 0 {
-		return fmt.Sprintf("tls: %s expired%s (%dd ago, threshold %dd)", which, when, -cert.days, minDays)
-	}
-	return fmt.Sprintf("tls: %s expires%s (in %dd, < %dd)", which, when, cert.days, minDays)
+	return notifications.FormatTLSExpiryError(notifications.TLSExpiryCertificate{
+		Subject:      cert.subject,
+		Intermediate: !cert.leaf,
+		NotAfter:     cert.notAfter,
+	}, cert.days, minDays)
 }
 
 // resolveClearedTLSExpiryAlert resolves the open tls_expiry alert of a monitor

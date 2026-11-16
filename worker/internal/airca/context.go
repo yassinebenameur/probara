@@ -393,10 +393,12 @@ const classifiedErrorPattern = "no such host|dns lookup|dns resolution|dns error
 // loadWindowChecks reads only result_source='monitor' rows (S-E1,
 // docs/state-semantics.md): platform rows record that a job expired before any
 // worker observed the target, so counting them would report scheduler or
-// queue trouble as target failures.
+// queue trouble as target failures. A failed HTTP check's captured response
+// is dropped from metrics_data before it leaves Postgres: evidence reads only
+// timings and the certificate, never bodies.
 func loadWindowChecks(ctx context.Context, dbc *db.Client, tenantID, monitorID uuid.UUID, start, end time.Time) ([]ai.CheckContext, int, int, sql.NullTime, error) {
 	rows, err := dbc.QueryContext(ctx, `SELECT cr.status,cr.http_status,cr.latency_ms,LEFT(COALESCE(cr.error_message,''),4096),
- CASE WHEN octet_length(cr.metrics_data::text)<=65536 THEN cr.metrics_data ELSE NULL END,cr.created_at,COUNT(*) OVER(),
+ CASE WHEN octet_length(cr.metrics_data::text)<=65536 THEN cr.metrics_data #- '{http,failure_response}' ELSE NULL END,cr.created_at,COUNT(*) OVER(),
  COUNT(*) FILTER(WHERE cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $6)) OVER(),
  MIN(cr.created_at) FILTER(WHERE cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $6)) OVER()
  FROM check_results cr JOIN monitors m ON m.id=cr.monitor_id AND m.tenant_id=$1

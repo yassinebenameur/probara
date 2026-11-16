@@ -68,6 +68,43 @@ func (h *Handlers) GetMonitorResults(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, results)
 }
 
+// GetMonitorResult handles GET /monitors/{id}/results/{resultId}: one check
+// result whole, with the failed-response capture the list reads omit.
+func (h *Handlers) GetMonitorResult(w http.ResponseWriter, r *http.Request) {
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
+		return
+	}
+	monitorID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		apierrors.WriteValidationError(w, "invalid monitor ID")
+		return
+	}
+	resultID, err := uuid.Parse(chi.URLParam(r, "resultId"))
+	if err != nil {
+		apierrors.WriteValidationError(w, "invalid result ID")
+		return
+	}
+	result, err := h.resultService.GetMonitorResult(r.Context(), tenantUUID, monitorID, resultID)
+	if err != nil {
+		switch {
+		case errors.Is(err, monitorservice.ErrMonitorNotFound):
+			apierrors.WriteNotFoundError(w, "monitor not found")
+		case errors.Is(err, resultservice.ErrResultNotFound):
+			apierrors.WriteNotFoundError(w, "check result not found")
+		default:
+			h.logger.WithFields(map[string]interface{}{
+				"error":      err.Error(),
+				"tenant_id":  tenantUUID.String(),
+				"monitor_id": monitorID,
+			}).Error("Failed to get monitor result")
+			apierrors.WriteInternalError(w, "failed to get monitor result")
+		}
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
+}
+
 // GetMonitorResultsBatch handles GET /api/v1/monitors/results/batch: the
 // newest ?limit= (default 20, max 100) results for each of up to 100
 // monitors, named by ?ids= (comma-separated, repeatable). It is a GET so

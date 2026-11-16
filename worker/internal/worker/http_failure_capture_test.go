@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -331,5 +333,29 @@ func TestHTTPFailureCaptureReadCapEndsInSecret(t *testing.T) {
 	// A body that was read whole keeps its tail: nothing more could follow.
 	if capture := captureFailureResponse(resp, []byte("error: Cust"), false, config); capture.BodyExcerpt != "error: Cust" || capture.BodyTruncated {
 		t.Errorf("whole body: excerpt = %q truncated=%v", capture.BodyExcerpt, capture.BodyTruncated)
+	}
+}
+
+// A body the transport did not decode (the monitor asked for gzip itself) is
+// compressed bytes redaction cannot see into: described, never stored. One
+// the transport decoded is text as usual.
+func TestHTTPFailureCaptureEncodedBody(t *testing.T) {
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"error":"down","token":"secret-123456"}`))
+	_ = zw.Close()
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(500)
+		_, _ = w.Write(gz.Bytes())
+	}
+	_, capture := runCaptureCheck(t, handler, map[string]any{"headers": map[string]string{"Accept-Encoding": "gzip"}})
+	if capture == nil || capture.BodyExcerpt != "" || capture.BodyNote != fmt.Sprintf("encoded body not stored (gzip, %d bytes)", gz.Len()) {
+		t.Fatalf("monitor-requested gzip: capture = %+v", capture)
+	}
+	_, capture = runCaptureCheck(t, handler, map[string]any{})
+	if capture == nil || capture.BodyNote != "" || capture.BodyExcerpt != `{"error":"down","token":"[REDACTED]"}` {
+		t.Fatalf("transport-decoded gzip: capture = %+v", capture)
 	}
 }

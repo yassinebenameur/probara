@@ -4,6 +4,7 @@
 // ("5 alerts triggered") whose text comes from summarizeAlertBurst.
 
 import { formatAlertValue, formatSeriesLabel } from './metrics';
+import { tlsExpiryCondition } from './tls-cert';
 import type { Alert, AlertStreamEventType } from './types';
 
 export type AlertToastType = 'error' | 'warning' | 'success' | 'info';
@@ -43,9 +44,7 @@ export function alertCondition(alert: Alert): string {
       return `${label} is over its threshold`;
     }
     case 'tls_expiry':
-      return alert.metric_value != null
-        ? `certificate expires in ${Math.max(0, Math.round(alert.metric_value))}d`
-        : 'certificate is about to expire';
+      return tlsExpiryCondition(alert.last_error, alert.metric_value);
     case 'domain_expiry':
       if (alert.metric_value != null && alert.metric_value < 0) return 'domain registration has expired';
       return alert.metric_value != null
