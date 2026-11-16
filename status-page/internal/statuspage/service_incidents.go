@@ -10,22 +10,27 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+
+	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
-// loadMaintenanceWindows returns active and upcoming (next 14 days) maintenance
-// windows that affect at least one monitor on this status page, directly or via
-// a targeted group. Affected monitor names are page-scoped.
+// loadMaintenanceWindows returns the maintenance windows with an occurrence
+// in progress or starting in the next 14 days that covers at least one
+// monitor on this status page, directly or via a targeted group. Coverage is
+// the shared occurrence fragment (S-M5), never the window's own times. Each
+// window is listed once, at its earliest such occurrence; a repeating window
+// also carries the starts of up to maxListedNextStarts later ones. Affected
+// monitor names are page-scoped.
 func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageMaintenanceWindow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT mw.title, mw.description, mw.starts_at, mw.ends_at,
-			NOW() >= mw.starts_at AS is_active,
+		SELECT mw.id, mw.title, mw.description, mo.occurrence_starts_at, MAX(mo.ends_at),
+			NOW() >= mo.occurrence_starts_at AS is_active,
+			mw.recurrence_weekdays IS NOT NULL AS repeating,
 			array_agg(DISTINCT pm.name) AS affected
-		FROM maintenance_windows mw
-		JOIN maintenance_window_monitors mwm ON mwm.maintenance_window_id = mw.id
-		JOIN monitors pm ON pm.tenant_id = mw.tenant_id AND pm.deleted_at IS NULL
-			AND (pm.id = mwm.monitor_id
-				OR pm.id IN (SELECT mg.monitor_id FROM monitor_groups mg WHERE mg.group_id = mwm.monitor_id))
-		WHERE mw.tenant_id = $2
+		FROM monitors pm
+		CROSS JOIN LATERAL `+maintenance.OccurrenceRangesSQL("$2", "pm.id", "NOW()", "NOW() + INTERVAL '14 days'")+` mo
+		JOIN maintenance_windows mw ON mw.id = mo.window_id AND mw.tenant_id = $2
+		WHERE pm.tenant_id = $2 AND pm.deleted_at IS NULL
 		  AND pm.id IN (
 			SELECT spsm.monitor_id
 			FROM status_page_section_monitors spsm
@@ -34,10 +39,8 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 			UNION
 			SELECT spm.monitor_id FROM status_page_monitors spm WHERE spm.status_page_id = $1
 		  )
-		  AND mw.ends_at > NOW()
-		  AND mw.starts_at < NOW() + INTERVAL '14 days'
-		GROUP BY mw.id
-		ORDER BY mw.starts_at
+		GROUP BY mw.id, mo.occurrence_starts_at
+		ORDER BY mo.occurrence_starts_at, mw.id
 	`, statusPageID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("query maintenance windows: %w", err)
@@ -45,13 +48,23 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 	defer rows.Close()
 
 	windows := make([]StatusPageMaintenanceWindow, 0)
+	index := map[uuid.UUID]int{}
 	for rows.Next() {
+		var id uuid.UUID
 		var w StatusPageMaintenanceWindow
 		var affected []string
-		if err := rows.Scan(&w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, pq.Array(&affected)); err != nil {
+		if err := rows.Scan(&id, &w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, &w.Repeating, pq.Array(&affected)); err != nil {
 			return nil, fmt.Errorf("scan maintenance window: %w", err)
 		}
+		if i, seen := index[id]; seen {
+			// A later occurrence of a window already listed.
+			if len(windows[i].NextStartsAt) < maxListedNextStarts {
+				windows[i].NextStartsAt = append(windows[i].NextStartsAt, w.StartsAt)
+			}
+			continue
+		}
 		w.AffectedMonitors = affected
+		index[id] = len(windows)
 		windows = append(windows, w)
 	}
 	if err := rows.Err(); err != nil {
@@ -59,6 +72,9 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 	}
 	return windows, nil
 }
+
+// maxListedNextStarts caps the later starts a repeating window lists.
+const maxListedNextStarts = 3
 
 func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {
 	rows, err := s.db.QueryContext(ctx, `

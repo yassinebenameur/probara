@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -320,6 +321,8 @@ type kumaMonitor struct {
 	Hostname   string  `json:"hostname"`
 	Port       kumaInt `json:"port"`
 	PacketSize kumaInt `json:"packetSize"`
+	// PingCount is Kuma 2's echoes per check (ping_count, default 1).
+	PingCount kumaInt `json:"ping_count"`
 
 	// dns
 	DNSResolveServer string `json:"dns_resolve_server"`
@@ -770,9 +773,19 @@ func kumaPingConfig(monitor kumaMonitor) (map[string]interface{}, []string, stri
 	}
 	var warnings []string
 	if size := int(monitor.PacketSize); size > 0 && size != kumaDefaultPacketSize {
-		warnings = append(warnings, fmt.Sprintf("the custom ICMP packet size (%d bytes) was dropped - Probara's ping check is not tunable", size))
+		warnings = append(warnings, fmt.Sprintf("the custom ICMP packet size (%d bytes) was dropped - Probara's ping check sends a fixed packet size", size))
 	}
-	return map[string]interface{}{"host": host}, warnings, ""
+	config := map[string]interface{}{"host": host}
+	// Kuma's default of one echo maps to Probara's own default (three); a
+	// count the operator raised is kept, within Probara's bound.
+	if n := int(monitor.PingCount); n > 1 {
+		if n > sharedmodels.PingMaxCount {
+			warnings = append(warnings, fmt.Sprintf("the ping count of %d was lowered to %d, Probara's maximum", n, sharedmodels.PingMaxCount))
+			n = sharedmodels.PingMaxCount
+		}
+		config["count"] = n
+	}
+	return config, warnings, ""
 }
 
 func kumaDNSConfig(monitor kumaMonitor) (map[string]interface{}, []string, string) {

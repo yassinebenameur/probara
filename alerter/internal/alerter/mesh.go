@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
@@ -193,14 +194,13 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 }
 
 // resolveTenantDefaultChannels returns the tenant's default channel routing —
-// the only routing a monitor-less mesh alert can use.
+// the only routing a monitor-less alert (mesh edge, location_offline) can use.
 func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uuid.UUID) ([]channelTarget, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, tdc.delay_seconds
-		FROM tenant_default_channels tdc
-		JOIN alert_channels ac ON ac.id = tdc.channel_id
-		WHERE tdc.tenant_id = $1
-		ORDER BY tdc.position, ac.id
+		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, rt.delay_seconds
+		FROM (`+alertrouting.TenantTargetsSQL()+`) rt
+		JOIN alert_channels ac ON ac.id = rt.channel_id
+		ORDER BY rt.pos, ac.id
 	`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve tenant default channels: %w", err)
@@ -223,13 +223,19 @@ func (a *Alerter) resolveTenantDefaultChannels(ctx context.Context, tenantID uui
 }
 
 // dispatchOpenMeshAlerts fires due escalation tiers and reminders for open
-// mesh alerts, mirroring dispatchOpenAlerts' delay/reminder contract.
+// mesh alerts, mirroring dispatchOpenAlerts' delay/reminder contract,
+// including the acknowledge/snooze mute and the clocks it restarts. An edge
+// with a location that stopped reporting stays open but quiet
+// (alertrouting.SuppressedByOfflineLocationPredicate): that location's one
+// location_offline alert speaks for every path it breaks.
 func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.source_location_id, al.target_location_id,
 			COALESCE(sl.name, 'unknown'), COALESCE(tl.name, 'unknown'),
 			al.triggered_at, al.failure_count, al.last_error,
-			te.alert_reminder_seconds
+			te.alert_reminder_seconds,
+			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
+			`+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
 		FROM alerts al
 		JOIN tenants te ON te.id = al.tenant_id
 		LEFT JOIN locations sl ON sl.id = al.source_location_id
@@ -240,6 +246,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 		WHERE al.kind = 'mesh_edge'
 		  AND al.status IN ('active', 'acknowledged')
 		  AND ms.current_state = 'down'
+		  AND NOT `+alertrouting.SuppressedByOfflineLocationPredicate("al")+`
 	`)
 	if err != nil {
 		return fmt.Errorf("query open mesh alerts: %w", err)
@@ -249,15 +256,19 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 	type openMeshAlert struct {
 		edge            meshEdgeSubject
 		reminderSeconds int
+		eligibleSince   time.Time
+		gate            dispatchGate
 	}
 	var open []openMeshAlert
 	for rows.Next() {
 		var oa openMeshAlert
+		var resumedAt sql.NullTime
 		if err := rows.Scan(&oa.edge.alertID, &oa.edge.tenantID, &oa.edge.sourceID, &oa.edge.targetID,
 			&oa.edge.sourceName, &oa.edge.targetName, &oa.edge.triggeredAt, &oa.edge.failCount,
-			&oa.edge.lastError, &oa.reminderSeconds); err != nil {
+			&oa.edge.lastError, &oa.reminderSeconds, &oa.eligibleSince, &oa.gate.Muted, &resumedAt); err != nil {
 			return fmt.Errorf("scan open mesh alert: %w", err)
 		}
+		oa.gate.ResumedAt = resumedAt.Time
 		open = append(open, oa)
 	}
 	if err := rows.Err(); err != nil {
@@ -279,7 +290,9 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 
 		record := oa.edge.record(oa.edge.triggeredAt)
 		binding := oa.edge.binding()
-		alertAge := now.Sub(oa.edge.triggeredAt)
+		// Mesh alerts carry no root cause, so this is triggered_at until an
+		// unacknowledge or a snooze end restarts it.
+		alertAge := now.Sub(oa.eligibleSince)
 		reminderInterval := time.Duration(oa.reminderSeconds) * time.Second
 
 		for _, target := range targets {
@@ -287,7 +300,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 				continue
 			}
 			state := getNotificationState(states, oa.edge.alertID, target.channel.ID)
-			if event := openAlertEventDue(state, alertAge, target.delay, now, reminderInterval); event != "" {
+			if event := openAlertEventDue(state, alertAge, target.delay, now, reminderInterval, oa.gate); event != "" {
 				a.fireChannel(ctx, event, binding, &record, target.channel, now, reminderInterval)
 			}
 		}

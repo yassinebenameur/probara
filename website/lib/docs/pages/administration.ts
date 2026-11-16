@@ -364,7 +364,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Bulk alert triage (`POST /alerts/bulk/acknowledge` and `/resolve`) records one `alert.acknowledge` or `alert.resolve` event per requested alert (resource `alert/{id}`), shaped like the single action's, with `details.bulk: true`. An alert the batch skipped records as `failure` (HTTP 404, as the single action would answer) with `details.reason`. These per-alert events are written before the response, so they are not subject to the recorder's buffer, and they replace the usual request-level event; a refused or invalid bulk request (403, 400) records one request-level event as any other write does.",
+            "Bulk alert triage (`POST /alerts/bulk/acknowledge`, `/resolve`, `/unacknowledge`, `/snooze` and `/unsnooze`) records one `alert.acknowledge`, `alert.resolve`, `alert.unacknowledge`, `alert.snooze` or `alert.unsnooze` event per requested alert (resource `alert/{id}`), shaped like the single action's, with `details.bulk: true`. An alert the batch skipped records as `failure` (HTTP 404, as the single action would answer) with `details.reason`. These per-alert events are written before the response, so they are not subject to the recorder's buffer, and they replace the usual request-level event; a refused or invalid bulk request (403, 400) records one request-level event as any other write does.",
         },
         {
           type: "paragraph",

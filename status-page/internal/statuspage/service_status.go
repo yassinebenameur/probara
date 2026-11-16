@@ -22,20 +22,22 @@ type CurrentStatus struct {
 	TLSNotAfter        string
 }
 
-// applyCertificate copies the certificate a check recorded in its
-// metrics_data (an HTTPS or SIP-over-TLS check's) onto the status. The
-// location is shared/tlscert's, the same one the alerter's tls_expiry
-// evaluation reads, so the page and the alert never disagree on it.
+// applyCertificate copies the certificate expiry a check recorded in its
+// metrics_data (an HTTPS, SIP-over-TLS or TLS-wrapped TCP check's) onto the
+// status. The location and the expiry rule (the chain's earliest,
+// tlscert.Expiry) are shared/tlscert's, the same ones the alerter's
+// tls_expiry evaluation reads, so the page and the alert never disagree.
 func (cs *CurrentStatus) applyCertificate(metricsJSON []byte) {
 	info := tlscert.Extract(metricsJSON)
 	if info == nil {
 		return
 	}
-	if info.DaysUntilExpiry != nil {
-		cs.TLSDaysUntilExpiry = info.DaysUntilExpiry
+	notAfter, days, _ := info.Expiry()
+	if days != nil {
+		cs.TLSDaysUntilExpiry = days
 	}
-	if info.NotAfter != "" {
-		cs.TLSNotAfter = info.NotAfter
+	if notAfter != "" {
+		cs.TLSNotAfter = notAfter
 	}
 }
 

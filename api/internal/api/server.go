@@ -372,9 +372,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			mountRetiredAlertPolicyRoutes(r)
 
 			// Alert channels
-			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor)
+			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor).WithLogger(log)
 			alertChannelHandlers := alertchannelhandlers.NewHandlers(alertChannelService, log)
 			mountAlertChannelRoutes(r, alertChannelHandlers)
+			mountDeliveryRoutes(r, dbClient, log) // notification delivery history (routes_deliveries.go)
 
 			// Notification settings (workspace default routing, reminders, auto-incident)
 			notificationSettingsSvc := notificationsettingsservice.NewService(dbClient)

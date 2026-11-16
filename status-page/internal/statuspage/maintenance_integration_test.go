@@ -24,6 +24,7 @@ func insertTestMaintenanceWindow(ctx context.Context, t *testing.T, db *shareddb
 	`, windowID, tenantID, title, startsAt, endsAt); err != nil {
 		t.Fatalf("insert maintenance window: %v", err)
 	}
+	testutil.MaterializeOneOffMaintenance(ctx, t, db, windowID)
 	for _, monitorID := range monitorIDs {
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id)

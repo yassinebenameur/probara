@@ -256,6 +256,11 @@ make healthcheck`,
               "Any `sip_linger_dropped_total` growth: every linger slot (32 per worker) was taken, so a late or forked answer to that call was neither ACKed nor BYE'd and may stay up, and billed, until the far end times it out. Sustained `late_answer` means the far end answers after the check gave up. `late_bye_ok` and `late_bye_unconfirmed` count the second BYE a linger sends when a call's hang-up BYE drew no response: `late_bye_ok` means the far end confirmed it (a 2xx, or 481 for a dialog it had already ended), and `late_bye_unconfirmed` means it went unanswered again or was refused, so the call may still be up, and billed, until the far end times it out; it outranks a late answer in the same linger. `test_check_side_effect_rejected_total` counts `Test` calls a worker refused because 16 were already running on it; scheduled checks are not affected. `sip_call_teardown_unconfirmed_total{evidence=audio_after_bye}` counts unconfirmed hang-ups after which the far end kept sending audio: those calls are likely still up and billed. For [call quality](/docs/monitors/#network-protocols), `sip_media_refused_total` by reason shows far ends whose media address the worker policy refuses (`private_behind_public` growth usually means a carrier leaks private SDP addresses, or `HTTP_ALLOWED_CIDRS` lacks an on-premises range); `sip_media_rx_dropped_total{reason=foreign}` growth means audio arriving from addresses the SDP did not name (asymmetric media); and any sustained `sip_media_unreliable_total` means the worker is too loaded to time media, so its quality thresholds are skipped: give it CPU or fewer concurrent checks.",
             ],
             [
+              'Alerter locations',
+              '`probara_alerter_locations{state=online|offline|never_seen|disabled}`, `probara_alerter_location_offline_guard{reason=fleet_silent|startup}`, `probara_alerter_location_offline_guard_limit_seconds{reason}`',
+              'Offline count rising: locations past the 180-second rule. Not every one has an alert: locations silent for more than 7 days and locations held by the guard do not. `fleet_silent` at 1 means several locations went quiet together, so check NATS and the scheduler before the hold ends (`guard_limit_seconds`, 15 minutes after the newest heartbeat). Platform-wide counts; per-workspace detail is on the Locations page.',
+            ],
+            [
               'Status live updates',
               '`probara_status_page_sse_subscriber_connected`',
               'Zero when low-latency status invalidation is expected.',
@@ -334,6 +339,13 @@ go run ./cmd/migrate`,
           type: 'paragraph',
           text:
             'The migration CLI requires `POSTGRES_URL`, defaults `MIGRATIONS_PATH` to `./migrations`, and retries the initial database connection up to 30 times at one-second intervals. API startup also runs the shared migration set. The [Helm migration Job](/docs/deployment/#migrations-upgrades) is a post-install/post-upgrade hook.',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading to offline-location alerts',
+          text:
+            'Migration 000103 rewrites the `alerts` subject constraint and builds an index on it, which scans and locks the `alerts` table while it runs (quick at typical sizes; plan a quiet moment for a very large alert history). 000104 adds `locations.enabled_at`. During a mixed-version rollout, an alerter replica still on the previous version sends the resolve notices of `location_offline` alerts without the location\'s name and still pages mesh paths that the new version holds for an offline location; finish the rollout of every alerter replica.',
         },
         {
           type: 'code',
@@ -427,6 +439,11 @@ make db-restore`,
               term: 'AI training labels',
               description:
                 'Operator labels on AI analyses, alert triages and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',
+            },
+            {
+              term: 'Notification delivery history',
+              description:
+                'Every alert notification attempt ([delivery history](/docs/alerting/#delivery-history)) is kept 90 days for every tenant, whatever `data_retention_days` says (`0` included), and is deleted earlier with its alert, channel or workspace. The daily tenant cleanup prunes it within the same batch and per-run limits; its backlog shows as `store="alert_notification_deliveries"` on `retention_cleanup_backlogged_tenants` and `retention_cleanup_oldest_expired_timestamp_seconds`.',
             },
             {
               term: 'Audit retention',

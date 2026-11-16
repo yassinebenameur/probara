@@ -34,6 +34,7 @@ const (
 	MonitorTypeTCP              = sharedmodels.MonitorTypeTCP
 	MonitorTypeMySQL            = sharedmodels.MonitorTypeMySQL
 	MonitorTypeWebSocket        = sharedmodels.MonitorTypeWebSocket
+	MonitorTypeDomain           = sharedmodels.MonitorTypeDomain
 )
 
 // MonitorChannelAssignment is one channel in a monitor's custom routing list.

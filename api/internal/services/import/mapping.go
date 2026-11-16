@@ -260,6 +260,11 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		// WebSocket aliases
 		"ws":  "websocket",
 		"wss": "websocket",
+		// Domain registration expiry aliases
+		"whois":         "domain",
+		"rdap":          "domain",
+		"domain_expiry": "domain",
+		"domain-expiry": "domain",
 	}
 
 	for _, row := range rows {

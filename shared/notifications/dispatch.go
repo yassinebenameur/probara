@@ -26,8 +26,10 @@ type DispatchEnvelope struct {
 	// AlertID + EventType (with ChannelID) form the idempotency key that rides
 	// along to receivers. Deduplication itself happens before publish: the
 	// alerter claims the (alert, channel, event) slot in
-	// alert_notification_states atomically. Publishing also sets Nats-Msg-Id
-	// for broker deduplication if a process dies before committing its claim.
+	// alert_notification_states atomically. The Nats-Msg-Id is the key plus
+	// the claimed occurrence (the alerter's dispatchRound), the same when a
+	// claim that never committed is retried, so the broker collapses that
+	// duplicate, and different for a legitimate second send of the event.
 	// External delivery is at least once: receivers should honor the key.
 	AlertID   string `json:"alert_id"`
 	EventType string `json:"event_type"`
@@ -60,22 +62,14 @@ func (e DispatchEnvelope) RecipientKey() string {
 // does not.
 //
 // The key names one send, not one event type: a deliberate second send of an
-// event needs a key of its own (see OvertakenAckKey), or a plugin skips every
-// recipient the first send already reached and the re-send goes nowhere.
+// event needs a key of its own, or a plugin skips every recipient the first
+// send already reached and the re-send goes nowhere.
 func RecipientEventKey(eventType string, round time.Time) string {
 	if eventType == "reminder" && !round.IsZero() {
 		return "reminder:" + round.UTC().Format(time.RFC3339Nano)
 	}
 	return eventType
 }
-
-// OvertakenAckKey is the ledger key of the acknowledgement the delivery
-// worker re-sends after a trigger that the original acknowledgement overtook.
-// The original went out under "acknowledged" and was a no-op at the provider,
-// so the re-send must not inherit its progress; the key is still stable across
-// redeliveries of the one trigger message that fires it (created happens once
-// per alert and channel).
-const OvertakenAckKey = "acknowledged:after-trigger"
 
 // IdempotencyKey returns the deterministic key the alerter sets as the
 // x-idempotency-key NATS header and webhook plugins forward as

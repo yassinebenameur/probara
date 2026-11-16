@@ -31,10 +31,13 @@ import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
 import PrometheusForm from './PrometheusForm';
+import DomainForm from './DomainForm';
 import WebsocketForm from './WebsocketForm';
 import DatabaseForm from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow, sectionsWithErrors } from './HttpMonitorForm';
 import DnsEditor from './DnsEditor';
+import PingEditor from './PingEditor';
+import { PING_DEFAULT_COUNT } from '@/lib/monitor-form/ping';
 import SyntheticApiEditor from './SyntheticApiEditor';
 import SyntheticBrowserEditor, { useSyntheticBrowserSetup } from './SyntheticBrowserEditor';
 import { SyntheticLiveTestPanel, useSyntheticEditorMode } from './synthetic-kit';
@@ -79,6 +82,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   typeMeta('grpc', { description: 'gRPC health checks', category: 'Network', namePlaceholder: 'My gRPC service' }),
   typeMeta('tcp', { description: 'Connect to a host and port', category: 'Network', namePlaceholder: 'Postgres port reachability' }),
   typeMeta('sip', { description: 'OPTIONS, REGISTER, test calls', category: 'Network', namePlaceholder: 'My SIP server' }),
+  typeMeta('domain', { description: 'Registration expiry via RDAP/WHOIS', category: 'Network', namePlaceholder: 'example.com registration' }),
   typeMeta('postgres', { description: 'Connect, auth and query', category: 'Databases & brokers', namePlaceholder: 'Postgres production' }),
   typeMeta('mysql', { description: 'Connect, auth and query', category: 'Databases & brokers', namePlaceholder: 'MySQL production' }),
   typeMeta('redis', { description: 'Connect and PING latency', category: 'Databases & brokers', namePlaceholder: 'Redis cache' }),
@@ -107,6 +111,7 @@ const TYPE_FORMS: Partial<Record<MonitorType, ComponentType<MonitorFormProps>>> 
   prometheus: PrometheusForm,
   tcp: TcpForm,
   websocket: WebsocketForm,
+  domain: DomainForm,
 };
 
 const isDatabaseType = (type: MonitorType): type is DatabaseMonitorType => type in DB_TYPE_META;
@@ -282,8 +287,11 @@ export default function MonitorForm({
         }
         return [<PlanTarget key="t">{formData.method} {host}</PlanTarget>, `expects ${formData.status_rules.trim() || '2xx'}`];
       }
-      case 'ping':
-        return formData.host.trim() ? [<PlanTarget key="t">ping {formData.host.trim()}</PlanTarget>] : null;
+      case 'ping': {
+        if (!formData.host.trim()) return null;
+        const echoes = Number(formData.ping_count.trim()) || PING_DEFAULT_COUNT;
+        return [<PlanTarget key="t">ping {formData.host.trim()}</PlanTarget>, `${echoes} ${echoes === 1 ? 'echo' : 'echoes'}`];
+      }
       case 'dns':
         return formData.host.trim()
           ? [<PlanTarget key="t">{formData.dns_record_type} {formData.host.trim()}</PlanTarget>]
@@ -348,6 +356,8 @@ export default function MonitorForm({
           onToggleSection={(id, open) => setOpenSections((prev) => ({ ...prev, [id]: open }))}
         />
       )}
+
+      {monitorType === 'ping' && <PingEditor data={formData} onChange={patchForm} errors={errors} />}
 
       {monitorType === 'dns' && <DnsEditor data={formData} onChange={patchForm} />}
 

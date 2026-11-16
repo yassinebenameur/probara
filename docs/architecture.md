@@ -11,10 +11,10 @@ website (`website/`) are separate applications.
 | Component | Responsibilities | Data access |
 |---|---|---|
 | `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV), notification configuration, templates, locations, push and OTLP ingestion, Kubernetes discovery inventory and coverage; the MCP endpoint and its OAuth authorization server (tools re-dispatched through the REST router) | PostgreSQL and NATS |
-| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
+| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging; roll repeating maintenance occurrences forward to their horizon | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
-| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
+| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, domain expiry, mesh, and offline-location alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
 | `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
 | `ai-service/` | Local CPU inference (Python, FastAPI) for incident analysis, automatic alert triage and dependency suggestions: authenticated `/v1/decisions` returning probabilities over the closed choices in `shared/ai/catalogue.json`; bundled fine-tuned Laya head, offline | None: no PostgreSQL, NATS or egress. Called only by the API and the database-connected worker |
 | `cmd/discovery-collector` | Namespaced read-only Kubernetes inventory collection; complete snapshot uploads | Kubernetes API reads; HTTPS to Probara only |
@@ -23,7 +23,9 @@ website (`website/`) are separate applications.
 
 Worker checkers include HTTP, ping, DNS, TCP, gRPC, SIP (OPTIONS/REGISTER
 probes and INVITE test calls, the one side-effecting checker), synthetic
-API/browser, Redis, PostgreSQL, MongoDB, RabbitMQ, MySQL, and WebSocket checks.
+API/browser, Redis, PostgreSQL, MongoDB, RabbitMQ, MySQL, and WebSocket checks,
+and domain registration lookups (RDAP with a WHOIS fallback, `shared/domainexpiry`,
+whose server list ships embedded so private locations need no route to IANA).
 A test call with `call.media` also sends UDP RTP and RTCP during its hold to
 the address the far end's SDP answer chose, vetted by
 `netguard.Policy.AllowsServerChosen`; its measurement rides inside the
@@ -111,6 +113,45 @@ Routing comes from monitor overrides or workspace defaults; maintenance,
 group rollup, and dependency suppression determine which channels may fire.
 Escalation delays and reminders are tracked per alert/channel.
 
+An acknowledged or snoozed open alert is muted: it sends no reminder and no
+escalation page that had not fired yet. Its resolve, the `acknowledged` event
+to paging channels already paged and the `suspected_cause` follow-up still go
+out. The mute is defined once in `shared/alertrouting` (`mute.go`:
+`MutedPredicate`, `MuteHolds`, `DispatchResumedAtExpr`) and checked three
+times: the alerter's pre-filter (`openAlertEventDue`, lifecycle and mesh
+dispatch), its claim (`deliverNotification`, under the alert row's
+`FOR SHARE` lock), and the async worker (`eventSuperseded`, same lock), which
+drops a page or reminder queued before the ack or snooze and hands a page's
+claim back when it provably reached nobody: the worker writes a page attempt
+marker into the recipient ledger before the send and clears it only when the
+plugin's error proves nothing was accepted (`plugin.IsNotDelivered`). The
+dispatch message id is the idempotency key plus what identifies the claimed
+occurrence (`dispatchRound`: the alert's resume clock for a page, the round
+for a reminder, the acknowledgement time for an ack), so a publish whose
+claim rolled back is collapsed by JetStream on retry, while a re-page after
+an unacknowledge or snooze end gets a new id.
+Unacknowledge (`unacknowledged_at`) and the end of a snooze (`snoozed_until`,
+migration 000101) restart the escalation-delay and reminder clocks.
+`first_acknowledged_at` (migration 000102) keeps the first acknowledgement
+for SLA time to acknowledge; `snoozed_at` / `snoozed_by_user_id` record the
+running snooze for display.
+
+Monitor-less alerts route to the tenant defaults through
+`alertrouting.TenantTargetsSQL`: mesh edges, and `location_offline` (rule
+S-F6 in [state semantics](state-semantics.md)), one alert per check location
+that reported within 7 days and has sent no heartbeat for 180 seconds. The
+alerter reads `locations.last_seen_at`, which the scheduler's heartbeat
+consumer writes, so it holds the locations that went quiet together with the
+installation's newest heartbeat (that path or the database is at fault, not
+every site) for up to 15 minutes, and opens none after its own restart until
+a heartbeat lands later than its start. From the moment a location misses its
+one-minute connected window its mesh edges stay open but do not dispatch
+(`SuppressedByOfflineLocationPredicate`) while its alert is about to open or
+open; the location's alert is the page. The alerter exports the bounded
+gauges `probara_alerter_locations{state}`,
+`probara_alerter_location_offline_guard{reason}` and
+`probara_alerter_location_offline_guard_limit_seconds{reason}`.
+
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.
 An empty group's old availability alert is resolved; group timeline integration
@@ -132,6 +173,16 @@ claim, so a retry on any replica or worker reaches only the rest; the
 dispatch envelope's `delivery_key` names the event (and reminder round) those
 rows belong to.
 
+The notification delivery history, `alert_notification_deliveries`
+(migration 000107), has one writer package, `shared/notifications/deliverylog`,
+and three callers: the alerter's `deliverNotification` (synchronous sends; in
+the claim transaction when the claim commits, through the pool after it rolls
+back), the worker's notification consumer (every attempt and every event it
+drops; through the pool, except the muted drop that commits with its claim
+release), and the API's channel test send. Errors are sanitized and
+recipients masked before they are written. The API reads it per alert and per
+channel; the scheduler's retention cleanup deletes rows older than 90 days.
+
 Pages (created and reminder notifications) on chat, email, SMS and webhook
 channels carry a signed acknowledge link minted where they are sent (alerter,
 worker; API test sends never). Paging channels do not. It opens the operator UI's `/alert-action` page, which calls the
@@ -152,6 +203,15 @@ works in bounded batches; expired data remaining after a run keeps cleanup
 eligible for subsequent passes. Backlog gauges expose affected tenant counts
 and the oldest expired timestamp without scanning every expired row.
 
+Maintenance coverage is read from materialized occurrences
+(`maintenance_window_occurrences`) through `shared/maintenance`, never from a
+window's own times (state semantics S-M5). The API writes a window's
+occurrences up to a 35-day horizon in the transaction that saves it; the
+scheduler's hourly roll (`maintenance_occurrences.go`, under its own session
+advisory lock, locking each window row as API edits do) keeps every
+repeating window materialized that far ahead. Started occurrences are kept as
+history and never rewritten.
+
 Analytics choose raw, rollup, or interval-based calculations according to
 window coverage and the existing state semantics. Raw analytics stream
 results into accumulators; exact median/P95 calculations retain latency
@@ -162,7 +222,7 @@ Interval availability has one implementation, `IntegrateTimeline` in
 `shared/analytics/timeline.go`: the monitor headline and SLA reports both
 reduce its per-state seconds, so a one-monitor SLA and that monitor's
 headline agree. SLA reports are computed on request by the API from
-`monitor_state_intervals`, `maintenance_windows` and `alerts`; issuing one
+`monitor_state_intervals`, maintenance occurrences and `alerts`; issuing one
 freezes the report document in `sla_reports` (see
 [state semantics](state-semantics.md) S-U6/S-U7).
 
@@ -269,7 +329,7 @@ reads it in one place, the opt-in `dispatchSuspectedCauses` phase
 ready triage naming a catalogue cause at medium or high confidence that no
 operator corrected, sent through `deliverNotification` with a one-shot claim on
 `alert_notification_states.suspected_cause_sent_at`. It is muted by the same
-predicate as reminders, targets only plugins advertising `CapabilityFollowUp`
+predicate as reminders (not by acknowledgement or snooze), targets only plugins advertising `CapabilityFollowUp`
 (not PagerDuty or Opsgenie), runs last in the tick on its own time budget so
 the recovery sweep keeps its share, and stops under `LOCAL_AI_DISABLED=true` or
 `AI_TRIAGE_ENABLED=false`. The alerter reads the catalogue only and never calls

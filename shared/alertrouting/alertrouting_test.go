@@ -189,7 +189,8 @@ func TestDependencySuppressionFragments(t *testing.T) {
 	}
 
 	since := DispatchEligibleSinceExpr("al", "te")
-	for _, want := range []string{"GREATEST(al.triggered_at", "al.root_cause_cleared_at + make_interval(secs => te.dependency_suppression_grace_seconds)"} {
+	for _, want := range []string{"GREATEST(al.triggered_at", "al.root_cause_cleared_at + make_interval(secs => te.dependency_suppression_grace_seconds)",
+		"GREATEST(al.unacknowledged_at, al.snoozed_until)"} {
 		if !strings.Contains(since, want) {
 			t.Fatalf("DispatchEligibleSinceExpr missing %q:\n%s", want, since)
 		}
@@ -200,5 +201,26 @@ func TestDependencySuppressionFragments(t *testing.T) {
 		if !strings.Contains(impacted, want) {
 			t.Fatalf("ImpactedMonitorsSubquery missing %q:\n%s", want, impacted)
 		}
+	}
+}
+
+func TestOfflineLocationSuppressionFragment(t *testing.T) {
+	// It is dropped under NOT into the alerter's mesh dispatch and into the
+	// API's suppression CASE: it must name only the alias it is given, apply to
+	// mesh edges alone, read both endpoints, and hold from the connected
+	// window (S-F6) rather than the offline threshold.
+	pred := SuppressedByOfflineLocationPredicate("al")
+	for _, want := range []string{
+		"al.kind = 'mesh_edge'",
+		"sol.id IN (al.source_location_id, al.target_location_id)",
+		"make_interval(secs => 60)",
+		"sola.kind = 'location_offline'",
+	} {
+		if !strings.Contains(pred, want) {
+			t.Fatalf("SuppressedByOfflineLocationPredicate missing %q:\n%s", want, pred)
+		}
+	}
+	if tt := TenantTargetsSQL(); !strings.Contains(tt, "tdc.tenant_id = $1") || !strings.Contains(tt, "tdc.position AS pos") {
+		t.Fatalf("TenantTargetsSQL shape changed:\n%s", tt)
 	}
 }

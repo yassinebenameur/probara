@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/secrets"
@@ -29,6 +30,7 @@ var ErrAlertChannelNotFound = errors.New("alert channel not found")
 type Service struct {
 	db        *db.Client
 	encryptor secrets.Encryptor
+	logger    *logger.Logger
 }
 
 // NewService creates a new alert channel service.
@@ -37,6 +39,13 @@ func NewService(db *db.Client, encryptor secrets.Encryptor) *Service {
 		encryptor = secrets.NoOpEncryptor{}
 	}
 	return &Service{db: db, encryptor: encryptor}
+}
+
+// WithLogger sets where best-effort failures go (a test send the delivery
+// history could not record).
+func (s *Service) WithLogger(log *logger.Logger) *Service {
+	s.logger = log
+	return s
 }
 
 // CreateAlertChannel creates a new alert channel, encrypting secret fields
@@ -97,6 +106,7 @@ func (s *Service) GetAlertChannel(ctx context.Context, tenantID, channelID uuid.
 	if err := maskInPlace(channel); err != nil {
 		return nil, err
 	}
+	s.attachHealth(ctx, tenantID, channel)
 	return channel, nil
 }
 
@@ -165,6 +175,11 @@ func (s *Service) ListAlertChannels(ctx context.Context, tenantID uuid.UUID, pag
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating alert channels: %w", err)
 	}
+	listed := make([]*models.AlertChannel, len(items))
+	for i := range items {
+		listed[i] = &items[i]
+	}
+	s.attachHealth(ctx, tenantID, listed...)
 
 	return &models.AlertChannelListResponse{
 		Items:    items,
@@ -234,6 +249,7 @@ func (s *Service) UpdateAlertChannel(ctx context.Context, tenantID, channelID uu
 	if err := maskInPlace(&ch); err != nil {
 		return nil, err
 	}
+	s.attachHealth(ctx, tenantID, &ch)
 	return &ch, nil
 }
 
@@ -348,7 +364,8 @@ func (s *Service) TestAlertChannel(ctx context.Context, tenantID, channelID uuid
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	return p.Send(sendCtx, plugin.DispatchRequest{
+	started := time.Now()
+	err = p.Send(sendCtx, plugin.DispatchRequest{
 		Channel: plugin.ChannelRef{
 			ID:     channel.ID.String(),
 			Name:   channel.Name,
@@ -359,6 +376,11 @@ func (s *Service) TestAlertChannel(ctx context.Context, tenantID, channelID uuid
 		Attempt:   1,
 		Test:      true,
 	})
+	// Delivery history: test sends show on the channel, marked as tests.
+	if rerr := s.recordTestSend(ctx, channel.ID, manifest, cfgMap, started, err); rerr != nil && s.logger != nil {
+		s.logger.WithError(rerr).WithField("channel_id", channel.ID).Warn("Failed to record test notification delivery")
+	}
+	return err
 }
 
 // ErrInvalidConfig wraps a plugin's rejection of an updated channel config so

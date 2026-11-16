@@ -788,7 +788,7 @@ func (r *PostgresRepository) GetLocationIDsForMonitors(ctx context.Context, moni
 func (r *PostgresRepository) GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error) {
 	rows, err := r.conn(ctx).QueryContext(ctx, `
 		SELECT l.id, l.name,
-			l.last_seen_at IS NOT NULL AND l.last_seen_at > NOW() - INTERVAL '60 seconds',
+			l.last_seen_at IS NOT NULL AND l.last_seen_at > NOW() - make_interval(secs => $2),
 			COALESCE(mls.current_state, 'unknown'),
 			mls.last_latency_ms, mls.last_check_at
 		FROM monitor_locations ml
@@ -797,7 +797,7 @@ func (r *PostgresRepository) GetLocationStatuses(ctx context.Context, monitorID 
 			ON mls.monitor_id = ml.monitor_id AND mls.location_id = ml.location_id
 		WHERE ml.monitor_id = $1
 		ORDER BY l.name
-	`, monitorID)
+	`, monitorID, monitorstate.LocationConnectedWindow.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("failed to list location statuses: %w", err)
 	}

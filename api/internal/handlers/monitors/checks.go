@@ -107,6 +107,13 @@ func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteForbiddenError(w, "testing with saved credentials requires write permission")
 		return
 	}
+	// A domain lookup spends the registries' rate limit on the worker's
+	// egress address, which every workspace shares: the same gate keeps a
+	// read-only credential from repeating it.
+	if req.Type == models.MonitorTypeDomain && !ctxpkg.CanWrite(r.Context()) {
+		apierrors.WriteForbiddenError(w, "testing a domain lookup requires write permission (registries rate-limit lookups)")
+		return
+	}
 	config, err := h.service.ResolveTestConfig(r.Context(), tenantUUID, monitorID, req.Type, req.Config)
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrMonitorTypeMismatch) {

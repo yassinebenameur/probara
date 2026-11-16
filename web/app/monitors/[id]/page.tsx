@@ -262,6 +262,7 @@ export default function EditMonitorPage() {
       )}
       {activeTab === 'history' && (
         <MonitorDetailHistory
+          monitorId={monitor.id}
           results={historyResults?.results || []}
           analytics={historyAnalytics}
           slaTarget={slaTarget}

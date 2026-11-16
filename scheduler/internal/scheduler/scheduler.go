@@ -121,6 +121,8 @@ type Scheduler struct {
 	publish func(ctx context.Context, subject string, job *models.Job, headers map[string][]string) error
 
 	purger *purger
+
+	occurrences *occurrenceRoller
 }
 
 // NewScheduler creates a new scheduler instance
@@ -248,6 +250,12 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		BatchSize:     cfg.MonitorPurgeBatchSize,
 		MaxRowsPerRun: cfg.MonitorPurgeMaxRowsPerRun,
 	})
+	s.occurrences = &occurrenceRoller{
+		added: metricsRegistry.NewCounter(
+			"maintenance_occurrences_added_total", "Maintenance occurrences materialized by the horizon roll", []string{}),
+		errors: metricsRegistry.NewCounter(
+			"maintenance_occurrence_roll_errors_total", "Failed maintenance occurrence rolls", []string{}),
+	}
 
 	return s
 }
@@ -308,12 +316,15 @@ func (s *Scheduler) Start() error {
 	defer meshTicker.Stop()
 	watchdogTicker := time.NewTicker(watchdogTickerInterval)
 	defer watchdogTicker.Stop()
+	occurrenceTicker := time.NewTicker(maintenanceOccurrenceRollInterval)
+	defer occurrenceTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
 	s.triggerRetentionCleanup()
 	s.triggerRollupMaintenance()
 	s.triggerWatchdog()
+	s.triggerOccurrenceRoll()
 	if s.config.MeshEnabled {
 		s.runMeshBatch(s.ctx)
 	}
@@ -340,6 +351,8 @@ func (s *Scheduler) Start() error {
 			}
 		case <-watchdogTicker.C:
 			s.triggerWatchdog()
+		case <-occurrenceTicker.C:
+			s.triggerOccurrenceRoll()
 		}
 	}
 }
@@ -463,7 +476,8 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 
 	// Mesh results and metric samples follow data_retention_days (0 = keep
 	// forever); raw check results ignore it and use the fixed hour-aligned
-	// horizon (pruneTenantCheckResults).
+	// horizon (pruneTenantCheckResults). The notification delivery history
+	// is kept a fixed 90 days for everyone (retention_deliveries.go).
 	stores := []struct {
 		name  string
 		prune func(ctx context.Context, tenantID uuid.UUID, tenantDays int) (int64, error)
@@ -478,6 +492,7 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 			func(ctx context.Context, _ int) (time.Time, error) { return s.checkResultsPruneCutoff(ctx) }},
 		{"mesh_probe_results", s.pruneTenantMeshResults, tenantDaysCutoff},
 		{"metric_samples", s.pruneTenantMetricSamples, tenantDaysCutoff},
+		{"alert_notification_deliveries", s.pruneTenantDeliveries, deliveriesCutoff},
 	}
 	var totalDeleted int64
 	backlogged := make(map[string]int)

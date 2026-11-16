@@ -27,6 +27,8 @@ import (
 	"github.com/gobwas/ws/wsutil"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/yassinebenameur/probara/shared/maintenance"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -238,8 +240,7 @@ func (t *targets) reload(ctx context.Context) (otlpDue time.Time) {
 	maint := map[string]time.Time{}
 	for path, id := range maintIDs {
 		var ends *time.Time
-		if err := t.pool.QueryRow(ctx, `SELECT max(mw.ends_at) FROM maintenance_windows mw JOIN maintenance_window_monitors m ON m.maintenance_window_id = mw.id
-			WHERE m.monitor_id = $1 AND mw.starts_at <= now() AND mw.ends_at > now()`, id).Scan(&ends); err == nil && ends != nil {
+		if err := t.pool.QueryRow(ctx, `SELECT `+maintenance.MaintenanceUntilExpr("mon")+` FROM monitors mon WHERE mon.id = $1`, id).Scan(&ends); err == nil && ends != nil {
 			maint[path] = ends.Add(-10 * time.Minute)
 		}
 	}

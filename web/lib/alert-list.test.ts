@@ -114,7 +114,10 @@ test('alertTone: what the alert is now', () => {
   assert.equal(alertTone(alert('a', 'm')), 'active');
   assert.equal(alertTone(alert('a', 'm', { status: 'acknowledged', acknowledged_at: at(5) })), 'acknowledged');
   assert.equal(alertTone(alert('a', 'm', { suppression_reason: 'dependency' })), 'suppressed');
+  assert.equal(alertTone(alert('a', 'm', { snoozed_until: new Date(Date.now() + 3_600_000).toISOString() })), 'snoozed');
+  assert.equal(alertTone(alert('a', 'm', { snoozed_until: new Date(Date.now() - 60_000).toISOString() })), 'active');
   assert.equal(alertTone(alert('a', 'm', { status: 'resolved', resolved_at: at(9), suppression_reason: 'dependency' })), 'resolved');
+  assert.equal(alertTone(alert('a', 'm', { kind: 'mesh_edge', suppression_reason: 'location_offline' })), 'suppressed');
 });
 
 test('mergeLiveAlert keeps what a stream event never carries', () => {
@@ -140,6 +143,24 @@ test('mergeLiveAlert keeps what a stream event never carries', () => {
 
   // A brand new alert passes through.
   assert.equal(mergeLiveAlert(undefined, alert('n', 'x')).id, 'n');
+});
+
+test('mergeLiveAlert drops the acknowledgement once active again, and never keeps a snooze', () => {
+  const prev = alert('a', 'm', {
+    status: 'acknowledged',
+    acknowledged_at: at(5),
+    acknowledged_by: 'oncall',
+    acknowledged_by_user_id: 'u1',
+    snoozed_until: at(90),
+  });
+  const unacked = mergeLiveAlert(prev, alert('a', 'm', { status: 'active', updated_at: at(8) }));
+  assert.equal(unacked.acknowledged_at, undefined);
+  assert.equal(unacked.acknowledged_by, undefined);
+  assert.equal(unacked.acknowledged_by_user_id, undefined);
+  assert.equal(unacked.snoozed_until, undefined, 'an event without a snooze end means none holds');
+
+  const resolved = mergeLiveAlert(prev, alert('a', 'm', { status: 'resolved', resolved_at: at(9), updated_at: at(9) }));
+  assert.equal(resolved.acknowledged_by, 'oncall', 'a resolve event keeps who acknowledged');
 });
 
 test('toggleSelection toggles one row, or a Shift range from the anchor', () => {

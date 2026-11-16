@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { formatDate } from './format';
 import { serverFacts } from './monitor-server-facts';
 import type { CheckResult, Monitor } from './types';
 
@@ -106,4 +107,50 @@ test('serverFacts: tcp shows TLS only when the monitor uses it', () => {
     { key: 'tls', label: 'TLS', value: 'TLS 1.3' },
   ]);
   assert.deepEqual(serverFacts(monitor('tcp', { use_tls: true }), []), [{ key: 'tls', label: 'TLS', value: 'Enabled' }]);
+});
+
+test('serverFacts: the certificate row names an intermediate that expires first, as the alert does', () => {
+  const tls = {
+    subject: 'CN=imap.example.com',
+    not_after: '2027-06-01T00:00:00Z',
+    days_until_expiry: 200,
+    chain_not_after: '2026-11-25T00:00:00Z',
+    chain_min_days: 9,
+    chain_expiring_subject: 'CN=Example CA 2',
+  };
+  const tcp = serverFacts(monitor('tcp', { host: 'imap.example.com', port: 993, use_tls: true, tls_min_days_valid: 14 }), [
+    result('a', { tcp: { use_tls: true, tls_version: 'TLS 1.3', tls } }),
+  ]);
+  assert.deepEqual(tcp, [
+    { key: 'tls', label: 'TLS', value: 'TLS 1.3' },
+    {
+      key: 'certificate',
+      label: 'Certificate',
+      value: `intermediate CN=Example CA 2 expires in 9 days (${formatDate('2026-11-25T00:00:00Z')})`,
+      tone: 'warning',
+    },
+  ]);
+
+  // The leaf, recorded before chains were measured, outside the window.
+  const http = serverFacts(monitor('http', { url: 'https://a.example', method: 'GET', tls_min_days_valid: 14 }), [
+    result('a', { http: {} }),
+    result('b', { http: { tls: { subject: 'CN=a.example', not_after: '2027-06-01T00:00:00Z', days_until_expiry: 200 } } }),
+  ]);
+  assert.deepEqual(http, [
+    { key: 'certificate', label: 'Certificate', value: `expires in 200 days (${formatDate('2027-06-01T00:00:00Z')})`, tone: undefined },
+  ]);
+});
+
+test('serverFacts: a ping reports loss, round trip and a shortened echo gap', () => {
+  const facts = serverFacts(monitor('ping', { host: 'gw', interval_ms: 1000, max_rtt_ms: 5 }), [
+    result('a', { ping: { sent: 3, received: 2, loss_pct: 33.33, interval_ms: 250, rtt_min_ms: 0.42, rtt_avg_ms: 6.25, rtt_max_ms: 12.1 } }),
+  ]);
+  assert.deepEqual(facts, [
+    { key: 'loss', label: 'Packet loss', value: '33.33% (2/3 echoes answered)', tone: undefined },
+    { key: 'rtt', label: 'Round trip', value: 'min 0.4 ms · avg 6.3 ms · max 12 ms', tone: 'warning' },
+    { key: 'echo-gap', label: 'Echo gap', value: '250 ms, shortened from 1000 ms to fit the timeout', tone: 'note' },
+  ]);
+
+  const lost = serverFacts(monitor('ping', { host: 'gw' }), [result('a', { ping: { sent: 3, received: 0, loss_pct: 100, interval_ms: 1000 } })]);
+  assert.deepEqual(lost, [{ key: 'loss', label: 'Packet loss', value: '100.00% (0/3 echoes answered)', tone: 'warning' }]);
 });

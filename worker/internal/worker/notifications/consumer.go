@@ -25,12 +25,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
-	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
@@ -152,6 +153,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		entry.Error("Unsupported dispatch envelope version; dropping")
 		return nil
 	}
+	record := c.deliveryRecord(entry, envelope, deliveryAttempt(msg)) // delivery history
 
 	p, ok := plugin.DefaultRegistry.Get(envelope.ChannelType)
 	if !ok {
@@ -159,7 +161,9 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// bug — return an error so JetStream retries and the operator notices
 		// the consumer falling behind, then ship the missing plugin.
 		entry.Error("No registered plugin for channel type")
-		return fmt.Errorf("unknown plugin type: %s", envelope.ChannelType)
+		err := fmt.Errorf("unknown plugin type: %s", envelope.ChannelType)
+		record.failed(ctx, deliverylog.OutcomeFailed, deliverylog.ReasonPluginMissing, err, nil)
+		return err
 	}
 
 	channel, err := c.loadChannel(ctx, envelope.ChannelID)
@@ -175,12 +179,14 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	}
 	if !channel.IsActive {
 		entry.Info("Channel deactivated; dropping message")
+		record.dropped(ctx, deliverylog.ReasonChannelInactive, nil)
 		return nil
 	}
 	if channel.Type != envelope.ChannelType {
 		// Edge case: the channel was repurposed (type changed). Drop because
 		// the plugin we'd dispatch to no longer matches the stored config.
 		entry.WithField("current_type", channel.Type).Warn("Channel type changed since publish; dropping message")
+		record.dropped(ctx, deliverylog.ReasonChannelChanged, nil)
 		return nil
 	}
 
@@ -199,10 +205,28 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		}
 		defer func() { _ = tx.Rollback() }()
 	}
-	superseded, alertStatus, err := eventSuperseded(ctx, tx, envelope)
+	superseded, muted, alertStatus, err := eventSuperseded(ctx, tx, envelope)
 	if err != nil {
 		entry.WithError(err).Error("Failed to load alert status")
 		return err
+	}
+	if muted {
+		// Acknowledged or snoozed since publish (alertrouting.MuteHolds): an
+		// acknowledgement must never lose the race to a page or reminder
+		// already queued. Unlike a resolve the mute can lift, so a page that
+		// provably reached nobody hands the alerter's claim back under the
+		// same lock and is due again then (releaseMutedClaim).
+		if err := releaseMutedClaim(ctx, tx, envelope); err != nil {
+			entry.WithError(err).Error("Failed to release a muted notification claim")
+			return err
+		}
+		record.droppedTx(ctx, tx, mutedReason(ctx, tx, envelope))
+		if err := tx.Commit(); err != nil {
+			entry.WithError(err).Error("Failed to commit a released notification claim")
+			return err
+		}
+		entry.WithField("alert_status", alertStatus).Info("Alert acknowledged or snoozed since publish; dropping held event")
+		return nil
 	}
 	if superseded {
 		// A retried trigger/reminder/ack must never land after the resolve:
@@ -210,6 +234,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// have yet as a no-op, so a late trigger would open an incident that
 		// nothing ever closes.
 		entry.Info("Alert resolved since publish; dropping superseded event")
+		record.dropped(ctx, supersededReason(alertStatus), tx)
 		return nil
 	}
 
@@ -217,14 +242,17 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	if len(channel.Config) > 0 {
 		if err := json.Unmarshal(channel.Config, &configMap); err != nil {
 			entry.WithError(err).Error("Failed to decode channel config")
+			record.failed(ctx, deliverylog.OutcomePermanentFailure, deliverylog.ReasonInvalidConfig, err, tx)
 			return nil
 		}
 	}
 	configMap, err = secrets.DecryptConfig(c.encryptor, p.Manifest(), configMap)
 	if err != nil {
 		entry.WithError(err).Error("Failed to decrypt channel config")
+		record.failed(ctx, deliverylog.OutcomeFailed, "", err, tx)
 		return err
 	}
+	record.channelLoaded(p.Manifest(), configMap)
 
 	attempt := deliveryAttempt(msg)
 	alertID, alertErr := uuid.Parse(envelope.AlertID)
@@ -238,6 +266,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		if alertErr == nil && channelErr == nil {
 			recipients = recipientledger.For(c.db, alertID, channelID, deliveryKey)
 		}
+		recipients = record.track(recipients)
 		return p.Send(ctx, plugin.DispatchRequest{
 			Channel: plugin.ChannelRef{
 				ID:     envelope.ChannelID,
@@ -250,21 +279,16 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			Recipients: recipients,
 		})
 	}
-	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
-	if err == nil && ackOvertaken(p.Manifest(), envelope.EventType, alertStatus) {
-		// The operator acknowledged while this trigger sat on a retry
-		// backoff, so the "acknowledged" envelope has already been delivered
-		// and the provider dropped it as a no-op for an incident it did not
-		// have yet. It is never re-sent (acknowledged_sent_at is set), so the
-		// incident just opened would escalate forever. Acknowledge it now,
-		// still under the share lock, so nothing else can reorder the pair.
-		// It has its own ledger key: under "acknowledged" a fan-out plugin
-		// would skip everyone the no-op ack reached.
-		ack := envelope.Event
-		ack.Type = present.EventAcknowledged
-		ack.Alert.Status = alertStatus
-		err = send(present.EventAcknowledged, notifications.OvertakenAckKey, ack)
+	marked, err := c.markPage(ctx, envelope)
+	if err != nil {
+		entry.WithError(err).Error("Failed to record a page attempt")
+		return err
 	}
+	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
+	c.settlePage(ctx, entry, envelope, marked, err)
+	// Delivery history: Send is done, so the alert lock goes first (tx only
+	// ever rolls back on this path) and the row is written through the pool.
+	record.finished(ctx, err, tx)
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted
@@ -272,9 +296,6 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			entry.WithError(err).WithField("attempt", attempt).Error("Plugin Send failed permanently; dropping message")
 			return nil
 		}
-		// A failed follow-up acknowledge also retries the trigger. Paging
-		// providers dedupe triggers on the alert's key, so the redelivery
-		// re-opens nothing and gets the acknowledge a second chance.
 		entry.WithError(err).WithField("attempt", attempt).Warn("Plugin Send failed; will retry")
 		return err
 	}
@@ -283,43 +304,93 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	return nil
 }
 
-// ackOvertaken reports whether a just-delivered trigger landed after the
-// alert was acknowledged, on a channel that tracks acknowledgement state.
-// That happens when a trigger fails and waits on the JetStream backoff while
-// the operator acknowledges: the alerter publishes "acknowledged" as soon as
-// the created slot is claimed, not when it is delivered, so the ack can
-// overtake it. It also covers a later escalation tier paging a channel after
-// the ack.
-func ackOvertaken(m plugin.Manifest, eventType, alertStatus string) bool {
-	return eventType == present.EventCreated &&
-		alertStatus == "acknowledged" &&
-		m.HasCapability(plugin.CapabilityAcknowledge)
-}
-
 // eventSuperseded reports whether envelope describes an alert state the
 // alert has since left: any non-resolve event for an alert that is now
-// resolved (or deleted). JetStream redelivers failed messages on a backoff,
+// resolved (or deleted), or an acknowledgement of an alert unacknowledged
+// since. JetStream redelivers failed messages on a backoff,
 // so a created/reminder/acknowledged/suspected_cause message can outlive the
 // resolve the alerter published after it; delivering it then would reopen the alert on
 // the provider side. Resolves always go through (tx is nil for them). For
 // every other event it reads the status FOR SHARE inside tx, and the caller
-// keeps tx open until the send returns.
-func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded bool, status string, err error) {
+// keeps tx open until the send returns, so an acknowledge, snooze or resolve
+// committed after this check waits for the send.
+//
+// muted is set (with superseded false) when the alert is still open but
+// acknowledged or snoozed and the event is one the mute holds
+// (alertrouting.MuteHolds: a page or a reminder): the caller drops it and,
+// when it is safe, hands its claim back (releaseMutedClaim), because the
+// mute is temporary.
+func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded, muted bool, status string, err error) {
 	if envelope.EventType == "resolved" {
-		return false, "", nil
+		return false, false, "", nil
 	}
 	alertID, err := uuid.Parse(envelope.AlertID)
 	if err != nil {
-		return false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+		return false, false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
 	}
-	err = tx.QueryRowContext(ctx, `SELECT status FROM alerts WHERE id = $1 FOR SHARE`, alertID).Scan(&status)
+	var snoozed bool
+	err = tx.QueryRowContext(ctx, `SELECT al.status, `+alertrouting.SnoozedPredicate("al")+`
+		FROM alerts al WHERE al.id = $1 FOR SHARE`, alertID).Scan(&status, &snoozed)
 	if errors.Is(err, sql.ErrNoRows) {
-		return true, "", nil
+		return true, false, "", nil
 	}
 	if err != nil {
-		return false, "", err
+		return false, false, "", err
 	}
-	return status == "resolved", status, nil
+	if status == "resolved" {
+		return true, false, status, nil
+	}
+	if envelope.EventType == "acknowledged" && status != "acknowledged" {
+		// Unacknowledged since publish: telling the provider to stop
+		// escalating would now be wrong. The unacknowledge already re-armed
+		// the claim (acknowledged_sent_at), so a later acknowledge is sent.
+		return true, false, status, nil
+	}
+	return false, alertrouting.MuteHolds(envelope.EventType, status == "acknowledged", snoozed), status, nil
+}
+
+// releaseMutedClaim hands back the alerter's claim on a page ("created") the
+// mute held, inside tx (which still holds the alert row FOR SHARE, so no
+// claim can move meanwhile), so the route is paged once the mute lifts
+// instead of counting as paged when it never was. Left in place, a route
+// would only ever get reminders after an unacknowledge, which paging
+// providers ignore.
+//
+// Only a page that provably reached nobody is handed back: no attempt
+// marker (markPage; an attempt whose send may have been accepted keeps it)
+// and no recipient recorded delivered, on whichever delivery attempt this is.
+// Any other held page keeps its claim, so the channel still counts as paged
+// and gets the acknowledgement and the recovery notice: a provider that
+// opened an incident on an attempt whose reply was lost, or the recipients a
+// multi-recipient send already reached, must hear both. The row is matched
+// only while it still records exactly this claim (its time is the event's
+// timestamp, the claim's `now`).
+//
+// A held reminder keeps its claim: its next round counts from the later of
+// the last send and the way out of the mute, which comes after this claim,
+// so the earlier last_sent_at would change nothing.
+func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) error {
+	if envelope.EventType != "created" || envelope.Event.Timestamp.IsZero() {
+		return nil
+	}
+	alertID, err := uuid.Parse(envelope.AlertID)
+	if err != nil {
+		return fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+	}
+	channelID, err := uuid.Parse(envelope.ChannelID)
+	if err != nil {
+		return fmt.Errorf("invalid channel id %q: %w", envelope.ChannelID, err)
+	}
+	reached, err := recipientledger.Reached(ctx, tx, alertID, channelID, envelope.RecipientKey())
+	if err != nil || reached {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM alert_notification_states
+		WHERE alert_id = $1 AND channel_id = $2
+		  AND last_event_type = 'created' AND last_sent_at = $3::timestamptz`,
+		alertID, channelID, envelope.Event.Timestamp)
+	return err
 }
 
 type loadedChannel struct {

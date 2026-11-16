@@ -24,7 +24,8 @@ export interface Alert {
   threshold_value?: number;
   root_cause_monitor_id?: string;
   root_cause_down_since?: string;
-  // Mesh-edge subject (kind === 'mesh_edge').
+  // Mesh-edge subject (kind === 'mesh_edge'); an offline location
+  // (kind === 'location_offline') is the source alone.
   source_location_id?: string;
   target_location_id?: string;
   created_at: string;
@@ -36,7 +37,9 @@ export interface Alert {
   // Set while the alerter deliberately sends no notification for this open
   // alert. 'dependency': an upstream dependency is down (or recovered less
   // than the grace period ago) and dependency suppression is on.
-  suppression_reason?: 'dependency';
+  // 'location_offline': a mesh edge whose location stopped reporting; that
+  // location's own alert pages instead.
+  suppression_reason?: 'dependency' | 'location_offline';
   // How many open downstream alerts this alert's monitor is the suppressed
   // root cause of (its notification lists them under "also affecting").
   impacted_count?: number;
@@ -44,6 +47,18 @@ export interface Alert {
   // has no triage row; always absent (= unknown) on live stream events, which
   // are built from core NATS, so merge those with mergeAlertUpdate.
   triage?: AlertTriage;
+  // Who acknowledged (with acknowledged_at, when). Absent while not
+  // acknowledged, and for an acknowledgement made with an API key.
+  acknowledged_by_user_id?: string;
+  acknowledged_by?: string;
+  // Set while the open alert is snoozed: until then it sends no reminder and
+  // no further escalation. Absent once the snooze ended (lib/alert-mute
+  // isSnoozed also checks the clock, for a row loaded before it ran out), as
+  // are when the snooze began and who set it (absent for an API key).
+  snoozed_until?: string;
+  snoozed_at?: string;
+  snoozed_by_user_id?: string;
+  snoozed_by?: string;
 }
 
 // --- Automatic alert triage (never delays, routes or suppresses a page) ---
@@ -91,8 +106,13 @@ export interface AlertListResponse {
 /** `GET /alerts?sort=` columns (with `dir=asc|desc`). */
 export type AlertSortColumn = 'triggered_at' | 'status' | 'monitor' | 'duration';
 
-/** Why a bulk acknowledge/resolve left an alert unchanged. */
-export type AlertBulkFailureReason = 'not_found' | 'already_acknowledged' | 'already_resolved';
+/** Why a bulk action left an alert unchanged. */
+export type AlertBulkFailureReason =
+  | 'not_found'
+  | 'already_acknowledged'
+  | 'already_resolved'
+  | 'not_acknowledged'
+  | 'not_snoozed';
 
 /** `POST /alerts/bulk/{acknowledge,resolve}`: per-alert results, never all-or-nothing. */
 export interface AlertBulkResult {
@@ -102,7 +122,8 @@ export interface AlertBulkResult {
   failed: { id: string; reason: AlertBulkFailureReason }[];
 }
 
-export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved';
+/** `updated`: unacknowledged, snoozed or unsnoozed; the event carries the whole alert. */
+export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved' | 'updated';
 
 export interface AlertStreamEvent {
   type: AlertStreamEventType;

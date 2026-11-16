@@ -1,6 +1,7 @@
 package maintenancewindows
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -143,6 +144,71 @@ func (h *Handlers) DeleteMaintenanceWindow(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// PreviewMaintenanceRecurrence handles POST /api/v1/maintenance-windows/preview:
+// a weekly recurrence's next occurrences, computed without saving anything.
+func (h *Handlers) PreviewMaintenanceRecurrence(w http.ResponseWriter, r *http.Request) {
+	var req models.PreviewMaintenanceRecurrenceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+		return
+	}
+	preview, err := h.service.Preview(r.Context(), &req)
+	if err != nil {
+		h.writeServiceError(w, r, err, "preview maintenance recurrence")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, preview)
+}
+
+// ListMaintenanceOccurrences handles GET /api/v1/maintenance-windows/{id}/occurrences
+func (h *Handlers) ListMaintenanceOccurrences(w http.ResponseWriter, r *http.Request) {
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
+		return
+	}
+	windowID, ok := h.windowID(w, r)
+	if !ok {
+		return
+	}
+	page, pageSize := httpx.Page(r)
+	result, err := h.service.ListOccurrences(r.Context(), tenantUUID, windowID, r.URL.Query().Get("status"), page, pageSize)
+	if err != nil {
+		h.writeServiceError(w, r, err, "list maintenance occurrences")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
+}
+
+// EndMaintenanceOccurrence handles POST /api/v1/maintenance-windows/{id}/end-occurrence:
+// the occurrence in progress ends now; a repeating window keeps its schedule.
+func (h *Handlers) EndMaintenanceOccurrence(w http.ResponseWriter, r *http.Request) {
+	h.occurrenceAction(w, r, "end maintenance occurrence", h.service.EndOccurrence)
+}
+
+// SkipNextMaintenanceOccurrence handles POST /api/v1/maintenance-windows/{id}/skip-next:
+// a repeating window's next occurrence is skipped; the series carries on.
+func (h *Handlers) SkipNextMaintenanceOccurrence(w http.ResponseWriter, r *http.Request) {
+	h.occurrenceAction(w, r, "skip maintenance occurrence", h.service.SkipNextOccurrence)
+}
+
+func (h *Handlers) occurrenceAction(w http.ResponseWriter, r *http.Request, action string,
+	do func(ctx context.Context, tenantID, windowID uuid.UUID) (*models.MaintenanceWindow, error)) {
+	tenantUUID, ok := httpx.TenantID(w, r)
+	if !ok {
+		return
+	}
+	windowID, ok := h.windowID(w, r)
+	if !ok {
+		return
+	}
+	window, err := do(r.Context(), tenantUUID, windowID)
+	if err != nil {
+		h.writeServiceError(w, r, err, action)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, window)
+}
+
 // SnoozeMonitor handles POST /api/v1/monitors/{id}/snooze
 func (h *Handlers) SnoozeMonitor(w http.ResponseWriter, r *http.Request) {
 	tenantUUID, ok := httpx.TenantID(w, r)
@@ -207,6 +273,11 @@ func (h *Handlers) writeServiceError(w http.ResponseWriter, r *http.Request, err
 	}
 	if errors.Is(err, apperr.ErrMonitorNotFound) {
 		apierrors.WriteValidationError(w, err.Error())
+		return
+	}
+	var invalid *maintenancewindowservice.InvalidError
+	if errors.As(err, &invalid) {
+		apierrors.WriteValidationError(w, invalid.Msg)
 		return
 	}
 	// The remaining 400s are still matched by message: the service returns

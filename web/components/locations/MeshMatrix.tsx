@@ -193,7 +193,7 @@ export default function MeshMatrix() {
                           aria-hidden="true"
                         />
                         <span className="truncate" title={target.name}>{target.name}</span>
-                        <span className="sr-only">{target.connected ? ' (connected)' : ' (offline)'}</span>
+                        <span className="sr-only">{target.connected ? ' (connected)' : ' (disconnected)'}</span>
                       </div>
                     </th>
                   ))}
@@ -213,7 +213,7 @@ export default function MeshMatrix() {
                         <span className="min-w-0 sm:flex sm:items-center sm:gap-1.5">
                           <span className="block truncate" title={source.name}>{source.name}</span>
                           {!source.connected && (
-                            <span className="block shrink-0 text-xs font-normal text-slate-500">worker offline</span>
+                            <span className="block shrink-0 text-xs font-normal text-slate-500">worker disconnected</span>
                           )}
                         </span>
                       </div>

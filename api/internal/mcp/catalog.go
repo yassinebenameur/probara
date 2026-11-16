@@ -21,6 +21,7 @@ func catalog() []spec {
 		locationTools(),
 		discoveryTools(),
 		alertTools(),
+		alertMuteTools(),
 		incidentTools(),
 		notificationTools(),
 		slaTools(),
@@ -28,6 +29,8 @@ func catalog() []spec {
 		workspaceTools(),
 		platformTools(),
 		historyTools(),
+		maintenanceOccurrenceTools(),
+		deliveryTools(),
 	} {
 		all = append(all, group...)
 	}

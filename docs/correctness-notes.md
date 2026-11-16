@@ -193,6 +193,19 @@ Concretely:
   failure in that window can still re-text recipients. Workers from before the
   change ignore an envelope's `delivery_key`; new workers fall back to the
   event timestamp for envelopes without one.
+- **Acknowledge/snooze mute**: until migration 000101 adds
+  `alerts.snoozed_until`, `unacknowledged_at` and `acknowledged_by_user_id`,
+  the alerter's dispatch queries and `deliverNotification` fail with SQLSTATE
+  42703, so no notification goes out (a resolve is retried by the recovery
+  sweep afterwards), and the worker's `eventSuperseded` fails and JetStream
+  retries the message on its backoff. Until 000102 adds
+  `first_acknowledged_at`, `snoozed_at` and `snoozed_by_user_id`, the API's
+  alert reads, acknowledge, snooze and SLA reports fail too. All of it
+  recovers once the columns exist. Do not add a fallback without the
+  columns: a dispatch that cannot read the mute could page an acknowledged
+  alert. SLA reports read `COALESCE(first_acknowledged_at, acknowledged_at)`,
+  so an acknowledgement written by an older API pod during the rollout still
+  counts.
 
 For zero-error rollouts, when convenient, run the migration job manually
 before `helm upgrade` so the new schema is already in place when the new pods
