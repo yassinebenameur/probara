@@ -6,6 +6,7 @@ import {
   grpcMetadataError,
   initialGrpcFormState,
   initialTcpFormState,
+  tcpTlsErrors,
 } from './monitor-form/network';
 import { buildClonedMonitorInitialData } from './monitor-clone';
 import { renameSecretRow, toggleSecretRow } from './monitor-form/secret-map';
@@ -25,7 +26,7 @@ import {
   storedMonitor,
 } from './monitor-form/testing';
 import { MASKED_SECRET } from './types';
-import type { CreateMonitorRequest, GRPCMonitorConfig, SIPMonitorConfig, WebSocketMonitorConfig } from './types';
+import type { CreateMonitorRequest, GRPCMonitorConfig, SIPMonitorConfig, TCPMonitorConfig, WebSocketMonitorConfig } from './types';
 
 // gRPC, TCP, WebSocket and SIP: the delegated forms with a schedule and
 // locations. WebSocket headers (a secret map) and the SIP password are the
@@ -227,12 +228,59 @@ test('tcp: create from a filled form; skip-verify only rides with TLS', () => {
   assertWire(buildTcpRequest(form).depends_on_ids, ['dep-1']);
 });
 
+const CA_PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
+
+test('tcp: certificate fields ride only with TLS', () => {
+  const form = {
+    ...initialTcpFormState(),
+    name: 'IMAPS',
+    host: '10.0.0.5',
+    port: 993,
+    use_tls: true,
+    tls_min_days_valid: ' 14 ',
+    tls_server_name: ' imap.example.com ',
+  };
+  assert.deepEqual(tcpTlsErrors(form), {});
+  assertWire(buildTcpRequest(form).config, {
+    host: '10.0.0.5',
+    port: 993,
+    use_tls: true,
+    tls_min_days_valid: 14,
+    tls_server_name: 'imap.example.com',
+  });
+  assertWire(buildTcpRequest({ ...form, use_tls: false }).config, { host: '10.0.0.5', port: 993, use_tls: false });
+  assert.deepEqual(tcpTlsErrors({ ...form, tls_min_days_valid: '-1', tls_server_name: 'a b', tls_ca_pem: 'not pem' }), {
+    tls_min_days_valid: 'Must be a whole number of days, 0 or more',
+    tls_server_name: 'Must be a hostname or IP address',
+    tls_ca_pem: 'Must be PEM certificates (-----BEGIN CERTIFICATE----- …)',
+  });
+  assertWire((buildTcpRequest({ ...form, tls_ca_pem: ` ${CA_PEM}\n` }).config as TCPMonitorConfig).tls_ca_pem, CA_PEM);
+  assertWire((buildTcpRequest({ ...form, use_tls: false, tls_ca_pem: CA_PEM }).config as TCPMonitorConfig).tls_ca_pem, undefined);
+  assert.deepEqual(tcpTlsErrors({ ...form, use_tls: false, tls_min_days_valid: 'x' }), {});
+});
+
 test('tcp: edit round trip', () => {
-  const monitor = storedMonitor('tcp', { host: 'mail.example.com', port: 465, use_tls: true, tls_skip_verify: true });
+  const monitor = storedMonitor('tcp', {
+    host: 'mail.example.com',
+    port: 465,
+    use_tls: true,
+    tls_skip_verify: true,
+    tls_min_days_valid: 21,
+    tls_server_name: 'smtp.example.com',
+    tls_ca_pem: CA_PEM,
+  });
   assertWire(buildTcpRequest(initialTcpFormState(monitor)), {
     name: 'Stored monitor',
     type: 'tcp',
-    config: { host: 'mail.example.com', port: 465, use_tls: true, tls_skip_verify: true },
+    config: {
+      host: 'mail.example.com',
+      port: 465,
+      use_tls: true,
+      tls_skip_verify: true,
+      tls_min_days_valid: 21,
+      tls_server_name: 'smtp.example.com',
+      tls_ca_pem: CA_PEM,
+    },
     ...STORED_ENVELOPE,
     ...STORED_ALERTING,
     ...STORED_TAIL,

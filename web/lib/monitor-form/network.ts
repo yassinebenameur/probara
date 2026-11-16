@@ -95,12 +95,35 @@ export function initialTcpFormState(monitor?: Monitor, initialData?: CreateMonit
     port: existingConfig?.port ?? initialTcpConfig?.port ?? 0,
     use_tls: existingConfig?.use_tls ?? initialTcpConfig?.use_tls ?? false,
     tls_skip_verify: existingConfig?.tls_skip_verify ?? initialTcpConfig?.tls_skip_verify ?? false,
+    tls_min_days_valid: String(existingConfig?.tls_min_days_valid ?? initialTcpConfig?.tls_min_days_valid ?? ''),
+    tls_server_name: existingConfig?.tls_server_name ?? initialTcpConfig?.tls_server_name ?? '',
+    tls_ca_pem: existingConfig?.tls_ca_pem ?? initialTcpConfig?.tls_ca_pem ?? '',
   };
 }
 
 export type TcpFormState = ReturnType<typeof initialTcpFormState>;
 
-/** The request TcpForm submits. Skip-verify only applies over TLS. */
+/** TcpForm's certificate field errors (the API refuses the same). */
+export function tcpTlsErrors(form: TcpFormState): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!form.use_tls) return errors;
+  if (form.tls_min_days_valid.trim() && !/^\d+$/.test(form.tls_min_days_valid.trim())) {
+    errors.tls_min_days_valid = 'Must be a whole number of days, 0 or more';
+  }
+  if (/\s/.test(form.tls_server_name.trim())) {
+    errors.tls_server_name = 'Must be a hostname or IP address';
+  }
+  const pem = form.tls_ca_pem.trim();
+  if (pem && !/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(pem)) {
+    errors.tls_ca_pem = 'Must be PEM certificates (-----BEGIN CERTIFICATE----- …)';
+  }
+  return errors;
+}
+
+/**
+ * The request TcpForm submits. Skip-verify and the certificate fields only
+ * apply over TLS (the API refuses them on a plain connect).
+ */
 export function buildTcpRequest(form: TcpFormState): CreateMonitorRequest {
   const config: TCPMonitorConfig = {
     host: form.host.trim(),
@@ -110,6 +133,15 @@ export function buildTcpRequest(form: TcpFormState): CreateMonitorRequest {
 
   if (form.use_tls && form.tls_skip_verify) {
     config.tls_skip_verify = true;
+  }
+  if (form.use_tls && form.tls_min_days_valid.trim()) {
+    config.tls_min_days_valid = Number(form.tls_min_days_valid.trim());
+  }
+  if (form.use_tls && form.tls_server_name.trim()) {
+    config.tls_server_name = form.tls_server_name.trim();
+  }
+  if (form.use_tls && form.tls_ca_pem.trim()) {
+    config.tls_ca_pem = form.tls_ca_pem.trim();
   }
 
   return buildScheduledMonitorRequest('tcp', config, form);

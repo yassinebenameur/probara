@@ -126,3 +126,22 @@ func TestLocationWorkerNATSURLRejectsUnsafeBase(t *testing.T) {
 		}
 	}
 }
+
+// The Docker snippets never set the ping sysctl: a container in a user
+// namespace would refuse to start with it, taking the location offline.
+func TestDockerDeploySnippetsSetNoSysctl(t *testing.T) {
+	run, compose := dockerDeploySnippets("eu-west", "ghcr.io/x/probara-worker:1.2.3", "wss://loc:cred@nats.example.test/nats", "loc-id", "cred")
+	for name, snippet := range map[string]string{"docker run": run, "compose": compose} {
+		if strings.Contains(snippet, "sysctl") || strings.Contains(snippet, "ping_group_range") {
+			t.Errorf("%s snippet sets a sysctl:\n%s", name, snippet)
+		}
+		for _, want := range []string{"ghcr.io/x/probara-worker:1.2.3", "loc-id", "8080:8080"} {
+			if !strings.Contains(snippet, want) {
+				t.Errorf("%s snippet lacks %q:\n%s", name, want, snippet)
+			}
+		}
+	}
+	if !strings.Contains(run, "--name probara-worker-eu-west") || !strings.Contains(compose, "worker-eu-west:") {
+		t.Errorf("snippets do not carry the slug:\n%s\n%s", run, compose)
+	}
+}

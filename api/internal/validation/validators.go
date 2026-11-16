@@ -303,20 +303,15 @@ func (v *PingConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		return fmt.Errorf("invalid ping config: %w", err)
 	}
+	// The worker applies the same rules (shared struct).
+	return config.Validate()
+}
 
-	if config.Host == "" {
-		return fmt.Errorf("host is required")
-	}
-
-	// Validate host is either a valid hostname or IP address
-	if ip := net.ParseIP(config.Host); ip == nil {
-		// Not an IP, check if it's a valid hostname
-		if !isValidHostname(config.Host) {
-			return fmt.Errorf("host must be a valid IP address or hostname")
-		}
-	}
-
-	return nil
+// ValidateSchedule refuses echoes that do not fit the timeout as configured
+// (models.ValidatePingSchedule). A bare host always fits, so no monitor saved
+// before echoes were counted is refused on its next save.
+func (v *PingConfigValidator) ValidateSchedule(configRaw json.RawMessage, _, timeoutSeconds int) error {
+	return sharedmodels.ValidatePingSchedule(configRaw, timeoutSeconds)
 }
 
 // DNSConfigValidator validates DNS monitor configuration
@@ -406,23 +401,8 @@ func (v *TCPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		return fmt.Errorf("invalid tcp config: %w", err)
 	}
-
-	host := strings.TrimSpace(config.Host)
-	if host == "" {
-		return fmt.Errorf("host is required")
-	}
-
-	if ip := net.ParseIP(host); ip == nil {
-		if !isValidHostname(host) {
-			return fmt.Errorf("host must be a valid IP address or hostname")
-		}
-	}
-
-	if config.Port < 1 || config.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-
-	return nil
+	// The worker applies the same rules (shared struct).
+	return config.Validate()
 }
 
 // WebSocketConfigValidator validates WebSocket monitor configuration
@@ -1102,4 +1082,7 @@ var (
 	_ ConfigValidator = (*SyntheticBrowserConfigValidator)(nil)
 )
 
-var _ ScheduleAwareValidator = (*SIPConfigValidator)(nil)
+var (
+	_ ScheduleAwareValidator = (*SIPConfigValidator)(nil)
+	_ ScheduleAwareValidator = (*PingConfigValidator)(nil)
+)

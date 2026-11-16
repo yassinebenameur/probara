@@ -77,6 +77,7 @@ func mountMonitorRoutes(r chi.Router, monitorHandlers *monitorhandlers.Handlers,
 		r.Get("/{id}", monitorHandlers.GetMonitor)
 		r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 		r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
+		r.Get("/{id}/results/{resultId}", monitorHandlers.GetMonitorResult)
 		r.Get("/{id}/metrics-snapshots", monitorHandlers.GetMonitorMetricsSnapshots)
 		r.Delete("/{id}/history", monitorHandlers.DeleteMonitorHistory)
 		r.Post("/{id}/run", monitorHandlers.RunMonitorNow)

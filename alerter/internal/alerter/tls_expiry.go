@@ -26,7 +26,8 @@ type tlsExpiryConfig struct {
 }
 
 // evaluateTLSExpiry compares each monitor's latest recorded certificate expiry
-// (an HTTPS or SIP-over-TLS check's, located through shared/tlscert)
+// (an HTTPS, SIP-over-TLS or TLS-wrapped TCP check's, located through
+// shared/tlscert; the earliest across the presented chain, tlscert.Expiry)
 // against its tls_min_days_valid threshold and opens or resolves a tls_expiry
 // alert. Like latency anomalies and host metrics, this is orthogonal to the
 // availability state machine: a healthy endpoint with an aging certificate
@@ -55,13 +56,13 @@ func (a *Alerter) evaluateTLSExpiry(ctx context.Context) error {
 
 	now := time.Now()
 	for _, c := range configs {
-		days, ok := latest[c.monitorID]
+		cert, ok := latest[c.monitorID]
 		if !ok {
 			// No certificate observed yet; leave any open alert untouched.
 			continue
 		}
-		if days < c.minDays {
-			if err := a.openTLSExpiryAlert(ctx, c, days); err != nil {
+		if cert.days < c.minDays {
+			if err := a.openTLSExpiryAlert(ctx, c, cert); err != nil {
 				a.logger.WithError(err).WithFields(map[string]interface{}{
 					"monitor_id": c.monitorID,
 				}).Error("Failed to open tls expiry alert")
@@ -128,10 +129,19 @@ func (a *Alerter) loadTLSExpiryConfigs(ctx context.Context) ([]tlsExpiryConfig, 
 	return out, rows.Err()
 }
 
-// loadLatestCertExpiries returns days-until-expiry per monitor, computed at
+// certExpiry is the expiry a monitor's latest certificate snapshot reports
+// (tlscert.Expiry: the chain's earliest, else the leaf's).
+type certExpiry struct {
+	days     int
+	notAfter time.Time // zero when only the days snapshot parsed
+	subject  string
+	leaf     bool // the expiring certificate is the leaf itself
+}
+
+// loadLatestCertExpiries returns the expiry per monitor, days computed at
 // evaluation time from the not_after recorded on the monitor's most recent
 // check result that carries certificate info. Falls back to the worker's
-// days_until_expiry snapshot when not_after is unparseable.
+// days snapshot when not_after is unparseable.
 //
 // The per-monitor LATERAL walks idx_check_results_monitor_id_created_at
 // backwards and stops at the first row with certificate info; the 24h bound
@@ -140,19 +150,23 @@ func (a *Alerter) loadTLSExpiryConfigs(ctx context.Context) ([]tlsExpiryConfig, 
 // historical row and timed out on large check_results tables). Monitors
 // with no certificate observed in the window are skipped this tick, which
 // leaves any open alert untouched — same as "no data yet".
-func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]int, error) {
-	result := make(map[uuid.UUID]int)
+func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]certExpiry, error) {
+	result := make(map[uuid.UUID]certExpiry)
 	if len(monitorIDs) == 0 {
 		return result, nil
 	}
 	// Where the certificate sits in metrics_data ({http,tls}, {sip,tls}, …)
 	// is shared/tlscert's to say; the status page reads the same location
 	// through tlscert.Extract (TestSQLExprMatchesExtract pins the pair).
+	// Which expiry counts (chain or leaf) is tlscert.ExpirySQL's to say.
 	certExpr := tlscert.SQLExpr("metrics_data")
+	notAfterExpr, daysExpr, subjectExpr := tlscert.ExpirySQL("cr.tls")
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT m.id,
-			cr.tls #>> '{not_after}',
-			cr.tls #>> '{days_until_expiry}'
+			`+notAfterExpr+`,
+			`+daysExpr+`,
+			`+subjectExpr+`,
+			cr.tls #>> '{subject}'
 		FROM unnest($1::uuid[]) AS m(id)
 		JOIN LATERAL (
 			SELECT `+certExpr+` AS tls
@@ -171,20 +185,22 @@ func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.
 	defer rows.Close()
 	for rows.Next() {
 		var mid uuid.UUID
-		var notAfter, daysSnapshot sql.NullString
-		if err := rows.Scan(&mid, &notAfter, &daysSnapshot); err != nil {
+		var notAfter, daysSnapshot, subject, leafSubject sql.NullString
+		if err := rows.Scan(&mid, &notAfter, &daysSnapshot, &subject, &leafSubject); err != nil {
 			return nil, err
 		}
+		cert := certExpiry{subject: subject.String, leaf: subject.String == leafSubject.String}
 		if notAfter.Valid {
 			if t, err := time.Parse(time.RFC3339, notAfter.String); err == nil {
-				result[mid] = int(math.Floor(time.Until(t).Hours() / 24))
+				cert.days = int(math.Floor(time.Until(t).Hours() / 24))
+				cert.notAfter = t
+				result[mid] = cert
 				continue
 			}
 		}
 		if daysSnapshot.Valid {
-			var days int
-			if _, err := fmt.Sscanf(daysSnapshot.String, "%d", &days); err == nil {
-				result[mid] = days
+			if _, err := fmt.Sscanf(daysSnapshot.String, "%d", &cert.days); err == nil {
+				result[mid] = cert
 			}
 		}
 	}
@@ -194,10 +210,10 @@ func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.
 // openTLSExpiryAlert opens a tls_expiry alert if one is not already open.
 // Idempotent via the (monitor_id, kind, COALESCE(metric_name, ”)) partial
 // unique index, so it is safe across alerter replicas.
-func (a *Alerter) openTLSExpiryAlert(ctx context.Context, c tlsExpiryConfig, days int) error {
-	value := float64(days)
+func (a *Alerter) openTLSExpiryAlert(ctx context.Context, c tlsExpiryConfig, cert certExpiry) error {
+	value := float64(cert.days)
 	threshold := float64(c.minDays)
-	lastError := fmt.Sprintf("tls: expires in %dd (< %dd)", days, c.minDays)
+	lastError := tlsExpiryMessage(cert, c.minDays)
 
 	var alertID uuid.UUID
 	err := a.db.QueryRowContext(ctx, `
@@ -223,6 +239,19 @@ func (a *Alerter) openTLSExpiryAlert(ctx context.Context, c tlsExpiryConfig, day
 	binding := alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
 	return nil
+}
+
+// tlsExpiryMessage is the alert's last_error, which every notification and
+// the alerts page print: which certificate of the chain expires, and when.
+// It is also how present learns whether the certificate is an intermediate
+// (notifications.TLSExpiryCertificate reads it back), so it goes through the
+// shared formatter.
+func tlsExpiryMessage(cert certExpiry, minDays int) string {
+	return notifications.FormatTLSExpiryError(notifications.TLSExpiryCertificate{
+		Subject:      cert.subject,
+		Intermediate: !cert.leaf,
+		NotAfter:     cert.notAfter,
+	}, cert.days, minDays)
 }
 
 // resolveClearedTLSExpiryAlert resolves the open tls_expiry alert of a monitor

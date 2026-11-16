@@ -73,6 +73,20 @@ export interface HTTPMetrics {
   tls?: TLSCertInfo;
   assertions_failed?: string[];
   display_values?: HTTPDisplayValue[];
+  /** The redacted response of a failed check (worker http_failure_capture.go). */
+  failure_response?: HTTPFailureResponse;
+  /** Set by list reads in place of failure_response (fetch the result alone for it). */
+  failure_response_omitted?: boolean;
+}
+
+export interface HTTPFailureResponse {
+  status_line: string;
+  headers?: Record<string, string>;
+  headers_truncated?: boolean;
+  body_excerpt?: string;
+  body_truncated?: boolean;
+  /** Stands in for a body not stored as text (binary content). */
+  body_note?: string;
 }
 
 export interface HTTPDisplayValue {
@@ -103,6 +117,25 @@ export interface TCPMetrics {
   port?: number;
   use_tls?: boolean;
   tls_version?: string;
+  tls?: TLSCertInfo;
+  assertions_failed?: string[];
+}
+
+// Ping metrics (worker ping_checker.go pingMetrics) under metrics_data.ping.
+export interface PingMetricsEnvelope {
+  ping?: PingMetrics;
+}
+
+export interface PingMetrics {
+  ip?: string;
+  sent: number;
+  received: number;
+  loss_pct: number;
+  /** The gap actually used between echoes (shortened under a short timeout). */
+  interval_ms?: number;
+  rtt_min_ms?: number;
+  rtt_avg_ms?: number;
+  rtt_max_ms?: number;
 }
 
 export interface WebSocketMetricsEnvelope {
@@ -349,7 +382,7 @@ export interface HTTPTimingInfo {
 }
 
 // A check's certificate snapshot (Go shared/tlscert Info): http.tls for
-// HTTPS checks, sip.tls for SIP over TLS.
+// HTTPS checks, sip.tls for SIP over TLS, tcp.tls for TLS-wrapped TCP.
 export interface TLSCertInfo {
   version?: string;
   cipher_suite?: string;
@@ -364,6 +397,11 @@ export interface TLSCertInfo {
   ip_addresses?: string[];
   verified_chains?: number;
   peer_certificates?: number;
+  /** Earliest expiry across the leaf and the intermediates it presented. */
+  chain_not_after?: string;
+  chain_min_days?: number;
+  /** Subject of the certificate chain_not_after belongs to. */
+  chain_expiring_subject?: string;
 }
 
 export interface SyntheticAPIMetricsEnvelope {

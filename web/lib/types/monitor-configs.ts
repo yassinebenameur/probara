@@ -115,6 +115,14 @@ export interface HTTPMonitorConfig {
 
 export interface PingMonitorConfig {
   host: string;
+  /** Echoes per check, 1-10; absent sends 3 (Go models.PingMonitorConfig). */
+  count?: number;
+  /** Gap between echoes, 200-10000 ms; absent is 250, shortened to fit the timeout. */
+  interval_ms?: number;
+  /** Fail above this share of lost echoes (0 to below 100); absent fails only at 100%. */
+  max_packet_loss_pct?: number;
+  /** Fail when the average round trip exceeds it. */
+  max_rtt_ms?: number;
 }
 
 export interface DNSMonitorConfig {
@@ -160,6 +168,12 @@ export interface TCPMonitorConfig {
   port: number;
   use_tls?: boolean;
   tls_skip_verify?: boolean;
+  /** Opens a tls_expiry alert under this many days left (requires use_tls). */
+  tls_min_days_valid?: number;
+  /** SNI and verification name; the host when absent (requires use_tls). */
+  tls_server_name?: string;
+  /** PEM CA certificates trusted besides the system store (requires use_tls). */
+  tls_ca_pem?: string;
 }
 
 export interface GroupMonitorConfig {

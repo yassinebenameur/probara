@@ -545,6 +545,26 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		if resolved {
 			return "The TLS certificate has been renewed."
 		}
+		// The alert measures the chain's earliest expiry; when that is an
+		// intermediate the server presents, say so, since renewing the
+		// server's own certificate does not fix it.
+		if cert, ok := alert.TLSExpiryCertificate(); ok && cert.Intermediate {
+			which := "An intermediate certificate"
+			if cn := notifications.CommonName(cert.Subject); cn != "" {
+				which += " (" + cn + ")"
+			}
+			if alert.MetricValue != nil && *alert.MetricValue < 0 {
+				return which + " has expired."
+			}
+			if alert.MetricValue != nil {
+				s := fmt.Sprintf("%s expires in %s", which, dayValue(*alert.MetricValue))
+				if alert.ThresholdValue != nil {
+					s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
+				}
+				return s + "."
+			}
+			return which + " is approaching expiry."
+		}
 		if alert.MetricValue != nil {
 			s := fmt.Sprintf("The TLS certificate expires in %s", dayValue(*alert.MetricValue))
 			if alert.ThresholdValue != nil {

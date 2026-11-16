@@ -436,7 +436,7 @@ go run ./cmd/admin/migrate_sensitive_headers`,
         {
           type: 'paragraph',
           text:
-            '`HTTP_BLOCK_PRIVATE_IPS=true` is the recommended setting; the code default is `false`, and neither the Helm chart nor Compose sets it, so set it on every worker that runs inside a network it should not reach. Despite its historical name, the guard is shared by HTTP, synthetic API, TCP, gRPC, PostgreSQL, MySQL, MongoDB, Redis, broker, SIP, a DNS monitor\'s custom nameserver, and other worker dial paths. Synthetic browser journeys are the exception: Chromium resolves and connects on its own, and the policy is not applied to it at all, so a browser monitor reaches whatever its worker\'s network reaches.',
+            '`HTTP_BLOCK_PRIVATE_IPS=true` is the recommended setting; the code default is `false`, and neither the Helm chart nor Compose sets it, so set it on every worker that runs inside a network it should not reach. Despite its historical name, the guard is shared by HTTP, synthetic API, TCP, gRPC, PostgreSQL, MySQL, MongoDB, Redis, broker, SIP, ping (the target is resolved and vetted once, and echoes go to the vetted address), a DNS monitor\'s custom nameserver, and other worker dial paths. Synthetic browser journeys are the exception: Chromium resolves and connects on its own, and the policy is not applied to it at all, so a browser monitor reaches whatever its worker\'s network reaches.',
         },
         {
           type: 'table',
@@ -636,6 +636,7 @@ go run ./cmd/admin/migrate_sensitive_headers`,
             'The status service’s optional API proxy is intentionally restricted, but should still be exposed only through the expected status editing/preview flow.',
             'Synthetic browser screenshots can contain credentials, cookies, personal data, or application content. Store them encrypted, authorize retrieval, and expire them. Apply the same controls if trace or HAR capture is implemented later.',
             'Never make `SYNTHETIC_BROWSER_ARTIFACTS_DIR` a public static directory.',
+            'A failed HTTP check stores the [redacted response](/docs/monitors/#http) it got (status, headers, up to 8 KiB of body) with its result for 30 days. Every workspace member who can read the monitor sees it, in the UI and through the API and MCP single-result read (`GET /monitors/{id}/results/{resultId}`, `get_monitor_result`); list reads leave it out. The monitor\'s own credentials, cookies, credential headers and obvious credential fields are removed before storage, but other personal or business data a server puts in an error body is kept.',
           ],
         },
       ],

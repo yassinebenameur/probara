@@ -160,6 +160,12 @@ func TestSummarizeChecksCertificateFromAnyEnvelope(t *testing.T) {
 	if !e.CertificateExpired {
 		t.Fatalf("http certificate evidence = %+v, want expired", e)
 	}
+	// An expired intermediate counts although the leaf is valid: the chain's
+	// earliest expiry is the one the tls_expiry alert reports.
+	chain := json.RawMessage(`{"tcp":{"tls":{"not_after":"` + valid + `","chain_not_after":"` + expired + `"}}}`)
+	if e = SummarizeChecks([]CheckContext{{Status: "success", CheckedAt: now, Metrics: chain}}); !e.CertificateExpired {
+		t.Fatalf("chain certificate evidence = %+v, want expired", e)
+	}
 }
 func TestDisabledAndCancellation(t *testing.T) {
 	if _, err := NewAnalyzer(Config{Disabled: true}); err != ErrNotConfigured {

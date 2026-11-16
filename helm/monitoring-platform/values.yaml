@@ -491,6 +491,7 @@ worker:
   #     replicas: 1
   #     concurrency: "10"      # optional, defaults to worker.concurrency
   #     natsUrl: ""            # authenticated NATS URL from deploy info (required)
+  #     pingGroupRange: ""     # optional, overrides worker.pingGroupRange
   #     # Or take both from a Secret in the release namespace instead, so no
   #     # location credential lands in the PodSpec. Set it and natsUrl/
   #     # credential are no longer required.
@@ -509,6 +510,17 @@ worker:
   # (Kubernetes EnvVar entries), e.g. HTTP_ALLOWED_CIDRS or check tuning.
   # Individual locations entries may also carry their own extraEnv list.
   extraEnv: []
+  # Ping monitors send ICMP echoes over unprivileged "ping" sockets (never raw
+  # sockets: no NET_RAW, no root). Linux allows them only to groups inside
+  # net.ipv4.ping_group_range, which the default worker fleet and every
+  # location worker get as a pod sysctl. It is a namespaced "safe" sysctl,
+  # allowed by the kubelet without flags and by the baseline and restricted
+  # Pod Security Standards. If a cluster policy (Gatekeeper, Kyverno, a PSP)
+  # forbids every pod sysctl, set "" so the pods start: ping then works only
+  # where the node runtime already opens the range (containerd 2.x does), and
+  # elsewhere reports errors naming the sysctl while other checks run on. A
+  # worker.locations entry may set its own pingGroupRange (also "").
+  pingGroupRange: "0 2147483647"
 
 # =============================================================================
 # ALERTER SERVICE
