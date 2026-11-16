@@ -18,7 +18,8 @@ package alertrouting
 // Lifting a mute (unacknowledge, unsnooze, or the snooze running out) resumes
 // the clocks from that moment, DispatchResumedAtExpr: unfired tiers count
 // their delay from it (DispatchEligibleSinceExpr) and reminders their
-// interval, so no burst of "missed" notifications follows.
+// interval, so no burst of "missed" notifications follows. A relapse reopen
+// (relapse.go) restarts the same clocks from the reopen.
 
 // SnoozedPredicate returns a SQL boolean that is TRUE while the alert aliased
 // by alertAlias is snoozed: its snooze ends after the database's NOW(). Never
@@ -35,18 +36,18 @@ func MutedPredicate(alertAlias string) string {
 
 // DispatchResumedAtExpr returns a SQL timestamp: when the alert aliased by
 // alertAlias last came out of a mute (its last unacknowledge, or the end of
-// its snooze, whichever is later), or NULL when it never was muted that way.
-// GREATEST ignores NULLs.
+// its snooze) or last reopened as a relapse, whichever is latest, or NULL
+// when none of them happened. GREATEST ignores NULLs.
 func DispatchResumedAtExpr(alertAlias string) string {
-	return `GREATEST(` + alertAlias + `.unacknowledged_at, ` + alertAlias + `.snoozed_until)`
+	return `GREATEST(` + alertAlias + `.unacknowledged_at, ` + alertAlias + `.snoozed_until, ` + alertAlias + `.reopened_at)`
 }
 
 // MuteHolds reports whether the mute holds back an event of eventType for an
-// alert that is acknowledged and/or snoozed: the page ("created") and the
-// reminder only.
+// alert that is acknowledged and/or snoozed: the page ("created", and the
+// relapse notice EventRelapsed, which is a page too) and the reminder only.
 func MuteHolds(eventType string, acknowledged, snoozed bool) bool {
 	if !acknowledged && !snoozed {
 		return false
 	}
-	return eventType == "created" || eventType == "reminder"
+	return eventType == "created" || eventType == EventRelapsed || eventType == "reminder"
 }

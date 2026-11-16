@@ -12,7 +12,7 @@ import {
 import { deliveryOutcomeTone } from './status-tones';
 
 test('drops are neutral and never worded as failures', () => {
-  for (const reason of ['resolved', 'unacknowledged', 'muted', 'muted_requeued', 'channel_inactive', 'channel_changed']) {
+  for (const reason of ['resolved', 'unacknowledged', 'muted', 'muted_requeued', 'reopened', 'earlier_episode', 'channel_inactive', 'channel_changed']) {
     assert.equal(deliveryOutcomeTone('dropped', reason), 'neutral', reason);
     assert.equal(deliveryOutcomeLabel({ outcome: 'dropped', reason }), 'Not sent');
     const label = deliveryReasonLabel(reason) ?? '';
@@ -65,4 +65,8 @@ test('outcome filters', () => {
   assert.deepEqual(deliveryFilterOutcomes('all'), []);
   assert.deepEqual(deliveryFilterOutcomes('failures'), ['failed', 'permanent_failure']);
   assert.deepEqual(deliveryFilterOutcomes('dropped'), ['dropped']);
+});
+
+test('a relapse notice is labelled as one', () => {
+  assert.equal(deliveryEventLabel({ event_type: 'relapsed', test: false }), 'Relapse notice');
 });

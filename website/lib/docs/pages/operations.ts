@@ -348,6 +348,13 @@ go run ./cmd/migrate`,
             'Migration 000103 rewrites the `alerts` subject constraint and builds an index on it, which scans and locks the `alerts` table while it runs (quick at typical sizes; plan a quiet moment for a very large alert history). 000104 adds `locations.enabled_at`. During a mixed-version rollout, an alerter replica still on the previous version sends the resolve notices of `location_offline` alerts without the location\'s name and still pages mesh paths that the new version holds for an offline location; finish the rollout of every alerter replica.',
         },
         {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to relapse reopen',
+          text:
+            'Migration 000105 only adds columns, a table and constraints that skip scanning existing rows, so it is quick at any size. Upgrade the delivery workers before the alerter, or together with it: with asynchronous dispatch an older worker would send a [relapse notice](/docs/alerting/#relapses) under the first episode\'s PagerDuty or Opsgenie key, folding it into the earlier incident instead of opening a new one. Nothing relapses until a workspace sets its reopen cooldown, so upgrading in that order is enough.',
+        },
+        {
           type: 'code',
           language: 'bash',
           title: 'Create or update the initial administrator',

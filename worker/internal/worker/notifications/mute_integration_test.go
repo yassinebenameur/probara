@@ -148,10 +148,12 @@ func TestHandle_MutedEventsDroppedAndClaimsReleased(t *testing.T) {
 		}
 		return n == 1
 	}
+	// Page markers only: a delivered resolve keeps its own marker (a
+	// redelivery after a lost ack, met by a relapse, must not be handed back).
 	markers := func(ch uuid.UUID) int {
 		var n int
 		if err := dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM alert_notification_recipient_deliveries
-			WHERE alert_id = $1 AND channel_id = $2 AND recipient_hash = 'attempt'`, alertID, ch).Scan(&n); err != nil {
+			WHERE alert_id = $1 AND channel_id = $2 AND recipient_hash = 'attempt' AND event_key = 'created'`, alertID, ch).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
@@ -177,7 +179,7 @@ func TestHandle_MutedEventsDroppedAndClaimsReleased(t *testing.T) {
 		t.Fatalf("an ambiguous timeout keeps its marker: markers = %d, want 1", m)
 	}
 	// A worker that died after the marker and before the send.
-	if _, err := recipientledger.MarkAttempt(ctx, dbClient, alertID, crashCh, pageKey); err != nil {
+	if _, err := recipientledger.MarkAttempt(ctx, dbClient, alertID, crashCh, pageKeys(0)[0]); err != nil {
 		t.Fatal(err)
 	}
 	// The provider may have the timed-out incident: the acknowledgement went.

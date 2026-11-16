@@ -44,28 +44,42 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 		alertStatus string // "" = alert row gone
 		snoozed     bool
 		wantSend    bool
+		// rowRelapse is the alert's relapse_count now; the envelope was
+		// published in episode 0.
+		rowRelapse int
 	}{
-		{"created", "resolved", false, false},
-		{"reminder", "resolved", false, false},
-		{"acknowledged", "resolved", false, false},
-		{"created", "", false, false},
-		{"created", "active", false, true},
-		{"reminder", "active", false, true},
-		{"acknowledged", "acknowledged", false, true},
-		{"suspected_cause", "resolved", false, false},
-		{"suspected_cause", "active", false, true},
-		{"resolved", "resolved", false, true}, // resolves are never superseded
+		{"created", "resolved", false, false, 0},
+		{"reminder", "resolved", false, false, 0},
+		{"acknowledged", "resolved", false, false, 0},
+		{"created", "", false, false, 0},
+		{"created", "active", false, true, 0},
+		{"reminder", "active", false, true, 0},
+		{"acknowledged", "acknowledged", false, true, 0},
+		{"suspected_cause", "resolved", false, false, 0},
+		{"suspected_cause", "active", false, true, 0},
+		{"resolved", "resolved", false, true, 0},
+		{"resolved", "", false, true, 0}, // alert history deleted: the recovery still goes out
+		// Open again after a relapse since publish: the resolve is dropped
+		// (its claim handed back when it reached nobody, a no-op here: the
+		// envelope carries no claim time), and so is anything else from the
+		// episode that recovered. Once the alert is resolved again, an
+		// earlier episode's resolve still goes out: a channel that never
+		// heard the relapse got no other resolve.
+		{"resolved", "active", false, false, 1},
+		{"resolved", "resolved", false, true, 1},
+		{"created", "active", false, false, 1},
+		{"reminder", "active", false, false, 1},
 		// Acknowledged or snoozed since publish: the mute holds the page and
 		// the reminder, never the follow-up or the provider acknowledgement.
-		{"created", "acknowledged", false, false},
-		{"reminder", "acknowledged", false, false},
-		{"suspected_cause", "acknowledged", false, true},
-		{"created", "active", true, false},
-		{"reminder", "active", true, false},
-		{"suspected_cause", "active", true, true},
-		{"acknowledged", "acknowledged", true, true},
+		{"created", "acknowledged", false, false, 0},
+		{"reminder", "acknowledged", false, false, 0},
+		{"suspected_cause", "acknowledged", false, true, 0},
+		{"created", "active", true, false, 0},
+		{"reminder", "active", true, false, 0},
+		{"suspected_cause", "active", true, true, 0},
+		{"acknowledged", "acknowledged", true, true, 0},
 		// Unacknowledged since publish: the provider must not be told to stop.
-		{"acknowledged", "active", false, false},
+		{"acknowledged", "active", false, false, 0},
 	}
 	for _, tc := range cases {
 		name := tc.eventType + "/" + tc.alertStatus
@@ -84,30 +98,42 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 			mock.ExpectQuery(regexp.QuoteMeta(`FROM alert_channels`)).WithArgs(channelID).
 				WillReturnRows(sqlmock.NewRows([]string{"name", "type", "config", "is_active"}).
 					AddRow("pager", supersededStubType, []byte(`{}`), true))
-			if tc.eventType != "resolved" {
-				mock.ExpectBegin()
-				q := mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID)
-				if tc.alertStatus == "" {
-					q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}))
-				} else {
-					q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}).AddRow(tc.alertStatus, tc.snoozed))
-				}
-				if muted := tc.alertStatus != "" && tc.alertStatus != "resolved" && tc.eventType != "acknowledged" && !tc.wantSend; muted {
-					// The held event's claim is handed back (a no-op here:
-					// the envelope carries no claim time) and committed.
-					mock.ExpectCommit()
-				} else {
-					if tc.eventType == "created" && tc.wantSend {
-						// The page attempt marker, written before the send.
-						mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
-							WillReturnResult(sqlmock.NewResult(0, 1))
-					}
-					mock.ExpectRollback()
-				}
+			// Every event, resolves included, reads the alert under its lock.
+			mock.ExpectBegin()
+			q := mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID)
+			if tc.alertStatus == "" {
+				q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}))
 			} else {
-				// A delivered resolve clears the channel's page marker.
+				q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.alertStatus, tc.snoozed, tc.rowRelapse))
+			}
+			if tc.eventType == "resolved" || tc.eventType == "acknowledged" {
+				// The route's open incident (useOpenIncident); none recorded.
+				mock.ExpectQuery(regexp.QuoteMeta(`SELECT delivered_relapse FROM alert_notification_states`)).
+					WillReturnRows(sqlmock.NewRows([]string{"delivered_relapse"}))
+			}
+			muted := tc.alertStatus != "" && tc.alertStatus != "resolved" && tc.rowRelapse == 0 &&
+				tc.eventType != "acknowledged" && tc.eventType != "resolved" && !tc.wantSend
+			switch {
+			case muted || (tc.eventType == "resolved" && !tc.wantSend):
+				// The held page's, or the reopen-dropped resolve's, claim is
+				// handed back (a no-op here: the envelope carries no claim
+				// time) and committed.
+				mock.ExpectCommit()
+			case tc.eventType == "created" && tc.wantSend:
+				// The page attempt marker, written before the send.
+				mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectRollback()
+			case tc.eventType == "resolved" && tc.wantSend:
+				// Resolves are marked too (a reopen may drop one), and a
+				// delivered resolve clears the channel's page marker.
+				mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+					WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM alert_notification_recipient_deliveries`)).
 					WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectRollback()
+			default:
+				mock.ExpectRollback()
 			}
 
 			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
@@ -176,7 +202,7 @@ func TestHandle_DropsTriggerQueuedBeforeAck(t *testing.T) {
 					AddRow("pager", tc.channelType, []byte(`{}`), true))
 			mock.ExpectBegin()
 			mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID).
-				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed"}).AddRow(tc.alertStatus, false))
+				WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.alertStatus, false, 0))
 			if tc.alertStatus == "acknowledged" {
 				mock.ExpectCommit()
 			} else {
@@ -207,5 +233,48 @@ func TestHandle_DropsTriggerQueuedBeforeAck(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A paging provider keys its incident per page episode, so a resolve queued
+// before a relapse closes only the earlier incident: it is delivered even
+// while the alert is open again.
+func TestHandle_PagingResolveDeliveredWhileRelapsed(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	pagingStub.sends = nil
+
+	channelID, alertID := uuid.New(), uuid.New()
+	mock.ExpectQuery(regexp.QuoteMeta(`FROM alert_channels`)).WithArgs(channelID).
+		WillReturnRows(sqlmock.NewRows([]string{"name", "type", "config", "is_active"}).
+			AddRow("pager", pagingStubType, []byte(`{}`), true))
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow("active", false, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT delivered_relapse FROM alert_notification_states`)).
+		WillReturnRows(sqlmock.NewRows([]string{"delivered_relapse"}))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM alert_notification_recipient_deliveries`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+
+	c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
+	raw, _ := json.Marshal(notifications.DispatchEnvelope{
+		V: 1, ChannelID: channelID.String(), ChannelType: pagingStubType,
+		AlertID: alertID.String(), EventType: "resolved",
+		Event: notifications.AlertEvent{Type: "resolved"},
+	})
+	if err := c.handle(context.Background(), &queue.Message{Data: raw}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(pagingStub.sends) != 1 || pagingStub.sends[0] != "resolved" {
+		t.Fatalf("sends = %v, want the resolve", pagingStub.sends)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

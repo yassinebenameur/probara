@@ -95,15 +95,24 @@ func TestBuildAlertEvent_SuspectedCause(t *testing.T) {
 	}
 }
 
-// openAlertEventDue must agree with the created/reminder predicates of
-// claimNotificationTx: created only before any send and once the escalation
-// delay has passed; reminder only on an unresolved slot whose last send is at
-// least one interval old, and never with reminders off.
+// openAlertEventDue must agree with the created/relapsed/reminder predicates
+// of claimNotificationTx: created only before any send and once the
+// escalation delay has passed; relapsed only on a slot last paged in an
+// earlier episode of an alert that has since reopened, whether it heard the
+// recovery or not, once the delay has passed again; reminder only on an
+// unresolved slot paged this episode whose last send is at least one
+// interval old, and never with reminders off.
 func TestOpenAlertEventDue(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	interval := 10 * time.Minute
 	sent := func(event string, ago time.Duration) *notificationState {
 		return &notificationState{LastEventType: event, LastSentAt: now.Add(-ago)}
+	}
+	// pagedIn is a slot last paged in episode paged; the alert is in episode 1.
+	pagedIn := func(event string, ago time.Duration, paged int) *notificationState {
+		st := sent(event, ago)
+		st.PagedRelapse = paged
+		return st
 	}
 	tests := []struct {
 		name     string
@@ -112,19 +121,25 @@ func TestOpenAlertEventDue(t *testing.T) {
 		delay    time.Duration
 		interval time.Duration
 		want     string
+		relapse  int // the alert's episode
 	}{
-		{"first send, no delay", nil, 0, 0, interval, "created"},
-		{"first send, delay not reached", nil, 4 * time.Minute, 5 * time.Minute, interval, ""},
-		{"first send, delay reached", nil, 5 * time.Minute, 5 * time.Minute, interval, "created"},
-		{"reminder before interval", sent("created", 9*time.Minute), time.Hour, 0, interval, ""},
-		{"reminder at interval", sent("created", 10*time.Minute), time.Hour, 0, interval, "reminder"},
-		{"reminder after a reminder", sent("reminder", 11*time.Minute), time.Hour, 0, interval, "reminder"},
-		{"reminders off", sent("created", time.Hour), time.Hour, 0, 0, ""},
-		{"resolved slot never reminds", sent("resolved", time.Hour), time.Hour, 0, interval, ""},
-		{"sent slot never re-creates", sent("created", time.Minute), time.Hour, 0, interval, ""},
+		{"first send, no delay", nil, 0, 0, interval, "created", 0},
+		{"first send, delay not reached", nil, 4 * time.Minute, 5 * time.Minute, interval, "", 0},
+		{"first send, delay reached", nil, 5 * time.Minute, 5 * time.Minute, interval, "created", 0},
+		{"reminder before interval", sent("created", 9*time.Minute), time.Hour, 0, interval, "", 0},
+		{"reminder at interval", sent("created", 10*time.Minute), time.Hour, 0, interval, "reminder", 0},
+		{"reminder after a reminder", sent("reminder", 11*time.Minute), time.Hour, 0, interval, "reminder", 0},
+		{"reminders off", sent("created", time.Hour), time.Hour, 0, 0, "", 0},
+		{"resolved slot never reminds", sent("resolved", time.Hour), time.Hour, 0, interval, "", 0},
+		{"heard the recovery, then the alert reopened: relapse notice", pagedIn("resolved", time.Hour, 0), time.Hour, 0, interval, "relapsed", 1},
+		{"missed the recovery, then the alert reopened: relapse notice too", pagedIn("reminder", time.Hour, 0), time.Hour, 0, interval, "relapsed", 1},
+		{"relapse notice waits for the delay from the reopen", pagedIn("resolved", time.Hour, 0), 4 * time.Minute, 5 * time.Minute, interval, "", 1},
+		{"relapsed slot reminds like a page", pagedIn("relapsed", 11*time.Minute, 1), time.Hour, 0, interval, "reminder", 1},
+		{"relapsed slot never re-sends the notice", pagedIn("relapsed", time.Minute, 1), time.Hour, 0, interval, "", 1},
+		{"sent slot never re-creates", sent("created", time.Minute), time.Hour, 0, interval, "", 0},
 	}
 	for _, tt := range tests {
-		if got := openAlertEventDue(tt.state, tt.alertAge, tt.delay, now, tt.interval, dispatchGate{}); got != tt.want {
+		if got := openAlertEventDue(tt.state, tt.alertAge, tt.delay, now, tt.interval, dispatchGate{RelapseCount: tt.relapse}); got != tt.want {
 			t.Errorf("%s: openAlertEventDue = %q, want %q", tt.name, got, tt.want)
 		}
 	}

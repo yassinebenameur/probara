@@ -66,6 +66,14 @@ const REASON: Record<string, ReasonCopy> = {
     label: 'Out of retries',
     hint: 'The delivery worker’s last attempt failed; nothing retries it.',
   },
+  reopened: {
+    label: 'Alert relapsed first',
+    hint: 'A recovery notice queued before the alert relapsed and reopened. Telling the channel it recovered after it failed again would be wrong, so it was dropped; if it provably reached no one, the channel hears the relapse’s own recovery.',
+  },
+  earlier_episode: {
+    label: 'From before the relapse',
+    hint: 'Queued before the alert relapsed, so it belongs to the outage that recovered. The relapse notifies on its own.',
+  },
 };
 
 /** Short reason text, or null when the row has none. Unknown reasons show as sent. */
@@ -85,6 +93,7 @@ const EVENT_LABEL: Record<string, string> = {
   resolved: 'Recovery',
   acknowledged: 'Acknowledgement',
   suspected_cause: 'Suspected cause',
+  relapsed: 'Relapse notice',
 };
 
 /** What was being delivered; a test send says so whatever event it carried. */

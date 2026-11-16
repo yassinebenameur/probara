@@ -26,6 +26,9 @@ type offlineLocation struct {
 	onlyMonitorCount int
 	triggeredAt      time.Time
 	resolveReason    string
+	// reporting: its last heartbeat is inside the offline threshold, the
+	// only state that counts as a recovery a relapse may reopen.
+	reporting bool
 }
 
 func (l offlineLocation) record(triggeredAt time.Time) alertRecord {
@@ -297,28 +300,64 @@ func (a *Alerter) openLocationOfflineAlerts(ctx context.Context, fleet locationF
 	return nil
 }
 
-// openLocationOfflineAlert inserts the alert only if the location is still
-// offline at insert time (it may have reported since the candidate query),
+// openLocationOfflineAlert opens the alert only if the location is still
+// offline at that point (it may have reported since the candidate query),
 // and only once across replicas: idx_alerts_one_open_location_offline makes
-// the loser's INSERT a no-op.
+// the loser's INSERT a no-op. A location that went offline again soon after
+// it reported again reopens its recent alert instead (relapse.go).
 func (a *Alerter) openLocationOfflineAlert(ctx context.Context, l offlineLocation) error {
-	err := a.db.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
-			triggered_at, failure_count, source_location_id, created_at, updated_at)
-		SELECT $1, l.tenant_id, NULL, 'location_offline', 'active', NOW(), 0, l.id, NOW(), NOW()
-		FROM locations l
-		WHERE l.id = $2 AND `+monitorstate.LocationOfflinePredicate("l")+`
-		ON CONFLICT (source_location_id)
-			WHERE kind = 'location_offline' AND status IN ('active', 'acknowledged') DO NOTHING
-		RETURNING id, triggered_at
-	`, uuid.New(), l.locationID).Scan(&l.alertID, &l.triggeredAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil // another replica won, or the location reported meanwhile
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin location offline alert transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var stillOffline bool
+	if err := tx.QueryRowContext(ctx, `SELECT `+monitorstate.LocationOfflinePredicate("l")+` FROM locations l WHERE l.id = $1`,
+		l.locationID).Scan(&stillOffline); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("recheck offline location: %w", err)
+	}
+	if !stillOffline {
+		return nil // it reported meanwhile
+	}
+	reopened, err := reopenRecentAlertTx(ctx, tx,
+		alertIdentity{tenantID: l.tenantID, kind: notifications.KindLocationOffline, sourceLocationID: l.locationID}, nil)
+	if reopenSkipped(err) {
+		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("insert location offline alert: %w", err)
+		return err
+	}
+	if reopened != nil {
+		l.alertID, l.triggeredAt = reopened.id, reopened.triggeredAt
+		if err := a.noteRelapseTx(ctx, tx, l.tenantID, reopened); err != nil {
+			return err
+		}
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
+				triggered_at, failure_count, source_location_id, created_at, updated_at)
+			SELECT $1, l.tenant_id, NULL, 'location_offline', 'active', NOW(), 0, l.id, NOW(), NOW()
+			FROM locations l
+			WHERE l.id = $2 AND `+monitorstate.LocationOfflinePredicate("l")+`
+			ON CONFLICT (source_location_id)
+				WHERE kind = 'location_offline' AND status IN ('active', 'acknowledged') DO NOTHING
+			RETURNING id, triggered_at
+		`, uuid.New(), l.locationID).Scan(&l.alertID, &l.triggeredAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // another replica won, or the location reported meanwhile
+		}
+		if err != nil {
+			return fmt.Errorf("insert location offline alert: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit location offline alert transaction: %w", err)
 	}
 	record := l.record(l.triggeredAt)
+	if reopened != nil {
+		reopened.apply(&record)
+	}
 	a.publishAlertEvent(ctx, "created", l.binding(), &record, nil)
 	return nil
 }
@@ -336,7 +375,8 @@ func (a *Alerter) resolveLocationOfflineAlerts(ctx context.Context) error {
 				WHEN l.id IS NULL OR l.deleted_at IS NOT NULL THEN '`+notifications.ResolveReasonLocationDeleted+`'
 				WHEN NOT l.enabled THEN '`+notifications.ResolveReasonLocationDisabled+`'
 				ELSE '`+notifications.ResolveReasonRecovered+`'
-			END
+			END,
+			COALESCE(l.last_seen_at > NOW() - make_interval(secs => `+fmt.Sprint(int(monitorstate.LocationOfflineAfter/time.Second))+`), FALSE)
 		FROM alerts al
 		LEFT JOIN locations l ON l.id = al.source_location_id
 		WHERE al.kind = 'location_offline'
@@ -351,7 +391,7 @@ func (a *Alerter) resolveLocationOfflineAlerts(ctx context.Context) error {
 	var recovered []offlineLocation
 	for rows.Next() {
 		var l offlineLocation
-		if err := rows.Scan(&l.alertID, &l.tenantID, &l.locationID, &l.name, &l.lastSeenAt, &l.triggeredAt, &l.resolveReason); err != nil {
+		if err := rows.Scan(&l.alertID, &l.tenantID, &l.locationID, &l.name, &l.lastSeenAt, &l.triggeredAt, &l.resolveReason, &l.reporting); err != nil {
 			return fmt.Errorf("scan recovered location: %w", err)
 		}
 		recovered = append(recovered, l)
@@ -361,7 +401,12 @@ func (a *Alerter) resolveLocationOfflineAlerts(ctx context.Context) error {
 	}
 
 	for _, l := range recovered {
-		resolvedAt, err := a.resolveAlertWithReason(ctx, l.alertID, time.Now(), l.resolveReason)
+		// Only a location actually reporting again recovered. Disabled or
+		// deleted is not a recovery, and neither is the grace after a
+		// re-enable (a silent location disabled and re-enabled stops counting
+		// as offline for one threshold without having sent a heartbeat).
+		recovered := l.resolveReason == notifications.ResolveReasonRecovered && l.reporting
+		resolvedAt, err := a.resolveAlertWithReason(ctx, l.alertID, resolveReason(recovered), l.resolveReason)
 		if errors.Is(err, errAlertAlreadyResolved) {
 			continue
 		}
@@ -385,7 +430,7 @@ func (a *Alerter) dispatchOpenLocationOfflineAlerts(ctx context.Context) error {
 			`+locationMonitorCountsSQL("l")+`,
 			al.triggered_at, te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
-			`+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
+			`+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`, al.relapse_count
 		FROM alerts al
 		JOIN tenants te ON te.id = al.tenant_id
 		JOIN locations l ON l.id = al.source_location_id
@@ -410,7 +455,7 @@ func (a *Alerter) dispatchOpenLocationOfflineAlerts(ctx context.Context) error {
 		var resumedAt sql.NullTime
 		if err := rows.Scan(&oa.loc.alertID, &oa.loc.tenantID, &oa.loc.locationID, &oa.loc.name, &oa.loc.lastSeenAt,
 			&oa.loc.monitorCount, &oa.loc.onlyMonitorCount, &oa.loc.triggeredAt, &oa.reminderSeconds,
-			&oa.eligibleSince, &oa.gate.Muted, &resumedAt); err != nil {
+			&oa.eligibleSince, &oa.gate.Muted, &resumedAt, &oa.gate.RelapseCount); err != nil {
 			return fmt.Errorf("scan open location offline alert: %w", err)
 		}
 		oa.gate.ResumedAt = resumedAt.Time
@@ -435,8 +480,9 @@ func (a *Alerter) dispatchOpenLocationOfflineAlerts(ctx context.Context) error {
 		record := oa.loc.record(oa.loc.triggeredAt)
 		binding := oa.loc.binding()
 		// A location alert has no root cause, so this is triggered_at until an
-		// unacknowledge or a snooze end restarts it; the acknowledge/snooze
-		// mute applies as it does to every other open alert.
+		// unacknowledge, a snooze end or a relapse reopen restarts it; the
+		// acknowledge/snooze mute and the relapse notice (gate.RelapseCount)
+		// apply as they do to every other open alert.
 		alertAge := now.Sub(oa.eligibleSince)
 		reminderInterval := time.Duration(oa.reminderSeconds) * time.Second
 		for _, target := range targets {

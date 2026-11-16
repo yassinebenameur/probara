@@ -36,7 +36,8 @@ func alertTools() []spec {
 			Name:  "get_alert",
 			Title: "Get alert",
 			Description: "One alert in full, including its AI triage (suspected cause, evidence) when the local " +
-				"model has produced one, and the labelling context for label_alert_triage.",
+				"model has produced one, the labelling context for label_alert_triage, and for a relapsed alert " +
+				"(relapse_count > 0) its relapse history.",
 			Method: http.MethodGet, Route: "/alerts/{id}",
 			PathDocs: map[string]string{"id": "Alert ID."},
 		},
@@ -54,7 +55,8 @@ func alertTools() []spec {
 			Name:  "resolve_alert",
 			Title: "Resolve alert",
 			Description: "Resolve an active or acknowledged alert by hand. Channels that were paged receive a real " +
-				"\"resolved\" notification. If the monitor is still failing, a new alert can open.",
+				"\"resolved\" notification. If the monitor is still failing, a new alert can open (a manually " +
+				"resolved alert never reopens as a relapse).",
 			Method: http.MethodPost, Route: "/alerts/{id}/resolve",
 			PathDocs: map[string]string{"id": "Alert ID."},
 		},

@@ -118,8 +118,8 @@ escalation page that had not fired yet. Its resolve, the `acknowledged` event
 to paging channels already paged and the `suspected_cause` follow-up still go
 out. The mute is defined once in `shared/alertrouting` (`mute.go`:
 `MutedPredicate`, `MuteHolds`, `DispatchResumedAtExpr`) and checked three
-times: the alerter's pre-filter (`openAlertEventDue`, lifecycle and mesh
-dispatch), its claim (`deliverNotification`, under the alert row's
+times: the alerter's pre-filter (`openAlertEventDue`, lifecycle, mesh and
+offline-location dispatch), its claim (`deliverNotification`, under the alert row's
 `FOR SHARE` lock), and the async worker (`eventSuperseded`, same lock), which
 drops a page or reminder queued before the ack or snooze and hands a page's
 claim back when it provably reached nobody: the worker writes a page attempt
@@ -152,6 +152,43 @@ gauges `probara_alerter_locations{state}`,
 `probara_alerter_location_offline_guard{reason}` and
 `probara_alerter_location_offline_guard_limit_seconds{reason}`.
 
+Relapse reopen (off unless a workspace sets `alert_reopen_cooldown_minutes`,
+migration 000105; rule in `shared/alertrouting/relapse.go`): every alert
+kind's opener (availability, latency, host metric, TLS and domain expiry,
+mesh edge, offline location) first tries `reopenRecentAlertTx`
+(`alerter/internal/alerter/relapse.go`), one guarded UPDATE that reopens the
+subject's latest alert when the alerter resolved it because its condition
+cleared (`auto_resolved`, set by `resolveAlert` only on the recovery paths;
+never for a paused, disabled or deleted subject, a removed rule, stale
+readings, or a domain alert changing form) within the cooldown:
+`relapse_count` + 1, `reopened_at`, a row in `alert_relapses`, the episode's
+acknowledgement, snooze and `resolve_reason` cleared (`first_acknowledged_at`
+kept). It waits at most `reopenLockTimeout` (1 s) for row locks and otherwise
+retries next tick; only when it finds nothing does the opener INSERT, and the
+one-open-alert indexes make the pair race-safe across replicas. A reopen is
+published to the alert stream as `created` with the relapse count and adds an
+"Alert relapsed" entry to linked open incidents; it never touches state
+intervals or downtime. Each reopen is a paging episode: `reopened_at`
+restarts the delay and reminder clocks (`DispatchResumedAtExpr`), each route
+records the episode of its last page (`paged_relapse`), a route last paged in
+an earlier episode is due one `relapsed` claim (sent to plugins as `created`
+with `relapse_notice`), and the episode is part of the recipient-ledger key,
+the idempotency key and so the dispatch message id (the relapse notice's
+`dispatchRound` is its own, prefixed `relapsed:`). PagerDuty and Opsgenie key
+incidents per episode, so the relapse notice closes the route's previous
+incident and opens a new one; what is open is the episode of the last page
+actually delivered (`delivered_relapse`, written after the send), which
+resolves and acknowledgements target, and a relapse notice that is dropped
+or fails for good still sends that close. `resolved_at` is the database
+clock on every resolve path, the clock of the reopen window. Both the alerter claim and the async worker
+hold the alert row `FOR SHARE` for every event, resolves included; a
+resolve still queued while the alert is open again is dropped (paging
+channels excepted) and handed back to `created` when no attempt marker or
+recipient says it may have reached anyone (the worker marks resolves and
+relapse notices as it marks pages, under their episode's ledger key), and
+once the alert has recovered again a queued resolve of any episode is
+delivered.
+
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.
 An empty group's old availability alert is resolved; group timeline integration
@@ -178,8 +215,9 @@ The notification delivery history, `alert_notification_deliveries`
 and three callers: the alerter's `deliverNotification` (synchronous sends; in
 the claim transaction when the claim commits, through the pool after it rolls
 back), the worker's notification consumer (every attempt and every event it
-drops; through the pool, except the muted drop that commits with its claim
-release), and the API's channel test send. Errors are sanitized and
+drops; through the pool, except the muted drop and the relapse-superseded
+resolve drop, which commit with their claim release), and the API's channel
+test send. A relapse notice is recorded as event `relapsed`. Errors are sanitized and
 recipients masked before they are written. The API reads it per alert and per
 channel; the scheduler's retention cleanup deletes rows older than 90 days.
 

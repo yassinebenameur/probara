@@ -409,23 +409,31 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 		unackedAgo time.Duration // 0: never unacknowledged
 		sentAgo    time.Duration // 0: channel never paged
 		want       string
+		// relapsed: the alert reopened a minute ago (relapse 1) and the
+		// route was last paged before that, so the mute decides whether the
+		// relapse notice goes out.
+		relapsed bool
 	}{
-		{"fresh", "active", none, none, none, "created"},
-		{"acknowledged, never paged", "acknowledged", none, none, none, ""},
-		{"snoozed, never paged", "active", time.Hour, none, none, ""},
-		{"snooze over, never paged", "active", -time.Minute, none, none, "created"},
-		{"reminder due", "active", none, none, 30 * time.Minute, "reminder"},
-		{"reminder not due", "active", none, none, 5 * time.Minute, ""},
-		{"acknowledged", "acknowledged", none, none, 30 * time.Minute, ""},
-		{"snoozed", "active", time.Hour, none, 30 * time.Minute, ""},
-		{"acknowledged and snoozed", "acknowledged", time.Hour, none, 30 * time.Minute, ""},
-		{"snooze just over", "active", -time.Minute, none, 30 * time.Minute, ""},
-		{"snooze long over", "active", -11 * time.Minute, none, 30 * time.Minute, "reminder"},
-		{"just unacknowledged", "active", none, time.Minute, 30 * time.Minute, ""},
-		{"unacknowledged long ago", "active", none, 11 * time.Minute, 30 * time.Minute, "reminder"},
-		{"unacknowledged long ago, sent since", "active", none, 11 * time.Minute, 5 * time.Minute, ""},
-		{"later of unack and snooze end wins", "active", -11 * time.Minute, time.Minute, 30 * time.Minute, ""},
-		{"acknowledged again after an unack", "acknowledged", none, 11 * time.Minute, 30 * time.Minute, ""},
+		{"fresh", "active", none, none, none, "created", false},
+		{"acknowledged, never paged", "acknowledged", none, none, none, "", false},
+		{"snoozed, never paged", "active", time.Hour, none, none, "", false},
+		{"snooze over, never paged", "active", -time.Minute, none, none, "created", false},
+		{"reminder due", "active", none, none, 30 * time.Minute, "reminder", false},
+		{"reminder not due", "active", none, none, 5 * time.Minute, "", false},
+		{"acknowledged", "acknowledged", none, none, 30 * time.Minute, "", false},
+		{"snoozed", "active", time.Hour, none, 30 * time.Minute, "", false},
+		{"acknowledged and snoozed", "acknowledged", time.Hour, none, 30 * time.Minute, "", false},
+		{"snooze just over", "active", -time.Minute, none, 30 * time.Minute, "", false},
+		{"snooze long over", "active", -11 * time.Minute, none, 30 * time.Minute, "reminder", false},
+		{"just unacknowledged", "active", none, time.Minute, 30 * time.Minute, "", false},
+		{"unacknowledged long ago", "active", none, 11 * time.Minute, 30 * time.Minute, "reminder", false},
+		{"unacknowledged long ago, sent since", "active", none, 11 * time.Minute, 5 * time.Minute, "", false},
+		{"later of unack and snooze end wins", "active", -11 * time.Minute, time.Minute, 30 * time.Minute, "", false},
+		{"acknowledged again after an unack", "acknowledged", none, 11 * time.Minute, 30 * time.Minute, "", false},
+		{"relapsed", "active", none, none, 30 * time.Minute, alertrouting.EventRelapsed, true},
+		{"relapsed, acknowledged since", "acknowledged", none, none, 30 * time.Minute, "", true},
+		{"relapsed, snoozed since", "active", time.Hour, none, 30 * time.Minute, "", true},
+		{"relapsed, snooze over", "active", -30 * time.Second, none, 30 * time.Minute, alertrouting.EventRelapsed, true},
 	}
 
 	a := newIntegrationAlerter(db)
@@ -442,6 +450,9 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 					CASE WHEN $6::double precision <> 0 THEN NOW() - make_interval(secs => $6::double precision) END,
 					1, NOW(), NOW())
 			`, alertID, tenantID, monitorID, tc.status, tc.snoozeIn.Seconds(), tc.unackedAgo.Seconds())
+			if tc.relapsed {
+				mustExec(ctx, t, db, `UPDATE alerts SET relapse_count = 1, reopened_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, alertID)
+			}
 			if tc.sentAgo != 0 {
 				mustExec(ctx, t, db, `
 					INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
@@ -455,9 +466,9 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 			var eligibleSince time.Time
 			if err := db.QueryRowContext(ctx, `
 				SELECT `+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`,
-					`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`
+					`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`, al.relapse_count
 				FROM alerts al JOIN tenants te ON te.id = al.tenant_id WHERE al.id = $1
-			`, alertID).Scan(&gate.Muted, &resumedAt, &eligibleSince); err != nil {
+			`, alertID).Scan(&gate.Muted, &resumedAt, &eligibleSince, &gate.RelapseCount); err != nil {
 				t.Fatal(err)
 			}
 			gate.ResumedAt = resumedAt.Time
@@ -474,7 +485,11 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 
 			// Claim: the one event this state can be due for.
 			event := "created"
-			if state != nil {
+			switch {
+			case state == nil:
+			case state.PagedRelapse < gate.RelapseCount:
+				event = alertrouting.EventRelapsed
+			default:
 				event = "reminder"
 			}
 			sent, err := a.deliverNotification(ctx, event, alertSubject{MonitorID: monitorID, TenantID: tenantID},

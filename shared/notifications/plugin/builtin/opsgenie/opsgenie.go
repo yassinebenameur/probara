@@ -161,13 +161,26 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 		}
 	}
 	headers := map[string]string{"Authorization": "GenieKey " + cfg.APIKey}
-	alias := Alias(req.Event.Alert.ID)
+	alert := req.Event.Alert
+	alias := Alias(alert.ID, alert.PagedRelapse)
 	msg := req.View()
 
 	switch req.Type() {
 	case present.EventCreated:
 		if req.Test {
 			msg.Tone = present.ToneInfo
+		}
+		if prev := alert.PreviousPagedRelapse; !req.Test && alert.RelapseNotice && prev != nil && *prev != alert.PagedRelapse {
+			// A relapse opens a new alert: a create with the earlier alias
+			// would be deduplicated into it and not notify while it is open
+			// or acknowledged. Close the earlier one (still open when this
+			// channel never received that recovery; closing a closed alert
+			// changes nothing). Different aliases, so the order Opsgenie
+			// processes the two requests in does not matter.
+			if err := plugin.PostJSON(ctx, p.httpClient, actionURL(base, Alias(alert.ID, *prev), "close"),
+				note("Relapsed: superseded by a new alert for the relapse."), headers, "opsgenie alert api"); err != nil {
+				return err
+			}
 		}
 		if err := plugin.PostJSON(ctx, p.httpClient, base, buildCreate(alias, cfg.Priority, msg), headers, "opsgenie alert api"); err != nil {
 			return err
@@ -199,10 +212,17 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	}
 }
 
-// Alias is the provider alias for a Probara alert: stable for the alert's
-// lifetime, which is what lets acknowledge and close find the alert create
-// opened.
-func Alias(alertID string) string {
+// Alias is the provider alias for one paging episode of a Probara alert,
+// which is what lets acknowledge and close find the alert create opened.
+// Each paging episode of an alert (its first trigger, then each relapse:
+// notifications.AlertDetails.PagedRelapse) has its own alias, so a relapse
+// opens a new Opsgenie alert and acknowledge/close reach the alert the
+// channel's page opened. Episode 0 keeps the alias alerts had before
+// relapses existed.
+func Alias(alertID string, episode int) string {
+	if episode > 0 {
+		return fmt.Sprintf("probara-%s-relapse-%d", alertID, episode)
+	}
 	return "probara-" + alertID
 }
 

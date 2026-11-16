@@ -81,14 +81,17 @@ func notificationTools() []spec {
 			Name:  "get_notification_settings",
 			Title: "Get notification settings",
 			Description: "Workspace alerting defaults: default channels (who monitors in \"default\" mode page), " +
-				"reminders, auto-incident creation, latency anomaly detection and dependency suppression.",
+				"reminders, auto-incident creation, latency anomaly detection, dependency suppression and the " +
+				"relapse reopen cooldown (alert_reopen_cooldown_minutes, 0 = off).",
 			Method: http.MethodGet, Route: "/notification-settings",
 		},
 		{
 			Name:  "update_notification_settings",
 			Title: "Update notification settings",
 			Description: "Change workspace alerting defaults. Unsent fields stay. default_channels, when sent, " +
-				"replaces the default routing in order ([] routes default-mode monitors to nobody).",
+				"replaces the default routing in order ([] routes default-mode monitors to nobody). " +
+				"alert_reopen_cooldown_minutes (1-1440, 0 = off): an alert that recovered on its own and fails " +
+				"again within it reopens as a relapse instead of a new alert.",
 			Method: http.MethodPut, Route: "/notification-settings",
 			Body: typeOf[notificationsettings.UpdateRequest](),
 		},

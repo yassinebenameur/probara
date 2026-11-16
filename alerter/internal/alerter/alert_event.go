@@ -64,6 +64,16 @@ type alertRecord struct {
 	ResolveReason string
 	// SuspectedCause is set only for the "suspected_cause" follow-up.
 	SuspectedCause *notifications.SuspectedCause
+	// Relapse annotation (notifications.AlertDetails): set by a reopen, and
+	// for every send by deliverNotification from the row it locks.
+	RelapseCount    int
+	ReopenedAt      *time.Time
+	LastRecoveredAt *time.Time
+	// Per delivery, set by deliverNotification from its claim
+	// (notifications.AlertDetails documents them).
+	RelapseNotice        bool
+	PagedRelapse         int
+	PreviousPagedRelapse *int
 }
 
 type alertChannel struct {
@@ -77,6 +87,7 @@ type alertChannel struct {
 type notificationState struct {
 	LastSentAt           time.Time
 	LastEventType        string
+	PagedRelapse         int
 	AcknowledgedSentAt   *time.Time
 	SuspectedCauseSentAt *time.Time
 }
@@ -100,7 +111,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 	}
 
 	query := `
-		SELECT alert_id, channel_id, last_sent_at, last_event_type, acknowledged_sent_at, suspected_cause_sent_at
+		SELECT alert_id, channel_id, last_sent_at, last_event_type, acknowledged_sent_at, suspected_cause_sent_at, paged_relapse
 		FROM alert_notification_states
 		WHERE alert_id = ANY($1)
 	`
@@ -115,7 +126,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 		var alertID uuid.UUID
 		var channelID uuid.UUID
 		var state notificationState
-		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType, &state.AcknowledgedSentAt, &state.SuspectedCauseSentAt); err != nil {
+		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType, &state.AcknowledgedSentAt, &state.SuspectedCauseSentAt, &state.PagedRelapse); err != nil {
 			return nil, fmt.Errorf("failed to scan notification state: %w", err)
 		}
 		if _, ok := states[alertID]; !ok {
@@ -135,17 +146,57 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 // neither publish nor notify, and this is not an error worth logging.
 var errAlertAlreadyResolved = errors.New("alert already resolved")
 
-func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time) (time.Time, error) {
-	return a.resolveAlertWithReason(ctx, alertID, now, "")
+// resolveReason says why the alerter resolves an alert, which decides
+// whether a relapse may reopen it (relapse.go).
+type resolveReason bool
+
+const (
+	// resolvedRecovered: the alert's condition cleared (the monitor came
+	// back up, the metric or latency returned to normal, the certificate or
+	// domain was renewed, the mesh edge recovered, the location reports
+	// again). Sets auto_resolved, so the subject failing again within the
+	// tenant's reopen cooldown reopens the alert.
+	resolvedRecovered resolveReason = true
+	// resolvedOutOfScope: the alerter closes the alert because its subject
+	// left evaluation (monitor paused, disabled or deleted, rule or
+	// threshold removed, readings gone stale, mesh edge or location gone,
+	// group emptied or paused), or because the alert's form changed (a
+	// domain alert switching between "expiry unknown" and dated). Not a
+	// recovery: the subject coming back opens a new alert.
+	resolvedOutOfScope resolveReason = false
+)
+
+// resolveAlert is the alerter's own resolve; reason records whether the
+// condition cleared (auto_resolved). A manual resolve in the API leaves
+// auto_resolved FALSE, so it never reopens either.
+//
+// resolved_at is the database's clock, the one the reopen window
+// (relapse.go), reopened_at and every other alert time are measured on: an
+// alerter host clock ahead or behind would stretch or shorten the cooldown
+// and could date a recovery after the relapse it led to. Callers notify with
+// the time this returns.
+func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, reason resolveReason) (time.Time, error) {
+	return a.resolveAlertWithReason(ctx, alertID, reason, "")
 }
 
-// resolveAlertWithReason is resolveAlert recording why the alert closed in
-// alerts.resolve_reason ("" leaves it NULL).
-func (a *Alerter) resolveAlertWithReason(ctx context.Context, alertID uuid.UUID, now time.Time, reason string) (time.Time, error) {
+// resolveAlertWithReason is resolveAlert also recording why the alert closed
+// in alerts.resolve_reason (notifications.ResolveReason*; "" leaves it NULL),
+// the wording the closing notification uses.
+func (a *Alerter) resolveAlertWithReason(ctx context.Context, alertID uuid.UUID, reason resolveReason, recorded string) (time.Time, error) {
+	return a.resolveAlertAt(ctx, alertID, time.Time{}, reason, recorded)
+}
+
+// resolveAlertAt resolves at a given time; the zero time is the database's
+// NOW(), the only value production code passes. Tests pin past times.
+func (a *Alerter) resolveAlertAt(ctx context.Context, alertID uuid.UUID, at time.Time, reason resolveReason, recorded string) (time.Time, error) {
+	var pinned any
+	if !at.IsZero() {
+		pinned = at
+	}
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1,
-			resolve_reason = NULLIF($3, '')
+		SET status = 'resolved', resolved_at = COALESCE($1::timestamptz, NOW()), updated_at = NOW(),
+			auto_resolved = $3, resolve_reason = NULLIF($4, '')
 		WHERE id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING resolved_at
 	`
@@ -159,7 +210,7 @@ func (a *Alerter) resolveAlertWithReason(ctx context.Context, alertID uuid.UUID,
 	}()
 
 	var resolvedAt time.Time
-	if err := tx.QueryRowContext(ctx, query, now, alertID, reason).Scan(&resolvedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, query, pinned, alertID, bool(reason), recorded).Scan(&resolvedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return time.Time{}, errAlertAlreadyResolved
 		}
@@ -179,6 +230,17 @@ func (a *Alerter) resolveAlertWithReason(ctx context.Context, alertID uuid.UUID,
 func (a *Alerter) publishAlertEvent(ctx context.Context, eventType string, binding alertSubject, alert *alertRecord, resolvedAt *time.Time) {
 	if a.nats == nil {
 		return
+	}
+	if eventType == "resolved" && a.db != nil && alert.RelapseCount == 0 {
+		// Each kind's resolver builds its record from its own open-alert
+		// query; the relapse count comes from the row here, so a relapsed
+		// alert's live resolve still says it relapsed (the operator UI
+		// replaces the row with this event).
+		withRelapse := *alert
+		if err := a.db.QueryRowContext(ctx, `SELECT relapse_count, reopened_at FROM alerts WHERE id = $1`, alert.ID).
+			Scan(&withRelapse.RelapseCount, &withRelapse.ReopenedAt); err == nil {
+			alert = &withRelapse
+		}
 	}
 
 	event := buildAlertEvent(eventType, binding, alert, resolvedAt, time.Now())
@@ -224,6 +286,7 @@ func (a *Alerter) sendChannelNotification(
 			EventType:   eventType,
 			Event:       event,
 			DeliveryKey: deliveryKey,
+			Release:     claimRelease(ctx),
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
 		// One message per claimed occurrence (dispatchRound): a retry of a
@@ -341,6 +404,12 @@ func buildAlertEvent(eventType string, binding alertSubject, alert *alertRecord,
 			TargetLocationID:     uuidStr(alert.TargetLocationID),
 			TargetLocationName:   alert.TargetLocationName,
 			SuspectedCause:       alert.SuspectedCause,
+			RelapseCount:         alert.RelapseCount,
+			ReopenedAt:           alert.ReopenedAt,
+			LastRecoveredAt:      alert.LastRecoveredAt,
+			RelapseNotice:        alert.RelapseNotice,
+			PagedRelapse:         alert.PagedRelapse,
+			PreviousPagedRelapse: alert.PreviousPagedRelapse,
 
 			LocationLastSeenAt:       alert.LocationLastSeenAt,
 			LocationMonitorCount:     alert.LocationMonitorCount,

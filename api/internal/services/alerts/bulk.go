@@ -69,7 +69,8 @@ func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alert
 	changed, err := collectIDs(s.db.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
 		SET status = 'acknowledged', acknowledged_at = $4, acknowledged_by_user_id = $5, updated_at = $4,
-			first_acknowledged_at = COALESCE(a.first_acknowledged_at, $4)
+			first_acknowledged_at = COALESCE(a.first_acknowledged_at, $4),
+			`+firstAckEpisodeStartSet("a")+`
 		FROM target
 		WHERE a.id = target.id
 		RETURNING a.id
@@ -85,7 +86,6 @@ func (s *Service) BulkAcknowledge(ctx context.Context, tenantID uuid.UUID, alert
 // transaction as ResolveAlert does. The others are reported in Failed.
 func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error) {
 	ids := dedupeIDs(alertIDs)
-	now := time.Now()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -97,12 +97,12 @@ func (s *Service) BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs 
 
 	changed, err := collectIDs(tx.QueryContext(ctx, bulkTargetCTE+`
 		UPDATE alerts a
-		SET status = 'resolved', resolved_at = $4, updated_at = $4,
+		SET status = 'resolved', resolved_at = NOW(), updated_at = NOW(),
 			resolve_reason = '`+notifications.ResolveReasonManual+`'
 		FROM target
 		WHERE a.id = target.id
 		RETURNING a.id
-	`, pq.Array(uuidStrings(ids)), tenantID, pq.Array([]string{"active", "acknowledged"}), now))
+	`, pq.Array(uuidStrings(ids)), tenantID, pq.Array([]string{"active", "acknowledged"})))
 	if err != nil {
 		return nil, fmt.Errorf("failed to bulk resolve alerts: %w", err)
 	}

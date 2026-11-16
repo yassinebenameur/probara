@@ -103,6 +103,30 @@ type AlertDetails struct {
 	// alert's own value (active or acknowledged): receivers branch on the
 	// event type, never on status.
 	SuspectedCause *SuspectedCause `json:"suspected_cause,omitempty"`
+
+	// Relapse annotation: set once the alert has reopened within its
+	// workspace's reopen cooldown (shared/alertrouting relapse.go).
+	// RelapseCount is how many times it reopened and names the paging
+	// episode an event belongs to (0 = the first); ReopenedAt is the latest
+	// reopen and LastRecoveredAt the recovery that reopen interrupted. A
+	// relapse notice is a "created" event with RelapseCount > 0.
+	RelapseCount    int        `json:"relapse_count,omitempty"`
+	ReopenedAt      *time.Time `json:"reopened_at,omitempty"`
+	LastRecoveredAt *time.Time `json:"last_recovered_at,omitempty"`
+
+	// Per-delivery relapse context, set by the alerter's claim for one
+	// channel. RelapseNotice marks the one send that tells this channel the
+	// alert relapsed (a "created" event; present words only it as a
+	// relapse). PagedRelapse is the episode of the page this channel's
+	// provider incident belongs to, and PreviousPagedRelapse, on a relapse
+	// notice, the episode of the channel's page before it: paging providers
+	// key their incident per episode (pagerduty.DedupKey, opsgenie.Alias), so
+	// a relapse notice closes the earlier incident and opens a new one,
+	// which pages even if the earlier one was acknowledged and never
+	// resolved, and a late resolve closes only the incident it was for.
+	RelapseNotice        bool `json:"relapse_notice,omitempty"`
+	PagedRelapse         int  `json:"paged_relapse,omitempty"`
+	PreviousPagedRelapse *int `json:"previous_paged_relapse,omitempty"`
 }
 
 // SuspectedCause is a triage's named cause as a follow-up carries it.

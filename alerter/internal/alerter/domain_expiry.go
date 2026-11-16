@@ -119,10 +119,13 @@ func (a *Alerter) evaluateDomainExpiry(ctx context.Context) error {
 				value := float64(days)
 				err = a.openDomainExpiryAlert(ctx, m, &value, lastError)
 			} else {
-				err = a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, now)
+				// Renewed, or the window narrowed: a recovery.
+				err = a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, now, resolvedRecovered)
 			}
 		} else if obs.noExpiryPublished {
-			err = a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, now)
+			// "Expiry unknown" is this registry's normal state: nothing was
+			// fixed, so a later alert is a new one.
+			err = a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, now, resolvedOutOfScope)
 		} else if obs.unknownRounds >= domainExpiryUnknownAfter {
 			err = a.openDomainExpiryAlert(ctx, m, nil, "domain: expiry unknown: "+obs.unknownReason.String)
 		}
@@ -268,23 +271,49 @@ func (a *Alerter) openDomainExpiryAlert(ctx context.Context, m domainExpiryMonit
 	`, m.monitorID).Scan(&openUnknown)
 	switch {
 	case err == nil && openUnknown != (value == nil):
-		if err := a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, time.Now()); err != nil {
+		// A change of form, not a recovery: never reopenable as a relapse.
+		if err := a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, time.Now(), resolvedOutOfScope); err != nil {
 			return err
 		}
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("query open domain expiry alert: %w", err)
 	}
 
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin domain expiry alert transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A relapse of the same form only (relapse.go): a dated alert never
+	// comes back as "expiry unknown", or the other way round.
+	unknown := value == nil
+	reopened, err := reopenRecentAlertTx(ctx, tx,
+		alertIdentity{tenantID: m.tenantID, kind: notifications.KindDomainExpiry, monitorID: m.monitorID, metricValueNull: &unknown},
+		[]alertColumn{{"last_error", lastError}, {"metric_value", value}, {"threshold_value", threshold}})
+	if reopenSkipped(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	var alertID uuid.UUID
-	err = a.db.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
-			triggered_at, failure_count, last_error, metric_value, threshold_value,
-			created_at, updated_at)
-		VALUES ($1, $2, $3, 'domain_expiry', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
-		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
-		RETURNING id
-	`, uuid.New(), m.tenantID, m.monitorID, lastError, value, threshold).Scan(&alertID)
+	if reopened != nil {
+		alertID = reopened.id
+		if err := a.noteRelapseTx(ctx, tx, m.tenantID, reopened); err != nil {
+			return err
+		}
+	} else {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
+				triggered_at, failure_count, last_error, metric_value, threshold_value,
+				created_at, updated_at)
+			VALUES ($1, $2, $3, 'domain_expiry', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
+			ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
+			RETURNING id
+		`, uuid.New(), m.tenantID, m.monitorID, lastError, value, threshold).Scan(&alertID)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
 		if _, err := a.db.ExecContext(ctx, `
 			UPDATE alerts
 			SET metric_value = $2, threshold_value = $3, last_error = $4, updated_at = NOW()
@@ -301,11 +330,17 @@ func (a *Alerter) openDomainExpiryAlert(ctx context.Context, m domainExpiryMonit
 	if err != nil {
 		return fmt.Errorf("insert domain expiry alert: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit domain expiry alert transaction: %w", err)
+	}
 
 	record := alertRecord{
 		ID: alertID, TenantID: m.tenantID, MonitorID: m.monitorID,
 		Kind: notifications.KindDomainExpiry, TriggeredAt: time.Now(), LastError: &lastError,
 		MetricValue: value, ThresholdValue: &threshold,
+	}
+	if reopened != nil {
+		reopened.apply(&record)
 	}
 	binding := alertSubject{MonitorID: m.monitorID, TenantID: m.tenantID, MonitorName: m.monitorName}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
@@ -313,8 +348,10 @@ func (a *Alerter) openDomainExpiryAlert(ctx context.Context, m domainExpiryMonit
 }
 
 // resolveDomainExpiryAlert resolves the monitor's open domain_expiry alert,
-// if any, and notifies the channels it already reached.
-func (a *Alerter) resolveDomainExpiryAlert(ctx context.Context, monitorID, tenantID uuid.UUID, monitorName string, now time.Time) error {
+// if any, and notifies the channels it already reached. reason says whether
+// the registration was renewed (a recovery a relapse may reopen) or the
+// alert closed for any other reason.
+func (a *Alerter) resolveDomainExpiryAlert(ctx context.Context, monitorID, tenantID uuid.UUID, monitorName string, now time.Time, reason resolveReason) error {
 	var (
 		alertID     uuid.UUID
 		triggeredAt time.Time
@@ -331,7 +368,7 @@ func (a *Alerter) resolveDomainExpiryAlert(ctx context.Context, monitorID, tenan
 	if err != nil {
 		return fmt.Errorf("query open domain expiry alert: %w", err)
 	}
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now)
+	resolvedAt, err := a.resolveAlert(ctx, alertID, reason)
 	if errors.Is(err, errAlertAlreadyResolved) {
 		return nil // a sibling replica resolved it
 	}
@@ -390,7 +427,7 @@ func (a *Alerter) resolveOrphanDomainExpiryAlerts(ctx context.Context, keep []uu
 		return err
 	}
 	for _, o := range orphans {
-		if err := a.resolveDomainExpiryAlert(ctx, o.monitorID, o.tenantID, o.name, now); err != nil {
+		if err := a.resolveDomainExpiryAlert(ctx, o.monitorID, o.tenantID, o.name, now, resolvedOutOfScope); err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": o.monitorID}).Error("Failed to resolve orphan domain expiry alert")
 		}
 	}

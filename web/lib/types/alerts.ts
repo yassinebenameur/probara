@@ -59,6 +59,20 @@ export interface Alert {
   snoozed_at?: string;
   snoozed_by_user_id?: string;
   snoozed_by?: string;
+  // Relapse reopen: how many times the alert reopened because its subject
+  // failed again within the workspace's reopen cooldown (0 = never), and the
+  // latest reopen. triggered_at stays the first trigger. The history is on
+  // GET /alerts/{id} only.
+  relapse_count?: number;
+  reopened_at?: string;
+  relapses?: AlertRelapse[];
+}
+
+/** One reopen of a relapsed alert: the recovery it interrupted and when it reopened. */
+export interface AlertRelapse {
+  number: number;
+  recovered_at: string;
+  reopened_at: string;
 }
 
 // --- Automatic alert triage (never delays, routes or suppresses a page) ---

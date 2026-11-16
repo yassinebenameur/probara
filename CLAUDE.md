@@ -777,14 +777,21 @@ or imported groups come back empty. Any other path that creates groups through
   (`recipientledger.MarkAttempt`, written before the send, cleared only on
   `plugin.IsNotDelivered`; `worker/.../page_marker.go`), never by delivery
   count; otherwise the route keeps counting as paged so it hears the ack
-  and the resolve. Dispatch message ids are the idempotency key plus the
+  and the resolve. Resolves and relapse notices are marked the same way,
+  under their delivery key, which carries the episode
+  (`releaseSupersededResolveClaim` and the relapse branch of
+  `releaseMutedClaim` read it); a held relapse notice is handed back to the
+  exact row its claim replaced (`DispatchEnvelope.Release`). Dispatch message ids are the idempotency key plus the
   claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
-  finds again on retry (the resume clock for a page, the round for a
-  reminder, `acknowledged_at` for an ack, nothing for resolve and
-  follow-up), so JetStream's duplicate window collapses a retried publish
+  finds again on retry (the resume clock for a page, `relapsed:` plus it
+  for a relapse notice, the round for a reminder, `acknowledged_at` for an
+  ack, nothing for resolve and follow-up; the episode is in the
+  idempotency key itself), so JetStream's duplicate window collapses a retried publish
   ("duplicate" is success) yet queues a re-page after an unack or snooze end.
   SLA time to acknowledge reads `first_acknowledged_at` (set once by the API,
-  never cleared), not `acknowledged_at`, which an unacknowledge clears.
+  never cleared), not `acknowledged_at`, which an unacknowledge clears,
+  measured from `first_ack_episode_started_at` (set with it:
+  `firstAckEpisodeStartSet` in `api/internal/services/alerts`).
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
   skips notifications, so it is not an error to log.
 - **Incident recovery entries have one writer**: `shared/incidentrecovery`.
@@ -801,10 +808,39 @@ or imported groups come back empty. Any other path that creates groups through
   acknowledgement or snooze: the acknowledge, snooze and resolve UPDATEs
   wait for an in-flight send, and a page or reminder still queued when they
   commit is dropped under the same lock (`alertrouting.MuteHolds`), as is an
-  acknowledgement queued before an unacknowledge.
+  acknowledgement queued before an unacknowledge. Resolves take the lock
+  too, so a relapse reopen waits (at most `reopenLockTimeout`) for a resolve
+  being sent; a resolve still queued is dropped only while the alert is open
+  again and the channel is not a paging one (`releaseSupersededResolveClaim`
+  hands its claim back to `created` only when it provably reached nobody),
+  and delivered once the alert has recovered again; any other event of an
+  earlier episode (`relapse_count`) is dropped.
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.
+- **Relapse reopen** (off unless `tenants.alert_reopen_cooldown_minutes` is
+  set): the rule is `shared/alertrouting/relapse.go`; every alert kind's
+  opener calls `reopenRecentAlertTx` (`alerter/internal/alerter/relapse.go`)
+  before its INSERT, and a new kind's opener must too, as must a new
+  resolve path pass `resolvedRecovered` (condition cleared, reopenable) or
+  `resolvedOutOfScope` (paused, deleted, rule removed, stale) to
+  `resolveAlert`; a manual resolve never reopens. `reopened_at` restarts the
+  delay and reminder clocks (`DispatchResumedAtExpr`). A route whose
+  `paged_relapse` is below the alert's `relapse_count` is due one `relapsed`
+  claim (sent as `created` with `RelapseNotice`, the only send `present`
+  words as a relapse), in `openAlertEventDue` and
+  `claimNotificationTx` together (`TestRelapsePreFilterMatchesClaim`); the
+  episode rides the ledger and idempotency keys
+  (`notifications.RecipientEventKeyFor`, `notifications.IdempotencyKey`), and
+  paging plugins key incidents on the route's `PagedRelapse`
+  (`pagerduty.DedupKey`, `opsgenie.Alias`). What is open at a provider is
+  `delivered_relapse`, written only after a delivered page (alerter sync
+  path, worker `recordDeliveredPage`); resolves, acks and a relapse notice's
+  close of the earlier incident target it (`claimNotificationTx`, worker
+  `useOpenIncident`), and a relapse notice dropped or failed for good still
+  sends that close (`closePreviousIncident`). Alert times come from the
+  database clock: `resolveAlert` and the API resolves write `NOW()`, as the
+  reopen window and `reopened_at` do; never resolve with a process clock.
 - **Alert wording lives in `shared/notifications/present`**, for every
   channel. `present.Build` turns an event into one `Message` (label, summary,
   metric, facts, deep link, tone); plugins reach it via
@@ -852,7 +888,7 @@ or imported groups come back empty. Any other path that creates groups through
 - **Fan-out progress is durable, per recipient.** Every real send sets
   `DispatchRequest.Recipients` (`shared/notifications/recipientledger`, table
   `alert_notification_recipient_deliveries`) from the pool, never the claim or
-  lock transaction (both roll back), keyed by `notifications.RecipientEventKey`:
+  lock transaction (both roll back), keyed by `notifications.RecipientEventKeyFor`:
   the event type, plus for reminders the `last_sent_at` the reminder claim
   replaced (`claimNotificationTx`), carried to the worker as
   `DispatchEnvelope.DeliveryKey`. A deliberate re-send of an event needs a key
@@ -885,7 +921,8 @@ or imported groups come back empty. Any other path that creates groups through
   (`deliverylog.Track`), one per recipient an attempt tried. A held page's
   row says `muted_requeued` when `releaseMutedClaim` handed its claim back and
   `muted` when it kept it (`mutedReason`, read in the same tx), so change them
-  together. A new drop or failure cause is a `Reason*` constant plus its
+  together; a relapse notice is recorded as event `relapsed`, and a resolve
+  dropped for a relapse as `reopened` (committed with its hand-back). A new drop or failure cause is a `Reason*` constant plus its
   wording in `web/lib/deliveries.ts` and the alerting docs.
 
 ## Status pages

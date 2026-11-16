@@ -179,6 +179,12 @@ export function mergeLiveAlert(prev: Alert | undefined, incoming: Alert): Alert 
     next.source_location_name ??= prev.source_location_name;
     next.target_location_name ??= prev.target_location_name;
     next.monitor_name ??= prev.monitor_name;
+    // A relapse count only grows: an event built without it (an older
+    // alerter's resolve) must not drop the "Relapsed" chip.
+    if ((prev.relapse_count ?? 0) > (next.relapse_count ?? 0)) {
+      next.relapse_count = prev.relapse_count;
+      next.reopened_at ??= prev.reopened_at;
+    }
     if (isOpenAlert(next)) {
       next.suppression_reason ??= prev.suppression_reason;
       next.impacted_count ??= prev.impacted_count;

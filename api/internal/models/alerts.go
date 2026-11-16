@@ -49,8 +49,22 @@ type Alert struct {
 	// Kind == "mesh_edge" (MonitorID is nil for these).
 	SourceLocationID *uuid.UUID `json:"source_location_id,omitempty"`
 	TargetLocationID *uuid.UUID `json:"target_location_id,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// RelapseCount is how many times the alert reopened because its subject
+	// failed again within the workspace's reopen cooldown after recovering
+	// (0 = never); ReopenedAt is the latest reopen. TriggeredAt stays the
+	// first trigger.
+	RelapseCount int        `json:"relapse_count"`
+	ReopenedAt   *time.Time `json:"reopened_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// AlertRelapse is one reopen of a relapsed alert: the recovery it
+// interrupted and when the alert reopened.
+type AlertRelapse struct {
+	Number      int       `json:"number"`
+	RecoveredAt time.Time `json:"recovered_at"`
+	ReopenedAt  time.Time `json:"reopened_at"`
 }
 
 // AlertWithDetails includes related entity names for display
@@ -87,6 +101,9 @@ type AlertWithDetails struct {
 	SnoozedAt       *time.Time `json:"snoozed_at,omitempty"`
 	SnoozedByUserID *uuid.UUID `json:"snoozed_by_user_id,omitempty"`
 	SnoozedBy       *string    `json:"snoozed_by,omitempty"`
+	// Relapses is the alert's relapse history, oldest first. Only GET
+	// /alerts/{id} reports it, and only for an alert that relapsed.
+	Relapses []AlertRelapse `json:"relapses,omitempty"`
 }
 
 // SnoozeAlertRequest is the body of POST /alerts/{id}/snooze: exactly one of

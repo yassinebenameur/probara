@@ -11,6 +11,7 @@ import Switch from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/ToastProvider';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import { getNotificationSettings, updateNotificationSettings } from '@/lib/api';
+import { reopenCooldownOptions } from '@/lib/alert-relapse';
 import { sectionLayout, type SectionLayout } from './layout';
 import type { ChannelAssignment, NotificationSettings } from '@/lib/types';
 
@@ -187,6 +188,7 @@ interface Snapshot {
   sustainedIdx: number;
   dependencySuppression: boolean;
   dependencyGraceIdx: number;
+  reopenCooldownMinutes: number;
 }
 
 // Dirty check: channel assignments compare by channel and delay only, in any
@@ -243,6 +245,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
   const [sustainedIdx, setSustainedIdx] = useState(1);
   const [dependencySuppression, setDependencySuppression] = useState(false);
   const [dependencyGraceIdx, setDependencyGraceIdx] = useState(1);
+  const [reopenCooldownMinutes, setReopenCooldownMinutes] = useState(0);
   // What the server holds; the save bar only appears when the form differs.
   const [saved, setSaved] = useState<Snapshot | null>(null);
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
@@ -258,6 +261,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     sustainedIdx,
     dependencySuppression,
     dependencyGraceIdx,
+    reopenCooldownMinutes,
   };
   const dirty = saved !== null && comparable(current) !== comparable(saved);
 
@@ -308,6 +312,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     setSustainedIdx(s.sustainedIdx);
     setDependencySuppression(s.dependencySuppression);
     setDependencyGraceIdx(s.dependencyGraceIdx);
+    setReopenCooldownMinutes(s.reopenCooldownMinutes);
   };
 
   const loadSettings = async () => {
@@ -325,6 +330,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         sustainedIdx: nearestIndex(SUSTAINED_LEVELS, (l) => l.seconds, s.latency_anomaly_min_breach_seconds ?? 120),
         dependencySuppression: s.dependency_suppression_enabled ?? false,
         dependencyGraceIdx: nearestIndex(DEPENDENCY_GRACE_LEVELS, (l) => l.seconds, s.dependency_suppression_grace_seconds ?? 120),
+        reopenCooldownMinutes: s.alert_reopen_cooldown_minutes ?? 0,
       };
       apply(loaded);
       setSaved(loaded);
@@ -354,6 +360,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         latency_anomaly_min_delta_pct: sens.deltaPct,
         dependency_suppression_enabled: dependencySuppression,
         dependency_suppression_grace_seconds: DEPENDENCY_GRACE_LEVELS[dependencyGraceIdx].seconds,
+        alert_reopen_cooldown_minutes: reopenCooldownMinutes,
       });
       markFocusReturn();
       setSaved(current);
@@ -438,6 +445,29 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
             >
               {REMINDER_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          )}
+        />
+
+        {/* Relapse reopen (shared/alertrouting relapse.go): off by default.
+            The options keep a value saved outside the presets (API). */}
+        <SettingRow
+          title="Reopen relapses within"
+          description="When an alert that recovered fails again within this time, the same alert reopens and counts a relapse instead of a new alert opening, and channels are told once that it relapsed. Alerts resolved by hand or closed by pausing a monitor never reopen. Off opens a new alert every time."
+          control={({ titleId, descriptionId }) => (
+            <select
+              value={reopenCooldownMinutes}
+              onChange={(e) => setReopenCooldownMinutes(Number(e.target.value))}
+              disabled={readOnly}
+              aria-labelledby={titleId}
+              aria-describedby={descriptionId}
+              className={SELECT_CLASS}
+            >
+              {reopenCooldownOptions(saved?.reopenCooldownMinutes ?? reopenCooldownMinutes).map((opt) => (
+                <option key={opt.minutes} value={opt.minutes}>
                   {opt.label}
                 </option>
               ))}
