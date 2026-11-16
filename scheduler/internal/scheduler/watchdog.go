@@ -178,6 +178,9 @@ func (s *Scheduler) markMonitorUnknown(ctx context.Context, monitorID uuid.UUID)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE monitors
 		SET current_state = 'unknown', consecutive_failures = 0, consecutive_successes = 0,
+			-- A stream that was down (confirmed or recovering) still owes a
+			-- recovery confirmation when results resume (S-T7).
+			recovery_pending = (current_state = 'down' OR recovery_pending),
 			last_state_change_at = NOW(), updated_at = NOW()
 		WHERE id = $1
 	`, monitorID); err != nil {
@@ -262,13 +265,23 @@ func (s *Scheduler) reaggregateMonitor(ctx context.Context, monitorID uuid.UUID)
 		return err
 	}
 
-	fresh, err := monitorstate.LoadFreshLocationCounts(
-		ctx, tx, monitorID, monitorstate.FreshnessHorizonSeconds(intervalSeconds))
+	freshness := monitorstate.FreshnessHorizonSeconds(intervalSeconds)
+	// Locations that were down when their evidence went stale drop their
+	// recovery count but keep owing the confirmation (S-T7).
+	if err := monitorstate.ResetStaleDownLocationsTx(ctx, tx, monitorID, freshness); err != nil {
+		return err
+	}
+	fresh, err := monitorstate.LoadFreshLocationCounts(ctx, tx, monitorID, freshness)
 	if err != nil {
 		return err
 	}
 	newState := monitorstate.AggregateLocations(fresh.Counts, quorum)
 	if string(newState) == current {
+		// The state stands, but the stale locations no longer count toward
+		// the display-only recovery progress.
+		if err := monitorstate.RefreshRecoveryProgressTx(ctx, tx, monitorID); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 

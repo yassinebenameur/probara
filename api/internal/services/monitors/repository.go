@@ -650,9 +650,10 @@ func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitor
 	defer func() { _ = tx.Rollback() }()
 
 	var prevState string
+	var prevPending bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT current_state FROM monitors WHERE id = $1 AND tenant_id = $2 FOR UPDATE
-	`, monitorID, tenantID).Scan(&prevState); err != nil {
+		SELECT current_state, recovery_pending FROM monitors WHERE id = $1 AND tenant_id = $2 FOR UPDATE
+	`, monitorID, tenantID).Scan(&prevState, &prevPending); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrMonitorNotFound
 		}
@@ -683,6 +684,12 @@ func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitor
 		return fmt.Errorf("failed to clear monitor location state: %w", err)
 	}
 
+	// A monitor that is down, or owes a recovery confirmation, hands that
+	// debt to every stream it moves to (S-T7): a location without state yet
+	// starts unknown but owing the confirmation, and a return to the default
+	// fleet leaves the monitor's own stream owing it. Otherwise a fresh
+	// stream's first pass would be up and skip the confirmation.
+	owesConfirmation := prevState == string(monitorstate.StateDown) || prevPending
 	for _, locationID := range locationIDs {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO monitor_locations (monitor_id, location_id)
@@ -690,14 +697,37 @@ func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitor
 		`, monitorID, locationID); err != nil {
 			return fmt.Errorf("failed to add monitor location: %w", err)
 		}
+		if owesConfirmation {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, recovery_pending)
+				VALUES ($1, $2, $3, 'unknown', TRUE) ON CONFLICT DO NOTHING
+			`, monitorID, locationID, tenantID); err != nil {
+				return fmt.Errorf("failed to seed location recovery: %w", err)
+			}
+		}
+	}
+
+	if len(locationIDs) > 0 {
+		// The monitor's own stream is no longer evidence (S-E5): its memory
+		// moved to the locations above, and the progress it shows is now
+		// the locations'.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE monitors SET recovery_pending = FALSE WHERE id = $1 AND recovery_pending
+		`, monitorID); err != nil {
+			return fmt.Errorf("failed to clear monitor recovery: %w", err)
+		}
+		if err := monitorstate.RefreshRecoveryProgressTx(ctx, tx, monitorID); err != nil {
+			return err
+		}
 	}
 
 	if len(locationIDs) == 0 {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE monitors
-			SET current_state = 'unknown', consecutive_failures = 0, consecutive_successes = 0, updated_at = NOW()
+			SET current_state = 'unknown', consecutive_failures = 0, consecutive_successes = 0,
+				recovery_pending = $3, updated_at = NOW()
 			WHERE id = $1 AND tenant_id = $2
-		`, monitorID, tenantID); err != nil {
+		`, monitorID, tenantID, owesConfirmation); err != nil {
 			return fmt.Errorf("failed to reset monitor state: %w", err)
 		}
 		if prevState != string(monitorstate.StateUnknown) {
@@ -746,6 +776,7 @@ func (r *PostgresRepository) SetEnabled(ctx context.Context, tenantID, monitorID
 			current_state = 'unknown',
 			consecutive_failures = 0,
 			consecutive_successes = 0,
+			recovery_pending = FALSE,
 			last_state_change_at = NOW(),
 			updated_at = NOW()
 		WHERE id = $1

@@ -155,3 +155,141 @@ func TestQuorumRecoveryConfirmation(t *testing.T) {
 		}
 	}
 }
+
+// S-T7 with S-F2: a location-less monitor that went silent while down (the
+// watchdog left it unknown, owing a confirmation) is down — recovering at 1 —
+// on its first pass after the silence, never up.
+func TestIngestSilentRecoveryStillConfirms(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "silent-recovery")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "silent")
+	setRecoveryThreshold(ctx, t, dbClient, monitorID, 1, 2)
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE monitors SET current_state = 'unknown', recovery_pending = TRUE WHERE id = $1
+	`, monitorID); err != nil {
+		t.Fatal(err)
+	}
+	i := newTestIngest(t, dbClient, nil)
+
+	ingestMessage(t, i, monitorMessage(tenantID, monitorID, "success"))
+	if state, _, successes := monitorCounts(ctx, t, dbClient, monitorID); state != "down" || successes != 1 {
+		t.Fatalf("first pass after silence: %s/CS %d, want down/1 [S-T7]", state, successes)
+	}
+	ingestMessage(t, i, monitorMessage(tenantID, monitorID, "success"))
+	if state, _, successes := monitorCounts(ctx, t, dbClient, monitorID); state != "up" || successes != 0 {
+		t.Fatalf("second pass: %s/CS %d, want up/0 [S-T7]", state, successes)
+	}
+	var pending bool
+	if err := dbClient.QueryRowContext(ctx, `SELECT recovery_pending FROM monitors WHERE id = $1`, monitorID).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending {
+		t.Fatal("confirmed recovery left the monitor owing one [S-T7]")
+	}
+}
+
+// S-T7 per location: a location that was down when its evidence went stale
+// restarts its count at 1 (it does not resume the stale one), and a location
+// added to a down monitor owes the confirmation from its first pass.
+func TestQuorumStaleAndAddedLocationsStillConfirm(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "location-recovery")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	stale := insertLocation(ctx, t, dbClient, tenantID, "stale")
+	added := insertLocation(ctx, t, dbClient, tenantID, "added")
+	selectLocations(ctx, t, dbClient, monitorID, 2, stale, added)
+	setRecoveryThreshold(ctx, t, dbClient, monitorID, 1, 3)
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, consecutive_successes, last_check_at)
+		VALUES ($1, $2, $3, 'down', 2, NOW() - INTERVAL '1 hour')
+	`, monitorID, stale, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	// What SetLocations seeds for a location added to a down monitor.
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, recovery_pending)
+		VALUES ($1, $2, $3, 'unknown', TRUE)
+	`, monitorID, added, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = $1`, monitorID); err != nil {
+		t.Fatal(err)
+	}
+	i := newTestIngest(t, dbClient, nil)
+
+	locationRow := func(locationID uuid.UUID) (string, int, bool) {
+		t.Helper()
+		var state string
+		var successes int
+		var pending bool
+		if err := dbClient.QueryRowContext(ctx, `
+			SELECT current_state, consecutive_successes, recovery_pending FROM monitor_location_state
+			WHERE monitor_id = $1 AND location_id = $2
+		`, monitorID, locationID).Scan(&state, &successes, &pending); err != nil {
+			t.Fatal(err)
+		}
+		return state, successes, pending
+	}
+
+	ingestMessage(t, i, locationMessage(tenantID, monitorID, stale, "success"))
+	if state, successes, _ := locationRow(stale); state != "down" || successes != 1 {
+		t.Fatalf("stale location's first pass: %s/CS %d, want down/1, not the stale count + 1 [S-T7]", state, successes)
+	}
+	ingestMessage(t, i, locationMessage(tenantID, monitorID, added, "success"))
+	if state, successes, pending := locationRow(added); state != "down" || successes != 1 || pending {
+		t.Fatalf("added location's first pass: %s/CS %d pending %v, want down/1 [S-T7]", state, successes, pending)
+	}
+	if state, _, successes := monitorCounts(ctx, t, dbClient, monitorID); state != "down" || successes != 1 {
+		t.Fatalf("monitor after both first passes: %s/CS %d, want down/1 (quorum 2) [S-T7, S-A1]", state, successes)
+	}
+}
+
+// S-T7: a pass that leaves a monitor recovering pulls its next check in to
+// the fast recheck; a SIP test call keeps its interval (S-A9).
+func TestIngestRecoveringPassPullsInTheRecheck(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "recovery-recheck")
+	httpID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "http")
+	callID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "call")
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE monitors SET type = 'sip', config = '{"host":"trunk.example.com","method":"invite","call":{"number":"100"}}'
+		WHERE id = $1
+	`, callID); err != nil {
+		t.Fatal(err)
+	}
+	i := newTestIngest(t, dbClient, nil)
+	for _, id := range []uuid.UUID{httpID, callID} {
+		setRecoveryThreshold(ctx, t, dbClient, id, 1, 3)
+		if _, err := dbClient.ExecContext(ctx, `
+			UPDATE monitors SET interval_seconds = 300, next_run_at = NOW() + INTERVAL '290 seconds' WHERE id = $1
+		`, id); err != nil {
+			t.Fatal(err)
+		}
+		ingestMessage(t, i, monitorMessage(tenantID, id, "failure"))
+		ingestMessage(t, i, monitorMessage(tenantID, id, "success"))
+	}
+	soon := func(id uuid.UUID) bool {
+		t.Helper()
+		var ok bool
+		if err := dbClient.QueryRowContext(ctx,
+			`SELECT next_run_at <= NOW() + INTERVAL '21 seconds' FROM monitors WHERE id = $1`, id).Scan(&ok); err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if !soon(httpID) {
+		t.Fatal("recovering http monitor kept its 5-minute slot, want the fast recheck [S-T7]")
+	}
+	if soon(callID) {
+		t.Fatal("recovering SIP test call was pulled in, want its interval kept [S-A9, S-T7]")
+	}
+}

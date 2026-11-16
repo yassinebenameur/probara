@@ -73,11 +73,15 @@ func (i *Ingest) persistAtLocation(ctx context.Context, r monitorstate.Result) (
 	// exactly like the failure threshold.
 	var locSnap monitorstate.Snapshot
 	var lastStarted sql.NullTime
+	var stale bool
+	freshness := monitorstate.FreshnessHorizonSeconds(intervalSeconds)
 	err = tx.QueryRowContext(ctx, `
-		SELECT current_state, consecutive_failures, consecutive_successes, last_result_started_at
+		SELECT current_state, consecutive_failures, consecutive_successes, recovery_pending, last_result_started_at,
+			COALESCE(last_check_at < NOW() - make_interval(secs => $3), FALSE)
 		FROM monitor_location_state
 		WHERE monitor_id = $1 AND location_id = $2
-	`, r.MonitorID, r.LocationID).Scan(&locSnap.State, &locSnap.ConsecutiveFailures, &locSnap.ConsecutiveSuccesses, &lastStarted)
+	`, r.MonitorID, r.LocationID, freshness).Scan(&locSnap.State, &locSnap.ConsecutiveFailures,
+		&locSnap.ConsecutiveSuccesses, &locSnap.RecoveryPending, &lastStarted, &stale)
 	if err == sql.ErrNoRows {
 		locSnap = monitorstate.Snapshot{State: monitorstate.StateUnknown}
 	} else if err != nil {
@@ -93,17 +97,25 @@ func (i *Ingest) persistAtLocation(ctx context.Context, r monitorstate.Result) (
 		return outcome{}, nil
 	}
 
+	// A location that was down when its evidence went stale re-enters from
+	// unknown, still owing a recovery confirmation (S-T7) — the same reset
+	// the watchdog writes (ResetStaleDownLocationsTx), applied here in case
+	// it has not run yet.
+	if stale && locSnap.State == monitorstate.StateDown {
+		locSnap = monitorstate.AfterSilence(locSnap)
+	}
 	locTransition := monitorstate.Apply(locSnap, monitorstate.IsFailureStatus(r.Status), threshold, recoveryThreshold)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO monitor_location_state (
 			monitor_id, location_id, tenant_id, current_state,
-			consecutive_failures, consecutive_successes, last_latency_ms, last_check_at,
+			consecutive_failures, consecutive_successes, recovery_pending, last_latency_ms, last_check_at,
 			last_result_started_at, last_state_change_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $9, $6, NOW(), $8, CASE WHEN $7 THEN NOW() END, NOW())
+		) VALUES ($1, $2, $3, $4, $5, $9, $10, $6, NOW(), $8, CASE WHEN $7 THEN NOW() END, NOW())
 		ON CONFLICT (monitor_id, location_id) DO UPDATE SET
 			current_state = EXCLUDED.current_state,
 			consecutive_failures = EXCLUDED.consecutive_failures,
 			consecutive_successes = EXCLUDED.consecutive_successes,
+			recovery_pending = EXCLUDED.recovery_pending,
 			last_latency_ms = EXCLUDED.last_latency_ms,
 			last_check_at = NOW(),
 			last_result_started_at = EXCLUDED.last_result_started_at,
@@ -111,14 +123,13 @@ func (i *Ingest) persistAtLocation(ctx context.Context, r monitorstate.Result) (
 			updated_at = NOW()
 	`, r.MonitorID, r.LocationID, r.TenantID, string(locTransition.To),
 		locTransition.ConsecutiveFailures, r.LatencyMs, locTransition.Changed, r.StartedAt,
-		locTransition.ConsecutiveSuccesses); err != nil {
+		locTransition.ConsecutiveSuccesses, locTransition.RecoveryPending); err != nil {
 		return outcome{}, fmt.Errorf("upsert location state: %w", err)
 	}
 
 	// Spatial aggregation over the currently selected, live locations with
 	// FRESH evidence (S-A10) — shared with the absence watchdog.
-	fresh, err := monitorstate.LoadFreshLocationCounts(
-		ctx, tx, r.MonitorID, monitorstate.FreshnessHorizonSeconds(intervalSeconds))
+	fresh, err := monitorstate.LoadFreshLocationCounts(ctx, tx, r.MonitorID, freshness)
 	if err != nil {
 		return outcome{}, err
 	}
@@ -140,6 +151,11 @@ func (i *Ingest) persistAtLocation(ctx context.Context, r monitorstate.Result) (
 	}
 	if changed {
 		if err := monitorstate.RecordIntervalTx(ctx, tx, r.TenantID, r.MonitorID, newState, monitorstate.IntervalReasonResult); err != nil {
+			return outcome{}, err
+		}
+	}
+	if locTransition.To == monitorstate.StateDown && locTransition.ConsecutiveSuccesses > 0 {
+		if err := pullRecoveringRecheck(ctx, tx, r.MonitorID); err != nil {
 			return outcome{}, err
 		}
 	}

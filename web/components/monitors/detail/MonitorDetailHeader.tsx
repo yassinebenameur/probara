@@ -54,7 +54,8 @@ export default function MonitorDetailHeader({
   onClearHistory,
   onDelete,
 }: MonitorDetailHeaderProps) {
-  const recovery = monitor.enabled ? recoveryProgress(monitor) : null;
+  // Groups carry no count of their own (their members confirm).
+  const recovery = monitor.enabled && !isGroup ? recoveryProgress(monitor) : null;
   return (
     <PageHeader
       breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: monitor.name }]}

@@ -34,6 +34,11 @@ type Snapshot struct {
 	// recovery (S-T7). It is non-zero only while the stream is down: any
 	// failure, and leaving down, reset it.
 	ConsecutiveSuccesses int
+	// RecoveryPending remembers, outside down, that the stream was down when
+	// its evidence went stale (or, for a location, that it was added to a
+	// down monitor): it owes a recovery confirmation before it is up again
+	// (S-T7). Only meaningful in unknown or suspect; down and up clear it.
+	RecoveryPending bool
 }
 
 // Transition is the outcome of applying one check result.
@@ -42,6 +47,7 @@ type Transition struct {
 	To                   State
 	ConsecutiveFailures  int
 	ConsecutiveSuccesses int  // passes toward confirming recovery; 0 unless To is down
+	RecoveryPending      bool // still owes a confirmation; only with To unknown or suspect
 	Changed              bool // state value changed
 	OpenedOutage         bool // entered down
 	ClosedOutage         bool // left down via success
@@ -66,12 +72,20 @@ func Apply(current Snapshot, resultIsFailure bool, threshold, recoveryThreshold 
 	if !resultIsFailure {
 		t.ConsecutiveFailures = 0
 		// S-T7: a down stream stays down until enough passes confirm the
-		// recovery; that time is still an outage (and downtime). Only down
-		// needs confirming: from unknown, suspect or up a pass is up at once.
-		if current.State == StateDown {
-			if successes := current.ConsecutiveSuccesses + 1; successes < recoveryThreshold {
+		// recovery; that time is still an outage (and downtime). Only down,
+		// or a stream that owes a confirmation since it went silent while
+		// down, needs confirming: otherwise a pass is up at once. A pending
+		// stream re-enters down on its first pass, counting from 1.
+		if current.State == StateDown || current.RecoveryPending {
+			counted := 0
+			if current.State == StateDown {
+				counted = current.ConsecutiveSuccesses
+			}
+			if successes := counted + 1; successes < recoveryThreshold {
 				t.To = StateDown
 				t.ConsecutiveSuccesses = successes
+				t.Changed = current.State != StateDown
+				t.OpenedOutage = t.Changed
 				return t
 			}
 		}
@@ -88,6 +102,9 @@ func Apply(current Snapshot, resultIsFailure bool, threshold, recoveryThreshold 
 	}
 	t.Changed = t.To != current.State
 	t.OpenedOutage = t.To == StateDown && current.State != StateDown
+	// Failures keep what is owed until the stream is down again (where any
+	// recovery needs confirming anyway).
+	t.RecoveryPending = current.RecoveryPending && t.To != StateDown
 	return t
 }
 

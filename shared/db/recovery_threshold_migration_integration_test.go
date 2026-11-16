@@ -16,8 +16,8 @@ import (
 )
 
 // Migration 000115 adds recovery confirmation (docs/state-semantics.md S-T7):
-// monitors.recovery_threshold (default 1, 1-10) and the consecutive_successes
-// counters on monitors and monitor_location_state. This walks it down and back
+// monitors.recovery_threshold (default 1, 1-10), and the consecutive_successes
+// counters and recovery_pending memory on monitors and monitor_location_state. This walks it down and back
 // up through golang-migrate, with an existing monitor taking the default.
 func TestRecoveryThresholdMigrationUpDownUp(t *testing.T) {
 	ctx := context.Background()
@@ -62,8 +62,16 @@ func TestRecoveryThresholdMigrationUpDownUp(t *testing.T) {
 		if _, err := dbc.ExecContext(ctx, `UPDATE monitors SET recovery_threshold = 1 WHERE id = $1`, monitor); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := dbc.ExecContext(ctx, `SELECT consecutive_successes FROM monitor_location_state LIMIT 1`); err != nil {
-			t.Errorf("%s: monitor_location_state.consecutive_successes missing: %v", phase, err)
+		for _, probe := range []string{
+			`SELECT consecutive_successes, recovery_pending FROM monitor_location_state LIMIT 1`,
+		} {
+			if _, err := dbc.ExecContext(ctx, probe); err != nil {
+				t.Errorf("%s: %s: %v", phase, probe, err)
+			}
+		}
+		var pending bool
+		if err := dbc.QueryRowContext(ctx, `SELECT recovery_pending FROM monitors WHERE id = $1`, monitor).Scan(&pending); err != nil || pending {
+			t.Errorf("%s: existing monitor recovery_pending = %v (%v), want false", phase, pending, err)
 		}
 	}
 	checkUp("up")
@@ -74,7 +82,9 @@ func TestRecoveryThresholdMigrationUpDownUp(t *testing.T) {
 	for _, probe := range []string{
 		`SELECT recovery_threshold FROM monitors LIMIT 1`,
 		`SELECT consecutive_successes FROM monitors LIMIT 1`,
+		`SELECT recovery_pending FROM monitors LIMIT 1`,
 		`SELECT consecutive_successes FROM monitor_location_state LIMIT 1`,
+		`SELECT recovery_pending FROM monitor_location_state LIMIT 1`,
 	} {
 		if _, err := dbc.ExecContext(ctx, probe); err == nil {
 			t.Errorf("down 000115 kept a column: %s", probe)

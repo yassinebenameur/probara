@@ -87,6 +87,12 @@ interface AlertingSectionProps {
   /** "Mark up after": passes in a row before a down monitor is up again. Omit to hide (groups). */
   recoveryThreshold?: number;
   onRecoveryThresholdChange?: (n: number) => void;
+  /**
+   * How the passes that confirm a recovery arrive: `recheck` (active checks,
+   * rechecked fast while recovering), `interval` (SIP test calls, never
+   * rechecked faster) or `reports` (push and agent, at the sender's pace).
+   */
+  recoveryPace?: RecoveryPace;
   mode: NotificationMode;
   onModeChange: (m: NotificationMode) => void;
   customChannels: ChannelAssignment[];
@@ -109,11 +115,25 @@ function graceLabel(seconds: number): string {
   return `after ${seconds}s`;
 }
 
+type RecoveryPace = 'recheck' | 'interval' | 'reports';
+
 // Unconfirmed passes are still downtime, so say what the setting costs: the
-// worst case adds one interval per extra pass (no fast recheck while down).
-function recoveryHint(threshold: number, intervalSeconds: number): string {
+// time from the first pass to the confirming one, at the pace passes arrive.
+// Active checks recheck at the suspect cadence while recovering (the
+// scheduler's FastRecheckInterval, never slower than the interval).
+function recoveryHint(threshold: number, intervalSeconds: number, pace: RecoveryPace): string {
   if (threshold <= 1) return 'Up again on the first passing check.';
-  return `Stays down until ${threshold} checks in a row pass, about ${formatDuration((threshold - 1) * intervalSeconds)} after the first; that time counts as downtime.`;
+  const extra = threshold - 1;
+  switch (pace) {
+    case 'reports':
+      return `Stays down until ${threshold} reports in a row arrive on time. They come at the sender's pace: at the expected interval that adds about ${formatDuration(extra * intervalSeconds)} of downtime.`;
+    case 'interval':
+      return `Stays down until ${threshold} test calls in a row pass, one per interval (calls are never rechecked faster): about ${formatDuration(extra * intervalSeconds)} more downtime.`;
+    default: {
+      const recheck = Math.min(intervalSeconds, 20);
+      return `Stays down until ${threshold} checks in a row pass. A recovering monitor is rechecked every ${formatDuration(recheck)}, so that adds about ${formatDuration(extra * recheck)} of downtime.`;
+    }
+  }
 }
 
 function detectionHint(threshold: number, intervalSeconds: number): string {
@@ -127,7 +147,7 @@ function detectionHint(threshold: number, intervalSeconds: number): string {
 
 export function AlertingSection({
   isGroup, intervalSeconds, threshold, onThresholdChange, minThreshold = 1,
-  recoveryThreshold, onRecoveryThresholdChange,
+  recoveryThreshold, onRecoveryThresholdChange, recoveryPace = 'recheck',
   mode, onModeChange, customChannels, onCustomChannelsChange,
   rollup, onRollupChange,
   dependencySuppression, onDependencySuppressionChange, hasDependencies,
@@ -264,7 +284,7 @@ export function AlertingSection({
       {!isGroup && recoveryThreshold !== undefined && onRecoveryThresholdChange && (
         <FormRow
           title="Mark up after"
-          description={recoveryHint(recoveryThreshold, intervalSeconds)}
+          description={recoveryHint(recoveryThreshold, intervalSeconds, recoveryPace)}
           control={({ titleId, descriptionId }) => (
             <select
               aria-labelledby={titleId}

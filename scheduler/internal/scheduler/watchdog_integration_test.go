@@ -72,6 +72,18 @@ func TestWatchdogMarksStaleActiveMonitorUnknown(t *testing.T) {
 	if successes != 0 {
 		t.Fatalf("stale monitor kept %d passes toward a recovery, want 0 [S-F2, S-T7]", successes)
 	}
+	// ...but remembers it was down: it owes the confirmation when results
+	// resume. The fresh, up monitor owes nothing.
+	for id, want := range map[uuid.UUID]bool{staleID: true, freshID: false} {
+		var pending bool
+		if err := dbClient.QueryRowContext(ctx,
+			`SELECT recovery_pending FROM monitors WHERE id = $1`, id).Scan(&pending); err != nil {
+			t.Fatalf("query pending: %v", err)
+		}
+		if pending != want {
+			t.Fatalf("monitor %s recovery_pending = %v, want %v [S-F2, S-T7]", id, pending, want)
+		}
+	}
 	if state, _ := monitorStateAndFails(ctx, t, dbClient, freshID); state != "up" {
 		t.Fatalf("fresh monitor = %s, want up untouched [S-F1]", state)
 	}

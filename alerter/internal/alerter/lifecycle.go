@@ -308,6 +308,9 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 		FROM monitors m`+rootCauseLateral("m.id")+`
 		WHERE m.current_state = 'down' AND m.enabled = TRUE AND m.deleted_at IS NULL
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
+		  -- Already passing again: an alert opened before stays open, but no
+		  -- new one is announced for an outage the target is leaving (S-T7).
+		  AND NOT `+recoveringPredicate("m")+`
 		  -- A 'per_monitor' group never emits its own derived-down alert; its
 		  -- members alert individually instead.
 		  AND NOT `+alertrouting.SelfSilentGroupPredicate("m")+`

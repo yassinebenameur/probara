@@ -429,6 +429,9 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 				current_state = CASE WHEN sub.remaining = 0 THEN 'unknown' ELSE m.current_state END,
 				consecutive_failures = CASE WHEN sub.remaining = 0 THEN 0 ELSE m.consecutive_failures END,
 				consecutive_successes = CASE WHEN sub.remaining = 0 THEN 0 ELSE m.consecutive_successes END,
+				-- Back on the default fleet, a monitor that was down still
+				-- owes a recovery confirmation (S-T7).
+				recovery_pending = CASE WHEN sub.remaining = 0 THEN m.current_state = 'down' OR m.recovery_pending ELSE m.recovery_pending END,
 				updated_at = NOW()
 			FROM (
 				SELECT m2.id, COUNT(ml.location_id)::int AS remaining
@@ -445,6 +448,22 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 
 	if err := monitorstate.RecordIntervalsTx(ctx, tx, resetIDs, monitorstate.StateUnknown, monitorstate.IntervalReasonLocationChange); err != nil {
 		return 0, err
+	}
+
+	// Monitors that keep other locations: the deleted one no longer counts
+	// toward the display-only recovery progress (S-T7).
+	for _, monitorID := range affected {
+		var locationBound bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM monitor_locations WHERE monitor_id = $1)
+		`, monitorID).Scan(&locationBound); err != nil {
+			return 0, fmt.Errorf("check remaining locations: %w", err)
+		}
+		if locationBound {
+			if err := monitorstate.RefreshRecoveryProgressTx(ctx, tx, monitorID); err != nil {
+				return 0, err
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

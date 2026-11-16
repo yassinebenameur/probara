@@ -176,6 +176,9 @@ func TestSpecProperty_ApplyInvariants(t *testing.T) {
 		if cur.State == StateDown {
 			cur.ConsecutiveSuccesses = rng.Intn(11)
 		}
+		if cur.State == StateUnknown || cur.State == StateSuspect {
+			cur.RecoveryPending = rng.Intn(2) == 0
+		}
 		failure := rng.Intn(2) == 0
 		threshold := rng.Intn(7) - 1 // includes 0 and -1 (clamp to 1)
 		eff := threshold
@@ -187,8 +190,14 @@ func TestSpecProperty_ApplyInvariants(t *testing.T) {
 		if effRecovery < 1 {
 			effRecovery = 1
 		}
-		// S-T7: a pass leaves down only once it completes the confirmation.
-		confirming := cur.State == StateDown && !failure && cur.ConsecutiveSuccesses+1 < effRecovery
+		// S-T7: a pass leaves down (or the confirmation a silent down stream
+		// owes) only once it completes the confirmation.
+		counted := 0
+		if cur.State == StateDown {
+			counted = cur.ConsecutiveSuccesses
+		}
+		owes := cur.State == StateDown || cur.RecoveryPending
+		confirming := owes && !failure && counted+1 < effRecovery
 		got := Apply(cur, failure, threshold, recovery)
 
 		if got.To != StateUp && got.To != StateSuspect && got.To != StateDown {
@@ -203,9 +212,13 @@ func TestSpecProperty_ApplyInvariants(t *testing.T) {
 		if got.ClosedOutage != (got.From == StateDown && !failure && !confirming) {
 			t.Fatalf("ClosedOutage=%v for %s failure=%v confirming=%v [S-T6, S-T7]", got.ClosedOutage, got.From, failure, confirming)
 		}
-		if confirming && (got.To != StateDown || got.ConsecutiveFailures != 0 || got.ConsecutiveSuccesses != cur.ConsecutiveSuccesses+1) {
-			t.Fatalf("unconfirmed pass from down ⇒ down/CF 0/CS+1, got %s/%d/%d from CS %d [S-T7]",
-				got.To, got.ConsecutiveFailures, got.ConsecutiveSuccesses, cur.ConsecutiveSuccesses)
+		if confirming && (got.To != StateDown || got.ConsecutiveFailures != 0 || got.ConsecutiveSuccesses != counted+1) {
+			t.Fatalf("unconfirmed pass owing a confirmation ⇒ down/CF 0/CS+1, got %s/%d/%d from %+v [S-T7]",
+				got.To, got.ConsecutiveFailures, got.ConsecutiveSuccesses, cur)
+		}
+		if got.RecoveryPending != (failure && cur.RecoveryPending && got.To != StateDown) {
+			t.Fatalf("RecoveryPending=%v from %+v failure=%v to %s: kept only by failures short of down [S-T7]",
+				got.RecoveryPending, cur, failure, got.To)
 		}
 		if !failure && !confirming && (got.To != StateUp || got.ConsecutiveFailures != 0 || got.ConsecutiveSuccesses != 0) {
 			t.Fatalf("pass ⇒ up/0/0, got %s/%d/%d [S-T1, S-T4, S-T7]", got.To, got.ConsecutiveFailures, got.ConsecutiveSuccesses)
@@ -421,6 +434,139 @@ func TestSpecProperty_RecoveryConfirmationRuns(t *testing.T) {
 				t.Fatalf("seq %d step %d (threshold %d, recovery %d): got %s/CF %d/CS %d, want %s/CF %d/CS %d [S-T2, S-T3, S-T7]",
 					i, j, threshold, recovery, snap.State, snap.ConsecutiveFailures, snap.ConsecutiveSuccesses, want, fails, wantCS)
 			}
+		}
+	}
+}
+
+// applySingleSample is the temporal machine as it was before S-T7, frozen
+// here so recovery_threshold 1 can be held to it.
+func applySingleSample(current Snapshot, resultIsFailure bool, threshold int) Transition {
+	if threshold < 1 {
+		threshold = 1
+	}
+	t := Transition{From: current.State}
+	if !resultIsFailure {
+		t.To = StateUp
+		t.Changed = current.State != StateUp
+		t.ClosedOutage = current.State == StateDown
+		return t
+	}
+	t.ConsecutiveFailures = current.ConsecutiveFailures + 1
+	if current.State == StateDown || t.ConsecutiveFailures >= threshold {
+		t.To = StateDown
+	} else {
+		t.To = StateSuspect
+	}
+	t.Changed = t.To != current.State
+	t.OpenedOutage = t.To == StateDown && current.State != StateDown
+	return t
+}
+
+// S-T7: at recovery_threshold 1 every observable output — state, failure
+// count, outage edges — is exactly the pre-S-T7 machine's, whatever the
+// snapshot carries (including the memory of a silent outage), and no pass is
+// ever counted. Only the RecoveryPending bookkeeping may differ.
+func TestSpecProperty_RecoveryThresholdOneIsSingleSample(t *testing.T) {
+	states := []State{StateUnknown, StateUp, StateSuspect, StateDown, StateDegraded}
+	rng := rand.New(rand.NewSource(1001))
+	for i := 0; i < 3000; i++ {
+		cur := Snapshot{State: states[rng.Intn(len(states))], ConsecutiveFailures: rng.Intn(11), RecoveryPending: rng.Intn(2) == 0}
+		if cur.State == StateDown {
+			cur.ConsecutiveSuccesses = rng.Intn(11)
+		}
+		failure := rng.Intn(2) == 0
+		threshold := rng.Intn(7) - 1
+		got := Apply(cur, failure, threshold, 1)
+		got.RecoveryPending = false
+		if want := applySingleSample(cur, failure, threshold); got != want {
+			t.Fatalf("Apply(%+v, %v, %d, 1) = %+v, want the single-sample %+v [S-T7]", cur, failure, threshold, got, want)
+		}
+	}
+}
+
+// S-T7 with S-F2: a stream that went silent while down (confirmed or already
+// recovering) re-enters from unknown owing the whole confirmation: its first
+// pass after silence is down with one pass counted, never up. A stream that
+// was up keeps today's behaviour.
+func TestSpecScenario_SilentRecoveryStillConfirms(t *testing.T) {
+	for _, before := range []Snapshot{
+		{State: StateDown, ConsecutiveFailures: 4},
+		{State: StateDown, ConsecutiveSuccesses: 2},
+	} {
+		silent := AfterSilence(before)
+		if silent != (Snapshot{State: StateUnknown, RecoveryPending: true}) {
+			t.Fatalf("AfterSilence(%+v) = %+v, want unknown owing a confirmation [S-F2, S-T7]", before, silent)
+		}
+		first := Apply(silent, false, 2, 3)
+		want := Transition{From: StateUnknown, To: StateDown, ConsecutiveSuccesses: 1, Changed: true, OpenedOutage: true}
+		if first != want {
+			t.Fatalf("first pass after silence from %+v = %+v, want %+v [S-T7]", before, first, want)
+		}
+		second := Apply(Snapshot{State: first.To, ConsecutiveSuccesses: first.ConsecutiveSuccesses}, false, 2, 3)
+		third := Apply(Snapshot{State: second.To, ConsecutiveSuccesses: second.ConsecutiveSuccesses}, false, 2, 3)
+		if second.To != StateDown || second.ConsecutiveSuccesses != 2 || third.To != StateUp || !third.ClosedOutage {
+			t.Fatalf("after silence: %+v then %+v, want down at 2 then up [S-T7]", second, third)
+		}
+	}
+
+	// A failure first keeps the debt through suspect; the next pass counts 1.
+	silent := AfterSilence(Snapshot{State: StateDown, ConsecutiveSuccesses: 1})
+	fail := Apply(silent, true, 2, 3)
+	if fail.To != StateSuspect || !fail.RecoveryPending {
+		t.Fatalf("failure after silence = %+v, want suspect still owing [S-T2, S-T7]", fail)
+	}
+	pass := Apply(Snapshot{State: fail.To, ConsecutiveFailures: fail.ConsecutiveFailures, RecoveryPending: fail.RecoveryPending}, false, 2, 3)
+	if pass.To != StateDown || pass.ConsecutiveSuccesses != 1 || pass.ConsecutiveFailures != 0 {
+		t.Fatalf("pass after a post-silence failure = %+v, want down at 1 [S-T7]", pass)
+	}
+	// Two failures settle it as a fresh outage; down needs confirming anyway.
+	down := Apply(Snapshot{State: fail.To, ConsecutiveFailures: fail.ConsecutiveFailures, RecoveryPending: true}, true, 2, 3)
+	if down.To != StateDown || down.RecoveryPending {
+		t.Fatalf("second failure after silence = %+v, want down, the debt folded into it [S-T7]", down)
+	}
+
+	// Up before the silence: unknown owes nothing, the first pass is up.
+	if up := AfterSilence(Snapshot{State: StateUp}); up.RecoveryPending || Apply(up, false, 2, 3).To != StateUp {
+		t.Fatalf("a stream that was up re-enters as today [S-F2]")
+	}
+	// At threshold 1 the debt changes nothing (single-sample recovery).
+	if got := Apply(silent, false, 2, 1); got.To != StateUp {
+		t.Fatalf("threshold 1 after silence = %+v, want up [S-T7]", got)
+	}
+}
+
+// S-T7 per location: a location added to a monitor that is down (or that
+// already owes a confirmation) starts unknown but owing one, so its first
+// pass cannot lift the aggregate; it confirms like any down location.
+func TestSpecScenario_AddedLocationInheritsConfirmation(t *testing.T) {
+	const quorum, threshold, recovery = 1, 2, 3
+	added := Snapshot{State: StateUnknown, RecoveryPending: true}
+	aggregate := func(s Snapshot) (State, int) {
+		c := LocationCounts{Selected: 1}
+		var down []int
+		switch s.State {
+		case StateDown:
+			c.Down++
+			down = append(down, s.ConsecutiveSuccesses)
+		case StateSuspect:
+			c.Suspect++
+		case StateUp:
+			c.Up++
+		}
+		return AggregateLocations(c, quorum), RecoveryProgress(down, quorum, 1)
+	}
+	snap := added
+	for pass := 1; pass <= recovery; pass++ {
+		tr := Apply(snap, false, threshold, recovery)
+		snap = Snapshot{State: tr.To, ConsecutiveSuccesses: tr.ConsecutiveSuccesses, RecoveryPending: tr.RecoveryPending}
+		state, progress := aggregate(snap)
+		wantState, wantProgress := StateDown, pass
+		if pass == recovery {
+			wantState, wantProgress = StateUp, 0
+		}
+		if state != wantState || progress != wantProgress {
+			t.Fatalf("pass %d at the added location: aggregate %s at %d, want %s at %d [S-T7, S-A1]",
+				pass, state, progress, wantState, wantProgress)
 		}
 	}
 }

@@ -94,12 +94,12 @@ func Record(ctx context.Context, db *sql.DB, r Result) (Transition, error) {
 	var threshold, recoveryThreshold int
 	var lastStarted sql.NullTime
 	err = tx.QueryRowContext(ctx, `
-		SELECT current_state, consecutive_failures, consecutive_successes,
+		SELECT current_state, consecutive_failures, consecutive_successes, recovery_pending,
 			consecutive_failures_threshold, recovery_threshold, last_result_started_at
 		FROM monitors
 		WHERE id = $1
 		FOR UPDATE
-	`, r.MonitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &snap.ConsecutiveSuccesses,
+	`, r.MonitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &snap.ConsecutiveSuccesses, &snap.RecoveryPending,
 		&threshold, &recoveryThreshold, &lastStarted)
 	if err != nil {
 		return Transition{}, fmt.Errorf("lock monitor state: %w", err)
@@ -163,13 +163,14 @@ func Record(ctx context.Context, db *sql.DB, r Result) (Transition, error) {
 		SET current_state = $1,
 			consecutive_failures = $2,
 			consecutive_successes = $7,
+			recovery_pending = $8,
 			last_state_change_at = CASE WHEN $3 THEN NOW() ELSE last_state_change_at END,
 			last_result_at = NOW(),
 			last_result_started_at = CASE WHEN $6 THEN last_result_started_at ELSE $5::timestamptz END,
 			updated_at = NOW()
 		WHERE id = $4
 	`, string(transition.To), transition.ConsecutiveFailures, transition.Changed, r.MonitorID, r.StartedAt, r.SyntheticAbsence,
-		transition.ConsecutiveSuccesses); err != nil {
+		transition.ConsecutiveSuccesses, transition.RecoveryPending); err != nil {
 		return Transition{}, fmt.Errorf("update monitor state: %w", err)
 	}
 	if transition.Changed {
