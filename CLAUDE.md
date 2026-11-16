@@ -833,6 +833,22 @@ or imported groups come back empty. Any other path that creates groups through
   `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
   Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
   link when it has one.
+- **Delivery history** (`alert_notification_deliveries`, 90 days) is written
+  only through `shared/notifications/deliverylog`, from exactly two send
+  paths — `deliverNotification` (`alerter/.../delivery_log.go`: in the claim
+  tx when it commits, through the pool after a rollback) and the worker
+  consumer (`worker/.../notifications/delivery_log.go`, one call per outcome,
+  drops included) — plus the API test send. Never write it elsewhere, never
+  let a failed write fail a delivery (`RecordTx`: a savepoint plus server-side
+  `SET LOCAL` timeouts — never a client context deadline inside a caller's
+  transaction, lib/pq closes the connection when one fires), and never
+  store raw error text: `deliverylog` sanitizes it and masks the channel's
+  secrets (`SecretValues`). Fan-out rows follow the recipient ledger
+  (`deliverylog.Track`), one per recipient an attempt tried. A held page's
+  row says `muted_requeued` when `releaseMutedClaim` handed its claim back and
+  `muted` when it kept it (`mutedReason`, read in the same tx), so change them
+  together. A new drop or failure cause is a `Reason*` constant plus its
+  wording in `web/lib/deliveries.ts` and the alerting docs.
 
 ## Status pages
 

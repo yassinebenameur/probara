@@ -29,6 +29,7 @@ func catalog() []spec {
 		workspaceTools(),
 		platformTools(),
 		maintenanceOccurrenceTools(),
+		deliveryTools(),
 	} {
 		all = append(all, group...)
 	}

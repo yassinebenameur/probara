@@ -44,6 +44,7 @@ import { useToast } from '@/components/ui/ToastProvider';
 import TypeBadge from '@/components/ui/TypeBadge';
 import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 import { commonName, tlsExpiryCertificate } from '@/lib/tls-cert';
+import AlertDeliveries from './AlertDeliveries';
 
 /** What the feed needs to know about an alert's monitor (from the monitors list). */
 export interface FeedMonitor {
@@ -743,6 +744,7 @@ export default function AlertFeed({
                 {alert.triage.summary && <p className="mt-1 text-pretty text-xs leading-5 text-slate-400">{alert.triage.summary}</p>}
               </div>
             )}
+            <AlertDeliveries alertId={alert.id} headingClassName={SECTION_LABEL} />
           </div>
         )}
 
