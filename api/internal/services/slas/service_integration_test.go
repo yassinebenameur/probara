@@ -115,6 +115,19 @@ func TestSLAService(t *testing.T) {
 		require.InDelta(t, 3600, *r.Response.MTTRSeconds, 1e-6)
 		require.Equal(t, 1, r.Response.AlertCount)
 		require.InDelta(t, 600, *r.Response.MTTASeconds, 1e-6)
+		// S-U8: a closed period has only the period window; its burn-down
+		// is against the full period's budget, its last day consuming the
+		// headline's.
+		require.NotNil(t, r.Burn)
+		require.Len(t, r.Burn.Windows, 1)
+		require.Equal(t, models.SLABurnWindowPeriod, r.Burn.Windows[0].Key)
+		require.InDelta(t, (1-719.0/720)/0.001, *r.Burn.Windows[0].BurnRate, 1e-6)
+		require.Equal(t, models.SLABudgetExhausted, r.Burn.Exhaustion, "3600s down against a 2592s budget")
+		require.Len(t, r.Burn.BurnDown, 30)
+		require.InDelta(t, 0, r.Burn.BurnDown[8].ConsumedSeconds, 1e-6)
+		require.InDelta(t, 3600, r.Burn.BurnDown[9].ConsumedSeconds, 1e-6)
+		require.InDelta(t, r.Budget.ConsumedSeconds, r.Burn.BurnDown[29].ConsumedSeconds, 1e-6)
+		require.InDelta(t, (2592-3600)/2592.0*100, *r.Burn.BurnDown[29].RemainingPct, 1e-6)
 
 		var csvBuf, pdfBuf bytes.Buffer
 		require.NoError(t, WriteCSV(&csvBuf, r))
@@ -220,6 +233,19 @@ func TestSLAService(t *testing.T) {
 		require.False(t, r.Period.IsClosed)
 		require.True(t, r.Period.EffectiveEnd.Equal(now))
 		require.Empty(t, r.Period.NextKey, "November has not started")
+		// S-U8 on a partial period, 36 hours in: the windows are the last
+		// hour and the 24 hours to now (both inside October), then the
+		// period to date; nothing burns, so nothing is projected.
+		require.Len(t, r.Burn.Windows, 3)
+		require.True(t, r.Burn.Windows[0].Start.Equal(now.Add(-time.Hour)))
+		require.True(t, r.Burn.Windows[1].Start.Equal(now.Add(-24*time.Hour)))
+		require.True(t, r.Burn.Windows[2].Start.Equal(r.Period.Start))
+		for _, w := range r.Burn.Windows {
+			require.InDelta(t, 0, *w.BurnRate, 1e-9, w.Key)
+		}
+		require.Equal(t, models.SLABudgetNotProjected, r.Burn.Exhaustion)
+		require.Len(t, r.Burn.BurnDown, 2)
+		require.True(t, r.Burn.BurnDown[1].End.Equal(now), "today's point measures to now")
 
 		r, err = svc.Report(ctx, tenantID, serial.ID, ReportQuery{From: "2026-09-10", To: "2026-09-10"})
 		require.NoError(t, err)
@@ -378,7 +404,45 @@ func TestSLAService(t *testing.T) {
 		}
 	})
 
+	t.Run("period change re-plans the report schedule", func(t *testing.T) {
+		nextRun := func() time.Time {
+			var next time.Time
+			require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT next_run_at FROM sla_report_schedules WHERE sla_id = $1`, serial.ID).Scan(&next))
+			return next.UTC()
+		}
+		_, err := dbClient.ExecContext(ctx, `
+			INSERT INTO sla_report_schedules (tenant_id, sla_id, recipients, next_run_at) VALUES ($1, $2, ARRAY['ops@example.com'], $3)
+		`, tenantID, serial.ID, time.Date(2026, 11, 1, 1, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+
+		// Friday 2 Oct is in ISO week 40 (Mon 28 Sep - Mon 5 Oct).
+		weekly := "weekly"
+		_, err = svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Period: &weekly})
+		require.NoError(t, err)
+		require.Equal(t, time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC).Add(ReportIssueGrace), nextRun())
+		paris := "Europe/Paris"
+		_, err = svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Timezone: &paris})
+		require.NoError(t, err)
+		require.Equal(t, time.Date(2026, 10, 4, 22, 0, 0, 0, time.UTC).Add(ReportIssueGrace), nextRun(), "midnight in Paris")
+
+		// Other edits leave the plan alone.
+		_, err = dbClient.ExecContext(ctx, `UPDATE sla_report_schedules SET next_run_at = $2 WHERE sla_id = $1`, serial.ID, nov1)
+		require.NoError(t, err)
+		name := "Checkout platform"
+		_, err = svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Name: &name})
+		require.NoError(t, err)
+		require.Equal(t, nov1, nextRun())
+
+		monthly, utc := "monthly", "UTC"
+		_, err = svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Period: &monthly, Timezone: &utc})
+		require.NoError(t, err)
+		require.Equal(t, nov1.Add(ReportIssueGrace), nextRun())
+	})
+
 	require.NoError(t, svc.Delete(ctx, tenantID, serial.ID))
 	_, err = svc.Get(ctx, tenantID, serial.ID)
 	require.ErrorIs(t, err, ErrNotFound)
+	var schedules int
+	require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM sla_report_schedules`).Scan(&schedules))
+	require.Zero(t, schedules, "deleting the SLA deletes its schedule")
 }

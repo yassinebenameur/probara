@@ -69,6 +69,7 @@ import (
 	oidcmappingsservice "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
+	reportscheduleservice "github.com/yassinebenameur/probara/api/internal/services/reportschedules"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
@@ -96,6 +97,7 @@ type Server struct {
 	statusPublisher    *statusupdates.Publisher
 	auditRecorder      *auditservice.Recorder
 	auditPruner        *auditservice.Pruner
+	reportRunner       *reportscheduleservice.Runner
 	locationAuthorizer *locationnatsauthservice.Service
 	locationAuth       *callout.AuthorizationService
 	locationAuthConn   *nats.Conn
@@ -207,6 +209,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
 	mountPushWebhookRoutes(r, pushHandlers)
 
+	// Emailed SLA report schedules and their runner (routes_reportschedules.go).
+	reportScheduleHandlers, reportRunner := newReportSchedules(cfg, dbClient, auditRecorder, log)
+
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
 	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret)
@@ -242,6 +247,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
 		mountAuthRoutes(r, authHandlers, adminUsersHandlers)
 		mountAlertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_alertactions.go)
+		mountReportUnsubscribeRoutes(r, reportScheduleHandlers)           // signed unsubscribe links of report emails
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -337,6 +343,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo, cfg.LocalAI.Disabled || !cfg.AITriageEnabled), Log: log}
 			r.Route("/slas", slaHandlers.Routes)
 			r.Route("/sla-reports", slaHandlers.ReportRoutes)
+			mountReportScheduleRoutes(r, reportScheduleHandlers)
 
 			// Maintenance windows
 			maintenanceService := maintenancewindowservice.NewService(dbClient)
@@ -430,6 +437,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		statusPublisher:    statusPublisher,
 		auditRecorder:      auditRecorder,
 		auditPruner:        auditPruner,
+		reportRunner:       reportRunner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
 		mcpErr:             mcpErr,
@@ -476,6 +484,9 @@ func (s *Server) Start() error {
 	if s.auditPruner != nil {
 		s.auditPruner.Start()
 	}
+	if s.reportRunner != nil {
+		s.reportRunner.Start()
+	}
 
 	return s.http.ListenAndServe()
 }
@@ -499,6 +510,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.auditPruner != nil {
 		s.auditPruner.Stop()
+	}
+	if s.reportRunner != nil {
+		s.reportRunner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

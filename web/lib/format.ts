@@ -178,6 +178,16 @@ export function formatPercent(value: number, options: { digits?: number; trim?: 
   return `${options.trim ? fixed.replace(/\.0+$/, '') : fixed}%`;
 }
 
+/**
+ * An error-budget burn rate (docs/state-semantics.md S-U8) as a multiple of
+ * the even pace: `0.42×`, `1.00×`, `14.4×` (`—` without data). Two decimals
+ * below 10, one above, so a fast burn reads at a glance.
+ */
+export function formatBurnRate(rate: number | null | undefined): string {
+  if (rate === null || rate === undefined || !Number.isFinite(rate)) return '—';
+  return `${rate.toFixed(rate >= 10 ? 1 : 2)}×`;
+}
+
 /** The size of a file or text source: `512 B`, `3.4 KB`, `1.2 MB`. */
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

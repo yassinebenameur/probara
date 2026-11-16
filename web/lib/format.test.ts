@@ -179,3 +179,12 @@ test('formatFileSize steps from bytes to KB to MB', () => {
   assert.equal(formatFileSize(1024 * 1024), '1.0 MB');
   assert.equal(formatFileSize(1.5 * 1024 * 1024), '1.5 MB');
 });
+
+test('formatBurnRate: a multiple of the even pace, one decimal past 10', async () => {
+  const { formatBurnRate } = await import('./format');
+  assert.equal(formatBurnRate(0), '0.00×');
+  assert.equal(formatBurnRate(1.3889), '1.39×');
+  assert.equal(formatBurnRate(14.4), '14.4×');
+  assert.equal(formatBurnRate(null), '—');
+  assert.equal(formatBurnRate(Number.NaN), '—');
+});

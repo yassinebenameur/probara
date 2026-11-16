@@ -204,6 +204,47 @@ export function expiryDaysTone(days: number | null | undefined, warnDays: number
   return 'good';
 }
 
+// ── SLA error budget ─────────────────────────────────────────────────────
+
+/** Burn rates above the even pace (1×) warn; above twice it, the budget is gone by mid-period. */
+export const BURN_RATE_WARN = 1;
+export const BURN_RATE_BAD = 2;
+
+/** Tone of an error-budget burn rate (S-U8): good at or under the even pace. */
+export function burnRateTone(rate: number | null | undefined): UptimeTone {
+  return thresholdTone(rate, BURN_RATE_WARN, BURN_RATE_BAD);
+}
+
+/** Tone of an SLA's budget exhaustion state (api models.SLABudget*). */
+export function budgetExhaustionTone(state: string | null | undefined): UptimeTone {
+  switch (state) {
+    case 'exhausted':
+      return 'bad';
+    case 'projected':
+      return 'warn';
+    case 'not_projected':
+      return 'good';
+    default:
+      return 'none';
+  }
+}
+
+/** Pill tone of one recipient's emailed-report delivery (api models.SLAReportDelivery*). */
+export function reportDeliveryTone(status: string | null | undefined): StatusTone {
+  switch (status) {
+    case 'sent':
+      return 'success';
+    case 'failed':
+      return 'danger';
+    case 'uncertain':
+    case 'pending':
+    case 'sending':
+      return 'warning';
+    default:
+      return 'neutral';
+  }
+}
+
 // ── Monitor status ───────────────────────────────────────────────────────
 
 export const MONITOR_STATUS_LABEL: Record<MonitorDisplayStatus, string> = {

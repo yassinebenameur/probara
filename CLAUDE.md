@@ -300,6 +300,17 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   rollup ranges via the scheduler's `syncDowntimeFromIntervals` projection;
   `TestDowntimeProjectionMatchesRawAnalyticsPath` pins the pair). Never
   derive downtime from check rows.
+- **SLA burn and report emails**: burn rate, burn-down and exhaustion (S-U8,
+  `api/internal/services/slas/burn.go`) are extra buckets on the report's one
+  `IntegrateTimeline` call, never another query; `SLAReport.burn` is optional
+  like `suspected_causes`. Scheduled report emails run in the **API**
+  (`api/internal/services/reportschedules`, its `Runner` started from
+  `server.go`): claim the period and its per-recipient deliveries before
+  mailing, commit each delivery as `sending` before it goes out, never resend
+  an `uncertain` one. The next send is `slas.ReportRunAt`, re-planned by the
+  SLA service when a period or timezone changes. Schedules need SMTP,
+  `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; unsubscribe links are
+  `shared/actionlink` tokens (`ActionUnsubscribeReport`, own TTL).
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the

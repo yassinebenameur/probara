@@ -29,6 +29,7 @@ func catalog() []spec {
 		workspaceTools(),
 		platformTools(),
 		maintenanceOccurrenceTools(),
+		slaReportScheduleTools(),
 	} {
 		all = append(all, group...)
 	}

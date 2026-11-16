@@ -3,13 +3,15 @@
 import Link from 'next/link';
 import { Info } from 'lucide-react';
 import {
-  causeShare, dayTone, formatSlaDate, formatSlaDuration, formatSlaPct, formatTarget, showSuspectedCauses, slaCausesCaveat, slaTone,
-  type SlaReport, type SlaReportOutage, type SlaReportSuspectedCauses,
+  burnWindowLabel, causeShare, dayTone, exhaustionCopy, formatSlaDate, formatSlaDuration, formatSlaPct, formatTarget, showSuspectedCauses,
+  slaCausesCaveat, slaTone,
+  type SlaReport, type SlaReportBurn, type SlaReportOutage, type SlaReportSuspectedCauses,
 } from '@/lib/sla';
-import { formatDate, formatDateTime, formatUptime } from '@/lib/format';
+import { formatBurnRate, formatDate, formatDateTime, formatUptime } from '@/lib/format';
+import { UPTIME_TONE_TEXT, budgetExhaustionTone, burnRateTone } from '@/lib/status-tones';
 import TypeBadge from '@/components/ui/TypeBadge';
 import Panel from '@/components/ui/Panel';
-import { AvailabilityFigure, BudgetBar, SlaStatusPill, TONE_BG, TONE_TEXT } from './SlaVisuals';
+import { AvailabilityFigure, BudgetBar, BurnDownChart, SlaStatusPill, TONE_BG, TONE_TEXT } from './SlaVisuals';
 
 function formatInZone(iso: string, timeZone: string, withTime = true): string {
   // The report reads in the SLA's own timezone, not the browser's.
@@ -86,6 +88,46 @@ function OutageTable({ outages, timeZone, showMonitor, showCause = false }: {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * Error-budget burn (S-U8): the burn rate per window, whether the budget
+ * runs out this period, and the burn-down. Rendered only for reports that
+ * carry it, so an older issued report looks as it did.
+ */
+function BurnPanel({ report, burn }: { report: SlaReport; burn: SlaReportBurn }) {
+  const closed = report.period.is_closed;
+  const tz = report.definition.timezone;
+  const hasPoints = burn.burn_down.some((p) => p.remaining_pct !== null);
+  return (
+    <Panel title="Budget burn" subtitle="Burn rate 1× spends the error budget exactly over the period; 2× twice as fast.">
+      <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+        {burn.windows.map((w) => (
+          <div key={w.key}>
+            <dt className="text-xs text-slate-400">{burnWindowLabel(w.key, closed)}</dt>
+            <dd className={`mt-0.5 text-title font-semibold tabular-nums ${UPTIME_TONE_TEXT[burnRateTone(w.burn_rate)]}`}>
+              {formatBurnRate(w.burn_rate)}
+            </dd>
+            <dd className="text-xs tabular-nums text-slate-500">{formatSlaPct(w.availability_pct)} available</dd>
+          </div>
+        ))}
+        <div className="col-span-2 sm:col-span-1">
+          <dt className="text-xs text-slate-400">Budget</dt>
+          <dd className={`mt-0.5 text-sm ${UPTIME_TONE_TEXT[budgetExhaustionTone(burn.exhaustion)]}`}>
+            {exhaustionCopy(burn, closed, tz)}
+          </dd>
+        </div>
+      </dl>
+      {hasPoints && (
+        <div className="mt-4">
+          <BurnDownChart report={report} />
+          <p className="mt-1 text-xs text-slate-500">
+            Budget left of the full period after each day in {tz}; dashed, the even spend that uses it all by the period end.
+          </p>
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -219,6 +261,8 @@ export function SlaReportView({ report }: { report: SlaReport }) {
           </dl>
         </Panel>
       </div>
+
+      {report.burn && <BurnPanel report={report} burn={report.burn} />}
 
       {report.daily.length > 0 && (
         <Panel title="Daily availability" subtitle={`Days in ${tz}`}>

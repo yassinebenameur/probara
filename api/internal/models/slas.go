@@ -96,6 +96,72 @@ type SLAReport struct {
 	// (web, CSV, PDF) must treat it as optional and leave such a report's
 	// output unchanged.
 	SuspectedCauses *SLAReportSuspectedCauses `json:"suspected_causes,omitempty"`
+	// Burn is the error-budget burn (docs/state-semantics.md S-U8). Absent
+	// on reports computed before it existed, so every renderer (web, CSV,
+	// PDF) must treat it as optional and leave such a report's output
+	// unchanged.
+	Burn *SLAReportBurn `json:"burn,omitempty"`
+}
+
+// Burn-rate windows of an SLA report (S-U8), in display order. The two
+// short windows end at the report's effective end and exist only while the
+// period runs; every window is clipped to the period, so it measures the
+// budget the report is about.
+const (
+	SLABurnWindowHour   = "1h"
+	SLABurnWindowDay    = "24h"
+	SLABurnWindowPeriod = "period"
+)
+
+// Budget exhaustion states of an SLA report (S-U8).
+const (
+	// SLABudgetExhausted: the full period's error budget is spent.
+	SLABudgetExhausted = "exhausted"
+	// SLABudgetProjected: at the last 24 hours' pace, the running period's
+	// budget runs out at ProjectedExhaustionAt, before the period ends.
+	SLABudgetProjected = "projected"
+	// SLABudgetNotProjected: the budget lasts the period at the last 24
+	// hours' pace, or lasted the closed period.
+	SLABudgetNotProjected = "not_projected"
+	// SLABudgetNoData: nothing observed in the period, or (running period)
+	// in the last 24 hours, so there is no pace to project.
+	SLABudgetNoData = "no_data"
+)
+
+// SLAReportBurn is how fast the error budget is being spent (S-U8).
+type SLAReportBurn struct {
+	// Windows: 1h and 24h (running periods only), then the period to date.
+	Windows    []SLAReportBurnWindow `json:"windows"`
+	Exhaustion string                `json:"exhaustion"`
+	// ProjectedExhaustionAt is set only when Exhaustion is "projected".
+	ProjectedExhaustionAt *time.Time `json:"projected_exhaustion_at,omitempty"`
+	// BurnDown is the full period's budget left after each local day of
+	// the report so far; empty without monitors.
+	BurnDown []SLAReportBurnPoint `json:"burn_down"`
+}
+
+// SLAReportBurnWindow is one window's burn rate: (1 - availability) /
+// (1 - target), so 1 spends the budget exactly at the allowed pace. Both
+// figures are nil without data in the window; BurnRate is also nil when the
+// target leaves no budget.
+type SLAReportBurnWindow struct {
+	Key             string    `json:"key"`
+	Start           time.Time `json:"start"`
+	End             time.Time `json:"end"`
+	AvailabilityPct *float64  `json:"availability_pct"`
+	BurnRate        *float64  `json:"burn_rate"`
+}
+
+// SLAReportBurnPoint is the error budget at the end of one day of the
+// period. ConsumedSeconds is the budget consumed from the period start to
+// End; RemainingPct what is left of AllowedFullPeriodSeconds, negative once
+// overspent, nil while nothing was observed yet (or with no budget).
+type SLAReportBurnPoint struct {
+	Date string `json:"date"`
+	// End is the day's end, or the report's effective end for today.
+	End             time.Time `json:"end"`
+	ConsumedSeconds float64   `json:"consumed_seconds"`
+	RemainingPct    *float64  `json:"remaining_pct"`
 }
 
 // SLAReportDefinition is the SLA as it stood when the report was computed.

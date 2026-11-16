@@ -180,6 +180,40 @@ export interface SlaReport {
   notes: string[];
   /** Absent on reports issued before causes existed: render nothing for those. */
   suspected_causes?: SlaReportSuspectedCauses;
+  /** Error-budget burn (S-U8). Absent on reports issued before it existed: render nothing for those. */
+  burn?: SlaReportBurn;
+}
+
+/** Burn-rate windows (api models.SLABurnWindow*): the short two only while the period runs. */
+export type SlaBurnWindowKey = '1h' | '24h' | 'period';
+
+/** Budget exhaustion states (api models.SLABudget*). */
+export type SlaBudgetExhaustion = 'exhausted' | 'projected' | 'not_projected' | 'no_data';
+
+export interface SlaReportBurnWindow {
+  key: SlaBurnWindowKey;
+  start: string;
+  end: string;
+  availability_pct: number | null;
+  /** (1 − availability) ÷ (1 − target): 1 spends the budget exactly at the even pace. */
+  burn_rate: number | null;
+}
+
+export interface SlaReportBurnPoint {
+  /** Local day in the SLA's timezone. */
+  date: string;
+  /** The instant the point measures to: the day's end, or now for today. */
+  end: string;
+  consumed_seconds: number;
+  /** Share of the full period's budget left; negative once overspent; null before anything was observed. */
+  remaining_pct: number | null;
+}
+
+export interface SlaReportBurn {
+  windows: SlaReportBurnWindow[];
+  exhaustion: SlaBudgetExhaustion;
+  projected_exhaustion_at?: string;
+  burn_down: SlaReportBurnPoint[];
 }
 
 export interface SlaReportRef {
@@ -407,4 +441,160 @@ export function slaCausesCaveat(c: Pick<SlaReportSuspectedCauses, 'outage_count'
     'Counts are monitor outages, not alerts, and downtime is summed per monitor, so it can exceed the service downtime when monitors fail together. ' +
     `${c.triaged_outage_count} of ${c.outage_count} monitor outages had a triaged alert.`
   );
+}
+
+// ── Error-budget burn (docs/state-semantics.md S-U8) ─────────────────────
+
+export const SLA_BURN_WINDOW_LABELS: Record<SlaBurnWindowKey, string> = {
+  '1h': 'Last hour',
+  '24h': 'Last 24 hours',
+  period: 'Period to date',
+};
+
+/** A window's label; a closed period's own window covers all of it. */
+export function burnWindowLabel(key: SlaBurnWindowKey, closed: boolean): string {
+  return key === 'period' && closed ? 'Whole period' : SLA_BURN_WINDOW_LABELS[key];
+}
+
+/**
+ * What the report says about running out. Same states and wording as the
+ * PDF's ExhaustionText (api/internal/services/slas/export.go).
+ */
+export function exhaustionCopy(burn: Pick<SlaReportBurn, 'exhaustion' | 'projected_exhaustion_at'>, closed: boolean, timeZone: string): string {
+  switch (burn.exhaustion) {
+    case 'exhausted':
+      return "Exhausted: the period's error budget is spent";
+    case 'projected':
+      if (burn.projected_exhaustion_at) {
+        return `Runs out ${formatSlaDate(burn.projected_exhaustion_at, timeZone) ?? burn.projected_exhaustion_at} at the last 24 hours' pace`;
+      }
+      break;
+    case 'not_projected':
+      return closed ? 'Lasted the period' : 'Not projected to run out this period';
+  }
+  return 'No data to project';
+}
+
+export interface BurnDownRow {
+  ts: number;
+  /** Budget left (full period), null where nothing was observed. */
+  remaining: number | null;
+  /** The even spend: 100% at the period start to 0% at its end. */
+  even: number;
+}
+
+/**
+ * Rows for the burn-down chart across the whole period: a full budget at the
+ * start, one point per reported day, and the period end so the even-spend
+ * line always reaches 0%.
+ */
+export function burnDownRows(report: Pick<SlaReport, 'period' | 'burn'>): BurnDownRow[] {
+  const start = Date.parse(report.period.start);
+  const end = Date.parse(report.period.end);
+  const span = end - start;
+  if (!report.burn || !(span > 0)) return [];
+  const even = (ts: number) => Math.max(0, Math.min(100, 100 * (1 - (ts - start) / span)));
+  const rows: BurnDownRow[] = [{ ts: start, remaining: 100, even: 100 }];
+  for (const p of report.burn.burn_down) {
+    const ts = Date.parse(p.end);
+    if (!Number.isFinite(ts)) continue;
+    rows.push({ ts, remaining: p.remaining_pct, even: even(ts) });
+  }
+  if (rows[rows.length - 1].ts < end) rows.push({ ts: end, remaining: null, even: 0 });
+  return rows;
+}
+
+// ── Emailed report schedules ─────────────────────────────────────────────
+
+/** Also the API's cap (reportschedules.MaxRecipients). */
+export const SLA_REPORT_MAX_RECIPIENTS = 50;
+
+export type SlaReportDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'uncertain' | 'skipped' | 'cancelled';
+
+export const SLA_REPORT_DELIVERY_LABELS: Record<SlaReportDeliveryStatus, string> = {
+  pending: 'Waiting to send',
+  sending: 'Sending',
+  sent: 'Sent',
+  failed: 'Failed',
+  uncertain: 'Uncertain',
+  skipped: 'Skipped (unsubscribed)',
+  cancelled: 'Cancelled',
+};
+
+export interface SlaReportDelivery {
+  period_key: string;
+  address: string;
+  status: SlaReportDeliveryStatus;
+  attempts: number;
+  /** Set while a failed attempt waits for its retry. */
+  next_attempt_at?: string;
+  sent_at?: string;
+  last_error?: string;
+}
+
+export interface SlaReportSchedule {
+  id: string;
+  sla_id: string;
+  enabled: boolean;
+  recipients: string[];
+  unsubscribed: string[];
+  include_csv: boolean;
+  /** The running period's close plus the grace hour; meaningful only while enabled. */
+  next_run_at: string;
+  last_period_key?: string;
+  last_run_at: string | null;
+  last_error?: string;
+  /** The last claimed period's outcome per recipient. */
+  deliveries: SlaReportDelivery[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SlaReportScheduleResponse {
+  schedule: SlaReportSchedule | null;
+  /** False when the API lacks SMTP, APP_BASE_URL or PROBARA_SECRETS_KEY; mail_problems names each. */
+  mail_ready: boolean;
+  mail_problems: string[];
+}
+
+export interface SlaReportScheduleInput {
+  enabled: boolean;
+  recipients: string[];
+  include_csv: boolean;
+  resubscribe?: string[];
+}
+
+// The API's rule (shared/mail ParseRecipient): ASCII dot-atoms on both sides
+// of a single "@", no display name, no quotes.
+const ATEXT = "[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+";
+const DOT_ATOM = `${ATEXT}(?:\\.${ATEXT})*`;
+const PLAIN_ADDRESS = new RegExp(`^${DOT_ATOM}@${DOT_ATOM}$`);
+
+/**
+ * Splits a pasted recipient list (commas, semicolons, spaces or new lines)
+ * into lower-cased, de-duplicated addresses, and the entries that are not
+ * plain addresses.
+ */
+export function parseRecipients(text: string): { recipients: string[]; invalid: string[] } {
+  const recipients: string[] = [];
+  const invalid: string[] = [];
+  for (const raw of text.split(/[\s,;]+/)) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    const addr = entry.toLowerCase();
+    if (!PLAIN_ADDRESS.test(addr)) {
+      invalid.push(entry);
+    } else if (!recipients.includes(addr)) {
+      recipients.push(addr);
+    }
+  }
+  return { recipients, invalid };
+}
+
+/** Validates a recipient list before it reaches the API; returns a message or null. */
+export function recipientsError(parsed: { recipients: string[]; invalid: string[] }): string | null {
+  if (parsed.invalid.length > 0) return `Not a plain email address: ${parsed.invalid.join(', ')}`;
+  if (parsed.recipients.length === 0) return 'Add at least one recipient.';
+  if (parsed.recipients.length > SLA_REPORT_MAX_RECIPIENTS) return `At most ${SLA_REPORT_MAX_RECIPIENTS} recipients.`;
+  return null;
 }

@@ -57,6 +57,12 @@ type Attachment struct {
 // caller knows not to retry it.
 var ErrInvalidMessage = errors.New("invalid mail message")
 
+// ErrMaybeDelivered marks a recipient whose message was fully transmitted
+// but whose acceptance was never confirmed (the connection dropped or timed
+// out waiting for the reply to the end of data). The relay may have queued
+// it, so a caller that must never mail anyone twice does not retry it.
+var ErrMaybeDelivered = errors.New("mail may have been delivered")
+
 // Length bounds that keep every header line the mailer writes under the
 // SMTP 998-octet limit. The subject needs none: it is encoded and folded.
 // A header value is sent as given, since List-Unsubscribe and similar fields
