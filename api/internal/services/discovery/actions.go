@@ -177,7 +177,7 @@ func (s *Service) Approve(ctx context.Context, tenant, service uuid.UUID, req Ap
 		return uuid.Nil, false, invalid(err.Error())
 	}
 	now := time.Now()
-	m := &models.Monitor{ID: uuid.New(), TenantID: tenant, Name: req.Name, Type: models.MonitorType(suggestion.Type), Config: raw, IntervalSeconds: req.IntervalSeconds, TimeoutSeconds: 10, Enabled: true, Tags: []string{"discovered"}, NextRunAt: &now, CreatedAt: now, UpdatedAt: now, ConsecutiveFailuresThreshold: 2, NotificationMode: req.NotificationMode, MemberAlertRollup: "per_monitor", DependencySuppression: "inherit", LocationQuorum: 1}
+	m := &models.Monitor{ID: uuid.New(), TenantID: tenant, Name: req.Name, Type: models.MonitorType(suggestion.Type), Config: raw, IntervalSeconds: req.IntervalSeconds, TimeoutSeconds: 10, Enabled: true, Tags: []string{"discovered"}, NextRunAt: &now, CreatedAt: now, UpdatedAt: now, ConsecutiveFailuresThreshold: 2, RecoveryThreshold: 1, NotificationMode: req.NotificationMode, MemberAlertRollup: "per_monitor", DependencySuppression: "inherit", LocationQuorum: 1}
 	if err = monitors.NewPostgresRepository(s.db).CreateInTx(ctx, tx, m); err != nil {
 		return uuid.Nil, false, err
 	}

@@ -112,7 +112,7 @@ export const ALERTING_PAGE: DocPage = {
             "The alerter opens an availability alert only when effective state is `down`, the monitor is enabled, and maintenance/rollup rules do not mute it.",
             "The initial notification is sent through eligible routes after each route's configured delay.",
             "While the condition remains down, reminders are sent at the tenant reminder interval, unless the alert is acknowledged or snoozed.",
-            "When the monitor is fully `up`, the alert resolves and resolution notifications go only to channels that previously received that alert.",
+            "When the monitor is fully `up`, the alert resolves and resolution notifications go only to channels that previously received that alert. A monitor with a [`recovery_threshold`](/docs/monitors/#scheduling-and-state) above 1 is `up` only once that many checks in a row pass, so the alert stays open, and reminders continue, until then.",
           ],
         },
         {

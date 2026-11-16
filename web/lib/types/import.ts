@@ -26,6 +26,7 @@ export interface FieldMapping {
   enabled?: string;
   group_members?: string;
   consecutive_failures_threshold?: string;
+  recovery_threshold?: string;
 }
 
 /** A source record a format adapter refused to translate. Informational only. */

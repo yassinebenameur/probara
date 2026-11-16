@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // Evidence freshness (S-F1, docs/state-semantics.md): a stream's evidence is
@@ -55,26 +56,37 @@ type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
 }
 
+// FreshLocations is the spatial-rule input for one location-bound monitor.
+type FreshLocations struct {
+	Counts LocationCounts
+	// MaxFailures is the max consecutive failures across fresh locations
+	// (S-A9).
+	MaxFailures int
+	// DownSuccesses holds each fresh down location's consecutive successes
+	// toward confirming its recovery (S-T7), the input of RecoveryProgress.
+	DownSuccesses []int
+}
+
 // LoadFreshLocationCounts assembles the spatial-rule input for one monitor:
 // per-location states over the currently selected, live locations, counting
 // only locations with FRESH evidence (S-A10) — a silent location's last
 // state must not keep voting. Selected still counts every live selected
 // location whether or not it is fresh, so quorum clamping is unaffected.
-// Also returns the max consecutive failures across fresh locations.
 //
 // This is the single source of the aggregation input, shared by the results
 // ingest (on every location result) and the absence watchdog (when results
 // stop arriving) — the two must never disagree.
-func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID, freshnessSeconds int) (LocationCounts, int, error) {
-	var counts LocationCounts
-	var maxFailures int
+func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID, freshnessSeconds int) (FreshLocations, error) {
+	var f FreshLocations
+	var downSuccesses pq.Int64Array
 	err := q.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE mls.current_state = 'down'),
 			COUNT(*) FILTER (WHERE mls.current_state = 'suspect'),
 			COUNT(*) FILTER (WHERE mls.current_state = 'up'),
 			COUNT(ml.location_id),
-			COALESCE(MAX(mls.consecutive_failures), 0)
+			COALESCE(MAX(mls.consecutive_failures), 0),
+			COALESCE(array_agg(mls.consecutive_successes) FILTER (WHERE mls.current_state = 'down'), '{}')
 		FROM monitor_locations ml
 		JOIN locations l ON l.id = ml.location_id
 			AND l.deleted_at IS NULL
@@ -83,11 +95,16 @@ func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID
 			ON mls.monitor_id = ml.monitor_id AND mls.location_id = ml.location_id
 			AND mls.last_check_at >= NOW() - make_interval(secs => $2)
 		WHERE ml.monitor_id = $1
-	`, monitorID, freshnessSeconds).Scan(&counts.Down, &counts.Suspect, &counts.Up, &counts.Selected, &maxFailures)
+	`, monitorID, freshnessSeconds).Scan(&f.Counts.Down, &f.Counts.Suspect, &f.Counts.Up, &f.Counts.Selected,
+		&f.MaxFailures, &downSuccesses)
 	if err != nil {
-		return LocationCounts{}, 0, fmt.Errorf("aggregate location states: %w", err)
+		return FreshLocations{}, fmt.Errorf("aggregate location states: %w", err)
 	}
-	return counts, maxFailures, nil
+	f.DownSuccesses = make([]int, len(downSuccesses))
+	for i, n := range downSuccesses {
+		f.DownSuccesses[i] = int(n)
+	}
+	return f, nil
 }
 
 // Location liveness (S-F6, docs/state-semantics.md). Location workers

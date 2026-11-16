@@ -9,7 +9,7 @@ import TypeBadge from '@/components/ui/TypeBadge';
 import Button from '@/components/ui/Button';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 import { RelativeTime } from '@/components/ui/RelativeTime';
-import { monitorTargetLabel, type MonitorDisplayStatus } from '@/lib/monitor-utils';
+import { monitorTargetLabel, recoveryProgress, type MonitorDisplayStatus } from '@/lib/monitor-utils';
 import { MONITOR_STATUS_LABEL, MONITOR_STATUS_TONE } from '@/lib/status-tones';
 import { formatDuration } from '@/lib/format';
 
@@ -54,14 +54,23 @@ export default function MonitorDetailHeader({
   onClearHistory,
   onDelete,
 }: MonitorDetailHeaderProps) {
+  const recovery = monitor.enabled ? recoveryProgress(monitor) : null;
   return (
     <PageHeader
       breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: monitor.name }]}
       title={monitor.name}
       titleAside={
-        <Pill tone={MONITOR_STATUS_TONE[status]} dot>
-          {MONITOR_STATUS_LABEL[status]}
-        </Pill>
+        <span className="inline-flex items-center gap-2">
+          <Pill tone={MONITOR_STATUS_TONE[status]} dot>
+            {MONITOR_STATUS_LABEL[status]}
+          </Pill>
+          {/* Passing again but not yet confirmed: still down, and still downtime. */}
+          {recovery && (
+            <span className="text-xs tabular-nums text-slate-400">
+              Recovering · {recovery.passes} of {recovery.needed} passing checks
+            </span>
+          )}
+        </span>
       }
       // One line of facts on desktop: the target truncates (full value in
       // its tooltip, copy/open stay visible) so "checked …" never wraps

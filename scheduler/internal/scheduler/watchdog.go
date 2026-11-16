@@ -177,7 +177,7 @@ func (s *Scheduler) markMonitorUnknown(ctx context.Context, monitorID uuid.UUID)
 
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE monitors
-		SET current_state = 'unknown', consecutive_failures = 0,
+		SET current_state = 'unknown', consecutive_failures = 0, consecutive_successes = 0,
 			last_state_change_at = NOW(), updated_at = NOW()
 		WHERE id = $1
 	`, monitorID); err != nil {
@@ -262,22 +262,23 @@ func (s *Scheduler) reaggregateMonitor(ctx context.Context, monitorID uuid.UUID)
 		return err
 	}
 
-	counts, maxFailures, err := monitorstate.LoadFreshLocationCounts(
+	fresh, err := monitorstate.LoadFreshLocationCounts(
 		ctx, tx, monitorID, monitorstate.FreshnessHorizonSeconds(intervalSeconds))
 	if err != nil {
 		return err
 	}
-	newState := monitorstate.AggregateLocations(counts, quorum)
+	newState := monitorstate.AggregateLocations(fresh.Counts, quorum)
 	if string(newState) == current {
 		return tx.Commit()
 	}
 
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE monitors
-		SET current_state = $1, consecutive_failures = $2,
+		SET current_state = $1, consecutive_failures = $2, consecutive_successes = $4,
 			last_state_change_at = NOW(), updated_at = NOW()
 		WHERE id = $3
-	`, string(newState), maxFailures, monitorID); err != nil {
+	`, string(newState), fresh.MaxFailures, monitorID,
+		monitorstate.RecoveryProgress(fresh.DownSuccesses, quorum, fresh.Counts.Selected)); err != nil {
 		return err
 	}
 	if err := monitorstate.RecordIntervalTx(ctx, tx, tenantID, monitorID,

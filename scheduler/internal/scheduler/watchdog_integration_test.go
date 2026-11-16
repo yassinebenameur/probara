@@ -47,8 +47,14 @@ func TestWatchdogMarksStaleActiveMonitorUnknown(t *testing.T) {
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "watchdog")
 	staleID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "stale-target")
 	freshID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "fresh-target")
-	setMonitorEvidence(ctx, t, dbClient, staleID, "up", time.Now().Add(-10*time.Minute))
+	setMonitorEvidence(ctx, t, dbClient, staleID, "down", time.Now().Add(-10*time.Minute))
 	setMonitorEvidence(ctx, t, dbClient, freshID, "up", time.Now())
+	// The stale monitor was mid-recovery (S-T7).
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE monitors SET recovery_threshold = 3, consecutive_successes = 2 WHERE id = $1
+	`, staleID); err != nil {
+		t.Fatalf("set recovery: %v", err)
+	}
 
 	s := newTestScheduler(dbClient)
 	if err := s.watchdogActivePass(ctx); err != nil {
@@ -57,6 +63,14 @@ func TestWatchdogMarksStaleActiveMonitorUnknown(t *testing.T) {
 
 	if state, fails := monitorStateAndFails(ctx, t, dbClient, staleID); state != "unknown" || fails != 0 {
 		t.Fatalf("stale monitor = %s/%d, want unknown/0 [S-F2]", state, fails)
+	}
+	var successes int
+	if err := dbClient.QueryRowContext(ctx,
+		`SELECT consecutive_successes FROM monitors WHERE id = $1`, staleID).Scan(&successes); err != nil {
+		t.Fatalf("query successes: %v", err)
+	}
+	if successes != 0 {
+		t.Fatalf("stale monitor kept %d passes toward a recovery, want 0 [S-F2, S-T7]", successes)
 	}
 	if state, _ := monitorStateAndFails(ctx, t, dbClient, freshID); state != "up" {
 		t.Fatalf("fresh monitor = %s, want up untouched [S-F1]", state)

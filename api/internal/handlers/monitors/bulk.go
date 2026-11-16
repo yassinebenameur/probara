@@ -19,6 +19,7 @@ import (
 type BulkAlertingRequest struct {
 	MonitorIDs                   []string                          `json:"monitor_ids"`
 	ConsecutiveFailuresThreshold *int                              `json:"consecutive_failures_threshold,omitempty"`
+	RecoveryThreshold            *int                              `json:"recovery_threshold,omitempty"`
 	NotificationMode             *string                           `json:"notification_mode,omitempty"`
 	NotificationChannels         []models.MonitorChannelAssignment `json:"notification_channels,omitempty"`
 }
@@ -46,6 +47,10 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
+	if err := validation.ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
+		apierrors.WriteValidationError(w, err.Error())
+		return
+	}
 
 	monitorIDs := make([]uuid.UUID, 0, len(req.MonitorIDs))
 	for _, idStr := range req.MonitorIDs {
@@ -58,7 +63,7 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, err := h.service.BulkUpdateAlerting(r.Context(), tenantUUID, monitorIDs,
-		req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels)
+		req.ConsecutiveFailuresThreshold, req.RecoveryThreshold, req.NotificationMode, req.NotificationChannels)
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
 			apierrors.WriteForbiddenError(w, err.Error())

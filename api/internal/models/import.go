@@ -53,6 +53,9 @@ type FieldMapping struct {
 	// ConsecutiveFailuresThreshold is the retry tolerance before a monitor is
 	// considered down. Clamped to [1,10] on import to match the column check.
 	ConsecutiveFailuresThreshold string `json:"consecutive_failures_threshold,omitempty"`
+	// RecoveryThreshold is the passing checks in a row a down monitor needs
+	// before it is up again. Clamped to [1,10] on import like the above.
+	RecoveryThreshold string `json:"recovery_threshold,omitempty"`
 }
 
 // ImportPreviewResponse is returned after parsing the uploaded file
@@ -114,4 +117,5 @@ type PortableExportMonitor struct {
 	Config                       interface{} `json:"config" yaml:"config"`
 	GroupMembers                 []string    `json:"group_members,omitempty" yaml:"group_members,omitempty"`
 	ConsecutiveFailuresThreshold int         `json:"consecutive_failures_threshold,omitempty" yaml:"consecutive_failures_threshold,omitempty"`
+	RecoveryThreshold            int         `json:"recovery_threshold,omitempty" yaml:"recovery_threshold,omitempty"`
 }

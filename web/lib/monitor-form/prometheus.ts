@@ -39,6 +39,7 @@ export function initialPrometheusFormState(monitor?: Monitor, initialData?: Crea
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? initialData?.consecutive_failures_threshold ?? 2,
+    recovery_threshold: monitor?.recovery_threshold ?? initialData?.recovery_threshold ?? 1,
     notification_mode: (monitor?.notification_mode ?? initialData?.notification_mode ?? 'default') as NotificationMode,
     dependency_suppression: (monitor?.dependency_suppression ?? initialData?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? initialData?.notification_channels ?? [] as ChannelAssignment[],

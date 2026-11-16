@@ -135,6 +135,7 @@ func (m *MockMonitorService) BulkUpdateAlerting(
 	tenantID uuid.UUID,
 	monitorIDs []uuid.UUID,
 	threshold *int,
+	recoveryThreshold *int,
 	mode *string,
 	channels []models.MonitorChannelAssignment,
 ) (int, error) {

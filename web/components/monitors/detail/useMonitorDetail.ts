@@ -104,6 +104,17 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
     }
   }, [id]);
 
+  // Re-reads the monitor without the loading state, for the poll: a new check
+  // can move the server's state (a recovery confirmed, a quorum verdict), and
+  // the badge and recovery progress follow that state, not the last check.
+  const refreshMonitorQuietly = useCallback(async () => {
+    try {
+      setMonitor(await getMonitor(id));
+    } catch {
+      // Keep what is shown; the next new result retries.
+    }
+  }, [id]);
+
   // Recent results power the status badge and the History tab. Agent monitor
   // results are heartbeats now — metrics render from the metric store query
   // API (fetched inside AgentMetricsView), never from these results.
@@ -274,7 +285,11 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
       }
       isPollingRef.current = true;
       try {
+        const newestBefore = resultsRef.current?.results?.[0]?.created_at;
         await loadResults({ silent: true });
+        if (resultsRef.current?.results?.[0]?.created_at !== newestBefore) {
+          await refreshMonitorQuietly();
+        }
       } finally {
         isPollingRef.current = false;
       }
@@ -296,7 +311,7 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [activeTab, loadResults, monitor?.type]);
+  }, [activeTab, loadResults, refreshMonitorQuietly, monitor?.type]);
 
   useEffect(() => {
     if (activeTab !== 'history') {

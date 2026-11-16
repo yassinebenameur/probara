@@ -61,6 +61,10 @@ export interface Monitor {
   created_at: string;
   updated_at: string;
   consecutive_failures_threshold: number;
+  /** Passing checks in a row before a down monitor is up again (1-10). */
+  recovery_threshold?: number;
+  /** Read-only: passes so far toward that confirmation; non-zero only while down. */
+  consecutive_successes?: number;
   notification_mode: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
@@ -107,6 +111,7 @@ export interface CreateMonitorRequest {
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;
@@ -125,6 +130,7 @@ export interface UpdateMonitorRequest {
   enabled?: boolean;
   tags?: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
   dependency_suppression?: DependencySuppression;

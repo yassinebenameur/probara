@@ -171,6 +171,7 @@ test('push: create from a filled form', () => {
     enabled: false,
     tags: 'batch',
     consecutive_failures_threshold: 1,
+    recovery_threshold: 3,
   };
   assertWire(buildPushRequest(form), {
     name: 'Nightly job',
@@ -180,6 +181,7 @@ test('push: create from a filled form', () => {
     timeout_seconds: 300,
     enabled: false,
     consecutive_failures_threshold: 1,
+    recovery_threshold: 3,
     notification_mode: 'default',
     dependency_suppression: 'inherit',
     notification_channels: [],
@@ -451,14 +453,15 @@ test('prometheus: a clone also copies the source alerting settings', () => {
     interval_seconds: 60,
     timeout_seconds: 10,
     consecutive_failures_threshold: 5,
+    recovery_threshold: 4,
     notification_mode: 'custom',
     dependency_suppression: 'off',
     notification_channels: [{ channel_id: 'ch-1', delay_seconds: 0 }],
   };
   const request = buildPrometheusRequest(initialPrometheusFormState(undefined, initialData));
   assertWire(
-    [request.consecutive_failures_threshold, request.notification_mode, request.dependency_suppression, request.notification_channels],
-    [5, 'custom', 'off', [{ channel_id: 'ch-1', delay_seconds: 0 }]]
+    [request.consecutive_failures_threshold, request.recovery_threshold, request.notification_mode, request.dependency_suppression, request.notification_channels],
+    [5, 4, 'custom', 'off', [{ channel_id: 'ch-1', delay_seconds: 0 }]]
   );
 });
 

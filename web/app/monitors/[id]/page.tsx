@@ -232,6 +232,7 @@ export default function EditMonitorPage() {
         <MonitorLocationStrip
           locations={monitor.locations}
           quorum={monitor.location_quorum ?? 1}
+          recoveryThreshold={monitor.recovery_threshold}
         />
       )}
 

@@ -167,6 +167,7 @@ export async function getPushInfo(
 export async function bulkUpdateAlerting(data: {
   monitor_ids: string[];
   consecutive_failures_threshold?: number;
+  recovery_threshold?: number;
   notification_mode?: NotificationMode;
   notification_channels?: ChannelAssignment[];
 }): Promise<{ updated: number }> {

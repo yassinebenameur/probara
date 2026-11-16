@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
@@ -214,6 +215,9 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
+	if err := ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
+		return err
+	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
 		return err
 	}
@@ -307,6 +311,9 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 	}
 
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
+		return err
+	}
+	if err := ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
 		return err
 	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
@@ -422,6 +429,15 @@ func ValidateDependencySuppression(value *string) error {
 		return nil
 	}
 	return fmt.Errorf("dependency_suppression must be 'inherit', 'on' or 'off'")
+}
+
+// ValidateRecoveryThreshold validates recovery_threshold, the passing checks
+// in a row a down monitor needs before it is up again (S-T7).
+func ValidateRecoveryThreshold(threshold *int) error {
+	if threshold != nil && (*threshold < monitorstate.MinRecoveryThreshold || *threshold > monitorstate.MaxRecoveryThreshold) {
+		return fmt.Errorf("recovery_threshold must be between %d and %d", monitorstate.MinRecoveryThreshold, monitorstate.MaxRecoveryThreshold)
+	}
+	return nil
 }
 
 // ValidateMonitorNotificationFields validates the notification-routing fields that can be set

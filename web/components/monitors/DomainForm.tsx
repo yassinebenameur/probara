@@ -233,6 +233,8 @@ export default function DomainForm({ monitor, initialData, onSubmit, onCancel, l
           threshold={formData.consecutive_failures_threshold}
           minThreshold={DOMAIN_MIN_CONSECUTIVE_FAILURES}
           onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
+          recoveryThreshold={formData.recovery_threshold}
+          onRecoveryThresholdChange={(n) => setFormData((prev) => ({ ...prev, recovery_threshold: n }))}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}

@@ -69,10 +69,11 @@ type LocationDeployInfo struct {
 // MonitorLocationStatus is the per-location breakdown embedded in a monitor:
 // the location's identity plus its per-location check state.
 type MonitorLocationStatus struct {
-	ID            uuid.UUID  `json:"id"`
-	Name          string     `json:"name"`
-	Connected     bool       `json:"connected"`
-	CurrentState  string     `json:"current_state"`
-	LastLatencyMs *int64     `json:"last_latency_ms,omitempty"`
-	LastCheckAt   *time.Time `json:"last_check_at,omitempty"`
+	ID                   uuid.UUID  `json:"id"`
+	Name                 string     `json:"name"`
+	Connected            bool       `json:"connected"`
+	CurrentState         string     `json:"current_state"`
+	ConsecutiveSuccesses int        `json:"consecutive_successes"` // Passes toward confirming this location's recovery (S-T7); non-zero only while down
+	LastLatencyMs        *int64     `json:"last_latency_ms,omitempty"`
+	LastCheckAt          *time.Time `json:"last_check_at,omitempty"`
 }

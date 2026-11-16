@@ -16,6 +16,7 @@ import ChannelPicker from '@/components/channels/ChannelPicker';
 import Callout from '@/components/ui/Callout';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import { notifyModeChange } from '@/lib/monitor-form/common';
+import { formatDuration } from '@/lib/format';
 import { FormRow } from './form-kit';
 // Links inside running text are underlined: colour alone is not enough to
 // tell them from the sentence around them (WCAG 1.4.1).
@@ -83,6 +84,9 @@ interface AlertingSectionProps {
   onThresholdChange: (n: number) => void;
   /** Lowest "mark down after" a type allows (domain monitors: 2). */
   minThreshold?: number;
+  /** "Mark up after": passes in a row before a down monitor is up again. Omit to hide (groups). */
+  recoveryThreshold?: number;
+  onRecoveryThresholdChange?: (n: number) => void;
   mode: NotificationMode;
   onModeChange: (m: NotificationMode) => void;
   customChannels: ChannelAssignment[];
@@ -105,6 +109,13 @@ function graceLabel(seconds: number): string {
   return `after ${seconds}s`;
 }
 
+// Unconfirmed passes are still downtime, so say what the setting costs: the
+// worst case adds one interval per extra pass (no fast recheck while down).
+function recoveryHint(threshold: number, intervalSeconds: number): string {
+  if (threshold <= 1) return 'Up again on the first passing check.';
+  return `Stays down until ${threshold} checks in a row pass, about ${formatDuration((threshold - 1) * intervalSeconds)} after the first; that time counts as downtime.`;
+}
+
 function detectionHint(threshold: number, intervalSeconds: number): string {
   const recheck = Math.min(intervalSeconds, 20);
   // Worst case: a full interval passes before the first failure is observed,
@@ -116,6 +127,7 @@ function detectionHint(threshold: number, intervalSeconds: number): string {
 
 export function AlertingSection({
   isGroup, intervalSeconds, threshold, onThresholdChange, minThreshold = 1,
+  recoveryThreshold, onRecoveryThresholdChange,
   mode, onModeChange, customChannels, onCustomChannelsChange,
   rollup, onRollupChange,
   dependencySuppression, onDependencySuppressionChange, hasDependencies,
@@ -242,6 +254,28 @@ export function AlertingSection({
               {Array.from({ length: 11 - minThreshold }, (_, i) => i + minThreshold).map((n) => (
                 <option key={n} value={n}>
                   {n} failed check{n === 1 ? '' : 's'}
+                </option>
+              ))}
+            </select>
+          )}
+        />
+      )}
+
+      {!isGroup && recoveryThreshold !== undefined && onRecoveryThresholdChange && (
+        <FormRow
+          title="Mark up after"
+          description={recoveryHint(recoveryThreshold, intervalSeconds)}
+          control={({ titleId, descriptionId }) => (
+            <select
+              aria-labelledby={titleId}
+              aria-describedby={descriptionId}
+              className="input input-sm !w-44"
+              value={recoveryThreshold}
+              onChange={(e) => onRecoveryThresholdChange(Number(e.target.value))}
+            >
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>
+                  {n} passing check{n === 1 ? '' : 's'}
                 </option>
               ))}
             </select>

@@ -99,7 +99,7 @@ func (m *portableMonitorServiceMock) DeleteMonitorHistory(ctx context.Context, t
 	return nil
 }
 
-func (m *portableMonitorServiceMock) BulkUpdateAlerting(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, threshold *int, mode *string, channels []models.MonitorChannelAssignment) (int, error) {
+func (m *portableMonitorServiceMock) BulkUpdateAlerting(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, threshold *int, recoveryThreshold *int, mode *string, channels []models.MonitorChannelAssignment) (int, error) {
 	return len(monitorIDs), nil
 }
 

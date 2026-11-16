@@ -60,6 +60,7 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byt
 			Config:                       configValue,
 			GroupMembers:                 groupMembers,
 			ConsecutiveFailuresThreshold: monitor.ConsecutiveFailuresThreshold,
+			RecoveryThreshold:            monitor.RecoveryThreshold,
 		})
 	}
 
