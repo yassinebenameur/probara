@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -47,7 +48,17 @@ type StatusPageConfig struct {
 	// AppBaseURL is APP_BASE_URL, the operator UI origin. Every page's CSP
 	// frame-ancestors admits it so the template editor can preview pages.
 	AppBaseURL string
+	// SessionSecret is STATUS_PAGE_SESSION_SECRET, the key that signs visitor
+	// sessions on password and private pages. Optional: without it those
+	// pages cannot be opened (fail closed) while public and unlisted pages
+	// serve as usual. Shorter than MinStatusPageSessionSecretLength refuses
+	// to start rather than leaving gated pages quietly unavailable.
+	SessionSecret string
 }
+
+// MinStatusPageSessionSecretLength is the shortest STATUS_PAGE_SESSION_SECRET
+// accepted.
+const MinStatusPageSessionSecretLength = 32
 
 // LoadStatusPageConfig loads status page service configuration
 func LoadStatusPageConfig() (*StatusPageConfig, error) {
@@ -85,6 +96,11 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 		cfg.LegacyTrustedProxy = true
 	}
 	cfg.AppBaseURL = loadAppBaseURL()
+
+	cfg.SessionSecret = strings.TrimSpace(os.Getenv("STATUS_PAGE_SESSION_SECRET"))
+	if cfg.SessionSecret != "" && len(cfg.SessionSecret) < MinStatusPageSessionSecretLength {
+		return nil, fmt.Errorf("STATUS_PAGE_SESSION_SECRET must be at least %d characters", MinStatusPageSessionSecretLength)
+	}
 
 	return cfg, nil
 }

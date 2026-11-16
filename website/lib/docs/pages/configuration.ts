@@ -820,6 +820,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               'HMAC secret shared with API for one-hour [preview tokens](/docs/status-pages/#preview-security). With no secret, preview verification is not enforced. Helm: `secrets.statusPagePreviewSecret` (or its `ExistingSecret` reference, canonical key `status_page_preview_secret`) renders it into both the API and the status service.',
             ],
             [
+              '`STATUS_PAGE_SESSION_SECRET`',
+              'Empty; at least 32 characters when set, or the service refuses to start',
+              'Status service only. Signs visitor sessions on [password and private pages](/docs/status-pages/#visibility). Unset: those pages cannot be opened (password pages answer `503`, private pages `404`) and a warning is logged, while public and unlisted pages serve as usual. Changing it signs every visitor out. Generate with `openssl rand -hex 32`; the release installer and `scripts/start-local-services.sh` generate one. Helm: `secrets.statusPageSessionSecret` (or `statusPageSessionSecretExistingSecret`, canonical key `status_page_session_secret`).',
+            ],
+            [
               '`STATUSPAGE_UPDATES_SUBJECT`',
               '`statuspage.updates`',
               'Core NATS live-invalidation subject shared by API, scheduler, and status service. Also wakes the push sender early; delivery does not depend on it.',

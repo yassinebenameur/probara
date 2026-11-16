@@ -19,6 +19,8 @@ import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
 import SectionList from './SectionList';
 import PagePreview from './PagePreview';
+import PageAccessFields from './PageAccessFields';
+import { pageAccessError, pageAccessPayload } from '@/lib/status-page-access';
 import {
   DEFAULT_PRIMARY,
   DEFAULT_SECONDARY,
@@ -60,6 +62,9 @@ function snapshot(state: FormState): string {
       secondary_color: state.basics.secondary_color.trim(),
     },
     enablePushNotifications: state.enablePushNotifications,
+    visibility: state.visibility,
+    password: state.password !== '',
+    clearPassword: state.clearPassword,
     sections: state.sections.map((section) => ({
       title: section.title.trim(),
       monitors: section.monitors.map((m) => ({
@@ -241,10 +246,14 @@ export default function StatusPageForm({
         nextErrors[`section-${section.id}`] = `Section ${index + 1} needs a title`;
       }
     });
+    const accessError = pageAccessError(state, statusPage?.has_password === true);
+    if (accessError) {
+      nextErrors.access = accessError;
+    }
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
-      if (nextErrors.slug || nextErrors.title) {
+      if (nextErrors.slug || nextErrors.title || nextErrors.access) {
         const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         formRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
       }
@@ -291,6 +300,7 @@ export default function StatusPageForm({
       monitor_display_names: monitorDisplayNames,
       sections: normalizedSections,
       settings: { enable_push_notifications: state.enablePushNotifications },
+      ...pageAccessPayload(state),
     };
 
     await onSubmit(requestData);
@@ -407,6 +417,17 @@ export default function StatusPageForm({
               description="Let visitors opt in to a browser notification when a component here goes down, and when it recovers. Requires a VAPID keypair on the status-page service; without one the control is not shown."
             />
           </div>
+
+          <PageAccessFields
+            visibility={state.visibility}
+            hasStoredPassword={statusPage?.has_password === true}
+            password={state.password}
+            clearPassword={state.clearPassword}
+            error={errors.access}
+            onVisibilityChange={(value) => dispatch({ type: 'set_visibility', value })}
+            onPasswordChange={(value) => dispatch({ type: 'set_password', value })}
+            onClearPasswordChange={(value) => dispatch({ type: 'set_clear_password', value })}
+          />
         </div>
       </section>
 

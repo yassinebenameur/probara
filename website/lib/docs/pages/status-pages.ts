@@ -47,6 +47,14 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`sections`",
               "Ordered groups with titles up to 80 characters and ordered monitor entries",
             ],
+            [
+              "`visibility`",
+              "Who may view the page: `public` (default), `unlisted`, `password` or `private` — see [visibility and kiosk tokens](#visibility)",
+            ],
+            [
+              "`password`",
+              "Write-only visitor password, 8–72 characters; reads report `has_password` only",
+            ],
           ],
         },
         {
@@ -59,7 +67,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           tone: "warning",
           title: "A public page exposes operational information",
           text:
-            "Only select monitors, names, descriptions, incidents, and maintenance details intended for unauthenticated visitors. The active built-in template does not currently render monitor target URLs, but custom templates and future use of schema-reserved fields must still be reviewed for disclosure.",
+            "A public or unlisted page is readable by anyone who has its URL. Only select monitors, names, descriptions, incidents, and maintenance details intended for unauthenticated visitors, or make the page password-protected or private. The active built-in template does not currently render monitor target URLs, but custom templates and future use of schema-reserved fields must still be reviewed for disclosure.",
         },
       ],
     },
@@ -172,9 +180,18 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`POST /public/status/{slug}/push/unsubscribe`",
-              "Removes a browser push subscription. Always 204, so it cannot be used to probe which endpoints exist",
+              "Removes a browser push subscription. Always 204 for a page the visitor may see, so it cannot be used to probe which endpoints exist",
+            ],
+            [
+              "`POST /public/status/{slug}/unlock`",
+              "The password form's target on a password page; sets the visitor session cookie. `GET` returns to the page",
             ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every route under `/public/status/{slug}/` — those above and any added later — passes the page's [visibility](#visibility) check before it does anything else, including serving the cached render. The only exceptions are `/unlock`, which is how a visitor gets through the check, and `sw.js`, which serves no page data.",
         },
         {
           type: "paragraph",
@@ -187,6 +204,81 @@ export const STATUS_PAGES_PAGE: DocPage = {
           title: "Live delivery is eventually consistent",
           text:
             "Core NATS status messages are not durable. PostgreSQL/API data remains authoritative, and the fallback refresh repairs a missed invalidation without requiring the visitor to reload manually.",
+        },
+      ],
+    },
+    {
+      id: "visibility",
+      title: "Visibility and kiosk tokens",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Visibility", "Who can view it", "Search engines"],
+          rows: [
+            ["`public` (default)", "Anyone with the URL", "May index it"],
+            [
+              "`unlisted`",
+              "Anyone with the URL. A hidden link, not access control: anyone who learns the URL can share it",
+              "Asked not to: every response carries `X-Robots-Tag: noindex` and the page a robots meta tag. Never named on a listing, sitemap or other discovery surface",
+            ],
+            [
+              "`password`",
+              "Visitors who enter the page's password, and browsers opened with a kiosk token. Everyone else gets the unlock form",
+              "Not indexed",
+            ],
+            [
+              "`private`",
+              "Only browsers opened with a kiosk token. Everyone else gets exactly the response of a page that does not exist",
+              "Not indexed",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Set visibility and the password on the page's settings in the UI, or with `visibility` and `password` on [create and update](/docs/api/). The password is write-only: omit it to keep the stored one, send `\"\"` to remove it (refused while the page is password-protected), anything else replaces it. Leaving `password` visibility keeps the stored password, so switching back needs no new one.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A visitor who enters the right password, or opens a kiosk URL, gets a session cookie: signed with `STATUS_PAGE_SESSION_SECRET`, `HttpOnly`, `SameSite=Lax`, `Secure` when the request arrived over HTTPS, and scoped to the page's path. Nothing about the session is stored. A password session lasts 7 days and ends early when the password is set, changed or removed; a kiosk session lasts 400 days (the browser maximum) and ends at once when its token is revoked or the page stops accepting tokens. Open live streams re-check the session every 15 seconds, and a visibility or password change closes them so they reconnect through the check.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Kiosk tokens** are for wall displays and dashboards. Create one from the page's Kiosk tokens panel (or `POST /api/v1/status-pages/{id}/access-tokens` with a label); the token is shown once, and only its SHA-256 hash is stored. Open `/public/status/{slug}?token=<token>` on the display once: the page swaps the token for a session cookie and redirects to the same URL without it, so the token does not stay in the address bar, the history or a `Referer`. A token opens a private page and also bypasses the password on a password page. Each page can hold 50 active tokens; revoked ones stay listed with who created them and when.",
+        },
+        {
+          type: "table",
+          columns: ["Route", "Password page, no session", "Private page, no session"],
+          rows: [
+            ["The page", "Unlock form (`401`)", "`404`, same as a missing page"],
+            ["`/data`, `/stream`, and every other sub-route, including ones added later", "`401`", "`404`, same as a missing page"],
+            ["`/preview/draft`", "`401` unless it carries a valid preview token", "`404` unless it carries a valid preview token"],
+            ["`/push/subscribe`", "`401`; with a session still `404` — no notifications on gated pages", "`404`"],
+            ["`/unlock`", "Checks the password", "`404`, same as a missing page"],
+            ["The in-page API proxy (`/_sp_api/`)", "Refused for calls naming the page", "Refused for calls naming the page"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every response for a password or private page — allowed or refused — is `Cache-Control: private, no-store` with no `ETag`, so neither a shared cache nor a browser revalidation can hand it to someone else. The status service checks visibility before its render cache, on every request, so a page rendered while it was public is never served from the cache once it is not. Unlock attempts are limited per visitor address and per page, and a wrong password gets one generic message.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Password and private pages need STATUS_PAGE_SESSION_SECRET",
+          text:
+            "Without the [session secret](/docs/configuration/#status-page-service) on the status-page service, a password page answers `503` and a private page `404` — they cannot be opened, and the service logs a warning — while public and unlisted pages serve as usual. The API does not hold the secret, so it accepts these visibilities either way. The release installer and `scripts/start-local-services.sh` generate one; on Helm set `secrets.statusPageSessionSecret` or an existing Secret. Changing it signs every visitor out.",
+        },
+        {
+          type: "list",
+          items: [
+            "Custom templates are covered too: the unlock form is its own small page (title, logo and primary colour only) and never uses the page template.",
+            "The built-in template reloads when a live refresh is refused (`401`/`404`), so a wall display whose token was revoked shows that instead of freezing on the last render. A custom template's own script does what its author wrote.",
+            "A visitor session belongs to the page's current URL: renaming the slug signs its visitors out, and a kiosk display must open the new URL with its token.",
+          ],
         },
       ],
     },
@@ -237,6 +329,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Rotating the VAPID keypair invalidates every stored subscription — push services bind an endpoint to the key that created it — and every visitor must opt in again.",
             "A page rendered by a custom template gets no control unless the author adds one; `.PushEnabled` and `.PushPublicKey` are available in the template context.",
             "Subscriptions store only the opaque browser endpoint and its public keys. No visitor identity, email address, or visit history is recorded.",
+            "Password and private pages offer no notifications: a subscription outlives the visitor session that made it. Switching a page to password or private stops notifications to its existing subscribers; switching it back resumes them.",
           ],
         },
         {
@@ -467,6 +560,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "When `STATUS_PAGE_PREVIEW_SECRET` is configured, draft preview URLs require a [signed preview token](/docs/security/#status-pages-artifacts). Without that secret, the development preview path is open to anyone who can reach it.",
         },
         {
+          type: "paragraph",
+          text:
+            "On a password or private page the preview token also stands in for the visitor's credential, so the template editor works without a password or kiosk token. That holds only while the secret is set: without it a gated page's preview needs a visitor session like any other route, and the editor's preview cannot open it.",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Configure preview signing outside local development",
@@ -511,6 +609,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Exercise unknown, suspect, degraded, down, maintenance, and incident states in a safe preview environment.",
             "Check custom HTML/CSS for content security, accessibility, focus states, contrast, and responsive overflow.",
             "Configure the preview secret and confirm the public status service has a reachable API/data path.",
+            "Choose the page's visibility; for a password or private page, confirm `STATUS_PAGE_SESSION_SECRET` is set and open it once through the unlock form or a kiosk URL.",
             "Publish, open the anonymous route in a clean browser session, and verify SSE/fallback refresh behavior.",
           ],
         },

@@ -580,7 +580,7 @@ or imported groups come back empty. Any other path that creates groups through
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
   `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
-  `status_page_preview_secret`, `bootstrap_setup_code`) are the contract external secret managers
+  `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
   in the Secret. `ADMIN_COOKIE_SECURE` comes from the
@@ -956,6 +956,18 @@ or imported groups come back empty. Any other path that creates groups through
   literal `{{cspNonce}}`. Every inline `<script>` in `default.gohtml` needs
   `nonce="{{cspNonce}}"` (`TestCSPNonceContract`), and a 304 never carries a
   CSP.
+- **Visibility gate before everything** (`statuspage/access.go`, contract
+  `shared/pageaccess`): `authorize` runs first in `HandleStatusPage`, before
+  the method guard, every sub-route and the slug-keyed render cache; deny by
+  default, exempt only `/unlock` and a valid preview token on
+  `/preview/draft`. A new route or suffix (feeds, summaries, badges) needs a
+  row in `routeTable` (`TestRouteAccess_EveryRouteIsClassified` scans the
+  package). Private-without-credential answers via `writeNotFound`, identical
+  to a missing slug, from the same single `PageAccess` query. The API alone
+  writes visibility, password hashes and token hashes; sessions are stateless
+  HMAC cookies (`session.go`, `STATUS_PAGE_SESSION_SECRET`, path-scoped). No
+  push on password/private pages; a surface that enumerates pages lists only
+  `pageaccess.Listed` ones.
 
 ## Web UI conventions
 

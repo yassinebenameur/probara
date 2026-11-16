@@ -219,6 +219,17 @@ secrets:
   statusPagePreviewSecret: ""
   statusPagePreviewSecretExistingSecret: ""
   statusPagePreviewSecretExistingSecretKey: status_page_preview_secret
+  # Signs visitor sessions on password and private status pages
+  # (STATUS_PAGE_SESSION_SECRET, canonical key status_page_session_secret,
+  # status-page only). At least 32 characters: `openssl rand -hex 32`. Unset
+  # leaves password and private pages closed (they cannot be unlocked) while
+  # public and unlisted pages serve as usual; changing it signs every visitor
+  # out. With only the chart-wide secrets.existingSecret set, the key is
+  # optional in that Secret; a Secret named in
+  # statusPageSessionSecretExistingSecret must exist and hold the key.
+  statusPageSessionSecret: ""
+  statusPageSessionSecretExistingSecret: ""
+  statusPageSessionSecretExistingSecretKey: status_page_session_secret
   # One-time code the first-admin form asks for (BOOTSTRAP_SETUP_CODE,
   # canonical key bootstrap_setup_code, api only). Set it when the UI is
   # reachable before you create the first administrator, so nobody else can

@@ -300,6 +300,11 @@ export const SECURITY_PAGE: DocPage = {
               'Changing invalidates outstanding one-hour preview tokens.',
             ],
             [
+              '`STATUS_PAGE_SESSION_SECRET`',
+              'Status-page service only',
+              'Signs visitor sessions on password and private status pages. Changing it signs every visitor out, kiosk displays included (they open their kiosk URL again). Unset closes those pages.',
+            ],
+            [
               '`BOOTSTRAP_SETUP_CODE`',
               'API only, until the first administrator exists',
               'Gates first-administrator creation on a reachable install; at least 16 characters besides dashes and spaces, or the API refuses to start. While it is set, an SSO sign-in never becomes the first superadministrator: just-in-time users are ordinary members, and the first-administrator form stays open until a superadministrator exists. Once any superadministrator has existed, bootstrap is closed for good, with or without the code, even if every user is later disabled or removed outside the product. Useless after that; remove or rotate it freely, but removing it brings back SSO bootstrap on an install that has never had a superadministrator.',
@@ -636,7 +641,8 @@ go run ./cmd/admin/migrate_sensitive_headers`,
         {
           type: 'list',
           items: [
-            'Published [status pages](/docs/status-pages/#page-model) are intentionally public. Do not include private monitor URLs, internal hostnames, customer names, or operational notes unless disclosure is intended.',
+            'Published [status pages](/docs/status-pages/#page-model) are public unless their [visibility](/docs/status-pages/#visibility) says otherwise. Do not include private monitor URLs, internal hostnames, customer names, or operational notes on a public or unlisted page unless disclosure is intended. Unlisted is a hidden link, not access control.',
+            'Password and private pages are checked before the render cache and on every sub-route; refusals and gated content are `private, no-store`, and a private page without a credential answers exactly like a missing one. Visitor passwords are bcrypt-hashed and kiosk tokens SHA-256-hashed by the API; the status service only reads them and never writes a session, a token use or an attempt. Kiosk tokens leave the URL on first use (redirect to the clean URL, `Referrer-Policy: no-referrer` on that response) and never reach a log line. Unlock attempts are rate-limited per client address and per page. Set `STATUS_PAGE_SESSION_SECRET` on the status service for these pages to open at all.',
             'Set one strong shared `STATUS_PAGE_PREVIEW_SECRET` on API and status service (Helm: `secrets.statusPagePreviewSecret`, rendered into both). Without it, preview-token enforcement is disabled.',
             'Preview tokens are HMAC-SHA256 values with a one-hour expiry. Treat preview URLs as temporary bearer links.',
             'The status service’s optional API proxy is intentionally restricted, but should still be exposed only through the expected status editing/preview flow.',

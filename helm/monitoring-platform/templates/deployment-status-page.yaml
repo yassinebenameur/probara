@@ -83,6 +83,12 @@ spec:
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
         {{- end }}
+        {{- /* Visitor sessions on password and private pages. Optional only in
+        the chart-wide Secret: a per-field Secret named on purpose must hold
+        the key, or every gated page would quietly stay closed. */}}
+        {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPageSessionSecret "secret" .Values.secrets.statusPageSessionSecretExistingSecret) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_SESSION_SECRET" "key" "status_page_session_secret" "secret" .Values.secrets.statusPageSessionSecretExistingSecret "secretKey" .Values.secrets.statusPageSessionSecretExistingSecretKey "optional" (not .Values.secrets.statusPageSessionSecretExistingSecret)) | nindent 8 }}
+        {{- end }}
         {{- include "monitoring-platform.edgeEnv" (dict "ctx" . "component" "status-page") | nindent 8 }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}

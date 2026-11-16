@@ -114,7 +114,6 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		`id="typeFilter"`,
 		`id="sortControl"`,
 		`id="layoutControl"`,
-		`window.location.reload()`,
 		`fonts.googleapis.com`,
 		`unpkg.com/lucide`,
 		`Incident timeline coming later`,
@@ -123,6 +122,14 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("expected rendered HTML to omit %q for single-monitor pages", unwanted)
 		}
+	}
+	// Live refresh preserves page state, so it never reloads, except when
+	// the refetch says the page is gone or the visitor's access ended.
+	if n := strings.Count(html, `window.location.reload()`); n != 1 {
+		t.Fatalf("window.location.reload() appears %d times, want once", n)
+	}
+	if !regexp.MustCompile(`(?s)response\.status === 401 \|\| response\.status === 404\) \{[^}]*window\.location\.reload\(\)`).MatchString(html) {
+		t.Fatal("the only reload must sit in the 401/404 branch of the live refresh")
 	}
 	for _, re := range []*regexp.Regexp{
 		regexp.MustCompile(`(?s)class="uptime-bars js-strip".*?data-cells="48".*?data-cells-1h="60".*?data-cells-7d="70".*?data-cells-30d="90".*?data-cells-90d="90"`),

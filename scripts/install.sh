@@ -172,6 +172,7 @@ env_default POSTGRES_PASSWORD "$(openssl rand -hex 24)"
 env_default NATS_PLATFORM_PASSWORD "$(openssl rand -hex 24)"
 env_default LOCAL_AI_TOKEN "$(openssl rand -hex 32)"
 env_default STATUS_PAGE_PREVIEW_SECRET "$(openssl rand -hex 32)"
+env_default STATUS_PAGE_SESSION_SECRET "$(openssl rand -hex 32)"
 # Required to create the first administrator, so the published UI cannot be
 # claimed by whoever reaches it first. Useless once that admin exists.
 env_default BOOTSTRAP_SETUP_CODE "$(gen_setup_code)"

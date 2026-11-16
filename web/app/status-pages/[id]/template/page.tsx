@@ -56,6 +56,7 @@ import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
 import { formatDateTime, formatDateTimeFull, formatFileSize } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
+import { isGatedVisibility } from '@/lib/status-page-access';
 import { followLiveSource, templateEditorState } from '@/lib/template-editor';
 import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
 import { errorMessage } from '@/lib/errors';
@@ -634,6 +635,15 @@ export default function StatusPageTemplatePage() {
                 </Button>
               </div>
             </div>
+            {/* A password or private page opens to the preview only with its
+                preview token, which the API mints only when the deployment
+                sets STATUS_PAGE_PREVIEW_SECRET. */}
+            {isGatedVisibility(statusPage.visibility) && templateState && !templateState.preview_token && (
+              <Callout tone="warning" className="mx-3 mb-3">
+                This page is not public, and previews of it need <code className="font-mono">STATUS_PAGE_PREVIEW_SECRET</code>{' '}
+                on the api and status-page services. Without it the preview cannot open the page.
+              </Callout>
+            )}
             {/* The draft route renders the published (or built-in) page while
                 no draft exists, so there is always something real to show. */}
             <iframe
