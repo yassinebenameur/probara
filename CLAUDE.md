@@ -323,6 +323,18 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
   cascades only on tenant delete. The label routes are writes (never in
   `postReadPaths`); export is `RequireTenantAdmin`.
+- **Maintenance coverage**: `shared/maintenance` (S-M5). A window is a
+  schedule (one-off, or the weekly `Rule`, expanded only by `Rule.Expand`);
+  what covers monitors is its materialized occurrences
+  (`maintenance_window_occurrences`), read only through
+  `OccurrenceRangesSQL`, `InMaintenance*Predicate` and
+  `MaintenanceUntilExpr` — never `maintenance_windows.starts_at/ends_at`.
+  Every occurrence writer is in `store.go`: the API on save, the scheduler's
+  `maintenance_occurrences.go` rolling the 35-day horizon. Started
+  occurrences, removed targets (`maintenance_window_past_targets`) and
+  deleted windows (`deleted_at`) are history, never rewritten. Anything that
+  inserts a window directly (tests, `scripts/seed-demo`) must insert its
+  occurrence too (`testutil.MaterializeOneOffMaintenance`).
 
 ## Monitor import
 
@@ -1404,6 +1416,12 @@ or imported groups come back empty. Any other path that creates groups through
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **`maintenance_window_occurrences` is SLA history too.** Nothing prunes it;
+  the coverage fragments stay cheap as it grows only because they start
+  from the monitor's links and probe each window through
+  `idx_maintenance_window_occurrences_window_end` (see `occurrencesSQL`;
+  `TestCoverageQueriesStayIndexDrivenWithLongHistory` pins the plan). Never
+  fold the link branches into one `OR` filter.
 - **Path-borne credentials** (`/push/{token}`): the API's request log, panic
   log and HTTP metrics never use `r.URL.Path` raw — logs redact by the
   router's patterns, metrics label by route pattern

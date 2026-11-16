@@ -46,6 +46,12 @@ func mountMaintenanceWindowRoutes(r chi.Router, maintenanceHandlers *maintenance
 		r.Get("/{id}", maintenanceHandlers.GetMaintenanceWindow)
 		r.Patch("/{id}", maintenanceHandlers.UpdateMaintenanceWindow)
 		r.Delete("/{id}", maintenanceHandlers.DeleteMaintenanceWindow)
+		// Recurring maintenance. Preview saves nothing, so it is on the
+		// read-only POST allowlist (middleware/readonly.go).
+		r.Post("/preview", maintenanceHandlers.PreviewMaintenanceRecurrence)
+		r.Get("/{id}/occurrences", maintenanceHandlers.ListMaintenanceOccurrences)
+		r.Post("/{id}/end-occurrence", maintenanceHandlers.EndMaintenanceOccurrence)
+		r.Post("/{id}/skip-next", maintenanceHandlers.SkipNextMaintenanceOccurrence)
 	})
 }
 

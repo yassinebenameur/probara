@@ -24,6 +24,7 @@ var postReadPaths = map[string]struct{}{
 	"/api/v1/monitors/dependency-suggestions": {},
 	"/api/v1/mesh/probe":                      {},
 	"/api/v1/ai-settings/test":                {},
+	"/api/v1/maintenance-windows/preview":     {},
 }
 
 // postReadPathPatterns extends the allowlist to parameterized routes. The

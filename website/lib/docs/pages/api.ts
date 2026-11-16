@@ -431,7 +431,23 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`DELETE /api/v1/maintenance-windows/{id}`",
-              "Delete a maintenance window",
+              "Delete a maintenance window: coverage ends now, future occurrences go, covered time stays in history",
+            ],
+            [
+              "`POST /api/v1/maintenance-windows/preview`",
+              "Next occurrences of a weekly `recurrence` (`count`, default 5, max 20); saves nothing, allowed for read-only access",
+            ],
+            [
+              "`GET /api/v1/maintenance-windows/{id}/occurrences`",
+              "A window's occurrences: `status=upcoming` (default, soonest first) or `past` (most recent first), paged",
+            ],
+            [
+              "`POST /api/v1/maintenance-windows/{id}/end-occurrence`",
+              "End the occurrence in progress now; a repeating window keeps its schedule",
+            ],
+            [
+              "`POST /api/v1/maintenance-windows/{id}/skip-next`",
+              "Skip a repeating window's next occurrence",
             ],
           ],
         },
@@ -441,6 +457,18 @@ export const API_PAGE: DocPage = {
           title: "Create maintenance",
           code:
             '{\n  "title": "Database upgrade",\n  "description": "Planned primary database maintenance",\n  "starts_at": "2026-08-01T22:00:00Z",\n  "ends_at": "2026-08-01T23:30:00Z",\n  "monitor_ids": ["<monitor-id>"]\n}',
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Create repeating maintenance",
+          code:
+            '{\n  "title": "Nightly database backup",\n  "monitor_ids": ["<monitor-id>"],\n  "recurrence": {\n    "frequency": "weekly",\n    "weekdays": [2, 4],\n    "start_time": "02:00",\n    "duration_minutes": 90,\n    "timezone": "Europe/Paris",\n    "until": "2027-06-30"\n  }\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "A repeating window takes no `starts_at`/`ends_at`. On `PATCH`, a sent `recurrence` replaces the whole rule, and `{\"frequency\": \"none\"}` with both times makes the window a one-off again. Schedule and monitor changes apply from the moment they are saved; occurrences that already started are never rewritten. A one-off's `starts_at`/`ends_at` in responses are the span it actually covers, which after an edit can differ from the times sent. See [maintenance windows](/docs/alerting/#maintenance) for the timezone and daylight-saving rules.",
         },
       ],
     },

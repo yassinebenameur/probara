@@ -553,8 +553,12 @@ export const ALERTING_PAGE: DocPage = {
           rows: [
             ["`title`", "Required operator-facing title"],
             ["`description`", "Optional maintenance context"],
-            ["`starts_at`", "RFC 3339 start timestamp"],
-            ["`ends_at`", "RFC 3339 end timestamp, after the start"],
+            ["`starts_at`", "RFC 3339 start timestamp of a one-off window"],
+            ["`ends_at`", "RFC 3339 end timestamp of a one-off window, after the start"],
+            [
+              "`recurrence`",
+              "Makes the window repeat weekly instead (then send no `starts_at`/`ends_at`): `frequency: \"weekly\"`, `weekdays` (0 = Sunday … 6 = Saturday; all seven is daily), `start_time` (local `HH:MM`), `duration_minutes` (1 to 10080, 7 days), `timezone` (IANA), optional `until` (last local date, `YYYY-MM-DD`)",
+            ],
             [
               "`monitor_ids`",
               "Selected tenant monitors; selecting a group also covers its members for muting",
@@ -564,7 +568,32 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Maintenance windows are classified as upcoming, active, or past. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during the active interval. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest start, past (and the unfiltered list) by most recent end, so a page cut never drops the next window.",
+            "Maintenance windows are classified as upcoming, active, or past, from their occurrences: active while one is in progress, upcoming while one that is not skipped is ahead, past otherwise. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during each occurrence. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest next start, past by most recent end (the unfiltered list newest first), so a page cut never drops the next window.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A repeating window runs on the chosen weekdays at its start time in its timezone, so \"Tuesday and Thursday 02:00 Europe/Paris for 90 minutes\" stays at 02:00 local time across daylight-saving changes. On the night the clocks go forward, a start time that does not exist runs at the next valid instant, the moment the gap ends (02:30 runs at 03:00). On the night they go back, a start time that happens twice runs once, at its first instance. The duration is elapsed time, so an occurrence lasts exactly its minutes even when a clock change falls inside it. At most one occurrence starts per local day; an occurrence longer than the gap to the next simply overlaps it, and overlapping coverage counts once. The form previews the next occurrences, and `POST /maintenance-windows/preview` returns them for any rule without saving it.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Occurrences are materialized 35 days ahead: the API writes them when a window is saved and the scheduler rolls the horizon forward every hour. Each window response carries `recurrence` (repeating windows only) and `next_occurrence` (the one in progress, else the next that is not skipped); for a repeating window `starts_at`/`ends_at` are the first occurrence of its current schedule. For a one-off they are always the span it actually covers: after an edit or an early end they are its occurrence's times rather than the times sent (a start that has passed never moves, ending one stores the moment it ended, and a finished one-off given a new future end shows it covering from the edit). `GET /maintenance-windows/{id}/occurrences?status=upcoming|past` lists the concrete occurrences, each `active`, `upcoming`, `past` or `skipped`.",
+        },
+        {
+          type: "list",
+          items: [
+            "**Edits apply from now on.** Changing the schedule never rewrites an occurrence that already started: the one in progress keeps its start and takes the end the new schedule gives the present (or ends at the edit when the new schedule does not cover the present), and every future occurrence is regenerated. Coverage is never backdated by an edit: a new occurrence already under way when you save starts at the save. A skipped occurrence stays skipped when the new schedule still has it.",
+            "**Monitor changes apply from now on too.** A monitor removed from a window stays covered for the time the window already covered it; a monitor added is covered from the edit.",
+            "**End this occurrence now** (`POST /maintenance-windows/{id}/end-occurrence`) ends the occurrence in progress; a repeating window runs again at its next occurrence, a one-off is over.",
+            "**Skip next occurrence** (`POST /maintenance-windows/{id}/skip-next`) skips the next occurrence that has not started; the series carries on after it.",
+            "**Deleting a window** ends coverage immediately and removes its future occurrences. Time it already covered stays in availability and SLA history; a window that never started is removed entirely.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Occurrences are never pruned: like the state timeline, they are the history SLA reports and uptime read back for any period. Two things still change past coverage: creating a one-off whose start is already in the past covers from that start (backdated maintenance), and group membership is read as it is now, so adding a monitor to a group that a window targets also covers it for that window's past occurrences.",
         },
         {
           type: "paragraph",

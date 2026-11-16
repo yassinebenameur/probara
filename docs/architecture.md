@@ -11,7 +11,7 @@ website (`website/`) are separate applications.
 | Component | Responsibilities | Data access |
 |---|---|---|
 | `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV), notification configuration, templates, locations, push and OTLP ingestion, Kubernetes discovery inventory and coverage; the MCP endpoint and its OAuth authorization server (tools re-dispatched through the REST router) | PostgreSQL and NATS |
-| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
+| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging; roll repeating maintenance occurrences forward to their horizon | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
 | `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, domain expiry, mesh, and offline-location alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
@@ -193,6 +193,15 @@ works in bounded batches; expired data remaining after a run keeps cleanup
 eligible for subsequent passes. Backlog gauges expose affected tenant counts
 and the oldest expired timestamp without scanning every expired row.
 
+Maintenance coverage is read from materialized occurrences
+(`maintenance_window_occurrences`) through `shared/maintenance`, never from a
+window's own times (state semantics S-M5). The API writes a window's
+occurrences up to a 35-day horizon in the transaction that saves it; the
+scheduler's hourly roll (`maintenance_occurrences.go`, under its own session
+advisory lock, locking each window row as API edits do) keeps every
+repeating window materialized that far ahead. Started occurrences are kept as
+history and never rewritten.
+
 Analytics choose raw, rollup, or interval-based calculations according to
 window coverage and the existing state semantics. Raw analytics stream
 results into accumulators; exact median/P95 calculations retain latency
@@ -203,7 +212,7 @@ Interval availability has one implementation, `IntegrateTimeline` in
 `shared/analytics/timeline.go`: the monitor headline and SLA reports both
 reduce its per-state seconds, so a one-monitor SLA and that monitor's
 headline agree. SLA reports are computed on request by the API from
-`monitor_state_intervals`, `maintenance_windows` and `alerts`; issuing one
+`monitor_state_intervals`, maintenance occurrences and `alerts`; issuing one
 freezes the report document in `sla_reports` (see
 [state semantics](state-semantics.md) S-U6/S-U7).
 
