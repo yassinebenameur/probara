@@ -79,6 +79,20 @@ type statusPageRenderView struct {
 	Monitors           []statusPageMonitorView
 	Incidents          []statusPageIncidentView
 	MaintenanceWindows []statusPageMaintenanceView
+	// Head metadata (seo.go), added later: SEOTitle is the <title> and
+	// og:title, MetaDescription the description tags, SiteName og:site_name,
+	// CanonicalURL the canonical link and og:url ("" when the public origin
+	// is unknown), OGImageURL the logo when it is an absolute URL, Robots
+	// the robots meta content, FeedURL and SummaryURL the Atom feed and
+	// summary.json.
+	SEOTitle        string
+	MetaDescription string
+	SiteName        string
+	CanonicalURL    string
+	OGImageURL      string
+	Robots          string
+	FeedURL         string
+	SummaryURL      string
 }
 
 const (
@@ -231,8 +245,12 @@ func renderPublicStatusPage(data *StatusPageData, apiEnabled bool) (string, erro
 // fails to parse or execute. customErr reports that failure so callers can
 // log it; a page must keep serving on a broken template, never 500.
 func renderStatusPageHTML(data *StatusPageData, apiEnabled bool) (html string, customErr error, err error) {
-	view := buildStatusPageRenderView(data, apiEnabled)
+	return renderStatusPageView(data, buildStatusPageRenderView(data, apiEnabled))
+}
 
+// renderStatusPageView is renderStatusPageHTML for an already built view, so
+// a build that also derives summary.json from the view builds it once.
+func renderStatusPageView(data *StatusPageData, view statusPageRenderView) (html string, customErr error, err error) {
 	if strings.TrimSpace(data.CustomTemplateSource) != "" {
 		tmpl, cerr := customTemplateFor(data.ID, data.CustomTemplateVersion, data.CustomTemplateSource)
 		if cerr == nil {
@@ -417,6 +435,16 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	sort.Slice(view.Incidents, func(i, j int) bool {
 		return incidentStateRank(view.Incidents[i].State) < incidentStateRank(view.Incidents[j].State)
 	})
+
+	seo := resolvePageSEO(data)
+	view.SEOTitle = seo.Title
+	view.MetaDescription = seo.Description
+	view.SiteName = seo.SiteName
+	view.CanonicalURL = seo.CanonicalURL
+	view.OGImageURL = seo.OGImageURL
+	view.Robots = seo.Robots
+	view.FeedURL = seo.FeedURL
+	view.SummaryURL = seo.SummaryURL
 
 	return view
 }

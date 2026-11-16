@@ -46,10 +46,15 @@ type cacheEntry struct {
 
 // renderedPage is one cached render: the HTML (with the CSP nonce still a
 // placeholder) and the page's CSP inputs, so every response can mint its own
-// nonce without re-rendering.
+// nonce without re-rendering. noindex is the page's indexing opt-out, sent
+// as X-Robots-Tag with the HTML. summary is the summary.json document built
+// from the same data, which the badges read too; it is never served with
+// the HTML, so it is not part of the ETag.
 type renderedPage struct {
-	html string
-	csp  pageCSP
+	html    string
+	csp     pageCSP
+	noindex bool
+	summary *pageSummary
 }
 
 // renderCache caches the rendered HTML of public status pages per slug so N
@@ -135,10 +140,16 @@ func (c *renderCache) GetPage(slug string, build func() (renderedPage, error)) (
 }
 
 func (p renderedPage) etag() string {
-	if p.csp.mode == "" {
+	if p.csp.mode == "" && !p.noindex {
 		return computeETag(p.html)
 	}
-	return computeETag(p.html + "\x00" + p.csp.mode + "\x00" + strings.Join(p.csp.frameAncestors, " "))
+	// A custom template may print no robots meta, so the header can be the
+	// only thing an indexing change alters.
+	robots := ""
+	if p.noindex {
+		robots = "\x00noindex"
+	}
+	return computeETag(p.html + "\x00" + p.csp.mode + "\x00" + strings.Join(p.csp.frameAncestors, " ") + robots)
 }
 
 // Invalidate drops the cached entry for slug so the next Get rebuilds it.

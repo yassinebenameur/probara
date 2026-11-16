@@ -956,6 +956,15 @@ or imported groups come back empty. Any other path that creates groups through
   literal `{{cspNonce}}`. Every inline `<script>` in `default.gohtml` needs
   `nonce="{{cspNonce}}"` (`TestCSPNonceContract`), and a 304 never carries a
   CSP.
+- **Page add-ons** (`feed.atom`, `summary.json`, badges; `addons.go`) are
+  sub-routes dispatched from `HandleStatusPage` (`parsePageAddon`, every
+  shape in `pageAddonRoutes`), never mux routes, so a check there covers
+  them. `summary.json` and the badges come from the page's own render
+  (`cachedPage`, keyed by slug alone, so access checks run before it) and
+  show only rendered components; hidden uptime stays `null` and uptime
+  badges 404 (`summary.go`). The summary is a versioned contract pinned by
+  `testdata/summary_v1.golden.json`: add fields, never repurpose them. Head
+  metadata and the indexing decision live in `seo.go` (`pageIndexable`).
 
 ## Web UI conventions
 

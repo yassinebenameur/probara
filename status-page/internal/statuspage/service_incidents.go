@@ -26,7 +26,8 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 		SELECT mw.id, mw.title, mw.description, mo.occurrence_starts_at, MAX(mo.ends_at),
 			NOW() >= mo.occurrence_starts_at AS is_active,
 			mw.recurrence_weekdays IS NOT NULL AS repeating,
-			array_agg(DISTINCT pm.name) AS affected
+			array_agg(DISTINCT pm.name) AS affected,
+			mw.updated_at
 		FROM monitors pm
 		CROSS JOIN LATERAL `+maintenance.OccurrenceRangesSQL("$2", "pm.id", "NOW()", "NOW() + INTERVAL '14 days'")+` mo
 		JOIN maintenance_windows mw ON mw.id = mo.window_id AND mw.tenant_id = $2
@@ -53,9 +54,10 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 		var id uuid.UUID
 		var w StatusPageMaintenanceWindow
 		var affected []string
-		if err := rows.Scan(&id, &w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, &w.Repeating, pq.Array(&affected)); err != nil {
+		if err := rows.Scan(&id, &w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, &w.Repeating, pq.Array(&affected), &w.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan maintenance window: %w", err)
 		}
+		w.ID = id
 		if i, seen := index[id]; seen {
 			// A later occurrence of a window already listed.
 			if len(windows[i].NextStartsAt) < maxListedNextStarts {
