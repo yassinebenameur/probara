@@ -16,6 +16,7 @@ func relapseSample() notifications.AlertEvent {
 	reopened := recovered.Add(4 * time.Minute)
 	ev.Timestamp = reopened
 	ev.Alert.RelapseCount = 2
+	ev.Alert.RelapseNotice = true
 	ev.Alert.ReopenedAt = &reopened
 	ev.Alert.LastRecoveredAt = &recovered
 	return ev
@@ -70,6 +71,17 @@ func TestRelapseOnlyChangesThePage(t *testing.T) {
 	if first.Label != "Alert Triggered" || hasRow(first.Rows, "Relapses", "") {
 		t.Fatalf("first page: label=%q rows=%+v", first.Label, first.Rows)
 	}
+	// A page during a relapse that is not the relapse notice (an escalation
+	// route's first page, a channel that never heard the alert) is an
+	// ordinary page, with the relapse count as a fact.
+	tier := relapseSample()
+	tier.Alert.RelapseNotice = false
+	page := Build(tier, EventCreated, "")
+	if page.Label != "Alert Triggered" || page.StatusWord != "DOWN" || strings.Contains(page.Summary, "Relapsed") ||
+		!hasRow(page.Rows, "Relapses", "2") {
+		t.Fatalf("ordinary page of a relapsed alert: label=%q status=%q summary=%q rows=%+v",
+			page.Label, page.StatusWord, page.Summary, page.Rows)
+	}
 }
 
 // Every kind that can reopen gets a relapse page in its own terms and tone.
@@ -99,7 +111,7 @@ func TestBuildRelapsePageEveryKind(t *testing.T) {
 		m := Build(ev, EventCreated, "")
 		label := tc.label
 		if label == "" {
-			label = Build(func() notifications.AlertEvent { e := ev; e.Alert.RelapseCount = 0; return e }(), EventCreated, "").Label + " Again"
+			label = Build(func() notifications.AlertEvent { e := ev; e.Alert.RelapseNotice = false; return e }(), EventCreated, "").Label + " Again"
 		}
 		if m.Label != label || m.StatusWord != "RELAPSED" || m.Tone != tc.tone {
 			t.Errorf("%s: label=%q status=%q tone=%q, want %q", tc.kind, m.Label, m.StatusWord, m.Tone, label)

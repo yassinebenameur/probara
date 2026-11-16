@@ -59,12 +59,14 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 		{"suspected_cause", "active", false, true, 0},
 		{"resolved", "resolved", false, true, 0},
 		{"resolved", "", false, true, 0}, // alert history deleted: the recovery still goes out
-		// Reopened as a relapse since publish: the resolve is dropped (its
-		// claim handed back when it reached nobody, a no-op here: the
+		// Open again after a relapse since publish: the resolve is dropped
+		// (its claim handed back when it reached nobody, a no-op here: the
 		// envelope carries no claim time), and so is anything else from the
-		// episode that recovered.
+		// episode that recovered. Once the alert is resolved again, an
+		// earlier episode's resolve still goes out: a channel that never
+		// heard the relapse got no other resolve.
 		{"resolved", "active", false, false, 1},
-		{"resolved", "resolved", false, false, 1},
+		{"resolved", "resolved", false, true, 1},
 		{"created", "active", false, false, 1},
 		{"reminder", "active", false, false, 1},
 		// Acknowledged or snoozed since publish: the mute holds the page and
@@ -208,5 +210,42 @@ func TestHandle_DropsTriggerQueuedBeforeAck(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A paging provider keys its incident per page episode, so a resolve queued
+// before a relapse closes only the earlier incident: it is delivered even
+// while the alert is open again.
+func TestHandle_PagingResolveDeliveredWhileRelapsed(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	pagingStub.sends = nil
+
+	channelID, alertID := uuid.New(), uuid.New()
+	mock.ExpectQuery(regexp.QuoteMeta(`FROM alert_channels`)).WithArgs(channelID).
+		WillReturnRows(sqlmock.NewRows([]string{"name", "type", "config", "is_active"}).
+			AddRow("pager", pagingStubType, []byte(`{}`), true))
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow("active", false, 1))
+	mock.ExpectRollback()
+
+	c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
+	raw, _ := json.Marshal(notifications.DispatchEnvelope{
+		V: 1, ChannelID: channelID.String(), ChannelType: pagingStubType,
+		AlertID: alertID.String(), EventType: "resolved",
+		Event: notifications.AlertEvent{Type: "resolved"},
+	})
+	if err := c.handle(context.Background(), &queue.Message{Data: raw}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(pagingStub.sends) != 1 || pagingStub.sends[0] != "resolved" {
+		t.Fatalf("sends = %v, want the resolve", pagingStub.sends)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

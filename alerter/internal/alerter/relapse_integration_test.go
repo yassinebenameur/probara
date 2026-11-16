@@ -21,11 +21,17 @@ import (
 )
 
 // relapseSend is one sendFunc call: the channel, the plugin-facing event
-// type and the paging episode (relapse count) it carried.
+// type, the paging episode (relapse count) it carried, and whether it was
+// claimed as the relapse notice.
 type relapseSend struct {
 	channel uuid.UUID
 	event   string
 	relapse int
+	notice  bool
+	// paged / previous: the episode the channel's provider incident belongs
+	// to, and on a relapse notice the one of its page before.
+	paged    int
+	previous *int
 }
 
 // relapseRecorder records every send, and can fail them all.
@@ -41,8 +47,22 @@ func (r *relapseRecorder) send(_ context.Context, ch alertChannel, eventType str
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sends = append(r.sends, relapseSend{channel: ch.ID, event: eventType, relapse: alert.RelapseCount})
+	r.sends = append(r.sends, relapseSend{channel: ch.ID, event: eventType, relapse: alert.RelapseCount, notice: alert.RelapseNotice,
+		paged: alert.PagedRelapse, previous: alert.PreviousPagedRelapse})
 	return nil
+}
+
+// notices counts the relapse notices sent to channel.
+func (r *relapseRecorder) notices(channel uuid.UUID) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, s := range r.sends {
+		if s.channel == channel && s.notice {
+			n++
+		}
+	}
+	return n
 }
 
 // count counts the sends of event to channel in episode relapse (-1: any).
@@ -304,7 +324,7 @@ func TestRelapseClocksCountFromTheReopen(t *testing.T) {
 
 	goDown(ctx, t, db, a, monitorID)
 	dispatch(ctx, t, a)
-	if rec.count(first, "created", 1) != 1 {
+	if rec.count(first, "created", 1) != 1 || rec.notices(first) != 1 {
 		t.Fatalf("relapse notice to the first route: %+v", rec.sends)
 	}
 	if n := rec.count(tier, "created", -1); n != 0 {
@@ -322,9 +342,9 @@ func TestRelapseClocksCountFromTheReopen(t *testing.T) {
 
 	mustExec(ctx, t, db, `UPDATE alerts SET reopened_at = NOW() - INTERVAL '11 minutes' WHERE id = $1`, alertID)
 	dispatch(ctx, t, a)
-	// The tier never heard the alert: its first page in the relapse is a
-	// plain page (worded as a relapse, since the alert relapsed).
-	if rec.count(tier, "created", 1) != 1 {
+	// The tier never heard the alert: its first page in the relapse is an
+	// ordinary page, not a relapse notice.
+	if rec.count(tier, "created", 1) != 1 || rec.notices(tier) != 0 {
 		t.Fatalf("tier after its delay from the reopen: %+v", rec.sends)
 	}
 	if lastEvent, _, _ := notificationStateFor(ctx, t, db, alertID, tier); lastEvent != "created" {
@@ -334,9 +354,11 @@ func TestRelapseClocksCountFromTheReopen(t *testing.T) {
 
 // A relapse that happens while the earlier recovery's resolve is still
 // pending (its send failed, the sweep retries it) drops that resolve: the
-// route is never told "recovered" after the alert relapsed. The route still
-// counts as paged, so it gets no relapse notice, and the relapse's own
-// recovery reaches it.
+// route is never told "recovered" after the alert relapsed. It is still
+// re-paged: its last page is from the episode that recovered, and for a
+// paging provider whose incident is still open (and maybe acknowledged) only
+// a page reaches anyone, never a reminder. The relapse's own recovery then
+// reaches it.
 func TestRelapseDropsPendingResolve(t *testing.T) {
 	ctx := context.Background()
 	db, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -351,9 +373,12 @@ func TestRelapseDropsPendingResolve(t *testing.T) {
 
 	goDown(ctx, t, db, a, monitorID)
 	dispatch(ctx, t, a)
+	alertID := alertRowsFor(ctx, t, db, monitorID, "availability")[0].id
+	// Acknowledged in the first episode: a paging provider holds the
+	// incident acknowledged, so only a new page reaches anyone.
+	acknowledge(ctx, t, db, alertID)
 	rec.fail.Store(true)
 	goUp(ctx, t, db, a, monitorID)
-	alertID := alertRowsFor(ctx, t, db, monitorID, "availability")[0].id
 	if lastEvent, _, _ := notificationStateFor(ctx, t, db, alertID, route); lastEvent != "created" {
 		t.Fatalf("failed resolve left the route at %q, want created (pending)", lastEvent)
 	}
@@ -367,8 +392,16 @@ func TestRelapseDropsPendingResolve(t *testing.T) {
 	if n := rec.count(route, "resolved", -1); n != 0 {
 		t.Fatalf("the earlier recovery reached the route after the relapse: %+v", rec.sends)
 	}
-	if n := rec.count(route, "created", 1); n != 0 {
-		t.Fatalf("a route that never heard the recovery got a relapse notice: %+v", rec.sends)
+	if n := rec.notices(route); n != 1 {
+		t.Fatalf("relapse notices to a route that missed the recovery = %d, want 1: %+v", n, rec.sends)
+	}
+	for _, sent := range rec.sends {
+		if sent.notice && (sent.paged != 1 || sent.previous == nil || *sent.previous != 0) {
+			t.Fatalf("relapse notice keyed paged=%d previous=%v, want a new incident (1) closing the first (0)", sent.paged, sent.previous)
+		}
+	}
+	if n := rec.count(route, "reminder", -1); n != 0 {
+		t.Fatalf("reminders instead of a page: %+v", rec.sends)
 	}
 
 	goUp(ctx, t, db, a, monitorID)
@@ -457,7 +490,7 @@ func TestRelapseEachIdentityBearingKind(t *testing.T) {
 		}
 		rows.Close()
 		for _, id := range ids {
-			if _, err := a.resolveAlert(ctx, id, time.Now()); err != nil {
+			if _, err := a.resolveAlert(ctx, id, time.Now(), resolvedRecovered); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -573,16 +606,19 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 		reopenedAgo time.Duration
 		state       string        // the route's row; "" for none
 		sentAgo     time.Duration // its last_sent_at
+		paged       int           // its paged_relapse (the alert is in episode 1)
 		want        string
 	}{
-		{"heard the recovery", "active", false, time.Minute, "resolved", 2 * time.Minute, alertrouting.EventRelapsed},
-		{"heard the recovery, acknowledged since", "acknowledged", false, time.Minute, "resolved", 2 * time.Minute, ""},
-		{"heard the recovery, snoozed since", "active", true, time.Minute, "resolved", 2 * time.Minute, ""},
-		{"never paged", "active", false, time.Minute, "", 0, "created"},
-		{"told of the relapse", "active", false, time.Minute, "relapsed", 30 * time.Second, ""},
-		{"told of the relapse long ago", "active", false, 20 * time.Minute, "relapsed", 11 * time.Minute, "reminder"},
-		{"missed the recovery, reopened just now", "active", false, time.Minute, "created", 30 * time.Minute, ""},
-		{"missed the recovery, reopened long ago", "active", false, 11 * time.Minute, "created", 30 * time.Minute, "reminder"},
+		{"heard the recovery", "active", false, time.Minute, "resolved", 2 * time.Minute, 0, alertrouting.EventRelapsed},
+		{"heard the recovery, acknowledged since", "acknowledged", false, time.Minute, "resolved", 2 * time.Minute, 0, ""},
+		{"heard the recovery, snoozed since", "active", true, time.Minute, "resolved", 2 * time.Minute, 0, ""},
+		{"never paged", "active", false, time.Minute, "", 0, 0, "created"},
+		{"told of the relapse", "active", false, time.Minute, "relapsed", 30 * time.Second, 1, ""},
+		{"told of the relapse long ago", "active", false, 20 * time.Minute, "relapsed", 11 * time.Minute, 1, "reminder"},
+		{"first paged in this episode", "active", false, 20 * time.Minute, "created", 11 * time.Minute, 1, "reminder"},
+		{"missed the recovery, reopened just now", "active", false, time.Minute, "created", 30 * time.Minute, 0, alertrouting.EventRelapsed},
+		{"missed the recovery after a reminder", "active", false, 11 * time.Minute, "reminder", 30 * time.Minute, 0, alertrouting.EventRelapsed},
+		{"missed the recovery, acknowledged since", "acknowledged", false, 11 * time.Minute, "created", 30 * time.Minute, 0, ""},
 	}
 	a := newIntegrationAlerter(db)
 	for _, tc := range cases {
@@ -601,9 +637,9 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 				SELECT id, 1, reopened_at - INTERVAL '3 minutes', reopened_at FROM alerts WHERE id = $1`, alertID)
 			if tc.state != "" {
 				mustExec(ctx, t, db, `
-					INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
-					VALUES ($1, $2, NOW() - make_interval(secs => $3), $4, NOW(), NOW())
-				`, alertID, ch, tc.sentAgo.Seconds(), tc.state)
+					INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, paged_relapse, created_at, updated_at)
+					VALUES ($1, $2, NOW() - make_interval(secs => $3), $4, $5, NOW(), NOW())
+				`, alertID, ch, tc.sentAgo.Seconds(), tc.state, tc.paged)
 			}
 
 			var gate dispatchGate
@@ -611,9 +647,9 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 			var eligibleSince time.Time
 			if err := db.QueryRowContext(ctx, `
 				SELECT `+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`,
-					`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`
+					`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`, al.relapse_count
 				FROM alerts al JOIN tenants te ON te.id = al.tenant_id WHERE al.id = $1
-			`, alertID).Scan(&gate.Muted, &resumedAt, &eligibleSince); err != nil {
+			`, alertID).Scan(&gate.Muted, &resumedAt, &eligibleSince, &gate.RelapseCount); err != nil {
 				t.Fatal(err)
 			}
 			gate.ResumedAt = resumedAt.Time
@@ -632,15 +668,24 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 			event := "created"
 			switch {
 			case state == nil:
-			case state.LastEventType == "resolved":
+			case state.PagedRelapse < gate.RelapseCount:
 				event = alertrouting.EventRelapsed
+				// The pre-filter never sends such a route a reminder, and
+				// neither does the claim.
+				if sent, err := a.deliverNotification(ctx, "reminder", alertSubject{MonitorID: monitorID, TenantID: tenantID},
+					&alertRecord{ID: alertID, TenantID: tenantID, MonitorID: monitorID}, nil,
+					alertChannel{ID: ch, Type: "webhook", IsActive: true}, time.Now(), interval); err != nil || sent {
+					t.Fatalf("reminder claim on a route last paged in an earlier episode: sent=%v err=%v", sent, err)
+				}
 			default:
 				event = "reminder"
 			}
 			var sentType string
-			var sentRelapse int
+			var sentRelapse, sentPaged int
+			var sentNotice bool
+			var sentPrevious *int
 			a.sendFunc = func(_ context.Context, _ alertChannel, eventType string, _ alertSubject, alert *alertRecord, _ *groupDetail, _ time.Time) error {
-				sentType, sentRelapse = eventType, alert.RelapseCount
+				sentType, sentRelapse, sentNotice, sentPaged, sentPrevious = eventType, alert.RelapseCount, alert.RelapseNotice, alert.PagedRelapse, alert.PreviousPagedRelapse
 				return nil
 			}
 			sent, err := a.deliverNotification(ctx, event, alertSubject{MonitorID: monitorID, TenantID: tenantID},
@@ -652,9 +697,213 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 			if sent != (tc.want == event) {
 				t.Fatalf("claim of %s sent=%v, pre-filter said %q", event, sent, pre)
 			}
-			if sent && event == alertrouting.EventRelapsed && (sentType != "created" || sentRelapse != 1) {
-				t.Fatalf("relapse notice went out as %q in episode %d, want created in episode 1", sentType, sentRelapse)
+			if sent && event == alertrouting.EventRelapsed && (sentType != "created" || sentRelapse != 1 || !sentNotice ||
+				sentPaged != 1 || sentPrevious == nil || *sentPrevious != tc.paged) {
+				t.Fatalf("relapse notice went out as %q (episode %d, notice %v, paged %d, previous %v), want a created notice paging episode 1 after %d",
+					sentType, sentRelapse, sentNotice, sentPaged, sentPrevious, tc.paged)
+			}
+			if sent && event != alertrouting.EventRelapsed && sentNotice {
+				t.Fatalf("%s carried the relapse notice flag", event)
 			}
 		})
+	}
+}
+
+// Only a recovery makes an alert reopenable (auto_resolved). Every other way
+// the alerter closes an alert leaves it closed for good, so the subject
+// coming back opens a new alert: a paused, deleted or emptied monitor, a
+// removed rule or threshold, stale host readings, a vanished mesh edge.
+func TestRelapseOnlyAfterARecovery(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "relapse-scope")
+	setReopenCooldown(ctx, t, db, tenantID, 10)
+	a := newIntegrationAlerter(db)
+	autoResolved := func(alertID uuid.UUID) bool {
+		t.Helper()
+		var status string
+		var auto bool
+		if err := db.QueryRowContext(ctx, `SELECT status, auto_resolved FROM alerts WHERE id = $1`, alertID).Scan(&status, &auto); err != nil {
+			t.Fatal(err)
+		}
+		if status != "resolved" {
+			t.Fatalf("alert %s is %s, want resolved", alertID, status)
+		}
+		return auto
+	}
+	openAlert := func(kind string, monitorID uuid.UUID, metric string) uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		mustExec(ctx, t, db, `INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count, metric_name, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 'active', NOW(), 1, NULLIF($5, ''), NOW(), NOW())`, id, tenantID, monitorID, kind, metric)
+		return id
+	}
+
+	t.Run("pause then resume opens a new alert", func(t *testing.T) {
+		monitorID := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "paused")
+		goDown(ctx, t, db, a, monitorID)
+		first := alertRowsFor(ctx, t, db, monitorID, "availability")[0].id
+		mustExec(ctx, t, db, `UPDATE monitors SET enabled = FALSE WHERE id = $1`, monitorID)
+		if err := a.resolveAlertsForRecoveredMonitors(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if autoResolved(first) {
+			t.Fatal("a paused monitor's alert must not be reopenable")
+		}
+		mustExec(ctx, t, db, `UPDATE monitors SET enabled = TRUE WHERE id = $1`, monitorID)
+		goDown(ctx, t, db, a, monitorID)
+		if rows := alertRowsFor(ctx, t, db, monitorID, "availability"); len(rows) != 2 || rows[1].relapseCount != 0 {
+			t.Fatalf("alerts = %+v, want a new alert after the resume", rows)
+		}
+	})
+
+	t.Run("availability: up is a recovery, deleted is not", func(t *testing.T) {
+		up := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "up")
+		goDown(ctx, t, db, a, up)
+		goUp(ctx, t, db, a, up)
+		if !autoResolved(alertRowsFor(ctx, t, db, up, "availability")[0].id) {
+			t.Fatal("a monitor back up must leave its alert reopenable")
+		}
+		gone := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "gone")
+		goDown(ctx, t, db, a, gone)
+		mustExec(ctx, t, db, `UPDATE monitors SET deleted_at = NOW() WHERE id = $1`, gone)
+		if err := a.resolveAlertsForRecoveredMonitors(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if autoResolved(alertRowsFor(ctx, t, db, gone, "availability")[0].id) {
+			t.Fatal("a deleted monitor's alert must not be reopenable")
+		}
+	})
+
+	t.Run("group emptied or paused is not a recovery", func(t *testing.T) {
+		group := testutil.InsertGroupMonitor(ctx, t, db, tenantID, "empty-group")
+		id := openAlert("availability", group, "")
+		mustExec(ctx, t, db, `UPDATE monitors SET current_state = 'unknown' WHERE id = $1`, group)
+		if err := a.resolveAlertsForRecoveredMonitors(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if autoResolved(id) {
+			t.Fatal("an emptied group's alert must not be reopenable")
+		}
+	})
+
+	t.Run("mesh: up is a recovery, a vanished edge is not", func(t *testing.T) {
+		src := insertMeshLocation(ctx, t, db, tenantID, "eu", "eu-scope")
+		dst := insertMeshLocation(ctx, t, db, tenantID, "us", "us-scope")
+		other := insertMeshLocation(ctx, t, db, tenantID, "ap", "ap-scope")
+		insertMeshEdgeState(ctx, t, db, tenantID, src, dst, "down", 3, "timeout")
+		insertMeshEdgeState(ctx, t, db, tenantID, src, other, "down", 3, "timeout")
+		if err := a.openMeshEdgeAlerts(ctx); err != nil {
+			t.Fatal(err)
+		}
+		setMeshEdgeState(ctx, t, db, src, dst, "up")
+		mustExec(ctx, t, db, `DELETE FROM location_mesh_state WHERE source_location_id = $1 AND target_location_id = $2`, src, other)
+		if err := a.resolveMeshEdgeAlerts(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var recovered, vanished bool
+		if err := db.QueryRowContext(ctx, `SELECT
+				BOOL_OR(auto_resolved) FILTER (WHERE target_location_id = $2),
+				BOOL_OR(auto_resolved) FILTER (WHERE target_location_id = $3)
+			FROM alerts WHERE kind = 'mesh_edge' AND source_location_id = $1 AND status = 'resolved'`, src, dst, other).Scan(&recovered, &vanished); err != nil {
+			t.Fatal(err)
+		}
+		if !recovered || vanished {
+			t.Fatalf("auto_resolved: recovered edge %v (want true), vanished edge %v (want false)", recovered, vanished)
+		}
+	})
+
+	t.Run("host metric: back within the rule is a recovery, stale or removed is not", func(t *testing.T) {
+		monitorID := testutil.InsertAgentMonitor(ctx, t, db, tenantID, "host", "agent-scope", 60)
+		c := hostMetricConfig{monitorID: monitorID, tenantID: tenantID, monitorName: "host"}
+		cleared := openAlert("host_metric", monitorID, "system.cpu.utilization")
+		stale := openAlert("host_metric", monitorID, "system.memory.utilization")
+		if err := a.resolveClearedHostMetricAlerts(ctx, c, map[string]bool{},
+			map[string]bool{"system.cpu.utilization": true}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if !autoResolved(cleared) || autoResolved(stale) {
+			t.Fatalf("auto_resolved: fresh reading back within the rule %v (want true), stale series %v (want false)",
+				autoResolved(cleared), autoResolved(stale))
+		}
+		orphan := openAlert("host_metric", monitorID, "system.cpu.utilization")
+		if err := a.resolveOrphanHostMetricAlerts(ctx, nil); err != nil {
+			t.Fatal(err)
+		}
+		if autoResolved(orphan) {
+			t.Fatal("a host metric alert whose rules were removed must not be reopenable")
+		}
+	})
+
+	t.Run("tls and latency: cleared is a recovery, orphaned is not", func(t *testing.T) {
+		monitorID := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "cert")
+		tlsAlert := openAlert("tls_expiry", monitorID, "")
+		latency := openAlert("latency_anomaly", monitorID, "")
+		a.resolveTLSExpiryAlert(ctx, tlsAlert, tenantID, monitorID, "cert", time.Now(), time.Now(), resolvedRecovered)
+		if err := a.resolveLatencyAnomalyAlert(ctx, monitorID, tenantID, "cert", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if !autoResolved(tlsAlert) || !autoResolved(latency) {
+			t.Fatal("a renewed certificate and a latency back to baseline must leave their alerts reopenable")
+		}
+		tlsOrphan := openAlert("tls_expiry", monitorID, "")
+		latencyOrphan := openAlert("latency_anomaly", monitorID, "")
+		if err := a.resolveOrphanTLSExpiryAlerts(ctx, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.resolveOrphanLatencyAlerts(ctx, nil); err != nil {
+			t.Fatal(err)
+		}
+		if autoResolved(tlsOrphan) || autoResolved(latencyOrphan) {
+			t.Fatal("alerts closed because their threshold or detection was removed must not be reopenable")
+		}
+	})
+}
+
+// A reopen waits only briefly for the row lock a resolve being delivered
+// holds (the alert row FOR SHARE, up to the delivery timeout): past
+// reopenLockTimeout it gives up for this tick without opening a new alert,
+// and the next tick reopens it.
+func TestRelapseReopenGivesUpOnALockedAlert(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "relapse-lock")
+	setReopenCooldown(ctx, t, db, tenantID, 10)
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "API")
+	a := newIntegrationAlerter(db)
+
+	goDown(ctx, t, db, a, monitorID)
+	goUp(ctx, t, db, a, monitorID)
+	alertID := alertRowsFor(ctx, t, db, monitorID, "availability")[0].id
+
+	// A sender delivering the resolve holds the row FOR SHARE.
+	holder, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback() }()
+	if _, err := holder.ExecContext(ctx, `SELECT 1 FROM alerts WHERE id = $1 FOR SHARE`, alertID); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	goDown(ctx, t, db, a, monitorID)
+	if waited := time.Since(started); waited > reopenLockTimeout+5*time.Second {
+		t.Fatalf("the opener waited %s on the locked alert", waited)
+	}
+	rows := alertRowsFor(ctx, t, db, monitorID, "availability")
+	if len(rows) != 1 || rows[0].status != "resolved" {
+		t.Fatalf("alerts while locked = %+v, want the one alert, still resolved (no new alert)", rows)
+	}
+
+	if err := holder.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	goDown(ctx, t, db, a, monitorID)
+	rows = alertRowsFor(ctx, t, db, monitorID, "availability")
+	if len(rows) != 1 || rows[0].status != "active" || rows[0].relapseCount != 1 {
+		t.Fatalf("alerts after the lock = %+v, want the alert reopened", rows)
 	}
 }

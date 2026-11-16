@@ -3,7 +3,6 @@ package alerter
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -254,7 +253,7 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 
 	reopened, err := reopenRecentAlertTx(ctx, tx, alertIdentity{tenantID: c.tenantID, kind: notifications.KindLatencyAnomaly, monitorID: c.monitorID},
 		[]alertColumn{{"baseline_latency_ms", baseline}, {"observed_latency_ms", observed}, {"anomaly_score", score}})
-	if errors.Is(err, errAlertAlreadyOpen) {
+	if reopenSkipped(err) {
 		return nil
 	}
 	if err != nil {
@@ -331,7 +330,8 @@ func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, ten
 		return fmt.Errorf("query open latency alert: %w", err)
 	}
 
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now)
+	// Latency back within its baseline: a recovery.
+	resolvedAt, err := a.resolveAlert(ctx, alertID, now, resolvedRecovered)
 	if err != nil {
 		return err
 	}
@@ -382,7 +382,8 @@ func (a *Alerter) resolveOrphanLatencyAlerts(ctx context.Context, keep []uuid.UU
 
 	now := time.Now()
 	for _, o := range orphans {
-		resolvedAt, err := a.resolveAlert(ctx, o.id, now)
+		// Detection off or the monitor gone: not a recovery.
+		resolvedAt, err := a.resolveAlert(ctx, o.id, now, resolvedOutOfScope)
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": o.id}).Error("Failed to resolve orphan latency alert")
 			continue

@@ -456,7 +456,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
             The options keep a value saved outside the presets (API). */}
         <SettingRow
           title="Reopen relapses within"
-          description="When an alert that recovered on its own fails again within this time, the same alert reopens and counts a relapse instead of a new alert opening. Channels are told once that it relapsed. Off opens a new alert every time."
+          description="When an alert that recovered fails again within this time, the same alert reopens and counts a relapse instead of a new alert opening, and channels are told once that it relapsed. Alerts resolved by hand or closed by pausing a monitor never reopen. Off opens a new alert every time."
           control={({ titleId, descriptionId }) => (
             <select
               value={reopenCooldownMinutes}

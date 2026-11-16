@@ -8,15 +8,17 @@ import (
 
 // Relapse wording. An alert whose subject fails again within its workspace's
 // reopen cooldown is reopened rather than replaced (shared/alertrouting
-// relapse.go), and each route that heard the recovery is told so once, with
-// a "created" event whose Alert.RelapseCount > 0. Plugins see no new event
-// type: a paging provider re-triggers, every other channel shows this
-// wording. Every event of a relapsed alert also carries the relapse rows.
+// relapse.go), and each route last paged in an earlier episode is told so
+// once, with a "created" event carrying Alert.RelapseNotice. Plugins see no
+// new event type: a paging provider re-triggers, every other channel shows
+// this wording. Any other page of a relapsed alert (an escalation route's
+// first page during a relapse, say) is an ordinary page; every event of a
+// relapsed alert carries the relapse rows as facts.
 
-// isRelapsePage reports whether this event is the page of a relapse: a
-// created event of a reopened, still open alert.
+// isRelapsePage reports whether this event is the relapse notice: a created
+// event the alerter claimed as the relapse, of a still open alert.
 func isRelapsePage(alert notifications.AlertDetails, eventType string, resolved bool) bool {
-	return alert.RelapseCount > 0 && eventType == EventCreated && !resolved
+	return alert.RelapseNotice && alert.RelapseCount > 0 && eventType == EventCreated && !resolved
 }
 
 // relapseLabel is the headline of a relapse page: the kind's own page label,
@@ -26,7 +28,7 @@ func relapseLabel(alert notifications.AlertDetails) string {
 		return "Alert Relapsed"
 	}
 	firstPage := alert
-	firstPage.RelapseCount = 0
+	firstPage.RelapseNotice = false
 	return labelFor(firstPage, EventCreated) + " Again"
 }
 

@@ -15,21 +15,46 @@ import (
 )
 
 // Relapse reopen: every alert kind's opener first tries to reopen its
-// subject's recently auto-resolved alert (reopenRecentAlertTx) and inserts a
-// new alert only when that finds nothing. The rule and what it notifies are
+// subject's recently recovered alert (reopenRecentAlertTx) and inserts a new
+// alert only when that finds nothing. The rule and what it notifies are
 // documented in shared/alertrouting relapse.go; this file is the write side.
 //
 // Notifications are not sent here. The dispatch loops page a reopened alert
-// like any open one: a route whose row says 'resolved' (it heard the
-// recovery) is due the one relapse notice (openAlertEventDue, the
-// EventRelapsed claim), and the escalation delays and reminders count from
-// reopened_at.
+// like any open one: a route last paged in an earlier episode
+// (paged_relapse < relapse_count) is due the one relapse notice
+// (openAlertEventDue, the EventRelapsed claim), and the escalation delays and
+// reminders count from reopened_at.
 
 // errAlertAlreadyOpen reports that a reopen lost a race to another replica's
 // new alert for the same subject (the one-open-alert unique index refused
 // it). The caller's transaction is aborted; like a lost INSERT race, there is
 // nothing left to do.
 var errAlertAlreadyOpen = errors.New("an alert for this subject is already open")
+
+// errReopenBusy reports that the reopen gave up waiting for a row lock
+// (reopenLockTimeout). The caller's transaction is aborted; the next tick
+// tries again.
+var errReopenBusy = errors.New("relapse reopen waited too long for a lock")
+
+// reopenSkipped reports whether a reopen attempt ended with nothing to do
+// this tick: another replica opened the subject's alert, or the reopen timed
+// out on a lock. Either way the opener must return without inserting.
+func reopenSkipped(err error) bool {
+	return errors.Is(err, errAlertAlreadyOpen) || errors.Is(err, errReopenBusy)
+}
+
+// reopenLockTimeout bounds how long a reopen waits for row locks. The alert
+// it reopens was just resolved, and its resolve may still be in flight: the
+// alerter's claim and the async worker hold the row FOR SHARE through the
+// provider call (up to the 15-second delivery timeout), and the reopen's
+// UPDATE waits for them so "recovered" is never sent after "relapsed". The
+// openers run serially over every tenant's subjects, so one slow webhook
+// must not hold up new alerts everywhere: past this the attempt is dropped
+// and the next tick retries. It never falls back to inserting a new alert,
+// which would turn the relapse into the separate page the setting exists to
+// avoid (and race a replica that does get the lock; the one-open-alert
+// index would keep whichever committed first).
+const reopenLockTimeout = time.Second
 
 // alertIdentity is what reopen matches an alert on: its kind and subject.
 // Monitor kinds name the monitor (and, for host_metric, the series key in
@@ -71,7 +96,8 @@ func (r *reopenedAlert) apply(record *alertRecord) {
 }
 
 // reopenRecentAlertTx reopens id's latest alert inside tx when the alerter
-// resolved it on its own less than the tenant's reopen cooldown ago, and
+// resolved it because its condition cleared (auto_resolved) less than the
+// tenant's reopen cooldown ago, and
 // returns it; nil when there is nothing to reopen (the feature is off, the
 // latest alert is open, was resolved by hand or too long ago, or none
 // exists), and the caller opens a new alert. refresh lists the kind-specific
@@ -148,16 +174,27 @@ func reopenRecentAlertTx(ctx context.Context, tx *sql.Tx, id alertIdentity, refr
 		)
 		SELECT id, triggered_at, relapse_count, reopened_at, resolved_at FROM reopened`
 
+	// SET LOCAL lasts to the end of the transaction, so it is reset right
+	// after the statement: the opener's INSERT and auto-incident steps keep
+	// the session's own timeout.
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, reopenLockTimeout.Milliseconds())); err != nil {
+		return nil, fmt.Errorf("bound relapse reopen lock wait: %w", err)
+	}
 	var r reopenedAlert
 	err := tx.QueryRowContext(ctx, query, args...).Scan(&r.id, &r.triggeredAt, &r.relapseCount, &r.reopenedAt, &r.recoveredAt)
+	switch {
+	case isLockTimeout(err):
+		return nil, errReopenBusy
+	case isUniqueViolation(err):
+		return nil, errAlertAlreadyOpen
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return nil, fmt.Errorf("reopen %s alert: %w", id.kind, err)
+	}
+	if _, rerr := tx.ExecContext(ctx, `SET LOCAL lock_timeout TO DEFAULT`); rerr != nil {
+		return nil, fmt.Errorf("reset lock wait after relapse reopen: %w", rerr)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
-	}
-	if isUniqueViolation(err) {
-		return nil, errAlertAlreadyOpen
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reopen %s alert: %w", id.kind, err)
 	}
 	return &r, nil
 }
@@ -215,4 +252,10 @@ func (a *Alerter) noteRelapseTx(ctx context.Context, tx *sql.Tx, tenantID uuid.U
 func isUniqueViolation(err error) bool {
 	var pqErr *pq.Error
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
+}
+
+// isLockTimeout reports whether err is Postgres giving up on lock_timeout.
+func isLockTimeout(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "55P03"
 }

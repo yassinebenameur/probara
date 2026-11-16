@@ -129,7 +129,7 @@ func (a *Alerter) openMeshEdgeAlert(ctx context.Context, e meshEdgeSubject) erro
 	reopened, err := reopenRecentAlertTx(ctx, tx,
 		alertIdentity{tenantID: e.tenantID, kind: notifications.KindMeshEdge, sourceLocationID: e.sourceID, targetLocationID: e.targetID},
 		[]alertColumn{{"failure_count", e.failCount}, {"last_error", lastError}})
-	if errors.Is(err, errAlertAlreadyOpen) {
+	if reopenSkipped(err) {
 		return nil // another replica won the race
 	}
 	if err != nil {
@@ -169,15 +169,17 @@ func (a *Alerter) openMeshEdgeAlert(ctx context.Context, e meshEdgeSubject) erro
 	return nil
 }
 
-// resolveMeshEdgeAlerts resolves open mesh alerts whose edge is up again or no
-// longer exists (endpoint cleared / location disabled or soft-deleted — the
+// resolveMeshEdgeAlerts resolves open mesh alerts whose edge is up again (a
+// recovery a relapse may reopen) or no longer exists (not a recovery) (endpoint cleared / location disabled or soft-deleted — the
 // scheduler's edge sync removes the row, and soft-deletes never fire the FK
 // cascade, so orphan-resolution here is load-bearing).
 func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.source_location_id, al.target_location_id,
 			COALESCE(sl.name, 'unknown'), COALESCE(tl.name, 'unknown'),
-			al.triggered_at, al.failure_count, al.last_error
+			al.triggered_at, al.failure_count, al.last_error,
+			-- Up again is a recovery; a vanished edge is not.
+			COALESCE(ms.current_state = 'up', FALSE)
 		FROM alerts al
 		LEFT JOIN locations sl ON sl.id = al.source_location_id
 		LEFT JOIN locations tl ON tl.id = al.target_location_id
@@ -193,11 +195,15 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	var toResolve []meshEdgeSubject
+	type recoveredEdge struct {
+		meshEdgeSubject
+		recovered bool
+	}
+	var toResolve []recoveredEdge
 	for rows.Next() {
-		var e meshEdgeSubject
+		var e recoveredEdge
 		if err := rows.Scan(&e.alertID, &e.tenantID, &e.sourceID, &e.targetID,
-			&e.sourceName, &e.targetName, &e.triggeredAt, &e.failCount, &e.lastError); err != nil {
+			&e.sourceName, &e.targetName, &e.triggeredAt, &e.failCount, &e.lastError, &e.recovered); err != nil {
 			return fmt.Errorf("scan recovered mesh alert: %w", err)
 		}
 		toResolve = append(toResolve, e)
@@ -207,7 +213,7 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 	}
 
 	for _, e := range toResolve {
-		resolvedAt, err := a.resolveAlert(ctx, e.alertID, time.Now())
+		resolvedAt, err := a.resolveAlert(ctx, e.alertID, time.Now(), resolveReason(e.recovered))
 		if errors.Is(err, errAlertAlreadyResolved) {
 			continue
 		}
@@ -262,7 +268,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 			al.triggered_at, al.failure_count, al.last_error,
 			te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
-			`+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
+			`+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`, al.relapse_count
 		FROM alerts al
 		JOIN tenants te ON te.id = al.tenant_id
 		LEFT JOIN locations sl ON sl.id = al.source_location_id
@@ -291,7 +297,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 		var resumedAt sql.NullTime
 		if err := rows.Scan(&oa.edge.alertID, &oa.edge.tenantID, &oa.edge.sourceID, &oa.edge.targetID,
 			&oa.edge.sourceName, &oa.edge.targetName, &oa.edge.triggeredAt, &oa.edge.failCount,
-			&oa.edge.lastError, &oa.reminderSeconds, &oa.eligibleSince, &oa.gate.Muted, &resumedAt); err != nil {
+			&oa.edge.lastError, &oa.reminderSeconds, &oa.eligibleSince, &oa.gate.Muted, &resumedAt, &oa.gate.RelapseCount); err != nil {
 			return fmt.Errorf("scan open mesh alert: %w", err)
 		}
 		oa.gate.ResumedAt = resumedAt.Time

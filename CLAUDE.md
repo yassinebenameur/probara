@@ -716,25 +716,31 @@ or imported groups come back empty. Any other path that creates groups through
   wait for an in-flight send, and a page or reminder still queued when they
   commit is dropped under the same lock (`alertrouting.MuteHolds`), as is an
   acknowledgement queued before an unacknowledge. Resolves take the lock
-  too, so a relapse reopen waits for a resolve being sent and a resolve
-  still queued when it commits is dropped (`releaseSupersededResolveClaim`
+  too, so a relapse reopen waits (at most `reopenLockTimeout`) for a resolve
+  being sent; a resolve still queued is dropped only while the alert is open
+  again and the channel is not a paging one (`releaseSupersededResolveClaim`
   hands its claim back to `created` only when it provably reached nobody),
-  as is any event of an earlier episode (`relapse_count`).
+  and delivered once the alert has recovered again; any other event of an
+  earlier episode (`relapse_count`) is dropped.
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.
 - **Relapse reopen** (off unless `tenants.alert_reopen_cooldown_minutes` is
   set): the rule is `shared/alertrouting/relapse.go`; every alert kind's
   opener calls `reopenRecentAlertTx` (`alerter/internal/alerter/relapse.go`)
-  before its INSERT, and a new kind's opener must too. Only the alerter's
-  `resolveAlert` sets `auto_resolved`, so a manual resolve never reopens.
-  `reopened_at` restarts the delay and reminder clocks
-  (`DispatchResumedAtExpr`). A route at `resolved` on an open alert is due
-  one `relapsed` claim (sent as `created` with `relapse_count`), in
-  `openAlertEventDue` and
+  before its INSERT, and a new kind's opener must too, as must a new
+  resolve path pass `resolvedRecovered` (condition cleared, reopenable) or
+  `resolvedOutOfScope` (paused, deleted, rule removed, stale) to
+  `resolveAlert`; a manual resolve never reopens. `reopened_at` restarts the
+  delay and reminder clocks (`DispatchResumedAtExpr`). A route whose
+  `paged_relapse` is below the alert's `relapse_count` is due one `relapsed`
+  claim (sent as `created` with `RelapseNotice`, the only send `present`
+  words as a relapse), in `openAlertEventDue` and
   `claimNotificationTx` together (`TestRelapsePreFilterMatchesClaim`); the
   episode rides the ledger and idempotency keys
-  (`notifications.RecipientEventKeyFor`, `notifications.IdempotencyKey`).
+  (`notifications.RecipientEventKeyFor`, `notifications.IdempotencyKey`), and
+  paging plugins key incidents on the route's `PagedRelapse`
+  (`pagerduty.DedupKey`, `opsgenie.Alias`).
 - **Alert wording lives in `shared/notifications/present`**, for every
   channel. `present.Build` turns an event into one `Message` (label, summary,
   metric, facts, deep link, tone); plugins reach it via

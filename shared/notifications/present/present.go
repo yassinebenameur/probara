@@ -378,7 +378,7 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 	if isRelapsePage(alert, eventType, resolved) {
 		// The kind's page tone, under one word every channel shows.
 		firstPage := alert
-		firstPage.RelapseCount = 0
+		firstPage.RelapseNotice = false
 		tone, _ := toneFor(firstPage, EventCreated, false)
 		return tone, "RELAPSED"
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -209,7 +208,7 @@ func (a *Alerter) openTLSExpiryAlert(ctx context.Context, c tlsExpiryConfig, day
 	reopened, err := reopenRecentAlertTx(ctx, tx,
 		alertIdentity{tenantID: c.tenantID, kind: notifications.KindTLSExpiry, monitorID: c.monitorID},
 		[]alertColumn{{"last_error", lastError}, {"metric_value", value}, {"threshold_value", threshold}})
-	if errors.Is(err, errAlertAlreadyOpen) {
+	if reopenSkipped(err) {
 		return nil
 	}
 	if err != nil {
@@ -269,7 +268,8 @@ func (a *Alerter) resolveClearedTLSExpiryAlert(ctx context.Context, c tlsExpiryC
 	if err != nil {
 		return fmt.Errorf("query open tls expiry alert: %w", err)
 	}
-	a.resolveTLSExpiryAlert(ctx, alertID, c.tenantID, c.monitorID, c.monitorName, triggeredAt, now)
+	// Renewed (or now outside the window): a recovery.
+	a.resolveTLSExpiryAlert(ctx, alertID, c.tenantID, c.monitorID, c.monitorName, triggeredAt, now, resolvedRecovered)
 	return nil
 }
 
@@ -313,15 +313,15 @@ func (a *Alerter) resolveOrphanTLSExpiryAlerts(ctx context.Context, keep []uuid.
 
 	now := time.Now()
 	for _, o := range orphans {
-		a.resolveTLSExpiryAlert(ctx, o.id, o.tenantID, o.monitorID, o.monitorName, o.triggeredAt, now)
+		a.resolveTLSExpiryAlert(ctx, o.id, o.tenantID, o.monitorID, o.monitorName, o.triggeredAt, now, resolvedOutOfScope)
 	}
 	return nil
 }
 
 // resolveTLSExpiryAlert resolves a single tls_expiry alert and notifies any
 // channels that already fired for it.
-func (a *Alerter) resolveTLSExpiryAlert(ctx context.Context, alertID, tenantID, monitorID uuid.UUID, monitorName string, triggeredAt, now time.Time) {
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now)
+func (a *Alerter) resolveTLSExpiryAlert(ctx context.Context, alertID, tenantID, monitorID uuid.UUID, monitorName string, triggeredAt, now time.Time, reason resolveReason) {
+	resolvedAt, err := a.resolveAlert(ctx, alertID, now, reason)
 	if err != nil {
 		a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": alertID}).Error("Failed to resolve tls expiry alert")
 		return

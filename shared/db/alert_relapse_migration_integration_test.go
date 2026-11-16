@@ -17,10 +17,11 @@ import (
 )
 
 // Migration 000105 adds relapse reopen: the tenant cooldown, the alert's
-// relapse columns, its relapse history and the 'relapsed' notification
-// state. Walk it down and back up with data in every piece, as a rollback and
-// re-upgrade would: the down maps a relapse notice back to a page, and the up
-// backfills the first acknowledgement's episode start.
+// relapse columns, its relapse history, each route's paged episode and the
+// 'relapsed' notification state. Walk it down and back up with data in every
+// piece, as a rollback and re-upgrade would: the down maps a relapse notice
+// back to a page. The up only touches catalog metadata (no backfill, CHECKs
+// NOT VALID), yet its CHECKs hold for every write.
 func TestAlertRelapseMigrationUpDownUp(t *testing.T) {
 	ctx := context.Background()
 	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -57,6 +58,7 @@ func TestAlertRelapseMigrationUpDownUp(t *testing.T) {
 			SELECT COUNT(*) FROM information_schema.columns
 			WHERE (table_name = 'alerts' AND column_name IN ('relapse_count', 'reopened_at', 'auto_resolved', 'first_ack_episode_started_at'))
 			   OR (table_name = 'tenants' AND column_name = 'alert_reopen_cooldown_minutes')
+			   OR (table_name = 'alert_notification_states' AND column_name = 'paged_relapse')
 			   OR table_name = 'alert_relapses'`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
@@ -78,13 +80,14 @@ func TestAlertRelapseMigrationUpDownUp(t *testing.T) {
 			VALUES ($1, $2, $3, 'availability', 'resolved', NOW() - INTERVAL '1 hour', 0, NOW(), NOW())`, acked, tenant, monitor)
 
 		migrateTo(105)
-		if got := relapseColumns(); got != 9 {
-			t.Fatalf("relapse columns after 000105 = %d, want 9", got)
+		if got := relapseColumns(); got != 10 {
+			t.Fatalf("relapse columns after 000105 = %d, want 10", got)
 		}
-		var backfilled bool
-		if err := dbc.QueryRowContext(ctx, `SELECT first_ack_episode_started_at = triggered_at FROM alerts WHERE id = $1`,
-			acked).Scan(&backfilled); err != nil || !backfilled {
-			t.Fatalf("episode start not backfilled from triggered_at: %v %v", backfilled, err)
+		// No backfill: NULL reads as the first episode (triggered_at).
+		var untouched bool
+		if err := dbc.QueryRowContext(ctx, `SELECT first_ack_episode_started_at IS NULL AND relapse_count = 0 AND NOT auto_resolved
+			FROM alerts WHERE id = $1`, acked).Scan(&untouched); err != nil || !untouched {
+			t.Fatalf("pre-migration alert not left at the defaults: %v %v", untouched, err)
 		}
 		exec(`UPDATE tenants SET alert_reopen_cooldown_minutes = 30 WHERE id = $1`, tenant)
 		relapsed := uuid.New()
@@ -96,6 +99,12 @@ func TestAlertRelapseMigrationUpDownUp(t *testing.T) {
 			VALUES ($1, $2, NOW(), 'relapsed')`, relapsed, channel)
 		if _, err := dbc.ExecContext(ctx, `UPDATE tenants SET alert_reopen_cooldown_minutes = 1441 WHERE id = $1`, tenant); err == nil {
 			t.Fatal("a cooldown over a day must be refused")
+		}
+		if _, err := dbc.ExecContext(ctx, `UPDATE alerts SET relapse_count = -1 WHERE id = $1`, relapsed); err == nil {
+			t.Fatal("a negative relapse count must be refused")
+		}
+		if _, err := dbc.ExecContext(ctx, `UPDATE alert_notification_states SET last_event_type = 'bogus' WHERE alert_id = $1`, relapsed); err == nil {
+			t.Fatal("an unknown notification state must be refused")
 		}
 
 		migrateTo(102)

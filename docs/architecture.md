@@ -132,22 +132,27 @@ Relapse reopen (off unless a workspace sets `alert_reopen_cooldown_minutes`,
 migration 000105; rule in `shared/alertrouting/relapse.go`): every alert
 kind's opener first tries `reopenRecentAlertTx`
 (`alerter/internal/alerter/relapse.go`), one guarded UPDATE that reopens the
-subject's latest alert when the alerter itself resolved it (`auto_resolved`)
+subject's latest alert when the alerter resolved it because its condition
+cleared (`auto_resolved`, set by `resolveAlert` only on the recovery paths)
 within the cooldown: `relapse_count` + 1, `reopened_at`, a row in
 `alert_relapses`, the episode's ack and snooze cleared (`first_acknowledged_at`
-kept). Only when it finds nothing does the opener INSERT; the one-open-alert
-indexes make the pair race-safe across replicas. A reopen is published to the
-alert stream as `created` with the relapse count and adds an "Alert relapsed"
-entry to linked open incidents; it never touches state intervals or downtime.
-Each reopen is a paging episode: `reopened_at` restarts the delay and reminder
-clocks (`DispatchResumedAtExpr`), a route whose row says `resolved` is due
-one `relapsed` claim (sent to plugins as `created` with `relapse_count`), and
-the episode is part of the recipient-ledger and idempotency keys. Both the
-alerter claim and the async worker hold the alert row `FOR SHARE` for every
-event, resolves included, so a reopen waits for a resolve being sent; a
-resolve still queued when the reopen commits is dropped, and the worker hands
-its claim back (to `created`) when it provably reached nobody, so the
-relapse's resolve reaches that route.
+kept). It waits at most `reopenLockTimeout` (1 s) for row locks and otherwise
+retries next tick; only when it finds nothing does the opener INSERT, and the
+one-open-alert indexes make the pair race-safe across replicas. A reopen is
+published to the alert stream as `created` with the relapse count and adds an
+"Alert relapsed" entry to linked open incidents; it never touches state
+intervals or downtime. Each reopen is a paging episode: `reopened_at`
+restarts the delay and reminder clocks (`DispatchResumedAtExpr`), each route
+records the episode of its last page (`paged_relapse`), a route last paged in
+an earlier episode is due one `relapsed` claim (sent to plugins as `created`
+with `relapse_notice`), and the episode is part of the recipient-ledger and
+idempotency keys. PagerDuty and Opsgenie key incidents per episode, so the
+relapse notice closes the route's previous incident and opens a new one.
+Both the alerter claim and the async worker hold the alert row `FOR SHARE`
+for every event, resolves included; a resolve still queued while the alert
+is open again is dropped (paging channels excepted) and handed back to
+`created` when it provably reached nobody, and once the alert has recovered
+again a queued resolve of any episode is delivered.
 
 Group state is derived from enabled, nondeleted leaf descendants in one
 evaluation, including nested groups. No participating leaves means unknown.

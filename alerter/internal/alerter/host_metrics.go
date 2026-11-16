@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -87,7 +86,7 @@ func (a *Alerter) evaluateHostMetricThresholds(ctx context.Context) error {
 
 	now := time.Now()
 	for _, c := range configs {
-		breaching, err := a.evaluateMonitorRules(ctx, c)
+		breaching, fresh, err := a.evaluateMonitorRules(ctx, c)
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{
 				"monitor_id": c.monitorID,
@@ -107,7 +106,7 @@ func (a *Alerter) evaluateHostMetricThresholds(ctx context.Context) error {
 
 		// Resolve open alerts whose series is no longer breaching —
 		// recovered, rule removed, or series gone stale (freshness bound).
-		if err := a.resolveClearedHostMetricAlerts(ctx, c, open, now); err != nil {
+		if err := a.resolveClearedHostMetricAlerts(ctx, c, open, fresh, now); err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{
 				"monitor_id": c.monitorID,
 			}).Error("Failed to resolve cleared host metric alerts")
@@ -119,10 +118,12 @@ func (a *Alerter) evaluateHostMetricThresholds(ctx context.Context) error {
 	return a.resolveOrphanHostMetricAlerts(ctx, monitorIDs)
 }
 
-// evaluateMonitorRules returns the monitor's currently breaching series.
-// Only series seen within the freshness horizon participate; a stale or
-// absent series contributes nothing (its alert then resolves).
-func (a *Alerter) evaluateMonitorRules(ctx context.Context, c hostMetricConfig) ([]breachingSeries, error) {
+// evaluateMonitorRules returns the monitor's currently breaching series, and
+// the keys of every fresh series a rule covers (breaching or not). Only
+// series seen within the freshness horizon participate; a stale or absent
+// series contributes nothing (its alert then resolves, but not as a
+// recovery: fresh tells the two apart).
+func (a *Alerter) evaluateMonitorRules(ctx context.Context, c hostMetricConfig) ([]breachingSeries, map[string]bool, error) {
 	names := make([]string, 0, len(c.rules))
 	seen := map[string]bool{}
 	for _, r := range c.rules {
@@ -134,22 +135,24 @@ func (a *Alerter) evaluateMonitorRules(ctx context.Context, c hostMetricConfig) 
 	freshness := time.Duration(monitorstate.FreshnessHorizonSeconds(c.intervalSeconds)) * time.Second
 	latest, err := metricstore.LatestSamples(ctx, a.db, c.tenantID, c.monitorID, names, freshness)
 	if err != nil {
-		return nil, fmt.Errorf("load latest samples: %w", err)
+		return nil, nil, fmt.Errorf("load latest samples: %w", err)
 	}
 
 	var out []breachingSeries
+	fresh := map[string]bool{}
 	for _, rule := range c.rules {
 		for _, ls := range latest {
 			if ls.MetricName != rule.MetricName || !attrsMatch(rule.AttributeFilters, ls.Attributes) {
 				continue
 			}
+			fresh[metricstore.SeriesKeyString(ls.MetricName, ls.Attributes)] = true
 			if !rule.breaches(ls.Value) {
 				continue
 			}
 			if rule.ForDurationSeconds > 0 {
 				sustained, err := a.sustainedBreach(ctx, rule, ls.SeriesID, time.Now())
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				if !sustained {
 					continue
@@ -162,7 +165,7 @@ func (a *Alerter) evaluateMonitorRules(ctx context.Context, c hostMetricConfig) 
 			})
 		}
 	}
-	return out, nil
+	return out, fresh, nil
 }
 
 // sustainedBreach implements for_duration with Prometheus `for` semantics,
@@ -265,7 +268,7 @@ func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, b
 	reopened, err := reopenRecentAlertTx(ctx, tx,
 		alertIdentity{tenantID: c.tenantID, kind: notifications.KindHostMetric, monitorID: c.monitorID, metricName: b.seriesKey},
 		[]alertColumn{{"metric_value", b.value}, {"threshold_value", b.threshold}})
-	if errors.Is(err, errAlertAlreadyOpen) {
+	if reopenSkipped(err) {
 		return nil
 	}
 	if err != nil {
@@ -315,8 +318,10 @@ func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, b
 
 // resolveClearedHostMetricAlerts resolves open host_metric alerts for a
 // monitor whose series key is no longer in the breaching set (recovered,
-// rule removed, or series stale/absent), notifying channels that fired.
-func (a *Alerter) resolveClearedHostMetricAlerts(ctx context.Context, c hostMetricConfig, breaching map[string]bool, now time.Time) error {
+// rule removed, or series stale/absent), notifying channels that fired. Only
+// a series still reporting fresh, rule-covered readings recovered; the
+// others are closed out of scope (resolveReason).
+func (a *Alerter) resolveClearedHostMetricAlerts(ctx context.Context, c hostMetricConfig, breaching, fresh map[string]bool, now time.Time) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT id, metric_name, threshold_value, triggered_at FROM alerts
 		WHERE monitor_id = $1 AND kind = 'host_metric' AND status IN ('active', 'acknowledged')
@@ -348,7 +353,8 @@ func (a *Alerter) resolveClearedHostMetricAlerts(ctx context.Context, c hostMetr
 		if breaching[oa.metricName.String] {
 			continue // still breaching; keep open
 		}
-		a.resolveHostMetricAlert(ctx, oa.id, c.tenantID, c.monitorID, c.monitorName, oa.metricName.String, oa.threshold, oa.triggeredAt, now)
+		a.resolveHostMetricAlert(ctx, oa.id, c.tenantID, c.monitorID, c.monitorName, oa.metricName.String, oa.threshold, oa.triggeredAt, now,
+			resolveReason(fresh[oa.metricName.String]))
 	}
 	return nil
 }
@@ -395,7 +401,7 @@ func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid
 
 	now := time.Now()
 	for _, o := range orphans {
-		a.resolveHostMetricAlert(ctx, o.id, o.tenantID, o.monitorID, o.monitorName, o.metricName.String, o.threshold, o.triggeredAt, now)
+		a.resolveHostMetricAlert(ctx, o.id, o.tenantID, o.monitorID, o.monitorName, o.metricName.String, o.threshold, o.triggeredAt, now, resolvedOutOfScope)
 	}
 	return nil
 }
@@ -403,8 +409,8 @@ func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid
 // resolveHostMetricAlert resolves a single host_metric alert and notifies
 // any channels that already fired for it. The threshold rides the resolve
 // event so wording can say what range the metric returned to.
-func (a *Alerter) resolveHostMetricAlert(ctx context.Context, alertID, tenantID, monitorID uuid.UUID, monitorName, seriesKey string, threshold sql.NullFloat64, triggeredAt, now time.Time) {
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now)
+func (a *Alerter) resolveHostMetricAlert(ctx context.Context, alertID, tenantID, monitorID uuid.UUID, monitorName, seriesKey string, threshold sql.NullFloat64, triggeredAt, now time.Time, reason resolveReason) {
+	resolvedAt, err := a.resolveAlert(ctx, alertID, now, reason)
 	if err != nil {
 		a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": alertID}).Error("Failed to resolve host metric alert")
 		return

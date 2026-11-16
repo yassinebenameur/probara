@@ -18,14 +18,18 @@ import (
 )
 
 // A resolve the alerter claimed and queued before the alert relapsed is
-// dropped by the worker: "recovered" must never reach a route after the alert
-// failed again. A resolve that provably reached nobody (first attempt,
-// nothing in the recipient ledger) hands its claim back to 'created', so the
-// route counts as still paged and hears the relapse's own resolve; one that
-// may have reached the provider (a redelivery) keeps 'resolved', so the route
-// is told of the relapse instead; a route the alerter has re-claimed since is
-// left alone. A resolve from an earlier episode of an alert that has
-// recovered again is dropped too: that recovery has its own resolve.
+// dropped by the worker while the alert is open again: "recovered" must
+// never reach a route after the alert failed again. A resolve that provably
+// reached nobody (first attempt, nothing in the recipient ledger) hands its
+// claim back to 'created', so the route also hears the relapse's own resolve
+// if the relapse recovers before its delay; one that may have reached the
+// provider (a redelivery) keeps 'resolved'; a route the alerter has
+// re-claimed since is left alone. A paging channel's resolve goes out
+// anyway: it closes only its own episode's incident. Once the alert has
+// recovered again, a resolve queued in an earlier episode is delivered
+// whatever its attempt: a route whose escalation delay outlasted the relapse
+// heard neither the relapse nor its recovery, so this resolve is the one
+// that closes its provider's incident.
 func TestHandle_ResolveSupersededByRelapse(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -59,10 +63,10 @@ func TestHandle_ResolveSupersededByRelapse(t *testing.T) {
 		}
 		return lastEvent
 	}
-	resolve := func(alertID, ch uuid.UUID, relapse int, attempt uint64) {
+	resolveOn := func(channelType string, alertID, ch uuid.UUID, relapse int, attempt uint64) {
 		t.Helper()
 		raw, _ := json.Marshal(notifications.DispatchEnvelope{
-			V: 1, ChannelID: ch.String(), ChannelType: muteStubType,
+			V: 1, ChannelID: ch.String(), ChannelType: channelType,
 			AlertID: alertID.String(), EventType: "resolved",
 			Event: notifications.AlertEvent{Type: "resolved", Timestamp: claimedAt,
 				Alert: notifications.AlertDetails{ID: alertID.String(), RelapseCount: relapse}},
@@ -72,7 +76,18 @@ func TestHandle_ResolveSupersededByRelapse(t *testing.T) {
 			t.Fatalf("handle: %v", err)
 		}
 	}
+	resolve := func(alertID, ch uuid.UUID, relapse int, attempt uint64) {
+		t.Helper()
+		resolveOn(muteStubType, alertID, ch, relapse, attempt)
+	}
+	pagingChannel := func(name string) uuid.UUID {
+		id := uuid.New()
+		exec(`INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, '{}'::jsonb, TRUE, NOW(), NOW())`, id, tenantID, name, pagingStubType)
+		return id
+	}
 	muteStub.take()
+	pagingStub.sends = nil
 
 	// Reopened (relapse 1, open) while its episode-0 resolves were queued.
 	reopened := uuid.New()
@@ -100,32 +115,43 @@ func TestHandle_ResolveSupersededByRelapse(t *testing.T) {
 			t.Errorf("route %s left at %q, want %q", ch, got, want)
 		}
 	}
+	pager := pagingChannel("pager")
+	state(reopened, pager, "resolved", claimedAt)
+	resolveOn(pagingStubType, reopened, pager, 0, 2)
+	if len(pagingStub.sends) != 1 || pagingStub.sends[0] != "resolved" {
+		t.Fatalf("paging sends = %v, want the earlier episode's resolve", pagingStub.sends)
+	}
 
-	// Reopened and recovered again (relapse 1, resolved): the episode-0
-	// resolve is stale; the episode-1 resolve goes out.
+	// Reopened and recovered again (relapse 1, resolved) before a route with
+	// a long escalation delay heard the relapse: its episode-0 resolve, on a
+	// retry, still goes out, on chat and paging channels alike.
 	recoveredAgain := uuid.New()
 	exec(`INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, resolved_at, relapse_count, reopened_at,
 			failure_count, created_at, updated_at)
 		VALUES ($1, $2, $3, 'availability', 'resolved', NOW() - INTERVAL '1 hour', NOW(), 1, NOW() - INTERVAL '5 minutes', 3, NOW(), NOW())`,
 		recoveredAgain, tenantID, monitorID)
-	stale, current := newChannel("stale"), newChannel("current")
+	stale, current, stalePager := newChannel("stale"), newChannel("current"), pagingChannel("stale-pager")
 	state(recoveredAgain, stale, "resolved", claimedAt)
 	state(recoveredAgain, current, "resolved", claimedAt)
-	resolve(recoveredAgain, stale, 0, 1)
+	state(recoveredAgain, stalePager, "resolved", claimedAt)
+	resolve(recoveredAgain, stale, 0, 2)
 	resolve(recoveredAgain, current, 1, 1)
-	if sent := muteStub.take(); len(sent) != 1 || sent[0] != "resolved" {
-		t.Fatalf("sends = %v, want only the current episode's resolve", sent)
+	resolveOn(pagingStubType, recoveredAgain, stalePager, 0, 2)
+	if sent := muteStub.take(); len(sent) != 2 || sent[0] != "resolved" || sent[1] != "resolved" {
+		t.Fatalf("sends = %v, want both resolves", sent)
 	}
-	// The stale resolve's route is handed back too: the sweep then sends it
-	// the current episode's resolve (alerter dispatchPendingRecoveries).
-	if got := stateOf(recoveredAgain, stale); got != "created" {
-		t.Fatalf("stale route left at %q, want created", got)
+	if len(pagingStub.sends) != 2 {
+		t.Fatalf("paging sends = %v, want the stale episode's resolve too", pagingStub.sends)
+	}
+	if got := stateOf(recoveredAgain, stale); got != "resolved" {
+		t.Fatalf("stale route left at %q, want resolved", got)
 	}
 }
 
-// A relapse notice (a "created" page of a reopened alert) held because the
-// alert was acknowledged or snoozed after it was claimed hands its claim back
-// to 'resolved', so the route is told of the relapse once the mute lifts.
+// A relapse notice (a "created" page claimed as the relapse) held because the
+// alert was acknowledged or snoozed after it was claimed hands its claim back:
+// the route's paged episode goes back to its previous page's, so it is told
+// of the relapse once the mute lifts.
 func TestHandle_MutedRelapseNoticeReleasesItsClaim(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -152,13 +178,18 @@ func TestHandle_MutedRelapseNoticeReleasesItsClaim(t *testing.T) {
 		VALUES ($1, $2, $3, 'relapsed', NOW(), NOW())`, alertID, ch, claimedAt); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE alert_notification_states SET paged_relapse = 1 WHERE alert_id = $1`, alertID); err != nil {
+		t.Fatal(err)
+	}
 	muteStub.take()
 
+	previous := 0
 	raw, _ := json.Marshal(notifications.DispatchEnvelope{
 		V: 1, ChannelID: ch.String(), ChannelType: muteStubType,
 		AlertID: alertID.String(), EventType: "created",
 		Event: notifications.AlertEvent{Type: "created", Timestamp: claimedAt,
-			Alert: notifications.AlertDetails{ID: alertID.String(), RelapseCount: 1}},
+			Alert: notifications.AlertDetails{ID: alertID.String(), RelapseCount: 1, RelapseNotice: true,
+				PagedRelapse: 1, PreviousPagedRelapse: &previous}},
 	})
 	c := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
 	if err := c.handle(ctx, &queue.Message{Data: raw, NumDelivered: 1}); err != nil {
@@ -167,12 +198,12 @@ func TestHandle_MutedRelapseNoticeReleasesItsClaim(t *testing.T) {
 	if sent := muteStub.take(); len(sent) != 0 {
 		t.Fatalf("a held relapse notice was delivered: %v", sent)
 	}
-	var lastEvent string
-	if err := dbClient.QueryRowContext(ctx, `SELECT last_event_type FROM alert_notification_states WHERE alert_id = $1 AND channel_id = $2`,
-		alertID, ch).Scan(&lastEvent); err != nil {
+	var paged int
+	if err := dbClient.QueryRowContext(ctx, `SELECT paged_relapse FROM alert_notification_states WHERE alert_id = $1 AND channel_id = $2`,
+		alertID, ch).Scan(&paged); err != nil {
 		t.Fatal(err)
 	}
-	if lastEvent != "resolved" {
-		t.Fatalf("held relapse notice left the route at %q, want resolved", lastEvent)
+	if paged != 0 {
+		t.Fatalf("held relapse notice left the route paged in episode %d, want 0 (due again)", paged)
 	}
 }

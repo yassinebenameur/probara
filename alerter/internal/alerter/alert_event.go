@@ -62,6 +62,11 @@ type alertRecord struct {
 	RelapseCount    int
 	ReopenedAt      *time.Time
 	LastRecoveredAt *time.Time
+	// Per delivery, set by deliverNotification from its claim
+	// (notifications.AlertDetails documents them).
+	RelapseNotice        bool
+	PagedRelapse         int
+	PreviousPagedRelapse *int
 }
 
 type alertChannel struct {
@@ -75,6 +80,7 @@ type alertChannel struct {
 type notificationState struct {
 	LastSentAt           time.Time
 	LastEventType        string
+	PagedRelapse         int
 	AcknowledgedSentAt   *time.Time
 	SuspectedCauseSentAt *time.Time
 }
@@ -98,7 +104,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 	}
 
 	query := `
-		SELECT alert_id, channel_id, last_sent_at, last_event_type, acknowledged_sent_at, suspected_cause_sent_at
+		SELECT alert_id, channel_id, last_sent_at, last_event_type, acknowledged_sent_at, suspected_cause_sent_at, paged_relapse
 		FROM alert_notification_states
 		WHERE alert_id = ANY($1)
 	`
@@ -113,7 +119,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 		var alertID uuid.UUID
 		var channelID uuid.UUID
 		var state notificationState
-		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType, &state.AcknowledgedSentAt, &state.SuspectedCauseSentAt); err != nil {
+		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType, &state.AcknowledgedSentAt, &state.SuspectedCauseSentAt, &state.PagedRelapse); err != nil {
 			return nil, fmt.Errorf("failed to scan notification state: %w", err)
 		}
 		if _, ok := states[alertID]; !ok {
@@ -133,14 +139,31 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 // neither publish nor notify, and this is not an error worth logging.
 var errAlertAlreadyResolved = errors.New("alert already resolved")
 
-// resolveAlert is the alerter's own resolve. It marks the alert
-// auto_resolved, which is what lets a relapse within the tenant's reopen
-// cooldown reopen it (relapse.go); a manual resolve in the API leaves the
-// flag FALSE.
-func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time) (time.Time, error) {
+// resolveReason says why the alerter resolves an alert, which decides
+// whether a relapse may reopen it (relapse.go).
+type resolveReason bool
+
+const (
+	// resolvedRecovered: the alert's condition cleared (the monitor came
+	// back up, the metric or latency returned to normal, the certificate was
+	// renewed, the mesh edge recovered). Sets auto_resolved, so the subject
+	// failing again within the tenant's reopen cooldown reopens the alert.
+	resolvedRecovered resolveReason = true
+	// resolvedOutOfScope: the alerter closes the alert because its subject
+	// left evaluation (monitor paused, disabled or deleted, rule or
+	// threshold removed, readings gone stale, mesh edge or location gone,
+	// group emptied or paused). Not a recovery: the subject coming back
+	// opens a new alert.
+	resolvedOutOfScope resolveReason = false
+)
+
+// resolveAlert is the alerter's own resolve; reason records whether the
+// condition cleared (auto_resolved). A manual resolve in the API leaves
+// auto_resolved FALSE, so it never reopens either.
+func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time, reason resolveReason) (time.Time, error) {
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, auto_resolved = TRUE, updated_at = $1
+		SET status = 'resolved', resolved_at = $1, auto_resolved = $3, updated_at = $1
 		WHERE id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING resolved_at
 	`
@@ -154,7 +177,7 @@ func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.
 	}()
 
 	var resolvedAt time.Time
-	if err := tx.QueryRowContext(ctx, query, now, alertID).Scan(&resolvedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, query, now, alertID, bool(reason)).Scan(&resolvedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return time.Time{}, errAlertAlreadyResolved
 		}
@@ -342,6 +365,9 @@ func buildAlertEvent(eventType string, binding alertSubject, alert *alertRecord,
 			RelapseCount:         alert.RelapseCount,
 			ReopenedAt:           alert.ReopenedAt,
 			LastRecoveredAt:      alert.LastRecoveredAt,
+			RelapseNotice:        alert.RelapseNotice,
+			PagedRelapse:         alert.PagedRelapse,
+			PreviousPagedRelapse: alert.PreviousPagedRelapse,
 		},
 	}
 }

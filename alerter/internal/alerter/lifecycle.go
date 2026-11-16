@@ -400,7 +400,7 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 			{"root_cause_monitor_id", rootCauseID}, {"root_cause_down_since", rootCauseDownSince},
 			{"root_cause_cleared_at", nil}, {"failing_locations", failingLocations},
 		})
-	if errors.Is(err, errAlertAlreadyOpen) {
+	if reopenSkipped(err) {
 		return nil // another replica won the race
 	}
 	if err != nil {
@@ -465,11 +465,14 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 }
 
 // resolveAlertsForRecoveredMonitors resolves open alerts whose monitor is up,
-// disabled, or deleted.
+// disabled, or deleted, or whose group has no enabled members left. Only the
+// first is a recovery a relapse may reopen (resolvedRecovered); a paused,
+// deleted or emptied subject coming back opens a new alert.
 func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.triggered_at, al.failure_count, al.last_error,
-			al.root_cause_monitor_id, al.root_cause_down_since, rcm.name
+			al.root_cause_monitor_id, al.root_cause_down_since, rcm.name,
+			(m.current_state = 'up' AND m.deleted_at IS NULL AND m.enabled)
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
@@ -486,6 +489,7 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 	type openAlert struct {
 		record      alertRecord
 		monitorName string
+		recovered   bool
 	}
 	var toResolve []openAlert
 	for rows.Next() {
@@ -496,7 +500,7 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 		var rcName sql.NullString
 		if err := rows.Scan(&oa.record.ID, &oa.record.TenantID, &oa.record.MonitorID,
 			&oa.monitorName, &oa.record.TriggeredAt, &oa.record.FailureCount, &lastError,
-			&rcID, &rcDownSince, &rcName); err != nil {
+			&rcID, &rcDownSince, &rcName, &oa.recovered); err != nil {
 			return fmt.Errorf("scan recovered alert: %w", err)
 		}
 		if lastError.Valid {
@@ -510,7 +514,7 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 	}
 
 	for _, oa := range toResolve {
-		resolvedAt, err := a.resolveAlert(ctx, oa.record.ID, time.Now())
+		resolvedAt, err := a.resolveAlert(ctx, oa.record.ID, time.Now(), resolveReason(oa.recovered))
 		if errors.Is(err, errAlertAlreadyResolved) {
 			// A sibling replica resolved it first; it also owns the
 			// resolution notifications.
@@ -584,7 +588,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			te.alert_reminder_seconds,
 			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
 			CASE WHEN al.kind = 'availability' THEN `+alertrouting.ImpactedMonitorsSubquery("al.monitor_id")+` END,
-			`+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`
+			`+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`, al.relapse_count
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		JOIN tenants te ON te.id = al.tenant_id
@@ -620,7 +624,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			&rcID, &rcDownSince, &rcName,
 			&baseline, &observed, &score,
 			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds,
-			&oa.eligibleSince, &impacted, &oa.gate.Muted, &resumedAt); err != nil {
+			&oa.eligibleSince, &impacted, &oa.gate.Muted, &resumedAt, &oa.gate.RelapseCount); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
 		oa.gate.ResumedAt = resumedAt.Time

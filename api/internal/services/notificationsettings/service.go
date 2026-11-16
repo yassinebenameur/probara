@@ -52,7 +52,8 @@ type Settings struct {
 	DependencySuppressionGraceSeconds int  `json:"dependency_suppression_grace_seconds"`
 
 	// AlertReopenCooldownMinutes is relapse reopen (shared/alertrouting
-	// relapse.go): when an alert the alerter resolved on its own fails again
+	// relapse.go): when an alert that recovered (not one paused, deleted or
+	// resolved by hand) fails again
 	// within this many minutes, it reopens (relapse_count + 1) instead of a
 	// new alert opening. 0 is off (the default); 1-1440 otherwise.
 	AlertReopenCooldownMinutes int `json:"alert_reopen_cooldown_minutes"`
