@@ -11,7 +11,7 @@ import { checkResultLabel } from '@/lib/status-tones';
 import { strictestTarget, type Sla } from '@/lib/sla';
 import { errorMessage } from '@/lib/errors';
 
-export const MONITOR_DETAIL_TABS = ['overview', 'history', 'settings', 'json'] as const;
+export const MONITOR_DETAIL_TABS = ['overview', 'history', 'settings', 'changes', 'json'] as const;
 export type MonitorDetailTab = (typeof MONITOR_DETAIL_TABS)[number];
 
 export const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -473,6 +473,8 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
 
   return {
     monitor,
+    // A restore from the Changes tab hands back the monitor it wrote.
+    setMonitor,
     loading,
     saving,
     error,

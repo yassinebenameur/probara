@@ -15,7 +15,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     let isMounted = true;
 
     // Don't protect auth pages
-    if (pathname === '/connect' || pathname === '/login' || pathname === '/oauth/consent' || pathname === '/alert-action') {
+    if (pathname === '/connect' || pathname === '/login' || pathname === '/oauth/consent' || pathname === '/alert-action' || pathname === '/report-unsubscribe') {
       setChecked(true);
       setAuthed(true);
       return;

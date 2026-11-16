@@ -120,7 +120,10 @@ func failingLocationsSubquery(monitorCol string) string {
 		 ) ORDER BY l.name)
 		 FROM monitor_location_state mls
 		 JOIN locations l ON l.id = mls.location_id AND l.deleted_at IS NULL
-		 WHERE mls.monitor_id = %s AND mls.current_state = 'down')`, monitorCol)
+		 WHERE mls.monitor_id = %s AND mls.current_state = 'down'
+		   -- A location returning with passes it still has to confirm is
+		   -- not failing (S-T7).
+		   AND NOT mls.recovery_pending)`, monitorCol)
 }
 
 // refreshAlertFailingLocations recomputes the failing-locations breakdown for

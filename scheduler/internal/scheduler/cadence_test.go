@@ -34,6 +34,10 @@ func TestNextCheckDelay(t *testing.T) {
 		{"recovering_never_slower_than_interval", "http", "", "down", true, 10, 10 * time.Second},
 		{"recovering_sip_options_fast_rechecks", "sip", sipOptions, "down", true, 60, 20 * time.Second},
 		{"recovering_sip_call_keeps_interval", "sip", sipCall, "down", true, 60, 60 * time.Second},
+		// Registries rate-limit lookups: a domain monitor keeps its interval
+		// (monitorstate.FastRecheckExempt), confirming either way.
+		{"suspect_domain_keeps_interval", "domain", `{"domain":"example.com"}`, "suspect", false, 3600, time.Hour},
+		{"recovering_domain_keeps_interval", "domain", `{"domain":"example.com"}`, "down", true, 3600, time.Hour},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

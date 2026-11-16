@@ -34,10 +34,13 @@ type Snapshot struct {
 	// recovery (S-T7). It is non-zero only while the stream is down: any
 	// failure, and leaving down, reset it.
 	ConsecutiveSuccesses int
-	// RecoveryPending remembers, outside down, that the stream was down when
-	// its evidence went stale (or, for a location, that it was added to a
-	// down monitor): it owes a recovery confirmation before it is up again
-	// (S-T7). Only meaningful in unknown or suspect; down and up clear it.
+	// RecoveryPending remembers that the stream was down when its evidence
+	// went stale (or, for a location, that it was added to a down monitor):
+	// it owes a recovery confirmation before it is up again (S-T7). It holds
+	// through unknown and suspect, and through down while that owed
+	// confirmation is counted with no failure since; a failure that makes the
+	// stream down, or the confirmation, clears it. A location in that state
+	// does not vote in the quorum (LoadFreshLocationCounts).
 	RecoveryPending bool
 }
 
@@ -47,7 +50,7 @@ type Transition struct {
 	To                   State
 	ConsecutiveFailures  int
 	ConsecutiveSuccesses int  // passes toward confirming recovery; 0 unless To is down
-	RecoveryPending      bool // still owes a confirmation; only with To unknown or suspect
+	RecoveryPending      bool // still owes the confirmation it owed before (see Snapshot)
 	Changed              bool // state value changed
 	OpenedOutage         bool // entered down
 	ClosedOutage         bool // left down via success
@@ -84,6 +87,7 @@ func Apply(current Snapshot, resultIsFailure bool, threshold, recoveryThreshold 
 			if successes := counted + 1; successes < recoveryThreshold {
 				t.To = StateDown
 				t.ConsecutiveSuccesses = successes
+				t.RecoveryPending = current.RecoveryPending
 				t.Changed = current.State != StateDown
 				t.OpenedOutage = t.Changed
 				return t

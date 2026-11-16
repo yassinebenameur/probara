@@ -89,8 +89,9 @@ interface AlertingSectionProps {
   onRecoveryThresholdChange?: (n: number) => void;
   /**
    * How the passes that confirm a recovery arrive: `recheck` (active checks,
-   * rechecked fast while recovering), `interval` (SIP test calls, never
-   * rechecked faster) or `reports` (push and agent, at the sender's pace).
+   * rechecked fast while recovering), `interval` (SIP test calls and domain
+   * monitors, whose interval is a rate limit and is never shortened) or
+   * `reports` (push and agent, at the sender's pace).
    */
   recoveryPace?: RecoveryPace;
   mode: NotificationMode;
@@ -128,7 +129,7 @@ function recoveryHint(threshold: number, intervalSeconds: number, pace: Recovery
     case 'reports':
       return `Stays down until ${threshold} reports in a row arrive on time. They come at the sender's pace: at the expected interval that adds about ${formatDuration(extra * intervalSeconds)} of downtime.`;
     case 'interval':
-      return `Stays down until ${threshold} test calls in a row pass, one per interval (calls are never rechecked faster): about ${formatDuration(extra * intervalSeconds)} more downtime.`;
+      return `Stays down until ${threshold} checks in a row pass, one per interval (this type is never rechecked faster): about ${formatDuration(extra * intervalSeconds)} more downtime.`;
     default: {
       const recheck = Math.min(intervalSeconds, 20);
       return `Stays down until ${threshold} checks in a row pass. A recovering monitor is rechecked every ${formatDuration(recheck)}, so that adds about ${formatDuration(extra * recheck)} of downtime.`;

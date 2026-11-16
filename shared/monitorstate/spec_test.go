@@ -176,7 +176,7 @@ func TestSpecProperty_ApplyInvariants(t *testing.T) {
 		if cur.State == StateDown {
 			cur.ConsecutiveSuccesses = rng.Intn(11)
 		}
-		if cur.State == StateUnknown || cur.State == StateSuspect {
+		if cur.State == StateUnknown || cur.State == StateSuspect || cur.State == StateDown {
 			cur.RecoveryPending = rng.Intn(2) == 0
 		}
 		failure := rng.Intn(2) == 0
@@ -216,9 +216,12 @@ func TestSpecProperty_ApplyInvariants(t *testing.T) {
 			t.Fatalf("unconfirmed pass owing a confirmation ⇒ down/CF 0/CS+1, got %s/%d/%d from %+v [S-T7]",
 				got.To, got.ConsecutiveFailures, got.ConsecutiveSuccesses, cur)
 		}
-		if got.RecoveryPending != (failure && cur.RecoveryPending && got.To != StateDown) {
-			t.Fatalf("RecoveryPending=%v from %+v failure=%v to %s: kept only by failures short of down [S-T7]",
-				got.RecoveryPending, cur, failure, got.To)
+		// The owed confirmation is kept by failures short of down and by the
+		// passes that count it; a failure that makes the stream down, and the
+		// confirmation itself, clear it.
+		if want := cur.RecoveryPending && (failure != (got.To == StateDown)); got.RecoveryPending != want {
+			t.Fatalf("RecoveryPending=%v from %+v failure=%v to %s, want %v [S-T7]",
+				got.RecoveryPending, cur, failure, got.To, want)
 		}
 		if !failure && !confirming && (got.To != StateUp || got.ConsecutiveFailures != 0 || got.ConsecutiveSuccesses != 0) {
 			t.Fatalf("pass ⇒ up/0/0, got %s/%d/%d [S-T1, S-T4, S-T7]", got.To, got.ConsecutiveFailures, got.ConsecutiveSuccesses)
@@ -498,7 +501,7 @@ func TestSpecScenario_SilentRecoveryStillConfirms(t *testing.T) {
 			t.Fatalf("AfterSilence(%+v) = %+v, want unknown owing a confirmation [S-F2, S-T7]", before, silent)
 		}
 		first := Apply(silent, false, 2, 3)
-		want := Transition{From: StateUnknown, To: StateDown, ConsecutiveSuccesses: 1, Changed: true, OpenedOutage: true}
+		want := Transition{From: StateUnknown, To: StateDown, ConsecutiveSuccesses: 1, RecoveryPending: true, Changed: true, OpenedOutage: true}
 		if first != want {
 			t.Fatalf("first pass after silence from %+v = %+v, want %+v [S-T7]", before, first, want)
 		}
@@ -535,39 +538,66 @@ func TestSpecScenario_SilentRecoveryStillConfirms(t *testing.T) {
 	}
 }
 
-// S-T7 per location: a location added to a monitor that is down (or that
-// already owes a confirmation) starts unknown but owing one, so its first
-// pass cannot lift the aggregate; it confirms like any down location.
-func TestSpecScenario_AddedLocationInheritsConfirmation(t *testing.T) {
+// S-T7 per location: a location added to a monitor that is down, or one that
+// was down when its evidence went stale, owes a confirmation. While it counts
+// it does not vote (LoadFreshLocationCounts leaves pending rows out): its
+// passes neither drag a healthy aggregate down nor lift a down one before
+// they confirm. A failure makes it an ordinary down vote.
+func TestSpecScenario_OwingLocationDoesNotVoteUntilConfirmed(t *testing.T) {
 	const quorum, threshold, recovery = 1, 2, 3
-	added := Snapshot{State: StateUnknown, RecoveryPending: true}
-	aggregate := func(s Snapshot) (State, int) {
-		c := LocationCounts{Selected: 1}
+	// counts mirrors the counts query: pending down rows do not vote.
+	counts := func(locs ...Snapshot) (State, int) {
+		c := LocationCounts{Selected: len(locs)}
 		var down []int
-		switch s.State {
-		case StateDown:
-			c.Down++
-			down = append(down, s.ConsecutiveSuccesses)
-		case StateSuspect:
-			c.Suspect++
-		case StateUp:
-			c.Up++
+		for _, s := range locs {
+			switch {
+			case s.State == StateDown && !s.RecoveryPending:
+				c.Down++
+				down = append(down, s.ConsecutiveSuccesses)
+			case s.State == StateSuspect:
+				c.Suspect++
+			case s.State == StateUp:
+				c.Up++
+			}
 		}
-		return AggregateLocations(c, quorum), RecoveryProgress(down, quorum, 1)
+		return AggregateLocations(c, quorum), RecoveryProgress(down, quorum, len(locs))
 	}
-	snap := added
+	step := func(s Snapshot, failure bool) Snapshot {
+		tr := Apply(s, failure, threshold, recovery)
+		return Snapshot{State: tr.To, ConsecutiveFailures: tr.ConsecutiveFailures,
+			ConsecutiveSuccesses: tr.ConsecutiveSuccesses, RecoveryPending: tr.RecoveryPending}
+	}
+
+	// A location that comes back after silence beside a healthy one: the
+	// aggregate stays up through its confirmation.
+	healthy := Snapshot{State: StateUp}
+	returning := AfterSilence(Snapshot{State: StateDown, ConsecutiveFailures: 5})
 	for pass := 1; pass <= recovery; pass++ {
-		tr := Apply(snap, false, threshold, recovery)
-		snap = Snapshot{State: tr.To, ConsecutiveSuccesses: tr.ConsecutiveSuccesses, RecoveryPending: tr.RecoveryPending}
-		state, progress := aggregate(snap)
-		wantState, wantProgress := StateDown, pass
-		if pass == recovery {
-			wantState, wantProgress = StateUp, 0
+		returning = step(returning, false)
+		if state, _ := counts(healthy, returning); state != StateUp {
+			t.Fatalf("pass %d of a returning location dragged the aggregate to %s [S-T7, S-A10]", pass, state)
 		}
-		if state != wantState || progress != wantProgress {
-			t.Fatalf("pass %d at the added location: aggregate %s at %d, want %s at %d [S-T7, S-A1]",
-				pass, state, progress, wantState, wantProgress)
+	}
+	if returning.State != StateUp || returning.RecoveryPending {
+		t.Fatalf("returning location after %d passes = %+v, want up [S-T7]", recovery, returning)
+	}
+
+	// A location added to a down monitor: it cannot lift it on its first pass.
+	added := Snapshot{State: StateUnknown, RecoveryPending: true}
+	for pass := 1; pass < recovery; pass++ {
+		added = step(added, false)
+		if state, _ := counts(added); state == StateUp || added.State != StateDown || added.ConsecutiveSuccesses != pass {
+			t.Fatalf("pass %d at the added location: %+v, aggregate %s; want counting, not up [S-T7]", pass, added, state)
 		}
+	}
+	if added = step(added, false); added.State != StateUp {
+		t.Fatalf("added location after %d passes = %+v, want up [S-T7]", recovery, added)
+	}
+
+	// A failure turns the debt into an ordinary down vote.
+	failing := step(step(Snapshot{State: StateUnknown, RecoveryPending: true}, false), true)
+	if state, _ := counts(failing); failing.RecoveryPending || state != StateDown {
+		t.Fatalf("owing location after a failure = %+v (aggregate %s), want an ordinary down vote [S-T3, S-T7]", failing, state)
 	}
 }
 
@@ -658,5 +688,32 @@ func TestSpecLocationOffline(t *testing.T) {
 	}
 	if LocationOfflineAfter <= LocationConnectedWindow {
 		t.Fatal("offline must come after the connected window ends, or the mesh hold starts late [S-F6]")
+	}
+}
+
+// S-T7, S-A9: the fast recheck (suspect or recovering) is withheld from the
+// monitors whose schedule floor is a rate limit, and only from those.
+func TestSpecFastRecheckExempt(t *testing.T) {
+	const sipCall = `{"host":"trunk.example.com","method":"invite","call":{"number":"100"}}`
+	cases := []struct {
+		typ, config string
+		exempt      bool
+	}{
+		{"sip", sipCall, true},
+		{"sip", `{"host":"trunk.example.com","method":"options"}`, false},
+		{"domain", `{"domain":"example.com"}`, true},
+		{"push", `{}`, true},
+		{"agent", `{}`, true},
+		{"group", `{}`, true},
+		{"http", `{"url":"https://example.com"}`, false},
+		{"ping", `{"host":"example.com"}`, false},
+		{"synthetic_browser", `{"start_url":"https://example.com"}`, false},
+		{"synthetic_api", `{}`, false},
+		{"prometheus", `{}`, false},
+	}
+	for _, tc := range cases {
+		if got := FastRecheckExempt(tc.typ, []byte(tc.config)); got != tc.exempt {
+			t.Errorf("FastRecheckExempt(%s, %s) = %v, want %v [S-T7, S-A9]", tc.typ, tc.config, got, tc.exempt)
+		}
 	}
 }

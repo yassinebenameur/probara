@@ -151,7 +151,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An active monitor runs on its interval. Both `failure` and `error` outcomes count toward consecutive failure confirmation. Before the threshold it is `suspect`; at the threshold it becomes `down`. Any successful effective result resets the failure counter and returns a suspect monitor to `up`. A `down` monitor returns to `up` after `recovery_threshold` successful results in a row (default 1, so the first one). Until then it stays `down` and keeps any open availability alert; it never opens a new one while passing (for example after a maintenance window ends), and the monitor page shows the progress as \"Recovering · 2 of 3 passing checks\". The unconfirmed time is downtime in the monitor's availability headline, its downtime periods and [SLAs](/docs/slas/), and status pages show the monitor down until the confirmation; surfaces that count check results (status-page uptime and bars, the dashboard's 24h and 1h figures, group analytics) count those passing checks as available. A failure while recovering restarts the count, pausing drops it, and a changed threshold applies from the next result. A monitor that was down when its results stopped (it reads `unknown` meanwhile) still owes the confirmation when they resume: its first passing check counts 1, it does not return it to `up`. The same holds for a location that goes silent while down, and for a location added to a monitor that is down. While recovering, an active monitor is rechecked every 20 seconds (or its interval, if shorter), so each extra pass costs about 20 seconds of downtime; SIP test calls keep their interval, and push and agent monitors recover at the pace their reports arrive. Confirmed transitions drive the [availability alert lifecycle](/docs/alerting/#availability).",
+            "An active monitor runs on its interval. Both `failure` and `error` outcomes count toward consecutive failure confirmation. Before the threshold it is `suspect`; at the threshold it becomes `down`. Any successful effective result resets the failure counter and returns a suspect monitor to `up`. A `down` monitor returns to `up` after `recovery_threshold` successful results in a row (default 1, so the first one). Until then it stays `down` and keeps any open availability alert; it never opens a new one while passing (for example after a maintenance window ends), and the monitor page shows the progress as \"Recovering · 2 of 3 passing checks\". The unconfirmed time is downtime in the monitor's availability headline, its downtime periods and [SLAs](/docs/slas/), and status pages show the monitor down until the confirmation; surfaces that count check results (status-page uptime and bars, the dashboard's 24h and 1h figures, group analytics) count those passing checks as available. A failure while recovering restarts the count, pausing drops it, and a changed threshold applies from the next result. A monitor that was down when its results stopped (it reads `unknown` meanwhile) still owes the confirmation when they resume: its first passing check counts 1, it does not return it to `up`. The same holds for a location that goes silent while down, and for a location added to a monitor that is down; while such a location counts its passes it does not vote, so it never takes down a monitor whose other locations are healthy (a location whose worker was offline comes back without flapping its monitors). While recovering, an active monitor is rechecked every 20 seconds (or its interval, if shorter), so each extra pass costs about 20 seconds of downtime. SIP test calls and domain monitors are never rechecked faster than their interval, whose floor is a rate limit (a carrier's call rate, a registry's lookup limit), so they confirm at one check per interval; push and agent monitors recover at the pace their reports arrive. A change to `recovery_threshold` is recorded in the monitor's configuration history and restores like the other settings. Confirmed transitions drive the [availability alert lifecycle](/docs/alerting/#availability).",
         },
         {
           type: "paragraph",
@@ -820,7 +820,7 @@ export const MONITORS_PAGE: DocPage = {
           type: "list",
           items: [
             "On the monitors list, hover a row (or tab to it) to reveal its checkbox; shift-click selects a range and Esc clears the selection. While anything is selected, a floating action bar offers grouping, moving, bulk alerting, and delete. Selection needs write access.",
-            "Bulk alerting changes can update the failure threshold, the recovery threshold, notification mode and channel assignments across selected monitors.",
+            "Bulk alerting changes can update the failure threshold, the recovery threshold, notification mode and channel assignments across selected monitors. Monitors are changed in batches of 100, each all or nothing; the request is checked first (workspace, SIP test-call rule, channels), so a refusal changes nothing, and an unexpected failure part-way reports how many monitors the earlier batches changed. The edit sets the same values on every monitor, so repeating the request is safe.",
             "Bulk delete soft-deletes selected monitors and schedules cleanup.",
             "Import preview parses and validates without creating monitors. Execution reports a per-row outcome rather than treating every file as all-or-nothing.",
             "JSON, YAML, and CSV formats are accepted, including common wrapper keys and a versioned portable YAML bundle.",
@@ -834,6 +834,51 @@ export const MONITORS_PAGE: DocPage = {
           title: "Secrets do not round-trip",
           text:
             "Raw portable import accepts every monitor type in the live registry, including Redis, PostgreSQL, MySQL, MongoDB, RabbitMQ, and WebSocket. Exported masked secrets are not usable credentials, so re-enter passwords, connection strings, client keys, secret headers, secret metadata and secret variables after import; verify every preview before execution.",
+        },
+      ],
+    },
+    {
+      id: "config-history",
+      title: "Configuration history and restore",
+      intro:
+        "Every save of a monitor is recorded as a version you can view, compare and restore from the monitor's **Changes** tab, the [API](/docs/api/#monitor-endpoints) or [MCP](/docs/mcp/#tools).",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A version is recorded for every save, whatever it came through: the operator UI, the API, MCP, an import (both mapping paths), a Kubernetes discovery approval, a bulk alerting edit, adding or removing group members or dependencies, and a restore. A save that changes nothing records nothing, and pausing or resuming records nothing. Each version keeps who made it (the user or API key, by its name at the time, or the system), when, the source, and the fields that changed from the previous version. A version is written in the same transaction as the save it describes, so it credits that save and no concurrent one, and a save that fails leaves no version behind. A save whose member list names a monitor that cannot be added (deleted, another workspace's, or nesting the group in itself) is refused as a whole.",
+        },
+        {
+          type: "table",
+          columns: ["Recorded in a version", "Not recorded"],
+          rows: [
+            [
+              "Name, type, `config`, interval, timeout, tags, failure threshold, notification mode and custom channels with their delays, member alert roll-up, dependency suppression, locations and quorum, dependencies, and a group's members",
+              "Pause state (`enabled`: pausing and resuming show in the state timeline and the audit log), the generated push token and agent ID, current state, results, alerts and maintenance windows",
+            ],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "A monitor that existed before history did gets a **baseline** on its first recorded change: version 1 is the configuration it had just before, version 2 the change, so even that first change can be compared and undone. Monitors created since start at their creation.",
+            "Deleting a location, an alert channel or a monitor changes the monitors that used it (their locations, custom channels, group members or dependencies). Each affected monitor gets a **system** version at that moment, so the change is never credited to whoever saves the monitor next.",
+            "Secret values are never stored in a version, in plain text or encrypted. A version holds the masked config (`***` for a set secret) and the names of the secrets that save set, replaced or cleared, so the diff can say a password changed without showing it. This also holds for monitors saved before credential-named headers, metadata and variables were moved into secret fields on every save: a version masks such a credential wherever the stored config still has it, under any key spelling. A version also masks the credentials of the URLs a check dials (an HTTP, WebSocket or Prometheus URL, a synthetic API base or request URL, a synthetic browser start URL or `goto` step URL): the password of a `user:password@` part and the value of a credential-named query parameter such as `?token=` or `?api_key=`. A credential carried in a URL path is not recognized.",
+            "What a version does not mask: free text the product does not treat as a credential is stored as written, in versions as in the monitor itself — request bodies, literal values typed into synthetic browser steps (use `{{secret_variables}}` references instead), header and variable values under names that do not look like credentials, and assertion values, URLs written inside any of these included. Keep credentials in the designated secret fields.",
+            "Compare a version with the one before it, any other version, or the live monitor. Secret fields read as set, not set, or changed, never as values.",
+            "Restore re-applies every non-secret setting of the version through the same validation and save path as an edit (the SIP test-call rule included) and records a new version that names the one restored. Only the settings that differ are written, and the restore is all or nothing: if any part fails, nothing changes and no version is recorded. A version of another monitor type than the monitor has now cannot be restored: its secret fields would otherwise resolve against the current type's secrets.",
+            "Restore keeps the secrets stored now and never writes a secret from a version: it never brings back or removes a password, token, connection string, client key, secret header, secret metadata or secret variable, keeps secret keys added since the version, leaves out a credential-named plain header or variable unless the monitor holds that same value now, and keeps a URL's masked credentials only when the stored URL is the same one (otherwise the URL is restored without them). A secret the version had and the monitor no longer holds, such as a removed secret variable a `{{name}}` step still references, stays empty: the restore applies everything else and lists the secrets to enter again in Settings.",
+            "A restore is refused, with nothing changed, when the version cannot be valid without such a secret (a version in connection-string mode restored onto a monitor that no longer stores a connection string), or when it conflicts with a secret the monitor holds now (a version using basic auth restored onto a monitor that now authenticates with a secret `Authorization` header). The message names what to enter or clear in Settings before restoring again.",
+            "Channels, locations, dependencies and group members the version names that no longer exist are left out and reported, and so are dependencies and members that would now close a cycle. The pause state is left as it is.",
+            "Reading history follows monitor read access, so viewers can browse it. Restoring needs write access (and a signed-in tenant admin for a SIP test-call monitor) and is audited as `monitor.restore`.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Bounds",
+          text:
+            "Each monitor keeps its newest 100 versions; older ones are pruned as new ones are recorded. History is deleted with the monitor and with its workspace. The one-off [backfill tools](/docs/security/#encryption-at-rest) rewrite stored configs directly and record no version, so the next save's version also shows what they moved; the credential backfill also scrubs existing versions.",
         },
       ],
     },

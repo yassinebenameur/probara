@@ -259,13 +259,18 @@ func (s *Service) Update(ctx context.Context, tenantID, id uuid.UUID, req *model
 			return nil, err
 		}
 	}
+	if def.Period != existing.Period || def.Timezone != existing.Timezone {
+		if err := replanReportSchedulesTx(ctx, tx, tenantID, id, definitionOf(existing), def, s.now()); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit SLA: %w", err)
 	}
 	return s.Get(ctx, tenantID, id)
 }
 
-// Delete removes an SLA and its issued reports.
+// Delete removes an SLA, its issued reports and its report schedule.
 func (s *Service) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM slas WHERE tenant_id = $1 AND id = $2`, tenantID, id)
 	if err != nil {
@@ -541,12 +546,15 @@ func (s *Service) ListReports(ctx context.Context, tenantID, slaID uuid.UUID) ([
 	return out, rows.Err()
 }
 
-const issuedByExpr = `COALESCE(u.username, CASE WHEN r.issued_by_api_key_id IS NOT NULL THEN 'API key' ELSE 'deleted user' END)`
+const issuedByExpr = `COALESCE(u.username, CASE WHEN r.issued_by_api_key_id IS NOT NULL THEN 'API key'
+	WHEN r.issued_by_schedule THEN 'report schedule' ELSE 'deleted user' END)`
 
 // Issuer identifies who issues a report.
 type Issuer struct {
 	AdminID  uuid.UUID
 	APIKeyID uuid.UUID
+	// Schedule: the SLA's report schedule issued it at period close.
+	Schedule bool
 }
 
 // IssueReport freezes the report of a closed period. periodKey "" means the
@@ -572,6 +580,13 @@ func (s *Service) IssueReport(ctx context.Context, tenantID, slaID uuid.UUID, pe
 	} else if period, err = sharedanalytics.ParsePeriod(kind, loc, periodKey); err != nil {
 		return nil, invalid("%s", err.Error())
 	}
+	return s.issuePeriod(ctx, tenantID, sla, period, by)
+}
+
+// issuePeriod freezes the report of one closed period of sla.
+func (s *Service) issuePeriod(ctx context.Context, tenantID uuid.UUID, sla *models.SLA, period sharedanalytics.Period, by Issuer) (*models.SLAReport, error) {
+	slaID := sla.ID
+	now := s.now()
 	if period.End.After(now) {
 		return nil, invalid("period %s has not ended yet; only closed periods can be issued", period.Key)
 	}
@@ -587,10 +602,10 @@ func (s *Service) IssueReport(ctx context.Context, tenantID, slaID uuid.UUID, pe
 	id := uuid.New()
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO sla_reports (id, tenant_id, sla_id, period_key, period_start, period_end, availability_pct,
-			target_pct, met, issued_by_admin_id, issued_by_api_key_id, data)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			target_pct, met, issued_by_admin_id, issued_by_api_key_id, issued_by_schedule, data)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`, id, tenantID, slaID, period.Key, period.Start.UTC(), period.End.UTC(), report.Summary.AvailabilityPct,
-		sla.TargetPct, report.Summary.Met, nullUUID(by.AdminID), nullUUID(by.APIKeyID), data); err != nil {
+		sla.TargetPct, report.Summary.Met, nullUUID(by.AdminID), nullUUID(by.APIKeyID), by.Schedule, data); err != nil {
 		if pgerr.IsUniqueViolation(err) {
 			return nil, Conflict{Message: fmt.Sprintf("a report for %s was already issued", period.Key)}
 		}

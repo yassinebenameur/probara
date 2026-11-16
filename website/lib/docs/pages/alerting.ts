@@ -15,6 +15,7 @@ export const ALERTING_PAGE: DocPage = {
     "incidents",
     "latency anomaly",
     "alert triage",
+    "delivery history",
   ],
   sections: [
     {
@@ -327,7 +328,7 @@ export const ALERTING_PAGE: DocPage = {
           type: "list",
           items: [
             "Create a channel from a registered plugin and save its plugin-specific configuration. Updates are validated by the plugin against the merged configuration, including kept secrets, so an edit cannot move a channel to a host create would have rejected.",
-            "Use the channel test action before assigning production monitors. Tests send a real notification and require write permission. PagerDuty and Opsgenie tests open an informational alert and resolve it immediately, which may still notify whoever is on call. Opsgenie processes requests asynchronously, so its test waits (up to four seconds) for the alert to exist before closing it; if Opsgenie is slower than that, the test reports the alias so you can close the alert by hand. Email tests are served by the API process, so they need the same [platform SMTP configuration](/docs/configuration/#alerter-and-smtp) as the alerter; without it the test reports `mailer not configured` even when alert email is being delivered.",
+            "Use the channel test action before assigning production monitors. Tests send a real notification and require write permission. PagerDuty and Opsgenie tests open an informational alert and resolve it immediately, which may still notify whoever is on call. Opsgenie processes requests asynchronously, so its test waits (up to four seconds) for the alert to exist before closing it; if Opsgenie is slower than that, the test reports the alias so you can close the alert by hand. Email tests are served by the API process, so they need the same [platform SMTP configuration](/docs/configuration/#alerter-and-smtp) as the alerter; without it the test reports `mailer not configured` even when alert email is being delivered. Every test lands in the channel's [delivery history](#delivery-history), marked as a test.",
             "Activate or deactivate the channel. Inactive channels remain configured but are skipped for delivery.",
             "Assign it in tenant defaults or in a monitor's custom routing.",
           ],
@@ -335,7 +336,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: a page or reminder still waiting on a retry when the alert is acknowledged or snoozed is dropped instead of delivered, and one already being delivered holds the alert, so acknowledging waits for it. A dropped page counts as never sent only when no earlier attempt can have been accepted (every earlier attempt failed before connecting, was refused by the egress policy, or got an error status back), so after an unacknowledge that route is paged again. Otherwise (a timeout after the request was sent, a worker stopped mid-send, an SMS that reached some recipients) it still counts as paged, so that route gets the acknowledgement and the recovery notice. A delivery retried after the alerter lost track of whether it was queued is collapsed by the broker instead of being sent twice.",
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once, recorded in the [delivery history](#delivery-history), and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. The retry texts only the recipients Twilio has not accepted yet: each accepted recipient is recorded in the database the moment Twilio answers, so it is skipped whichever alerter replica or delivery worker picks the retry up, after a restart included. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery. Acknowledgement is ordered the same way: a page or reminder still waiting on a retry when the alert is acknowledged or snoozed is dropped instead of delivered, and one already being delivered holds the alert, so acknowledging waits for it. A dropped page counts as never sent only when no earlier attempt can have been accepted (every earlier attempt failed before connecting, was refused by the egress policy, or got an error status back), so after an unacknowledge that route is paged again. Otherwise (a timeout after the request was sent, a worker stopped mid-send, an SMS that reached some recipients) it still counts as paged, so that route gets the acknowledgement and the recovery notice. A delivery retried after the alerter lost track of whether it was queued is collapsed by the broker instead of being sent twice.",
         },
         {
           type: "callout",
@@ -357,6 +358,48 @@ export const ALERTING_PAGE: DocPage = {
           title: "Known gaps",
           text:
             "Acknowledgement syncs one way: acknowledging in Probara acknowledges the PagerDuty or Opsgenie alert, but acknowledging or resolving in the provider does not change the Probara alert. Retrying an SMS send for one recipient does not text the others again: every number Twilio accepted for that event (or that reminder round) is skipped. A number can still get a duplicate when Twilio accepted the message but its answer never arrived (a timeout or a crash mid-request), or when recording the acceptance failed while another number's failure forced a retry.",
+        },
+      ],
+    },
+    {
+      id: "delivery-history",
+      title: "Notification delivery history",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Every attempt to deliver an alert notification is recorded: each synchronous send by the alerter, each attempt a delivery worker makes after the alerter queued the event (`ALERTER_ASYNC_DISPATCH`), each queued event the worker decides not to send, and each channel test. A row holds the alert, the channel, the event (`created`, `reminder`, `resolved`, `acknowledged`, `suspected_cause`), the attempt number, which path sent it (alerter or delivery worker), the outcome and its reason, the provider's HTTP status when it answered with an error, how long the attempt took, and the error. An SMS channel gets one row per recipient, with the number masked (`********4321`); a retry adds rows only for the numbers it texted, never for the ones an earlier attempt reached. An email with several addresses is one send, so one row.",
+        },
+        {
+          type: "table",
+          columns: ["Outcome", "Reason", "What happened"],
+          rows: [
+            ["Delivered", "—", "The provider accepted the notification (for that recipient)."],
+            ["Failed, retrying", "—", "A timeout, connection error, 5xx or 429. Retried: by the alerter's next cycle, or by the delivery worker's backoff (10 s, 30 s, 2 min, 10 min)."],
+            ["Failed, gave up", "`retries_exhausted`", "The delivery worker's fifth and last attempt failed; nothing retries it."],
+            ["Failed, retrying", "`plugin_missing`", "The delivery worker that took the event has no plugin for the channel type (a deployment mismatch); retried."],
+            ["Rejected", "—", "The provider refused the channel itself (revoked key, deleted webhook, unknown chat, invalid number, any other 4xx, a redirect). Not retried."],
+            ["Rejected", "`egress_blocked`", "The [notification egress policy](/docs/security/#ssrf-network-policy) refused the address. Not retried; allow the range in `NOTIFICATION_ALLOWED_CIDRS` if it is yours."],
+            ["Rejected", "`invalid_config`", "The stored channel configuration could not be read. Not retried; save the channel again."],
+            ["Not sent", "`resolved`", "A queued page, reminder, acknowledgement or follow-up whose alert resolved before it went out. Sending it would reopen the alert at the provider, so it is dropped; the recovery notice goes out instead."],
+            ["Not sent", "`unacknowledged`", "A queued acknowledgement notice whose alert was unacknowledged before it went out. A later acknowledgement is sent again."],
+            ["Not sent", "`muted_requeued`", "A queued page whose alert was acknowledged or snoozed before it went out, and that provably reached no one (every earlier attempt failed before connecting, was refused by the egress policy or got an error status back). It is sent again once the alert is unacknowledged or the snooze ends."],
+            ["Not sent", "`muted`", "A queued page or reminder held the same way that is not sent again: a reminder resumes with its next round once the mute lifts, and a page an earlier attempt may have delivered (a timeout after sending, an SMS that reached some numbers) still counts as sent, so the channel gets the acknowledgement and the recovery notice instead."],
+            ["Not sent", "`channel_inactive`", "The channel was deactivated after the event was queued."],
+            ["Not sent", "`channel_changed`", "The channel's type changed after the event was queued."],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "An alert's attempts, across all its channels and in the order they happened, are under **Notifications** in its details on the Alerts page. A channel's attempts, newest first and filterable by outcome, are under **Recent deliveries** on the channel's page. Offline-location and mesh-edge alerts are recorded like monitor alerts and are named by their locations. There is no workspace-wide list. A channel is flagged **Failing**, in the channel list and on its page, when a delivery to it failed (transiently or for good) in the last 24 hours and none has succeeded since; test sends count both ways, so a successful test after a fix clears the flag. A partly failed SMS send counts as a failure, and a not-sent row counts as neither. The same data is in the API (`GET /alerts/{id}/deliveries`, `GET /alert-channels/{id}/deliveries`, `failing`, `last_delivered_at` and `last_failed_at` on channels) and the [MCP tools](/docs/mcp/).",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "What the history keeps, and for how long",
+          text:
+            "Rows are kept 90 days for every workspace, whatever its data retention setting, and go with their alert, channel or workspace when those are deleted. Errors are stored sanitized: URLs are cut to their host, bearer and basic credentials, tokens and credential-named parameters are masked, the channel's own secret values (webhook URLs, tokens, keys, header values) are removed wherever they appear, even cut short by a truncated provider response, phone numbers and email addresses a provider echoed are masked like stored recipients, and the text is capped at 512 characters. Recipients are stored masked plus the hash the SMS retry ledger already uses. Not recorded: an event the alerter queued for the delivery workers (the worker's rows say what became of it, so a queue outage shows as no rows), a send another alerter replica claimed first, and an event that was never due (muted, in an escalation delay, suppressed by a dependency).",
         },
       ],
     },

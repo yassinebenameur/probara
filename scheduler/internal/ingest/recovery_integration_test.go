@@ -193,7 +193,9 @@ func TestIngestSilentRecoveryStillConfirms(t *testing.T) {
 
 // S-T7 per location: a location that was down when its evidence went stale
 // restarts its count at 1 (it does not resume the stale one), and a location
-// added to a down monitor owes the confirmation from its first pass.
+// added to a down monitor owes the confirmation from its first pass. While
+// they count they do not vote, so a healthy location keeps the aggregate up;
+// a failure makes an ordinary down vote.
 func TestQuorumStaleAndAddedLocationsStillConfirm(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -203,24 +205,23 @@ func TestQuorumStaleAndAddedLocationsStillConfirm(t *testing.T) {
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	stale := insertLocation(ctx, t, dbClient, tenantID, "stale")
 	added := insertLocation(ctx, t, dbClient, tenantID, "added")
-	selectLocations(ctx, t, dbClient, monitorID, 2, stale, added)
+	healthy := insertLocation(ctx, t, dbClient, tenantID, "healthy")
+	selectLocations(ctx, t, dbClient, monitorID, 1, stale, added, healthy)
 	setRecoveryThreshold(ctx, t, dbClient, monitorID, 1, 3)
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, consecutive_successes, last_check_at)
-		VALUES ($1, $2, $3, 'down', 2, NOW() - INTERVAL '1 hour')
-	`, monitorID, stale, tenantID); err != nil {
-		t.Fatal(err)
+	exec := func(q string, args ...interface{}) {
+		t.Helper()
+		if _, err := dbClient.ExecContext(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
 	}
+	exec(`INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, consecutive_successes, last_check_at)
+		VALUES ($1, $2, $3, 'down', 2, NOW() - INTERVAL '1 hour')`, monitorID, stale, tenantID)
 	// What SetLocations seeds for a location added to a down monitor.
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, recovery_pending)
-		VALUES ($1, $2, $3, 'unknown', TRUE)
-	`, monitorID, added, tenantID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = $1`, monitorID); err != nil {
-		t.Fatal(err)
-	}
+	exec(`INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, recovery_pending)
+		VALUES ($1, $2, $3, 'unknown', TRUE)`, monitorID, added, tenantID)
+	exec(`INSERT INTO monitor_location_state (monitor_id, location_id, tenant_id, current_state, last_check_at)
+		VALUES ($1, $2, $3, 'up', NOW())`, monitorID, healthy, tenantID)
+	exec(`UPDATE monitors SET current_state = 'up' WHERE id = $1`, monitorID)
 	i := newTestIngest(t, dbClient, nil)
 
 	locationRow := func(locationID uuid.UUID) (string, int, bool) {
@@ -238,15 +239,23 @@ func TestQuorumStaleAndAddedLocationsStillConfirm(t *testing.T) {
 	}
 
 	ingestMessage(t, i, locationMessage(tenantID, monitorID, stale, "success"))
-	if state, successes, _ := locationRow(stale); state != "down" || successes != 1 {
-		t.Fatalf("stale location's first pass: %s/CS %d, want down/1, not the stale count + 1 [S-T7]", state, successes)
+	if state, successes, pending := locationRow(stale); state != "down" || successes != 1 || !pending {
+		t.Fatalf("stale location's first pass: %s/CS %d pending %v, want down/1 owing, not the stale count + 1 [S-T7]", state, successes, pending)
 	}
 	ingestMessage(t, i, locationMessage(tenantID, monitorID, added, "success"))
-	if state, successes, pending := locationRow(added); state != "down" || successes != 1 || pending {
-		t.Fatalf("added location's first pass: %s/CS %d pending %v, want down/1 [S-T7]", state, successes, pending)
+	if state, successes, pending := locationRow(added); state != "down" || successes != 1 || !pending {
+		t.Fatalf("added location's first pass: %s/CS %d pending %v, want down/1 owing [S-T7]", state, successes, pending)
 	}
-	if state, _, successes := monitorCounts(ctx, t, dbClient, monitorID); state != "down" || successes != 1 {
-		t.Fatalf("monitor after both first passes: %s/CS %d, want down/1 (quorum 2) [S-T7, S-A1]", state, successes)
+	if state, _, _ := monitorCounts(ctx, t, dbClient, monitorID); state != "up" {
+		t.Fatalf("monitor with a healthy location = %s, want up: owing locations do not vote [S-T7, S-A1]", state)
+	}
+
+	ingestMessage(t, i, locationMessage(tenantID, monitorID, stale, "failure"))
+	if state, _, pending := locationRow(stale); state != "down" || pending {
+		t.Fatalf("stale location after a failure: %s pending %v, want an ordinary down [S-T3, S-T7]", state, pending)
+	}
+	if state, _, _ := monitorCounts(ctx, t, dbClient, monitorID); state != "down" {
+		t.Fatalf("monitor after a real failure at quorum 1 = %s, want down [S-A1]", state)
 	}
 }
 
@@ -266,8 +275,14 @@ func TestIngestRecoveringPassPullsInTheRecheck(t *testing.T) {
 	`, callID); err != nil {
 		t.Fatal(err)
 	}
+	domainID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "domain")
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE monitors SET type = 'domain', config = '{"domain":"example.com"}' WHERE id = $1
+	`, domainID); err != nil {
+		t.Fatal(err)
+	}
 	i := newTestIngest(t, dbClient, nil)
-	for _, id := range []uuid.UUID{httpID, callID} {
+	for _, id := range []uuid.UUID{httpID, callID, domainID} {
 		setRecoveryThreshold(ctx, t, dbClient, id, 1, 3)
 		if _, err := dbClient.ExecContext(ctx, `
 			UPDATE monitors SET interval_seconds = 300, next_run_at = NOW() + INTERVAL '290 seconds' WHERE id = $1
@@ -291,5 +306,8 @@ func TestIngestRecoveringPassPullsInTheRecheck(t *testing.T) {
 	}
 	if soon(callID) {
 		t.Fatal("recovering SIP test call was pulled in, want its interval kept [S-A9, S-T7]")
+	}
+	if soon(domainID) {
+		t.Fatal("recovering domain monitor was pulled in, want its interval kept (registries rate-limit) [S-T7]")
 	}
 }

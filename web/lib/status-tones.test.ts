@@ -157,3 +157,20 @@ test('locationConnection: disconnected after a minute, offline only when the API
   assert.equal(locationConnectionTone('offline', 0), 'neutral');
   assert.equal(locationConnectionTone('connected', 0), 'success');
 });
+
+test('burn rate and budget exhaustion tones', async () => {
+  const { budgetExhaustionTone, burnRateTone, reportDeliveryTone } = await import('./status-tones');
+  assert.equal(burnRateTone(0.5), 'good');
+  assert.equal(burnRateTone(1), 'good', 'exactly the even pace is on budget');
+  assert.equal(burnRateTone(1.5), 'warn');
+  assert.equal(burnRateTone(14.4), 'bad');
+  assert.equal(burnRateTone(null), 'none');
+  assert.equal(budgetExhaustionTone('exhausted'), 'bad');
+  assert.equal(budgetExhaustionTone('projected'), 'warn');
+  assert.equal(budgetExhaustionTone('not_projected'), 'good');
+  assert.equal(budgetExhaustionTone('no_data'), 'none');
+  assert.equal(reportDeliveryTone('sent'), 'success');
+  assert.equal(reportDeliveryTone('failed'), 'danger');
+  assert.equal(reportDeliveryTone('uncertain'), 'warning');
+  assert.equal(reportDeliveryTone('skipped'), 'neutral');
+});

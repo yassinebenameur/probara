@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
@@ -21,9 +20,8 @@ type queryExecer interface {
 // the fast recheck (S-T7): the run after a pass was scheduled at dispatch,
 // before the pass made the monitor recovering, and would otherwise cost a
 // whole interval of downtime per pass. The scheduler keeps the same cadence
-// for the runs after that (nextCheckDelay). Passive types are never
-// dispatched, and SIP test calls keep their interval, the call-rate floor
-// (S-A9), exactly as for the suspect recheck.
+// for the runs after that (nextCheckDelay). monitorstate.FastRecheckExempt
+// (SIP test calls, domain monitors, passive types) keeps its interval.
 func pullRecoveringRecheck(ctx context.Context, q queryExecer, monitorID uuid.UUID) error {
 	var monitorType string
 	var config json.RawMessage
@@ -34,7 +32,7 @@ func pullRecoveringRecheck(ctx context.Context, q queryExecer, monitorID uuid.UU
 	`, monitorID).Scan(&monitorType, &config, &recovering); err != nil {
 		return fmt.Errorf("read recovering monitor: %w", err)
 	}
-	if !recovering || models.IsPassiveMonitorType(monitorType) || models.IsSIPCallConfig(monitorType, config) {
+	if !recovering || monitorstate.FastRecheckExempt(monitorType, config) {
 		return nil
 	}
 	if _, err := q.ExecContext(ctx, `

@@ -321,7 +321,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY`',
               'Base64 encoding of exactly 32 bytes',
-              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback). The API, alerter and worker also derive the signing key for [acknowledge links](/docs/alerting/#acknowledge-links) from it; without it notifications carry none.',
+              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback). The API, alerter and worker also derive the signing key for [acknowledge links](/docs/alerting/#acknowledge-links) from it; without it notifications carry none. The API signs the unsubscribe links of [scheduled SLA reports](/docs/slas/#schedules) with it too, so without it no report schedule can be enabled.',
             ],
             [
               '`PROBARA_SECRETS_KEY_V2` … `PROBARA_SECRETS_KEY_V100`',
@@ -723,7 +723,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
+            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The API also mails [scheduled SLA reports](/docs/slas/#schedules), which additionally need `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; without all three no schedule can be enabled. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
         },
         {
           type: 'table',
@@ -747,7 +747,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel, and, with `PROBARA_SECRETS_KEY` set, the one-click [acknowledge link](/docs/alerting/#acknowledge-links) on pages; both are omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one).',
+              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel, and, with `PROBARA_SECRETS_KEY` set, the one-click [acknowledge link](/docs/alerting/#acknowledge-links) on pages; both are omitted when unset. Read by the same three services. The API also sends [MCP](/docs/mcp/#authentication) sign-ins to the consent screen at this origin (default: the API origin, which is right when the UI and API share one), and needs it for [scheduled SLA reports](/docs/slas/#schedules), whose emails link to the report and to their unsubscribe page there.',
             ],
           ],
         },

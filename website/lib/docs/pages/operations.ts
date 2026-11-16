@@ -441,6 +441,11 @@ make db-restore`,
                 'Operator labels on AI analyses, alert triages and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',
             },
             {
+              term: 'Notification delivery history',
+              description:
+                'Every alert notification attempt ([delivery history](/docs/alerting/#delivery-history)) is kept 90 days for every tenant, whatever `data_retention_days` says (`0` included), and is deleted earlier with its alert, channel or workspace. The daily tenant cleanup prunes it within the same batch and per-run limits; its backlog shows as `store="alert_notification_deliveries"` on `retention_cleanup_backlogged_tenants` and `retention_cleanup_oldest_expired_timestamp_seconds`.',
+            },
+            {
               term: 'Audit retention',
               description:
                 '`AUDIT_RETENTION_DAYS` is a separate compliance control, defaults to 365 days, and uses `0` to retain forever.',

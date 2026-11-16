@@ -300,6 +300,21 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   rollup ranges via the scheduler's `syncDowntimeFromIntervals` projection;
   `TestDowntimeProjectionMatchesRawAnalyticsPath` pins the pair). Never
   derive downtime from check rows.
+- **SLA burn and report emails**: burn rate, burn-down and exhaustion (S-U8,
+  `api/internal/services/slas/burn.go`) are extra buckets on the report's one
+  `IntegrateTimeline` call, never another query; `SLAReport.burn` is optional
+  like `suspected_causes`. Scheduled report emails run in the **API**
+  (`api/internal/services/reportschedules`, its `Runner` started from
+  `server.go` and stopped before the audit recorder): issue the report with
+  no lock held, then claim the period and its per-recipient deliveries in one
+  `lock_timeout` transaction before mailing; a delivery is `claimed` (safe to
+  hand back) until `sending` is committed right before `SendMessage`, so
+  `uncertain` (never resent) only follows a started send. Which periods go
+  out (catch-up of the last 3, `sends_after`, the grace-hour carry-over) is
+  `nextPeriod`; the SLA service re-plans when a period or timezone changes.
+  The burn budget base is `periodBudget` (eligible time, as the headline). Schedules need SMTP,
+  `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; unsubscribe links are
+  `shared/actionlink` tokens (`ActionUnsubscribeReport`, own TTL).
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the
@@ -326,6 +341,29 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
   cascades only on tenant delete. The label routes are writes (never in
   `postReadPaths`); export is `RequireTenantAdmin`.
+- **Monitor config history**: every path that creates or changes a monitor
+  records a version through `api/internal/services/monitors/versions.go`,
+  inside the save's transaction (`api/internal/dbtx` carries it through the
+  monitors, groups and dependencies services; `Service.InTx`, which retries a
+  deadlock once). `CreateMonitor`/`UpdateMonitor` do it; a write beside them
+  calls `RecordVersion` (member and dependency routes) or `RecordVersionTx`
+  (discovery approval); a change made outside a save (location, channel or
+  monitor delete) uses the set-based `PrepareSystemVersionsTx` (before its
+  writes) and `RecordTx` (after), which only log failures. A save of an
+  existing monitor calls `CaptureBaseline` before its first write; nothing in
+  a save may use a second pool connection. **Lock order** (doc in
+  `api/internal/dbtx`): every transaction locks the monitor rows it touches
+  before its first write, ascending id, one pass (`LockMonitorsTx`: FOR
+  UPDATE for monitors changed or versioned, edge sources included; FOR KEY
+  SHARE for edge targets); deletes lock the monitors they rewrite the same
+  way. The FOR UPDATE row lock also serializes version numbering; there are
+  no advisory locks. Snapshots are
+  masked with `secrets.MaskStoredMonitorConfig`; restore never writes a
+  secret from a version (`restoreConfig`) and refuses another type. A new
+  top-level setting accepted by `UpdateMonitorRequest` is one
+  `snapshotColumns` entry (`versions_fields.go`) plus its
+  `models.MonitorConfigSnapshot` field, or it is neither versioned nor
+  restored.
 - **Maintenance coverage**: `shared/maintenance` (S-M5). A window is a
   schedule (one-off, or the weekly `Rule`, expanded only by `Rule.Expand`);
   what covers monitors is its materialized occurrences
@@ -833,6 +871,22 @@ or imported groups come back empty. Any other path that creates groups through
   `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
   Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
   link when it has one.
+- **Delivery history** (`alert_notification_deliveries`, 90 days) is written
+  only through `shared/notifications/deliverylog`, from exactly two send
+  paths — `deliverNotification` (`alerter/.../delivery_log.go`: in the claim
+  tx when it commits, through the pool after a rollback) and the worker
+  consumer (`worker/.../notifications/delivery_log.go`, one call per outcome,
+  drops included) — plus the API test send. Never write it elsewhere, never
+  let a failed write fail a delivery (`RecordTx`: a savepoint plus server-side
+  `SET LOCAL` timeouts — never a client context deadline inside a caller's
+  transaction, lib/pq closes the connection when one fires), and never
+  store raw error text: `deliverylog` sanitizes it and masks the channel's
+  secrets (`SecretValues`). Fan-out rows follow the recipient ledger
+  (`deliverylog.Track`), one per recipient an attempt tried. A held page's
+  row says `muted_requeued` when `releaseMutedClaim` handed its claim back and
+  `muted` when it kept it (`mutedReason`, read in the same tx), so change them
+  together. A new drop or failure cause is a `Reason*` constant plus its
+  wording in `web/lib/deliveries.ts` and the alerting docs.
 
 ## Status pages
 
@@ -1458,6 +1512,13 @@ or imported groups come back empty. Any other path that creates groups through
   (`api/internal/middleware/route_redaction.go`). Redaction keys on the
   parameter NAME, so a credential in a path must be a `{…token}`/`{…secret}`
   parameter, and a handler must not log or echo it.
+- **Recovery confirmation** (S-T7): every writer of monitor or location
+  state carries `consecutive_successes` and `recovery_pending` with the
+  rest (reset with the failures; a down stream going `unknown` or moving
+  to other locations keeps owing its confirmation — `AfterSilence`,
+  `SetLocations`). Which monitors never get a fast recheck (suspect or
+  recovering) is one table, `monitorstate.FastRecheckExempt`; a new type
+  whose interval floor is a rate limit goes there.
 
 ## Commits and PRs
 

@@ -72,6 +72,10 @@ type FreshLocations struct {
 // only locations with FRESH evidence (S-A10) — a silent location's last
 // state must not keep voting. Selected still counts every live selected
 // location whether or not it is fresh, so quorum clamping is unaffected.
+// A location down only because it owes a recovery confirmation since its
+// silence or its addition (recovery_pending, no failure since) does not vote
+// either: its passes must neither drag a healthy aggregate down nor count it
+// up before they confirm (S-T7).
 //
 // This is the single source of the aggregation input, shared by the results
 // ingest (on every location result) and the absence watchdog (when results
@@ -81,12 +85,12 @@ func LoadFreshLocationCounts(ctx context.Context, q queryer, monitorID uuid.UUID
 	var downSuccesses pq.Int64Array
 	err := q.QueryRowContext(ctx, `
 		SELECT
-			COUNT(*) FILTER (WHERE mls.current_state = 'down'),
+			COUNT(*) FILTER (WHERE mls.current_state = 'down' AND NOT mls.recovery_pending),
 			COUNT(*) FILTER (WHERE mls.current_state = 'suspect'),
 			COUNT(*) FILTER (WHERE mls.current_state = 'up'),
 			COUNT(ml.location_id),
 			COALESCE(MAX(mls.consecutive_failures), 0),
-			COALESCE(array_agg(mls.consecutive_successes) FILTER (WHERE mls.current_state = 'down'), '{}')
+			COALESCE(array_agg(mls.consecutive_successes) FILTER (WHERE mls.current_state = 'down' AND NOT mls.recovery_pending), '{}')
 		FROM monitor_locations ml
 		JOIN locations l ON l.id = ml.location_id
 			AND l.deleted_at IS NULL

@@ -3,10 +3,13 @@ package monitorstate
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/models"
 )
 
 // Recovery confirmation helpers (S-T7, docs/state-semantics.md).
@@ -16,6 +19,35 @@ import (
 // are being counted). The scheduler never stretches a monitor's own interval
 // with it, and SIP test calls never get it (S-A9).
 const FastRecheckInterval = 20 * time.Second
+
+// FastRecheckExempt is the one table of monitors that never get the fast
+// recheck, neither to confirm a failure (suspect) nor a recovery: those whose
+// own schedule floor is a rate limit, so a check must never come sooner than
+// it. Every other type accepts the platform's 10 s interval floor, below
+// FastRecheckInterval, so a recheck is never faster than an operator may
+// already schedule it.
+//
+//   - SIP INVITE test calls (S-A9): each check is a real, billable call; the
+//     interval floor (models.SIPCallMinIntervalSeconds) is the call rate, and
+//     a 20 s recheck would also overlap a call that can last 24 s.
+//   - domain registration monitors: RDAP and WHOIS servers rate-limit
+//     lookups (models.DomainMinIntervalSeconds, one hour).
+//   - passive types (push, agent, group): never dispatched; their passes
+//     arrive at the reporter's pace.
+//
+// IsSIPCallConfig reads only non-secret fields, so an encrypted config
+// answers the same.
+func FastRecheckExempt(monitorType string, config json.RawMessage) bool {
+	switch {
+	case models.IsPassiveMonitorType(monitorType):
+		return true
+	case monitorType == string(models.MonitorTypeDomain):
+		return true
+	case models.IsSIPCallConfig(monitorType, config):
+		return true
+	}
+	return false
+}
 
 // RecoveringPredicate returns a SQL boolean that is TRUE when the monitor
 // aliased by alias is down while one of its streams counts passes toward a

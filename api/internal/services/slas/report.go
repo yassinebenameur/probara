@@ -125,11 +125,18 @@ func (s *Service) buildReport(ctx context.Context, tenantID uuid.UUID, sla *mode
 	if len(members) == 0 {
 		report.Notes = append(report.Notes, "No monitors match this SLA.")
 		report.Budget = budgetFor(sla.TargetPct, report.Summary, period)
+		report.Burn = emptyBurn(window)
 		return report, nil
 	}
 
 	days := sharedanalytics.DayBuckets(loc, window.Start, window.End)
 	buckets := append([]sharedanalytics.TimeRange{window}, days...)
+	// The S-U8 burn windows ride on the same integration as extra buckets.
+	short := burnWindows(period, end, report.Period.IsClosed)
+	shortStart := len(buckets)
+	for _, w := range short {
+		buckets = append(buckets, w.rng)
+	}
 	ids := memberIDs(members)
 	res, err := s.analytics.IntegrateTimeline(ctx, tenantID, ids, buckets, opts)
 	if err != nil {
@@ -138,6 +145,8 @@ func (s *Service) buildReport(ctx context.Context, tenantID uuid.UUID, sla *mode
 
 	report.Summary = summarize(sla, res, 0, members)
 	report.Budget = budgetFor(sla.TargetPct, report.Summary, period)
+	report.Burn = buildBurn(sla, res, members, period, window, days, short, shortStart, report.Summary,
+		report.Period.IsClosed, loc)
 	for i, day := range days {
 		d := summarize(sla, res, i+1, members)
 		report.Daily = append(report.Daily, models.SLAReportDay{

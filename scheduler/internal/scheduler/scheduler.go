@@ -44,16 +44,14 @@ const (
 // while passes are counted toward confirming its recovery, S-T7) get the
 // fast recheck;
 // 'degraded' (spatial: some locations down, below quorum) can persist
-// indefinitely and runs at the normal interval. Side-effecting checks (SIP
-// INVITE test calls) never get the fast recheck (S-A9): their interval floor
-// (models.SIPCallMinIntervalSeconds) is the call-rate limit, and a 20 s
-// recheck would also overlap a call that can run 24 s (timeout plus teardown
-// reserve). IsSIPCallConfig reads only non-secret fields, so the encrypted
-// config answers the same.
+// indefinitely and runs at the normal interval. Monitors whose schedule
+// floor is a rate limit never get the fast recheck: SIP INVITE test calls
+// (S-A9) and domain monitors — the one table is
+// monitorstate.FastRecheckExempt.
 func nextCheckDelay(m Monitor) time.Duration {
 	interval := time.Duration(m.IntervalSeconds) * time.Second
 	if (m.CurrentState == "suspect" || m.Recovering) && suspectRecheckInterval < interval &&
-		!models.IsSIPCallConfig(m.Type, m.Config) {
+		!monitorstate.FastRecheckExempt(m.Type, m.Config) {
 		return suspectRecheckInterval
 	}
 	return interval
@@ -483,7 +481,8 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 
 	// Mesh results and metric samples follow data_retention_days (0 = keep
 	// forever); raw check results ignore it and use the fixed hour-aligned
-	// horizon (pruneTenantCheckResults).
+	// horizon (pruneTenantCheckResults). The notification delivery history
+	// is kept a fixed 90 days for everyone (retention_deliveries.go).
 	stores := []struct {
 		name  string
 		prune func(ctx context.Context, tenantID uuid.UUID, tenantDays int) (int64, error)
@@ -498,6 +497,7 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 			func(ctx context.Context, _ int) (time.Time, error) { return s.checkResultsPruneCutoff(ctx) }},
 		{"mesh_probe_results", s.pruneTenantMeshResults, tenantDaysCutoff},
 		{"metric_samples", s.pruneTenantMetricSamples, tenantDaysCutoff},
+		{"alert_notification_deliveries", s.pruneTenantDeliveries, deliveriesCutoff},
 	}
 	var totalDeleted int64
 	backlogged := make(map[string]int)

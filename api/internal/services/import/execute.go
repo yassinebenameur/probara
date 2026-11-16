@@ -11,11 +11,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 )
 
 // ExecuteImport executes the import with the given rows and mapping
 func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *models.ImportExecuteRequest) (*models.ImportExecuteResponse, error) {
+	// Each imported monitor is one save (saveRow): created, its group
+	// members attached, and its version recorded with source "import", in
+	// one transaction. Both paths (raw config and simple mapping) create
+	// through the monitors service.
+	ctx = monitorservice.WithVersionSource(ctx, monitorservice.VersionSourceImport)
+
 	results := make([]models.ImportRowResult, len(req.Rows))
 	successCount := 0
 	failedCount := 0
@@ -106,11 +113,12 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 			monitor *models.Monitor
 			err     error
 		)
-		if useRawConfig {
-			monitor, err = s.createMonitorFromConfig(ctx, tenantID, row, req.Mapping, monitorType)
-		} else {
-			monitor, err = s.createMonitor(ctx, tenantID, row, req.Mapping, monitorType)
-		}
+		monitor, err = s.saveRow(ctx, func(ctx context.Context) (*models.Monitor, error) {
+			if useRawConfig {
+				return s.createMonitorFromConfig(ctx, tenantID, row, req.Mapping, monitorType)
+			}
+			return s.createMonitor(ctx, tenantID, row, req.Mapping, monitorType)
+		})
 		if err != nil {
 			result.Status = "failed"
 			result.Error = err.Error()
@@ -149,11 +157,12 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 			monitor *models.Monitor
 			err     error
 		)
-		if useRawConfig {
-			monitor, err = s.createGroupMonitorFromConfig(ctx, tenantID, row, req.Mapping, monitorNameToIDs)
-		} else {
-			monitor, err = s.createGroupMonitor(ctx, tenantID, row, req.Mapping, monitorNameToID)
-		}
+		monitor, err = s.saveRow(ctx, func(ctx context.Context) (*models.Monitor, error) {
+			if useRawConfig {
+				return s.createGroupMonitorFromConfig(ctx, tenantID, row, req.Mapping, monitorNameToIDs)
+			}
+			return s.createGroupMonitor(ctx, tenantID, row, req.Mapping, monitorNameToID)
+		})
 		if err != nil {
 			result.Status = "failed"
 			result.Error = err.Error()
@@ -179,6 +188,42 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		FailedCount:  failedCount,
 		SkippedCount: skippedCount,
 	}, nil
+}
+
+// transactor and monitorLocker are implemented by the Postgres-backed
+// monitors service.
+type transactor interface {
+	InTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+type monitorLocker interface {
+	LockMonitors(ctx context.Context, tenantID uuid.UUID, write, read []uuid.UUID) error
+}
+
+// saveRow runs one row's creation as one save: the monitor, its group
+// members and its configuration version commit together, so a failed row
+// leaves nothing behind and every created monitor has its version.
+func (s *Service) saveRow(ctx context.Context, create func(ctx context.Context) (*models.Monitor, error)) (*models.Monitor, error) {
+	var monitor *models.Monitor
+	run := func(ctx context.Context) error {
+		ctx, versions := monitorservice.DeferVersions(ctx)
+		var err error
+		if monitor, err = create(ctx); err != nil {
+			return err
+		}
+		versions.Flush(ctx)
+		return nil
+	}
+	var err error
+	if tx, ok := s.monitorService.(transactor); ok {
+		err = tx.InTx(ctx, run)
+	} else {
+		err = run(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return monitor, nil
 }
 
 // createMonitor creates a single non-group monitor
@@ -402,6 +447,13 @@ func (s *Service) syncGroupMembers(ctx context.Context, tenantID, groupID uuid.U
 		parsed = append(parsed, id)
 	}
 
+	// The members are locked in lock order before their edges are written
+	// (api/internal/dbtx), as every save adding edges does.
+	if locker, ok := s.monitorService.(monitorLocker); ok {
+		if err := locker.LockMonitors(ctx, tenantID, nil, parsed); err != nil {
+			return fmt.Errorf("failed to attach group members: %w", err)
+		}
+	}
 	if err := s.groupService.AddMonitorsToGroup(ctx, tenantID, groupID, parsed); err != nil {
 		return fmt.Errorf("failed to attach group members: %w", err)
 	}
