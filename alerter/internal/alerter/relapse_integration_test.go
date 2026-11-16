@@ -493,7 +493,7 @@ func TestRelapseEachIdentityBearingKind(t *testing.T) {
 		}
 		rows.Close()
 		for _, id := range ids {
-			if _, err := a.resolveAlert(ctx, id, time.Now(), resolvedRecovered); err != nil {
+			if _, err := a.resolveAlert(ctx, id, resolvedRecovered); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -853,12 +853,63 @@ func TestRelapseOnlyAfterARecovery(t *testing.T) {
 		}
 	})
 
+	t.Run("latency: back to baseline is a recovery, no readings is not", func(t *testing.T) {
+		anomalies := newAnomalyAlerter(db)
+		enableTenantAnomaly(ctx, t, db, tenantID)
+		now := time.Now().UTC()
+		evaluate := func() {
+			t.Helper()
+			if err := anomalies.evaluateLatencyAnomalies(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		latest := func(monitorID uuid.UUID) uuid.UUID {
+			t.Helper()
+			rows := alertRowsFor(ctx, t, db, monitorID, "latency_anomaly")
+			if len(rows) == 0 {
+				t.Fatal("no latency alert opened")
+			}
+			return rows[len(rows)-1].id
+		}
+		slowThen := func(name string, then func(monitorID uuid.UUID)) uuid.UUID {
+			t.Helper()
+			monitorID := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, name)
+			seedFlatBaseline(ctx, t, db, tenantID, monitorID, now, 12, 100)
+			for _, age := range []time.Duration{10, 30, 60, 90} {
+				testutil.InsertCheckResult(ctx, t, db, tenantID, monitorID, now.Add(-age*time.Second), "success", "monitor", testutil.IntPtr(500))
+			}
+			evaluate()
+			mustExec(ctx, t, db, `UPDATE check_results SET created_at = $2, started_at = $2, completed_at = $2 WHERE monitor_id = $1`,
+				monitorID, now.Add(-10*time.Minute))
+			then(monitorID)
+			evaluate()
+			return latest(monitorID)
+		}
+		// Hard down: only failures in the window, so no latency to judge.
+		down := slowThen("slow-then-down", func(monitorID uuid.UUID) {
+			for _, age := range []time.Duration{10, 30, 60, 90} {
+				testutil.InsertCheckResult(ctx, t, db, tenantID, monitorID, now.Add(-age*time.Second), "failure", "monitor", nil)
+			}
+		})
+		if autoResolved(down) {
+			t.Fatal("a latency alert closed for lack of readings must not be reopenable")
+		}
+		fast := slowThen("slow-then-fast", func(monitorID uuid.UUID) {
+			for _, age := range []time.Duration{10, 30, 60, 90} {
+				testutil.InsertCheckResult(ctx, t, db, tenantID, monitorID, now.Add(-age*time.Second), "success", "monitor", testutil.IntPtr(100))
+			}
+		})
+		if !autoResolved(fast) {
+			t.Fatal("fresh readings back at baseline must leave the alert reopenable")
+		}
+	})
+
 	t.Run("tls and latency: cleared is a recovery, orphaned is not", func(t *testing.T) {
 		monitorID := testutil.InsertHTTPMonitor(ctx, t, db, tenantID, "cert")
 		tlsAlert := openAlert("tls_expiry", monitorID, "")
 		latency := openAlert("latency_anomaly", monitorID, "")
 		a.resolveTLSExpiryAlert(ctx, tlsAlert, tenantID, monitorID, "cert", time.Now(), time.Now(), resolvedRecovered)
-		if err := a.resolveLatencyAnomalyAlert(ctx, monitorID, tenantID, "cert", time.Now()); err != nil {
+		if err := a.resolveLatencyAnomalyAlert(ctx, monitorID, tenantID, "cert", resolvedRecovered); err != nil {
 			t.Fatal(err)
 		}
 		if !autoResolved(tlsAlert) || !autoResolved(latency) {

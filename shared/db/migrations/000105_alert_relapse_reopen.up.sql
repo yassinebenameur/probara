@@ -55,13 +55,19 @@ CREATE TABLE alert_relapses (
     PRIMARY KEY (alert_id, relapse_number)
 );
 
--- paged_relapse: the alert episode (relapse_count) of the last page this
--- route received. A route last paged in an earlier episode is due one
--- relapse notice; paging providers key their incident on it, so a late
--- resolve closes only the incident it was for. The 'relapsed' state is that
--- notice's claim (sent to the channel as a 'created' page).
+-- paged_relapse: the alert episode (relapse_count) of the last page claimed
+-- for this route. A route last paged in an earlier episode is due one
+-- relapse notice. The 'relapsed' state is that notice's claim (sent to the
+-- channel as a 'created' page).
+-- delivered_relapse: the episode of the last page actually delivered to the
+-- route (written after the send, by the alerter's synchronous path or the
+-- delivery worker; NULL until one is, read as paged_relapse). Paging
+-- providers key their incident per episode, so the resolve, the
+-- acknowledgement and a relapse notice's close of the earlier incident all
+-- target the incident this records as open, never one only claimed.
 ALTER TABLE alert_notification_states
-    ADD COLUMN paged_relapse INTEGER NOT NULL DEFAULT 0;
+    ADD COLUMN paged_relapse INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN delivered_relapse INTEGER;
 ALTER TABLE alert_notification_states
     DROP CONSTRAINT IF EXISTS alert_notification_states_last_event_type_check;
 ALTER TABLE alert_notification_states

@@ -742,7 +742,8 @@ or imported groups come back empty. Any other path that creates groups through
   and the resolve. Resolves and relapse notices are marked the same way,
   under their delivery key, which carries the episode
   (`releaseSupersededResolveClaim` and the relapse branch of
-  `releaseMutedClaim` read it). Dispatch message ids are the idempotency key plus the
+  `releaseMutedClaim` read it); a held relapse notice is handed back to the
+  exact row its claim replaced (`DispatchEnvelope.Release`). Dispatch message ids are the idempotency key plus the
   claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
   finds again on retry (the resume clock for a page, `relapsed:` plus it
   for a relapse notice, the round for a reminder, `acknowledged_at` for an
@@ -794,7 +795,14 @@ or imported groups come back empty. Any other path that creates groups through
   episode rides the ledger and idempotency keys
   (`notifications.RecipientEventKeyFor`, `notifications.IdempotencyKey`), and
   paging plugins key incidents on the route's `PagedRelapse`
-  (`pagerduty.DedupKey`, `opsgenie.Alias`).
+  (`pagerduty.DedupKey`, `opsgenie.Alias`). What is open at a provider is
+  `delivered_relapse`, written only after a delivered page (alerter sync
+  path, worker `recordDeliveredPage`); resolves, acks and a relapse notice's
+  close of the earlier incident target it (`claimNotificationTx`, worker
+  `useOpenIncident`), and a relapse notice dropped or failed for good still
+  sends that close (`closePreviousIncident`). Alert times come from the
+  database clock: `resolveAlert` and the API resolves write `NOW()`, as the
+  reopen window and `reopened_at` do; never resolve with a process clock.
 - **Alert wording lives in `shared/notifications/present`**, for every
   channel. `present.Build` turns an event into one `Message` (label, summary,
   metric, facts, deep link, tone); plugins reach it via

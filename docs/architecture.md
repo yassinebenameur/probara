@@ -176,7 +176,11 @@ with `relapse_notice`), and the episode is part of the recipient-ledger key,
 the idempotency key and so the dispatch message id (the relapse notice's
 `dispatchRound` is its own, prefixed `relapsed:`). PagerDuty and Opsgenie key
 incidents per episode, so the relapse notice closes the route's previous
-incident and opens a new one. Both the alerter claim and the async worker
+incident and opens a new one; what is open is the episode of the last page
+actually delivered (`delivered_relapse`, written after the send), which
+resolves and acknowledgements target, and a relapse notice that is dropped
+or fails for good still sends that close. `resolved_at` is the database
+clock on every resolve path, the clock of the reopen window. Both the alerter claim and the async worker
 hold the alert row `FOR SHARE` for every event, resolves included; a
 resolve still queued while the alert is open again is dropped (paging
 channels excepted) and handed back to `created` when no attempt marker or

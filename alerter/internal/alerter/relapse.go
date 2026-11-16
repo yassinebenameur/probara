@@ -152,7 +152,11 @@ func reopenRecentAlertTx(ctx context.Context, tx *sql.Tx, id alertIdentity, refr
 		WITH reopened AS (
 			UPDATE alerts al
 			SET status = 'active', resolved_at = NULL, auto_resolved = FALSE, resolve_reason = NULL,
-				relapse_count = al.relapse_count + 1, reopened_at = NOW(),
+				relapse_count = al.relapse_count + 1,
+				-- Never before the recovery it interrupts (a resolve written
+				-- by an older alerter on its own clock, or a transaction
+				-- that began a moment before that resolve committed).
+				reopened_at = GREATEST(NOW(), prev.resolved_at),
 				acknowledged_at = NULL, acknowledged_by_user_id = NULL,
 				snoozed_until = NULL, snoozed_at = NULL, snoozed_by_user_id = NULL` + set.String() + `,
 				updated_at = NOW()

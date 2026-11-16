@@ -106,6 +106,11 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 			} else {
 				q.WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow(tc.alertStatus, tc.snoozed, tc.rowRelapse))
 			}
+			if tc.eventType == "resolved" || tc.eventType == "acknowledged" {
+				// The route's open incident (useOpenIncident); none recorded.
+				mock.ExpectQuery(regexp.QuoteMeta(`SELECT delivered_relapse FROM alert_notification_states`)).
+					WillReturnRows(sqlmock.NewRows([]string{"delivered_relapse"}))
+			}
 			muted := tc.alertStatus != "" && tc.alertStatus != "resolved" && tc.rowRelapse == 0 &&
 				tc.eventType != "acknowledged" && tc.eventType != "resolved" && !tc.wantSend
 			switch {
@@ -249,6 +254,8 @@ func TestHandle_PagingResolveDeliveredWhileRelapsed(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID).
 		WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow("active", false, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT delivered_relapse FROM alert_notification_states`)).
+		WillReturnRows(sqlmock.NewRows([]string{"delivered_relapse"}))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM alert_notification_recipient_deliveries`)).

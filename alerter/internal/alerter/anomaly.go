@@ -84,7 +84,15 @@ func (a *Alerter) evaluateLatencyAnomalies(ctx context.Context) error {
 				a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": c.monitorID}).Error("Failed to open latency anomaly alert")
 			}
 		} else {
-			if err := a.resolveLatencyAnomalyAlert(ctx, c.monitorID, c.tenantID, c.monitorName, now); err != nil {
+			// Detect also says "not anomalous" when there is too little to
+			// judge (fewer than anomaly.DefaultMinSamples successful checks:
+			// a service that went from slow to hard down has none). That
+			// closes the alert, but it is no recovery a relapse may reopen.
+			reason := resolvedOutOfScope
+			if count >= anomaly.DefaultMinSamples {
+				reason = resolvedRecovered
+			}
+			if err := a.resolveLatencyAnomalyAlert(ctx, c.monitorID, c.tenantID, c.monitorName, reason); err != nil {
 				a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": c.monitorID}).Error("Failed to resolve latency anomaly alert")
 			}
 		}
@@ -315,8 +323,10 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 }
 
 // resolveLatencyAnomalyAlert resolves the open latency_anomaly alert for a
-// monitor whose latency has returned to baseline, notifying channels that fired.
-func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, tenantID uuid.UUID, monitorName string, now time.Time) error {
+// monitor whose latency is no longer judged degraded, notifying channels
+// that fired. reason says whether fresh readings showed it back at baseline
+// (a recovery) or there were too few to judge.
+func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, tenantID uuid.UUID, monitorName string, reason resolveReason) error {
 	var alertID uuid.UUID
 	var triggeredAt time.Time
 	err := a.db.QueryRowContext(ctx, `
@@ -330,8 +340,7 @@ func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, ten
 		return fmt.Errorf("query open latency alert: %w", err)
 	}
 
-	// Latency back within its baseline: a recovery.
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now, resolvedRecovered)
+	resolvedAt, err := a.resolveAlert(ctx, alertID, reason)
 	if err != nil {
 		return err
 	}
@@ -380,10 +389,9 @@ func (a *Alerter) resolveOrphanLatencyAlerts(ctx context.Context, keep []uuid.UU
 		return err
 	}
 
-	now := time.Now()
 	for _, o := range orphans {
 		// Detection off or the monitor gone: not a recovery.
-		resolvedAt, err := a.resolveAlert(ctx, o.id, now, resolvedOutOfScope)
+		resolvedAt, err := a.resolveAlert(ctx, o.id, resolvedOutOfScope)
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": o.id}).Error("Failed to resolve orphan latency alert")
 			continue

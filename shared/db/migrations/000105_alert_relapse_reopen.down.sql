@@ -8,6 +8,7 @@ ALTER TABLE alert_notification_states
     ADD CONSTRAINT alert_notification_states_last_event_type_check
         CHECK (last_event_type IN ('created', 'resolved', 'reminder')) NOT VALID;
 ALTER TABLE alert_notification_states
+    DROP COLUMN IF EXISTS delivered_relapse,
     DROP COLUMN IF EXISTS paged_relapse;
 
 DROP TABLE IF EXISTS alert_relapses;

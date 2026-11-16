@@ -455,14 +455,15 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 
 // ResolveAlert marks an alert as resolved
 func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
-	now := time.Now()
 	// resolve_reason 'manual' (notifications.ResolveReasonManual): the
 	// closing notice the alerter sends must not claim the condition cleared.
+	// resolved_at is the database clock, as the alerter's resolves are, so
+	// every alert time (and the relapse cooldown) is on one clock.
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1,
+		SET status = 'resolved', resolved_at = NOW(), updated_at = NOW(),
 			resolve_reason = '` + notifications.ResolveReasonManual + `'
-		WHERE id = $2 AND tenant_id = $3 AND status IN ('active', 'acknowledged')
+		WHERE id = $1 AND tenant_id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING id
 	`
 
@@ -475,7 +476,7 @@ func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID)
 	}()
 
 	var id uuid.UUID
-	err = tx.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
+	err = tx.QueryRowContext(ctx, query, alertID, tenantID).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrAlertAlreadyResolved

@@ -126,6 +126,9 @@ func (a *Alerter) deliverNotification(
 	// A rolled-back claim is retried by whichever replica claims next; the
 	// key lets that retry skip the recipients this attempt already reached.
 	ctx = withRecipientKey(ctx, notifications.RecipientEventKeyFor(eventType, claim.round, alert.RelapseCount))
+	if alert.RelapseNotice {
+		ctx = withClaimRelease(ctx, claim.release)
+	}
 	ctx = withDispatchRound(ctx, dispatchRound(eventType, claim.round, resumedAt.Time, acknowledgedAt.Time))
 	ctx, trace := withSendTrace(ctx)
 	sendType := eventType
@@ -152,6 +155,16 @@ func (a *Alerter) deliverNotification(
 		return false, err
 	}
 	a.recordDelivery(ctx, tx, trace, eventType, alert.ID, channel.ID, nil)
+	if (eventType == "created" || eventType == alertrouting.EventRelapsed) && !trace.queued {
+		// Delivered here (the async path records it in the worker once the
+		// provider accepted it): this episode's incident is the one open at
+		// the provider, which the resolve and acknowledgement target.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE alert_notification_states SET delivered_relapse = $3
+			WHERE alert_id = $1 AND channel_id = $2`, alert.ID, channel.ID, claim.pagedRelapse); err != nil {
+			return false, fmt.Errorf("record delivered page episode: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit notification claim: %w", err)
 	}
@@ -221,12 +234,18 @@ type notificationClaim struct {
 	claimed bool
 	// round is the last_sent_at a reminder claim replaced (zero otherwise).
 	round time.Time
-	// pagedRelapse is the route's paged_relapse after the claim: the episode
-	// of the page its provider incident belongs to.
+	// pagedRelapse is the episode whose provider incident this send is
+	// about: the claimed episode for a page or reminder; for a resolve or an
+	// acknowledgement the episode of the last page actually delivered
+	// (delivered_relapse, falling back to paged_relapse), the incident open
+	// at the provider.
 	pagedRelapse int
-	// previousPagedRelapse is, for a relapse notice, the paged_relapse the
-	// claim replaced: the episode of the route's previous page.
+	// previousPagedRelapse is, for a relapse notice, the episode of the
+	// route's last delivered page: the incident the notice closes first.
 	previousPagedRelapse int
+	// release is, for a relapse notice, the row as the claim found it, so a
+	// worker that holds the notice back can restore it exactly.
+	release notifications.ClaimRelease
 }
 
 // claimNotificationTx reserves the right to send eventType for one
@@ -282,7 +301,8 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 				alert_id, channel_id, last_sent_at, last_event_type, paged_relapse, created_at, updated_at
 			) VALUES ($1, $2, $3, 'created', $4, NOW(), NOW())
 			ON CONFLICT (alert_id, channel_id) DO NOTHING
-			RETURNING alert_id, NULL::timestamptz, paged_relapse, paged_relapse`
+			RETURNING alert_id, NULL::timestamptz, paged_relapse, paged_relapse,
+				paged_relapse, NULL::text, NULL::timestamptz`
 	case alertrouting.EventRelapsed:
 		query = `
 			UPDATE alert_notification_states s
@@ -291,7 +311,8 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			WHERE s.alert_id = $1 AND s.channel_id = $2
 			  AND prev.alert_id = s.alert_id AND prev.channel_id = s.channel_id
 			  AND s.paged_relapse < $4
-			RETURNING s.alert_id, NULL::timestamptz, s.paged_relapse, prev.paged_relapse`
+			RETURNING s.alert_id, NULL::timestamptz, s.paged_relapse, COALESCE(prev.delivered_relapse, prev.paged_relapse),
+				prev.paged_relapse, prev.last_event_type, prev.last_sent_at`
 	case "reminder":
 		if reminderInterval <= 0 {
 			return notificationClaim{}, nil
@@ -309,7 +330,8 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 				SELECT 1 FROM alerts al
 				WHERE al.id = s.alert_id
 				  AND ` + alertrouting.DispatchResumedAtExpr("al") + ` > $3::timestamptz - ($5::double precision * INTERVAL '1 second'))
-			RETURNING s.alert_id, prev.last_sent_at, s.paged_relapse, prev.paged_relapse`
+			RETURNING s.alert_id, prev.last_sent_at, s.paged_relapse, s.paged_relapse,
+				s.paged_relapse, NULL::text, NULL::timestamptz`
 		args = append(args, reminderInterval.Seconds())
 	case "resolved":
 		query = `
@@ -319,7 +341,8 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			ON CONFLICT (alert_id, channel_id) DO UPDATE
 			SET last_sent_at = EXCLUDED.last_sent_at, last_event_type = 'resolved', updated_at = NOW()
 			WHERE alert_notification_states.last_event_type <> 'resolved'
-			RETURNING alert_id, NULL::timestamptz, paged_relapse, paged_relapse`
+			RETURNING alert_id, NULL::timestamptz, COALESCE(delivered_relapse, paged_relapse), COALESCE(delivered_relapse, paged_relapse),
+				paged_relapse, NULL::text, NULL::timestamptz`
 	case "acknowledged":
 		// One-shot, and only for a channel that was actually paged: the row
 		// must exist (created fired) and the alert must not have resolved.
@@ -329,7 +352,8 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			WHERE alert_id = $1 AND channel_id = $2
 			  AND acknowledged_sent_at IS NULL
 			  AND last_event_type <> 'resolved'
-			RETURNING alert_id, NULL::timestamptz, paged_relapse, paged_relapse`
+			RETURNING alert_id, NULL::timestamptz, COALESCE(delivered_relapse, paged_relapse), COALESCE(delivered_relapse, paged_relapse),
+				paged_relapse, NULL::text, NULL::timestamptz`
 	case "suspected_cause":
 		// Advisory follow-up: one-shot, and only for a channel that was
 		// paged for this still-open alert (see dispatchSuspectedCauses).
@@ -339,7 +363,8 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			WHERE alert_id = $1 AND channel_id = $2
 			  AND suspected_cause_sent_at IS NULL
 			  AND last_event_type <> 'resolved'
-			RETURNING alert_id, NULL::timestamptz, paged_relapse, paged_relapse`
+			RETURNING alert_id, NULL::timestamptz, paged_relapse, paged_relapse,
+				paged_relapse, NULL::text, NULL::timestamptz`
 	default:
 		return notificationClaim{}, fmt.Errorf("unknown notification event type %q", eventType)
 	}
@@ -347,7 +372,11 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 	var claimedAlertID uuid.UUID
 	var round sql.NullTime
 	var c notificationClaim
-	err := tx.QueryRowContext(ctx, query, args...).Scan(&claimedAlertID, &round, &c.pagedRelapse, &c.previousPagedRelapse)
+	var prevPaged int
+	var prevEvent sql.NullString
+	var prevSent sql.NullTime
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&claimedAlertID, &round, &c.pagedRelapse, &c.previousPagedRelapse,
+		&prevPaged, &prevEvent, &prevSent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return notificationClaim{}, nil
 	}
@@ -356,6 +385,13 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 	}
 	c.claimed = true
 	c.round = round.Time
+	if eventType == alertrouting.EventRelapsed {
+		c.release = notifications.ClaimRelease{EventType: prevEvent.String, PagedRelapse: prevPaged}
+		if prevSent.Valid {
+			sent := prevSent.Time
+			c.release.SentAt = &sent
+		}
+	}
 	return c, nil
 }
 
@@ -422,6 +458,22 @@ func dispatchMessageID(ctx context.Context, key, eventType string, now time.Time
 		return key
 	}
 	return key + ":" + round
+}
+
+type claimReleaseCtx struct{}
+
+// withClaimRelease hands sendChannelNotification a relapse notice's
+// hand-back state for the dispatch envelope, without widening sendFunc.
+func withClaimRelease(ctx context.Context, release notifications.ClaimRelease) context.Context {
+	return context.WithValue(ctx, claimReleaseCtx{}, release)
+}
+
+// claimRelease returns the state withClaimRelease attached, if any.
+func claimRelease(ctx context.Context) *notifications.ClaimRelease {
+	if r, ok := ctx.Value(claimReleaseCtx{}).(notifications.ClaimRelease); ok {
+		return &r
+	}
+	return nil
 }
 
 type recipientKeyCtx struct{}

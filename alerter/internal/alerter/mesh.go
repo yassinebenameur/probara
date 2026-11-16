@@ -213,7 +213,7 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 	}
 
 	for _, e := range toResolve {
-		resolvedAt, err := a.resolveAlert(ctx, e.alertID, time.Now(), resolveReason(e.recovered))
+		resolvedAt, err := a.resolveAlert(ctx, e.alertID, resolveReason(e.recovered))
 		if errors.Is(err, errAlertAlreadyResolved) {
 			continue
 		}

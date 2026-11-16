@@ -58,7 +58,7 @@ func TestAlertRelapseMigrationUpDownUp(t *testing.T) {
 			SELECT COUNT(*) FROM information_schema.columns
 			WHERE (table_name = 'alerts' AND column_name IN ('relapse_count', 'reopened_at', 'auto_resolved', 'first_ack_episode_started_at'))
 			   OR (table_name = 'tenants' AND column_name = 'alert_reopen_cooldown_minutes')
-			   OR (table_name = 'alert_notification_states' AND column_name = 'paged_relapse')
+			   OR (table_name = 'alert_notification_states' AND column_name IN ('paged_relapse', 'delivered_relapse'))
 			   OR table_name = 'alert_relapses'`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
@@ -80,8 +80,8 @@ func TestAlertRelapseMigrationUpDownUp(t *testing.T) {
 			VALUES ($1, $2, $3, 'availability', 'resolved', NOW() - INTERVAL '1 hour', 0, NOW(), NOW())`, acked, tenant, monitor)
 
 		migrateTo(105)
-		if got := relapseColumns(); got != 10 {
-			t.Fatalf("relapse columns after 000105 = %d, want 10", got)
+		if got := relapseColumns(); got != 11 {
+			t.Fatalf("relapse columns after 000105 = %d, want 11", got)
 		}
 		// No backfill: NULL reads as the first episode (triggered_at).
 		var untouched bool

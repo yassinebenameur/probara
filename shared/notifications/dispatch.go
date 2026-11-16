@@ -46,6 +46,23 @@ type DispatchEnvelope struct {
 	// published before the field existed falls back to RecipientKey's
 	// derivation, which is stable across redeliveries of one message.
 	DeliveryKey string `json:"delivery_key,omitempty"`
+
+	// Release is set on a relapse notice: the claimed row as the alerter's
+	// claim found it, which a worker that holds the notice back (the alert
+	// was acknowledged or snoozed since) restores, so the route is exactly
+	// as if the notice had never been claimed.
+	Release *ClaimRelease `json:"release,omitempty"`
+}
+
+// ClaimRelease is a relapse notice's hand-back state
+// (DispatchEnvelope.Release).
+type ClaimRelease struct {
+	// EventType and SentAt are the row's last_event_type and last_sent_at
+	// before the relapse claim replaced them.
+	EventType string     `json:"event_type"`
+	SentAt    *time.Time `json:"sent_at,omitempty"`
+	// PagedRelapse is the row's paged_relapse before the claim.
+	PagedRelapse int `json:"paged_relapse"`
 }
 
 // RecipientKey returns the ledger key for this envelope's event.

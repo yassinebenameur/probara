@@ -350,7 +350,7 @@ func (a *Alerter) resolveOrphanTLSExpiryAlerts(ctx context.Context, keep []uuid.
 // resolveTLSExpiryAlert resolves a single tls_expiry alert and notifies any
 // channels that already fired for it.
 func (a *Alerter) resolveTLSExpiryAlert(ctx context.Context, alertID, tenantID, monitorID uuid.UUID, monitorName string, triggeredAt, now time.Time, reason resolveReason) {
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now, reason)
+	resolvedAt, err := a.resolveAlert(ctx, alertID, reason)
 	if err != nil {
 		a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": alertID}).Error("Failed to resolve tls expiry alert")
 		return

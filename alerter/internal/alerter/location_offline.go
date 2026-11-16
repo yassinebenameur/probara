@@ -26,6 +26,9 @@ type offlineLocation struct {
 	onlyMonitorCount int
 	triggeredAt      time.Time
 	resolveReason    string
+	// reporting: its last heartbeat is inside the offline threshold, the
+	// only state that counts as a recovery a relapse may reopen.
+	reporting bool
 }
 
 func (l offlineLocation) record(triggeredAt time.Time) alertRecord {
@@ -372,7 +375,8 @@ func (a *Alerter) resolveLocationOfflineAlerts(ctx context.Context) error {
 				WHEN l.id IS NULL OR l.deleted_at IS NOT NULL THEN '`+notifications.ResolveReasonLocationDeleted+`'
 				WHEN NOT l.enabled THEN '`+notifications.ResolveReasonLocationDisabled+`'
 				ELSE '`+notifications.ResolveReasonRecovered+`'
-			END
+			END,
+			COALESCE(l.last_seen_at > NOW() - make_interval(secs => `+fmt.Sprint(int(monitorstate.LocationOfflineAfter/time.Second))+`), FALSE)
 		FROM alerts al
 		LEFT JOIN locations l ON l.id = al.source_location_id
 		WHERE al.kind = 'location_offline'
@@ -387,7 +391,7 @@ func (a *Alerter) resolveLocationOfflineAlerts(ctx context.Context) error {
 	var recovered []offlineLocation
 	for rows.Next() {
 		var l offlineLocation
-		if err := rows.Scan(&l.alertID, &l.tenantID, &l.locationID, &l.name, &l.lastSeenAt, &l.triggeredAt, &l.resolveReason); err != nil {
+		if err := rows.Scan(&l.alertID, &l.tenantID, &l.locationID, &l.name, &l.lastSeenAt, &l.triggeredAt, &l.resolveReason, &l.reporting); err != nil {
 			return fmt.Errorf("scan recovered location: %w", err)
 		}
 		recovered = append(recovered, l)
@@ -397,10 +401,12 @@ func (a *Alerter) resolveLocationOfflineAlerts(ctx context.Context) error {
 	}
 
 	for _, l := range recovered {
-		// Reporting again is a recovery a relapse may reopen; a disabled or
-		// deleted location is not.
-		resolvedAt, err := a.resolveAlertWithReason(ctx, l.alertID, time.Now(),
-			resolveReason(l.resolveReason == notifications.ResolveReasonRecovered), l.resolveReason)
+		// Only a location actually reporting again recovered. Disabled or
+		// deleted is not a recovery, and neither is the grace after a
+		// re-enable (a silent location disabled and re-enabled stops counting
+		// as offline for one threshold without having sent a heartbeat).
+		recovered := l.resolveReason == notifications.ResolveReasonRecovered && l.reporting
+		resolvedAt, err := a.resolveAlertWithReason(ctx, l.alertID, resolveReason(recovered), l.resolveReason)
 		if errors.Is(err, errAlertAlreadyResolved) {
 			continue
 		}

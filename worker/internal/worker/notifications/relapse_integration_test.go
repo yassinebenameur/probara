@@ -203,6 +203,8 @@ func TestHandle_MutedRelapseNoticeReleasesItsClaim(t *testing.T) {
 		// The alerter's ledger key for the relapse notice: its own claim, in
 		// the episode, so it never reads a first page's marker.
 		DeliveryKey: notifications.RecipientEventKeyFor("relapsed", time.Time{}, 1),
+		// The row as the claim found it (the alerter sends it along).
+		Release: &notifications.ClaimRelease{EventType: "resolved", PagedRelapse: 0},
 	})
 	c := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
 	if err := c.handle(ctx, &queue.Message{Data: raw, NumDelivered: 1}); err != nil {

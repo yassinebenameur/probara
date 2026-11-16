@@ -525,7 +525,7 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 	}
 
 	for _, oa := range toResolve {
-		resolvedAt, err := a.resolveAlert(ctx, oa.record.ID, time.Now(), resolveReason(oa.recovered))
+		resolvedAt, err := a.resolveAlert(ctx, oa.record.ID, resolveReason(oa.recovered))
 		if errors.Is(err, errAlertAlreadyResolved) {
 			// A sibling replica resolved it first; it also owns the
 			// resolution notifications.

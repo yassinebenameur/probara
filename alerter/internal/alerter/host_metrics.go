@@ -410,7 +410,7 @@ func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid
 // any channels that already fired for it. The threshold rides the resolve
 // event so wording can say what range the metric returned to.
 func (a *Alerter) resolveHostMetricAlert(ctx context.Context, alertID, tenantID, monitorID uuid.UUID, monitorName, seriesKey string, threshold sql.NullFloat64, triggeredAt, now time.Time, reason resolveReason) {
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now, reason)
+	resolvedAt, err := a.resolveAlert(ctx, alertID, reason)
 	if err != nil {
 		a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": alertID}).Error("Failed to resolve host metric alert")
 		return

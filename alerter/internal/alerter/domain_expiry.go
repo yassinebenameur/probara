@@ -368,7 +368,7 @@ func (a *Alerter) resolveDomainExpiryAlert(ctx context.Context, monitorID, tenan
 	if err != nil {
 		return fmt.Errorf("query open domain expiry alert: %w", err)
 	}
-	resolvedAt, err := a.resolveAlert(ctx, alertID, now, reason)
+	resolvedAt, err := a.resolveAlert(ctx, alertID, reason)
 	if errors.Is(err, errAlertAlreadyResolved) {
 		return nil // a sibling replica resolved it
 	}

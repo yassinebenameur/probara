@@ -214,6 +214,13 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		entry.WithError(err).Error("Failed to load alert status")
 		return err
 	}
+	// Which provider incident this send is about is what the route last had
+	// delivered, read now under the lock, not what the alerter's claim
+	// assumed when it published (useOpenIncident).
+	if err := useOpenIncident(ctx, tx, &envelope); err != nil {
+		entry.WithError(err).Error("Failed to load the route's open incident")
+		return err
+	}
 	if muted {
 		// Acknowledged or snoozed since publish (alertrouting.MuteHolds): an
 		// acknowledgement must never lose the race to a page or reminder
@@ -224,6 +231,11 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			entry.WithError(err).Error("Failed to release a muted notification claim")
 			return err
 		}
+		var closed *closeRecord
+		if keyedIncidents {
+			closed = c.closePreviousIncident(ctx, entry, p, channel, envelope, deliveryAttempt(msg))
+		}
+		closed.write(ctx, tx)
 		record.droppedTx(ctx, tx, mutedReason(ctx, tx, envelope))
 		if err := tx.Commit(); err != nil {
 			entry.WithError(err).Error("Failed to commit a released notification claim")
@@ -256,7 +268,12 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// nothing ever closes. One published before a relapse reopen belongs
 		// to the episode that recovered; the relapse pages on its own.
 		entry.WithField("alert_status", alertStatus).Info("Alert resolved or reopened since publish; dropping superseded event")
-		record.dropped(ctx, reason, tx)
+		var closed *closeRecord
+		if keyedIncidents {
+			closed = c.closePreviousIncident(ctx, entry, p, channel, envelope, deliveryAttempt(msg))
+		}
+		record.dropped(ctx, reason, tx) // releases the alert row
+		closed.write(ctx, nil)
 		return nil
 	}
 
@@ -308,9 +325,18 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	}
 	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
 	c.settlePage(ctx, entry, envelope, marked, err)
+	var closed *closeRecord
+	if err == nil {
+		c.recordDeliveredPage(ctx, entry, envelope)
+	} else if keyedIncidents && (plugin.IsPermanent(err) || attempt >= MaxDeliver) {
+		// A relapse notice nothing will retry: its close of the earlier
+		// incident may never have gone out with it.
+		closed = c.closePreviousIncident(ctx, entry, p, channel, envelope, attempt)
+	}
 	// Delivery history: Send is done, so the alert lock goes first (tx only
 	// ever rolls back on this path) and the row is written through the pool.
-	record.finished(ctx, err, tx)
+	record.finished(ctx, err, tx) // releases the alert row
+	closed.write(ctx, nil)
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted
@@ -412,9 +438,10 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 // timestamp, the claim's `now`).
 //
 // A held relapse notice goes out as a page too (a "created" event with
-// RelapseNotice), claimed by moving the route's paged_relapse up to the
-// alert's episode; handing it back restores the episode of the route's
-// previous page, so the notice is due again.
+// RelapseNotice), claimed by moving the route's row to 'relapsed' in the
+// alert's episode; handing it back restores the row the claim replaced
+// (DispatchEnvelope.Release), so the notice is due again and nothing else
+// about the route changed.
 //
 // A held reminder keeps its claim: its next round counts from the later of
 // the last send and the way out of the mute, which comes after this claim,
@@ -435,13 +462,19 @@ func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.D
 	if err != nil || reached {
 		return err
 	}
-	if alert := envelope.Event.Alert; alert.RelapseNotice && alert.PreviousPagedRelapse != nil {
+	if envelope.Event.Alert.RelapseNotice && envelope.Release != nil {
+		// The row exactly as the relapse claim found it (last event, its
+		// time, the episode of its last page), so a route that heard the
+		// earlier recovery is 'resolved' again and gets no second recovery
+		// notice, the same as when the acknowledgement had come before the
+		// claim.
+		release := envelope.Release
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE alert_notification_states
-			SET paged_relapse = $4, updated_at = NOW()
+			SET last_event_type = $4, last_sent_at = COALESCE($5::timestamptz, last_sent_at), paged_relapse = $6, updated_at = NOW()
 			WHERE alert_id = $1 AND channel_id = $2
 			  AND last_event_type = 'relapsed' AND last_sent_at = $3::timestamptz`,
-			alertID, channelID, envelope.Event.Timestamp, *alert.PreviousPagedRelapse); err != nil {
+			alertID, channelID, envelope.Event.Timestamp, release.EventType, release.SentAt, release.PagedRelapse); err != nil {
 			return err
 		}
 	}

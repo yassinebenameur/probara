@@ -222,3 +222,12 @@ test('shortcutEffect applies only to an alert the action can still move', () => 
   assert.equal(shortcutEffect('resolve', 'acknowledged'), 'apply');
   assert.equal(shortcutEffect('resolve', 'resolved'), 'already_resolved');
 });
+
+test('mergeLiveAlert keeps a relapsed alert relapsed when its resolve event omits the count', () => {
+  const prev = alert('a', 'm', { relapse_count: 2, reopened_at: at(5) });
+  const resolved = mergeLiveAlert(prev, alert('a', 'm', { status: 'resolved', resolved_at: at(9), relapse_count: 0 }));
+  assert.equal(resolved.relapse_count, 2);
+  assert.equal(resolved.reopened_at, at(5));
+  // A later relapse still raises it.
+  assert.equal(mergeLiveAlert(prev, alert('a', 'm', { relapse_count: 3, reopened_at: at(10) })).relapse_count, 3);
+});
