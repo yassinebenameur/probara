@@ -99,6 +99,11 @@ export const API_PAGE: DocPage = {
                 "Used only on `/api/v1/alert-actions/acknowledge`, sent in the `X-Action-Token` header. It comes from a notification's [acknowledge link](/docs/alerting/#acknowledge-links) and authorizes acknowledging that one alert for 72 hours.",
             },
             {
+              term: "Report unsubscribe token",
+              description:
+                "Used only on `/api/v1/report-unsubscribe`, in the `X-Action-Token` header or, for a mail client's one-click unsubscribe POST, the `token` query parameter. It comes from an [emailed SLA report](/docs/slas/#schedules) and authorizes removing that one recipient from that one schedule for a year.",
+            },
+            {
               term: "MCP access token",
               description:
                 "`Bearer pbm_at_…`, issued to an AI agent by the [MCP sign-in](/docs/mcp/#authentication). Valid only on `/api/v1/mcp`: every tool call there runs as one of the routes below with the same checks. A direct REST call with it returns 401.",
@@ -287,6 +292,22 @@ export const API_PAGE: DocPage = {
               "`POST /api/v1/monitors/{id}/snooze`",
               "Create a one-monitor snooze by duration or end time",
             ],
+            [
+              "`GET /api/v1/monitors/{id}/versions`",
+              "List the monitor's [configuration versions](/docs/monitors/#config-history), newest first (paginated)",
+            ],
+            [
+              "`GET /api/v1/monitors/{id}/versions/{version}`",
+              "One version with its masked snapshot",
+            ],
+            [
+              "`GET /api/v1/monitors/{id}/versions/{version}/diff?against=`",
+              "Field changes from `against` (a version number, `current` for the live monitor, or by default the previous version) to this version",
+            ],
+            [
+              "`POST /api/v1/monitors/{id}/versions/{version}/restore`",
+              "Re-apply a version through the update path, keeping current secrets",
+            ],
           ],
         },
         {
@@ -307,6 +328,11 @@ export const API_PAGE: DocPage = {
           title: "Test and run have different side effects",
           text:
             "`POST /monitors/test` is allowed for viewers/read keys because it is compute-only. `POST /monitors/{id}/run` publishes a normal job, stores the result, changes state, and can trigger alerts, so it requires write permission. For a SIP test-call monitor (`method: invite`) both place a real call, so both, like creating or changing one, need a signed-in tenant admin or superadmin; every API key gets HTTP 403.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Configuration history: a list item carries `version`, `source` (`ui`, `api`, `mcp`, `import`, `discovery`, `restore`; `baseline` for the configuration before a monitor's first recorded save; `system` for a change made by deleting a location, channel or member monitor), `actor_type` (`user`, `api_key`, `system`), `actor_label` (the name at the time), `restored_from` on a restore, `changed_fields` (snapshot paths such as `config.url`) and `changed_secret_fields` (secret field names, never values); the list also returns `history_starts_at`, `truncated` and `retention_limit` (100). A diff change is `{path, before, after}`; a secret field is flagged `secret: true` and only ever reads `***` (set) or is absent, so a replaced secret reads `***` on both sides. Restore answers `{monitor, restored_from, version, dropped_references, secrets_to_reenter}`: `version` is absent when the monitor already matched, `dropped_references` names channels, locations, dependencies and members that no longer exist (`member:<id>`) or would now close a cycle (`dependency_cycle:<id>`, `member_cycle:<id>`), and `secrets_to_reenter` names secrets the version had that the monitor no longer holds. A restore is all or nothing; one that cannot be valid without such a secret, or conflicts with a secret held now, is a 400 naming what to do, with nothing changed. Reads need monitor read access; restore needs write access, follows the SIP test-call rule and is audited as `monitor.restore`. A version that does not exist, or was pruned, is a 404.",
         },
       ],
     },
@@ -383,7 +409,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Dependency creation rejects self-reference and transitive cycles with HTTP 409. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate.",
+            "Dependency creation rejects self-reference and transitive cycles with HTTP 409; a `PATCH /monitors/{id}` whose `depends_on_ids` would form one is refused as a whole, with nothing in it applied. A create or update and its member and dependency changes are saved in one transaction. `POST /monitors/bulk/alerting` checks every monitor and channel first, then applies the edit in batches of 100 monitors, each one transaction; an error after earlier batches committed says how many monitors were already updated; the edit is idempotent, so retrying the request is safe. A save that loses a database lock conflict twice answers 503 `conflict` with nothing saved; retry it. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate.",
         },
       ],
     },
@@ -495,6 +521,23 @@ export const API_PAGE: DocPage = {
               "Issue a closed period's report (`{\"period\": \"2026-09\"}`, default the last closed period); `409` when already issued",
             ],
             ["`GET /api/v1/sla-reports/{id}`", "An issued report as frozen; `format=json|csv|pdf` returns a download"],
+            [
+              "`GET /api/v1/sla-report-schedules/{sla_id}`",
+              "The SLA's emailed report schedule: `schedule` (null when it has none; recipients, `unsubscribed`, `include_csv`, `next_run_at`, `last_period_key`, `last_error` and per-recipient `deliveries` of the last period) with `mail_ready` and `mail_problems`",
+            ],
+            [
+              "`PUT /api/v1/sla-report-schedules/{sla_id}`",
+              "Write; create or replace it: `enabled` (default true; refused with 400 while `mail_ready` is false), `recipients` (1-50 plain addresses), `include_csv`, `resubscribe` (unsubscribed recipients to send to again). Audited as `sla-report-schedule.update`",
+            ],
+            ["`DELETE /api/v1/sla-report-schedules/{sla_id}`", "Write; delete the schedule, its recipients' unsubscribes and the links it mailed"],
+            [
+              "`GET /api/v1/report-unsubscribe`",
+              "Public; token in `X-Action-Token`. Describes the link: `state` `subscribed` or `unsubscribed` (200) with `sla_name`, `expired` (410) or `invalid` (404) with nothing else. With the token as a `token` query parameter instead it redirects (303) to the confirm page",
+            ],
+            [
+              "`POST /api/v1/report-unsubscribe`",
+              "Public; token in `X-Action-Token` or the `token` query parameter (RFC 8058 one-click, any body). Unsubscribes that recipient: `unsubscribed` (200, also when already), `expired` (410), `invalid` (404). Audited as `sla-report-schedule.unsubscribe`",
+            ],
           ],
         },
         {

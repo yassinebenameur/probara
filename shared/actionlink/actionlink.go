@@ -1,5 +1,6 @@
 // Package actionlink mints and verifies the signed tokens behind one-click
-// alert actions in notifications ("acknowledge this alert"). *Signer
+// alert actions in notifications ("acknowledge this alert") and the
+// unsubscribe links in emailed SLA reports. *Signer
 // implements present.LinkSigner, the seam package present renders action
 // links through, and the API verifies the same tokens.
 //
@@ -35,14 +36,26 @@ import (
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// ActionAcknowledge is the only action a token can authorize. It equals
-// present.ActionAcknowledge (pinned by a test).
+// ActionAcknowledge authorizes acknowledging one alert. It equals
+// present.ActionAcknowledge (pinned by a test). Its token's IDs are the
+// tenant, the alert and the channel the notification went to.
 const ActionAcknowledge = "ack"
 
-// TTL is how long a link stays valid after the notification carrying it was
-// built: long enough to cover a weekend of reminders, short enough that a
-// forwarded message goes stale.
+// ActionUnsubscribeReport authorizes removing one recipient from one SLA
+// report schedule (api/internal/services/reportschedules). Its token carries
+// the tenant, the schedule in the alert slot and the recipient's address key
+// in the channel slot, so the address itself never appears in the link.
+const ActionUnsubscribeReport = "report-unsubscribe"
+
+// TTL is how long an acknowledge link stays valid after the notification
+// carrying it was built: long enough to cover a weekend of reminders, short
+// enough that a forwarded message goes stale.
 const TTL = 72 * time.Hour
+
+// UnsubscribeTTL is how long a report email's unsubscribe link works. People
+// unsubscribe from a report weeks after it arrived, and mail rules require
+// the link to keep working well beyond the next send.
+const UnsubscribeTTL = 365 * 24 * time.Hour
 
 // hkdfInfo separates the link-signing key from every other use of the
 // secrets keyring (AES-GCM envelopes use the raw key). Changing it revokes
@@ -63,8 +76,12 @@ const (
 )
 
 // actionCodes maps an action to its byte in the token. A code is never
-// reused for a different action.
-var actionCodes = map[string]byte{ActionAcknowledge: 1}
+// reused for a different action, and the MAC covers it, so a token minted
+// for one action never authorizes another.
+var actionCodes = map[string]byte{ActionAcknowledge: 1, ActionUnsubscribeReport: 2}
+
+// actionTTL is each action's link lifetime.
+var actionTTL = map[string]time.Duration{ActionAcknowledge: TTL, ActionUnsubscribeReport: UnsubscribeTTL}
 
 // Errors. ErrExpired is returned only for an authentic token, together with
 // its claims, so a caller may still say which alert the stale link was for.
@@ -80,7 +97,9 @@ type Keyring interface {
 	KeyForVersion(v int) ([]byte, error)
 }
 
-// Claims is what a verified token authorizes.
+// Claims is what a verified token authorizes. AlertID and ChannelID are the
+// acknowledge action's names for the token's second and third IDs; see each
+// action for what they hold.
 type Claims struct {
 	Action     string
 	TenantID   uuid.UUID
@@ -121,7 +140,7 @@ func FromEnv() (*Signer, error) {
 }
 
 // ActionToken mints a token authorizing action on alertID in tenantID, as
-// delivered on channelID, valid for TTL from issuedAt (the time the
+// delivered on channelID, valid for the action's TTL from issuedAt (the time the
 // notification was built). A zero or future issuedAt counts from now, so a
 // skewed event clock can never stretch a link's lifetime. It implements
 // present.LinkSigner.
@@ -156,7 +175,7 @@ func (s *Signer) ActionToken(action, tenantID, alertID, channelID string, issued
 	if issuedAt.IsZero() || issuedAt.After(now) {
 		issuedAt = now
 	}
-	exp := issuedAt.Add(TTL).Unix()
+	exp := issuedAt.Add(actionTTL[action]).Unix()
 	if exp <= 0 || exp > 0xffffffff {
 		return "", errors.New("actionlink: expiry out of range")
 	}

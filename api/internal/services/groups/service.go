@@ -10,6 +10,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/apperr"
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
@@ -66,7 +67,7 @@ func (s *Service) AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid
 			VALUES ($1, $2, NOW())
 			ON CONFLICT (monitor_id, group_id) DO NOTHING
 		`
-		_, err := s.db.ExecContext(ctx, query, monitorID, groupID)
+		_, err := dbtx.Of(ctx, s.db).ExecContext(ctx, query, monitorID, groupID)
 		if err != nil {
 			return fmt.Errorf("failed to add monitor to group: %w", err)
 		}
@@ -89,7 +90,7 @@ func (s *Service) RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID
 	// Remove from monitor_groups
 	for _, monitorID := range monitorIDs {
 		query := `DELETE FROM monitor_groups WHERE monitor_id = $1 AND group_id = $2`
-		_, err := s.db.ExecContext(ctx, query, monitorID, groupID)
+		_, err := dbtx.Of(ctx, s.db).ExecContext(ctx, query, monitorID, groupID)
 		if err != nil {
 			return fmt.Errorf("failed to remove monitor from group: %w", err)
 		}
@@ -119,7 +120,7 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 		ORDER BY m.name
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, groupID, tenantID)
+	rows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, query, groupID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get group members: %w", err)
 	}
@@ -187,7 +188,7 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 		ORDER BY m.name
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, groupID, tenantID)
+	rows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, query, groupID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recursive group members: %w", err)
 	}
@@ -236,7 +237,7 @@ func (s *Service) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid
 		ORDER BY m.name
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, monitorID, tenantID)
+	rows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, query, monitorID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get monitor groups: %w", err)
 	}
@@ -282,6 +283,14 @@ func (s *Service) GetGroupStatus(ctx context.Context, tenantID, groupID uuid.UUI
 	return summaries[groupID].DisplayCheckStatus(), nil
 }
 
+// WouldCreateCycle reports whether adding candidateMemberID to the group
+// parentGroupID would nest the group in itself, the check AddMonitorsToGroup
+// refuses with. A restore uses it to leave such a member out instead of
+// failing.
+func (s *Service) WouldCreateCycle(ctx context.Context, tenantID, parentGroupID, candidateMemberID uuid.UUID) (bool, error) {
+	return s.wouldCreateCycle(ctx, tenantID, parentGroupID, candidateMemberID)
+}
+
 func (s *Service) wouldCreateCycle(ctx context.Context, tenantID, parentGroupID, candidateMemberID uuid.UUID) (bool, error) {
 	if parentGroupID == candidateMemberID {
 		return true, nil
@@ -319,7 +328,7 @@ func (s *Service) wouldCreateCycle(ctx context.Context, tenantID, parentGroupID,
 	`
 
 	var exists bool
-	if err := s.db.QueryRowContext(ctx, query, candidateMemberID, tenantID, parentGroupID).Scan(&exists); err != nil {
+	if err := dbtx.Of(ctx, s.db).QueryRowContext(ctx, query, candidateMemberID, tenantID, parentGroupID).Scan(&exists); err != nil {
 		return false, fmt.Errorf("failed to validate group cycle: %w", err)
 	}
 	return exists, nil
@@ -338,7 +347,7 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 	var monitor models.Monitor
 	var tags []string
 
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(
+	err := dbtx.Of(ctx, s.db).QueryRowContext(ctx, query, monitorID, tenantID).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,

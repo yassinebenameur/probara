@@ -300,6 +300,21 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   rollup ranges via the scheduler's `syncDowntimeFromIntervals` projection;
   `TestDowntimeProjectionMatchesRawAnalyticsPath` pins the pair). Never
   derive downtime from check rows.
+- **SLA burn and report emails**: burn rate, burn-down and exhaustion (S-U8,
+  `api/internal/services/slas/burn.go`) are extra buckets on the report's one
+  `IntegrateTimeline` call, never another query; `SLAReport.burn` is optional
+  like `suspected_causes`. Scheduled report emails run in the **API**
+  (`api/internal/services/reportschedules`, its `Runner` started from
+  `server.go` and stopped before the audit recorder): issue the report with
+  no lock held, then claim the period and its per-recipient deliveries in one
+  `lock_timeout` transaction before mailing; a delivery is `claimed` (safe to
+  hand back) until `sending` is committed right before `SendMessage`, so
+  `uncertain` (never resent) only follows a started send. Which periods go
+  out (catch-up of the last 3, `sends_after`, the grace-hour carry-over) is
+  `nextPeriod`; the SLA service re-plans when a period or timezone changes.
+  The burn budget base is `periodBudget` (eligible time, as the headline). Schedules need SMTP,
+  `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; unsubscribe links are
+  `shared/actionlink` tokens (`ActionUnsubscribeReport`, own TTL).
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the
@@ -326,6 +341,29 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
   cascades only on tenant delete. The label routes are writes (never in
   `postReadPaths`); export is `RequireTenantAdmin`.
+- **Monitor config history**: every path that creates or changes a monitor
+  records a version through `api/internal/services/monitors/versions.go`,
+  inside the save's transaction (`api/internal/dbtx` carries it through the
+  monitors, groups and dependencies services; `Service.InTx`, which retries a
+  deadlock once). `CreateMonitor`/`UpdateMonitor` do it; a write beside them
+  calls `RecordVersion` (member and dependency routes) or `RecordVersionTx`
+  (discovery approval); a change made outside a save (location, channel or
+  monitor delete) uses the set-based `PrepareSystemVersionsTx` (before its
+  writes) and `RecordTx` (after), which only log failures. A save of an
+  existing monitor calls `CaptureBaseline` before its first write; nothing in
+  a save may use a second pool connection. **Lock order** (doc in
+  `api/internal/dbtx`): every transaction locks the monitor rows it touches
+  before its first write, ascending id, one pass (`LockMonitorsTx`: FOR
+  UPDATE for monitors changed or versioned, edge sources included; FOR KEY
+  SHARE for edge targets); deletes lock the monitors they rewrite the same
+  way. The FOR UPDATE row lock also serializes version numbering; there are
+  no advisory locks. Snapshots are
+  masked with `secrets.MaskStoredMonitorConfig`; restore never writes a
+  secret from a version (`restoreConfig`) and refuses another type. A new
+  top-level setting accepted by `UpdateMonitorRequest` is one
+  `snapshotColumns` entry (`versions_fields.go`) plus its
+  `models.MonitorConfigSnapshot` field, or it is neither versioned nor
+  restored.
 - **Maintenance coverage**: `shared/maintenance` (S-M5). A window is a
   schedule (one-off, or the weekly `Rule`, expanded only by `Rule.Expand`);
   what covers monitors is its materialized occurrences

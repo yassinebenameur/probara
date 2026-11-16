@@ -23,4 +23,5 @@ export * from './api/locations';
 export * from './api/import';
 export * from './api/slas';
 export * from './api/discovery';
+export * from './api/monitor-versions';
 export * from './api/deliveries';

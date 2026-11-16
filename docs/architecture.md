@@ -10,7 +10,7 @@ website (`website/`) are separate applications.
 
 | Component | Responsibilities | Data access |
 |---|---|---|
-| `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV), notification configuration, templates, locations, push and OTLP ingestion, Kubernetes discovery inventory and coverage; the MCP endpoint and its OAuth authorization server (tools re-dispatched through the REST router) | PostgreSQL and NATS |
+| `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV) and their scheduled emails (background report runner), notification configuration, templates, locations, push and OTLP ingestion, Kubernetes discovery inventory and coverage; the MCP endpoint and its OAuth authorization server (tools re-dispatched through the REST router) | PostgreSQL and NATS |
 | `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging; roll repeating maintenance occurrences forward to their horizon | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
@@ -263,6 +263,23 @@ headline agree. SLA reports are computed on request by the API from
 `monitor_state_intervals`, maintenance occurrences and `alerts`; issuing one
 freezes the report document in `sla_reports` (see
 [state semantics](state-semantics.md) S-U6/S-U7).
+
+Scheduled SLA report emails run in the **API**, which owns report issuing
+and has the mailer: every replica starts the report runner
+(`api/internal/services/reportschedules`, a one-minute loop, off without
+SMTP, `APP_BASE_URL` or `PROBARA_SECRETS_KEY`). At each period close plus an
+hour it leases a due `sla_report_schedules` row (`FOR UPDATE SKIP LOCKED`,
+committed at once), issues the report with no lock held, then in one
+`lock_timeout` transaction claims the period and commits one
+`sla_report_deliveries` row per recipient before mailing anyone. Batches
+reserve deliveries as `claimed` (handed back if the runner stops) and mark
+each `sending` only right before its message leaves through `shared/mail`, so
+replicas and crashes never mail a period twice to one address (an
+interrupted send becomes `uncertain`, a transient failure retries with
+backoff). Missed closes are caught up (the last three, oldest first). Recipients unsubscribe through a
+signed `shared/actionlink` token on the public `/api/v1/report-unsubscribe`
+route. The SLA service re-plans a schedule's next send when the SLA's period
+or timezone changes.
 
 ## Shared code and security boundaries
 

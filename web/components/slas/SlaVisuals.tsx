@@ -1,8 +1,12 @@
 'use client';
 
+import { useMemo } from 'react';
+import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import Pill, { type PillTone } from '@/components/ui/Pill';
-import { formatSlaPct, type SlaTone } from '@/lib/sla';
-import { NO_DATA_BAR, UPTIME_TONE_BAR } from '@/lib/status-tones';
+import { CHART_AXIS_TICK, CHART_CURSOR, CHART_GRID, CHART_TOOLTIP_CLASS } from '@/components/monitors/metric-chart';
+import { formatPercent } from '@/lib/format';
+import { burnDownRows, formatSlaDate, formatSlaPct, type BurnDownRow, type SlaReport, type SlaTone } from '@/lib/sla';
+import { NO_DATA_BAR, UPTIME_TONE_BAR, UPTIME_TONE_VAR } from '@/lib/status-tones';
 
 const PILL_TONE: Record<SlaTone, PillTone> = { good: 'success', warn: 'warning', bad: 'danger', none: 'neutral' };
 
@@ -80,4 +84,85 @@ export function saveDownload({ blob, filename }: { blob: Blob; filename: string 
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+/** A chart instant as a day in the SLA's timezone, without the year: `5 Oct`. */
+function chartDay(ts: number, timeZone: string): string {
+  return (formatSlaDate(new Date(ts).toISOString(), timeZone, false) ?? '').replace(/ \d{4}$/, '');
+}
+
+function BurnDownTooltip({ active, payload, timeZone }: {
+  active?: boolean;
+  payload?: Array<{ payload?: BurnDownRow }>;
+  timeZone: string;
+}) {
+  const row = payload?.[0]?.payload;
+  if (!active || !row) return null;
+  return (
+    <div className={CHART_TOOLTIP_CLASS}>
+      <p className="mb-1 text-xs font-medium text-slate-400">{formatSlaDate(new Date(row.ts).toISOString(), timeZone) ?? ''}</p>
+      <p className="text-sm font-semibold tabular-nums text-white">
+        {row.remaining === null ? 'No data' : `${formatPercent(row.remaining)} left`}
+      </p>
+      <p className="text-xs tabular-nums text-slate-400">Even spend: {formatPercent(row.even)}</p>
+    </div>
+  );
+}
+
+/**
+ * The error-budget burn-down (S-U8) across the whole period: the full
+ * period's budget left after each day, against the even spend from 100% to
+ * 0%, with the 0% line a status line. The budget line is neutral ink while
+ * it stays above the even spend and takes the warn or bad tone below it or
+ * once spent, so a healthy period draws no colour.
+ */
+export function BurnDownChart({ report }: { report: SlaReport }) {
+  const rows = useMemo(() => burnDownRows(report), [report]);
+  const timeZone = report.definition.timezone;
+  const { domain, ticks, color, summary } = useMemo(() => {
+    const values = rows.map((r) => r.remaining).filter((v): v is number => v !== null);
+    const lowest = Math.max(-100, Math.min(0, ...values));
+    const floor = Math.floor(lowest / 25) * 25;
+    const steps: number[] = [];
+    for (let v = floor; v <= 100; v += 25) steps.push(v);
+    const reported = rows.filter((r) => r.remaining !== null && r.ts > rows[0].ts);
+    const last = reported[reported.length - 1];
+    let tone: 'good' | 'warn' | 'bad' = 'good';
+    if (last && last.remaining !== null) {
+      if (last.remaining <= 0) tone = 'bad';
+      else if (last.remaining < last.even) tone = 'warn';
+    }
+    return {
+      domain: [floor, 100] as [number, number],
+      ticks: steps,
+      color: tone === 'good' ? 'var(--text-secondary)' : UPTIME_TONE_VAR[tone],
+      summary: last && last.remaining !== null
+        ? `Error budget burn-down: ${formatPercent(last.remaining)} of the period's budget left on ${chartDay(last.ts, timeZone)}, against ${formatPercent(last.even)} at an even spend`
+        : 'Error budget burn-down: no data yet',
+    };
+  }, [rows, timeZone]);
+  if (rows.length < 2) return null;
+  const start = rows[0].ts;
+  const end = rows[rows.length - 1].ts;
+
+  return (
+    <div className="h-56 min-w-0" role="img" aria-label={summary}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 4 }}>
+          <CartesianGrid {...CHART_GRID} />
+          <XAxis dataKey="ts" type="number" scale="time" domain={[start, end]} axisLine={false} tickLine={false}
+            tick={CHART_AXIS_TICK} minTickGap={32} tickFormatter={(v) => chartDay(Number(v), timeZone)} />
+          <YAxis domain={domain} ticks={ticks} interval={0} width={48} axisLine={false} tickLine={false} tick={CHART_AXIS_TICK}
+            tickFormatter={(v) => formatPercent(Number(v), { digits: 0 })} />
+          <ReferenceLine y={0} stroke={UPTIME_TONE_VAR.bad} strokeWidth={1} />
+          <Tooltip content={<BurnDownTooltip timeZone={timeZone} />} cursor={CHART_CURSOR} />
+          <Line type="linear" dataKey="even" stroke="var(--text-muted)" strokeDasharray="4 4" strokeWidth={1.5} dot={false}
+            activeDot={false} isAnimationActive={false} name="Even spend" />
+          <Line type="linear" dataKey="remaining" stroke={color} strokeWidth={2} dot={false} connectNulls={false}
+            isAnimationActive={false} name="Budget left"
+            activeDot={{ r: 3.5, fill: color, stroke: 'var(--bg-elevated)', strokeWidth: 2 }} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }

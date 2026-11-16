@@ -9,6 +9,8 @@ import (
 	"net/smtp"
 	"net/textproto"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/mail"
 )
 
 // smtpMessageTimeout bounds one message's SMTP I/O (and the connect,
@@ -147,6 +149,12 @@ func (s *smtpSession) send(ctx context.Context, from string, to []string, messag
 		return stageBeforeData, fmt.Errorf("smtp write failed: %w", err)
 	}
 	if err := writer.Close(); err != nil {
+		// A reply means the relay refused the message; no reply at all
+		// leaves its fate unknown.
+		var reply *textproto.Error
+		if !errors.As(err, &reply) {
+			err = fmt.Errorf("%w: %w", mail.ErrMaybeDelivered, err)
+		}
 		return stageAfterData, fmt.Errorf("smtp close failed: %w", err)
 	}
 	return stageBeforeData, nil

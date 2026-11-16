@@ -248,3 +248,58 @@ func TestMigrateSensitiveHeaders_DryRunThenApply(t *testing.T) {
 		}
 	}
 }
+
+// Configuration versions recorded from a row that held a plain credential,
+// before snapshots applied the move rules, are scrubbed: dry run counts,
+// apply masks, a second run finds nothing.
+func TestScrubVersions_DryRunThenApply(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+	tenantID := testutil.InsertTenant(ctx, t, client, "backfill-versions")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, client, tenantID, "versioned")
+	insert := func(version int, snapshot string) {
+		t.Helper()
+		if _, err := client.ExecContext(ctx, `
+			INSERT INTO monitor_config_versions (tenant_id, monitor_id, version, snapshot, actor_type, source)
+			VALUES ($1, $2, $3, $4::jsonb, 'system', 'baseline')`, tenantID, monitorID, version, snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(1, `{"name":"versioned","type":"http","config":{"url":"https://v.example","headers":{"Authorization":"Bearer leaked","Accept":"json"},"Basic_Auth_Password":"leaked-2"}}`)
+	insert(2, `{"name":"versioned","type":"http","config":{"url":"https://v.example","secret_headers":{"Authorization":"***"}}}`)
+	var logs []string
+	logf := func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+
+	dry, err := scrubVersions(ctx, client.DB, false, logf)
+	if err != nil || dry.Scrubbed != 1 || dry.Errored != 0 {
+		t.Fatalf("dry run = %+v, %v", dry, err)
+	}
+	read := func(version int) string {
+		t.Helper()
+		var snapshot string
+		if err := client.QueryRowContext(ctx, `SELECT snapshot::text FROM monitor_config_versions WHERE monitor_id = $1 AND version = $2`, monitorID, version).Scan(&snapshot); err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+	if !strings.Contains(read(1), "leaked") {
+		t.Fatal("dry run wrote")
+	}
+	applied, err := scrubVersions(ctx, client.DB, true, logf)
+	if err != nil || applied.Scrubbed != 1 {
+		t.Fatalf("apply = %+v, %v", applied, err)
+	}
+	if v1 := read(1); strings.Contains(v1, "leaked") || !strings.Contains(v1, `"Accept": "json"`) || !strings.Contains(v1, `"secret_headers": {"Authorization": "***"}`) {
+		t.Fatalf("scrubbed snapshot = %s", v1)
+	}
+	again, err := scrubVersions(ctx, client.DB, true, logf)
+	if err != nil || again.Scrubbed != 0 {
+		t.Fatalf("second run = %+v, %v", again, err)
+	}
+	for _, line := range logs {
+		if strings.Contains(line, "leaked") {
+			t.Fatalf("a value reached the log: %s", line)
+		}
+	}
+}

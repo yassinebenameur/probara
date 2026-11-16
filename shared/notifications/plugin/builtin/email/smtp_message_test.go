@@ -166,12 +166,13 @@ type smtpTransaction struct {
 // fakeSMTPOptions shape the fake server's misbehaviour. Counts are 1-based
 // and global across connections; zero disables the behaviour.
 type fakeSMTPOptions struct {
-	reject        []string // RCPT for these addresses gets a 550
-	dropAtMail    int      // close the connection on the Nth MAIL, unanswered
-	busyAtMail    int      // answer the Nth MAIL with 421 and close
-	dropAfterData int      // record the Nth message, then close without the 250
-	silentAtMail  int      // never answer the Nth MAIL
-	quitReply     string   // answer QUIT with this ("" = 221); "silent" never answers
+	reject          []string // RCPT for these addresses gets a 550
+	dropAtMail      int      // close the connection on the Nth MAIL, unanswered
+	busyAtMail      int      // answer the Nth MAIL with 421 and close
+	dropAfterData   int      // record the Nth message, then close without the 250
+	refuseAfterData int      // answer the end of the Nth message with a 554
+	silentAtMail    int      // never answer the Nth MAIL
+	quitReply       string   // answer QUIT with this ("" = 221); "silent" never answers
 }
 
 type fakeSMTP struct {
@@ -250,10 +251,15 @@ func startFakeSMTP(t *testing.T, opts fakeSMTPOptions) *fakeSMTP {
 							f.transactions = append(f.transactions, cur)
 							datas++
 							drop := datas == opts.dropAfterData
+							refuse := datas == opts.refuseAfterData
 							f.mu.Unlock()
 							cur, body = smtpTransaction{conn: connNo}, strings.Builder{}
 							if drop {
 								return
+							}
+							if refuse {
+								write("554 message refused")
+								continue
 							}
 							write("250 queued")
 							continue
@@ -464,6 +470,22 @@ func TestSMTPMailer_SendMessageDoesNotResendAfterData(t *testing.T) {
 	}
 	if got := f.delivered(); strings.Join(got, ",") != "a@example.com,b@example.com,c@example.com" {
 		t.Errorf("server received %v, want each recipient exactly once", got)
+	}
+	// The caller learns the message may have arrived, so it never retries it.
+	if !errors.Is(err, mail.ErrMaybeDelivered) {
+		t.Errorf("err = %v, want it to wrap mail.ErrMaybeDelivered", err)
+	}
+}
+
+// A refusal of the message itself (a reply to the end of DATA) is a plain
+// failure: the relay did not take it, so a retry duplicates nothing.
+func TestSMTPMailer_RefusalAfterDataIsNotMaybeDelivered(t *testing.T) {
+	f := startFakeSMTP(t, fakeSMTPOptions{refuseAfterData: 1})
+	mailer := newTestMailer(t, f, SMTPParams{})
+	err := mailer.SendMessage(context.Background(), mail.Message{To: []string{"a@example.com"}, Subject: "s", Text: "t"})
+	var de *mail.DeliveryError
+	if !errors.As(err, &de) || errors.Is(err, mail.ErrMaybeDelivered) {
+		t.Fatalf("SendMessage = %v: a refused message must fail without reading as maybe delivered", err)
 	}
 }
 

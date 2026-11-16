@@ -264,3 +264,26 @@ func TestImplementsPresentSigner(t *testing.T) {
 	}
 	var _ present.LinkSigner = (*Signer)(nil)
 }
+
+// An unsubscribe token lives a year, and neither action's token authorizes
+// the other.
+func TestUnsubscribeActionIsSeparate(t *testing.T) {
+	s := signerAt(keyring{1: key1}, t0)
+	tok, err := s.ActionToken(ActionUnsubscribeReport, tenant.String(), alert.String(), channel.String(), t0)
+	if err != nil {
+		t.Fatalf("ActionToken: %v", err)
+	}
+	c, err := s.Verify(tok, ActionUnsubscribeReport)
+	if err != nil || !c.ExpiresAt.Equal(t0.Add(UnsubscribeTTL)) || c.AlertID != alert || c.ChannelID != channel {
+		t.Fatalf("Verify = %+v, %v", c, err)
+	}
+	if _, err := signerAt(keyring{1: key1}, t0.Add(UnsubscribeTTL)).Verify(tok, ActionUnsubscribeReport); !errors.Is(err, ErrExpired) {
+		t.Fatalf("after a year: err = %v, want ErrExpired", err)
+	}
+	if _, err := s.Verify(tok, ActionAcknowledge); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unsubscribe token as ack: err = %v, want ErrInvalid", err)
+	}
+	if _, err := s.Verify(mint(t, s, t0), ActionUnsubscribeReport); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("ack token as unsubscribe: err = %v, want ErrInvalid", err)
+	}
+}
