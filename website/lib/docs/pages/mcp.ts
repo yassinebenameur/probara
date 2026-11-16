@@ -152,6 +152,7 @@ export const MCP_PAGE: DocPage = {
             ["Fleet", "`whoami`, `get_dashboard_overview`, `list_problem_monitors`, `list_recent_failures`, `get_group_sparkline`"],
             ["Monitors", "`list_monitors`, `get_monitor`, `create_monitor`, `update_monitor`, `delete_monitor`, `test_monitor_config`, `run_monitor_now`, `snooze_monitor`, `bulk_update_alerting`, `bulk_delete_monitors`"],
             ["History", "`get_monitor_analytics`, `get_monitor_results`, `get_monitor_results_batch` (up to 100 monitors per call), `get_monitor_metrics_snapshots`, `get_synthetic_screenshot` (returns the image), `delete_monitor_history`"],
+            ["Configuration history", "`list_monitor_versions`, `get_monitor_version`, `diff_monitor_version` (against another version or `current`), `restore_monitor_version` (destructive; keeps current secrets)"],
             ["Structure", "group members, `get_dependency_graph`, dependency add/remove, `suggest_dependencies` (local AI)"],
             ["Host agents", "`list_metric_series`, `query_metrics`, collector config and install/uninstall scripts, `get_push_info`"],
             ["Import / export", "`export_monitors`, `preview_monitor_import` (send the file's text), `import_monitors`"],

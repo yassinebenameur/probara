@@ -28,6 +28,7 @@ func catalog() []spec {
 		statusPageTools(),
 		workspaceTools(),
 		platformTools(),
+		historyTools(),
 		maintenanceOccurrenceTools(),
 		deliveryTools(),
 	} {

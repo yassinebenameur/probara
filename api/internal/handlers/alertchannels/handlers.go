@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -184,6 +185,10 @@ func (h *Handlers) DeleteAlertChannel(w http.ResponseWriter, r *http.Request) {
 	if err := h.service.DeleteAlertChannel(r.Context(), tenantUUID, channelID); err != nil {
 		if errors.Is(err, alertchannelservice.ErrAlertChannelNotFound) {
 			apierrors.WriteNotFoundError(w, "alert channel not found")
+			return
+		}
+		if dbtx.IsConflict(err) {
+			apierrors.WriteError(w, http.StatusServiceUnavailable, "conflict", dbtx.ErrConflict.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{

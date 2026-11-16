@@ -1,37 +1,37 @@
-package main
+package secrets
 
 import (
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// canonicalizeCredentialKeys renames, in cfg, the miscased spellings of the
+// CanonicalizeCredentialKeys renames, in cfg, the miscased spellings of the
 // keys credentials live under: a type's registered secret fields and the
-// plain keys on secrets.PlainCredentialPaths (`Headers`, `Variables`,
+// plain keys on PlainCredentialPaths (`Headers`, `Variables`,
 // `Metadata`, a synthetic API step's `Request`/`Headers`). Before validation
 // refused them, the API stored such keys as sent; the worker honoured them
 // (config structs decode keys case-insensitively) while encryption, masking
 // and the header move did not, so those credentials sit in plain text and
-// today's validation refuses the row on every save.
+// today's validation refuses the row on every save. The
+// cmd/admin/migrate_sensitive_headers backfill repairs stored rows with it,
+// and MaskStoredMonitorConfig applies it before masking a stored config.
 //
 // When several spellings exist, their values are merged the way the struct
 // decode combined them: maps are united and equal values collapse. Spellings
 // that disagree (one header with two values, two different step lists) are a
 // conflict, returned as paths for an operator to fix by hand. cfg may be
 // partly rewritten then, so the caller must discard it.
-func canonicalizeCredentialKeys(monitorType string, cfg map[string]any) (changed bool, conflicts []string) {
-	fields := append(append([]string(nil), secrets.MonitorSecretFields[monitorType]...),
-		secrets.MonitorSecretMapFields[monitorType]...)
+func CanonicalizeCredentialKeys(monitorType string, cfg map[string]any) (changed bool, conflicts []string) {
+	fields := append(append([]string(nil), MonitorSecretFields[monitorType]...),
+		MonitorSecretMapFields[monitorType]...)
 	for _, field := range fields {
 		if renamed := canonicalizeKey(cfg, field, "", &conflicts); renamed {
 			changed = true
 		}
 	}
-	for _, path := range secrets.PlainCredentialPaths[monitorType] {
+	for _, path := range PlainCredentialPaths[monitorType] {
 		if canonicalizePath(cfg, path, "", &conflicts) {
 			changed = true
 		}
@@ -62,7 +62,7 @@ func canonicalizePath(node any, path []string, where string, conflicts *[]string
 		return false
 	}
 	key := path[0]
-	for _, candidate := range sortedKeys(object) {
+	for _, candidate := range sortedObjectKeys(object) {
 		if strings.EqualFold(candidate, key) && canonicalizePath(object[candidate], path[1:], joinPath(where, candidate), conflicts) {
 			changed = true
 		}
@@ -77,7 +77,7 @@ func canonicalizePath(node any, path []string, where string, conflicts *[]string
 // exact one, reporting the first spelling that disagrees.
 func canonicalizeKey(object map[string]any, key, where string, conflicts *[]string) bool {
 	var variants []string
-	for _, candidate := range sortedKeys(object) {
+	for _, candidate := range sortedObjectKeys(object) {
 		if candidate != key && strings.EqualFold(candidate, key) {
 			variants = append(variants, candidate)
 		}
@@ -129,7 +129,7 @@ func mergeKeyValues(a, b any) (any, bool) {
 	return nil, false
 }
 
-func sortedKeys(object map[string]any) []string {
+func sortedObjectKeys(object map[string]any) []string {
 	keys := make([]string, 0, len(object))
 	for k := range object {
 		keys = append(keys, k)

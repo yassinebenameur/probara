@@ -72,6 +72,12 @@ func TestDiscoveryLifecycle(t *testing.T) {
 	require.Equal(t, 1, count)
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM monitors WHERE tenant_id=$1`, tenant).Scan(&count))
 	require.Equal(t, 1, count)
+	// Approval records the monitor's first configuration version, once, in
+	// the creating transaction (replays record nothing).
+	var source string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*), min(source) FROM monitor_config_versions WHERE tenant_id=$1 AND monitor_id=$2`, tenant, monitor).Scan(&count, &source))
+	require.Equal(t, 1, count)
+	require.Equal(t, "discovery", source)
 	overview, err = s.Overview(ctx, tenant, i.ID, OverviewQuery{Page: 1})
 	require.NoError(t, err)
 	// No result yet: aged from created_at like the watchdog, so a monitor
