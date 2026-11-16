@@ -316,7 +316,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Public page data includes applicable maintenance with an occurrence in progress or starting within the next 14 days. A window is applicable when it directly covers a selected monitor or covers a selected group and its members. Each window appears once, at its occurrence in progress or its next one (times in UTC), never at the date its schedule was first saved; a skipped occurrence is not shown. A repeating window is labelled \"Repeats\" with up to three following starts. Custom templates read that line as `RepeatText` on each `MaintenanceWindows` entry, next to `TimeRangeText`.",
+            "Public page data includes applicable maintenance with an occurrence in progress or starting within the next 14 days. A window is applicable when it directly covers a selected monitor or covers a selected group and its members. Each window appears once, at its occurrence in progress or its next one, never at the date its schedule was first saved; a skipped occurrence is not shown. A repeating window is labelled \"Repeats\" with up to three following starts. The page is rendered with times in UTC; the built-in template's script then shows them in the visitor's local time with the UTC times alongside, and visitors without scripts keep the UTC text. Custom templates read the lines as `TimeRangeText` and `RepeatText` on each `MaintenanceWindows` entry, plus `StartsAtISO`, `EndsAtISO` and `NextStartsISO` (space-separated) in RFC 3339 UTC for their own formatting.",
         },
         {
           type: "paragraph",

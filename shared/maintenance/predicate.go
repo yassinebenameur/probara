@@ -21,9 +21,18 @@ package maintenance
 // ones (maintenance_window_past_targets) over [linked_at, unlinked_at). So a
 // target edit, like a schedule edit, takes effect when it is saved and never
 // rewrites what an earlier occurrence covered. Group membership is read as
-// it is now. Skipped occurrences cover nothing. timeCond is applied to the
-// raw occurrence (alias mwo, for the index) and to the clipped span (alias
-// mo).
+// it is now. Skipped occurrences cover nothing.
+//
+// The shape is what keeps it cheap as history grows: it starts from the
+// monitor's own links (four index lookups on monitor_id: direct and via its
+// groups, current and removed) and only then reads each window's
+// occurrences through idx_maintenance_window_occurrences_window_end, whose
+// ends_at bound skips everything that ended before the instant or range
+// asked about. Do not fold the branches into one "monitor_id = X OR IN
+// (groups)" filter: the planner then starts from the occurrence table and
+// reads a tenant's whole history once per monitor row. timeCond is applied
+// to the raw occurrence (alias mwo, for the index) and to the clipped span
+// (alias mo).
 //
 // A window that targets both a monitor and its group yields the occurrence
 // twice, and a monitor removed and re-added yields one piece per link;
@@ -32,26 +41,38 @@ func occurrencesSQL(tenantExpr, monitorExpr string, timeCond func(alias string) 
 	return `(
 		SELECT mo.window_id, mo.occurrence_starts_at, mo.starts_at, mo.ends_at
 		FROM (
-			SELECT mwo.window_id, mwo.starts_at AS occurrence_starts_at,
+			SELECT mwt.window_id, mwo.starts_at AS occurrence_starts_at,
 				GREATEST(mwo.starts_at, mwt.valid_from) AS starts_at,
 				LEAST(mwo.ends_at, mwt.valid_to) AS ends_at
 			FROM (
-				SELECT maintenance_window_id, monitor_id, linked_at AS valid_from,
+				SELECT l.maintenance_window_id AS window_id, l.linked_at AS valid_from,
 					'infinity'::timestamptz AS valid_to
-				FROM maintenance_window_monitors
+				FROM maintenance_window_monitors l
+				WHERE l.monitor_id = ` + monitorExpr + `
 				UNION ALL
-				SELECT maintenance_window_id, monitor_id, linked_at, unlinked_at
-				FROM maintenance_window_past_targets
+				SELECT l.maintenance_window_id, l.linked_at, 'infinity'::timestamptz
+				FROM monitor_groups mg
+				JOIN maintenance_window_monitors l ON l.monitor_id = mg.group_id
+				WHERE mg.monitor_id = ` + monitorExpr + `
+				UNION ALL
+				SELECT p.maintenance_window_id, p.linked_at, p.unlinked_at
+				FROM maintenance_window_past_targets p
+				WHERE p.monitor_id = ` + monitorExpr + `
+				UNION ALL
+				SELECT p.maintenance_window_id, p.linked_at, p.unlinked_at
+				FROM monitor_groups mg
+				JOIN maintenance_window_past_targets p ON p.monitor_id = mg.group_id
+				WHERE mg.monitor_id = ` + monitorExpr + `
 			) mwt
-			JOIN maintenance_window_occurrences mwo ON mwo.window_id = mwt.maintenance_window_id
-			WHERE mwo.tenant_id = ` + tenantExpr + `
-			  AND NOT mwo.skipped
-			  AND ` + timeCond("mwo") + `
-			  AND mwo.starts_at < mwt.valid_to AND mwo.ends_at > mwt.valid_from
-			  AND (mwt.monitor_id = ` + monitorExpr + `
-			       OR mwt.monitor_id IN (
-			           SELECT mg.group_id FROM monitor_groups mg
-			           WHERE mg.monitor_id = ` + monitorExpr + `))
+			CROSS JOIN LATERAL (
+				SELECT o.starts_at, o.ends_at
+				FROM maintenance_window_occurrences o
+				WHERE o.window_id = mwt.window_id
+				  AND o.tenant_id = ` + tenantExpr + `
+				  AND NOT o.skipped
+				  AND ` + timeCond("o") + `
+				  AND o.starts_at < mwt.valid_to AND o.ends_at > mwt.valid_from
+			) mwo
 		) mo
 		WHERE ` + timeCond("mo") + `)`
 }

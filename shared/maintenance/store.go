@@ -263,15 +263,17 @@ func Reschedule(ctx context.Context, q DB, tenantID, windowID uuid.UUID, s Sched
 	case active != nil:
 		// The new schedule covers the present but nothing is running: the
 		// new occurrence starts now, never earlier. For a repeating window,
-		// an occurrence of the series that already started (and was ended
-		// early) or was skipped since active.Start is that same occurrence,
-		// handled already, so an unrelated edit does not revive it. A
+		// an occurrence of this slot (started since active.Start) that an
+		// operator skipped or ended early was handled already, so a later
+		// edit does not revive it. One that simply ran to its scheduled end
+		// was not: lengthening the rule past now covers from the edit. A
 		// one-off edited to cover the present again does run again.
 		handled := false
 		if s.Repeat != nil {
 			if err := q.QueryRowContext(ctx, `
 				SELECT EXISTS (SELECT 1 FROM maintenance_window_occurrences
-				WHERE window_id = $1 AND tenant_id = $2 AND starts_at >= $3 AND starts_at <= $4)`,
+				WHERE window_id = $1 AND tenant_id = $2 AND starts_at >= $3 AND starts_at <= $4
+				  AND (skipped OR ended_early))`,
 				windowID, tenantID, active.Start, now).Scan(&handled); err != nil {
 				return nil, fmt.Errorf("read maintenance occurrence in progress: %w", err)
 			}
@@ -295,6 +297,8 @@ func Reschedule(ctx context.Context, q DB, tenantID, windowID uuid.UUID, s Sched
 
 // EndNow ends the window's occurrence in progress at now, leaving its
 // schedule and later occurrences alone, and reports whether one was running.
+// It marks the occurrence ended_early, so a later schedule edit does not
+// revive what an operator stopped (Reschedule).
 // One that started at this very instant has no past to keep and is skipped
 // instead. Run it under the window's row lock with now from the
 // transaction's clock.
@@ -307,7 +311,7 @@ func EndNow(ctx context.Context, q DB, tenantID, windowID uuid.UUID, now time.Ti
 	}
 	skipped, _ := res.RowsAffected()
 	res, err = q.ExecContext(ctx, `
-		UPDATE maintenance_window_occurrences SET ends_at = $3
+		UPDATE maintenance_window_occurrences SET ends_at = $3, ended_early = true
 		WHERE window_id = $1 AND tenant_id = $2 AND starts_at < $3 AND ends_at > $3 AND NOT skipped`,
 		windowID, tenantID, now)
 	if err != nil {
@@ -379,7 +383,7 @@ const liveRepeatingSQL = `mw.recurrence_weekdays IS NOT NULL
 // (FOR UPDATE), the lock every API edit holds while it rewrites the schedule
 // and its occurrences. The schedule and the last materialized start are read
 // only after the lock is granted, so a roll never inserts occurrences of a
-// schedule an edit has just replaced. A window whose rule does not expand is
+// schedule an edit has just replaced. A window that fails to roll is
 // skipped, never stalling the others, and reported in the returned error.
 func RollForward(ctx context.Context, q TxDB, now time.Time) (int, error) {
 	rows, err := q.QueryContext(ctx, `
@@ -411,30 +415,32 @@ func RollForward(ctx context.Context, q TxDB, now time.Time) (int, error) {
 			return added, err
 		}
 		n, err := rollWindow(ctx, q, id, now)
-		var expandErr *rollExpandError
-		if errors.As(err, &expandErr) {
-			skipped = append(skipped, err)
-			continue
-		}
 		if err != nil {
-			return added, err
+			// One window that fails (a stored rule that no longer
+			// expands, a write that fails) must never stall the roll for
+			// every window after it: report it and move on.
+			if ctx.Err() != nil {
+				return added, errors.Join(append(skipped, ctx.Err())...)
+			}
+			skipped = append(skipped, &rollWindowError{windowID: id, err: err})
+			continue
 		}
 		added += n
 	}
 	return added, errors.Join(skipped...)
 }
 
-// rollExpandError is a stored rule that no longer expands.
-type rollExpandError struct {
+// rollWindowError is one window the roll skipped.
+type rollWindowError struct {
 	windowID uuid.UUID
 	err      error
 }
 
-func (e *rollExpandError) Error() string {
+func (e *rollWindowError) Error() string {
 	return fmt.Sprintf("maintenance window %s skipped: %v", e.windowID, e.err)
 }
 
-func (e *rollExpandError) Unwrap() error { return e.err }
+func (e *rollWindowError) Unwrap() error { return e.err }
 
 // rollWindow extends one window under its row lock (see RollForward).
 func rollWindow(ctx context.Context, q TxDB, windowID uuid.UUID, now time.Time) (int, error) {
@@ -470,11 +476,11 @@ func rollWindow(ctx context.Context, q TxDB, windowID uuid.UUID, now time.Time) 
 	}
 	s, err := sc.Schedule()
 	if err != nil {
-		return 0, &rollExpandError{windowID: windowID, err: err}
+		return 0, err
 	}
 	occ, err := s.upcoming(now)
 	if err != nil {
-		return 0, &rollExpandError{windowID: windowID, err: err}
+		return 0, err
 	}
 	var add []Occurrence
 	for _, o := range occ {
@@ -502,14 +508,28 @@ func rollWindow(ctx context.Context, q TxDB, windowID uuid.UUID, now time.Time) 
 // insertOccurrences adds occurrences, keeping any row already at the same
 // start. A skipped row there stays skipped and takes the new end, so the
 // occurrence list shows the span the schedule now gives it.
+//
+// Occurrences sharing a start become one row with the latest end. That
+// happens whenever several overlapping occurrences are already under way
+// and all are clipped to start now (a 30-hour daily rule saved mid-run):
+// coverage is a union anyway, and one INSERT may not touch a key twice.
 func insertOccurrences(ctx context.Context, q DB, tenantID, windowID uuid.UUID, occ []Occurrence) error {
 	if len(occ) == 0 {
 		return nil
 	}
-	starts := make([]time.Time, len(occ))
-	ends := make([]time.Time, len(occ))
-	for i, o := range occ {
-		starts[i], ends[i] = o.Start.UTC(), o.End.UTC()
+	byStart := make(map[int64]int, len(occ))
+	var starts, ends []time.Time
+	for _, o := range occ {
+		key := o.Start.UnixNano()
+		if i, dup := byStart[key]; dup {
+			if o.End.After(ends[i]) {
+				ends[i] = o.End.UTC()
+			}
+			continue
+		}
+		byStart[key] = len(starts)
+		starts = append(starts, o.Start.UTC())
+		ends = append(ends, o.End.UTC())
 	}
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at)

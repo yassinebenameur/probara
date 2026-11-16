@@ -543,7 +543,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Maintenance windows are classified as upcoming, active, or past, from their occurrences: active while one is in progress, upcoming while one is ahead, past otherwise. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during each occurrence. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest next start, past by most recent end (the unfiltered list newest first), so a page cut never drops the next window.",
+            "Maintenance windows are classified as upcoming, active, or past, from their occurrences: active while one is in progress, upcoming while one that is not skipped is ahead, past otherwise. Checks continue to execute and states continue to change; the alert opening/notification path is muted for covered monitors during each occurrence. `GET /maintenance-windows?status=` lists each class in the order an operator needs it: active windows by soonest end, upcoming by soonest next start, past by most recent end (the unfiltered list newest first), so a page cut never drops the next window.",
         },
         {
           type: "paragraph",
@@ -553,7 +553,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Occurrences are materialized 35 days ahead: the API writes them when a window is saved and the scheduler rolls the horizon forward every hour. Each window response carries `recurrence` (repeating windows only) and `next_occurrence` (the one in progress, else the next that is not skipped); for a repeating window `starts_at`/`ends_at` are the first occurrence of its current schedule. `GET /maintenance-windows/{id}/occurrences?status=upcoming|past` lists the concrete occurrences, each `active`, `upcoming`, `past` or `skipped`.",
+            "Occurrences are materialized 35 days ahead: the API writes them when a window is saved and the scheduler rolls the horizon forward every hour. Each window response carries `recurrence` (repeating windows only) and `next_occurrence` (the one in progress, else the next that is not skipped); for a repeating window `starts_at`/`ends_at` are the first occurrence of its current schedule. For a one-off they are always the span it actually covers: after an edit or an early end they are its occurrence's times rather than the times sent (a start that has passed never moves, ending one stores the moment it ended, and a finished one-off given a new future end shows it covering from the edit). `GET /maintenance-windows/{id}/occurrences?status=upcoming|past` lists the concrete occurrences, each `active`, `upcoming`, `past` or `skipped`.",
         },
         {
           type: "list",
@@ -564,6 +564,11 @@ export const ALERTING_PAGE: DocPage = {
             "**Skip next occurrence** (`POST /maintenance-windows/{id}/skip-next`) skips the next occurrence that has not started; the series carries on after it.",
             "**Deleting a window** ends coverage immediately and removes its future occurrences. Time it already covered stays in availability and SLA history; a window that never started is removed entirely.",
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Occurrences are never pruned: like the state timeline, they are the history SLA reports and uptime read back for any period. Two things still change past coverage: creating a one-off whose start is already in the past covers from that start (backdated maintenance), and group membership is read as it is now, so adding a monitor to a group that a window targets also covers it for that window's past occurrences.",
         },
         {
           type: "paragraph",

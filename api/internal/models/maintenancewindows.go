@@ -32,15 +32,18 @@ type MaintenanceWindow struct {
 	TenantID    uuid.UUID `json:"tenant_id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
-	// StartsAt/EndsAt are a one-off's span. For a repeating window they are
-	// the first occurrence of its current schedule; read NextOccurrence and
-	// the occurrence list for the rest.
+	// StartsAt/EndsAt are a one-off's span as it actually covers: after an
+	// edit or end-now they are its occurrence's times, not the times sent
+	// (a start that has passed never moves; ending stores the moment it
+	// ended). For a repeating window they are the first occurrence of its
+	// current schedule; read NextOccurrence and the occurrence list for the
+	// rest.
 	StartsAt   time.Time                     `json:"starts_at"`
 	EndsAt     time.Time                     `json:"ends_at"`
 	MonitorIDs []uuid.UUID                   `json:"monitor_ids"`
 	Monitors   []MaintenanceWindowMonitorRef `json:"monitors,omitempty"`
 	// Status comes from the occurrences: active while one is in progress,
-	// upcoming while one is ahead, past otherwise.
+	// upcoming while one that is not skipped is ahead, past otherwise.
 	Status MaintenanceWindowStatus `json:"status"`
 	// Recurrence is set for a repeating window.
 	Recurrence *MaintenanceRecurrence `json:"recurrence,omitempty"`

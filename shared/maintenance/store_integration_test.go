@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -285,5 +286,104 @@ func TestEndNowSkipNextAndRetire(t *testing.T) {
 	future := f.window(t, Schedule{Start: utc(2026, 8, 1, 0, 0), End: utc(2026, 8, 1, 1, 0)}, now0)
 	if started, err := Retire(f.ctx, f.db, f.tenant, future, now0); err != nil || started {
 		t.Fatalf("Retire of a window that never started = %v, %v; want nothing to keep", started, err)
+	}
+}
+
+// S-M5: saving a rule whose overlapping occurrences are both under way
+// covers from the save with one row (the latest end), never two rows
+// fighting over the same start.
+func TestMaterialize_OverlappingOccurrencesUnderWay(t *testing.T) {
+	f := newStoreFixture(t)
+
+	// Daily at 02:00 for 30 hours, saved at 04:00: yesterday's (to 08:00
+	// today) and today's (to 08:00 tomorrow) both run.
+	id := f.window(t, Schedule{Repeat: dailyAt(2, 30*time.Hour)}, utc(2026, 6, 2, 4, 0))
+	occ := f.occurrences(t, id)
+	if !occ[0].Start.Equal(utc(2026, 6, 2, 4, 0)) || !occ[0].End.Equal(utc(2026, 6, 3, 8, 0)) {
+		t.Fatalf("first occurrence = %+v, want [save, tomorrow 08:00)", occ[0])
+	}
+	if !occ[1].Start.Equal(utc(2026, 6, 3, 2, 0)) {
+		t.Fatalf("second occurrence = %+v, want tomorrow 02:00", occ[1])
+	}
+
+	// Saturday and Sunday at 00:00 for 48 hours, saved on Sunday 7 June.
+	weekend := &Rule{Weekdays: []time.Weekday{time.Saturday, time.Sunday}, StartMinute: 0, Duration: 48 * time.Hour, Timezone: "UTC"}
+	id = f.window(t, Schedule{Repeat: weekend}, utc(2026, 6, 7, 10, 0))
+	occ = f.occurrences(t, id)
+	if !occ[0].Start.Equal(utc(2026, 6, 7, 10, 0)) || !occ[0].End.Equal(utc(2026, 6, 9, 0, 0)) {
+		t.Fatalf("first weekend occurrence = %+v, want [save, Tuesday 00:00)", occ[0])
+	}
+
+	// The roll after a long gap clips the same way.
+	if _, err := f.db.ExecContext(f.ctx, `DELETE FROM maintenance_window_occurrences WHERE window_id = $1 AND starts_at > $2`,
+		id, utc(2026, 6, 8, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RollForward(f.ctx, f.db, utc(2026, 6, 14, 10, 0)); err != nil {
+		t.Fatalf("RollForward over overlapping missed occurrences: %v", err)
+	}
+}
+
+// The hourly roll reports a window it cannot roll and carries on with the
+// others.
+func TestRollForward_ContinuesPastAFailingWindow(t *testing.T) {
+	f := newStoreFixture(t)
+	now0 := utc(2026, 6, 1, 0, 0)
+	bad := f.window(t, Schedule{Repeat: dailyAt(2, time.Hour)}, now0)
+	good := f.window(t, Schedule{Repeat: dailyAt(3, time.Hour)}, now0)
+	// A stored rule that no longer expands, and a write that fails.
+	unexpandable := f.window(t, Schedule{Repeat: dailyAt(4, time.Hour)}, now0)
+	if _, err := f.db.ExecContext(f.ctx, `UPDATE maintenance_windows SET recurrence_timezone = 'Nowhere/Zone' WHERE id = $1`, unexpandable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.ExecContext(f.ctx, `
+		CREATE FUNCTION refuse_window() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.window_id = '`+bad.String()+`' THEN RAISE EXCEPTION 'refused'; END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER refuse_window BEFORE INSERT ON maintenance_window_occurrences
+		FOR EACH ROW EXECUTE FUNCTION refuse_window()`); err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.occurrences(t, good))
+	added, err := RollForward(f.ctx, f.db, now0.Add(7*24*time.Hour))
+	if err == nil || !strings.Contains(err.Error(), bad.String()) || !strings.Contains(err.Error(), unexpandable.String()) {
+		t.Fatalf("RollForward error = %v; want both failing windows reported", err)
+	}
+	if added != 7 || len(f.occurrences(t, good)) != before+7 {
+		t.Fatalf("RollForward added %d (good window %d -> %d); want the good window rolled", added, before, len(f.occurrences(t, good)))
+	}
+}
+
+// S-M5: lengthening a rule after today's occurrence ran to its scheduled end
+// covers from the edit; one an operator ended early stays ended.
+func TestReschedule_LengtheningAfterANaturalEnd(t *testing.T) {
+	f := newStoreFixture(t)
+	now0 := utc(2026, 6, 1, 0, 0)
+
+	natural := f.window(t, Schedule{Repeat: dailyAt(2, 30*time.Minute)}, now0)
+	edit := utc(2026, 6, 1, 3, 0) // today's 02:00–02:30 is over
+	if _, err := Reschedule(f.ctx, f.db, f.tenant, natural, Schedule{Repeat: dailyAt(2, 2*time.Hour)}, edit); err != nil {
+		t.Fatal(err)
+	}
+	occ := f.occurrences(t, natural)
+	if !occ[0].End.Equal(utc(2026, 6, 1, 2, 30)) {
+		t.Fatalf("finished occurrence rewritten: %+v", occ[0])
+	}
+	if !occ[1].Start.Equal(edit) || !occ[1].End.Equal(utc(2026, 6, 1, 4, 0)) {
+		t.Fatalf("occurrence after lengthening = %+v, want [edit, 04:00)", occ[1])
+	}
+
+	stopped := f.window(t, Schedule{Repeat: dailyAt(2, 30*time.Minute)}, now0)
+	if ended, err := EndNow(f.ctx, f.db, f.tenant, stopped, utc(2026, 6, 1, 2, 10)); err != nil || !ended {
+		t.Fatalf("EndNow = %v, %v", ended, err)
+	}
+	if _, err := Reschedule(f.ctx, f.db, f.tenant, stopped, Schedule{Repeat: dailyAt(2, 2*time.Hour)}, edit); err != nil {
+		t.Fatal(err)
+	}
+	occ = f.occurrences(t, stopped)
+	if !occ[0].End.Equal(utc(2026, 6, 1, 2, 10)) || !occ[1].Start.Equal(utc(2026, 6, 2, 2, 0)) {
+		t.Fatalf("occurrences after editing an ended-early slot = %+v; want it to stay ended", occ[:2])
 	}
 }

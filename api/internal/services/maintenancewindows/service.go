@@ -365,6 +365,12 @@ func (s *Service) Update(ctx context.Context, tenantID, windowID uuid.UUID, req 
 		return nil, fmt.Errorf("failed to update maintenance window: %w", err)
 	}
 
+	if next.Repeat == nil && !next.SameAs(old) {
+		if err := storeOneOffSpanTx(ctx, tx, windowID); err != nil {
+			return nil, err
+		}
+	}
+
 	if req.MonitorIDs != nil {
 		if err := validateMonitorIDsTx(ctx, tx, tenantID, monitorIDs); err != nil {
 			return nil, err
@@ -377,6 +383,25 @@ func (s *Service) Update(ctx context.Context, tenantID, windowID uuid.UUID, req 
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 	return s.Get(ctx, tenantID, windowID)
+}
+
+// storeOneOffSpanTx makes a one-off's starts_at/ends_at the span it actually
+// covers: its latest occurrence. An edit never moves a start that has
+// passed, ends a running window at the database's now rather than at a
+// past ends_at, and re-opens a finished one from the edit (S-M5), so the
+// times as sent can disagree with coverage; the stored ones never do.
+func storeOneOffSpanTx(ctx context.Context, tx *sql.Tx, windowID uuid.UUID) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE maintenance_windows mw SET starts_at = o.starts_at, ends_at = o.ends_at
+		FROM (
+			SELECT starts_at, ends_at FROM maintenance_window_occurrences
+			WHERE window_id = $1 AND NOT skipped
+			ORDER BY starts_at DESC LIMIT 1
+		) o
+		WHERE mw.id = $1`, windowID); err != nil {
+		return fmt.Errorf("store one-off maintenance span: %w", err)
+	}
+	return nil
 }
 
 // nextSchedule applies an update request to a window's schedule. A sent
@@ -468,10 +493,8 @@ func (s *Service) EndOccurrence(ctx context.Context, tenantID, windowID uuid.UUI
 		return nil, invalid("no occurrence of this window is in progress")
 	}
 	if sched.Repeat == nil {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE maintenance_windows SET ends_at = $2, updated_at = NOW()
-			WHERE id = $1 AND starts_at < $2 AND ends_at > $2`, windowID, now); err != nil {
-			return nil, fmt.Errorf("end maintenance window: %w", err)
+		if err := storeOneOffSpanTx(ctx, tx, windowID); err != nil {
+			return nil, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -635,8 +658,8 @@ func (s *Service) SnoozeMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 // status filters by derived lifecycle; monitorID filters windows targeting it.
 // The lifecycle comes from the occurrences, never the window's own times
 // (S-M5): active while one that is not skipped is in progress, upcoming
-// while one is ahead, past otherwise. Deleted windows (kept as history) are
-// never listed.
+// while one that is not skipped is ahead, past otherwise. Deleted windows
+// (kept as history) are never listed.
 func (s *Service) query(ctx context.Context, tenantID uuid.UUID, status string, monitorID uuid.UUID, windowID *uuid.UUID, page, pageSize int) ([]models.MaintenanceWindow, int, error) {
 	where := []string{"TRUE"}
 	args := []interface{}{tenantID}
@@ -683,7 +706,7 @@ func (s *Service) query(ctx context.Context, tenantID uuid.UUID, status string, 
 				(SELECT MAX(o.ends_at) FROM maintenance_window_occurrences o
 				 WHERE o.window_id = w.id AND NOT o.skipped AND o.starts_at <= NOW() AND o.ends_at > NOW()) AS active_end,
 				(SELECT MIN(o.starts_at) FROM maintenance_window_occurrences o
-				 WHERE o.window_id = w.id AND o.starts_at > NOW()) AS next_start,
+				 WHERE o.window_id = w.id AND NOT o.skipped AND o.starts_at > NOW()) AS next_start,
 				(SELECT MAX(o.ends_at) FROM maintenance_window_occurrences o
 				 WHERE o.window_id = w.id AND NOT o.skipped AND o.ends_at <= NOW()) AS last_end
 			FROM maintenance_windows w

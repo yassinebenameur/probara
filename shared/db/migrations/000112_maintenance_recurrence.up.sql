@@ -28,19 +28,29 @@ ALTER TABLE maintenance_windows
 -- and the alert predicates read them back as far as a query reaches, and an
 -- edit only replaces the ones that have not started (shared/maintenance).
 -- A skipped occurrence stays as a row so the horizon roller never
--- re-creates it; coverage ignores it.
+-- re-creates it; coverage ignores it. Past occurrences are never pruned:
+-- they are SLA history, like monitor_state_intervals.
 CREATE TABLE maintenance_window_occurrences (
     window_id UUID        NOT NULL REFERENCES maintenance_windows(id) ON DELETE CASCADE,
     tenant_id UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     starts_at TIMESTAMPTZ NOT NULL,
     ends_at   TIMESTAMPTZ NOT NULL,
     skipped   BOOLEAN     NOT NULL DEFAULT false,
+    -- An operator ended it before its scheduled end (end-now, delete); a
+    -- later schedule edit does not start this slot again.
+    ended_early BOOLEAN   NOT NULL DEFAULT false,
     PRIMARY KEY (window_id, starts_at),
     CONSTRAINT maintenance_window_occurrences_time_order CHECK (ends_at > starts_at)
 );
 
+-- Coverage reads (shared/maintenance occurrencesSQL) start from a monitor's
+-- links and probe each window here: ends_at > the instant (or range start)
+-- skips the whole history, and the included columns let the probe answer
+-- from the index alone. This is what keeps the per-monitor predicates on
+-- the alerter, monitor list and status page flat as history grows.
 CREATE INDEX idx_maintenance_window_occurrences_window_end
-    ON maintenance_window_occurrences (window_id, ends_at);
+    ON maintenance_window_occurrences (window_id, ends_at)
+    INCLUDE (starts_at, skipped, tenant_id);
 CREATE INDEX idx_maintenance_window_occurrences_tenant_time
     ON maintenance_window_occurrences (tenant_id, starts_at, ends_at);
 

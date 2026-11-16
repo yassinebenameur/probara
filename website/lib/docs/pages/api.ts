@@ -468,7 +468,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A repeating window takes no `starts_at`/`ends_at`. On `PATCH`, a sent `recurrence` replaces the whole rule, and `{\"frequency\": \"none\"}` with both times makes the window a one-off again. Schedule and monitor changes apply from the moment they are saved; occurrences that already started are never rewritten. See [maintenance windows](/docs/alerting/#maintenance) for the timezone and daylight-saving rules.",
+            "A repeating window takes no `starts_at`/`ends_at`. On `PATCH`, a sent `recurrence` replaces the whole rule, and `{\"frequency\": \"none\"}` with both times makes the window a one-off again. Schedule and monitor changes apply from the moment they are saved; occurrences that already started are never rewritten. A one-off's `starts_at`/`ends_at` in responses are the span it actually covers, which after an edit can differ from the times sent. See [maintenance windows](/docs/alerting/#maintenance) for the timezone and daylight-saving rules.",
         },
       ],
     },

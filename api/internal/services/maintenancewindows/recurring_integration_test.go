@@ -329,11 +329,12 @@ func TestOneOffEditsApplyFromNow(t *testing.T) {
 
 	// Moving the start earlier does not reach into the past.
 	earlier := now.Add(-3 * time.Hour)
-	_, err = svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{StartsAt: &earlier})
+	w, err = svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{StartsAt: &earlier})
 	require.NoError(t, err)
 	occ = occurrenceRows(ctx, t, dbClient, w.ID)
 	require.Len(t, occ, 1)
 	require.True(t, occ[0].start.Equal(now.Add(-time.Hour)), "a started occurrence keeps its start")
+	require.True(t, w.StartsAt.Equal(occ[0].start), "the stored span is the one covered, not the one sent")
 
 	w, err = svc.EndOccurrence(ctx, tenantID, w.ID)
 	require.NoError(t, err)
@@ -344,4 +345,61 @@ func TestOneOffEditsApplyFromNow(t *testing.T) {
 	later := now.Add(-30 * time.Minute)
 	_, err = svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{EndsAt: &later})
 	require.ErrorContains(t, err, "ends_at must be in the future")
+
+	// Re-opening the finished one-off covers from the edit, and the window
+	// says so instead of showing its old start with a gap.
+	reopen := now.Add(2 * time.Hour)
+	w, err = svc.Update(ctx, tenantID, w.ID, &models.UpdateMaintenanceWindowRequest{EndsAt: &reopen})
+	require.NoError(t, err)
+	require.Equal(t, models.MaintenanceWindowStatusActive, w.Status)
+	require.True(t, w.StartsAt.After(now), "re-opened from the edit: %v", w.StartsAt)
+	require.True(t, w.EndsAt.Equal(reopen))
+
+	// An ends_at in the past on a running one-off ends it at the database's
+	// now, and that is what is stored.
+	running, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "hotfix", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour), MonitorIDs: []string{monitorID.String()},
+	})
+	require.NoError(t, err)
+	past := now.Add(-10 * time.Minute)
+	running, err = svc.Update(ctx, tenantID, running.ID, &models.UpdateMaintenanceWindowRequest{EndsAt: &past})
+	require.NoError(t, err)
+	require.False(t, running.EndsAt.Before(now), "stored end %v is the moment it ended, not %v", running.EndsAt, past)
+	require.Equal(t, models.MaintenanceWindowStatusPast, running.Status)
+}
+
+// A rule saved while two of its overlapping occurrences run is valid (it
+// used to fail on two rows clipped to the same start), and a window whose
+// only remaining occurrence is skipped is over.
+func TestRecurringEdgeCases(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mw-edges")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api")
+	svc := maintenancewindows.NewService(dbClient)
+	now := dbNow(ctx, t, dbClient)
+
+	w, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "long nightly", Recurrence: startedMinutesAgo(now, 2*time.Hour, 30*60), MonitorIDs: []string{monitorID.String()},
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.MaintenanceWindowStatusActive, w.Status)
+	occ := occurrenceRows(ctx, t, dbClient, w.ID)
+	require.WithinDuration(t, now, occ[0].start, 5*time.Second)
+	require.WithinDuration(t, now.Add(28*time.Hour), occ[0].end, 2*time.Minute, "one row with the latest end")
+
+	first := now.Add(3 * time.Hour).UTC()
+	rec := startedMinutesAgo(first, 0, 60)
+	rec.Until = first.Format("2006-01-02")
+	last, err := svc.Create(ctx, tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "last one", Recurrence: rec, MonitorIDs: []string{monitorID.String()},
+	})
+	require.NoError(t, err)
+	require.Equal(t, models.MaintenanceWindowStatusUpcoming, last.Status)
+	last, err = svc.SkipNextOccurrence(ctx, tenantID, last.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.MaintenanceWindowStatusPast, last.Status)
+	require.Nil(t, last.NextOccurrence)
 }

@@ -1349,6 +1349,12 @@ or imported groups come back empty. Any other path that creates groups through
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **`maintenance_window_occurrences` is SLA history too.** Nothing prunes it;
+  the coverage fragments stay cheap as it grows only because they start
+  from the monitor's links and probe each window through
+  `idx_maintenance_window_occurrences_window_end` (see `occurrencesSQL`;
+  `TestCoverageQueriesStayIndexDrivenWithLongHistory` pins the plan). Never
+  fold the link branches into one `OR` filter.
 - **Path-borne credentials** (`/push/{token}`): the API's request log, panic
   log and HTTP metrics never use `r.URL.Path` raw — logs redact by the
   router's patterns, metrics label by route pattern

@@ -108,6 +108,14 @@ type statusPageMaintenanceView struct {
 	// RepeatText is set for a repeating window: "Repeats" plus the next
 	// starts that fall within the look-ahead.
 	RepeatText string
+	// StartsAtISO/EndsAtISO and NextStartsISO (space-separated) are the
+	// same instants in RFC 3339 UTC. The default template carries them as
+	// data attributes so its script can show the visitor's local time with
+	// the server-rendered UTC text alongside; without scripts the UTC text
+	// stays as it is.
+	StartsAtISO   string
+	EndsAtISO     string
+	NextStartsISO string
 }
 
 type statusPageSectionView struct {
@@ -518,7 +526,18 @@ func buildStatusPageMaintenanceView(window StatusPageMaintenanceWindow) statusPa
 		TimeRangeText:          timeRangeText,
 		AffectedComponentsText: affectedComponentsText,
 		RepeatText:             maintenanceRepeatText(window),
+		StartsAtISO:            start.Format(time.RFC3339),
+		EndsAtISO:              end.Format(time.RFC3339),
+		NextStartsISO:          isoList(window.NextStartsAt),
 	}
+}
+
+func isoList(times []time.Time) string {
+	out := make([]string, len(times))
+	for i, t := range times {
+		out[i] = t.UTC().Format(time.RFC3339)
+	}
+	return strings.Join(out, " ")
 }
 
 // maintenanceRepeatText labels a repeating window and lists its next starts

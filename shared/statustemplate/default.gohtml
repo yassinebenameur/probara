@@ -1773,8 +1773,8 @@
             <span class="inc-meta">{{.StateLabel}}</span>
           </div>
           {{if .Description}}<p class="inc-desc">{{.Description}}</p>{{end}}
-          <div class="inc-update">{{.TimeRangeText}}</div>
-          {{if .RepeatText}}<div class="inc-update">{{.RepeatText}}</div>{{end}}
+          <div class="inc-update js-maint-range" data-start="{{.StartsAtISO}}" data-end="{{.EndsAtISO}}">{{.TimeRangeText}}</div>
+          {{if .RepeatText}}<div class="inc-update js-maint-next" data-starts="{{.NextStartsISO}}">{{.RepeatText}}</div>{{end}}
           <div class="inc-update">{{.AffectedComponentsText}}</div>
         </article>
       {{end}}
@@ -2353,6 +2353,44 @@
         } catch (err) {}
       }
 
+      // Maintenance times arrive in UTC (that text is what visitors without
+      // scripts see). Show the visitor's own time first with the UTC text
+      // alongside. It reads the data-* instants, so it runs again safely
+      // after a live refresh replaces the section.
+      function localizeMaintenanceTimes() {
+        let dayFmt, timeFmt, utcFmt, utcDayFmt;
+        try {
+          dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+          utcFmt = new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
+          utcDayFmt = new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        } catch (err) {
+          return;
+        }
+        const valid = function (d) { return !isNaN(d.getTime()); };
+        const isUTC = function (d) { return d.getTimezoneOffset() === 0; };
+        const sameLocalDay = function (a, b) { return a.toDateString() === b.toDateString(); };
+        document.querySelectorAll('.js-maint-range').forEach(function (el) {
+          const start = new Date(el.dataset.start || '');
+          const end = new Date(el.dataset.end || '');
+          if (!valid(start) || !valid(end) || (isUTC(start) && isUTC(end))) return;
+          if (!el.dataset.utc) el.dataset.utc = el.textContent;
+          el.textContent = dayFmt.format(start) + ' – ' +
+            (sameLocalDay(start, end) ? timeFmt.format(end) : dayFmt.format(end)) +
+            ' your time · ' + el.dataset.utc;
+        });
+        document.querySelectorAll('.js-maint-next').forEach(function (el) {
+          const starts = (el.dataset.starts || '').split(' ').filter(Boolean)
+            .map(function (s) { return new Date(s); }).filter(valid);
+          if (!starts.length || starts.every(isUTC)) return;
+          if (!el.dataset.utc) el.dataset.utc = el.textContent;
+          el.textContent = 'Repeats · next: ' + starts.map(function (d) {
+            const utcDay = d.getUTCDate() === d.getDate();
+            return dayFmt.format(d) + ' (' + (utcDay ? utcFmt : utcDayFmt).format(d) + ' UTC)';
+          }).join(', ') + ', your time';
+        });
+      }
+
       function replaceLiveRegion(id, nextDoc) {
         const current = document.getElementById(id);
         const incoming = nextDoc.getElementById(id);
@@ -2489,6 +2527,7 @@
           replaceLiveRegion('servicesList', nextDoc);
           replaceLiveRegion('maintenanceSection', nextDoc);
         replaceLiveRegion('incidentsSection', nextDoc);
+          localizeMaintenanceTimes();
 
           restoreOpenMonitorIds(expandedMonitorIds);
           applyTheme(body.dataset.theme || defaultTheme, false);
@@ -2533,6 +2572,7 @@
       setupShortcuts();
       setupClock();
       setupBarTooltip();
+      localizeMaintenanceTimes();
       setupKioskNamePopover();
       window.addEventListener('resize', scheduleFitKiosk);
       if (document.fonts && document.fonts.ready) {
