@@ -238,6 +238,7 @@ export function reportDeliveryTone(status: string | null | undefined): StatusTon
       return 'danger';
     case 'uncertain':
     case 'pending':
+    case 'claimed':
     case 'sending':
       return 'warning';
     default:

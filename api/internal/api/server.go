@@ -505,14 +505,16 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.alertSubscriber != nil {
 		s.alertSubscriber.Stop()
 	}
+	// Before the audit recorder: a period claimed during shutdown still
+	// records its send event.
+	if s.reportRunner != nil {
+		s.reportRunner.Stop()
+	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Stop()
 	}
 	if s.auditPruner != nil {
 		s.auditPruner.Stop()
-	}
-	if s.reportRunner != nil {
-		s.reportRunner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

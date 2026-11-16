@@ -78,6 +78,7 @@ type unsubscribeLookup struct {
 	claims     actionlink.Claims
 	authentic  bool
 	addressKey string
+	slaID      uuid.UUID
 	slaName    string
 	state      string
 }
@@ -101,11 +102,11 @@ func (s *Service) resolveUnsubscribe(ctx context.Context, token string) (unsubsc
 	l := unsubscribeLookup{claims: claims, authentic: true, addressKey: hex.EncodeToString(claims.ChannelID[:])}
 	var unsubscribed bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT sl.name, EXISTS (SELECT 1 FROM sla_report_unsubscribes u WHERE u.schedule_id = sc.id AND u.address_key = $3)
+		SELECT sl.id, sl.name, EXISTS (SELECT 1 FROM sla_report_unsubscribes u WHERE u.schedule_id = sc.id AND u.address_key = $3)
 		FROM sla_report_schedules sc
 		JOIN slas sl ON sl.id = sc.sla_id AND sl.tenant_id = sc.tenant_id
 		WHERE sc.tenant_id = $1 AND sc.id = $2
-	`, claims.TenantID, claims.AlertID, l.addressKey).Scan(&l.slaName, &unsubscribed)
+	`, claims.TenantID, claims.AlertID, l.addressKey).Scan(&l.slaID, &l.slaName, &unsubscribed)
 	if errors.Is(err, sql.ErrNoRows) {
 		// A deleted schedule revokes every link it mailed.
 		l.state = models.ReportUnsubscribeInvalid
@@ -172,8 +173,9 @@ func responseOf(l unsubscribeLookup) models.ReportUnsubscribeResponse {
 	return resp
 }
 
-// recordUnsubscribe audits an unsubscribe on the schedule, attributed to
-// the link. The address key stands in for the address.
+// recordUnsubscribe audits an unsubscribe on the SLA (the resource every
+// schedule event names), attributed to the link. The address key stands in
+// for the address.
 func (s *Service) recordUnsubscribe(l unsubscribeLookup, event audit.Event) {
 	if s.audit == nil {
 		return
@@ -184,7 +186,7 @@ func (s *Service) recordUnsubscribe(l unsubscribeLookup, event audit.Event) {
 	event.ActorLabel = "unsubscribe link"
 	event.Action = "sla-report-schedule.unsubscribe"
 	event.ResourceType = "sla-report-schedule"
-	event.ResourceID = l.claims.AlertID.String()
+	event.ResourceID = l.slaID.String()
 	event.Outcome = audit.OutcomeSuccess
 	event.MergeDetails(map[string]any{"address_key": l.addressKey, "key_version": l.claims.KeyVersion})
 	s.audit.Record(event)

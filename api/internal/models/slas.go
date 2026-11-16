@@ -115,7 +115,10 @@ const (
 
 // Budget exhaustion states of an SLA report (S-U8).
 const (
-	// SLABudgetExhausted: the full period's error budget is spent.
+	// SLABudgetExhausted: the period's error budget is spent: consumption
+	// reached (1 - target) x (eligible time so far + time left), so even a
+	// clean rest of the period cannot meet the target. On a closed period
+	// that is exactly a breach.
 	SLABudgetExhausted = "exhausted"
 	// SLABudgetProjected: at the last 24 hours' pace, the running period's
 	// budget runs out at ProjectedExhaustionAt, before the period ends.
@@ -135,8 +138,8 @@ type SLAReportBurn struct {
 	Exhaustion string                `json:"exhaustion"`
 	// ProjectedExhaustionAt is set only when Exhaustion is "projected".
 	ProjectedExhaustionAt *time.Time `json:"projected_exhaustion_at,omitempty"`
-	// BurnDown is the full period's budget left after each local day of
-	// the report so far; empty without monitors.
+	// BurnDown is the period's budget left after each local day of the
+	// report so far; empty without monitors.
 	BurnDown []SLAReportBurnPoint `json:"burn_down"`
 }
 
@@ -154,8 +157,10 @@ type SLAReportBurnWindow struct {
 
 // SLAReportBurnPoint is the error budget at the end of one day of the
 // period. ConsumedSeconds is the budget consumed from the period start to
-// End; RemainingPct what is left of AllowedFullPeriodSeconds, negative once
-// overspent, nil while nothing was observed yet (or with no budget).
+// End; RemainingPct what is left of the period's budget as it stood then,
+// (1 - target) x (eligible time to End + time left in the period): negative
+// once overspent, nil while nothing was observed yet (or with no budget).
+// The last point of a closed period equals Budget.RemainingPct.
 type SLAReportBurnPoint struct {
 	Date string `json:"date"`
 	// End is the day's end, or the report's effective end for today.

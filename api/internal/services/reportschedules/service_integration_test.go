@@ -277,7 +277,7 @@ func TestRunnerSendsAtPeriodClose(t *testing.T) {
 	require.Len(t, msg.Attachments, 1)
 	require.Equal(t, "application/pdf", msg.Attachments[0].ContentType)
 	require.True(t, bytes.HasPrefix(msg.Attachments[0].Data, []byte("%PDF")))
-	require.Contains(t, msg.Text, "https://probara.example.com/slas/"+f.sla.ID.String()+"?tab=issued")
+	require.Contains(t, msg.Text, "https://probara.example.com/slas?sla="+f.sla.ID.String()+"&tenant="+f.tenantID.String())
 	require.Contains(t, msg.Text, "https://probara.example.com/report-unsubscribe#")
 	require.Regexp(t, `^<https://probara\.example\.com/api/v1/report-unsubscribe\?token=[A-Za-z0-9_-]+>$`, msg.Headers["List-Unsubscribe"])
 	require.Equal(t, "List-Unsubscribe=One-Click", msg.Headers["List-Unsubscribe-Post"])
@@ -398,18 +398,15 @@ func TestInterruptedSendIsNeverRepeated(t *testing.T) {
 	require.Equal(t, models.SLAReportDeliveryUncertain, f.deliveries(t, "2026-09")["ops@example.com"])
 	resp, err := s.Get(f.ctx, f.tenantID, f.sla.ID)
 	require.NoError(t, err)
-	require.Contains(t, resp.Schedule.LastError, "1 uncertain of 2 recipients for 2026-09")
+	require.Contains(t, resp.Schedule.LastError, "2026-09: 1 uncertain of 2 recipients")
 
-	// A row swept as uncertain while its runner was still busy with the
-	// batch is not sent by that runner afterwards.
-	_, err = f.db.ExecContext(f.ctx, `UPDATE sla_report_deliveries SET status = 'sending', attempts = 2 WHERE address = 'ops@example.com'`)
-	require.NoError(t, err)
+	// A batch that lost a row it had reserved (handed back or closed by
+	// another replica) does not send it.
 	var scheduleID uuid.UUID
-	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT id FROM sla_report_schedules`).Scan(&scheduleID))
-	held := claimedDelivery{scheduleID: scheduleID, tenantID: f.tenantID, periodKey: "2026-09",
-		addressKey: addressKey(scheduleID, "ops@example.com"), address: "ops@example.com", attempts: 2}
-	_, err = f.db.ExecContext(f.ctx, `UPDATE sla_report_deliveries SET status = 'uncertain' WHERE address = 'ops@example.com'`)
-	require.NoError(t, err)
+	var start time.Time
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT schedule_id, period_start FROM sla_report_deliveries WHERE address = 'ops@example.com'`).Scan(&scheduleID, &start))
+	held := claimedDelivery{scheduleID: scheduleID, tenantID: f.tenantID, periodStart: start, periodKey: "2026-09",
+		addressKey: addressKey(scheduleID, "ops@example.com"), address: "ops@example.com", claimID: uuid.New()}
 	s.sendGroup(f.ctx, []claimedDelivery{held})
 	require.Equal(t, []string{"cfo@example.com"}, mailer.recipients())
 	require.Equal(t, models.SLAReportDeliveryUncertain, f.deliveries(t, "2026-09")["ops@example.com"])
@@ -442,7 +439,7 @@ func TestFailedSendRetriesWithBackoff(t *testing.T) {
 	require.Equal(t, []string{"ops@example.com"}, mailer.recipients())
 	resp, err := s.Get(f.ctx, f.tenantID, f.sla.ID)
 	require.NoError(t, err)
-	require.Contains(t, resp.Schedule.LastError, "1 retrying of 2 recipients for 2026-09")
+	require.Contains(t, resp.Schedule.LastError, "2026-09: 1 retrying of 2 recipients")
 	require.Contains(t, resp.Schedule.LastError, "451 try again later")
 	var cfo models.SLAReportDelivery
 	for _, d := range resp.Schedule.Deliveries {
@@ -481,17 +478,18 @@ func TestFailedSendRetriesWithBackoff(t *testing.T) {
 	require.Equal(t, models.SLAReportDeliveryPending, outcomeOf(t, f, s, errors.New("timeout"), maxAttempts-1))
 }
 
-// outcomeOf records err for a delivery claimed for its attempt'th time.
+// outcomeOf records err for a delivery sent for its attempt'th time.
 func outcomeOf(t *testing.T, f *fixture, s *Service, err error, attempt int) string {
 	t.Helper()
 	var scheduleID uuid.UUID
 	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT id FROM sla_report_schedules`).Scan(&scheduleID))
 	addr := "probe-" + uuid.NewString()[:8] + "@example.com"
-	d := claimedDelivery{scheduleID: scheduleID, tenantID: f.tenantID, periodKey: "probe", addressKey: addressKey(scheduleID, addr), address: addr, attempts: attempt}
+	d := claimedDelivery{scheduleID: scheduleID, tenantID: f.tenantID, periodStart: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		periodKey: "probe", addressKey: addressKey(scheduleID, addr), address: addr, attempts: attempt, claimID: uuid.New()}
 	_, dbErr := f.db.ExecContext(f.ctx, `
-		INSERT INTO sla_report_deliveries (schedule_id, tenant_id, period_key, address_key, address, status, attempts, claimed_at)
-		VALUES ($1, $2, 'probe', $3, $4, 'sending', $5, NOW())
-	`, scheduleID, f.tenantID, d.addressKey, addr, attempt)
+		INSERT INTO sla_report_deliveries (schedule_id, tenant_id, period_start, period_key, address_key, address, status, attempts, claim_id, claimed_at)
+		VALUES ($1, $2, $3, 'probe', $4, $5, 'sending', $6, $7, NOW())
+	`, scheduleID, f.tenantID, d.periodStart, d.addressKey, addr, attempt, d.claimID)
 	require.NoError(t, dbErr)
 	s.recordOutcome(f.ctx, d, err)
 	var status string
@@ -547,6 +545,9 @@ func TestUnsubscribe(t *testing.T) {
 	require.Len(t, rec.events, 2, "the runner's send, then one unsubscribe")
 	require.Equal(t, "sla-report-schedule.unsubscribe", rec.events[1].Action)
 	require.Equal(t, f.tenantID, *rec.events[1].TenantID)
+	for _, e := range rec.events {
+		require.Equal(t, f.sla.ID.String(), e.ResourceID, "every schedule event names the SLA")
+	}
 
 	resp, err := s.Get(f.ctx, f.tenantID, f.sla.ID)
 	require.NoError(t, err)
@@ -624,4 +625,12 @@ func TestDisableAndRemoveCancelPending(t *testing.T) {
 	now = time.Date(2026, 12, 10, 0, 0, 0, 0, time.UTC)
 	sc := f.put(t, s, "ops@example.com")
 	require.Equal(t, time.Date(2027, 1, 1, 1, 0, 0, 0, time.UTC), sc.NextRunAt, "re-enabled: the next close, not the missed ones")
+	// Even when due at once, October and November (closed while it was
+	// off) are not sent.
+	_, err = f.db.ExecContext(f.ctx, `UPDATE sla_report_schedules SET next_run_at = $1`, now)
+	require.NoError(t, err)
+	require.NoError(t, s.RunOnce(f.ctx))
+	require.Empty(t, mailer.recipients())
+	require.Empty(t, f.deliveries(t, "2026-10"))
+	require.Empty(t, f.deliveries(t, "2026-11"))
 }

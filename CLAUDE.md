@@ -305,10 +305,14 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `IntegrateTimeline` call, never another query; `SLAReport.burn` is optional
   like `suspected_causes`. Scheduled report emails run in the **API**
   (`api/internal/services/reportschedules`, its `Runner` started from
-  `server.go`): claim the period and its per-recipient deliveries before
-  mailing, commit each delivery as `sending` before it goes out, never resend
-  an `uncertain` one. The next send is `slas.ReportRunAt`, re-planned by the
-  SLA service when a period or timezone changes. Schedules need SMTP,
+  `server.go` and stopped before the audit recorder): issue the report with
+  no lock held, then claim the period and its per-recipient deliveries in one
+  `lock_timeout` transaction before mailing; a delivery is `claimed` (safe to
+  hand back) until `sending` is committed right before `SendMessage`, so
+  `uncertain` (never resent) only follows a started send. Which periods go
+  out (catch-up of the last 3, `sends_after`, the grace-hour carry-over) is
+  `nextPeriod`; the SLA service re-plans when a period or timezone changes.
+  The burn budget base is `periodBudget` (eligible time, as the headline). Schedules need SMTP,
   `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; unsubscribe links are
   `shared/actionlink` tokens (`ActionUnsubscribeReport`, own TTL).
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`

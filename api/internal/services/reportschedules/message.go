@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	htmltemplate "html/template"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -62,7 +63,7 @@ func newReportView(sla *models.SLA, r *models.SLAReport, appBaseURL, recipient, 
 		Availability: "no data",
 		Target:       strconv.FormatFloat(r.Definition.TargetPct, 'f', -1, 64) + "%",
 		BudgetUsed:   "-",
-		ReportURL:    appBaseURL + "/slas/" + sla.ID.String() + "?tab=issued",
+		ReportURL:    appBaseURL + SLAReportPath(sla.ID.String(), sla.TenantID.String()),
 		Recipient:    recipient,
 		Unsubscribe:  unsubscribe,
 	}
@@ -93,6 +94,15 @@ func newReportView(sla *models.SLA, r *models.SLAReport, appBaseURL, recipient, 
 	}
 	v.Attached = strings.Join(names, ", ")
 	return v
+}
+
+// SLAReportPath is the operator-UI link to an SLA's issued reports, in the
+// house deep-link shape (present.AlertPath): the list route with the
+// resource and its workspace, which switches to that workspace (a switch on
+// a /slas/{id} page would fall back to the list) and then opens the SLA's
+// Issued reports tab. web/lib/sla-links.ts parses it.
+func SLAReportPath(slaID, tenantID string) string {
+	return "/slas?" + url.Values{"sla": {slaID}, "tenant": {tenantID}}.Encode()
 }
 
 // subject is one line: control characters in an SLA name (the mail seam

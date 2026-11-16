@@ -73,7 +73,7 @@ func burnRate(target float64, s models.SLAReportSummary) *float64 {
 // shortStart on (shortStart < 0 when there are none).
 func buildBurn(sla *models.SLA, res *sharedanalytics.TimelineResult, members []member, period sharedanalytics.Period,
 	window sharedanalytics.TimeRange, days []sharedanalytics.TimeRange, short []burnBucket, shortStart int,
-	budget models.SLAReportBudget, summary models.SLAReportSummary, closed bool, loc *time.Location) *models.SLAReportBurn {
+	summary models.SLAReportSummary, closed bool, loc *time.Location) *models.SLAReportBurn {
 	burn := &models.SLAReportBurn{
 		Windows:  []models.SLAReportBurnWindow{},
 		BurnDown: burnDown(sla, res, days, members, period, loc),
@@ -94,8 +94,21 @@ func buildBurn(sla *models.SLA, res *sharedanalytics.TimelineResult, members []m
 		Key: models.SLABurnWindowPeriod, Start: window.Start.UTC(), End: window.End.UTC(),
 		AvailabilityPct: summary.AvailabilityPct, BurnRate: burnRate(sla.TargetPct, summary),
 	})
-	burn.Exhaustion, burn.ProjectedExhaustionAt = projectExhaustion(sla.TargetPct, budget, summary, day, dayRange, period, closed)
+	burn.Exhaustion, burn.ProjectedExhaustionAt = projectExhaustion(sla.TargetPct, summary, day, dayRange, period, window.End, closed)
 	return burn
+}
+
+// periodBudget is the error budget the period ends up with if monitoring
+// continues (S-U8): (1 - target) x (eligible time so far + wall time left).
+// Unobserved time earns no budget, exactly as in the headline, so on a
+// closed period it equals Budget.AllowedSeconds and the burn-down, the
+// exhaustion verdict and the met/breached headline agree; a fully covered
+// period gets the whole calendar period's allowance.
+func periodBudget(target, eligible float64, left time.Duration) float64 {
+	if left < 0 {
+		left = 0
+	}
+	return (1 - target/100) * (eligible + left.Seconds())
 }
 
 // emptyBurn is the burn section of a report with no monitors.
@@ -109,18 +122,20 @@ func emptyBurn(window sharedanalytics.TimeRange) *models.SLAReportBurn {
 	}
 }
 
-// projectExhaustion classifies the full period's budget (S-U8). A running
-// period projects at the pace of the last 24 hours (clipped to the period):
-// budget consumed in that window per wall-clock second. The comparison stays
-// in float seconds, so a slow burn cannot overflow time.Duration.
-func projectExhaustion(target float64, budget models.SLAReportBudget, summary models.SLAReportSummary,
-	day *models.SLAReportSummary, dayRange sharedanalytics.TimeRange, period sharedanalytics.Period, closed bool) (string, *time.Time) {
+// projectExhaustion classifies the period's budget (S-U8, periodBudget). A
+// closed period is exhausted exactly when consumption reached its allowance,
+// the base the met/breached verdict uses. A running period projects at the
+// pace of the last 24 hours (clipped to the period): budget consumed in that
+// window per wall-clock second. The comparison stays in float seconds, so a
+// slow burn cannot overflow time.Duration.
+func projectExhaustion(target float64, summary models.SLAReportSummary, day *models.SLAReportSummary,
+	dayRange sharedanalytics.TimeRange, period sharedanalytics.Period, end time.Time, closed bool) (string, *time.Time) {
 	if summary.AvailabilityPct == nil {
 		return models.SLABudgetNoData, nil
 	}
-	full := budget.AllowedFullPeriodSeconds
-	left := full - budget.ConsumedSeconds
-	if budget.ConsumedSeconds > 0 && left <= 0 {
+	consumedSoFar := (1 - *summary.AvailabilityPct/100) * summary.EligibleSeconds
+	left := periodBudget(target, summary.EligibleSeconds, period.End.Sub(end)) - consumedSoFar
+	if consumedSoFar > 0 && left <= 0 {
 		return models.SLABudgetExhausted, nil
 	}
 	if closed {
@@ -142,11 +157,12 @@ func projectExhaustion(target float64, budget models.SLAReportBudget, summary mo
 	return models.SLABudgetProjected, &at
 }
 
-// burnDown is the S-U8 burn-down: after each day, the full period's error
-// budget left. Each point summarizes the period start through that day, so
-// it is exact for both aggregations (per-monitor and composite seconds add
-// up across day buckets; a mean SLA re-averages each monitor's cumulative
-// availability), and the last point consumes exactly the headline budget.
+// burnDown is the S-U8 burn-down: after each day, the period's error budget
+// left (periodBudget as it stood then). Each point summarizes the period
+// start through that day, so it is exact for both aggregations (per-monitor
+// and composite seconds add up across day buckets; a mean SLA re-averages
+// each monitor's cumulative availability), and the last point of a closed
+// period is exactly the headline budget's remaining share.
 func burnDown(sla *models.SLA, res *sharedanalytics.TimelineResult, days []sharedanalytics.TimeRange, members []member,
 	period sharedanalytics.Period, loc *time.Location) []models.SLAReportBurnPoint {
 	out := make([]models.SLAReportBurnPoint, 0, len(days))
@@ -181,8 +197,8 @@ func burnDown(sla *models.SLA, res *sharedanalytics.TimelineResult, days []share
 		point := models.SLAReportBurnPoint{
 			Date: day.Start.In(loc).Format("2006-01-02"), End: day.End.UTC(), ConsumedSeconds: b.ConsumedSeconds,
 		}
-		if sum.AvailabilityPct != nil && b.AllowedFullPeriodSeconds > 0 {
-			pct := (b.AllowedFullPeriodSeconds - b.ConsumedSeconds) / b.AllowedFullPeriodSeconds * 100
+		if allowed := periodBudget(sla.TargetPct, sum.EligibleSeconds, period.End.Sub(day.End)); sum.AvailabilityPct != nil && allowed > 0 {
+			pct := (allowed - b.ConsumedSeconds) / allowed * 100
 			point.RemainingPct = &pct
 		}
 		out = append(out, point)

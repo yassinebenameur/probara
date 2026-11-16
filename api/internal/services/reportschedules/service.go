@@ -62,8 +62,8 @@ func invalid(format string, args ...any) error { return Invalid{Message: fmt.Spr
 // Reports is the slice of the SLA service schedules use.
 type Reports interface {
 	Get(ctx context.Context, tenantID, id uuid.UUID) (*models.SLA, error)
-	IssueReport(ctx context.Context, tenantID, slaID uuid.UUID, periodKey string, by slas.Issuer) (*models.SLAReport, error)
-	IssuedReportForPeriod(ctx context.Context, tenantID, slaID uuid.UUID, periodKey string) (*models.SLAReport, error)
+	IssueReportUnder(ctx context.Context, tenantID, slaID uuid.UUID, kind, timezone, periodKey string, by slas.Issuer) (*models.SLAReport, error)
+	IssuedReportStarting(ctx context.Context, tenantID, slaID uuid.UUID, start time.Time) (*models.SLAReport, error)
 }
 
 // Links mints and verifies unsubscribe tokens (an *actionlink.Signer).
@@ -88,6 +88,9 @@ type Service struct {
 	audit      AuditRecorder
 	log        *logger.Logger
 	now        func() time.Time
+	// afterGroup, when set (tests), runs after each schedule group a
+	// delivery batch sends.
+	afterGroup func()
 }
 
 // Config is what the API process provides. Mailer may be nil (no SMTP),
@@ -136,24 +139,34 @@ func (s *Service) Ready() bool { return len(s.MailProblems()) == 0 }
 // row is a schedule as stored.
 type row struct {
 	models.SLAReportSchedule
-	TenantID uuid.UUID
+	TenantID   uuid.UUID
+	SendsAfter time.Time
+	// LastPeriodEnd is the end of the last claimed period (zero: none).
+	LastPeriodEnd time.Time
+	// Carry* name a period of the SLA's previous definition still to send.
+	CarryKind, CarryTimezone, CarryKey string
 }
 
 const scheduleColumns = `id, tenant_id, sla_id, enabled, recipients, include_csv, next_run_at,
-	COALESCE(last_period_key, ''), last_run_at, COALESCE(last_error, ''), created_at, updated_at`
+	COALESCE(last_period_key, ''), last_run_at, COALESCE(last_error, ''), created_at, updated_at,
+	sends_after, last_period_end, COALESCE(carry_period_kind, ''), COALESCE(carry_timezone, ''), COALESCE(carry_period_key, '')`
 
 func scanRow(r interface{ Scan(...any) error }) (*row, error) {
 	var sc row
 	var recipients pq.StringArray
-	var lastRun sql.NullTime
+	var lastRun, lastEnd sql.NullTime
 	if err := r.Scan(&sc.ID, &sc.TenantID, &sc.SLAID, &sc.Enabled, &recipients, &sc.IncludeCSV, &sc.NextRunAt,
-		&sc.LastPeriodKey, &lastRun, &sc.LastError, &sc.CreatedAt, &sc.UpdatedAt); err != nil {
+		&sc.LastPeriodKey, &lastRun, &sc.LastError, &sc.CreatedAt, &sc.UpdatedAt,
+		&sc.SendsAfter, &lastEnd, &sc.CarryKind, &sc.CarryTimezone, &sc.CarryKey); err != nil {
 		return nil, err
 	}
 	sc.Recipients = []string(recipients)
 	if lastRun.Valid {
 		t := lastRun.Time
 		sc.LastRunAt = &t
+	}
+	if lastEnd.Valid {
+		sc.LastPeriodEnd = lastEnd.Time
 	}
 	return &sc, nil
 }
@@ -181,7 +194,10 @@ func (s *Service) Get(ctx context.Context, tenantID, slaID uuid.UUID) (*models.S
 	return resp, nil
 }
 
-// fill adds the unsubscribed recipients and the last period's deliveries.
+// fill adds the unsubscribed recipients, the deliveries of every period
+// still kept (the last claimed one, and an older one while its recipients
+// wait for retries) and their problems to LastError, which as stored holds
+// only why a period could not be issued.
 func (s *Service) fill(ctx context.Context, sc *row) error {
 	opted, err := unsubscribedKeys(ctx, s.db, sc.ID)
 	if err != nil {
@@ -194,15 +210,12 @@ func (s *Service) fill(ctx context.Context, sc *row) error {
 		}
 	}
 	sc.Deliveries = []models.SLAReportDelivery{}
-	if sc.LastPeriodKey == "" {
-		return nil
-	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT period_key, address, status, attempts, next_attempt_at, sent_at, COALESCE(last_error, '')
 		FROM sla_report_deliveries
-		WHERE schedule_id = $1 AND period_key = $2
-		ORDER BY address
-	`, sc.ID, sc.LastPeriodKey)
+		WHERE schedule_id = $1
+		ORDER BY period_start DESC, address
+	`, sc.ID)
 	if err != nil {
 		return fmt.Errorf("list report deliveries: %w", err)
 	}
@@ -214,7 +227,7 @@ func (s *Service) fill(ctx context.Context, sc *row) error {
 		if err := rows.Scan(&d.PeriodKey, &d.Address, &d.Status, &d.Attempts, &next, &sent, &d.LastError); err != nil {
 			return fmt.Errorf("scan report delivery: %w", err)
 		}
-		if d.Status == models.SLAReportDeliveryPending && d.Attempts > 0 {
+		if retrying(d) {
 			d.NextAttemptAt = &next
 		}
 		if sent.Valid {
@@ -223,7 +236,73 @@ func (s *Service) fill(ctx context.Context, sc *row) error {
 		}
 		sc.Deliveries = append(sc.Deliveries, d)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if summary := deliverySummary(sc.Deliveries); summary != "" {
+		if sc.LastError != "" {
+			sc.LastError += " "
+		}
+		sc.LastError += summary
+	}
+	return nil
+}
+
+// retrying: a pending delivery that failed before and waits for a retry.
+func retrying(d models.SLAReportDelivery) bool {
+	return d.Status == models.SLAReportDeliveryPending && (d.Attempts > 0 || d.LastError != "")
+}
+
+// deliverySummary says, per kept period (newest first), how many recipients
+// failed, are uncertain or are retrying, with the first such error: ""
+// when none are.
+func deliverySummary(ds []models.SLAReportDelivery) string {
+	type tally struct {
+		failed, uncertain, retrying, total int
+		firstErr                           string
+	}
+	var order []string
+	byPeriod := map[string]*tally{}
+	for _, d := range ds {
+		t := byPeriod[d.PeriodKey]
+		if t == nil {
+			t = &tally{}
+			byPeriod[d.PeriodKey] = t
+			order = append(order, d.PeriodKey)
+		}
+		t.total++
+		problem := true
+		switch {
+		case d.Status == models.SLAReportDeliveryFailed:
+			t.failed++
+		case d.Status == models.SLAReportDeliveryUncertain:
+			t.uncertain++
+		case retrying(d):
+			t.retrying++
+		default:
+			problem = false
+		}
+		if problem && t.firstErr == "" {
+			t.firstErr = d.LastError
+		}
+	}
+	var out []string
+	for _, key := range order {
+		t := byPeriod[key]
+		var parts []string
+		for _, p := range []struct {
+			n    int
+			word string
+		}{{t.failed, "failed"}, {t.uncertain, "uncertain"}, {t.retrying, "retrying"}} {
+			if p.n > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s", p.n, p.word))
+			}
+		}
+		if len(parts) > 0 {
+			out = append(out, clip(fmt.Sprintf("%s: %s of %d recipients: %s", key, strings.Join(parts, ", "), t.total, t.firstErr)))
+		}
+	}
+	return strings.Join(out, "; ")
 }
 
 // Put creates or replaces the SLA's schedule. Enabling one needs mail to be
@@ -275,24 +354,23 @@ func (s *Service) Put(ctx context.Context, tenantID, slaID uuid.UUID, req *model
 	case errors.Is(err, sql.ErrNoRows):
 		id = uuid.New()
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO sla_report_schedules (id, tenant_id, sla_id, enabled, recipients, include_csv, next_run_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`, id, tenantID, slaID, enabled, pq.Array(recipients), req.IncludeCSV, firstRun); err != nil {
+			INSERT INTO sla_report_schedules (id, tenant_id, sla_id, enabled, recipients, include_csv, next_run_at, sends_after)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`, id, tenantID, slaID, enabled, pq.Array(recipients), req.IncludeCSV, firstRun, now); err != nil {
 			return nil, fmt.Errorf("create report schedule: %w", err)
 		}
 	case err != nil:
 		return nil, fmt.Errorf("lock report schedule: %w", err)
 	default:
 		id, before = old.ID, old.Recipients
-		next := old.NextRunAt
+		set := `enabled = $2, recipients = $3, include_csv = $4`
+		args := []any{id, enabled, pq.Array(recipients), req.IncludeCSV}
 		if enabled && !old.Enabled {
-			// Periods that closed while disabled are not sent late.
-			next = firstRun
+			// Periods that closed while disabled are never sent late.
+			set += `, next_run_at = $5, sends_after = $6, carry_period_kind = NULL, carry_timezone = NULL, carry_period_key = NULL`
+			args = append(args, firstRun, now)
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE sla_report_schedules SET enabled = $2, recipients = $3, include_csv = $4, next_run_at = $5, updated_at = NOW()
-			WHERE id = $1
-		`, id, enabled, pq.Array(recipients), req.IncludeCSV, next); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE sla_report_schedules SET `+set+`, updated_at = NOW() WHERE id = $1`, args...); err != nil {
 			return nil, fmt.Errorf("update report schedule: %w", err)
 		}
 	}

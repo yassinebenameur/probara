@@ -260,7 +260,7 @@ func (s *Service) Update(ctx context.Context, tenantID, id uuid.UUID, req *model
 		}
 	}
 	if def.Period != existing.Period || def.Timezone != existing.Timezone {
-		if err := replanReportSchedulesTx(ctx, tx, tenantID, id, def.Period, def.Timezone, s.now()); err != nil {
+		if err := replanReportSchedulesTx(ctx, tx, tenantID, id, definitionOf(existing), def, s.now()); err != nil {
 			return nil, err
 		}
 	}
@@ -580,6 +580,13 @@ func (s *Service) IssueReport(ctx context.Context, tenantID, slaID uuid.UUID, pe
 	} else if period, err = sharedanalytics.ParsePeriod(kind, loc, periodKey); err != nil {
 		return nil, invalid("%s", err.Error())
 	}
+	return s.issuePeriod(ctx, tenantID, sla, period, by)
+}
+
+// issuePeriod freezes the report of one closed period of sla.
+func (s *Service) issuePeriod(ctx context.Context, tenantID uuid.UUID, sla *models.SLA, period sharedanalytics.Period, by Issuer) (*models.SLAReport, error) {
+	slaID := sla.ID
+	now := s.now()
 	if period.End.After(now) {
 		return nil, invalid("period %s has not ended yet; only closed periods can be issued", period.Key)
 	}

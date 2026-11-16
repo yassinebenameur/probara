@@ -114,7 +114,7 @@ func TestReportEmailOverSMTP(t *testing.T) {
 	require.NoError(t, err)
 	sc := &row{TenantID: uuid.New()}
 	sc.ID = uuid.New()
-	sla := &models.SLA{ID: report.SLAID, Name: "Checkout"}
+	sla := &models.SLA{ID: report.SLAID, TenantID: sc.TenantID, Name: "Checkout"}
 
 	msg, err := s.message(sc, sla, report, "ops@example.com", attachments)
 	require.NoError(t, err)
@@ -162,8 +162,10 @@ func TestReportEmailOverSMTP(t *testing.T) {
 		ct, _, _ := mime.ParseMediaType(p.Header.Get("Content-Type"))
 		parts[ct] = string(raw)
 	}
+	link := "https://probara.example.com/slas?sla=" + sla.ID.String() + "&tenant=" + sc.TenantID.String()
+	require.Contains(t, parts["text/plain"], link)
+	require.Contains(t, parts["text/html"], strings.ReplaceAll(link, "&", "&amp;"))
 	for _, ct := range []string{"text/plain", "text/html"} {
-		require.Contains(t, parts[ct], "https://probara.example.com/slas/"+sla.ID.String()+"?tab=issued", ct)
 		require.Contains(t, parts[ct], "https://probara.example.com/report-unsubscribe#"+token, ct)
 		require.Contains(t, parts[ct], "99.950%", ct)
 		require.Contains(t, parts[ct], "50.0% (21m 36s of 43m 12s allowed)", ct)

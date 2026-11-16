@@ -123,7 +123,7 @@ function BurnPanel({ report, burn }: { report: SlaReport; burn: SlaReportBurn })
         <div className="mt-4">
           <BurnDownChart report={report} />
           <p className="mt-1 text-xs text-slate-500">
-            Budget left of the full period after each day in {tz}; dashed, the even spend that uses it all by the period end.
+            Budget left after each day in {tz}, against the downtime the target allows over the observed time plus the time still to come; dashed, the even spend that uses it all by the period end.
           </p>
         </div>
       )}

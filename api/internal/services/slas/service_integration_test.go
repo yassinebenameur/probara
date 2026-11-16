@@ -8,6 +8,7 @@ package slas
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -437,6 +438,42 @@ func TestSLAService(t *testing.T) {
 		_, err = svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Period: &monthly, Timezone: &utc})
 		require.NoError(t, err)
 		require.Equal(t, nov1.Add(ReportIssueGrace), nextRun())
+
+		// Inside the grace hour after September closed, and September not
+		// sent yet: a change to weekly still sends September, as monthly.
+		carry := func() (kind, tz, key sql.NullString, sendsAfter time.Time) {
+			require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT carry_period_kind, carry_timezone, carry_period_key, sends_after
+				FROM sla_report_schedules WHERE sla_id = $1`, serial.ID).Scan(&kind, &tz, &key, &sendsAfter))
+			return
+		}
+		inGrace := time.Date(2026, 10, 1, 0, 30, 0, 0, time.UTC)
+		svc.now = func() time.Time { return inGrace }
+		t.Cleanup(func() { svc.now = func() time.Time { return now } })
+		_, err = dbClient.ExecContext(ctx, `UPDATE sla_report_schedules SET sends_after = '2026-08-15', last_period_end = '2026-09-01' WHERE sla_id = $1`, serial.ID)
+		require.NoError(t, err)
+		_, err = svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Period: &weekly})
+		require.NoError(t, err)
+		kind, tz, key, sendsAfter := carry()
+		require.Equal(t, []string{"monthly", "UTC", "2026-09"}, []string{kind.String, tz.String, key.String})
+		require.True(t, sendsAfter.Equal(inGrace), "weekly periods closed before the change are not sent")
+		require.Equal(t, time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC), nextRun(), "September goes out at its own close plus the grace")
+
+		// A second change keeps the carried period.
+		_, err = svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Timezone: &paris})
+		require.NoError(t, err)
+		_, _, key, _ = carry()
+		require.Equal(t, "2026-09", key.String)
+
+		// Already claimed, or past the grace hour: nothing is carried.
+		_, err = dbClient.ExecContext(ctx, `UPDATE sla_report_schedules SET carry_period_kind = NULL, carry_timezone = NULL, carry_period_key = NULL,
+			sends_after = '2026-08-15', last_period_end = NULL WHERE sla_id = $1`, serial.ID)
+		require.NoError(t, err)
+		svc.now = func() time.Time { return inGrace.Add(time.Hour) }
+		_, err = svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Period: &monthly, Timezone: &utc})
+		require.NoError(t, err)
+		_, _, key, _ = carry()
+		require.False(t, key.Valid, "the weekly period that closed before the grace ran out was not in its grace hour")
+		svc.now = func() time.Time { return now }
 	})
 
 	require.NoError(t, svc.Delete(ctx, tenantID, serial.ID))

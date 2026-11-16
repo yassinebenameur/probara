@@ -205,7 +205,7 @@ export interface SlaReportBurnPoint {
   /** The instant the point measures to: the day's end, or now for today. */
   end: string;
   consumed_seconds: number;
-  /** Share of the full period's budget left; negative once overspent; null before anything was observed. */
+  /** Share of the period's budget left (observed time so far plus time to come); negative once overspent; null before anything was observed. */
   remaining_pct: number | null;
 }
 
@@ -477,7 +477,7 @@ export function exhaustionCopy(burn: Pick<SlaReportBurn, 'exhaustion' | 'project
 
 export interface BurnDownRow {
   ts: number;
-  /** Budget left (full period), null where nothing was observed. */
+  /** Budget left, null where nothing was observed. */
   remaining: number | null;
   /** The even spend: 100% at the period start to 0% at its end. */
   even: number;
@@ -509,10 +509,11 @@ export function burnDownRows(report: Pick<SlaReport, 'period' | 'burn'>): BurnDo
 /** Also the API's cap (reportschedules.MaxRecipients). */
 export const SLA_REPORT_MAX_RECIPIENTS = 50;
 
-export type SlaReportDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'uncertain' | 'skipped' | 'cancelled';
+export type SlaReportDeliveryStatus = 'pending' | 'claimed' | 'sending' | 'sent' | 'failed' | 'uncertain' | 'skipped' | 'cancelled';
 
 export const SLA_REPORT_DELIVERY_LABELS: Record<SlaReportDeliveryStatus, string> = {
   pending: 'Waiting to send',
+  claimed: 'Waiting to send',
   sending: 'Sending',
   sent: 'Sent',
   failed: 'Failed',
@@ -544,7 +545,7 @@ export interface SlaReportSchedule {
   last_period_key?: string;
   last_run_at: string | null;
   last_error?: string;
-  /** The last claimed period's outcome per recipient. */
+  /** Per recipient, newest period first: the last claimed one, and an older one while it has retries. */
   deliveries: SlaReportDelivery[];
   created_at: string;
   updated_at: string;

@@ -18,26 +18,41 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/api/internal/services/slas"
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/mail"
 )
 
 const (
 	// runInterval is how often the runner looks for due schedules and
-	// deliveries.
+	// deliveries; tickTimeout bounds one look (what is unfinished is handed
+	// back and picked up next time).
 	runInterval = time.Minute
+	tickTimeout = 10 * time.Minute
 	// maxPlansPerTick and maxDeliveriesPerTick bound one tick; the rest
 	// wait for the next tick or another replica.
 	maxPlansPerTick      = 50
 	maxDeliveriesPerTick = 500
 	deliveryBatch        = 50
+	// planLease keeps other replicas off a schedule while one issues its
+	// report without holding a lock; a replica that dies mid-way leaves the
+	// schedule due again once it lapses.
+	planLease = 10 * time.Minute
 	// planRetryDelay is how long a schedule whose period could not be
-	// issued waits before trying again.
+	// issued, or a delivery whose report could not be prepared, waits.
 	planRetryDelay = 15 * time.Minute
-	// staleSendingAfter closes a delivery claimed this long ago without an
-	// outcome as uncertain: its API died mid-send. Far above the mailer's
-	// 30-second bound per message.
+	// claimLockTimeout bounds the claim's wait for the schedule row (an
+	// operator saving it, the SLA being re-planned).
+	claimLockTimeout = "5s"
+	// maxCatchUp is how many closed periods a schedule sends after an
+	// outage, oldest first; older ones are skipped and logged.
+	maxCatchUp = 3
+	// staleClaimAfter hands a reserved delivery back: its runner died or
+	// is far behind, and nothing was sent. staleSendingAfter closes a
+	// delivery whose send started that long ago as uncertain: far above
+	// the mailer's 30-second bound per message.
+	staleClaimAfter   = 15 * time.Minute
 	staleSendingAfter = 15 * time.Minute
-	// maxAttempts is the attempts a recipient gets before it is failed.
+	// maxAttempts is the started sends a recipient gets before it is failed.
 	maxAttempts = 5
 	// recordTimeout bounds writing an outcome, which deliberately outlives
 	// the run's own cancellation.
@@ -46,17 +61,16 @@ const (
 	maxErrorLen = 500
 )
 
-// retryBackoff is the wait after the nth failed attempt (1-based).
+// retryBackoff is the wait after the nth failed send (1-based).
 var retryBackoff = []time.Duration{5 * time.Minute, 30 * time.Minute, 2 * time.Hour, 6 * time.Hour}
 
 const interruptedError = "the API stopped while sending; the message may or may not have arrived, so it is not sent again"
 
-// RunOnce closes interrupted sends, plans every due schedule, then sends
-// the due deliveries. It stops early, without an error, once ctx is
-// cancelled.
+// RunOnce hands back stale claims, plans every due schedule, then sends the
+// due deliveries. It stops early, without an error, once ctx is done.
 func (s *Service) RunOnce(ctx context.Context) error {
-	if err := s.closeInterrupted(ctx); err != nil {
-		return err
+	if err := s.reclaimStale(ctx); err != nil {
+		return quietCancel(ctx, err)
 	}
 	for i := 0; i < maxPlansPerTick && ctx.Err() == nil; i++ {
 		ran, err := s.planOne(ctx)
@@ -87,61 +101,83 @@ func quietCancel(ctx context.Context, err error) error {
 	return err
 }
 
-// closeInterrupted marks deliveries left in 'sending' by an API that died
-// (or was killed) mid-send as uncertain. Sending them again could mail the
-// period twice; leaving them 'sending' would hide them.
-func (s *Service) closeInterrupted(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `
-		UPDATE sla_report_deliveries SET status = 'uncertain', last_error = $2, updated_at = NOW()
+// reclaimStale returns deliveries reserved by a runner that died (or fell
+// far behind) to pending, since none of them was sent, and closes sends
+// that started long ago without an outcome as uncertain: they may have
+// arrived, so sending them again could mail the period twice.
+func (s *Service) reclaimStale(ctx context.Context) error {
+	now := s.now()
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE sla_report_deliveries SET status = 'pending', claim_id = NULL, claimed_at = NULL, updated_at = NOW()
+		WHERE status = 'claimed' AND claimed_at < $1
+	`, now.Add(-staleClaimAfter)); err != nil {
+		return fmt.Errorf("hand back stale report deliveries: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE sla_report_deliveries SET status = 'uncertain', claim_id = NULL, last_error = $2, updated_at = NOW()
 		WHERE status = 'sending' AND claimed_at < $1
-		RETURNING schedule_id, period_key
-	`, s.now().Add(-staleSendingAfter), interruptedError)
-	if err != nil {
+	`, now.Add(-staleSendingAfter), interruptedError); err != nil {
 		return fmt.Errorf("close interrupted report deliveries: %w", err)
-	}
-	touched, err := scanPeriods(rows)
-	if err != nil {
-		return err
-	}
-	for _, p := range touched {
-		if err := s.refreshError(ctx, p.scheduleID, p.periodKey); err != nil {
-			return err
-		}
 	}
 	return nil
 }
 
-type schedulePeriod struct {
-	scheduleID uuid.UUID
-	periodKey  string
+// candidate is one closed period a schedule should send.
+type candidate struct {
+	kind, timezone, key string
+	start, end          time.Time
+	carry               bool
 }
 
-func scanPeriods(rows *sql.Rows) ([]schedulePeriod, error) {
-	defer rows.Close()
-	seen := map[schedulePeriod]bool{}
-	var out []schedulePeriod
-	for rows.Next() {
-		var p schedulePeriod
-		if err := rows.Scan(&p.scheduleID, &p.periodKey); err != nil {
-			return nil, fmt.Errorf("scan report delivery: %w", err)
-		}
-		if !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	return out, rows.Err()
-}
-
-// planOne claims the most overdue enabled schedule and, when its last
-// closed period was not claimed yet, issues that period's report and
-// commits one delivery per recipient, all before anyone is mailed. It
-// reports whether a schedule was handled.
+// planOne picks the most overdue enabled schedule and sends its oldest
+// unsent closed period on its way. No lock is held while the report is
+// issued (that reads through other connections): a short transaction
+// leases the schedule, the report is issued, and a second transaction,
+// under lock_timeout, claims the period by recording it and adding one
+// delivery per recipient, all before anyone is mailed. It reports whether a
+// schedule was handled.
 func (s *Service) planOne(ctx context.Context) (bool, error) {
 	now := s.now()
+	sc, err := s.lease(ctx, now)
+	if err != nil || sc == nil {
+		return false, err
+	}
+	sla, cand, next, perr := s.nextPeriod(ctx, sc, now)
+	if perr == nil && cand != nil {
+		_, perr = s.issuedReport(ctx, sc.TenantID, sc.SLAID, *cand)
+	}
+	if perr != nil {
+		// Recorded and retried later rather than returned: an error here
+		// would leave the row first in line and starve every other one.
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE sla_report_schedules SET next_run_at = $2, last_error = $3, updated_at = NOW() WHERE id = $1
+		`, sc.ID, now.Add(planRetryDelay), clip("the report could not be issued: "+perr.Error())); err != nil {
+			return false, fmt.Errorf("record report schedule failure: %w", err)
+		}
+		return true, nil
+	}
+	if cand == nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE sla_report_schedules SET next_run_at = $2 WHERE id = $1`, sc.ID, next); err != nil {
+			return false, fmt.Errorf("reschedule report schedule: %w", err)
+		}
+		return true, nil
+	}
+	claimed, err := s.claimPeriod(ctx, sc.ID, *cand, now)
+	if err != nil {
+		return false, err
+	}
+	if claimed {
+		s.recordRun(sc, sla, cand.key)
+	}
+	return true, nil
+}
+
+// lease takes the most overdue enabled schedule and moves its next_run_at
+// planLease ahead, so other replicas pass it over while this one works.
+func (s *Service) lease(ctx context.Context, now time.Time) (*row, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("begin transaction: %w", err)
+		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 	sc, err := scanRow(tx.QueryRowContext(ctx, `SELECT `+scheduleColumns+` FROM sla_report_schedules
@@ -150,150 +186,212 @@ func (s *Service) planOne(ctx context.Context) (bool, error) {
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED`, now))
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("claim report schedule: %w", err)
+		return nil, fmt.Errorf("lease report schedule: %w", err)
 	}
-
-	sla, period, next, perr := s.plan(ctx, sc, now)
-	if perr != nil {
-		// Recorded and retried later rather than returned: an error here
-		// would leave the row first in line and starve every other schedule.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE sla_report_schedules SET next_run_at = $2, last_error = $3, updated_at = NOW() WHERE id = $1
-		`, sc.ID, now.Add(planRetryDelay), clip("the report could not be issued: "+perr.Error())); err != nil {
-			return false, fmt.Errorf("record report schedule failure: %w", err)
-		}
-		return true, tx.Commit()
+	if _, err := tx.ExecContext(ctx, `UPDATE sla_report_schedules SET next_run_at = $2 WHERE id = $1`, sc.ID, now.Add(planLease)); err != nil {
+		return nil, fmt.Errorf("lease report schedule: %w", err)
 	}
-	claimed := false
-	switch {
-	case now.Before(period.End.Add(slas.ReportIssueGrace)):
-		// Due early (a stale next_run_at): wait out the grace of the
-		// period that just closed.
-		next = period.End.Add(slas.ReportIssueGrace).UTC()
-	case period.Key == sc.LastPeriodKey:
-		// Already claimed; only the next run time was stale.
-	default:
-		if err := s.claimPeriodTx(ctx, tx, sc, period.Key, now); err != nil {
-			return false, err
-		}
-		claimed = true
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sla_report_schedules SET next_run_at = $2, updated_at = NOW() WHERE id = $1`,
-		sc.ID, next); err != nil {
-		return false, fmt.Errorf("reschedule report schedule: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit report schedule claim: %w", err)
-	}
-	if claimed {
-		s.recordRun(sc, sla, period.Key)
-	}
-	return true, nil
+	return sc, tx.Commit()
 }
 
-// plan loads the schedule's SLA, issues its last closed period's report
-// when it is due (reusing a copy issued by hand), and works out the next
-// run.
-func (s *Service) plan(ctx context.Context, sc *row, now time.Time) (*models.SLA, periodRef, time.Time, error) {
+// nextPeriod is the schedule's oldest closed period still to send, or nil
+// with the time to look again. The rules (CLAUDE.md, website docs):
+//   - a period is due once it closed plus ReportIssueGrace;
+//   - only periods that ended after sends_after (set on create, re-enable
+//     and a change of the SLA's period or timezone) and after the last one
+//     sent are sent, so periods closed while disabled never are;
+//   - after an outage the last maxCatchUp closed periods go out, oldest
+//     first; older ones are skipped and logged;
+//   - a period of the SLA's previous definition carried over by a change
+//     within the grace hour goes first, as it was defined.
+func (s *Service) nextPeriod(ctx context.Context, sc *row, now time.Time) (*models.SLA, *candidate, time.Time, error) {
 	sla, err := s.reports.Get(ctx, sc.TenantID, sc.SLAID)
 	if err != nil {
-		return nil, periodRef{}, time.Time{}, fmt.Errorf("load SLA: %w", err)
+		return nil, nil, time.Time{}, fmt.Errorf("load SLA: %w", err)
 	}
+	if sc.CarryKey != "" {
+		loc, err := time.LoadLocation(sc.CarryTimezone)
+		if err != nil {
+			return nil, nil, time.Time{}, fmt.Errorf("carried period timezone: %w", err)
+		}
+		p, err := sharedanalytics.ParsePeriod(sharedanalytics.PeriodKind(sc.CarryKind), loc, sc.CarryKey)
+		if err != nil {
+			return nil, nil, time.Time{}, fmt.Errorf("carried period: %w", err)
+		}
+		if due := p.End.Add(slas.ReportIssueGrace); now.Before(due) {
+			return sla, nil, due, nil
+		}
+		return sla, &candidate{kind: sc.CarryKind, timezone: sc.CarryTimezone, key: p.Key, start: p.Start, end: p.End, carry: true}, time.Time{}, nil
+	}
+
+	loc, err := time.LoadLocation(sla.Timezone)
+	if err != nil {
+		return nil, nil, time.Time{}, fmt.Errorf("SLA timezone: %w", err)
+	}
+	floor := sc.SendsAfter
+	if sc.LastPeriodEnd.After(floor) {
+		floor = sc.LastPeriodEnd
+	}
+	// Due periods, newest first: closed at least the grace ago, after floor.
+	running, err := slas.PeriodOf(sla.Period, sla.Timezone, now.Add(-slas.ReportIssueGrace))
+	if err != nil {
+		return nil, nil, time.Time{}, err
+	}
+	var due []sharedanalytics.Period
+	for p := running.Previous(loc); p.End.After(floor) && len(due) <= maxCatchUp; p = p.Previous(loc) {
+		due = append(due, p)
+	}
+	if len(due) > maxCatchUp {
+		due = due[:maxCatchUp]
+		if s.log != nil {
+			s.log.WithFields(map[string]interface{}{"sla_id": sc.SLAID.String(), "sent_from": due[maxCatchUp-1].Key}).
+				Warn("Report schedule fell behind; periods before the last few closed ones are not sent")
+		}
+	}
+	if len(due) > 0 {
+		p := due[len(due)-1]
+		return sla, &candidate{kind: sla.Period, timezone: sla.Timezone, key: p.Key, start: p.Start, end: p.End}, time.Time{}, nil
+	}
+	// Nothing due: look again when the period that just closed (if it is
+	// still to send) or the running one is through its grace.
 	next, err := slas.ReportRunAt(sla.Period, sla.Timezone, now)
 	if err != nil {
-		return nil, periodRef{}, time.Time{}, err
+		return nil, nil, time.Time{}, err
 	}
-	p, err := slas.LastClosedPeriod(sla, now)
-	if err != nil {
-		return nil, periodRef{}, time.Time{}, err
+	if cur, err := slas.PeriodOf(sla.Period, sla.Timezone, now); err == nil {
+		if closed := cur.Previous(loc); closed.End.After(floor) {
+			next = closed.End.Add(slas.ReportIssueGrace).UTC()
+		}
 	}
-	period := periodRef{Key: p.Key, End: p.End}
-	if now.Before(p.End.Add(slas.ReportIssueGrace)) || p.Key == sc.LastPeriodKey {
-		return sla, period, next, nil
-	}
-	if _, err := s.issuedReport(ctx, sc.TenantID, sla.ID, p.Key); err != nil {
-		return nil, periodRef{}, time.Time{}, err
-	}
-	return sla, period, next, nil
-}
-
-type periodRef struct {
-	Key string
-	End time.Time
+	return sla, nil, next, nil
 }
 
 // issuedReport returns the period's issued report, issuing it first when
 // nobody did.
-func (s *Service) issuedReport(ctx context.Context, tenantID, slaID uuid.UUID, periodKey string) (*models.SLAReport, error) {
-	r, err := s.reports.IssuedReportForPeriod(ctx, tenantID, slaID, periodKey)
+func (s *Service) issuedReport(ctx context.Context, tenantID, slaID uuid.UUID, c candidate) (*models.SLAReport, error) {
+	r, err := s.reports.IssuedReportStarting(ctx, tenantID, slaID, c.start)
 	if !errors.Is(err, slas.ErrNotFound) {
 		return r, err
 	}
-	r, err = s.reports.IssueReport(ctx, tenantID, slaID, periodKey, slas.Issuer{Schedule: true})
+	r, err = s.reports.IssueReportUnder(ctx, tenantID, slaID, c.kind, c.timezone, c.key, slas.Issuer{Schedule: true})
 	var conflict slas.Conflict
 	if errors.As(err, &conflict) {
-		// Issued by hand meanwhile.
-		return s.reports.IssuedReportForPeriod(ctx, tenantID, slaID, periodKey)
+		// Issued by hand, or by another replica, meanwhile.
+		return s.reports.IssuedReportStarting(ctx, tenantID, slaID, c.start)
 	}
 	return r, err
 }
 
-// claimPeriodTx records the period as claimed and adds one delivery per
-// recipient: pending, or skipped for those who unsubscribed. Finished
-// deliveries of older periods are pruned, so the table stays small.
-func (s *Service) claimPeriodTx(ctx context.Context, tx *sql.Tx, sc *row, periodKey string, now time.Time) error {
+// claimPeriod records the period as sent and adds one delivery per
+// recipient (pending, or skipped for those who unsubscribed), in one
+// transaction holding only the schedule row, after checking the period is
+// still the one to send. Finished deliveries of other periods are pruned.
+func (s *Service) claimPeriod(ctx context.Context, scheduleID uuid.UUID, c candidate, now time.Time) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL lock_timeout = '`+claimLockTimeout+`'`); err != nil {
+		return false, fmt.Errorf("set lock timeout: %w", err)
+	}
+	sc, err := scanRow(tx.QueryRowContext(ctx, `SELECT `+scheduleColumns+` FROM sla_report_schedules WHERE id = $1 FOR UPDATE`, scheduleID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock report schedule: %w", err)
+	}
+	floor := sc.SendsAfter
+	if sc.LastPeriodEnd.After(floor) {
+		floor = sc.LastPeriodEnd
+	}
+	still := sc.Enabled
+	if c.carry {
+		still = still && sc.CarryKey == c.key && sc.CarryKind == c.kind && sc.CarryTimezone == c.timezone
+	} else {
+		still = still && sc.CarryKey == "" && c.end.After(floor)
+	}
+	if !still {
+		// Edited, disabled or re-planned meanwhile: look again next tick.
+		if _, err := tx.ExecContext(ctx, `UPDATE sla_report_schedules SET next_run_at = $2 WHERE id = $1`, sc.ID, now); err != nil {
+			return false, fmt.Errorf("reschedule report schedule: %w", err)
+		}
+		return false, tx.Commit()
+	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM sla_report_deliveries
-		WHERE schedule_id = $1 AND period_key <> $2 AND status NOT IN ('pending', 'sending')
-	`, sc.ID, periodKey); err != nil {
-		return fmt.Errorf("prune report deliveries: %w", err)
+		WHERE schedule_id = $1 AND period_start <> $2 AND status NOT IN ('pending', 'claimed', 'sending')
+	`, sc.ID, c.start.UTC()); err != nil {
+		return false, fmt.Errorf("prune report deliveries: %w", err)
 	}
 	keys := make([]string, len(sc.Recipients))
 	for i, r := range sc.Recipients {
 		keys[i] = addressKey(sc.ID, r)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO sla_report_deliveries (schedule_id, tenant_id, period_key, address_key, address, status, last_error, next_attempt_at)
-		SELECT $1, $2, $3, r.k, r.a,
+		INSERT INTO sla_report_deliveries (schedule_id, tenant_id, period_start, period_key, address_key, address, status, last_error, next_attempt_at)
+		SELECT $1, $2, $3, $4, r.k, r.a,
 			CASE WHEN u.address_key IS NULL THEN 'pending' ELSE 'skipped' END,
-			CASE WHEN u.address_key IS NULL THEN NULL ELSE 'unsubscribed' END, $4
-		FROM unnest($5::text[], $6::text[]) AS r(a, k)
+			CASE WHEN u.address_key IS NULL THEN NULL ELSE 'unsubscribed' END, $5
+		FROM unnest($6::text[], $7::text[]) AS r(a, k)
 		LEFT JOIN sla_report_unsubscribes u ON u.schedule_id = $1 AND u.address_key = r.k
 		ON CONFLICT DO NOTHING
-	`, sc.ID, sc.TenantID, periodKey, now, pq.Array(sc.Recipients), pq.Array(keys)); err != nil {
-		return fmt.Errorf("add report deliveries: %w", err)
+	`, sc.ID, sc.TenantID, c.start.UTC(), c.key, now, pq.Array(sc.Recipients), pq.Array(keys)); err != nil {
+		return false, fmt.Errorf("add report deliveries: %w", err)
 	}
+	lastEnd := c.end
+	if sc.LastPeriodEnd.After(lastEnd) {
+		lastEnd = sc.LastPeriodEnd
+	}
+	// next_run_at = now: the next pass sends any further due period or
+	// plans the next close.
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE sla_report_schedules SET last_period_key = $2, last_run_at = $3, last_error = NULL WHERE id = $1
-	`, sc.ID, periodKey, now); err != nil {
-		return fmt.Errorf("claim report schedule period: %w", err)
+		UPDATE sla_report_schedules SET last_period_key = $2, last_period_start = $3, last_period_end = $4, last_run_at = $5,
+			last_error = NULL, next_run_at = $5, carry_period_kind = NULL, carry_timezone = NULL, carry_period_key = NULL,
+			updated_at = NOW()
+		WHERE id = $1
+	`, sc.ID, c.key, c.start.UTC(), lastEnd.UTC(), now); err != nil {
+		return false, fmt.Errorf("claim report schedule period: %w", err)
 	}
-	return nil
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit report schedule claim: %w", err)
+	}
+	return true, nil
 }
 
-// claimedDelivery is one delivery this runner committed as sending.
+// claimedDelivery is one delivery a runner batch reserved.
 type claimedDelivery struct {
-	scheduleID uuid.UUID
-	tenantID   uuid.UUID
-	periodKey  string
-	addressKey string
-	address    string
-	attempts   int
+	scheduleID  uuid.UUID
+	tenantID    uuid.UUID
+	periodStart time.Time
+	periodKey   string
+	addressKey  string
+	address     string
+	attempts    int
+	claimID     uuid.UUID
 }
 
-// deliverBatch claims up to deliveryBatch due deliveries of enabled
-// schedules (committed as 'sending' before any message goes out), sends
-// them and records each outcome. It returns how many it claimed.
+type groupKey struct {
+	scheduleID  uuid.UUID
+	periodStart time.Time
+}
+
+// deliverBatch reserves up to deliveryBatch due deliveries of enabled
+// schedules as 'claimed' under one claim ID, sends them group by group, and
+// before returning hands back every row it reserved but did not get to: a
+// failure in one group never strands the others.
 func (s *Service) deliverBatch(ctx context.Context) (int, error) {
 	now := s.now()
+	claimID := uuid.New()
 	rows, err := s.db.QueryContext(ctx, `
 		UPDATE sla_report_deliveries d
-		SET status = 'sending', attempts = d.attempts + 1, claimed_at = $1, updated_at = NOW()
+		SET status = 'claimed', claim_id = $3, claimed_at = $1, updated_at = NOW()
 		FROM (
-			SELECT dd.schedule_id, dd.period_key, dd.address_key
+			SELECT dd.schedule_id, dd.period_start, dd.address_key
 			FROM sla_report_deliveries dd
 			JOIN sla_report_schedules sc ON sc.id = dd.schedule_id AND sc.enabled
 			WHERE dd.status = 'pending' AND dd.next_attempt_at <= $1
@@ -301,16 +399,17 @@ func (s *Service) deliverBatch(ctx context.Context) (int, error) {
 			LIMIT $2
 			FOR UPDATE OF dd SKIP LOCKED
 		) c
-		WHERE d.schedule_id = c.schedule_id AND d.period_key = c.period_key AND d.address_key = c.address_key
-		RETURNING d.schedule_id, d.tenant_id, d.period_key, d.address_key, d.address, d.attempts
-	`, now, deliveryBatch)
+		WHERE d.schedule_id = c.schedule_id AND d.period_start = c.period_start AND d.address_key = c.address_key
+		RETURNING d.schedule_id, d.tenant_id, d.period_start, d.period_key, d.address_key, d.address, d.attempts
+	`, now, deliveryBatch, claimID)
 	if err != nil {
 		return 0, fmt.Errorf("claim report deliveries: %w", err)
 	}
+	defer s.releaseBatch(ctx, claimID)
 	var claimed []claimedDelivery
 	for rows.Next() {
-		var d claimedDelivery
-		if err := rows.Scan(&d.scheduleID, &d.tenantID, &d.periodKey, &d.addressKey, &d.address, &d.attempts); err != nil {
+		d := claimedDelivery{claimID: claimID}
+		if err := rows.Scan(&d.scheduleID, &d.tenantID, &d.periodStart, &d.periodKey, &d.addressKey, &d.address, &d.attempts); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("scan report delivery: %w", err)
 		}
@@ -320,27 +419,43 @@ func (s *Service) deliverBatch(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("claim report deliveries: %w", err)
 	}
 
-	groups := map[schedulePeriod][]claimedDelivery{}
-	var order []schedulePeriod
+	groups := map[groupKey][]claimedDelivery{}
+	var order []groupKey
 	for _, d := range claimed {
-		k := schedulePeriod{d.scheduleID, d.periodKey}
+		k := groupKey{d.scheduleID, d.periodStart}
 		if _, ok := groups[k]; !ok {
 			order = append(order, k)
 		}
 		groups[k] = append(groups[k], d)
 	}
 	for _, k := range order {
+		if ctx.Err() != nil {
+			break
+		}
 		s.sendGroup(ctx, groups[k])
-		if err := s.refreshError(context.WithoutCancel(ctx), k.scheduleID, k.periodKey); err != nil {
-			return len(claimed), err
+		if s.afterGroup != nil {
+			s.afterGroup()
 		}
 	}
 	return len(claimed), nil
 }
 
-// sendGroup sends one period's report to its claimed recipients and records
-// every outcome. Nothing here returns an error: each claimed row ends sent,
-// retrying, failed, uncertain, skipped or released.
+// releaseBatch hands every row of the batch still only reserved back to
+// pending, uncounted. Rows that started sending or finished are untouched.
+func (s *Service) releaseBatch(ctx context.Context, claimID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE sla_report_deliveries SET status = 'pending', claim_id = NULL, claimed_at = NULL, updated_at = NOW()
+		WHERE claim_id = $1 AND status = 'claimed'
+	`, claimID); err != nil && s.log != nil {
+		s.log.WithError(err).Error("Failed to hand back report deliveries; they return after the claim times out")
+	}
+}
+
+// sendGroup sends one period's report to its reserved recipients. Errors
+// end up on the rows, never returned: each row ends sent, retrying, failed,
+// uncertain, skipped or cancelled, or is handed back by releaseBatch.
 func (s *Service) sendGroup(ctx context.Context, group []claimedDelivery) {
 	first := group[0]
 	sc, err := scanRow(s.db.QueryRowContext(ctx, `SELECT `+scheduleColumns+` FROM sla_report_schedules
@@ -351,25 +466,27 @@ func (s *Service) sendGroup(ctx context.Context, group []claimedDelivery) {
 	var sla *models.SLA
 	var attachments []mail.Attachment
 	var report *models.SLAReport
+	var opted map[string]bool
 	if err == nil {
 		sla, err = s.reports.Get(ctx, sc.TenantID, sc.SLAID)
 	}
 	if err == nil {
-		report, err = s.issuedReport(ctx, sc.TenantID, sc.SLAID, first.periodKey)
+		report, err = s.reports.IssuedReportStarting(ctx, sc.TenantID, sc.SLAID, first.periodStart)
 	}
 	if err == nil {
 		attachments, err = renderAttachments(report, sc.IncludeCSV)
 	}
-	if err != nil {
-		for _, d := range group {
-			s.recordOutcome(ctx, d, fmt.Errorf("prepare the report: %w", err))
-		}
-		return
+	if err == nil {
+		opted, err = unsubscribedKeys(ctx, s.db, sc.ID)
 	}
-	opted, err := unsubscribedKeys(ctx, s.db, sc.ID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return // handed back
+		}
+		// Nothing was sent: retry later, without counting an attempt.
 		for _, d := range group {
-			s.recordOutcome(ctx, d, err)
+			s.update(ctx, d, models.SLAReportDeliveryClaimed, `status = 'pending', claim_id = NULL, next_attempt_at = $4, last_error = $5`,
+				s.now().Add(planRetryDelay), clip("prepare the report: "+err.Error()))
 		}
 		return
 	}
@@ -380,60 +497,68 @@ func (s *Service) sendGroup(ctx context.Context, group []claimedDelivery) {
 	for _, d := range group {
 		switch {
 		case ctx.Err() != nil:
-			// Stopping: hand the rest back untouched, the attempt uncounted.
-			s.release(ctx, d)
+			return // the rest are handed back
+		case !sc.Enabled:
+			s.update(ctx, d, models.SLAReportDeliveryClaimed, `status = 'cancelled', claim_id = NULL, last_error = 'schedule disabled'`)
 			continue
 		case opted[d.addressKey]:
-			s.finish(ctx, d, models.SLAReportDeliverySkipped, "unsubscribed")
+			s.update(ctx, d, models.SLAReportDeliveryClaimed, `status = 'skipped', claim_id = NULL, last_error = 'unsubscribed'`)
 			continue
 		case !listed[d.addressKey]:
-			s.finish(ctx, d, models.SLAReportDeliveryCancelled, "removed from the recipients")
-			continue
-		}
-		// Restart the claim's clock: a slow relay can keep a batch busy
-		// longer than staleSendingAfter, and a row another replica already
-		// closed as uncertain must not be sent after all.
-		if !s.touch(ctx, d) {
+			s.update(ctx, d, models.SLAReportDeliveryClaimed, `status = 'cancelled', claim_id = NULL, last_error = 'removed from the recipients'`)
 			continue
 		}
 		msg, err := s.message(sc, sla, report, d.address, attachments)
-		if err == nil {
-			err = s.mailer.SendMessage(ctx, msg)
+		if err != nil {
+			s.update(ctx, d, models.SLAReportDeliveryClaimed, `status = 'failed', claim_id = NULL, last_error = $4`, clip(err.Error()))
+			continue
 		}
-		s.recordOutcome(ctx, d, err)
+		var started bool
+		if d, started = s.startSending(ctx, d); !started {
+			continue
+		}
+		s.recordOutcome(ctx, d, s.mailer.SendMessage(ctx, msg))
 	}
 }
 
-// touch refreshes a claimed row's claimed_at and reports whether this
-// runner still owns it.
-func (s *Service) touch(ctx context.Context, d claimedDelivery) bool {
-	res, err := s.db.ExecContext(ctx, `UPDATE sla_report_deliveries SET claimed_at = $5
-		WHERE schedule_id = $1 AND period_key = $2 AND address_key = $3 AND attempts = $4 AND status = 'sending'`,
-		d.scheduleID, d.periodKey, d.addressKey, d.attempts, s.now())
+// startSending moves a reserved row to 'sending' (counting the attempt)
+// immediately before its message goes out, and reports whether this batch
+// still held it: another replica may have taken it back after
+// staleClaimAfter while this batch was busy.
+func (s *Service) startSending(ctx context.Context, d claimedDelivery) (claimedDelivery, bool) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE sla_report_deliveries SET status = 'sending', attempts = attempts + 1, claimed_at = $5, updated_at = NOW()
+		WHERE schedule_id = $1 AND period_start = $2 AND address_key = $3 AND claim_id = $4 AND status = 'claimed'
+		RETURNING attempts
+	`, d.scheduleID, d.periodStart, d.addressKey, d.claimID, s.now()).Scan(&d.attempts)
 	if err != nil {
-		if ctx.Err() == nil && s.log != nil {
-			s.log.WithError(err).Error("Failed to refresh a report delivery claim")
+		if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil && s.log != nil {
+			s.log.WithError(err).Error("Failed to start a report delivery")
 		}
-		s.release(ctx, d)
-		return false
+		return d, false
 	}
-	n, _ := res.RowsAffected()
-	return n == 1
+	return d, true
 }
 
-// recordOutcome stores what one send came to (err nil: sent).
+// recordOutcome stores what a started send came to (err nil: sent).
 func (s *Service) recordOutcome(ctx context.Context, d claimedDelivery, err error) {
 	now := s.now()
+	const sending = models.SLAReportDeliverySending
 	switch {
 	case err == nil:
-		s.update(ctx, d, `status = 'sent', sent_at = $5, last_error = NULL`, now)
+		s.update(ctx, d, sending, `status = 'sent', claim_id = NULL, sent_at = $4, last_error = NULL`, now)
 	case errors.Is(err, mail.ErrMaybeDelivered):
-		s.finish(ctx, d, models.SLAReportDeliveryUncertain, "the connection was lost after the message was sent; it may have arrived, so it is not sent again: "+err.Error())
+		s.update(ctx, d, sending, `status = 'uncertain', claim_id = NULL, last_error = $4`,
+			clip("the connection was lost after the message was sent; it may have arrived, so it is not sent again: "+err.Error()))
+	case ctx.Err() != nil:
+		// Stopped before the message was through: nothing reached the
+		// relay, so it goes back uncounted.
+		s.update(ctx, d, sending, `status = 'pending', claim_id = NULL, claimed_at = NULL, attempts = attempts - 1`)
 	case permanent(err) || d.attempts >= maxAttempts:
-		s.finish(ctx, d, models.SLAReportDeliveryFailed, err.Error())
+		s.update(ctx, d, sending, `status = 'failed', claim_id = NULL, last_error = $4`, clip(err.Error()))
 	default:
 		wait := retryBackoff[min(d.attempts, len(retryBackoff))-1]
-		s.update(ctx, d, `status = 'pending', next_attempt_at = $5, last_error = $6`, now.Add(wait), clip(err.Error()))
+		s.update(ctx, d, sending, `status = 'pending', claim_id = NULL, next_attempt_at = $4, last_error = $5`, now.Add(wait), clip(err.Error()))
 	}
 }
 
@@ -447,78 +572,19 @@ func permanent(err error) bool {
 	return errors.As(err, &reply) && reply.Code >= 500
 }
 
-func (s *Service) finish(ctx context.Context, d claimedDelivery, status, reason string) {
-	s.update(ctx, d, `status = $5, last_error = NULLIF($6, '')`, status, clip(reason))
-}
-
-// release hands a claimed row back without counting the attempt.
-func (s *Service) release(ctx context.Context, d claimedDelivery) {
-	s.update(ctx, d, `status = 'pending', attempts = attempts - 1, claimed_at = NULL`)
-}
-
-// update writes one claimed row's outcome on a context detached from the
-// run's, so a run cut short still records what it did. The status guard
-// keeps a stale runner from overwriting a row it no longer owns.
-func (s *Service) update(ctx context.Context, d claimedDelivery, set string, args ...any) {
+// update writes one row's outcome, on a context detached from the run's so
+// a run cut short still records what it did, and only while the row is in
+// the state this batch left it in (from) under its claim.
+func (s *Service) update(ctx context.Context, d claimedDelivery, from, set string, args ...any) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
-	all := append([]any{d.scheduleID, d.periodKey, d.addressKey, d.attempts}, args...)
-	if _, err := s.db.ExecContext(ctx, `UPDATE sla_report_deliveries SET `+set+`, updated_at = NOW()
-		WHERE schedule_id = $1 AND period_key = $2 AND address_key = $3 AND attempts = $4 AND status = 'sending'`, all...); err != nil && s.log != nil {
+	all := append([]any{d.scheduleID, d.periodStart, d.addressKey}, args...)
+	next := len(all) + 1
+	all = append(all, d.claimID, from)
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`UPDATE sla_report_deliveries SET %s, updated_at = NOW()
+		WHERE schedule_id = $1 AND period_start = $2 AND address_key = $3 AND claim_id = $%d AND status = $%d`, set, next, next+1), all...); err != nil && s.log != nil {
 		s.log.WithError(err).Error("Failed to record a report delivery")
 	}
-}
-
-// refreshError recomputes the schedule's last_error from its last
-// period's deliveries: what failed, is uncertain or waits for a retry;
-// cleared once nothing does. Another period's rows leave it alone.
-func (s *Service) refreshError(ctx context.Context, scheduleID uuid.UUID, periodKey string) error {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT status, attempts, COALESCE(last_error, '') FROM sla_report_deliveries
-		WHERE schedule_id = $1 AND period_key = $2
-		ORDER BY updated_at DESC
-	`, scheduleID, periodKey)
-	if err != nil {
-		return fmt.Errorf("summarize report deliveries: %w", err)
-	}
-	counts := map[string]int{}
-	total, firstErr := 0, ""
-	for rows.Next() {
-		var status, lastErr string
-		var attempts int
-		if err := rows.Scan(&status, &attempts, &lastErr); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan report delivery: %w", err)
-		}
-		total++
-		key := status
-		if status == models.SLAReportDeliveryPending && attempts > 0 {
-			key = "retrying"
-		}
-		counts[key]++
-		if firstErr == "" && (key == "retrying" || status == models.SLAReportDeliveryFailed || status == models.SLAReportDeliveryUncertain) {
-			firstErr = lastErr
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("summarize report deliveries: %w", err)
-	}
-	var parts []string
-	for _, k := range []string{models.SLAReportDeliveryFailed, models.SLAReportDeliveryUncertain, "retrying"} {
-		if counts[k] > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", counts[k], k))
-		}
-	}
-	var summary any
-	if len(parts) > 0 {
-		summary = clip(fmt.Sprintf("%s of %d recipients for %s: %s", strings.Join(parts, ", "), total, periodKey, firstErr))
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE sla_report_schedules SET last_error = $3 WHERE id = $1 AND last_period_key = $2
-	`, scheduleID, periodKey, summary); err != nil {
-		return fmt.Errorf("record report schedule error: %w", err)
-	}
-	return nil
 }
 
 func clip(s string) string {
@@ -546,8 +612,9 @@ func renderAttachments(r *models.SLAReport, withCSV bool) ([]mail.Attachment, er
 	return out, nil
 }
 
-// recordRun audits a claimed period: the runner issued (or reused) the
-// report and queued it for its recipients.
+// recordRun audits a claimed period on the SLA (the resource every
+// schedule event names): the report was issued (or reused) and queued for
+// its recipients.
 func (s *Service) recordRun(sc *row, sla *models.SLA, periodKey string) {
 	if s.audit == nil {
 		return
@@ -568,8 +635,8 @@ func (s *Service) recordRun(sc *row, sla *models.SLA, periodKey string) {
 }
 
 // Runner runs RunOnce on an interval, like the audit pruner. Every API
-// replica runs one; SKIP LOCKED and the claims committed before sending keep
-// them from sending a period twice.
+// replica runs one; the lease, the claims committed before sending and the
+// per-delivery states keep them from sending a period twice.
 type Runner struct {
 	svc      *Service
 	interval time.Duration
@@ -597,8 +664,8 @@ func (r *Runner) Start() {
 	go r.run()
 }
 
-// Stop ends the loop and waits for a run in progress, which records the
-// outcome of every message it sent.
+// Stop ends the loop and waits for a run in progress: sends in flight are
+// cut short and recorded, and every reserved row is handed back.
 func (r *Runner) Stop() {
 	r.once.Do(func() { close(r.stop) })
 	r.wg.Wait()
@@ -619,7 +686,7 @@ func (r *Runner) run() {
 }
 
 func (r *Runner) tick() {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), tickTimeout)
 	defer cancel()
 	go func() {
 		select {

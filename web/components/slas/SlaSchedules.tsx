@@ -180,7 +180,11 @@ export function SlaSchedules({ sla }: { sla: Sla }) {
     }
   };
 
-  const deliveries = new Map((schedule?.deliveries ?? []).map((d) => [d.address, d]));
+  // The API also returns an older period while its recipients wait for
+  // retries (summarized in last_error); the table shows the last one.
+  const deliveries = new Map(
+    (schedule?.deliveries ?? []).filter((d) => d.period_key === schedule?.last_period_key).map((d) => [d.address, d]),
+  );
 
   return (
     <div className="space-y-4">

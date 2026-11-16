@@ -11,7 +11,11 @@ import (
 const (
 	// SLAReportDeliveryPending: waiting for its first attempt or a retry.
 	SLAReportDeliveryPending = "pending"
-	// SLAReportDeliverySending: claimed by a runner, message in flight.
+	// SLAReportDeliveryClaimed: reserved by a runner's batch; nothing sent
+	// yet, so it is handed back if the runner stops or dies.
+	SLAReportDeliveryClaimed = "claimed"
+	// SLAReportDeliverySending: its message is going out right now; the only
+	// state that can become uncertain.
 	SLAReportDeliverySending = "sending"
 	// SLAReportDeliverySent: the mail relay accepted it.
 	SLAReportDeliverySent = "sent"
@@ -47,10 +51,12 @@ type SLAReportSchedule struct {
 	// LastPeriodKey is the last period claimed for sending.
 	LastPeriodKey string     `json:"last_period_key,omitempty"`
 	LastRunAt     *time.Time `json:"last_run_at"`
-	// LastError summarizes what went wrong with the last period: the report
-	// could not be issued, or recipients failed, are retrying or uncertain.
+	// LastError says why the last period could not be issued, followed by,
+	// per period still kept, how many recipients failed, are uncertain or
+	// are retrying.
 	LastError string `json:"last_error,omitempty"`
-	// Deliveries is the last claimed period's outcome per recipient.
+	// Deliveries is each kept period's outcome per recipient, newest period
+	// first: the last claimed one, and an older one while it has retries.
 	Deliveries []SLAReportDelivery `json:"deliveries"`
 	CreatedAt  time.Time           `json:"created_at"`
 	UpdatedAt  time.Time           `json:"updated_at"`

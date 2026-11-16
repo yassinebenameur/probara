@@ -86,7 +86,7 @@ func TestSLAReportScheduleMigrationsUpDownUp(t *testing.T) {
 		`, tenant, slaID).Scan(&scheduleID); err != nil {
 			t.Fatal(err)
 		}
-		exec(`INSERT INTO sla_report_deliveries (schedule_id, tenant_id, period_key, address_key, address) VALUES ($1, $2, '2026-09', 'k', 'ops@example.com')`, scheduleID, tenant)
+		exec(`INSERT INTO sla_report_deliveries (schedule_id, tenant_id, period_start, period_key, address_key, address) VALUES ($1, $2, '2026-09-01', '2026-09', 'k', 'ops@example.com')`, scheduleID, tenant)
 		exec(`INSERT INTO sla_report_unsubscribes (schedule_id, address_key) VALUES ($1, 'k')`, scheduleID)
 		exec(`INSERT INTO sla_reports (tenant_id, sla_id, period_key, period_start, period_end, target_pct, issued_by_schedule, data)
 			VALUES ($1, $2, '2026-09', '2026-09-01', '2026-10-01', 99.9, TRUE, '{}')`, tenant, slaID)

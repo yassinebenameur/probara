@@ -37,6 +37,6 @@ period,2026-09-01T02:00:00+02:00,2026-10-01T02:00:00+02:00,99.86111,1.3889
 
 Budget exhaustion,exhausted,
 
-Date,Budget consumed seconds,Budget remaining % (full period)
+Date,Budget consumed seconds,Budget remaining %
 2026-09-09,0,100.000
 2026-09-10,3600,-38.889

@@ -152,7 +152,7 @@ func WriteCSV(w io.Writer, r *models.SLAReport) error {
 			exhaustionAt = ts(*b.ProjectedExhaustionAt)
 		}
 		rows = append(rows, nil, []string{"Budget exhaustion", b.Exhaustion, exhaustionAt},
-			nil, []string{"Date", "Budget consumed seconds", "Budget remaining % (full period)"})
+			nil, []string{"Date", "Budget consumed seconds", "Budget remaining %"})
 		for _, p := range b.BurnDown {
 			rows = append(rows, []string{p.Date, secondsString(p.ConsumedSeconds), pctString(p.RemainingPct, 3)})
 		}
@@ -543,7 +543,7 @@ func burnDownChart(pdf *fpdf.Fpdf, tr func(string) string, r *models.SLAReport, 
 	}
 	pdf.SetFont("Helvetica", "", 8)
 	pdf.SetTextColor(pdfMuted.r, pdfMuted.g, pdfMuted.b)
-	pdf.CellFormat(w, 4, tr("Budget left (full period), by day"), "", 1, "L", false, 0, "")
+	pdf.CellFormat(w, 4, tr("Budget left, by day"), "", 1, "L", false, 0, "")
 	y0 := pdf.GetY() + 1
 	lo := 0.0
 	for _, p := range r.Burn.BurnDown {

@@ -145,7 +145,7 @@ func (s *Service) buildReport(ctx context.Context, tenantID uuid.UUID, sla *mode
 
 	report.Summary = summarize(sla, res, 0, members)
 	report.Budget = budgetFor(sla.TargetPct, report.Summary, period)
-	report.Burn = buildBurn(sla, res, members, period, window, days, short, shortStart, report.Budget, report.Summary,
+	report.Burn = buildBurn(sla, res, members, period, window, days, short, shortStart, report.Summary,
 		report.Period.IsClosed, loc)
 	for i, day := range days {
 		d := summarize(sla, res, i+1, members)

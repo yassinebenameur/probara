@@ -220,12 +220,15 @@ Scheduled SLA report emails run in the **API**, which owns report issuing
 and has the mailer: every replica starts the report runner
 (`api/internal/services/reportschedules`, a one-minute loop, off without
 SMTP, `APP_BASE_URL` or `PROBARA_SECRETS_KEY`). At each period close plus an
-hour it claims due `sla_report_schedules` rows `FOR UPDATE SKIP LOCKED`,
-issues the report and commits one `sla_report_deliveries` row per recipient
-before mailing anyone; each delivery is committed as `sending` before its
-message leaves through `shared/mail`, so replicas and crashes never mail a
-period twice to one address (an interrupted send becomes `uncertain`, a
-transient failure retries with backoff). Recipients unsubscribe through a
+hour it leases a due `sla_report_schedules` row (`FOR UPDATE SKIP LOCKED`,
+committed at once), issues the report with no lock held, then in one
+`lock_timeout` transaction claims the period and commits one
+`sla_report_deliveries` row per recipient before mailing anyone. Batches
+reserve deliveries as `claimed` (handed back if the runner stops) and mark
+each `sending` only right before its message leaves through `shared/mail`, so
+replicas and crashes never mail a period twice to one address (an
+interrupted send becomes `uncertain`, a transient failure retries with
+backoff). Missed closes are caught up (the last three, oldest first). Recipients unsubscribe through a
 signed `shared/actionlink` token on the public `/api/v1/report-unsubscribe`
 route. The SLA service re-plans a schedule's next send when the SLA's period
 or timezone changes.
