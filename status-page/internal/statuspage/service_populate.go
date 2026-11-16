@@ -246,7 +246,10 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 		FROM unnest($1::uuid[]) AS m(monitor_id)
 		JOIN monitors mon ON mon.id = m.monitor_id
 		LEFT JOIN LATERAL (
-			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+			-- A failed HTTP check's captured response (up to ~16 KiB) is never
+			-- rendered; drop it before it leaves Postgres for every monitor.
+			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at,
+				cr.metrics_data #- '{http,failure_response}' AS metrics_data
 			FROM check_results cr
 			WHERE cr.monitor_id = m.monitor_id
 			  AND cr.tenant_id = $2

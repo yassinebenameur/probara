@@ -79,10 +79,12 @@ func (a *Alerter) deliverNotification(
 	var status string
 	var resolvedAt *time.Time
 	var snoozed bool
+	var resumedAt, acknowledgedAt sql.NullTime
 	if err := tx.QueryRowContext(ctx, `SELECT al.status, al.resolved_at, `+alertrouting.SnoozedPredicate("al")+`,
+			`+alertrouting.DispatchResumedAtExpr("al")+`, al.acknowledged_at,
 			al.relapse_count, al.reopened_at,
 			(SELECT r.recovered_at FROM alert_relapses r WHERE r.alert_id = al.id AND r.relapse_number = al.relapse_count)
-		FROM alerts al WHERE al.id = $1 FOR SHARE OF al`, alert.ID).Scan(&status, &resolvedAt, &snoozed,
+		FROM alerts al WHERE al.id = $1 FOR SHARE OF al`, alert.ID).Scan(&status, &resolvedAt, &snoozed, &resumedAt, &acknowledgedAt,
 		&alert.RelapseCount, &alert.ReopenedAt, &alert.LastRecoveredAt); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
 	}
@@ -124,6 +126,8 @@ func (a *Alerter) deliverNotification(
 	// A rolled-back claim is retried by whichever replica claims next; the
 	// key lets that retry skip the recipients this attempt already reached.
 	ctx = withRecipientKey(ctx, notifications.RecipientEventKeyFor(eventType, claim.round, alert.RelapseCount))
+	ctx = withDispatchRound(ctx, dispatchRound(eventType, claim.round, resumedAt.Time, acknowledgedAt.Time))
+	ctx, trace := withSendTrace(ctx)
 	sendType := eventType
 	if eventType == alertrouting.EventRelapsed {
 		sendType = "created"
@@ -134,12 +138,20 @@ func (a *Alerter) deliverNotification(
 			// webhook). Keep the claim so the next cycle does not re-send and
 			// fail identically every evaluation interval; the error is still
 			// returned so it is logged.
+			a.recordDelivery(ctx, tx, trace, eventType, alert.ID, channel.ID, err)
 			if cerr := tx.Commit(); cerr != nil {
 				return false, fmt.Errorf("commit notification claim after permanent failure: %w", cerr)
 			}
+			return false, err
 		}
+		// Delivery history: the claim is released for the next cycle's retry,
+		// so the failed attempt is written through the pool after that
+		// rollback, which would otherwise take it along.
+		_ = tx.Rollback()
+		a.recordDelivery(ctx, nil, trace, eventType, alert.ID, channel.ID, err)
 		return false, err
 	}
+	a.recordDelivery(ctx, tx, trace, eventType, alert.ID, channel.ID, nil)
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit notification claim: %w", err)
 	}
@@ -345,6 +357,71 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 	c.claimed = true
 	c.round = round.Time
 	return c, nil
+}
+
+// dispatchRound names which occurrence of eventType a claim sends, for the
+// async dispatch message id (sendChannelNotification). It is built from data
+// a rolled-back claim finds again on its retry, so JetStream's duplicate
+// window collapses a publish whose claim never committed (lost PubAck, failed
+// commit, crash) instead of queueing a second message for the slot, and that
+// changes exactly when a second send is legitimate:
+//
+//   - created: the alert's way out of its last mute or reopen (resumedAt),
+//     which an unacknowledge, a snooze end or a relapse moves: a page the
+//     worker handed back is re-paged under a new id, even inside the
+//     duplicate window.
+//   - relapsed (the relapse notice): the same resumedAt, which the reopen
+//     set and only a later mute lifting moves, under its own prefix, so it
+//     never shares an id with a route's first page in the same episode.
+//   - reminder: the round, the last_sent_at the claim replaced.
+//   - acknowledged: the acknowledgement time; a re-acknowledge after an
+//     unacknowledge is a new one.
+//   - resolved, suspected_cause: once per alert, channel and episode, no
+//     round.
+//
+// The episode itself (relapse_count) is in the idempotency key the id
+// starts with (notifications.IdempotencyKey), so a relapse's page, resolve,
+// acknowledgement and follow-up never collide with the earlier episode's.
+func dispatchRound(eventType string, round, resumedAt, acknowledgedAt time.Time) string {
+	stamp := func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.UTC().Format(time.RFC3339Nano)
+	}
+	switch eventType {
+	case "created":
+		return stamp(resumedAt)
+	case alertrouting.EventRelapsed:
+		return alertrouting.EventRelapsed + ":" + stamp(resumedAt)
+	case "reminder":
+		return stamp(round)
+	case "acknowledged":
+		return stamp(acknowledgedAt)
+	}
+	return ""
+}
+
+type dispatchRoundCtx struct{}
+
+// withDispatchRound hands sendChannelNotification the claim's dispatchRound,
+// without widening sendFunc.
+func withDispatchRound(ctx context.Context, round string) context.Context {
+	return context.WithValue(ctx, dispatchRoundCtx{}, round)
+}
+
+// dispatchMessageID is the async dispatch Nats-Msg-Id: the idempotency key,
+// plus the claim's round when it has one. A send that bypassed the claim
+// (none attached) keys a reminder by now, as before, so rounds never merge.
+func dispatchMessageID(ctx context.Context, key, eventType string, now time.Time) string {
+	round, ok := ctx.Value(dispatchRoundCtx{}).(string)
+	if !ok && eventType == "reminder" {
+		round = now.UTC().Format(time.RFC3339Nano)
+	}
+	if round == "" {
+		return key
+	}
+	return key + ":" + round
 }
 
 type recipientKeyCtx struct{}

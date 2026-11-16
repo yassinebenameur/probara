@@ -67,6 +67,10 @@ type alertIdentity struct {
 	metricName       string
 	sourceLocationID uuid.UUID
 	targetLocationID uuid.UUID
+	// metricValueNull, when set, restricts the reopen to an alert of the
+	// same form: domain_expiry's "expiry unknown" (no value) and dated forms
+	// say different things, so one never reopens as the other.
+	metricValueNull *bool
 }
 
 // alertColumn is one kind-specific column a reopen refreshes with what the
@@ -132,6 +136,11 @@ func reopenRecentAlertTx(ctx context.Context, tx *sql.Tx, id alertIdentity, refr
 	matches := func(alias string) string {
 		return alias + `.tenant_id = $1 AND ` + alias + `.kind = $2 AND ` + fmt.Sprintf(subject, alias)
 	}
+	form := ""
+	if id.metricValueNull != nil {
+		args = append(args, *id.metricValueNull)
+		form = fmt.Sprintf(` AND (al.metric_value IS NULL) = $%d`, len(args))
+	}
 
 	var set strings.Builder
 	for _, c := range refresh {
@@ -142,7 +151,7 @@ func reopenRecentAlertTx(ctx context.Context, tx *sql.Tx, id alertIdentity, refr
 	query := `
 		WITH reopened AS (
 			UPDATE alerts al
-			SET status = 'active', resolved_at = NULL, auto_resolved = FALSE,
+			SET status = 'active', resolved_at = NULL, auto_resolved = FALSE, resolve_reason = NULL,
 				relapse_count = al.relapse_count + 1, reopened_at = NOW(),
 				acknowledged_at = NULL, acknowledged_by_user_id = NULL,
 				snoozed_until = NULL, snoozed_at = NULL, snoozed_by_user_id = NULL` + set.String() + `,
@@ -155,7 +164,7 @@ func reopenRecentAlertTx(ctx context.Context, tx *sql.Tx, id alertIdentity, refr
 			  AND te.id = al.tenant_id AND te.alert_reopen_cooldown_minutes > 0
 			  AND prev.id = al.id
 			  AND al.status = 'resolved' AND al.auto_resolved
-			  AND al.resolved_at > NOW() - make_interval(mins => te.alert_reopen_cooldown_minutes)
+			  AND al.resolved_at > NOW() - make_interval(mins => te.alert_reopen_cooldown_minutes)` + form + `
 			  -- Only the subject's latest alert: a newer one (open, or
 			  -- resolved by hand) means that episode has been superseded.
 			  AND NOT EXISTS (

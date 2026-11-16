@@ -369,6 +369,39 @@ test('ping: create from a filled form and an edit round trip', () => {
   });
 });
 
+test('ping: echo settings are sent only when filled, and survive an edit round trip', () => {
+  const filled = freshCreate('ping', {
+    name: 'Edge',
+    host: 'edge.example.com',
+    ping_count: '5',
+    ping_interval_ms: ' 500 ',
+    ping_max_packet_loss_pct: '20.5',
+    ping_max_rtt_ms: '150',
+  });
+  assert.deepEqual(validateMonitorForm('ping', filled, false), {});
+  assertWire(buildMonitorFormRequest('ping', filled, false).config, {
+    host: 'edge.example.com',
+    count: 5,
+    interval_ms: 500,
+    max_packet_loss_pct: 20.5,
+    max_rtt_ms: 150,
+  });
+
+  const stored = { host: 'gw.internal', count: 4, interval_ms: 250, max_packet_loss_pct: 0, max_rtt_ms: 80 };
+  const monitor = storedMonitor('ping', stored);
+  assertWire(buildMonitorFormRequest('ping', initialMonitorFormState(monitor), false).config, stored);
+
+  assert.deepEqual(
+    validateMonitorForm('ping', { ...filled, ping_count: '11', ping_interval_ms: '100', ping_max_packet_loss_pct: '100', ping_max_rtt_ms: '0' }, false),
+    {
+      ping_count: 'Between 1 and 10 echoes',
+      ping_interval_ms: 'Between 200 and 10000 ms',
+      ping_max_packet_loss_pct: '0 or more, below 100',
+      ping_max_rtt_ms: 'A whole number of milliseconds, 1 or more',
+    }
+  );
+});
+
 test('dns: create from defaults', () => {
   const form = freshCreate('dns', { name: 'Apex', host: 'example.com' });
   assertWire(buildMonitorFormRequest('dns', form, false), {

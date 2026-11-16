@@ -75,10 +75,12 @@ type AlertWithDetails struct {
 	SourceLocationName   *string `json:"source_location_name,omitempty"`
 	TargetLocationName   *string `json:"target_location_name,omitempty"`
 	// SuppressionReason is set while the alerter is deliberately sending no
-	// notification for this open alert. Today the only value is "dependency":
-	// an upstream dependency is down (or recovered less than the grace period
-	// ago) and dependency suppression is on for the monitor. Computed with the
-	// same SQL predicate the alerter dispatches with (shared/alertrouting).
+	// notification for this open alert: "dependency" when an upstream
+	// dependency is down (or recovered less than the grace period ago) and
+	// dependency suppression is on for the monitor; "location_offline" for a
+	// mesh edge whose location stopped reporting, whose own location_offline
+	// alert speaks for it. Computed with the same SQL predicates the alerter
+	// dispatches with (shared/alertrouting).
 	SuppressionReason *string `json:"suppression_reason,omitempty"`
 	// ImpactedCount is how many open downstream alerts this alert's monitor is
 	// the suppressed root cause of — the blast radius its notification lists.

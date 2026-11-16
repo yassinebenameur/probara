@@ -29,10 +29,11 @@ type DispatchEnvelope struct {
 	// AlertID + EventType (with ChannelID) form the idempotency key that rides
 	// along to receivers. Deduplication itself happens before publish: the
 	// alerter claims the (alert, channel, event) slot in
-	// alert_notification_states atomically. The Nats-Msg-Id names that claim
-	// (the key plus the claim time), so JetStream never swallows a later,
-	// legitimate send of the same event. External delivery is at least once:
-	// receivers should honor the key.
+	// alert_notification_states atomically. The Nats-Msg-Id is the key plus
+	// the claimed occurrence (the alerter's dispatchRound), the same when a
+	// claim that never committed is retried, so the broker collapses that
+	// duplicate, and different for a legitimate second send of the event.
+	// External delivery is at least once: receivers should honor the key.
 	AlertID   string `json:"alert_id"`
 	EventType string `json:"event_type"`
 

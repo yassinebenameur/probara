@@ -40,7 +40,7 @@ export const MONITORS_PAGE: DocPage = {
             [
               "`interval_seconds`",
               "Time between scheduled runs or expected passive reports",
-              "10–86,400 seconds",
+              "10–86,400 seconds (at least 3,600 for [domain monitors](#domain), 60 for SIP test calls)",
             ],
             [
               "`timeout_seconds`",
@@ -110,13 +110,14 @@ export const MONITORS_PAGE: DocPage = {
           columns: ["Type", "What it verifies", "Scheduled active check"],
           rows: [
             ["`http`", "HTTP response, content, headers, JSON, TLS, and latency", "Yes"],
-            ["`ping`", "ICMP reachability", "Yes"],
+            ["`ping`", "ICMP echo: packet loss and round trip", "Yes"],
             ["`dns`", "DNS resolution and optional expected answers", "Yes"],
             ["`grpc`", "Standard gRPC health service status", "Yes"],
             ["`tcp`", "TCP connection and optional TLS handshake", "Yes"],
             ["`sip`", "SIP `OPTIONS` ping, `REGISTER` auth probe, or `INVITE` test call (PDD, answer, ACK/BYE)", "Yes"],
             ["`websocket`", "WebSocket upgrade and optional message exchange", "Yes"],
             ["`prometheus`", "PromQL instant query compared against a numeric threshold", "Yes"],
+            ["`domain`", "[Domain registration expiry](#domain) through RDAP, with WHOIS as the fallback", "Yes"],
             ["`redis`", "Redis authentication, `PING`, and optional role", "Yes"],
             ["`postgres`", "PostgreSQL connect and optional query assertion", "Yes"],
             ["`mysql`", "MySQL connect and optional query assertion", "Yes"],
@@ -234,7 +235,7 @@ export const MONITORS_PAGE: DocPage = {
             ],
             [
               "`tls_min_days_valid`",
-              "Open a [`tls_expiry` alert](/docs/alerting/#host-and-mesh) when the leaf certificate has fewer remaining validity days; the check itself still passes",
+              "Open a [`tls_expiry` alert](/docs/alerting/#host-and-mesh) when the earliest-expiring certificate of the chain, the leaf or an intermediate the server presents, has fewer remaining validity days; the check itself still passes",
             ],
             [
               "`tls_server_name`",
@@ -260,6 +261,11 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
+            "Every failed or errored check that received a response stores it with the result, with no setting: the status line, the response headers and the first 8 KiB of the body, under 16 KiB in all. Redaction runs over the whole body before it is cut: the monitor's own secret headers, credential-named headers and basic auth, in every spelling the worker knows; credential-shaped body fields (JSON members, form and query parameters and `name: value` lines named like a token, secret, password, API key, session or cookie, and bearer or basic tokens); and the values of `Set-Cookie`, `Authorization`-style and session headers and of every header the monitor itself sends. Field redaction is best effort for credentials the worker does not know. A binary body, or one the server compressed when the monitor asked for it with its own `Accept-Encoding`, is described (encoding or type, and size), never stored, and text that holds NUL bytes or invalid UTF-8 is stored with replacement characters. The capture stays in the check result (kept 30 days), never in alert text. Reads of many results (the monitor's history and list, metrics snapshots, `get_monitor_results`) leave it out and mark the row with `http.failure_response_omitted`; the History tab fetches it when a failed check's Response is opened, through `GET /api/v1/monitors/{id}/results/{resultId}` (MCP `get_monitor_result`). Successful checks store nothing extra.",
+        },
+        {
+          type: "paragraph",
+          text:
             "Display fields put facts from a JSON response on the monitors list, such as a deployed `version` or `checks.db`. Configure them under Show values in monitor list, in the form's Labels & display section. They are resolved on every check, including failed ones, and shown as chips from the latest result (a chip without a label shows only the value), with the full value in the preview panel. A path that is missing or a body that is not JSON shows nothing and never fails the check. Scalars are shown as text and objects or arrays as raw JSON, cut to 64 characters. Each value is stored with its check result for the raw result retention window and is visible to anyone who can read the monitor, so do not point a display field at sensitive data.",
         },
         {
@@ -281,7 +287,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "Ping",
               description:
-                "Set `host` to a hostname or IP address. The worker performs an ICMP reachability check; firewalls and worker privileges can affect results independently of application health.",
+                "Set `host` to a hostname or IP address. Each check sends `count` ICMP echoes (1–10, default 3, every existing ping monitor included) `interval_ms` apart (200–10,000, default 250) and fails when no echo is answered, when more than `max_packet_loss_pct` of them go unanswered (0 to below 100; unset fails only at 100% loss), or when the average round trip exceeds `max_rtt_ms`. Latency is the average round trip, and the result records the address pinged, echoes sent and answered, loss %, the gap used and min/avg/max round trip. A check waits up to 1 second after its last echo (half the time left, when that is less) and then stops, so an echo answered later counts as lost, a healthy default check takes about half a second and a lost echo holds a worker for about 1.5 seconds, never the whole timeout. The echoes always fit the time the timeout leaves after resolving the host: a gap is shortened to fit, and a save is refused when an explicit `interval_ms` would not fit the timeout or a default one would drop below 200 ms. The host is resolved once and vetted by the worker's [network policy](/docs/security/#ssrf-network-policy) like every dial (IPv4 preferred, else IPv6), and the echo goes to that address; a refused address is an `error`. Echoes use unprivileged ICMP sockets, never raw sockets, so on Linux the worker's group must be inside the `net.ipv4.ping_group_range` sysctl ([ping sockets](/docs/deployment/#ping-sockets)); without it every ping check is an `error` that names the sysctl. Firewalls that drop ICMP still fail the check independently of application health.",
             },
             {
               term: "DNS",
@@ -296,7 +302,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "TCP",
               description:
-                "Set `host` and `port`; optionally enable TLS and `tls_skip_verify`. A successful connection, plus a successful TLS handshake when enabled, is healthy. No application payload is exchanged.",
+                "Set `host` and `port`; optionally enable `use_tls` for a TLS-wrapped port (443, 993, 5671, 6697, …). A successful connection, plus a successful TLS handshake when enabled, is healthy. No application payload is exchanged. With TLS the certificate is verified against the system trust store, plus the PEM CA certificates in `tls_ca_pem` for a private CA, under the server name `tls_server_name` (default: the host); `tls_skip_verify` accepts self-signed or mismatched certificates. The certificate is recorded either way, and `tls_min_days_valid` (requires `use_tls`) opens a [`tls_expiry` alert](/docs/alerting/#host-and-mesh) like HTTPS: when the earliest-expiring certificate of the presented chain has fewer days left, while the check itself still passes.",
             },
             {
               term: "SIP",
@@ -424,6 +430,66 @@ export const MONITORS_PAGE: DocPage = {
           title: "Prefer a numeric query plus a Probara threshold",
           text:
             "A PromQL filter such as `up == 0` returns an empty vector when everything is healthy, which then falls under `no_data_status`. Querying the numeric value and expressing the threshold in Probara is easier to read and preview.",
+        },
+      ],
+    },
+    {
+      id: "domain",
+      title: "Domain expiry monitors",
+      intro:
+        "A domain monitor watches when a domain's registration expires and opens a `domain_expiry` alert before it lapses. The worker asks the registry over RDAP and falls back to WHOIS for registries without RDAP, or without an expiry date in it.",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Field", "Purpose"],
+          rows: [
+            ["`domain`", "Required. The name to watch, without scheme, port or path. A subdomain is watched through its registered domain (`www.shop.example.co.uk` checks `example.co.uk`), found with the ICANN section of the public suffix list; a platform suffix such as `github.io` counts as the platform's own domain. Internationalized names are looked up in punycode. IP addresses, bare top-level domains or public suffixes, and names under a TLD the list does not know (`.local`, `.internal`, a made-up TLD) are refused. The list ships with each release, so a TLD delegated after it is refused until an update."],
+            ["`min_days_valid`", "Warning window in days, 0 to 3650, default 30: a registration with fewer days left opens a `domain_expiry` alert. 0 alerts only once it has expired."],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The schedule has a floor of one hour (`interval_seconds` of at least 3600), the monitor runs from at most one location (a registry answers the same from everywhere, so more would only multiply lookups), and \"mark down after\" (`consecutive_failures_threshold`) is at least 2, so a single registry answer never marks a domain down. The API refuses anything else, on create and on every update, a type change included. The form starts at once a day with a 30 s timeout. **Test lookup** in the form asks the registry through a worker without saving; it needs write permission, since every lookup spends the registries' rate limit on the worker's shared address.",
+        },
+        {
+          type: "table",
+          columns: ["Lookup result", "Check", "Alert"],
+          rows: [
+            ["Expiry known, outside the window", "`success`", "Any open `domain_expiry` alert resolves"],
+            ["Expiry known, inside the window", "`success` (the monitor stays up)", "`domain_expiry` with the days left, the date and the registrar"],
+            ["Date passed, registry reports an auto-renew or renew grace period", "`success`", "`domain_expiry` at 0 days left, noting the grace period"],
+            ["Expired, in redemption or pending delete", "`failure`", "Availability alert after two failing lookups, and `domain_expiry` reads as expired"],
+            ["Not registered", "`failure`", "Availability alert after two failing lookups"],
+            ["On hold (`clientHold`, `serverHold`)", "`success`", "None: the page shows the hold; the outage it causes (no DNS) is for a DNS or HTTP monitor"],
+            ["Expiry cannot be determined", "`success`, with `unknown_reason`", "`domain_expiry` with no value, once it persists (below)"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "\"Not registered\" needs more than one answer. An RDAP `404` counts only when it is an RDAP answer (an `application/rdap+json` or JSON body), not a plain web page where an RDAP server used to be; WHOIS is then asked too, and when WHOIS holds the name, its answer wins. `not_found_confirmed` records that RDAP and WHOIS both said so. Either way, the check fails and the monitor goes down only when the next lookup says so again. A WHOIS reply that refuses the query (a rate limit, a block, \"try later\", \"query rate exceeded\") is never read as \"not registered\", even when it also says \"not found\": it is an undetermined expiry.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "An undetermined expiry is not an outage of the domain, so it never fails the check, and it is not left silent either. It happens when the registry publishes no expiration date, when neither RDAP nor WHOIS is known for the TLD, when a WHOIS answer cannot be parsed, or when every lookup fails or is throttled. The monitor page then shows **expiry unknown** and the reason. A recorded expiry keeps counting for 7 days, so a registry outage or a rate limit does not lose it; once no lookup in the last 7 days found a date and at least two check rounds could not determine one (the results of one round from several sources count once), the alerter opens a `domain_expiry` alert without a value (\"Domain Expiry Unknown\") that resolves when a date is read again. Some registries never publish an expiry date at all; for those (`.de` today) the form and the monitor page say that the monitor can only detect that the domain stops being registered, and no \"expiry unknown\" alert opens.",
+        },
+        {
+          type: "list",
+          items: [
+            "RDAP servers come from the IANA bootstrap registry. Workers ship a snapshot of it and refresh it from `data.iana.org` once a day in the background; a worker that cannot reach IANA, such as one at a private location with restricted egress, keeps using the snapshot shipped with its release. Only `https` RDAP servers are used; a TLD whose registry lists plain `http` only falls back to WHOIS.",
+            "WHOIS asks `whois.iana.org` which server holds the TLD (cached for a day, at most 2048 TLDs), asks that server, and follows one registrar referral when a thin registry's answer has no expiry date: at most three queries, all to port 43 of a hostname. Dates are read from the formats the common registries use; a day/month-ambiguous date such as `03/04/2027` is not guessed at and reads as unknown. A date without a time zone is read as UTC.",
+            "Each worker throttles its own lookups per registry server: a burst of 20, then one a second. A server that answers HTTP `429` (honouring `Retry-After`) or refuses a WHOIS query is left alone for 5 minutes (between 1 minute and 1 hour). A throttled lookup is an undetermined expiry with the reason, never a failure.",
+            "Lookups always refuse private, loopback, link-local and other reserved destinations, even on a worker with `HTTP_BLOCK_PRIVATE_IPS=false`: every server is chosen by the bootstrap data or by a remote referral, never by the monitor, so an answer cannot steer the worker into its own network. `HTTP_ALLOWED_CIDRS` still admits ranges you trust. RDAP redirects are followed only to `https` on a hostname and the default port, at most three hops; WHOIS referrals must name a hostname.",
+            "RDAP gets at most two thirds of the timeout when WHOIS may still have to answer. Responses are capped at 1 MiB (RDAP) and 256 KiB (WHOIS).",
+            "A worker at a private location needs outbound HTTPS to the registries' RDAP servers and TCP 43 to their WHOIS servers.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every lookup records `metrics_data.domain`: `domain` (the registered name looked up), `expires_at`, `days_until_expiry`, `registered_at`, `updated_at`, `registrar`, `statuses`, `registered` (`false` when a registry does not hold the name, absent when no registry answered), `not_found_confirmed`, `source` (`rdap` or `whois`), `server`, `rdap_error` (why RDAP did not answer, or what it said, when WHOIS did), `unknown_reason`, `no_expiry_published`, `renewal_grace` and `on_hold`. The monitor page's Registration panel shows the latest.",
         },
       ],
     },

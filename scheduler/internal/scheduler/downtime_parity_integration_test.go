@@ -11,6 +11,7 @@ import (
 	testcontainers "github.com/testcontainers/testcontainers-go"
 
 	"github.com/yassinebenameur/probara/shared/analytics"
+	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
 // TestDowntimeProjectionMatchesRawAnalyticsPath pins the contract between the
@@ -60,6 +61,7 @@ func TestDowntimeProjectionMatchesRawAnalyticsPath(t *testing.T) {
 	`, windowID, tenantID, *at(-6 * time.Hour), *at(-3 * time.Hour)); err != nil {
 		t.Fatalf("insert maintenance window: %v", err)
 	}
+	testutil.MaterializeOneOffMaintenance(ctx, t, dbClient, windowID)
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO maintenance_window_monitors (maintenance_window_id, monitor_id) VALUES ($1, $2)
 	`, windowID, maintMon); err != nil {

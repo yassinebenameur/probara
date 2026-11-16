@@ -17,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/triageview"
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
 // Errors the handlers map to a status with errors.Is. The text reaches API
@@ -61,7 +62,8 @@ var alertDetailSelect = `
 		m.name as monitor_name,
 		a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name,
 		a.source_location_id, a.target_location_id, sl.name, tl.name,
-		CASE WHEN ` + alertSuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonDependency + `' END,
+		CASE WHEN ` + alertDependencySuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonDependency + `'
+			WHEN ` + alertLocationSuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonLocationOffline + `' END,
 		CASE WHEN a.status IN ('active', 'acknowledged') AND a.kind = 'availability'
 			THEN json_array_length(` + alertrouting.ImpactedMonitorsSubquery("a.monitor_id") + `) ELSE 0 END,
 		a.acknowledged_by_user_id, ackby.username,
@@ -83,15 +85,24 @@ var alertDetailSelect = `
 `
 
 // alertSuppressedPredicate is TRUE for an open alert whose notifications the
-// alerter is currently suppressing. It is the very predicate the alerter's
-// dispatch query excludes on, so the API never calls an alert suppressed that
-// would in fact page (or vice versa). Resolved alerts are never suppressed:
-// there is nothing left to dispatch. Expects aliases a (alerts), m (monitors)
-// and te (tenants); m is NULL for mesh alerts, which makes the CASE inside
-// fall through to the tenant default and the root-cause test NULL → not
-// suppressed.
-var alertSuppressedPredicate = `(a.status IN ('active', 'acknowledged') AND COALESCE(` +
+// alerter is currently suppressing. It is built from the very predicates the
+// alerter's dispatch queries exclude on, so the API never calls an alert
+// suppressed that would in fact page (or vice versa). Resolved alerts are
+// never suppressed: there is nothing left to dispatch. Expects aliases a
+// (alerts), m (monitors) and te (tenants); m is NULL for mesh alerts, which
+// makes the dependency CASE fall through to the tenant default and the
+// root-cause test NULL → not suppressed by a dependency.
+var alertSuppressedPredicate = `(` + alertDependencySuppressedPredicate + ` OR ` + alertLocationSuppressedPredicate + `)`
+
+// alertDependencySuppressedPredicate: an upstream dependency explains the
+// alert (suppression_reason "dependency").
+var alertDependencySuppressedPredicate = `(a.status IN ('active', 'acknowledged') AND COALESCE(` +
 	alertrouting.SuppressedByDependencyPredicate("a", "m", "te") + `, FALSE))`
+
+// alertLocationSuppressedPredicate: a mesh edge whose location stopped
+// reporting (suppression_reason "location_offline").
+var alertLocationSuppressedPredicate = `(a.status IN ('active', 'acknowledged') AND ` +
+	alertrouting.SuppressedByOfflineLocationPredicate("a") + `)`
 
 // alertVisibleClause hides alerts of soft-deleted monitors while keeping
 // monitor-less (mesh) alerts visible.
@@ -445,9 +456,12 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 // ResolveAlert marks an alert as resolved
 func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
 	now := time.Now()
+	// resolve_reason 'manual' (notifications.ResolveReasonManual): the
+	// closing notice the alerter sends must not claim the condition cleared.
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1
+		SET status = 'resolved', resolved_at = $1, updated_at = $1,
+			resolve_reason = '` + notifications.ResolveReasonManual + `'
 		WHERE id = $2 AND tenant_id = $3 AND status IN ('active', 'acknowledged')
 		RETURNING id
 	`

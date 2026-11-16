@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  locationConnection,
+  locationConnectionTone,
   alertStatusTone,
   checkResultLabel,
   checkResultTone,
@@ -142,4 +144,16 @@ test('thresholdTone judges jitter and round trip by the monitor\'s own warn and 
   assert.equal(thresholdTone(600, undefined, 500), 'bad');
   assert.equal(thresholdTone(600), 'good');
   assert.equal(thresholdTone(undefined, 1, 2), 'none');
+});
+
+test('locationConnection: disconnected after a minute, offline only when the API says so', () => {
+  const seen = '2026-11-15T12:00:00Z';
+  assert.equal(locationConnection({ connected: true, offline: false, last_seen_at: seen }), 'connected');
+  assert.equal(locationConnection({ connected: false, offline: false, last_seen_at: seen }), 'disconnected');
+  assert.equal(locationConnection({ connected: false, offline: true, last_seen_at: seen }), 'offline');
+  assert.equal(locationConnection({ connected: false, offline: false }), 'never_connected');
+  assert.equal(locationConnectionTone('offline', 3), 'danger');
+  assert.equal(locationConnectionTone('disconnected', 3), 'warning');
+  assert.equal(locationConnectionTone('offline', 0), 'neutral');
+  assert.equal(locationConnectionTone('connected', 0), 'success');
 });

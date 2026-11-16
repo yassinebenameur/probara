@@ -59,7 +59,7 @@ const kumaBackupFixture = `{
     },
     {
       "id": 6, "name": "Gateway ping", "type": "ping", "active": true,
-      "hostname": "10.0.0.1", "packetSize": 128, "interval": 30
+      "hostname": "10.0.0.1", "packetSize": 128, "ping_count": 5, "interval": 30
     },
     {
       "id": 7, "name": "Zone NS", "type": "dns", "active": true,
@@ -277,7 +277,7 @@ func TestParseKumaExport_TypeMappingTable(t *testing.T) {
 		{
 			name:   "Gateway ping",
 			want:   models.MonitorTypePing,
-			config: map[string]interface{}{"host": "10.0.0.1"},
+			config: map[string]interface{}{"host": "10.0.0.1", "count": 5},
 		},
 		{
 			name: "Zone NS",
@@ -871,5 +871,20 @@ func TestParseKumaExport_BasicAuthWithoutPasswordImportsDisabled(t *testing.T) {
 	full := kumaRowByName(t, preview, "Full")
 	if full.Fields["enabled"] != true || hasWarning(full.Warnings, "re-enter the basic auth password") {
 		t.Fatalf("a monitor with its password must import enabled: %v %v", full.Fields["enabled"], full.Warnings)
+	}
+}
+
+// Kuma 2's ping_count: its default of 1 leaves Probara's default, a raised
+// count is kept up to Probara's maximum.
+func TestKumaPingCount(t *testing.T) {
+	for _, tc := range []struct {
+		count     int
+		wantCount interface{}
+		warns     bool
+	}{{0, nil, false}, {1, nil, false}, {4, 4, false}, {50, 10, true}} {
+		config, warnings, reason := kumaPingConfig(kumaMonitor{Hostname: "10.0.0.1", PingCount: kumaInt(tc.count)})
+		if reason != "" || config["count"] != tc.wantCount || (len(warnings) > 0) != tc.warns {
+			t.Errorf("ping_count %d: config %v warnings %v reason %q", tc.count, config, warnings, reason)
+		}
 	}
 }

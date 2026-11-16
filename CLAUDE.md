@@ -207,10 +207,32 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   stored value", offered only for optional secret fields.
 - **Certificate location in `metrics_data`**: `shared/tlscert` owns the
   certificate snapshot (`Info`, built by `FromConnectionState`) and where it
-  sits (`MetricsPaths`: `http.tls`, `sip.tls`). The alerter's `tls_expiry`
+  sits (`MetricsPaths`: `http.tls`, `sip.tls`, `tcp.tls`). The alerter's `tls_expiry`
   reads through `SQLExpr`, the status page and AI evidence through
   `Extract`; `TestSQLExprMatchesExtract` pins the pair. A new TLS-capable
-  type adds its path there, never a hard-coded `#> '{x,tls}'`.
+  type adds its path there, never a hard-coded `#> '{x,tls}'`. The expiry
+  that counts is always the chain's earliest (leaf + presented
+  intermediates, never a trust-store root; `chainOf`): `Info.Expiry` in Go,
+  `ExpirySQL` in SQL (`TestExpirySQLMatchesExpiry`), never `not_after` alone.
+- **Domain registration snapshot**: `shared/domainexpiry` owns the domain
+  check's `metrics_data.domain` (`Info`, `MetricsPaths`, `SQLExpr`/
+  `ExpiresAtSQL`/`UnknownReasonSQL`, `Extract`; its own
+  `TestSQLExprMatchesExtract`), the lookups (RDAP via the embedded IANA
+  bootstrap in `Directory`, WHOIS fallback) and `RegistrableDomain`. Lookups
+  dial only through the worker's `domainDialGuard`, which blocks private
+  destinations whatever `HTTP_BLOCK_PRIVATE_IPS` says (servers come from
+  bootstrap data and referrals); keep redirect/referral targets validated
+  there. An undetermined expiry (including a throttled or refused lookup)
+  is a `success` with `unknown_reason`, never a failure; the alerter's
+  `evaluateDomainExpiry` (`domain_expiry.go`) turns a persistent one into a
+  valueless `domain_expiry` alert (not for `PublishesNoExpiry` TLDs), and
+  resolves-and-reopens when the alert switches between valueless and dated.
+  One registry answer never pages: `ValidateDomainMonitorRules`
+  (`shared/models/domain.go`) holds domain monitors to a threshold of at
+  least 2 and at most one location, and an RDAP 404 yields to a WHOIS that
+  holds the name. Lookups are throttled per registry host in the worker
+  (`throttle.go`), and `POST /monitors/test` of this type needs write
+  access (`handlers/monitors/checks.go`, beside the saved-secret gate).
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
@@ -237,7 +259,12 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   silences its whole membership — reachability reports it
   (`group_rollup_paused`), dispatch still does it. The package doc, the
   fragments' comments and `annotateOpenAlertRootCauses` (the grace clock)
-  cover the rest.
+  cover the rest. Monitor-less alerts (mesh edges, `location_offline`) route
+  through `TenantTargetsSQL`, the tenant defaults without a monitor
+  (`TestTenantTargetsSQLMatchesDefaults`), and a mesh edge with a location
+  that stopped reporting dispatches nothing
+  (`SuppressedByOfflineLocationPredicate`, `suppression_reason`
+  `location_offline`).
 - **Status page settings live in THREE mirrors**, all of which must change
   together for a new setting to survive a round trip:
   `api/internal/models/statuspages.go` (`StatusPageSettings`, the wire type),
@@ -299,6 +326,18 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
   cascades only on tenant delete. The label routes are writes (never in
   `postReadPaths`); export is `RequireTenantAdmin`.
+- **Maintenance coverage**: `shared/maintenance` (S-M5). A window is a
+  schedule (one-off, or the weekly `Rule`, expanded only by `Rule.Expand`);
+  what covers monitors is its materialized occurrences
+  (`maintenance_window_occurrences`), read only through
+  `OccurrenceRangesSQL`, `InMaintenance*Predicate` and
+  `MaintenanceUntilExpr` — never `maintenance_windows.starts_at/ends_at`.
+  Every occurrence writer is in `store.go`: the API on save, the scheduler's
+  `maintenance_occurrences.go` rolling the 35-day horizon. Started
+  occurrences, removed targets (`maintenance_window_past_targets`) and
+  deleted windows (`deleted_at`) are history, never rewritten. Anything that
+  inserts a window directly (tests, `scripts/seed-demo`) must insert its
+  occurrence too (`testutil.MaterializeOneOffMaintenance`).
 
 ## Monitor import
 
@@ -365,7 +404,13 @@ or imported groups come back empty. Any other path that creates groups through
    `MonitorType`, so a missing icon does not compile), `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
    `badge`), and the type count + `monitorGroups` on the
-   landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
+   landing page (`website/app/page.tsx`, three counts; `website/app/docs/page.tsx`,
+   README). Also per type: the status page's target extractor
+   (`newMonitorPresenters`, `status-page/internal/statuspage/presenter.go`),
+   `monitorTarget`/`monitorTargetLabel` (`web/lib/monitor-utils.ts`), the
+   clone case (`web/lib/monitor-clone.ts`), the import page's `getTarget`,
+   and any spelling worth an alias in the importer's `typeAliases`
+   (`api/internal/services/import/mapping.go`)
 
 ## Cross-service contracts
 
@@ -685,16 +730,25 @@ or imported groups come back empty. Any other path that creates groups through
   paging channels and the `suspected_cause` follow-up still go out. The
   rule is `shared/alertrouting/mute.go` (`MutedPredicate`, `MuteHolds`,
   `DispatchResumedAtExpr`), applied by `openAlertEventDue` (pre-filter, also
-  mesh), `deliverNotification` (claim) and the worker's `eventSuperseded`;
+  mesh, location offline), `deliverNotification` (claim) and the worker's `eventSuperseded`;
   change all three together (`TestMutePreFilterMatchesClaim` pins the
   alerter pair). Unack/unsnooze restart the delay and reminder clocks
   (`DispatchEligibleSinceExpr`, the reminder claim). A held page the worker
   drops hands its claim back (`releaseMutedClaim`) only when it provably
-  reached nobody (first attempt, empty recipient ledger); otherwise the
-  route keeps counting as paged so it hears the ack and the resolve.
-  Dispatch message ids are per claim (`sendChannelNotification`) and
-  published with `queue.PublishJSONUnique`, so JetStream's duplicate window
-  never swallows a re-page while its claim commits.
+  reached nobody: no page attempt marker and no recipient in the ledger
+  (`recipientledger.MarkAttempt`, written before the send, cleared only on
+  `plugin.IsNotDelivered`; `worker/.../page_marker.go`), never by delivery
+  count; otherwise the route keeps counting as paged so it hears the ack
+  and the resolve. Resolves and relapse notices are marked the same way,
+  under their delivery key, which carries the episode
+  (`releaseSupersededResolveClaim` and the relapse branch of
+  `releaseMutedClaim` read it). Dispatch message ids are the idempotency key plus the
+  claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
+  finds again on retry (the resume clock for a page, `relapsed:` plus it
+  for a relapse notice, the round for a reminder, `acknowledged_at` for an
+  ack, nothing for resolve and follow-up; the episode is in the
+  idempotency key itself), so JetStream's duplicate window collapses a retried publish
+  ("duplicate" is success) yet queues a re-page after an unack or snooze end.
   SLA time to acknowledge reads `first_acknowledged_at` (set once by the API,
   never cleared), not `acknowledged_at`, which an unacknowledge clears,
   measured from `first_ack_episode_started_at` (set with it:
@@ -753,7 +807,20 @@ or imported groups come back empty. Any other path that creates groups through
   `Kind*` constants in `shared/notifications/event.go` list the same kinds;
   a new kind rewrites the CHECK in one migration and adds its constant, its
   wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
-  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last).
+  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last). A
+  kind that notifies must also be listed in `openAlertDispatchablePredicate`
+  (`alerter/internal/alerter/lifecycle.go`), or it opens and never pages.
+- **Location liveness** (S-F6) is `shared/monitorstate/freshness.go`:
+  offline is `LocationOfflinePredicate`, disconnected
+  `LocationDisconnectedPredicate`, each with a Go twin
+  (`TestLocationPredicatesMatchGo` pins both at the boundaries), connected
+  `LocationConnected`. The alerter's `location_offline` evaluator
+  (`alerter/internal/alerter/location_offline.go`), the mesh hold, the API's
+  `connected`/`offline` and the UI's wording (`locationConnection` in
+  `web/lib/status-tones.ts`) all read them; never re-derive one from
+  `last_seen_at`. The evaluator's guard (`locationOfflineHold`) holds the
+  locations that went quiet together with the newest heartbeat, at most
+  15 minutes, and everything just after startup (database clock).
 - **Transactional mail** (invites, resets, subscriber mail, reports) goes
   through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
   MIME builder; `Message.Validate` is the header-injection guard and accepts
@@ -794,6 +861,23 @@ or imported groups come back empty. Any other path that creates groups through
   `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
   Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
   link when it has one.
+- **Delivery history** (`alert_notification_deliveries`, 90 days) is written
+  only through `shared/notifications/deliverylog`, from exactly two send
+  paths — `deliverNotification` (`alerter/.../delivery_log.go`: in the claim
+  tx when it commits, through the pool after a rollback) and the worker
+  consumer (`worker/.../notifications/delivery_log.go`, one call per outcome,
+  drops included) — plus the API test send. Never write it elsewhere, never
+  let a failed write fail a delivery (`RecordTx`: a savepoint plus server-side
+  `SET LOCAL` timeouts — never a client context deadline inside a caller's
+  transaction, lib/pq closes the connection when one fires), and never
+  store raw error text: `deliverylog` sanitizes it and masks the channel's
+  secrets (`SecretValues`). Fan-out rows follow the recipient ledger
+  (`deliverylog.Track`), one per recipient an attempt tried. A held page's
+  row says `muted_requeued` when `releaseMutedClaim` handed its claim back and
+  `muted` when it kept it (`mutedReason`, read in the same tx), so change them
+  together; a relapse notice is recorded as event `relapsed`, and a resolve
+  dropped for a relapse as `reopened` (committed with its hand-back). A new drop or failure cause is a `Reason*` constant plus its
+  wording in `web/lib/deliveries.ts` and the alerting docs.
 
 ## Status pages
 
@@ -1380,6 +1464,39 @@ or imported groups come back empty. Any other path that creates groups through
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **`maintenance_window_occurrences` is SLA history too.** Nothing prunes it;
+  the coverage fragments stay cheap as it grows only because they start
+  from the monitor's links and probe each window through
+  `idx_maintenance_window_occurrences_window_end` (see `occurrencesSQL`;
+  `TestCoverageQueriesStayIndexDrivenWithLongHistory` pins the plan). Never
+  fold the link branches into one `OR` filter.
+- **Ping** (`worker/internal/worker/ping_checker.go`) resolves through the
+  SSRF policy (`netguard.Policy.ResolveAllowed`, via `dialGuard`) and sends
+  only over unprivileged ICMP sockets. Those need the
+  `net.ipv4.ping_group_range` sysctl: Helm sets it (`worker.pingGroupRange`,
+  per-location override, `workerPodSecurityContext` helper); Docker 20.10+
+  has it by default, and Compose and the location Docker snippets must
+  never set it (a user-namespaced container refuses to start with it;
+  `dockerDeploySnippets` test). Echo spacing and the prober's deadline are
+  `models.PingMonitorConfig.PingSchedule` over the time left after
+  resolving; the API's `ValidatePingSchedule` uses the same function.
+- **Failed HTTP response capture** (`http_failure_capture.go`) is always on
+  for non-success results with a response: redact the whole read body
+  (`secretRedactor` + `redactCredentialFields`), then cut by encoded size;
+  `captureMaxBytes` keeps it under 16 KiB, far below the AI evidence's 64 KiB
+  `metrics_data` cutoff. Reads of many rows never ship it: the API's list,
+  batch and snapshot reads go through `listMetricsDataSQL`
+  (`services/results/failure_capture.go`, leaves
+  `http.failure_response_omitted`), the status page and AI evidence drop
+  `{http,failure_response}`; only `GetMonitorResult` returns it. A new
+  bulk `metrics_data` read must do the same. Check results reach Postgres
+  through `pgSafeJSON`/`pgSafeText` (`shared/monitorstate/pgsafe.go`), so
+  NUL or invalid UTF-8 in any checker's text cannot fail an insert.
+- **Which certificate a `tls_expiry` alert is about** rides its
+  `last_error` (`notifications.FormatTLSExpiryError` /
+  `ParseTLSExpiryError`, the alerts row carries it to every event);
+  `present` names an intermediate from it, and `web/lib/tls-cert.ts` is the
+  twin (`shared/notifications/testdata/tls_expiry_errors.json` pins both).
 - **Path-borne credentials** (`/push/{token}`): the API's request log, panic
   log and HTTP metrics never use `r.URL.Path` raw — logs redact by the
   router's patterns, metrics label by route pattern

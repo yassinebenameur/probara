@@ -197,6 +197,8 @@ export function monitorTargetLabel(type?: MonitorType | string): string {
       return 'host';
     case 'sip':
       return 'SIP target';
+    case 'domain':
+      return 'domain';
     default:
       return 'endpoint';
   }
@@ -273,7 +275,8 @@ export function sortBySeverity<T>(
 /**
  * The address a monitor checks, as shown under its name: the URL for HTTP,
  * synthetic, Prometheus and WebSocket monitors, `host:port` for gRPC and TCP,
- * who a SIP test call rings (`number@domain`), the host for everything else. Null when the type has no target (push,
+ * who a SIP test call rings (`number@domain`), the watched name for a domain
+ * monitor, the host for everything else. Null when the type has no target (push,
  * group, agent without a host).
  */
 export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config'>): string | null {
@@ -291,6 +294,7 @@ export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config'>): string
       const port = (config.port as number | undefined) || (config.use_tls === false ? 80 : 443);
       return `${host}:${port}`;
     }
+    if (monitor.type === 'domain') return str('domain');
     if (monitor.type === 'tcp' && host) {
       return config.port ? `${host}:${config.port}` : host;
     }

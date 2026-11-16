@@ -11,6 +11,11 @@ export interface AlertChannel {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  /** From the delivery history: newest delivered and failed attempts, test sends included. */
+  last_delivered_at?: string | null;
+  last_failed_at?: string | null;
+  /** A failure in the last 24 hours with no success since (lib/deliveries.ts). */
+  failing?: boolean;
 }
 
 export interface CreateAlertChannelRequest {

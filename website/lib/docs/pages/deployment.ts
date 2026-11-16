@@ -558,6 +558,11 @@ kubectl -n probara get jobs`,
               'Creates an HPA for the default worker deployment.',
             ],
             [
+              '`worker.pingGroupRange`',
+              '`"0 2147483647"`',
+              'The `net.ipv4.ping_group_range` pod sysctl on the default workers and every `worker.locations` entry (an entry may set its own), which [ping monitors](#ping-sockets) need. `""` leaves the node runtime\'s value, for clusters whose policy forbids pod sysctls.',
+            ],
+            [
               '`alerter.enabled`, `.replicas`, `.metricsPort`, `.logLevel`',
               '`true`, `2`, `9090`, `info`',
               'Alert evaluation workload. SMTP comes from the top-level `smtp` block; other advanced alert settings are not chart values.',
@@ -864,6 +869,26 @@ api:
       ],
     },
     {
+      id: 'ping-sockets',
+      title: 'Ping sockets',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Ping monitors send ICMP echoes over unprivileged ("ping") datagram sockets, never raw sockets: the worker needs no `NET_RAW` capability, no root and no setuid binary. Linux opens such a socket only to a process whose group is inside the `net.ipv4.ping_group_range` sysctl. A worker outside it reports every ping check as an `error` that names the sysctl (`ping: this worker may not open unprivileged ICMP sockets; its group must be inside the net.ipv4.ping_group_range sysctl …`); its other checks run as usual.',
+        },
+        {
+          type: 'list',
+          items: [
+            'Docker and Compose (the base and release files, and the generated private-location `docker run` and Compose snippets): nothing to set. Docker Engine 20.10 and later open the range to every group in each container. Neither file sets the sysctl explicitly, because a container in a user namespace refuses to start with it.',
+            'Rootless Docker or Podman, and `userns-remap`: the container cannot set the sysctl, and ping works only if the host\'s own `net.ipv4.ping_group_range` covers the group the worker runs as on the host (for rootless engines, the user\'s subordinate group range). Otherwise ping checks report the error above; widen the host sysctl (`sysctl -w net.ipv4.ping_group_range="0 2147483647"`, persisted in `/etc/sysctl.d`) or run ping monitors from another location.',
+            'Helm: `worker.pingGroupRange` (default `"0 2147483647"`, every group) becomes a pod `securityContext.sysctls` entry on the default workers and every `worker.locations` entry; an entry may set its own `pingGroupRange`. It is a namespaced sysctl on the Kubernetes safe list, allowed by the kubelet without flags and by the baseline and restricted Pod Security Standards. If a cluster policy (Gatekeeper, Kyverno, a PodSecurityPolicy) forbids every pod sysctl, the pods would not be admitted: set `worker.pingGroupRange: ""`, and ping then works only where the node runtime already opens the range (containerd 2.x does). An entry in `podSecurityContext.sysctls` wins.',
+            'The target goes through the worker\'s [network policy](/docs/security/#ssrf-network-policy): with `HTTP_BLOCK_PRIVATE_IPS=true`, a ping monitor can no longer reach private or loopback addresses outside `HTTP_ALLOWED_CIDRS`.',
+          ],
+        },
+      ],
+    },
+    {
       id: 'nats-websocket',
       title: 'NATS over websocket for restricted networks',
       blocks: [
@@ -974,6 +999,20 @@ api:
           title: 'Upgrading to a release with the NATS websocket listener and pinned worker snippets',
           text:
             'Two chart changes show up on the first upgrade. The embedded NATS pod template now carries a checksum of its `nats.conf`, so installs with `nats.auth.enabled` (or the websocket listener) see the NATS pod restart once; with persistence on, JetStream state survives, and services reconnect on their own after a short broker outage. From then on a broker config change rolls the pod, which is what makes enabling the websocket listener take effect. The generated private-location worker snippets now reference `{image.repository}-worker:{image tag}` instead of the public `:latest` worker, so an install with a mirrored `image.repository` hands remote sites an image from that mirror: make sure they can pull from it, or set `api.locationWorkerImage`.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to recurring maintenance windows: migrate first, avoid mixed versions',
+          text:
+            'Maintenance coverage moves to materialized occurrences (migrations 000112 and 000113). Until they have run, new alerter, API and status-page pods fail every query that checks maintenance (alert evaluation, monitor lists, status pages); API pods of the previous release still running after they have run create windows without an occurrence, which cover nothing. Run the migrations first (the `migrate` command or Job against the database, before upgrading the chart, whose own migration Job is a post-upgrade hook), then roll every service, and keep the old and new API from serving side by side. A window created by an old API pod during the rollout can be repaired once: `INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT id, tenant_id, starts_at, ends_at FROM maintenance_windows w WHERE recurrence_weekdays IS NULL AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM maintenance_window_occurrences o WHERE o.window_id = w.id);`',
+        },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading to a release with chain expiry, multi-echo ping and failure capture',
+          text:
+            'Three check changes apply to existing monitors without a save. Certificate expiry now counts the whole presented chain: every HTTPS, SIP-over-TLS and TLS-wrapped TCP monitor with `tls_min_days_valid` alerts on the earliest expiry among the leaf and the intermediates the server sends (never a trust-store root), so a monitor whose leaf is fine may open a `tls_expiry` alert for an expiring intermediate on its first check; the alert names that certificate and its date. Every ping monitor now sends three echoes 250 ms apart and still fails only when all are lost, so one dropped packet no longer fails it; a monitor with a short timeout gets its echoes squeezed to fit rather than failing, and ping targets now go through the worker\'s network policy, so with `HTTP_BLOCK_PRIVATE_IPS=true` a ping of a private address outside `HTTP_ALLOWED_CIDRS` turns into an `error`. Capacity: a healthy ping holds a worker slot for about half a second and a lost echo for about 1.5 seconds (the gaps plus a 1-second wait for the last reply, never the monitor\'s timeout), where a single echo used to return at once; a fleet running many ping monitors may need more `WORKER_CONCURRENCY` or replicas. Workers need the [ping sysctl](#ping-sockets): the chart sets it, Docker 20.10+ has it, rootless hosts must allow it on the host. Failed HTTP checks now store their redacted response with the result, which grows those rows by up to 16 KiB for the 30 days raw results are kept; list and history reads leave it out.',
         },
         {
           type: 'callout',

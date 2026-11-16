@@ -255,6 +255,38 @@ func inCIDRs(cidrs []*net.IPNet, ip net.IP) bool {
 	return false
 }
 
+// ResolveAllowed resolves host for a sender that is not a TCP dial (ICMP
+// echo): an IP literal stands for itself, a name is looked up once, and
+// only the addresses the policy permits are returned, in resolver order.
+// The caller sends to one of them and never resolves again, so DNS
+// rebinding between check and send is impossible, as with DialContext.
+// Every address refused is ErrBlocked; no address at all is a plain error.
+func (p Policy) ResolveAllowed(ctx context.Context, host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		if !p.Allows(ip) {
+			return nil, fmt.Errorf("%w: ip %s not allowed", ErrBlocked, host)
+		}
+		return []net.IP{ip}, nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var allowed []net.IP
+	for _, a := range addrs {
+		if p.Allows(a.IP) {
+			allowed = append(allowed, a.IP)
+		}
+	}
+	if len(allowed) == 0 {
+		if len(addrs) > 0 {
+			return nil, fmt.Errorf("%w: every address of %s is blocked", ErrBlocked, host)
+		}
+		return nil, fmt.Errorf("no addresses found for %s", host)
+	}
+	return allowed, nil
+}
+
 // Dialer is a TCP dialer that enforces a Policy. It implements DialContext
 // (and thereby the Mongo driver's ContextDialer).
 type Dialer struct {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/testutil"
@@ -20,11 +21,12 @@ import (
 // A resolve the alerter claimed and queued before the alert relapsed is
 // dropped by the worker while the alert is open again: "recovered" must
 // never reach a route after the alert failed again. A resolve that provably
-// reached nobody (first attempt, nothing in the recipient ledger) hands its
-// claim back to 'created', so the route also hears the relapse's own resolve
-// if the relapse recovers before its delay; one that may have reached the
-// provider (a redelivery) keeps 'resolved'; a route the alerter has
-// re-claimed since is left alone. A paging channel's resolve goes out
+// reached nobody (no attempt marker and nothing in the recipient ledger, on
+// any delivery attempt) hands its claim back to 'created', so the route also
+// hears the relapse's own resolve if the relapse recovers before its delay;
+// one that may have reached the provider (an earlier attempt's marker, or a
+// recipient recorded) keeps 'resolved'; a route the alerter has re-claimed
+// since is left alone. A paging channel's resolve goes out
 // anyway: it closes only its own episode's incident. Once the alert has
 // recovered again, a resolve queued in an earlier episode is delivered
 // whatever its attempt: a route whose escalation delay outlasted the relapse
@@ -96,8 +98,13 @@ func TestHandle_ResolveSupersededByRelapse(t *testing.T) {
 		VALUES ($1, $2, $3, 'availability', 'active', NOW() - INTERVAL '1 hour', 1, NOW(), 3, NOW(), NOW())`,
 		reopened, tenantID, monitorID)
 	waiting, retried, fanout, reclaimed := newChannel("waiting"), newChannel("retried"), newChannel("fanout"), newChannel("reclaimed")
-	for _, ch := range []uuid.UUID{waiting, retried, fanout} {
+	timedOut := newChannel("timed-out")
+	for _, ch := range []uuid.UUID{waiting, retried, fanout, timedOut} {
 		state(reopened, ch, "resolved", claimedAt)
+	}
+	// An earlier attempt that timed out after sending keeps its marker.
+	if _, err := recipientledger.MarkAttempt(ctx, dbClient, reopened, timedOut, "resolved"); err != nil {
+		t.Fatal(err)
 	}
 	state(reopened, reclaimed, "relapsed", claimedAt.Add(30*time.Second))
 	exec(`INSERT INTO alert_notification_recipient_deliveries (alert_id, channel_id, event_key, recipient_hash)
@@ -107,10 +114,13 @@ func TestHandle_ResolveSupersededByRelapse(t *testing.T) {
 	resolve(reopened, retried, 0, 2)
 	resolve(reopened, fanout, 0, 1)
 	resolve(reopened, reclaimed, 0, 1)
+	resolve(reopened, timedOut, 0, 2)
 	if sent := muteStub.take(); len(sent) != 0 {
 		t.Fatalf("resolves of the recovered episode were delivered after the relapse: %v", sent)
 	}
-	for ch, want := range map[uuid.UUID]string{waiting: "created", retried: "resolved", fanout: "resolved", reclaimed: "relapsed"} {
+	// "retried" is a redelivery whose earlier attempt left no marker (it
+	// failed before anything was accepted): handed back like a first attempt.
+	for ch, want := range map[uuid.UUID]string{waiting: "created", retried: "created", fanout: "resolved", reclaimed: "relapsed", timedOut: "resolved"} {
 		if got := stateOf(reopened, ch); got != want {
 			t.Errorf("route %s left at %q, want %q", ch, got, want)
 		}
@@ -190,6 +200,9 @@ func TestHandle_MutedRelapseNoticeReleasesItsClaim(t *testing.T) {
 		Event: notifications.AlertEvent{Type: "created", Timestamp: claimedAt,
 			Alert: notifications.AlertDetails{ID: alertID.String(), RelapseCount: 1, RelapseNotice: true,
 				PagedRelapse: 1, PreviousPagedRelapse: &previous}},
+		// The alerter's ledger key for the relapse notice: its own claim, in
+		// the episode, so it never reads a first page's marker.
+		DeliveryKey: notifications.RecipientEventKeyFor("relapsed", time.Time{}, 1),
 	})
 	c := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
 	if err := c.handle(ctx, &queue.Message{Data: raw, NumDelivered: 1}); err != nil {
@@ -205,5 +218,26 @@ func TestHandle_MutedRelapseNoticeReleasesItsClaim(t *testing.T) {
 	}
 	if paged != 0 {
 		t.Fatalf("held relapse notice left the route paged in episode %d, want 0 (due again)", paged)
+	}
+	var reason string
+	if err := dbClient.QueryRowContext(ctx, `SELECT reason FROM alert_notification_deliveries WHERE alert_id = $1 AND channel_id = $2 AND event_type = 'relapsed'`,
+		alertID, ch).Scan(&reason); err != nil || reason != "muted_requeued" {
+		t.Fatalf("delivery history of the held relapse notice: reason %q (%v), want muted_requeued under event relapsed", reason, err)
+	}
+
+	// A redelivery after an attempt that may have reached the provider (its
+	// marker stayed) keeps the claim: the route counts as told of the relapse.
+	if _, err := dbClient.ExecContext(ctx, `UPDATE alert_notification_states SET paged_relapse = 1 WHERE alert_id = $1`, alertID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recipientledger.MarkAttempt(ctx, dbClient, alertID, ch, notifications.RecipientEventKeyFor("relapsed", time.Time{}, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.handle(ctx, &queue.Message{Data: raw, NumDelivered: 2}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if err := dbClient.QueryRowContext(ctx, `SELECT paged_relapse FROM alert_notification_states WHERE alert_id = $1 AND channel_id = $2`,
+		alertID, ch).Scan(&paged); err != nil || paged != 1 {
+		t.Fatalf("a possibly delivered relapse notice was handed back: paged %d (%v)", paged, err)
 	}
 }

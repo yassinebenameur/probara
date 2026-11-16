@@ -361,8 +361,15 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		case alert.IsTLSExpiry():
 			return ToneUp, "CERTIFICATE RENEWED"
 		case alert.IsDomainExpiry():
+			if alert.MetricValue == nil {
+				return ToneUp, "RESOLVED"
+			}
 			return ToneUp, "DOMAIN RENEWED"
 		case alert.IsLocationOffline():
+			if locationClosedWithoutRecovery(alert) {
+				// Nothing came back: the alert just stopped applying.
+				return ToneInfo, "CLOSED"
+			}
 			return ToneUp, "BACK ONLINE"
 		}
 		return ToneUp, "RECOVERED"
@@ -395,6 +402,9 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		// outage, not a warning.
 		if alert.MetricValue != nil && *alert.MetricValue < 0 {
 			return ToneDown, "DOMAIN EXPIRED"
+		}
+		if alert.MetricValue == nil {
+			return ToneWarn, "EXPIRY UNKNOWN"
 		}
 		return ToneWarn, "EXPIRING SOON"
 	case alert.IsMeshEdge():
@@ -444,6 +454,14 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 	case alert.IsTLSExpiry():
 		return alert.TLSExpiryLabel(eventType)
 	case alert.IsDomainExpiry():
+		// No value: the alerter could not determine the expiry date
+		// (domain_expiry with metric_value NULL).
+		if alert.MetricValue == nil {
+			if eventType == EventResolved {
+				return "Domain Expiry Alert Resolved"
+			}
+			return "Domain Expiry Unknown"
+		}
 		switch eventType {
 		case EventResolved:
 			return "Domain Renewed"
@@ -455,6 +473,9 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 	case alert.IsLocationOffline():
 		switch eventType {
 		case EventResolved:
+			if locationClosedWithoutRecovery(alert) {
+				return "Location Alert Closed"
+			}
 			return "Location Back Online"
 		case EventReminder:
 			return "Location Still Offline"
@@ -538,6 +559,26 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		if resolved {
 			return "The TLS certificate has been renewed."
 		}
+		// The alert measures the chain's earliest expiry; when that is an
+		// intermediate the server presents, say so, since renewing the
+		// server's own certificate does not fix it.
+		if cert, ok := alert.TLSExpiryCertificate(); ok && cert.Intermediate {
+			which := "An intermediate certificate"
+			if cn := notifications.CommonName(cert.Subject); cn != "" {
+				which += " (" + cn + ")"
+			}
+			if alert.MetricValue != nil && *alert.MetricValue < 0 {
+				return which + " has expired."
+			}
+			if alert.MetricValue != nil {
+				s := fmt.Sprintf("%s expires in %s", which, dayValue(*alert.MetricValue))
+				if alert.ThresholdValue != nil {
+					s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
+				}
+				return s + "."
+			}
+			return which + " is approaching expiry."
+		}
 		if alert.MetricValue != nil {
 			s := fmt.Sprintf("The TLS certificate expires in %s", dayValue(*alert.MetricValue))
 			if alert.ThresholdValue != nil {
@@ -548,24 +589,35 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		return "The TLS certificate is approaching expiry."
 
 	case alert.IsDomainExpiry():
+		if alert.MetricValue == nil {
+			if resolved {
+				return "The registration expiry date can be read again, or the monitor no longer runs."
+			}
+			return "The registration expiry date could not be determined, so this domain is not being watched for expiry. The last error says why."
+		}
 		if resolved {
 			return "The domain registration has been renewed."
 		}
-		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+		if *alert.MetricValue < 0 {
 			return fmt.Sprintf("The domain registration expired %s ago. Renew it before the registry releases the name.", dayValue(-*alert.MetricValue))
 		}
-		if alert.MetricValue != nil {
-			s := fmt.Sprintf("The domain registration expires in %s", dayValue(*alert.MetricValue))
-			if alert.ThresholdValue != nil {
-				s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
-			}
-			return s + "."
+		s := fmt.Sprintf("The domain registration expires in %s", dayValue(*alert.MetricValue))
+		if alert.ThresholdValue != nil {
+			s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
 		}
-		return "The domain registration is approaching expiry."
+		return s + "."
 
 	case alert.IsLocationOffline():
 		name := locationName(alert)
 		if resolved {
+			switch alert.ResolveReason {
+			case notifications.ResolveReasonManual:
+				return fmt.Sprintf("An operator closed the alert for location %s. If it is still not reporting, a new alert opens.", name)
+			case notifications.ResolveReasonLocationDisabled:
+				return fmt.Sprintf("Location %s was disabled, so it is no longer expected to report.", name)
+			case notifications.ResolveReasonLocationDeleted:
+				return fmt.Sprintf("Location %s was deleted.", name)
+			}
 			if outage != "" {
 				return fmt.Sprintf("Location %s is reporting again after %s offline.", name, outage)
 			}
@@ -675,6 +727,14 @@ func detailRows(alert notifications.AlertDetails, elapsed string) []Row {
 	}
 	if alert.IsLocationOffline() {
 		rows = append(rows, Row{Label: "Location", Value: locationName(alert)})
+		// While it is open: when the location went quiet and what that
+		// strands. Once closed, the summary says what happened instead.
+		if alert.ResolvedAt == nil {
+			if alert.LocationLastSeenAt != nil {
+				rows = append(rows, Row{Label: "Last heartbeat", Value: HumanTime(*alert.LocationLastSeenAt)})
+			}
+			rows = append(rows, Row{Label: "Monitors", Value: locationMonitorsValue(alert)})
+		}
 	}
 	if name := strings.TrimSpace(alert.PolicyName); name != "" {
 		rows = append(rows, Row{Label: "Alert rule", Value: name})
@@ -870,6 +930,33 @@ func meshPath(alert notifications.AlertDetails) string {
 		return "on " + name
 	}
 	return "between locations"
+}
+
+// locationClosedWithoutRecovery reports whether a resolved location_offline
+// alert closed for a reason other than the location reporting again.
+func locationClosedWithoutRecovery(alert notifications.AlertDetails) bool {
+	switch alert.ResolveReason {
+	case notifications.ResolveReasonLocationDisabled, notifications.ResolveReasonLocationDeleted,
+		notifications.ResolveReasonManual:
+		return true
+	}
+	return false
+}
+
+// locationMonitorsValue is the blast radius of an offline location: the
+// monitors that run from it, and how many of those run nowhere else (they
+// get no fresh checks at all and go unknown, S-F2).
+func locationMonitorsValue(alert notifications.AlertDetails) string {
+	total, only := alert.LocationMonitorCount, alert.LocationOnlyMonitorCount
+	switch {
+	case total == 0:
+		return "none run from it"
+	case only == 0:
+		return fmt.Sprintf("%d, all also run from another location", total)
+	case only == total:
+		return fmt.Sprintf("%d, none with another location", total)
+	}
+	return fmt.Sprintf("%d, %d with no other location", total, only)
 }
 
 // locationName is a location_offline alert's subject: the Source location

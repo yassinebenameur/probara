@@ -105,6 +105,17 @@ type statusPageMaintenanceView struct {
 	IsActive               bool
 	TimeRangeText          string
 	AffectedComponentsText string
+	// RepeatText is set for a repeating window: "Repeats" plus the next
+	// starts that fall within the look-ahead.
+	RepeatText string
+	// StartsAtISO/EndsAtISO and NextStartsISO (space-separated) are the
+	// same instants in RFC 3339 UTC. The default template carries them as
+	// data attributes so its script can show the visitor's local time with
+	// the server-rendered UTC text alongside; without scripts the UTC text
+	// stays as it is.
+	StartsAtISO   string
+	EndsAtISO     string
+	NextStartsISO string
 }
 
 type statusPageSectionView struct {
@@ -514,7 +525,35 @@ func buildStatusPageMaintenanceView(window StatusPageMaintenanceWindow) statusPa
 		IsActive:               window.IsActive,
 		TimeRangeText:          timeRangeText,
 		AffectedComponentsText: affectedComponentsText,
+		RepeatText:             maintenanceRepeatText(window),
+		StartsAtISO:            start.Format(time.RFC3339),
+		EndsAtISO:              end.Format(time.RFC3339),
+		NextStartsISO:          isoList(window.NextStartsAt),
 	}
+}
+
+func isoList(times []time.Time) string {
+	out := make([]string, len(times))
+	for i, t := range times {
+		out[i] = t.UTC().Format(time.RFC3339)
+	}
+	return strings.Join(out, " ")
+}
+
+// maintenanceRepeatText labels a repeating window and lists its next starts
+// (UTC, like the time range above it).
+func maintenanceRepeatText(window StatusPageMaintenanceWindow) string {
+	if !window.Repeating {
+		return ""
+	}
+	if len(window.NextStartsAt) == 0 {
+		return "Repeats"
+	}
+	next := make([]string, 0, len(window.NextStartsAt))
+	for _, t := range window.NextStartsAt {
+		next = append(next, t.UTC().Format("Jan 2, 15:04"))
+	}
+	return "Repeats · next: " + strings.Join(next, ", ") + " UTC"
 }
 
 func incidentStateRank(state string) int {
@@ -762,6 +801,7 @@ var typeLabels = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "TCP",
 	models.MonitorTypeWebSocket:        "WebSocket",
 	models.MonitorTypePrometheus:       "Prometheus",
+	models.MonitorTypeDomain:           "Domain expiry",
 }
 
 var typeBadges = map[models.MonitorType]string{
@@ -783,6 +823,7 @@ var typeBadges = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "TCP",
 	models.MonitorTypeWebSocket:        "WS",
 	models.MonitorTypePrometheus:       "PROM",
+	models.MonitorTypeDomain:           "DOMN",
 }
 
 func typeLabel(kind string) string {

@@ -139,3 +139,26 @@ func hasRow(rows []Row, label, value string) bool {
 	}
 	return false
 }
+
+// The relapse lead composes with each kind's own sentence: a certificate
+// alert about an intermediate keeps naming it, and a domain whose expiry
+// cannot be read says so rather than "back in its warning window".
+func TestRelapsePageComposesWithKindWording(t *testing.T) {
+	ev := relapseSample()
+	ev.Alert.Kind = notifications.KindTLSExpiry
+	lastErr := notifications.FormatTLSExpiryError(notifications.TLSExpiryCertificate{Subject: "CN=R3,O=Example", Intermediate: true}, 9, 14)
+	ev.Alert.LastError = &lastErr
+	ev.Alert.MetricValue, ev.Alert.ThresholdValue = floatPtr(9), floatPtr(14)
+	m := Build(ev, EventCreated, "")
+	want := "Relapsed — back in its warning window 4m after recovering, relapse #2. An intermediate certificate (R3) expires in 9 days, inside the 14-day warning window."
+	if m.Summary != want || m.StatusWord != "RELAPSED" {
+		t.Fatalf("tls: status=%q summary=%q, want %q", m.StatusWord, m.Summary, want)
+	}
+
+	dom := relapseSample()
+	dom.Alert.Kind = notifications.KindDomainExpiry
+	dom.Alert.MetricValue = nil
+	if m := Build(dom, EventCreated, ""); !strings.HasPrefix(m.Summary, "Relapsed — unreadable again 4m after recovering, relapse #2.") {
+		t.Fatalf("domain expiry unknown: summary=%q", m.Summary)
+	}
+}

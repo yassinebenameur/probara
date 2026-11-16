@@ -98,7 +98,8 @@ type StatusPageIncidentUpdate struct {
 }
 
 // StatusPageMaintenanceWindow is an active or upcoming maintenance window shown
-// to public viewers, scoped to windows affecting monitors on this page.
+// to public viewers, scoped to windows affecting monitors on this page, at
+// its in-progress or next occurrence.
 type StatusPageMaintenanceWindow struct {
 	Title            string    `json:"title"`
 	Description      string    `json:"description"`
@@ -106,6 +107,11 @@ type StatusPageMaintenanceWindow struct {
 	EndsAt           time.Time `json:"ends_at"`
 	IsActive         bool      `json:"is_active"`
 	AffectedMonitors []string  `json:"affected_monitors,omitempty"`
+	// Repeating marks a recurring window; StartsAt/EndsAt are then its
+	// earliest listed occurrence and NextStartsAt the following ones (up to
+	// three, within the 14-day look-ahead).
+	Repeating    bool        `json:"repeating,omitempty"`
+	NextStartsAt []time.Time `json:"next_starts_at,omitempty"`
 }
 
 // MonitorStatus represents a monitor's status on a status page

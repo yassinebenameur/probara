@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
@@ -408,23 +409,31 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 		unackedAgo time.Duration // 0: never unacknowledged
 		sentAgo    time.Duration // 0: channel never paged
 		want       string
+		// relapsed: the alert reopened a minute ago (relapse 1) and the
+		// route was last paged before that, so the mute decides whether the
+		// relapse notice goes out.
+		relapsed bool
 	}{
-		{"fresh", "active", none, none, none, "created"},
-		{"acknowledged, never paged", "acknowledged", none, none, none, ""},
-		{"snoozed, never paged", "active", time.Hour, none, none, ""},
-		{"snooze over, never paged", "active", -time.Minute, none, none, "created"},
-		{"reminder due", "active", none, none, 30 * time.Minute, "reminder"},
-		{"reminder not due", "active", none, none, 5 * time.Minute, ""},
-		{"acknowledged", "acknowledged", none, none, 30 * time.Minute, ""},
-		{"snoozed", "active", time.Hour, none, 30 * time.Minute, ""},
-		{"acknowledged and snoozed", "acknowledged", time.Hour, none, 30 * time.Minute, ""},
-		{"snooze just over", "active", -time.Minute, none, 30 * time.Minute, ""},
-		{"snooze long over", "active", -11 * time.Minute, none, 30 * time.Minute, "reminder"},
-		{"just unacknowledged", "active", none, time.Minute, 30 * time.Minute, ""},
-		{"unacknowledged long ago", "active", none, 11 * time.Minute, 30 * time.Minute, "reminder"},
-		{"unacknowledged long ago, sent since", "active", none, 11 * time.Minute, 5 * time.Minute, ""},
-		{"later of unack and snooze end wins", "active", -11 * time.Minute, time.Minute, 30 * time.Minute, ""},
-		{"acknowledged again after an unack", "acknowledged", none, 11 * time.Minute, 30 * time.Minute, ""},
+		{"fresh", "active", none, none, none, "created", false},
+		{"acknowledged, never paged", "acknowledged", none, none, none, "", false},
+		{"snoozed, never paged", "active", time.Hour, none, none, "", false},
+		{"snooze over, never paged", "active", -time.Minute, none, none, "created", false},
+		{"reminder due", "active", none, none, 30 * time.Minute, "reminder", false},
+		{"reminder not due", "active", none, none, 5 * time.Minute, "", false},
+		{"acknowledged", "acknowledged", none, none, 30 * time.Minute, "", false},
+		{"snoozed", "active", time.Hour, none, 30 * time.Minute, "", false},
+		{"acknowledged and snoozed", "acknowledged", time.Hour, none, 30 * time.Minute, "", false},
+		{"snooze just over", "active", -time.Minute, none, 30 * time.Minute, "", false},
+		{"snooze long over", "active", -11 * time.Minute, none, 30 * time.Minute, "reminder", false},
+		{"just unacknowledged", "active", none, time.Minute, 30 * time.Minute, "", false},
+		{"unacknowledged long ago", "active", none, 11 * time.Minute, 30 * time.Minute, "reminder", false},
+		{"unacknowledged long ago, sent since", "active", none, 11 * time.Minute, 5 * time.Minute, "", false},
+		{"later of unack and snooze end wins", "active", -11 * time.Minute, time.Minute, 30 * time.Minute, "", false},
+		{"acknowledged again after an unack", "acknowledged", none, 11 * time.Minute, 30 * time.Minute, "", false},
+		{"relapsed", "active", none, none, 30 * time.Minute, alertrouting.EventRelapsed, true},
+		{"relapsed, acknowledged since", "acknowledged", none, none, 30 * time.Minute, "", true},
+		{"relapsed, snoozed since", "active", time.Hour, none, 30 * time.Minute, "", true},
+		{"relapsed, snooze over", "active", -30 * time.Second, none, 30 * time.Minute, alertrouting.EventRelapsed, true},
 	}
 
 	a := newIntegrationAlerter(db)
@@ -441,6 +450,9 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 					CASE WHEN $6::double precision <> 0 THEN NOW() - make_interval(secs => $6::double precision) END,
 					1, NOW(), NOW())
 			`, alertID, tenantID, monitorID, tc.status, tc.snoozeIn.Seconds(), tc.unackedAgo.Seconds())
+			if tc.relapsed {
+				mustExec(ctx, t, db, `UPDATE alerts SET relapse_count = 1, reopened_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, alertID)
+			}
 			if tc.sentAgo != 0 {
 				mustExec(ctx, t, db, `
 					INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at)
@@ -454,9 +466,9 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 			var eligibleSince time.Time
 			if err := db.QueryRowContext(ctx, `
 				SELECT `+alertrouting.MutedPredicate("al")+`, `+alertrouting.DispatchResumedAtExpr("al")+`,
-					`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`
+					`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`, al.relapse_count
 				FROM alerts al JOIN tenants te ON te.id = al.tenant_id WHERE al.id = $1
-			`, alertID).Scan(&gate.Muted, &resumedAt, &eligibleSince); err != nil {
+			`, alertID).Scan(&gate.Muted, &resumedAt, &eligibleSince, &gate.RelapseCount); err != nil {
 				t.Fatal(err)
 			}
 			gate.ResumedAt = resumedAt.Time
@@ -473,7 +485,11 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 
 			// Claim: the one event this state can be due for.
 			event := "created"
-			if state != nil {
+			switch {
+			case state == nil:
+			case state.PagedRelapse < gate.RelapseCount:
+				event = alertrouting.EventRelapsed
+			default:
 				event = "reminder"
 			}
 			sent, err := a.deliverNotification(ctx, event, alertSubject{MonitorID: monitorID, TenantID: tenantID},
@@ -486,5 +502,77 @@ func TestMutePreFilterMatchesClaim(t *testing.T) {
 				t.Fatalf("claim of %s sent=%v, pre-filter said %q", event, sent, pre)
 			}
 		})
+	}
+}
+
+// Offline-location alerts run their own dispatch loop; the mute and the
+// resumed clocks apply there too: an acknowledged and a snoozed alert send no
+// reminder and no unfired tier, still send the resolve notice when their
+// location reports again, and the acknowledged one resumes counted from its
+// unacknowledge.
+func TestLocationOfflineAlertAckAndSnooze(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "loc-mute")
+	mustExec(ctx, t, db, `UPDATE tenants SET alert_reminder_seconds = 300 WHERE id = $1`, tenantID)
+	first := insertRoute(ctx, t, db, tenantID, "first", 0)
+	tier := insertRoute(ctx, t, db, tenantID, "tier", 10*time.Minute)
+	ackedLoc := insertLocationSeen(ctx, t, db, tenantID, "acked", dur(10*time.Minute))
+	snoozedLoc := insertLocationSeen(ctx, t, db, tenantID, "snoozed", dur(10*time.Minute))
+	// A location still reporting, so the quiet two are not a silent fleet.
+	insertLocationSeen(ctx, t, db, tenantID, "alive", dur(5*time.Second))
+
+	rec := newMuteRecorder()
+	a := newIntegrationAlerter(db)
+	a.sendFunc = rec.send
+	evaluate := func() {
+		t.Helper()
+		if err := a.evaluateLocationOffline(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alertOf := func(loc uuid.UUID) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		if err := db.QueryRowContext(ctx, `SELECT id FROM alerts WHERE kind = 'location_offline' AND source_location_id = $1`, loc).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	evaluate()
+	if got := rec.count(first, "created"); got != 2 {
+		t.Fatalf("location pages = %d, want one per offline location (2)", got)
+	}
+	acked, snoozed := alertOf(ackedLoc), alertOf(snoozedLoc)
+	acknowledge(ctx, t, db, acked)
+	snoozeUntil(ctx, t, db, snoozed, time.Hour)
+	ageAlert(ctx, t, db, acked, 30*time.Minute)
+	ageAlert(ctx, t, db, snoozed, 30*time.Minute)
+
+	evaluate()
+	if r, c := rec.count(first, "reminder"), rec.count(tier, "created"); r != 0 || c != 0 {
+		t.Fatalf("acknowledged and snoozed location alerts: reminders=%d tier pages=%d, want none", r, c)
+	}
+
+	unacknowledgeAt(ctx, t, db, acked, time.Minute)
+	evaluate()
+	if r, c := rec.count(first, "reminder"), rec.count(tier, "created"); r != 0 || c != 0 {
+		t.Fatalf("a minute after the unack: reminders=%d tier pages=%d, want none", r, c)
+	}
+	unacknowledgeAt(ctx, t, db, acked, 11*time.Minute)
+	evaluate()
+	if r, c := rec.count(first, "reminder"), rec.count(tier, "created"); r != 1 || c != 1 {
+		t.Fatalf("eleven minutes after the unack: reminders=%d tier pages=%d, want 1 and 1 (the snoozed alert stays quiet)", r, c)
+	}
+
+	// The snoozed location reports again while snoozed; the other one too.
+	mustExec(ctx, t, db, `UPDATE locations SET last_seen_at = NOW() WHERE id = ANY($1)`, pq.Array([]uuid.UUID{ackedLoc, snoozedLoc}))
+	evaluate()
+	if got := rec.count(first, "resolved"); got != 2 {
+		t.Fatalf("resolve notices on the paged route = %d, want one per alert (2)", got)
+	}
+	if got := rec.count(tier, "resolved"); got != 1 {
+		t.Fatalf("resolve notices on the tier = %d, want 1 (only the unacknowledged alert paged it)", got)
 	}
 }

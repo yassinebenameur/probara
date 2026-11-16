@@ -17,6 +17,10 @@ type MaintenanceWindowService interface {
 	Update(ctx context.Context, tenantID, windowID uuid.UUID, req *models.UpdateMaintenanceWindowRequest) (*models.MaintenanceWindow, error)
 	Delete(ctx context.Context, tenantID, windowID uuid.UUID) error
 	SnoozeMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, until time.Time) (*models.MaintenanceWindow, error)
+	Preview(ctx context.Context, req *models.PreviewMaintenanceRecurrenceRequest) (*models.PreviewMaintenanceRecurrenceResponse, error)
+	ListOccurrences(ctx context.Context, tenantID, windowID uuid.UUID, status string, page, pageSize int) (*models.MaintenanceOccurrenceListResponse, error)
+	EndOccurrence(ctx context.Context, tenantID, windowID uuid.UUID) (*models.MaintenanceWindow, error)
+	SkipNextOccurrence(ctx context.Context, tenantID, windowID uuid.UUID) (*models.MaintenanceWindow, error)
 }
 
 // Ensure Service implements MaintenanceWindowService

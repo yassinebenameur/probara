@@ -132,13 +132,23 @@ func monitorTools() []spec {
 			Name:  "get_monitor_results",
 			Title: "Get check results",
 			Description: "Recent raw check results (status, latency, error, per-location, metrics_data), newest " +
-				"first. Raw results are kept 30 days; use get_monitor_analytics for longer windows.",
+				"first. Raw results are kept 30 days; use get_monitor_analytics for longer windows. A failed HTTP " +
+				"check's captured response is omitted here (get_monitor_result has it).",
 			Method: http.MethodGet, Route: "/monitors/{id}/results",
 			PathDocs: map[string]string{"id": "Monitor ID."},
 			Query: []param{
 				{Name: "limit", Type: "integer", Description: "Maximum results (default 50). Keep it small; results can be large."},
 				{Name: "since", Description: "RFC 3339 timestamp; only results after it."},
 			},
+		},
+		{
+			Name:  "get_monitor_result",
+			Title: "Get one check result",
+			Description: "One raw check result, whole. Unlike get_monitor_results it includes a failed HTTP check's " +
+				"captured response (metrics_data.http.failure_response: status line, redacted headers, body excerpt), " +
+				"which list reads replace with http.failure_response_omitted.",
+			Method: http.MethodGet, Route: "/monitors/{id}/results/{resultId}",
+			PathDocs: map[string]string{"id": "Monitor ID.", "resultId": "Check result ID (from get_monitor_results)."},
 		},
 		{
 			Name:  "get_monitor_results_batch",

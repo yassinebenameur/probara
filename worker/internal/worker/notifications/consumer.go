@@ -30,6 +30,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/queue"
@@ -152,6 +153,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		entry.Error("Unsupported dispatch envelope version; dropping")
 		return nil
 	}
+	record := c.deliveryRecord(entry, envelope, deliveryAttempt(msg)) // delivery history
 
 	p, ok := plugin.DefaultRegistry.Get(envelope.ChannelType)
 	if !ok {
@@ -159,7 +161,9 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// bug — return an error so JetStream retries and the operator notices
 		// the consumer falling behind, then ship the missing plugin.
 		entry.Error("No registered plugin for channel type")
-		return fmt.Errorf("unknown plugin type: %s", envelope.ChannelType)
+		err := fmt.Errorf("unknown plugin type: %s", envelope.ChannelType)
+		record.failed(ctx, deliverylog.OutcomeFailed, deliverylog.ReasonPluginMissing, err, nil)
+		return err
 	}
 
 	channel, err := c.loadChannel(ctx, envelope.ChannelID)
@@ -175,12 +179,14 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	}
 	if !channel.IsActive {
 		entry.Info("Channel deactivated; dropping message")
+		record.dropped(ctx, deliverylog.ReasonChannelInactive, nil)
 		return nil
 	}
 	if channel.Type != envelope.ChannelType {
 		// Edge case: the channel was repurposed (type changed). Drop because
 		// the plugin we'd dispatch to no longer matches the stored config.
 		entry.WithField("current_type", channel.Type).Warn("Channel type changed since publish; dropping message")
+		record.dropped(ctx, deliverylog.ReasonChannelChanged, nil)
 		return nil
 	}
 
@@ -203,7 +209,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	// (notifications.AlertDetails.PagedRelapse), so a late resolve closes
 	// only the incident it was for and is always delivered.
 	keyedIncidents := p.Manifest().HasCapability(plugin.CapabilityAcknowledge)
-	superseded, muted, alertStatus, err := eventSuperseded(ctx, tx, envelope, keyedIncidents)
+	superseded, muted, alertStatus, reason, err := eventSuperseded(ctx, tx, envelope, keyedIncidents)
 	if err != nil {
 		entry.WithError(err).Error("Failed to load alert status")
 		return err
@@ -214,10 +220,11 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// already queued. Unlike a resolve the mute can lift, so a page that
 		// provably reached nobody hands the alerter's claim back under the
 		// same lock and is due again then (releaseMutedClaim).
-		if err := releaseMutedClaim(ctx, tx, envelope, deliveryAttempt(msg)); err != nil {
+		if err := releaseMutedClaim(ctx, tx, envelope); err != nil {
 			entry.WithError(err).Error("Failed to release a muted notification claim")
 			return err
 		}
+		record.droppedTx(ctx, tx, mutedReason(ctx, tx, envelope))
 		if err := tx.Commit(); err != nil {
 			entry.WithError(err).Error("Failed to commit a released notification claim")
 			return err
@@ -229,11 +236,12 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// Only an alert open again (a relapse) supersedes a resolve. A route
 		// this recovery provably never reached hands its claim back under the
 		// same lock (releaseSupersededResolveClaim), so it hears the
-		// relapse's resolve.
-		if err := releaseSupersededResolveClaim(ctx, tx, envelope, deliveryAttempt(msg)); err != nil {
+		// relapse's resolve; the history row is written in the same tx.
+		if err := releaseSupersededResolveClaim(ctx, tx, envelope); err != nil {
 			entry.WithError(err).Error("Failed to release a superseded resolve claim")
 			return err
 		}
+		record.droppedTx(ctx, tx, reason)
 		if err := tx.Commit(); err != nil {
 			entry.WithError(err).Error("Failed to commit a released resolve claim")
 			return err
@@ -247,7 +255,8 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// have yet as a no-op, so a late trigger would open an incident that
 		// nothing ever closes. One published before a relapse reopen belongs
 		// to the episode that recovered; the relapse pages on its own.
-		entry.Info("Alert resolved or reopened since publish; dropping superseded event")
+		entry.WithField("alert_status", alertStatus).Info("Alert resolved or reopened since publish; dropping superseded event")
+		record.dropped(ctx, reason, tx)
 		return nil
 	}
 
@@ -255,14 +264,17 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	if len(channel.Config) > 0 {
 		if err := json.Unmarshal(channel.Config, &configMap); err != nil {
 			entry.WithError(err).Error("Failed to decode channel config")
+			record.failed(ctx, deliverylog.OutcomePermanentFailure, deliverylog.ReasonInvalidConfig, err, tx)
 			return nil
 		}
 	}
 	configMap, err = secrets.DecryptConfig(c.encryptor, p.Manifest(), configMap)
 	if err != nil {
 		entry.WithError(err).Error("Failed to decrypt channel config")
+		record.failed(ctx, deliverylog.OutcomeFailed, "", err, tx)
 		return err
 	}
+	record.channelLoaded(p.Manifest(), configMap)
 
 	attempt := deliveryAttempt(msg)
 	alertID, alertErr := uuid.Parse(envelope.AlertID)
@@ -276,6 +288,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		if alertErr == nil && channelErr == nil {
 			recipients = recipientledger.For(c.db, alertID, channelID, deliveryKey)
 		}
+		recipients = record.track(recipients)
 		return p.Send(ctx, plugin.DispatchRequest{
 			Channel: plugin.ChannelRef{
 				ID:     envelope.ChannelID,
@@ -288,7 +301,16 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			Recipients: recipients,
 		})
 	}
+	marked, err := c.markPage(ctx, envelope)
+	if err != nil {
+		entry.WithError(err).Error("Failed to record a page attempt")
+		return err
+	}
 	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
+	c.settlePage(ctx, entry, envelope, marked, err)
+	// Delivery history: Send is done, so the alert lock goes first (tx only
+	// ever rolls back on this path) and the row is written through the pool.
+	record.finished(ctx, err, tx)
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted
@@ -326,10 +348,15 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 // (alertrouting.MuteHolds: a page or a reminder): the caller drops it and,
 // when it is safe, hands its claim back (releaseMutedClaim), because the
 // mute is temporary.
-func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope, keyedIncidents bool) (superseded, muted bool, status string, err error) {
+//
+// reason is the delivery-history reason of a superseded event: resolved or
+// unacknowledged (supersededReason), deliverylog.ReasonReopened for a resolve
+// dropped because the alert is open again, deliverylog.ReasonEarlierEpisode
+// for any other event of an episode the alert has left.
+func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope, keyedIncidents bool) (superseded, muted bool, status string, reason deliverylog.Reason, err error) {
 	alertID, err := uuid.Parse(envelope.AlertID)
 	if err != nil {
-		return false, false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+		return false, false, "", "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
 	}
 	var snoozed bool
 	var relapseCount int
@@ -337,31 +364,34 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 		FROM alerts al WHERE al.id = $1 FOR SHARE`, alertID).Scan(&status, &snoozed, &relapseCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Deleted with its alert history: nothing left to tell.
-		return envelope.EventType != "resolved", false, "", nil
+		return envelope.EventType != "resolved", false, "", supersededReason(""), nil
 	}
 	if err != nil {
-		return false, false, "", err
+		return false, false, "", "", err
 	}
 	if envelope.EventType == "resolved" {
 		// Resolves are published only once the resolution committed, so an
 		// open alert here reopened since: "recovered" must not follow
 		// "relapsed" there. A paging provider's resolve closes the earlier
 		// episode's incident only, so it still goes out.
-		return status != "resolved" && !keyedIncidents, false, status, nil
+		if status != "resolved" && !keyedIncidents {
+			return true, false, status, deliverylog.ReasonReopened, nil
+		}
+		return false, false, status, "", nil
 	}
 	if relapseCount > envelope.Event.Alert.RelapseCount {
-		return true, false, status, nil
+		return true, false, status, deliverylog.ReasonEarlierEpisode, nil
 	}
 	if status == "resolved" {
-		return true, false, status, nil
+		return true, false, status, supersededReason(status), nil
 	}
 	if envelope.EventType == "acknowledged" && status != "acknowledged" {
 		// Unacknowledged since publish: telling the provider to stop
 		// escalating would now be wrong. The unacknowledge already re-armed
 		// the claim (acknowledged_sent_at), so a later acknowledge is sent.
-		return true, false, status, nil
+		return true, false, status, supersededReason(status), nil
 	}
-	return false, alertrouting.MuteHolds(envelope.EventType, status == "acknowledged", snoozed), status, nil
+	return false, alertrouting.MuteHolds(envelope.EventType, status == "acknowledged", snoozed), status, "", nil
 }
 
 // releaseMutedClaim hands back the alerter's claim on a page ("created") the
@@ -371,15 +401,15 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 // would only ever get reminders after an unacknowledge, which paging
 // providers ignore.
 //
-// Only a page that provably reached nobody is handed back: the first
-// delivery attempt (no earlier attempt can have reached a provider, even
-// one whose answer was lost to a timeout) with nothing in the recipient
-// ledger for its key. Any other held page keeps its claim, so the channel
-// still counts as paged and gets the acknowledgement and the recovery notice:
-// a provider that opened an incident on an attempt whose reply was lost, or
-// the recipients a multi-recipient send already reached, must hear both.
-// The row is matched only while it still records exactly this claim (its
-// time is the event's timestamp, the claim's `now`).
+// Only a page that provably reached nobody is handed back: no attempt
+// marker (markPage; an attempt whose send may have been accepted keeps it)
+// and no recipient recorded delivered, on whichever delivery attempt this is.
+// Any other held page keeps its claim, so the channel still counts as paged
+// and gets the acknowledgement and the recovery notice: a provider that
+// opened an incident on an attempt whose reply was lost, or the recipients a
+// multi-recipient send already reached, must hear both. The row is matched
+// only while it still records exactly this claim (its time is the event's
+// timestamp, the claim's `now`).
 //
 // A held relapse notice goes out as a page too (a "created" event with
 // RelapseNotice), claimed by moving the route's paged_relapse up to the
@@ -389,8 +419,8 @@ func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.Dis
 // A held reminder keeps its claim: its next round counts from the later of
 // the last send and the way out of the mute, which comes after this claim,
 // so the earlier last_sent_at would change nothing.
-func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope, attempt int) error {
-	if envelope.EventType != "created" || attempt > 1 || envelope.Event.Timestamp.IsZero() {
+func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) error {
+	if envelope.EventType != "created" || envelope.Event.Timestamp.IsZero() {
 		return nil
 	}
 	alertID, err := uuid.Parse(envelope.AlertID)
@@ -436,12 +466,15 @@ func releaseMutedClaim(ctx context.Context, tx *sql.Tx, envelope notifications.D
 // reopen stays unclaimed, so the relapse's resolve reaches it.
 //
 // Like releaseMutedClaim, only a resolve that provably reached nobody is
-// handed back (first delivery attempt, nothing in the recipient ledger for
-// its key); one that may have reached the provider keeps 'resolved', so the
-// route hears the relapse notice instead. The row is matched only while it
-// still records exactly this claim (its time is the event's timestamp).
-func releaseSupersededResolveClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope, attempt int) error {
-	if attempt > 1 || envelope.Event.Timestamp.IsZero() {
+// handed back, whichever delivery attempt this is: no attempt marker (markPage
+// marks resolves as it marks pages, and clears the marker only when the send
+// proved nothing was accepted) and no recipient recorded delivered under its
+// key, which names the episode. One that may have reached the provider keeps
+// 'resolved'. The row is matched only while it still records exactly this
+// claim: its time is the event's timestamp, and a relapse notice claimed
+// since would have moved it to 'relapsed' with a new time.
+func releaseSupersededResolveClaim(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) error {
+	if envelope.Event.Timestamp.IsZero() {
 		return nil
 	}
 	alertID, err := uuid.Parse(envelope.AlertID)

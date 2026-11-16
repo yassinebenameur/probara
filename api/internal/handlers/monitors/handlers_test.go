@@ -169,6 +169,7 @@ type MockResultsService struct {
 	batchIDs   []uuid.UUID
 	batchLimit int
 	batchCalls int
+	result     *models.CheckResult
 }
 
 func (m *MockResultsService) GetMonitorResultsBatch(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, limit int) (*resultservice.MonitorResultsBatchResponse, error) {
@@ -190,6 +191,13 @@ func (m *MockResultsService) GetMonitorResults(ctx context.Context, tenantID, mo
 		MonitorID: monitorID,
 		Results:   []models.CheckResult{},
 	}, nil
+}
+
+func (m *MockResultsService) GetMonitorResult(ctx context.Context, tenantID, monitorID, resultID uuid.UUID) (*models.CheckResult, error) {
+	if m.result == nil || m.result.ID != resultID {
+		return nil, resultservice.ErrResultNotFound
+	}
+	return m.result, nil
 }
 
 func (m *MockResultsService) GetMonitorAnalytics(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorAnalyticsResponse, error) {

@@ -606,7 +606,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'The HTTP prefix is historical',
           text:
-            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, synthetic API, TCP, gRPC, database, broker, DNS nameserver, and other [outbound dial paths](/docs/security/#ssrf-network-policy); synthetic browser journeys are not covered. Disabling the policy grants broad internal-network reach to monitor configuration.',
+            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, synthetic API, TCP, gRPC, database, broker, ping, DNS nameserver, and other [outbound dial paths](/docs/security/#ssrf-network-policy); synthetic browser journeys are not covered. Disabling the policy grants broad internal-network reach to monitor configuration.',
         },
       ],
     },

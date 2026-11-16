@@ -116,10 +116,13 @@ func SummarizeChecks(checks []CheckContext) MonitorEvidence {
 			e.MaxConnectMS = max(e.MaxConnectMS, m.HTTP.Timing.ConnectMS)
 			e.MaxTLSMS = max(e.MaxTLSMS, m.HTTP.Timing.TLSMS)
 			e.MaxTTFBMS = max(e.MaxTTFBMS, m.HTTP.Timing.TTFBMS)
-			// The certificate sits wherever shared/tlscert says (an HTTPS
-			// or SIP-over-TLS check's); only its expiry and serial are kept.
+			// The certificate sits wherever shared/tlscert says (an HTTPS,
+			// SIP-over-TLS or TLS-wrapped TCP check's); only its expiry and
+			// serial are kept. The expiry is the chain's earliest
+			// (tlscert.Expiry), the one the tls_expiry alert acts on.
 			if cert := tlscert.Extract(c.Metrics); cert != nil {
-				if end, err := time.Parse(time.RFC3339, cert.NotAfter); err == nil && !end.After(c.CheckedAt) {
+				notAfter, _, _ := cert.Expiry()
+				if end, err := time.Parse(time.RFC3339, notAfter); err == nil && !end.After(c.CheckedAt) {
 					e.CertificateExpired = true
 				}
 				if cert.SerialNumber != "" {

@@ -68,7 +68,36 @@ func TestSQLExprMatchesExtract(t *testing.T) {
 	t.Run("sql null", func(t *testing.T) { run(t, nil) })
 }
 
-func jsonNumber(n int) string {
-	raw, _ := json.Marshal(n)
-	return string(raw)
+// TestExpirySQLMatchesExpiry pins ExpirySQL to Info.Expiry: for every
+// certificate fixture, Postgres must pick the not_after, days and subject Go
+// picks.
+func TestExpirySQLMatchesExpiry(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	notAfterExpr, daysExpr, subjectExpr := ExpirySQL("d.cert")
+	query := `SELECT ` + notAfterExpr + `, ` + daysExpr + `, ` + subjectExpr + `
+		FROM (SELECT $1::jsonb AS cert) d`
+
+	for _, tt := range expiryFixtures {
+		t.Run(tt.name, func(t *testing.T) {
+			var notAfter, days, subject sql.NullString
+			if err := dbClient.QueryRowContext(ctx, query, tt.cert).Scan(&notAfter, &days, &subject); err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			var info Info
+			if err := json.Unmarshal([]byte(tt.cert), &info); err != nil {
+				t.Fatal(err)
+			}
+			wantNotAfter, wantDays, wantSubject := info.Expiry()
+			goDays := ""
+			if wantDays != nil {
+				goDays = jsonNumber(*wantDays)
+			}
+			if notAfter.String != wantNotAfter || days.String != goDays || subject.String != wantSubject {
+				t.Errorf("SQL = %q, %q, %q; Go = %q, %q, %q", notAfter.String, days.String, subject.String, wantNotAfter, goDays, wantSubject)
+			}
+		})
+	}
 }

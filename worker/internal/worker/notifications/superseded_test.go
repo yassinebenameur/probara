@@ -98,6 +98,7 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 			mock.ExpectQuery(regexp.QuoteMeta(`FROM alert_channels`)).WithArgs(channelID).
 				WillReturnRows(sqlmock.NewRows([]string{"name", "type", "config", "is_active"}).
 					AddRow("pager", supersededStubType, []byte(`{}`), true))
+			// Every event, resolves included, reads the alert under its lock.
 			mock.ExpectBegin()
 			q := mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID)
 			if tc.alertStatus == "" {
@@ -107,11 +108,26 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 			}
 			muted := tc.alertStatus != "" && tc.alertStatus != "resolved" && tc.rowRelapse == 0 &&
 				tc.eventType != "acknowledged" && tc.eventType != "resolved" && !tc.wantSend
-			if droppedResolve := tc.eventType == "resolved" && !tc.wantSend; muted || droppedResolve {
-				// The held event's claim is handed back (a no-op here:
-				// the envelope carries no claim time) and committed.
+			switch {
+			case muted || (tc.eventType == "resolved" && !tc.wantSend):
+				// The held page's, or the reopen-dropped resolve's, claim is
+				// handed back (a no-op here: the envelope carries no claim
+				// time) and committed.
 				mock.ExpectCommit()
-			} else {
+			case tc.eventType == "created" && tc.wantSend:
+				// The page attempt marker, written before the send.
+				mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectRollback()
+			case tc.eventType == "resolved" && tc.wantSend:
+				// Resolves are marked too (a reopen may drop one), and a
+				// delivered resolve clears the channel's page marker.
+				mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM alert_notification_recipient_deliveries`)).
+					WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectRollback()
+			default:
 				mock.ExpectRollback()
 			}
 
@@ -185,6 +201,8 @@ func TestHandle_DropsTriggerQueuedBeforeAck(t *testing.T) {
 			if tc.alertStatus == "acknowledged" {
 				mock.ExpectCommit()
 			} else {
+				mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+					WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectRollback()
 			}
 
@@ -231,6 +249,10 @@ func TestHandle_PagingResolveDeliveredWhileRelapsed(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(alertStatusQuery)).WithArgs(alertID).
 		WillReturnRows(sqlmock.NewRows([]string{"status", "snoozed", "relapse_count"}).AddRow("active", false, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO alert_notification_recipient_deliveries`)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM alert_notification_recipient_deliveries`)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
 	c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}

@@ -206,11 +206,14 @@ func TestRelapseReopensWithinCooldown(t *testing.T) {
 	if acked || snoozed || !firstAcked || autoResolved || resolved {
 		t.Fatalf("after reopen: acked=%v snoozed=%v firstAckKept=%v autoResolved=%v resolved=%v", acked, snoozed, firstAcked, autoResolved, resolved)
 	}
+	// recovered_at is the alerter's resolve time and reopened_at the
+	// database's: the history row carries both, whatever their clocks say.
 	var relapses int
-	var gapOK bool
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*), BOOL_AND(recovered_at <= reopened_at) FROM alert_relapses WHERE alert_id = $1`,
-		got.id).Scan(&relapses, &gapOK); err != nil || relapses != 1 || !gapOK {
-		t.Fatalf("relapse history: %d rows, ordered=%v, err=%v", relapses, gapOK, err)
+	var matches bool
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*), BOOL_AND(r.reopened_at = a.reopened_at AND r.recovered_at IS NOT NULL)
+		FROM alert_relapses r JOIN alerts a ON a.id = r.alert_id WHERE r.alert_id = $1`,
+		got.id).Scan(&relapses, &matches); err != nil || relapses != 1 || !matches {
+		t.Fatalf("relapse history: %d rows, consistent=%v, err=%v", relapses, matches, err)
 	}
 	var incidents, relapseEntries int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT ia.incident_id),
@@ -563,14 +566,14 @@ func TestRelapseEachIdentityBearingKind(t *testing.T) {
 		if err := a.openLatencyAnomalyAlert(ctx, lc, verdict); err != nil {
 			t.Fatal(err)
 		}
-		if err := a.openTLSExpiryAlert(ctx, tc, 10); err != nil {
+		if err := a.openTLSExpiryAlert(ctx, tc, certExpiry{days: 10}); err != nil {
 			t.Fatal(err)
 		}
 		resolveAll(`monitor_id = $1`, monitorID)
 		if err := a.openLatencyAnomalyAlert(ctx, lc, verdict); err != nil {
 			t.Fatal(err)
 		}
-		if err := a.openTLSExpiryAlert(ctx, tc, 9); err != nil {
+		if err := a.openTLSExpiryAlert(ctx, tc, certExpiry{days: 9}); err != nil {
 			t.Fatal(err)
 		}
 		for _, kind := range []string{notifications.KindLatencyAnomaly, notifications.KindTLSExpiry} {
@@ -608,17 +611,22 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 		sentAgo     time.Duration // its last_sent_at
 		paged       int           // its paged_relapse (the alert is in episode 1)
 		want        string
+		unackedAgo  time.Duration // >0: unacknowledged that long ago (after the reopen)
 	}{
-		{"heard the recovery", "active", false, time.Minute, "resolved", 2 * time.Minute, 0, alertrouting.EventRelapsed},
-		{"heard the recovery, acknowledged since", "acknowledged", false, time.Minute, "resolved", 2 * time.Minute, 0, ""},
-		{"heard the recovery, snoozed since", "active", true, time.Minute, "resolved", 2 * time.Minute, 0, ""},
-		{"never paged", "active", false, time.Minute, "", 0, 0, "created"},
-		{"told of the relapse", "active", false, time.Minute, "relapsed", 30 * time.Second, 1, ""},
-		{"told of the relapse long ago", "active", false, 20 * time.Minute, "relapsed", 11 * time.Minute, 1, "reminder"},
-		{"first paged in this episode", "active", false, 20 * time.Minute, "created", 11 * time.Minute, 1, "reminder"},
-		{"missed the recovery, reopened just now", "active", false, time.Minute, "created", 30 * time.Minute, 0, alertrouting.EventRelapsed},
-		{"missed the recovery after a reminder", "active", false, 11 * time.Minute, "reminder", 30 * time.Minute, 0, alertrouting.EventRelapsed},
-		{"missed the recovery, acknowledged since", "acknowledged", false, 11 * time.Minute, "created", 30 * time.Minute, 0, ""},
+		{"heard the recovery", "active", false, time.Minute, "resolved", 2 * time.Minute, 0, alertrouting.EventRelapsed, 0},
+		{"heard the recovery, acknowledged since", "acknowledged", false, time.Minute, "resolved", 2 * time.Minute, 0, "", 0},
+		{"heard the recovery, snoozed since", "active", true, time.Minute, "resolved", 2 * time.Minute, 0, "", 0},
+		{"never paged", "active", false, time.Minute, "", 0, 0, "created", 0},
+		{"told of the relapse", "active", false, time.Minute, "relapsed", 30 * time.Second, 1, "", 0},
+		{"told of the relapse long ago", "active", false, 20 * time.Minute, "relapsed", 11 * time.Minute, 1, "reminder", 0},
+		{"first paged in this episode", "active", false, 20 * time.Minute, "created", 11 * time.Minute, 1, "reminder", 0},
+		{"missed the recovery, reopened just now", "active", false, time.Minute, "created", 30 * time.Minute, 0, alertrouting.EventRelapsed, 0},
+		{"missed the recovery after a reminder", "active", false, 11 * time.Minute, "reminder", 30 * time.Minute, 0, alertrouting.EventRelapsed, 0},
+		{"missed the recovery, acknowledged since", "acknowledged", false, 11 * time.Minute, "created", 30 * time.Minute, 0, "", 0},
+		// Clocks after the reopen: an unacknowledge after the relapse notice
+		// restarts the reminder interval from itself.
+		{"told of the relapse, unacknowledged just now", "active", false, 20 * time.Minute, "relapsed", 11 * time.Minute, 1, "", time.Minute},
+		{"told of the relapse, unacknowledged long ago", "active", false, 30 * time.Minute, "relapsed", 25 * time.Minute, 1, "reminder", 12 * time.Minute},
 	}
 	a := newIntegrationAlerter(db)
 	for _, tc := range cases {
@@ -633,6 +641,9 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 					CASE WHEN $5 THEN NOW() + INTERVAL '1 hour' END,
 					1, NOW() - make_interval(secs => $6), 1, NOW(), NOW())
 			`, alertID, tenantID, monitorID, tc.status, tc.snoozed, tc.reopenedAgo.Seconds())
+			if tc.unackedAgo > 0 {
+				mustExec(ctx, t, db, `UPDATE alerts SET unacknowledged_at = NOW() - make_interval(secs => $2) WHERE id = $1`, alertID, tc.unackedAgo.Seconds())
+			}
 			mustExec(ctx, t, db, `INSERT INTO alert_relapses (alert_id, relapse_number, recovered_at, reopened_at)
 				SELECT id, 1, reopened_at - INTERVAL '3 minutes', reopened_at FROM alerts WHERE id = $1`, alertID)
 			if tc.state != "" {
@@ -657,7 +668,13 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			now := time.Now()
+			// The database's clock, which wrote every timestamp above: a
+			// container clock behind the host's must not turn a fresh send
+			// into an old one.
+			var now time.Time
+			if err := db.QueryRowContext(ctx, `SELECT NOW()`).Scan(&now); err != nil {
+				t.Fatal(err)
+			}
 			state := getNotificationState(states, alertID, ch)
 			pre := openAlertEventDue(state, now.Sub(eligibleSince), 0, now, interval, gate)
 			if pre != tc.want {
@@ -674,7 +691,7 @@ func TestRelapsePreFilterMatchesClaim(t *testing.T) {
 				// neither does the claim.
 				if sent, err := a.deliverNotification(ctx, "reminder", alertSubject{MonitorID: monitorID, TenantID: tenantID},
 					&alertRecord{ID: alertID, TenantID: tenantID, MonitorID: monitorID}, nil,
-					alertChannel{ID: ch, Type: "webhook", IsActive: true}, time.Now(), interval); err != nil || sent {
+					alertChannel{ID: ch, Type: "webhook", IsActive: true}, now, interval); err != nil || sent {
 					t.Fatalf("reminder claim on a route last paged in an earlier episode: sent=%v err=%v", sent, err)
 				}
 			default:

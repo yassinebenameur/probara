@@ -39,6 +39,8 @@ func relapseAgain(alert notifications.AlertDetails) string {
 		return "degraded again"
 	case alert.IsHostMetric():
 		return "breaching again"
+	case alert.IsDomainExpiry() && alert.MetricValue == nil:
+		return "unreadable again"
 	case alert.IsTLSExpiry(), alert.IsDomainExpiry():
 		return "back in its warning window"
 	case alert.IsMeshEdge():

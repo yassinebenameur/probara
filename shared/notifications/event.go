@@ -82,6 +82,19 @@ type AlertDetails struct {
 	TargetLocationID   *string `json:"target_location_id,omitempty"`
 	TargetLocationName *string `json:"target_location_name,omitempty"`
 
+	// Offline-location annotation, populated when Kind == "location_offline":
+	// LocationLastSeenAt is the location's last accepted heartbeat,
+	// LocationMonitorCount how many live monitors run from it, and
+	// LocationOnlyMonitorCount how many of those have no other enabled
+	// location, so they get no fresh checks at all while it is offline.
+	LocationLastSeenAt       *time.Time `json:"location_last_seen_at,omitempty"`
+	LocationMonitorCount     int        `json:"location_monitor_count,omitempty"`
+	LocationOnlyMonitorCount int        `json:"location_only_monitor_count,omitempty"`
+
+	// ResolveReason says why the alerter closed a resolved alert when that is
+	// not its condition clearing (ResolveReason* values; empty otherwise).
+	ResolveReason string `json:"resolve_reason,omitempty"`
+
 	// SuspectedCause is set only on the "suspected_cause" event: the opt-in
 	// follow-up the alerter sends once per paged channel when the alert's
 	// automatic triage names a cause with medium or high confidence. Resolved
@@ -165,11 +178,29 @@ const (
 	KindTLSExpiry      = "tls_expiry"
 	// KindDomainExpiry: a domain registration is inside its expiry window.
 	// MetricValue is the days left (negative once expired), ThresholdValue
-	// the warning window in days, as for KindTLSExpiry.
+	// the warning window in days, as for KindTLSExpiry. A nil MetricValue
+	// means the expiry date could not be determined (LastError says why).
 	KindDomainExpiry = "domain_expiry"
 	// KindLocationOffline: a check location stopped reporting. The location
 	// is named by SourceLocationID/SourceLocationName.
 	KindLocationOffline = "location_offline"
+)
+
+// Why an alert closed (alerts.resolve_reason) when it is not its condition
+// clearing: the location_offline reasons are set by the alerter, manual by
+// the API. Every other resolve leaves the reason empty.
+const (
+	// ResolveReasonRecovered: the location reports again.
+	ResolveReasonRecovered = "recovered"
+	// ResolveReasonLocationDisabled: the location was disabled, so it is no
+	// longer expected to report.
+	ResolveReasonLocationDisabled = "location_disabled"
+	// ResolveReasonLocationDeleted: the location was deleted.
+	ResolveReasonLocationDeleted = "location_deleted"
+	// ResolveReasonManual: an operator resolved the alert (the API sets it
+	// for every kind); the condition may still hold, and if it does the
+	// alerter opens a new alert on its next evaluation.
+	ResolveReasonManual = "manual"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.

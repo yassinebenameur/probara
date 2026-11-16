@@ -39,6 +39,10 @@ test('wording follows the alert kind', () => {
     alertToast('created', alert({ kind: 'domain_expiry', monitor_name: 'example.com', metric_value: 12.2 }))?.message,
     'example.com domain registration expires in 12d'
   );
+  // No value: the expiry date could not be determined. A warning, never an outage.
+  const unknown = alert({ kind: 'domain_expiry', monitor_name: 'example.de', metric_value: undefined });
+  assert.equal(alertToast('created', unknown)?.message, 'example.de domain expiry date could not be determined');
+  assert.equal(alertToast('created', unknown)?.type, 'warning');
   const offline = alert({ kind: 'location_offline', source_location_name: 'Paris' });
   assert.equal(alertSubject(offline), 'Paris');
   assert.equal(alertToast('created', offline)?.message, 'Paris stopped reporting');

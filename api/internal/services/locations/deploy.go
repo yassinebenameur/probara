@@ -82,38 +82,7 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
 		"METRICS_PORT":        "9090",
 	}
 
-	image := s.deployWorkerImage()
-	containerName := "probara-worker-" + location.Slug
-	// Port 8080 is the mesh echo endpoint (GET /mesh/echo). Publish it and set
-	// this host's reachable host:port as the location's "Mesh endpoint" to let
-	// other locations probe network connectivity to this one.
-	dockerRun := fmt.Sprintf(`# %s
-docker run -d \
-  --name %s \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  -e NATS_URL=%q \
-  -e WORKER_LOCATION_ID=%q \
-  -e LOCATION_CREDENTIAL=%q \
-  -e HTTP_PORT=8080 \
-  -e METRICS_PORT=9090 \
-  %s`, natsTransportNote(natsURL), containerName, natsURL, location.ID.String(), credential, image)
-
-	compose := fmt.Sprintf(`services:
-  worker-%s:
-    image: %s
-    restart: unless-stopped
-    ports:
-      # Mesh echo port — set this host's host:port as the location's Mesh endpoint.
-      - "8080:8080"
-    environment:
-      # %s
-      NATS_URL: %q
-      WORKER_LOCATION_ID: %q
-      LOCATION_CREDENTIAL: %q
-      HTTP_PORT: "8080"
-      METRICS_PORT: "9090"
-`, location.Slug, image, natsTransportNote(natsURL), natsURL, location.ID.String(), credential)
+	dockerRun, compose := dockerDeploySnippets(location.Slug, s.deployWorkerImage(), natsURL, location.ID.String(), credential)
 
 	return &models.LocationDeployInfo{
 		LocationID:        location.ID,
@@ -150,4 +119,47 @@ func locationWorkerNATSURL(baseURL, locationID, credential string) (string, erro
 	}
 	parsedNATSURL.User = url.UserPassword(locationID, credential)
 	return parsedNATSURL.String(), nil
+}
+
+// dockerDeploySnippets renders a location's `docker run` command and Compose
+// file.
+//
+// Neither sets the net.ipv4.ping_group_range sysctl ping monitors need:
+// Docker 20.10+ already opens it to every group, and a container in a user
+// namespace (rootless Docker or Podman, userns-remap) refuses to start with
+// the sysctl set, which would take the whole location offline rather than
+// only its ping checks (deployment docs, "Ping sockets").
+func dockerDeploySnippets(slug, image, natsURL, locationID, credential string) (dockerRun, compose string) {
+	containerName := "probara-worker-" + slug
+	// Port 8080 is the mesh echo endpoint (GET /mesh/echo). Publish it and set
+	// this host's reachable host:port as the location's "Mesh endpoint" to let
+	// other locations probe network connectivity to this one.
+	dockerRun = fmt.Sprintf(`# %s
+docker run -d \
+  --name %s \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e NATS_URL=%q \
+  -e WORKER_LOCATION_ID=%q \
+  -e LOCATION_CREDENTIAL=%q \
+  -e HTTP_PORT=8080 \
+  -e METRICS_PORT=9090 \
+  %s`, natsTransportNote(natsURL), containerName, natsURL, locationID, credential, image)
+
+	compose = fmt.Sprintf(`services:
+  worker-%s:
+    image: %s
+    restart: unless-stopped
+    ports:
+      # Mesh echo port — set this host's host:port as the location's Mesh endpoint.
+      - "8080:8080"
+    environment:
+      # %s
+      NATS_URL: %q
+      WORKER_LOCATION_ID: %q
+      LOCATION_CREDENTIAL: %q
+      HTTP_PORT: "8080"
+      METRICS_PORT: "9090"
+`, slug, image, natsTransportNote(natsURL), natsURL, locationID, credential)
+	return dockerRun, compose
 }

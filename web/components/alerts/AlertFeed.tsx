@@ -2,7 +2,7 @@
 
 import { CSSProperties, KeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { AlarmClock, AlarmClockOff, Bell, BellOff, Check, ChevronDown, CircleCheck, Network, PencilLine, Repeat, Tag, Undo2, UserCheck } from 'lucide-react';
+import { AlarmClock, AlarmClockOff, Bell, BellOff, Check, ChevronDown, CircleCheck, MapPin, Network, PencilLine, Repeat, Tag, Undo2, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
 import { acknowledgeAlert, labelAlertTriage, resolveAlert, snoozeAlert, unacknowledgeAlert, unsnoozeAlert } from '@/lib/api';
 import { isSnoozed, notificationState } from '@/lib/alert-mute';
@@ -44,6 +44,8 @@ import TableSkeleton from '@/components/ui/TableSkeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import TypeBadge from '@/components/ui/TypeBadge';
 import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
+import { commonName, tlsExpiryCertificate } from '@/lib/tls-cert';
+import AlertDeliveries from './AlertDeliveries';
 
 /** What the feed needs to know about an alert's monitor (from the monitors list). */
 export interface FeedMonitor {
@@ -147,7 +149,18 @@ function kindDetail(alert: Alert): string | null {
       alert.threshold_value != null ? ` (threshold ${formatAlertValue(alert.metric_name, alert.threshold_value)})` : ''
     }`;
   }
+  if (alert.kind === 'location_offline') return 'no worker heartbeat for 3 min or more';
   if (alert.kind === 'tls_expiry' && alert.metric_value != null) {
+    // An intermediate that expires first is named, as the notification does.
+    const cert = tlsExpiryCertificate(alert.last_error);
+    const which = cert?.intermediate ? `intermediate ${commonName(cert.subject) || 'certificate'} ` : '';
+    return `${which}expires in ${Math.round(alert.metric_value)}d${
+      alert.threshold_value != null ? ` (threshold ${Math.round(alert.threshold_value)}d)` : ''
+    }`;
+  }
+  if (alert.kind === 'domain_expiry') {
+    if (alert.metric_value == null) return 'expiry date unknown';
+    if (alert.metric_value < 0) return `expired ${Math.round(-alert.metric_value)}d ago`;
     return `expires in ${Math.round(alert.metric_value)}d${
       alert.threshold_value != null ? ` (threshold ${Math.round(alert.threshold_value)}d)` : ''
     }`;
@@ -397,6 +410,7 @@ export default function AlertFeed({
     const hasChips =
       (alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id) ||
       (alert.suppression_reason === 'dependency' && !alert.root_cause_monitor_name) ||
+      alert.suppression_reason === 'location_offline' ||
       (alert.impacted_count ?? 0) > 0 ||
       triagePresentation(alert.triage).visible ||
       (repeat && repeat.nth > 1) ||
@@ -464,6 +478,15 @@ export default function AlertFeed({
                   <Network className="h-3.5 w-3.5 shrink-0 text-slate-400" strokeWidth={1.75} />
                   <span className="truncate">{subject}</span>
                 </Link>
+              ) : alert.kind === 'location_offline' ? (
+                <Link
+                  href="/locations"
+                  className={`alert-row-link inline-flex min-w-0 items-center gap-1.5 rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
+                  title="Check location stopped reporting — view locations"
+                >
+                  <MapPin className="h-3.5 w-3.5 shrink-0 text-slate-400" strokeWidth={1.75} />
+                  <span className="truncate">{subject}</span>
+                </Link>
               ) : (
                 <Link
                   href={`/monitors/${alert.monitor_id}`}
@@ -474,6 +497,11 @@ export default function AlertFeed({
               )}
               {monitor && <TypeBadge type={monitor.type} config={monitor.config} size="sm" />}
               {alert.kind === 'mesh_edge' && <KindTag title="Directed inter-location connectivity path">mesh</KindTag>}
+              {alert.kind === 'location_offline' && (
+                <KindTag title="No worker heartbeat from this check location for 3 minutes; its monitors get no fresh checks from it">
+                  location
+                </KindTag>
+              )}
               {alert.kind === 'latency_anomaly' && <KindTag title="Latency degraded relative to baseline">latency</KindTag>}
               {alert.kind === 'host_metric' && (
                 <KindTag title="Host metric breached its configured threshold">{formatSeriesLabel(alert.metric_name)}</KindTag>
@@ -481,6 +509,11 @@ export default function AlertFeed({
               {alert.kind === 'tls_expiry' && (
                 <KindTag title="TLS certificate is inside its expiry warning window — the endpoint itself is still up">
                   certificate
+                </KindTag>
+              )}
+              {alert.kind === 'domain_expiry' && (
+                <KindTag title="Domain registration is inside its expiry warning window, or its expiry date could not be determined">
+                  domain
                 </KindTag>
               )}
             </div>
@@ -524,6 +557,16 @@ export default function AlertFeed({
                     <BellOff className="h-3 w-3 shrink-0" strokeWidth={1.75} />
                     Suppressed, upstream just recovered
                   </span>
+                )}
+                {alert.suppression_reason === 'location_offline' && (
+                  <Link
+                    href="/locations"
+                    className={`${CHIP} min-w-0 bg-well-hover text-slate-400 transition-colors hover:text-slate-200 ${FOCUS_RING}`}
+                    title="Notifications suppressed: a location on this path stopped reporting, and its own offline alert pages instead"
+                  >
+                    <BellOff className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                    <span className="truncate">Suppressed, location offline</span>
+                  </Link>
                 )}
                 {(alert.impacted_count ?? 0) > 0 && (
                   <span
@@ -710,7 +753,8 @@ export default function AlertFeed({
                 {/* The alerter rewrites failure_count with the failures in
                     its current window on every evaluation, so it is a
                     recent count, not the number that triggered the alert. */}
-                <DetailRow label="Recent failures">{alert.failure_count}</DetailRow>
+                {/* A location alert counts no check failures. */}
+                {alert.kind !== 'location_offline' && <DetailRow label="Recent failures">{alert.failure_count}</DetailRow>}
               </DetailList>
             </div>
             <div className="min-w-0">
@@ -729,6 +773,7 @@ export default function AlertFeed({
                 {alert.triage.summary && <p className="mt-1 text-pretty text-xs leading-5 text-slate-400">{alert.triage.summary}</p>}
               </div>
             )}
+            <AlertDeliveries alertId={alert.id} headingClassName={SECTION_LABEL} />
           </div>
         )}
 

@@ -431,7 +431,23 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`DELETE /api/v1/maintenance-windows/{id}`",
-              "Delete a maintenance window",
+              "Delete a maintenance window: coverage ends now, future occurrences go, covered time stays in history",
+            ],
+            [
+              "`POST /api/v1/maintenance-windows/preview`",
+              "Next occurrences of a weekly `recurrence` (`count`, default 5, max 20); saves nothing, allowed for read-only access",
+            ],
+            [
+              "`GET /api/v1/maintenance-windows/{id}/occurrences`",
+              "A window's occurrences: `status=upcoming` (default, soonest first) or `past` (most recent first), paged",
+            ],
+            [
+              "`POST /api/v1/maintenance-windows/{id}/end-occurrence`",
+              "End the occurrence in progress now; a repeating window keeps its schedule",
+            ],
+            [
+              "`POST /api/v1/maintenance-windows/{id}/skip-next`",
+              "Skip a repeating window's next occurrence",
             ],
           ],
         },
@@ -441,6 +457,18 @@ export const API_PAGE: DocPage = {
           title: "Create maintenance",
           code:
             '{\n  "title": "Database upgrade",\n  "description": "Planned primary database maintenance",\n  "starts_at": "2026-08-01T22:00:00Z",\n  "ends_at": "2026-08-01T23:30:00Z",\n  "monitor_ids": ["<monitor-id>"]\n}',
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Create repeating maintenance",
+          code:
+            '{\n  "title": "Nightly database backup",\n  "monitor_ids": ["<monitor-id>"],\n  "recurrence": {\n    "frequency": "weekly",\n    "weekdays": [2, 4],\n    "start_time": "02:00",\n    "duration_minutes": 90,\n    "timezone": "Europe/Paris",\n    "until": "2027-06-30"\n  }\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "A repeating window takes no `starts_at`/`ends_at`. On `PATCH`, a sent `recurrence` replaces the whole rule, and `{\"frequency\": \"none\"}` with both times makes the window a one-off again. Schedule and monitor changes apply from the moment they are saved; occurrences that already started are never rewritten. A one-off's `starts_at`/`ends_at` in responses are the span it actually covers, which after an edit can differ from the times sent. See [maintenance windows](/docs/alerting/#maintenance) for the timezone and daylight-saving rules.",
         },
       ],
     },
@@ -533,7 +561,7 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET /api/v1/alerts`",
-              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`, and `q`, a case-insensitive search of the subject: the monitor name or either location of a mesh alert, or an exact alert ID, up to 200 characters), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`, and `q`, a case-insensitive search of the subject: the monitor name, either location of a mesh alert or the location of an offline-location alert, or an exact alert ID, up to 200 characters), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies (`suppression_reason` is `location_offline` for a mesh alert held while one of its locations is silent), and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
             ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
@@ -586,6 +614,10 @@ export const API_PAGE: DocPage = {
               "Write; confirm or correct a ready triage as an [AI label](#ai-labels)",
             ],
             [
+              "`GET /api/v1/alerts/{id}/deliveries`",
+              "The alert's [notification delivery history](/docs/alerting/#delivery-history) across its channels, oldest first; `page`, `page_size` (default 50, max 200)",
+            ],
+            [
               "`GET /api/v1/alert-channels`",
               "List configured channels",
             ],
@@ -607,7 +639,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/alert-channels/{id}/test`",
-              "Send a real test notification",
+              "Send a real test notification; recorded in the channel's delivery history as a test",
+            ],
+            [
+              "`GET /api/v1/alert-channels/{id}/deliveries`",
+              "The channel's delivery history, test sends included, newest first; `outcome` (comma-separated: `delivered`, `failed`, `permanent_failure`, `dropped`), `page`, `page_size` (default 50, max 200)",
             ],
             [
               "`GET /api/v1/alert-channel-plugins`",
@@ -638,6 +674,11 @@ export const API_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Alert reads (list, detail, recent alerts, and the acknowledge and resolve responses) and the `alerts[]` of `GET /incidents/{id}` include a read-only `triage` object when the alert has a triage row. The object is omitted when there is no row, and stream events never carry it. Fields that do not apply are `null`: `id`, `status` (`pending`, `ready`, `failed`, `skipped`), `hypothesis` (catalogue key) and `title`, `confidence` (`low`, `medium`, `high`) and `summary` when ready, `skip_reason` (`resolved`, `cooldown`, `not_modeled`, `disabled`) when skipped, `error_message` (a fixed string) when failed, `created_at` (claim time), `completed_at`, `labelled`, and `labelable` (ready and at least one decision was sent to the model). Only `GET /alerts/{id}` adds `label_context`, in the same shape as an incident analysis's, when the triage is labelable.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Delivery history rows carry `id`, `alert_id` (`null` for a test send), `channel_id`, `channel_name`, `channel_type`, `event_type`, `recipient` (masked, per recipient on SMS, else `null`), `attempt`, `path` (`sync`: the alerter, or the API for a test; `async`: a delivery worker), `test`, `outcome` (`delivered`, `failed`, `permanent_failure`, `dropped`), `reason` (`resolved`, `unacknowledged`, `muted`, `muted_requeued`, `channel_inactive`, `channel_changed`, `egress_blocked`, `invalid_config`, `plugin_missing`, `retries_exhausted`, `reopened`, `earlier_episode`, or `null`; treat unknown values as text), `error` (sanitized), `provider_status`, `duration_ms`, `alert_kind`, `monitor_name`, `source_location_name` and `target_location_name` (an offline-location or mesh-edge alert's subject) and `created_at`; a page has `items`, `page`, `page_size` and `total`. An alert or channel of another workspace is a `404`. Channel reads (list, detail and the update response) add `last_delivered_at`, `last_failed_at` and `failing`: a failure in the last 24 hours with no success since, test sends included.",
         },
       ],
     },

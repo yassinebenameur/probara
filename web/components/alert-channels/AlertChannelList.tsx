@@ -17,6 +17,7 @@ import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { usePluginNames } from './usePluginNames';
 import { errorMessage } from '@/lib/errors';
 import { useAsyncData } from '@/lib/useAsyncData';
+import { CHANNEL_FAILING_HINT } from '@/lib/deliveries';
 
 // The workspace's alert channels, shown on the Notifications tab of Settings
 // under the default routing.
@@ -59,12 +60,24 @@ export default function AlertChannelList() {
     } catch (err) {
       showToast(errorMessage(err, 'Failed to send test notification'), 'error');
     }
+    // A test send is in the delivery history and moves the Failing badge;
+    // refresh the rows in place, without the loading skeleton.
+    fetchChannels().then(setChannels, () => {});
   };
 
   const status = (channel: AlertChannel) => (
-    <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
-      {channel.is_active ? 'Active' : 'Inactive'}
-    </Pill>
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
+        {channel.is_active ? 'Active' : 'Inactive'}
+      </Pill>
+      {channel.failing && (
+        <span title={CHANNEL_FAILING_HINT}>
+          <Pill tone="danger" size="xs" dot>
+            Failing
+          </Pill>
+        </span>
+      )}
+    </span>
   );
 
   // Ghost "New channel": the page's one accent button is Save notifications
