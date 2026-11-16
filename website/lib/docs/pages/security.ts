@@ -111,6 +111,11 @@ export const SECURITY_PAGE: DocPage = {
             'Use separate [API keys](/docs/administration/#api-keys) per integration, give them an expiry, select `read` unless mutation is necessary, and revoke them when ownership changes.',
           ],
         },
+        {
+          type: 'paragraph',
+          text:
+            'A [deleted workspace](/docs/administration/#workspaces) is refused where its tenant is resolved, not only hidden from lists: the session and MCP-token identity lookup (superadmins included), API-key, push-token, collector-token and private-location credential lookups, acknowledge and report-unsubscribe links, the status-page read path, and every background loop of the scheduler, alerter and worker check that the workspace is live in the same query. A credential minted by a request racing the delete is therefore refused too. The scheduler then erases the workspace’s data in bounded batches, credentials and status pages first; once its row is gone nothing of it remains in the database except audit log entries, which follow `AUDIT_RETENTION_DAYS`. Deleting a workspace does not rotate platform credentials (`PROBARA_SECRETS_KEY`, NATS, database) and cannot recall data already sent to providers or captured in backups.',
+        },
       ],
     },
     {

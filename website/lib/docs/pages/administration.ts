@@ -166,7 +166,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Public tenant create/update/delete management is not exposed through the normal product API.",
+            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Superadministrators create, rename and delete workspaces; see [Workspaces](#workspaces).",
         },
         {
           type: "callout",
@@ -174,6 +174,60 @@ export const ADMINISTRATION_PAGE: DocPage = {
           title: "Never reuse a cross-tenant cache key",
           text:
             "External integrations should include tenant identity in caches, queues, and idempotency keys even when resource UUIDs appear globally unique.",
+        },
+      ],
+    },
+    {
+      id: "workspaces",
+      title: "Workspaces",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Only superadministrators manage workspaces: the **Workspaces** page (listed with each workspace's member and monitor counts), the **New workspace** entry at the end of the workspace switcher, `POST /api/v1/tenants`, `PATCH /api/v1/tenants/{id}`, `DELETE /api/v1/tenants/{id}` and `GET /api/v1/tenants/overview`, or the matching [MCP](/docs/mcp/) tools. Members and API keys are refused. Each change is audited as `tenant.create`, `tenant.rename` or `tenant.delete` with the name, as a platform event that stays visible after the workspace is gone.",
+        },
+        {
+          type: "list",
+          items: [
+            "**Names** are 1–100 characters with no control characters, trimmed, and unique among live workspaces (exact match, so `Ops` and `ops` can coexist). A deleted workspace's name is free again at once.",
+            "**A new workspace starts empty**: no monitors or channels, the shared worker fleet, default notification settings, workspace AI on, and no members. Superadministrators act in every workspace without a membership; add members on the [user](#bootstrap-users) pages. Creating one from the switcher or the Workspaces page switches to it.",
+            "**Rename** changes only the name; IDs, keys and links keep working.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Delete** is permanent and has no undo window. The confirmation must repeat the workspace's name (`confirm_name` in the API). The default workspace cannot be deleted, nor, while SSO just-in-time provisioning is on, the workspace new SSO users join (`OIDC_JIT_DEFAULT_TENANT_ID`), nor the last remaining workspace.",
+        },
+        {
+          type: "table",
+          columns: ["When", "What happens"],
+          rows: [
+            [
+              "At once",
+              "The workspace disappears from every list and switcher, and its memberships, SSO group mappings and MCP connections are removed. Every credential scoped to it is refused: sessions and MCP tokens get `404 workspace_not_found` on its routes (superadministrators too), its API keys (OTLP ingest included) get `401`, push URLs and discovery collector tokens `404`, its private-location workers are refused by the broker on their next connection and their results and heartbeats are dropped, and acknowledge and report-unsubscribe links read as invalid.",
+            ],
+            [
+              "Within seconds",
+              "Its monitors are no longer dispatched, results still in flight are discarded, and the absence watchdog, mesh probes and maintenance windows skip it. Its status pages stop being served once the status-page cache expires (`STATUS_PAGE_CACHE_TTL`, 10 seconds by default) and visitor push stops. The alerter neither evaluates nor notifies for it: open alerts are left as they are and are not resolved (so its channels hear nothing), and notifications still queued are dropped. Scheduled SLA reports and AI analyses stop.",
+            ],
+            [
+              "In the background",
+              "The scheduler erases its data in bounded batches, table by table (secrets, API keys, tokens and status pages first, then history, then configuration), and deletes the workspace row last. Every run handles at most `MONITOR_PURGE_MAX_ROWS_PER_RUN` rows in `MONITOR_PURGE_BATCH_SIZE` batches, every `MONITOR_PURGE_INTERVAL_SECONDS`, so a large workspace takes several runs; progress shows in the scheduler log and the `workspace_purge_*` metrics ([Operations](/docs/operations/#retention)).",
+            ],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "What is kept",
+          text:
+            "Audit log entries about the workspace are kept and age out under `AUDIT_RETENTION_DAYS`. Status page slugs are unique across the installation, so a deleted workspace's slugs become free once the purge has removed its pages, usually within the first run. Users are platform accounts and are never deleted with a workspace.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A browser whose selected workspace is deleted switches to another one the user can open on its next request. A member whose only workspace was deleted keeps the account and can still sign in, but sees “You are not a member of any workspace” until a superadministrator adds a membership.",
         },
       ],
     },

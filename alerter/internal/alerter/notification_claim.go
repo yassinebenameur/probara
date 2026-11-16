@@ -12,6 +12,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // deliverNotification is the ONLY path that sends a channel notification and
@@ -76,17 +77,25 @@ func (a *Alerter) deliverNotification(
 	// notice. A resolve not yet claimed when the reopen commits finds the
 	// alert open here and is dropped: "recovered" must never follow
 	// "relapsed".
+	//
+	// The workspace is read under the same lock: a deleted workspace notifies
+	// nobody, whatever a pre-filter loaded before the delete committed. This
+	// is the one gate every alerter send passes (shared/tenancy).
 	var status string
 	var resolvedAt *time.Time
-	var snoozed bool
+	var snoozed, workspaceLive bool
 	var resumedAt, acknowledgedAt sql.NullTime
 	if err := tx.QueryRowContext(ctx, `SELECT al.status, al.resolved_at, `+alertrouting.SnoozedPredicate("al")+`,
 			`+alertrouting.DispatchResumedAtExpr("al")+`, al.acknowledged_at,
 			al.relapse_count, al.reopened_at,
-			(SELECT r.recovered_at FROM alert_relapses r WHERE r.alert_id = al.id AND r.relapse_number = al.relapse_count)
+			(SELECT r.recovered_at FROM alert_relapses r WHERE r.alert_id = al.id AND r.relapse_number = al.relapse_count),
+			`+tenancy.LiveTenantSQL("al.tenant_id")+`
 		FROM alerts al WHERE al.id = $1 FOR SHARE OF al`, alert.ID).Scan(&status, &resolvedAt, &snoozed, &resumedAt, &acknowledgedAt,
-		&alert.RelapseCount, &alert.ReopenedAt, &alert.LastRecoveredAt); err != nil {
+		&alert.RelapseCount, &alert.ReopenedAt, &alert.LastRecoveredAt, &workspaceLive); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
+	}
+	if !workspaceLive {
+		return false, nil
 	}
 	if (eventType == "resolved") != (status == "resolved") {
 		return false, nil

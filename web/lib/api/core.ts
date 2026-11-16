@@ -1,6 +1,13 @@
 import { clearApiKey, getApiKey } from '../auth';
-import { apiErrorFromBody } from '../errors';
-import { clearSelectedTenantId, emitTenantChange, getSelectedTenantId, setSelectedTenantId } from '../tenant';
+import { ApiRequestError, apiErrorFromBody } from '../errors';
+import {
+  WORKSPACE_NOT_FOUND,
+  clearSelectedTenantId,
+  emitTenantChange,
+  emitTenantsChanged,
+  getSelectedTenantId,
+  setSelectedTenantId,
+} from '../tenant';
 import type { TenantListResponse } from '../types';
 
 export { withQuery } from './query';
@@ -68,10 +75,34 @@ async function handleResponse<T>(response: Response, hasApiKey: boolean): Promis
   const data = await response.json();
 
   if (!response.ok) {
-    throw apiErrorFromBody(data);
+    const error = apiErrorFromBody(data);
+    if (response.status === 404 && error.error === WORKSPACE_NOT_FOUND) {
+      workspaceGone();
+    }
+    throw error;
   }
 
   return data;
+}
+
+// The selected workspace was deleted (by someone else, or in another tab):
+// validate the selection again before the next request, and have the
+// switcher reload its list, which settles on a workspace that still exists
+// and remounts the page on it.
+function workspaceGone(): void {
+  tenantSelectionValidated = false;
+  emitTenantsChanged();
+}
+
+// A signed-in member who belongs to no workspace (theirs was deleted, or none
+// was ever granted) has nothing to scope a request to. Answer here instead of
+// sending it: the API would refuse it as unauthenticated and bounce them back
+// to the sign-in page they just left.
+function noWorkspaceError(): ApiRequestError {
+  return new ApiRequestError(
+    'no_workspace',
+    'You are not a member of any workspace. Ask a platform administrator to add you to one.'
+  );
 }
 
 const AUTH_PATH_PREFIX = '/v1/auth';
@@ -79,6 +110,8 @@ const AUTH_PATH_PREFIX = '/v1/auth';
 const TENANTS_PATH = '/v1/tenants';
 
 let tenantSelectionValidated = false;
+// The last tenant list loaded for this session was empty.
+let noWorkspaces = false;
 
 async function ensureTenantSelected(): Promise<void> {
   try {
@@ -93,6 +126,7 @@ async function ensureTenantSelected(): Promise<void> {
     const data = (await response.json()) as TenantListResponse;
     const storedTenantId = getSelectedTenantId();
     const tenantIDs = new Set((data.items || []).map((tenant) => tenant.id));
+    noWorkspaces = tenantIDs.size === 0;
 
     if (storedTenantId && tenantIDs.has(storedTenantId)) {
       tenantSelectionValidated = true;
@@ -134,6 +168,9 @@ export async function apiRequest<T>(
     // Ensure the selected tenant exists before attaching X-Tenant-ID.
     if (!tenantSelectionValidated || !getSelectedTenantId()) {
       await ensureTenantSelected();
+    }
+    if (noWorkspaces && !getSelectedTenantId()) {
+      throw noWorkspaceError();
     }
   }
 
@@ -235,6 +272,9 @@ export async function apiFetch(
   const apiKey = getApiKey();
   if (!apiKey) {
     await ensureTenantSelected();
+    if (noWorkspaces && !getSelectedTenantId()) {
+      throw noWorkspaceError();
+    }
   }
 
   const makeRequest = async (): Promise<Response> => {

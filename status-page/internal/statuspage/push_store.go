@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // pushStore is the status-page service's ONLY write path to Postgres.
@@ -109,10 +111,10 @@ func (s *pushStore) DeleteSubscription(ctx context.Context, id uuid.UUID) error 
 // page has opted into browser notifications. Both come from one query so the
 // subscribe handler cannot act on a stale or half-read page.
 func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, bool, error) {
-	const query = `
+	query := `
 		SELECT id, COALESCE(settings->>'enable_push_notifications', 'false') = 'true'
 		FROM status_pages
-		WHERE slug = $1
+		WHERE slug = $1 AND ` + livePage + `
 	`
 	var id uuid.UUID
 	var enabled bool
@@ -184,15 +186,19 @@ type pendingDelivery struct {
 // notification is the better failure than dropping every notification a
 // crashed replica held.
 func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter time.Duration) ([]pendingDelivery, error) {
-	const query = `
+	// A deleted workspace's queued pushes are never sent; they are filtered
+	// before the LIMIT so they cannot hold the head of the queue.
+	query := `
 		WITH claimed AS (
 			SELECT d.id
 			FROM status_page_push_deliveries d
-			WHERE d.status = 'pending'
-			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2))
+			JOIN status_pages csp ON csp.id = d.status_page_id
+			WHERE (d.status = 'pending'
+			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2)))
+			  AND ` + tenancy.LiveTenantSQL("csp.tenant_id") + `
 			ORDER BY d.created_at
 			LIMIT $1
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF d SKIP LOCKED
 		)
 		UPDATE status_page_push_deliveries d
 		SET status = 'sending', claimed_at = NOW()

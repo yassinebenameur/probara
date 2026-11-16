@@ -401,7 +401,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Tenants (membership-filtered for members, all for superadmins)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
-			mountTenantRoutes(r, tenantHandlers)
+			mountTenantRoutes(r, tenantHandlers, newWorkspaceHandlers(tenantSvc, cfg, auditRecorder, log))
 
 			// Audit log (tenant admins and superadmins)
 			auditHandlers := audithandlers.NewHandlers(auditSvc, log)

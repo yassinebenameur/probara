@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Push notification timing. These are the knobs that decide what a visitor
@@ -113,6 +114,8 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 		JOIN page_monitor pm ON pm.monitor_id = n.monitor_id
 		JOIN status_pages sp ON sp.id = pm.status_page_id
 		WHERE COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
+		  -- A deleted workspace's pages notify no visitor.
+		  AND ` + tenancy.LiveTenantSQL("sp.tenant_id") + `
 		  -- No subscribers, no work. This also bounds the blast radius when
 		  -- an operator first enables the setting on a busy page.
 		  AND EXISTS (

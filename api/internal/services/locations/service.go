@@ -28,6 +28,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/secrets"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // ErrNotFound is returned when a location does not exist for the tenant.
@@ -161,7 +162,7 @@ func (s *Service) workerCredential(ctx context.Context, tenantID, locationID uui
 
 // AuthenticateWorker validates broker auth-callout credentials for one
 // private location. locationID is the NATS username and credential the
-// password. Only active locations authenticate.
+// password. Only active locations of a live workspace authenticate.
 func (s *Service) AuthenticateWorker(ctx context.Context, locationID, credential string) error {
 	id, err := uuid.Parse(locationID)
 	if err != nil || credential == "" {
@@ -173,6 +174,7 @@ func (s *Service) AuthenticateWorker(ctx context.Context, locationID, credential
 		FROM locations
 		WHERE id = $1 AND enabled = TRUE AND deleted_at IS NULL
 		  AND worker_credential IS NOT NULL
+		  AND `+tenancy.LiveTenantSQL("locations.tenant_id")+`
 	`, id).Scan(&stored); err != nil {
 		return ErrInvalidWorkerCredential
 	}

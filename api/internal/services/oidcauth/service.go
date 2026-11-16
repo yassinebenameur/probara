@@ -23,6 +23,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 var (
@@ -407,7 +408,7 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO tenant_memberships (id, admin_user_id, tenant_id, role, created_at, updated_at)
 				SELECT $1, $2, $3, $4, $5, $5
-				WHERE EXISTS (SELECT 1 FROM tenants WHERE id = $3)
+				WHERE `+tenancy.LiveTenantSQL("$3::uuid")+`
 			`, uuid.New(), user.ID, mappedTenantID, mappedMemberships[mappedTenantID], now); err != nil {
 				return nil, fmt.Errorf("failed to create mapped membership: %w", err)
 			}
@@ -416,7 +417,7 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tenant_memberships (id, admin_user_id, tenant_id, role, created_at, updated_at)
 			SELECT $1, $2, $3, $4, $5, $5
-			WHERE EXISTS (SELECT 1 FROM tenants WHERE id = $3)
+			WHERE `+tenancy.LiveTenantSQL("$3::uuid")+`
 		`, uuid.New(), user.ID, tenantID, s.cfg.JITDefaultRole, now); err != nil {
 			return nil, fmt.Errorf("failed to create default membership: %w", err)
 		}

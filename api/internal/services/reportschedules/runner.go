@@ -20,6 +20,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/slas"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/mail"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -180,8 +181,11 @@ func (s *Service) lease(ctx context.Context, now time.Time) (*row, error) {
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+	// A deleted workspace's schedules never send again; filtered before the
+	// LIMIT so they cannot hold the head of the queue.
 	sc, err := scanRow(tx.QueryRowContext(ctx, `SELECT `+scheduleColumns+` FROM sla_report_schedules
 		WHERE enabled AND next_run_at <= $1
+		  AND `+tenancy.LiveTenantSQL("sla_report_schedules.tenant_id")+`
 		ORDER BY next_run_at
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED`, now))
@@ -395,6 +399,7 @@ func (s *Service) deliverBatch(ctx context.Context) (int, error) {
 			FROM sla_report_deliveries dd
 			JOIN sla_report_schedules sc ON sc.id = dd.schedule_id AND sc.enabled
 			WHERE dd.status = 'pending' AND dd.next_attempt_at <= $1
+			  AND `+tenancy.LiveTenantSQL("sc.tenant_id")+`
 			ORDER BY dd.next_attempt_at
 			LIMIT $2
 			FOR UPDATE OF dd SKIP LOCKED
@@ -459,9 +464,12 @@ func (s *Service) releaseBatch(ctx context.Context, claimID uuid.UUID) {
 func (s *Service) sendGroup(ctx context.Context, group []claimedDelivery) {
 	first := group[0]
 	sc, err := scanRow(s.db.QueryRowContext(ctx, `SELECT `+scheduleColumns+` FROM sla_report_schedules
-		WHERE tenant_id = $1 AND id = $2`, first.tenantID, first.scheduleID))
+		WHERE tenant_id = $1 AND id = $2 AND `+tenancy.LiveTenantSQL("sla_report_schedules.tenant_id"), first.tenantID, first.scheduleID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return // deleted meanwhile, its deliveries with it
+		// Deleted meanwhile, its deliveries with it, or its workspace was
+		// deleted: the claimed rows are handed back by releaseBatch and
+		// never claimed again.
+		return
 	}
 	var sla *models.SLA
 	var attachments []mail.Attachment

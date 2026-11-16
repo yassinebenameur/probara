@@ -84,7 +84,45 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   inherits it, and `/monitors/{id}/run` and `/monitors/test` in their
   handlers (`monitorservice.RequireCallPermission`). Editors and API keys of
   any scope get 403.
-- `RequireSuperadmin`: `/users/*`.
+- `RequireSuperadmin`: `/users/*`, and workspace management (`POST
+  /tenants`, `PATCH`/`DELETE /tenants/{id}`, `GET /tenants/overview`).
+
+## Workspaces
+
+Superadmins create, rename and delete workspaces
+(`api/internal/services/tenants/workspaces.go`). Names are trimmed, 1–100
+characters without control characters, and unique among live workspaces
+(partial unique index `tenants_name_live_key`). A new workspace gets no
+membership: superadmins act everywhere. Delete needs `confirm_name` equal to
+the name and refuses the default workspace (`tenancy.DefaultTenantID`), the
+OIDC JIT tenant while JIT provisioning is on, and the last live workspace
+(a transaction advisory lock serializes deletes). Each change is audited
+explicitly (`tenant.create`/`.rename`/`.delete`, platform-level, with the
+name).
+
+Delete is a soft delete. One transaction stamps `tenants.deleted_at` and
+`deleted_by`, removes the workspace's memberships and SSO group mappings and
+revokes its MCP grants. From that commit:
+
+- `identityQuery` reports the deleted tenant and `AuthMiddleware` answers
+  `404 workspace_not_found` to any session or MCP-token request scoped to it,
+  superadmins included; an unknown tenant ID keeps its old handling.
+- `auth.ValidateAPIKey`, `mcpoauth.LookupAccessToken`, the push-token lookup,
+  the discovery collector lookups, `locations.AuthenticateWorker` (NATS
+  callout) and the ingest location credential lookup add
+  `tenancy.LiveTenantSQL` to their query, so a credential written by a
+  request racing the delete is refused too.
+- Tenant lists (`GET /tenants`, memberships on users and `/auth/me`, MCP
+  connections) omit it; acknowledge links and report-unsubscribe links of it
+  read as invalid.
+
+The web client treats `workspace_not_found` as "the selected workspace is
+gone": it re-validates the selection and the switcher reloads its list
+(`lib/api/core.ts`, `TENANTS_CHANGED_EVENT`). A member left with no
+workspace keeps the account; the client answers their tenant-scoped requests
+with a "not a member of any workspace" error instead of sending them.
+
+The scheduler purges the data afterwards; see `docs/architecture.md`.
 
 Audit runs *outside* the write gate so denied attempts are recorded with
 `outcome=denied`.

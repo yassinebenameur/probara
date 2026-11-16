@@ -18,6 +18,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // GetTenantID extracts the tenant ID from the request context
@@ -40,9 +41,11 @@ func GetAdminID(ctx context.Context) (string, error) {
 
 // identityQuery resolves the admin's platform role plus their membership role
 // for the requested tenant in one round trip. $2 is uuid.Nil when no tenant
-// was requested (m.role comes back NULL).
-const identityQuery = `
-	SELECT u.platform_role, u.disabled_at, m.role
+// was requested (m.role comes back NULL). The last column reports a
+// soft-deleted workspace (tenancy.DeletedTenantSQL), which every caller is
+// refused, superadmins included; an unknown ID keeps its own handling.
+var identityQuery = `
+	SELECT u.platform_role, u.disabled_at, m.role, ` + tenancy.DeletedTenantSQL("$2::uuid") + `
 	FROM admin_users u
 	LEFT JOIN tenant_memberships m ON m.admin_user_id = u.id AND m.tenant_id = $2
 	WHERE u.id = $1
@@ -121,9 +124,10 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	var platformRole string
 	var disabledAt *time.Time
 	var membershipRole sql.NullString
+	var tenantDeleted bool
 
 	err := dbClient.QueryRowContext(r.Context(), identityQuery, adminID, tenantUUID).
-		Scan(&platformRole, &disabledAt, &membershipRole)
+		Scan(&platformRole, &disabledAt, &membershipRole, &tenantDeleted)
 	switch {
 	case pgerr.IsMissingSchema(err):
 		// Deploy-ordering tolerance: migrations run as a post-upgrade job, so
@@ -142,6 +146,13 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 
 	if disabledAt != nil {
 		writeAuthError(w, "account disabled")
+		return
+	}
+	if tenantDeleted {
+		// A deleted workspace is gone for everyone, at once: its routes
+		// answer as if it never existed. The web client recognises the code
+		// and re-selects a workspace.
+		writeWorkspaceNotFound(w)
 		return
 	}
 
@@ -245,6 +256,16 @@ func writeForbiddenError(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	w.Write([]byte(`{"error":"forbidden","message":"` + message + `"}`))
+}
+
+// WorkspaceNotFoundCode is the error code of a request scoped to a deleted
+// workspace.
+const WorkspaceNotFoundCode = "workspace_not_found"
+
+func writeWorkspaceNotFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	w.Write([]byte(`{"error":"` + WorkspaceNotFoundCode + `","message":"this workspace has been deleted"}`))
 }
 
 func writeBadRequestError(w http.ResponseWriter, message string) {

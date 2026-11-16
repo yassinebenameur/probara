@@ -13,6 +13,10 @@ import (
 	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
 	userhandlers "github.com/yassinebenameur/probara/api/internal/handlers/users"
 	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
+	auditservice "github.com/yassinebenameur/probara/api/internal/services/audit"
+	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
+	"github.com/yassinebenameur/probara/shared/config"
+	"github.com/yassinebenameur/probara/shared/logger"
 )
 
 // mountAISettingsRoutes mounts the workspace AI settings.
@@ -46,15 +50,35 @@ func mountAPIKeyRoutes(r chi.Router, apiKeyHandlers *apikeyhandlers.Handlers) {
 	})
 }
 
-// mountTenantRoutes mounts tenant settings and the tenant list.
-func mountTenantRoutes(r chi.Router, tenantHandlers *tenanthandlers.Handlers) {
+// mountTenantRoutes mounts tenant settings, the tenant list and, for
+// superadmins, workspace management (create, rename, delete, overview).
+func mountTenantRoutes(r chi.Router, tenantHandlers *tenanthandlers.Handlers, workspaceHandlers *tenanthandlers.WorkspaceHandlers) {
 	r.Route("/tenant-settings", func(r chi.Router) {
 		r.Get("/", tenantHandlers.GetTenantSettings)
 		r.With(apimiddleware.RequireTenantAdmin).Patch("/", tenantHandlers.UpdateTenantSettings)
 	})
 	r.Route("/tenants", func(r chi.Router) {
 		r.Get("/", tenantHandlers.ListTenants)
+		r.Group(func(r chi.Router) {
+			r.Use(apimiddleware.RequireSuperadmin)
+			r.Get("/overview", workspaceHandlers.ListOverview)
+			r.Post("/", workspaceHandlers.Create)
+			r.Patch("/{id}", workspaceHandlers.Rename)
+			r.Delete("/{id}", workspaceHandlers.Delete)
+		})
 	})
+}
+
+// newWorkspaceHandlers builds the workspace management handlers. The OIDC
+// just-in-time provisioning workspace joins the default one as undeletable
+// while SSO provisioning is on.
+func newWorkspaceHandlers(svc *tenantservice.Service, cfg *config.APIConfig, recorder *auditservice.Recorder, log *logger.Logger) *tenanthandlers.WorkspaceHandlers {
+	if cfg.OIDC.Enabled && cfg.OIDC.JITProvision {
+		svc.ProtectWorkspaces(cfg.OIDC.JITDefaultTenantID)
+	} else {
+		svc.ProtectWorkspaces()
+	}
+	return tenanthandlers.NewWorkspaceHandlers(svc, recorder, log)
 }
 
 // mountAuditLogRoutes mounts the audit log, for tenant admins only.

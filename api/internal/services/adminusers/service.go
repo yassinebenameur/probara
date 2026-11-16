@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 var (
@@ -29,7 +30,7 @@ var (
 )
 
 const (
-	defaultTenantID   = "00000000-0000-0000-0000-000000000001"
+	defaultTenantID   = tenancy.DefaultTenantID
 	defaultTenantName = "Default"
 )
 
@@ -578,6 +579,7 @@ func (r *sqlRepository) AttachMemberships(ctx context.Context, users []models.Ad
 		FROM tenant_memberships m
 		JOIN tenants t ON t.id = m.tenant_id
 		WHERE m.admin_user_id = ANY($1)
+		  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 		ORDER BY t.name ASC
 	`, pq.Array(ids))
 	if err != nil {

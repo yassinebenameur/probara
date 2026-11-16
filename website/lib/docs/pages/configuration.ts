@@ -499,7 +499,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`MONITOR_PURGE_ENABLED`',
               '`true`; boolean',
-              'Not exposed by Compose or Helm.',
+              'Not exposed by Compose or Helm. Also governs the purge of deleted workspaces: with it off, their data stays in the database (they remain refused everywhere).',
             ],
             [
               '`MONITOR_PURGE_INTERVAL_SECONDS`',
