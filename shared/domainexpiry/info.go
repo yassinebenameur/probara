@@ -70,9 +70,70 @@ type Info struct {
 	RDAPError string `json:"rdap_error,omitempty"`
 	// UnknownReason says why the expiry could not be determined (the
 	// registry publishes none, no RDAP or WHOIS service for the TLD, every
-	// lookup failed). Empty whenever ExpiresAt is set or the name is not
-	// registered.
+	// lookup failed or was throttled). Empty whenever ExpiresAt is set or
+	// the name is not registered.
 	UnknownReason string `json:"unknown_reason,omitempty"`
+	// NotFoundConfirmed is set on a "not registered" answer that RDAP and
+	// WHOIS both gave. A single source's "not found" is still a failure,
+	// but the monitor needs two consecutive failing lookups to go down
+	// (domain monitors have a confirmation threshold of at least 2).
+	NotFoundConfirmed bool `json:"not_found_confirmed,omitempty"`
+	// NoExpiryPublished: the TLD's registry is known never to publish an
+	// expiry date (PublishesNoExpiry). The monitor can then only detect that
+	// the name stops being registered, and the alerter raises no
+	// "expiry unknown" alert for it.
+	NoExpiryPublished bool `json:"no_expiry_published,omitempty"`
+	// RenewalGrace: the expiry date has passed but the registry reports an
+	// auto-renew or renew grace period, so the name is still registered.
+	RenewalGrace bool `json:"renewal_grace,omitempty"`
+	// OnHold: the registry reports clientHold or serverHold, so the name is
+	// registered but not delegated and does not resolve.
+	OnHold bool `json:"on_hold,omitempty"`
+}
+
+// noExpiryTLDs are TLDs whose registry publishes no expiry date over RDAP
+// or WHOIS, by policy. Used only to say so plainly and to keep the
+// "expiry unknown" alert, which nobody could act on, from opening.
+var noExpiryTLDs = map[string]bool{
+	"de": true, // DENIC
+}
+
+// PublishesNoExpiry reports whether tld's registry is known never to publish
+// an expiry date.
+func PublishesNoExpiry(tld string) bool { return noExpiryTLDs[strings.ToLower(tld)] }
+
+// normalizeStatus folds RDAP ("auto renew period") and EPP
+// ("autoRenewPeriod") spellings together.
+func normalizeStatus(s string) string {
+	return strings.NewReplacer(" ", "", "_", "", "-", "").Replace(strings.ToLower(strings.TrimSpace(s)))
+}
+
+// HasStatus reports whether one of the snapshot's statuses is any of the
+// normalized names (e.g. "redemptionperiod").
+func (i *Info) HasStatus(names ...string) bool {
+	for _, s := range i.Statuses {
+		n := normalizeStatus(s)
+		for _, want := range names {
+			if n == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// annotate derives the status facts and the no-date note at now.
+func (i *Info) annotate(now time.Time) {
+	i.OnHold = i.HasStatus("clienthold", "serverhold")
+	if i.ExpiresAt != "" && i.HasStatus("autorenewperiod", "renewperiod") {
+		if at, err := time.Parse(time.RFC3339, i.ExpiresAt); err == nil && !now.Before(at) {
+			i.RenewalGrace = true
+		}
+	}
+	if i.IsRegistered() && i.ExpiresAt == "" && PublishesNoExpiry(TLD(i.Domain)) {
+		i.NoExpiryPublished = true
+		i.UnknownReason = fmt.Sprintf("the .%s registry does not publish an expiry date; this monitor can only detect that the domain stops being registered", TLD(i.Domain))
+	}
 }
 
 // SetExpiry records expiresAt and the whole days left at now.

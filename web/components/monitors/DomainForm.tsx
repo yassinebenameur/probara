@@ -5,6 +5,7 @@ import { testMonitorConfig, type TestMonitorConfigResponse } from '@/lib/api';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest } from '@/lib/types';
 import {
   DOMAIN_INTERVAL_PRESETS,
+  DOMAIN_MIN_CONSECUTIVE_FAILURES,
   DOMAIN_MAX_MIN_DAYS_VALID,
   DOMAIN_MIN_INTERVAL_SECONDS,
   buildDomainConfig,
@@ -176,12 +177,14 @@ export default function DomainForm({ monitor, initialData, onSubmit, onCancel, l
                 ) : (
                   <p className="text-amber-300">{preview.error_message || 'The lookup returned nothing.'}</p>
                 )}
-                {previewState?.reason && <p className="text-amber-300">{previewState.reason}</p>}
+                {previewState?.reason && (
+                  <p className={previewState.tone === 'none' ? 'text-slate-300' : 'text-amber-300'}>{previewState.reason}</p>
+                )}
                 {previewInfo &&
                   domainFacts(previewInfo).map((fact) => (
                     <div key={fact.label} className="flex justify-between gap-3">
                       <span className="text-slate-500">{fact.label}</span>
-                      <span className="min-w-0 break-words text-right text-slate-300">{fact.value}</span>
+                      <span className={`min-w-0 break-words text-right ${fact.warning ? 'text-amber-300' : 'text-slate-300'}`}>{fact.value}</span>
                     </div>
                   ))}
               </div>
@@ -196,13 +199,15 @@ export default function DomainForm({ monitor, initialData, onSubmit, onCancel, l
         intervalError={errors.interval_seconds}
         minIntervalSeconds={DOMAIN_MIN_INTERVAL_SECONDS}
         intervalPresets={DOMAIN_INTERVAL_PRESETS}
-        intervalHint="At most once an hour: registries rate-limit lookups"
+        intervalHint="At most once an hour, from one location: registries rate-limit lookups"
         timeoutSeconds={formData.timeout_seconds}
         onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
         timeoutError={errors.timeout_seconds}
         locations={{
           selectedIds: formData.location_ids,
-          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
+          // One location at most: a registry answers the same from
+          // everywhere, so picking another replaces the first.
+          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids.slice(-1) })),
           quorum: formData.location_quorum,
           onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
         }}
@@ -226,6 +231,7 @@ export default function DomainForm({ monitor, initialData, onSubmit, onCancel, l
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
+          minThreshold={DOMAIN_MIN_CONSECUTIVE_FAILURES}
           onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}

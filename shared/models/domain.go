@@ -20,7 +20,29 @@ const (
 	// DomainMaxMinDaysValid bounds the warning window to a registration
 	// term (registries sell at most ten years).
 	DomainMaxMinDaysValid = 3650
+	// DomainMinConsecutiveFailures is the lowest confirmation threshold a
+	// domain monitor may have: a single registry answer ("not registered",
+	// "expired") must never page, so the monitor goes down only after two
+	// consecutive failing lookups.
+	DomainMinConsecutiveFailures = 2
+	// DomainMaxLocations: a registry gives the same answer wherever it is
+	// asked from, so a domain monitor runs from one location (or the default
+	// fleet). More would only multiply lookups against rate-limited
+	// registries.
+	DomainMaxLocations = 1
 )
+
+// ValidateDomainMonitorRules checks the domain type's rules that live outside
+// its config: the confirmation threshold floor and the single location.
+func ValidateDomainMonitorRules(consecutiveFailuresThreshold, locationCount int) error {
+	if consecutiveFailuresThreshold < DomainMinConsecutiveFailures {
+		return fmt.Errorf("consecutive_failures_threshold must be at least %d for domain monitors (one registry answer must not mark a domain down)", DomainMinConsecutiveFailures)
+	}
+	if locationCount > DomainMaxLocations {
+		return fmt.Errorf("a domain monitor runs from at most %d location (registries answer the same from everywhere)", DomainMaxLocations)
+	}
+	return nil
+}
 
 // DomainMonitorConfig watches a domain's registration expiry through RDAP,
 // falling back to WHOIS (shared/domainexpiry). The check fails only when the

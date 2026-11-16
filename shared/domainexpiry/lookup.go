@@ -43,10 +43,22 @@ const rdapShare = 2.0 / 3.0
 // domain (RegistrableDomain). It never fails: an undetermined expiry is an
 // Info with UnknownReason set, so the caller records why.
 //
-// RDAP answers first. WHOIS is asked when RDAP has no service for the TLD or
-// failed, and when RDAP holds the name but publishes no expiry. An RDAP "not
-// found" is final.
+// RDAP answers first. WHOIS is asked when RDAP has no service for the TLD,
+// failed or was throttled, when RDAP holds the name but publishes no expiry,
+// and when RDAP says the name is not registered: that answer stands only if
+// WHOIS does not hold the name (a server that no longer serves the TLD, say
+// after a registry change a stale bootstrap has not caught up with, would
+// otherwise take every monitor in the TLD down). NotFoundConfirmed records
+// that both agreed.
 func (c *Client) Lookup(ctx context.Context, name string) *Info {
+	info := c.lookup(ctx, name)
+	info.annotate(c.now())
+	return info
+}
+
+const noDateReason = "the registry publishes no expiration date"
+
+func (c *Client) lookup(ctx context.Context, name string) *Info {
 	rdapCtx, cancel := ctx, context.CancelFunc(func() {})
 	if deadline, ok := ctx.Deadline(); ok {
 		rdapCtx, cancel = context.WithTimeout(ctx, time.Duration(float64(time.Until(deadline))*rdapShare))
@@ -54,12 +66,26 @@ func (c *Client) Lookup(ctx context.Context, name string) *Info {
 	info, rdapErr := c.lookupRDAP(rdapCtx, name)
 	cancel()
 
-	if rdapErr == nil && (info.ExpiresAt != "" || info.IsNotRegistered()) {
+	if rdapErr == nil && info.ExpiresAt != "" {
 		return info
+	}
+	if rdapErr == nil && info.IsRegistered() && PublishesNoExpiry(TLD(name)) {
+		return info // WHOIS has no date either; annotate says so
 	}
 	whois, whoisErr := c.lookupWHOIS(ctx, name)
 
-	if rdapErr == nil {
+	switch {
+	case rdapErr == nil && info.IsNotRegistered():
+		if whoisErr == nil && whois.IsRegistered() {
+			whois.RDAPError = "the RDAP server reported the name as not registered"
+			if whois.ExpiresAt == "" {
+				whois.UnknownReason = noDateReason
+			}
+			return whois
+		}
+		info.NotFoundConfirmed = whoisErr == nil && whois.IsNotRegistered()
+		return info
+	case rdapErr == nil:
 		// Registered over RDAP without a date: WHOIS may carry one.
 		if whoisErr == nil && whois.IsRegistered() && whois.ExpiresAt != "" {
 			if whois.Registrar == "" {
@@ -67,13 +93,12 @@ func (c *Client) Lookup(ctx context.Context, name string) *Info {
 			}
 			return whois
 		}
-		info.UnknownReason = "the registry publishes no expiration date"
+		info.UnknownReason = noDateReason
 		return info
-	}
-	if whoisErr == nil {
+	case whoisErr == nil:
 		whois.RDAPError = rdapErr.Error()
 		if whois.IsRegistered() && whois.ExpiresAt == "" {
-			whois.UnknownReason = "the registry publishes no expiration date"
+			whois.UnknownReason = noDateReason
 		}
 		return whois
 	}

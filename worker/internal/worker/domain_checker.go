@@ -101,11 +101,27 @@ func (c *DomainChecker) Check(ctx context.Context, raw json.RawMessage, timeoutS
 }
 
 // domainVerdict decides the check from a lookup.
+//
+// A "not registered" answer fails the check whether one registry source
+// gave it or two (NotFoundConfirmed): the API holds domain monitors to a
+// confirmation threshold of at least 2, so one answer leaves the monitor
+// suspect and only two consecutive failing lookups take it down. An RDAP
+// "not found" that WHOIS contradicts never reaches here as one
+// (domainexpiry.Client.Lookup).
+//
+// A passed expiry date inside the registry's auto-renew or renew grace
+// period is not an expiry: the name is still registered (RenewalGrace). A
+// name on hold (clientHold/serverHold) stays a success too: it is
+// registered, and the outage it causes (no DNS) is a DNS or HTTP monitor's
+// to report; the monitor page shows the hold as a warning.
 func domainVerdict(info *domainexpiry.Info, now time.Time) (string, string) {
 	if info.IsNotRegistered() {
-		return "failure", fmt.Sprintf("domain: %s is not registered (%s)", info.Domain, info.Source)
+		if info.NotFoundConfirmed {
+			return "failure", fmt.Sprintf("domain: %s is not registered (RDAP and WHOIS agree)", info.Domain)
+		}
+		return "failure", fmt.Sprintf("domain: %s is reported as not registered by %s", info.Domain, strings.ToUpper(info.Source))
 	}
-	if info.ExpiresAt != "" {
+	if info.ExpiresAt != "" && !info.RenewalGrace {
 		if expires, err := time.Parse(time.RFC3339, info.ExpiresAt); err == nil && !now.Before(expires) {
 			return "failure", fmt.Sprintf("domain: registration expired %s (%s)",
 				daysAgo(int(now.Sub(expires).Hours()/24)), expires.Format("2006-01-02"))

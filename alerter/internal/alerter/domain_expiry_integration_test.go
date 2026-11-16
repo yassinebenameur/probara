@@ -215,8 +215,10 @@ func TestEvaluateDomainExpiryKnownExpiryOutlivesFailedLookups(t *testing.T) {
 	}
 	evaluateDomain(ctx, t, alerter)
 	got = domainAlerts(ctx, t, dbClient, monitorID)
-	if len(got) != 1 || got[0].status != "active" || got[0].value.Valid ||
-		got[0].lastError != "domain: expiry unknown: rdap: timed out; whois: connection failed" {
+	// The alert changed meaning, so the dated one resolved and an "expiry
+	// unknown" one opened in its place.
+	if len(got) != 2 || got[0].status != "resolved" || got[1].status != "active" || got[1].value.Valid ||
+		got[1].lastError != "domain: expiry unknown: rdap: timed out; whois: connection failed" {
 		t.Fatalf("after the lookback: %+v", got)
 	}
 }
@@ -303,5 +305,70 @@ func TestEvaluateDomainExpiryTwoReplicas(t *testing.T) {
 	}
 	if recoveryEntries != 1 {
 		t.Fatalf("resolved rows = %d", recoveryEntries)
+	}
+}
+
+// Two rows of one round (two locations reporting together) are one
+// undetermined lookup, not two.
+func TestEvaluateDomainExpiryCountsRoundsNotRows(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerter")
+	monitorID := insertDomainMonitor(ctx, t, dbClient, tenantID, `{"domain":"example.fr"}`)
+	alerter := newHostMetricAlerter(dbClient)
+	round := time.Now().UTC().Add(-time.Hour)
+	insertDomainResult(ctx, t, dbClient, tenantID, monitorID, round, "success", unknownExpiry)
+	insertDomainResult(ctx, t, dbClient, tenantID, monitorID, round.Add(20*time.Second), "success", unknownExpiry)
+	evaluateDomain(ctx, t, alerter)
+	if got := domainAlerts(ctx, t, dbClient, monitorID); len(got) != 0 {
+		t.Fatalf("one round opened %+v", got)
+	}
+}
+
+// A registry that never publishes a date: "expiry unknown" is its normal
+// state, so no alert opens, and one opened before resolves.
+func TestEvaluateDomainExpiryNoDateRegistry(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerter")
+	monitorID := insertDomainMonitor(ctx, t, dbClient, tenantID, `{"domain":"example.de"}`)
+	alerter := newHostMetricAlerter(dbClient)
+	now := time.Now().UTC()
+	const noDate = `{"domain":"example.de","registered":true,"source":"whois","no_expiry_published":true,"unknown_reason":"the .de registry does not publish an expiry date; this monitor can only detect that the domain stops being registered"}`
+	for i := 4; i > 0; i-- {
+		insertDomainResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-time.Duration(i)*time.Hour), "success", noDate)
+	}
+	evaluateDomain(ctx, t, alerter)
+	if got := domainAlerts(ctx, t, dbClient, monitorID); len(got) != 0 {
+		t.Fatalf("no-date registry opened %+v", got)
+	}
+
+	// An "expiry unknown" alert opened before the TLD was known to publish
+	// no date resolves at the next lookup that says so.
+	mustExec(ctx, t, dbClient, `INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count, last_error, created_at, updated_at)
+		VALUES ($1, $2, $3, 'domain_expiry', 'active', NOW(), 0, 'domain: expiry unknown: x', NOW(), NOW())`, uuid.New(), tenantID, monitorID)
+	evaluateDomain(ctx, t, alerter)
+	if got := domainAlerts(ctx, t, dbClient, monitorID); len(got) != 1 || got[0].status != "resolved" {
+		t.Fatalf("stale unknown alert: %+v", got)
+	}
+}
+
+// A passed date in the registry's renew grace period is still registered:
+// inside the window (0 days left), not expired.
+func TestEvaluateDomainExpiryRenewalGrace(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerter")
+	monitorID := insertDomainMonitor(ctx, t, dbClient, tenantID, `{"domain":"example.com"}`)
+	at := time.Now().UTC().Add(-3 * 24 * time.Hour)
+	snapshot := fmt.Sprintf(`{"domain":"example.com","expires_at":%q,"registered":true,"source":"rdap","renewal_grace":true,"statuses":["auto renew period"]}`, at.Format(time.RFC3339))
+	insertDomainResult(ctx, t, dbClient, tenantID, monitorID, time.Now().Add(-time.Minute), "success", snapshot)
+	evaluateDomain(ctx, t, newHostMetricAlerter(dbClient))
+	got := domainAlerts(ctx, t, dbClient, monitorID)
+	if len(got) != 1 || got[0].value.Float64 != 0 || !strings.Contains(got[0].lastError, "renew grace period") {
+		t.Fatalf("grace: %+v", got)
 	}
 }

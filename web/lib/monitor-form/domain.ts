@@ -16,11 +16,13 @@ export const DOMAIN_MAX_MIN_DAYS_VALID = 3650;
 /** Interval presets for the schedule panel: hourly to daily. */
 export const DOMAIN_INTERVAL_PRESETS = [3600, 21600, 43200, 86400] as const;
 
+/** The lowest "mark down after" the API allows: one registry answer must never page. */
+export const DOMAIN_MIN_CONSECUTIVE_FAILURES = 2;
+
 /**
  * DomainForm's initial state: the stored monitor on edit, else the clone
- * source, else the defaults (daily, 30 s timeout, a 30-day window, down at
- * the first failed check: a failure is an expired or unregistered name,
- * which a second lookup would only confirm).
+ * source, else the defaults (daily, 30 s timeout, a 30-day window, down
+ * after two failed lookups).
  */
 export function initialDomainFormState(monitor?: Monitor, initialData?: CreateMonitorRequest) {
   const isEditMode = Boolean(monitor);
@@ -34,7 +36,6 @@ export function initialDomainFormState(monitor?: Monitor, initialData?: CreateMo
     ...shared,
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || DOMAIN_DEFAULT_INTERVAL_SECONDS,
     timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 30,
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 1,
     domain: config?.domain ?? '',
     min_days_valid: config?.min_days_valid ?? DOMAIN_DEFAULT_MIN_DAYS_VALID,
   };
@@ -75,6 +76,12 @@ export function validateDomainForm(form: DomainFormState): Record<string, string
   }
   if (form.timeout_seconds >= form.interval_seconds) {
     errors.timeout_seconds = 'Timeout must be less than interval';
+  }
+  if (form.consecutive_failures_threshold < DOMAIN_MIN_CONSECUTIVE_FAILURES) {
+    errors.consecutive_failures_threshold = 'Mark a domain down after at least 2 failed lookups';
+  }
+  if (form.location_ids.length > 1) {
+    errors.location_ids = 'A domain monitor runs from one location: registries answer the same from everywhere';
   }
   return errors;
 }

@@ -35,7 +35,16 @@ func (c *Client) httpClient() *http.Client {
 		MaxIdleConns:        1,
 		DisableKeepAlives:   true,
 	}
-	return &http.Client{Transport: transport, CheckRedirect: checkRDAPRedirect}
+	return &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if err := checkRDAPRedirect(req, via); err != nil {
+			return err
+		}
+		// A redirect to another server spends that server's lookups too.
+		if c.Directory != nil && req.URL.Host != via[len(via)-1].URL.Host {
+			return c.Directory.acquire(strings.ToLower(req.URL.Hostname()))
+		}
+		return nil
+	}}
 }
 
 // checkRDAPRedirect bounds where an RDAP server may send the lookup. RDAP
@@ -69,6 +78,14 @@ func (c *Client) lookupRDAP(ctx context.Context, name string) (*Info, error) {
 		return nil, errNoRDAP
 	}
 	base := bases[0]
+	u, err := url.Parse(base)
+	if err != nil {
+		return nil, errors.New("invalid RDAP server URL")
+	}
+	host := strings.ToLower(u.Hostname())
+	if err := c.Directory.acquire(host); err != nil {
+		return nil, err
+	}
 	client := c.httpClient()
 	defer client.CloseIdleConnections()
 
@@ -79,17 +96,23 @@ func (c *Client) lookupRDAP(ctx context.Context, name string) (*Info, error) {
 	req.Header.Set("Accept", "application/rdap+json, application/json")
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, errThrottled) {
+			return nil, err
+		}
 		return nil, lookupError(ctx, err)
 	}
 	defer resp.Body.Close()
 	server := origin(resp.Request.URL)
 
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
+	case resp.StatusCode == http.StatusNotFound && isJSONResponse(resp):
+		// Only an RDAP-shaped 404 says "not registered": a plain web 404
+		// is a server that no longer serves RDAP here (a stale bootstrap).
 		notRegistered := false
 		return &Info{Domain: name, Registered: &notRegistered, Source: SourceRDAP, Server: server}, nil
 	case resp.StatusCode == http.StatusTooManyRequests:
-		return nil, errors.New("rate limited by the registry (HTTP 429)")
+		c.Directory.coolDown(strings.ToLower(resp.Request.URL.Hostname()), retryAfter(resp.Header, c.now()))
+		return nil, fmt.Errorf("%w: rate limited by the registry (HTTP 429)", errThrottled)
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
@@ -106,6 +129,12 @@ func (c *Client) lookupRDAP(ctx context.Context, name string) (*Info, error) {
 	}
 	info.Server = server
 	return info, nil
+}
+
+// isJSONResponse reports an RDAP (application/rdap+json) or JSON body.
+func isJSONResponse(resp *http.Response) bool {
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	return strings.Contains(ct, "application/rdap+json") || strings.Contains(ct, "application/json")
 }
 
 // origin is scheme://host of the URL that answered, recorded as the server.
@@ -180,9 +209,16 @@ func parseRDAPDomain(body []byte, name string, now time.Time) (*Info, error) {
 	return info, nil
 }
 
+// parseRDAPDate reads an RFC 3339 event date. Some servers drop the zone;
+// such a date is read as UTC rather than discarded.
 func parseRDAPDate(s string) (time.Time, bool) {
-	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(s))
-	return at, err == nil
+	s = strings.TrimSpace(s)
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02T15:04:05", "2006-01-02"} {
+		if at, err := time.Parse(layout, s); err == nil {
+			return at, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // rdapRegistrar is the vCard "fn" of the first entity with the registrar

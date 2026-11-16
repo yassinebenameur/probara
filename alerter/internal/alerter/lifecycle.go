@@ -89,6 +89,7 @@ func openAlertDispatchablePredicate() string {
 			OR al.kind = 'latency_anomaly'
 			OR al.kind = 'host_metric'
 			OR al.kind = 'tls_expiry'
+			OR al.kind = 'domain_expiry'
 		  )
 		  AND NOT ` + maintenance.InMaintenancePredicate("m") + `
 		  -- A 'per_monitor' group does not dispatch its own alert (if one is still

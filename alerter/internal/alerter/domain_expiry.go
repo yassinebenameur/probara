@@ -25,10 +25,14 @@ const (
 	// well over the longest interval (24 h), and the walk stays small (at
 	// most one row an hour).
 	domainExpiryLookbackSQL = "7 days"
-	// domainExpiryUnknownAfter is how many lookups in the lookback, with no
-	// expiry among them, raise the "expiry unknown" warning: one failed
-	// lookup never does.
+	// domainExpiryUnknownAfter is how many check rounds in the lookback,
+	// with no expiry among them, raise the "expiry unknown" warning: one
+	// failed lookup never does.
 	domainExpiryUnknownAfter = 2
+	// domainRoundSeconds groups result rows into check rounds: the rows of
+	// one dispatch (several locations, a run-now next to a scheduled check)
+	// land within minutes, while scheduled rounds are at least an hour apart.
+	domainRoundSeconds = 600
 )
 
 // domainExpiryMonitor is one enabled domain monitor and its warning window.
@@ -44,8 +48,13 @@ type domainExpiryMonitor struct {
 type domainObservation struct {
 	expiresAt     sql.NullString
 	registrar     sql.NullString
-	unknownCount  int
+	renewalGrace  bool
+	unknownRounds int
 	unknownReason sql.NullString
+	// noExpiryPublished: the newest lookup says the registry never publishes
+	// a date (domainexpiry.PublishesNoExpiry), so "expiry unknown" is the
+	// normal state and nobody could act on an alert about it.
+	noExpiryPublished bool
 }
 
 // evaluateDomainExpiry opens, refreshes and resolves domain_expiry alerts.
@@ -59,17 +68,23 @@ type domainObservation struct {
 //     alert (metric_value = days left, negative once expired);
 //   - a recorded expiry outside the window resolves it (renewed, or the
 //     window narrowed);
-//   - no recorded expiry but domainExpiryUnknownAfter or more lookups that
-//     could not determine one opens it with metric_value NULL ("expiry
+//   - a passed date inside the registry's renew grace period counts as 0
+//     days left (registered, inside the window), not as expired;
+//   - no recorded expiry but domainExpiryUnknownAfter or more check rounds
+//     that could not determine one opens it with metric_value NULL ("expiry
 //     unknown"): an undetermined expiry never pages as an outage, but it
-//     does not stay silent forever either;
+//     does not stay silent forever either. Not for a registry known never
+//     to publish a date: there it is the normal state, so no alert opens and
+//     an open "unknown" one resolves;
 //   - nothing else (no rows yet, a single failed lookup, only "not
 //     registered" answers, which the availability alert covers) leaves any
 //     open alert as it is.
 //
 // An open alert's value and last_error follow every evaluation, so reminders
 // say how many days are left now (and that the registration has expired
-// once it has). The insert is idempotent through the open-alert unique index
+// once it has). When its form changes between dated and "expiry unknown"
+// it means something else, so it is resolved and a new one opened, and
+// channels hear about both. The insert is idempotent through the open-alert unique index
 // and the refresh and resolve are guarded updates, so two alerter replicas
 // running this at once open one alert and resolve it once.
 func (a *Alerter) evaluateDomainExpiry(ctx context.Context) error {
@@ -92,13 +107,23 @@ func (a *Alerter) evaluateDomainExpiry(ctx context.Context) error {
 		var err error
 		if expires, ok := parseExpiry(obs.expiresAt); ok {
 			days := domainexpiry.DaysUntil(expires, now)
+			lastError := domainExpiryLastError(expires, days, m.minDays, obs.registrar.String)
+			if days < 0 && obs.renewalGrace {
+				days = 0
+				lastError = fmt.Sprintf("domain: expired %s, in the registry's renew grace period", expires.UTC().Format("2006-01-02"))
+				if obs.registrar.String != "" {
+					lastError += "; registrar: " + obs.registrar.String
+				}
+			}
 			if days < m.minDays {
 				value := float64(days)
-				err = a.openDomainExpiryAlert(ctx, m, &value, domainExpiryLastError(expires, days, m.minDays, obs.registrar.String))
+				err = a.openDomainExpiryAlert(ctx, m, &value, lastError)
 			} else {
 				err = a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, now)
 			}
-		} else if obs.unknownCount >= domainExpiryUnknownAfter {
+		} else if obs.noExpiryPublished {
+			err = a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, now)
+		} else if obs.unknownRounds >= domainExpiryUnknownAfter {
 			err = a.openDomainExpiryAlert(ctx, m, nil, "domain: expiry unknown: "+obs.unknownReason.String)
 		}
 		if err != nil {
@@ -177,10 +202,12 @@ func (a *Alerter) loadDomainObservations(ctx context.Context, monitorIDs []uuid.
 	}
 	obj := domainexpiry.SQLExpr("cr.metrics_data")
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT m.id, k.expires_at, k.registrar, COALESCE(u.unknown_count, 0), u.unknown_reason
+		SELECT m.id, k.expires_at, k.registrar, COALESCE(k.renewal_grace, FALSE),
+			COALESCE(u.unknown_rounds, 0), u.unknown_reason, COALESCE(n.no_expiry_published, FALSE)
 		FROM unnest($1::uuid[]) AS m(id)
 		LEFT JOIN LATERAL (
-			SELECT `+domainexpiry.ExpiresAtSQL(obj)+` AS expires_at, `+obj+` ->> 'registrar' AS registrar
+			SELECT `+domainexpiry.ExpiresAtSQL(obj)+` AS expires_at, `+obj+` ->> 'registrar' AS registrar,
+				(`+obj+` ->> 'renewal_grace') = 'true' AS renewal_grace
 			FROM check_results cr
 			WHERE cr.monitor_id = m.id
 			  AND cr.result_source = 'monitor'
@@ -190,7 +217,7 @@ func (a *Alerter) loadDomainObservations(ctx context.Context, monitorIDs []uuid.
 			LIMIT 1
 		) k ON TRUE
 		LEFT JOIN LATERAL (
-			SELECT COUNT(*) AS unknown_count,
+			SELECT COUNT(DISTINCT FLOOR(EXTRACT(EPOCH FROM cr.created_at) / `+fmt.Sprint(domainRoundSeconds)+`)) AS unknown_rounds,
 				(ARRAY_AGG(`+domainexpiry.UnknownReasonSQL(obj)+` ORDER BY cr.created_at DESC))[1] AS unknown_reason
 			FROM check_results cr
 			WHERE cr.monitor_id = m.id
@@ -198,6 +225,16 @@ func (a *Alerter) loadDomainObservations(ctx context.Context, monitorIDs []uuid.
 			  AND cr.created_at > NOW() - INTERVAL '`+domainExpiryLookbackSQL+`'
 			  AND `+domainexpiry.UnknownReasonSQL(obj)+` IS NOT NULL
 		) u ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT (`+obj+` ->> 'no_expiry_published') = 'true' AS no_expiry_published
+			FROM check_results cr
+			WHERE cr.monitor_id = m.id
+			  AND cr.result_source = 'monitor'
+			  AND cr.created_at > NOW() - INTERVAL '`+domainExpiryLookbackSQL+`'
+			  AND `+obj+` IS NOT NULL
+			ORDER BY cr.created_at DESC
+			LIMIT 1
+		) n ON TRUE
 	`, pq.Array(monitorIDs))
 	if err != nil {
 		return nil, err
@@ -208,7 +245,7 @@ func (a *Alerter) loadDomainObservations(ctx context.Context, monitorIDs []uuid.
 			id  uuid.UUID
 			obs domainObservation
 		)
-		if err := rows.Scan(&id, &obs.expiresAt, &obs.registrar, &obs.unknownCount, &obs.unknownReason); err != nil {
+		if err := rows.Scan(&id, &obs.expiresAt, &obs.registrar, &obs.renewalGrace, &obs.unknownRounds, &obs.unknownReason, &obs.noExpiryPublished); err != nil {
 			return nil, err
 		}
 		out[id] = obs
@@ -221,8 +258,25 @@ func (a *Alerter) loadDomainObservations(ctx context.Context, monitorIDs []uuid.
 // value nil is "expiry unknown".
 func (a *Alerter) openDomainExpiryAlert(ctx context.Context, m domainExpiryMonitor, value *float64, lastError string) error {
 	threshold := float64(m.minDays)
-	var alertID uuid.UUID
+	// An open alert of the other form ("expiry unknown" vs dated) is a
+	// different message: close it so its channels hear it resolve, then
+	// open the new one, which pages as created.
+	var openUnknown bool
 	err := a.db.QueryRowContext(ctx, `
+		SELECT metric_value IS NULL FROM alerts
+		WHERE monitor_id = $1 AND kind = 'domain_expiry' AND status IN ('active', 'acknowledged')
+	`, m.monitorID).Scan(&openUnknown)
+	switch {
+	case err == nil && openUnknown != (value == nil):
+		if err := a.resolveDomainExpiryAlert(ctx, m.monitorID, m.tenantID, m.monitorName, time.Now()); err != nil {
+			return err
+		}
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("query open domain expiry alert: %w", err)
+	}
+
+	var alertID uuid.UUID
+	err = a.db.QueryRowContext(ctx, `
 		INSERT INTO alerts (id, tenant_id, monitor_id, kind, status,
 			triggered_at, failure_count, last_error, metric_value, threshold_value,
 			created_at, updated_at)
@@ -235,6 +289,9 @@ func (a *Alerter) openDomainExpiryAlert(ctx context.Context, m domainExpiryMonit
 			UPDATE alerts
 			SET metric_value = $2, threshold_value = $3, last_error = $4, updated_at = NOW()
 			WHERE monitor_id = $1 AND kind = 'domain_expiry' AND status IN ('active', 'acknowledged')
+			  -- Same form only: a replica that opened the other form a moment
+			  -- ago keeps it until the next evaluation replaces it properly.
+			  AND (metric_value IS NULL) = ($2::double precision IS NULL)
 			  AND (metric_value IS DISTINCT FROM $2 OR threshold_value IS DISTINCT FROM $3 OR last_error IS DISTINCT FROM $4)
 		`, m.monitorID, value, threshold, lastError); err != nil {
 			return fmt.Errorf("refresh domain expiry alert: %w", err)

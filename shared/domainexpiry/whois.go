@@ -51,6 +51,9 @@ func (c *Client) lookupWHOIS(ctx context.Context, name string) (*Info, error) {
 	}
 	info, err := parseWHOIS(text, name, c.now())
 	if err != nil {
+		if errors.Is(err, errWHOISRefused) {
+			c.Directory.coolDown(server, coolDownDefault)
+		}
 		return nil, err
 	}
 	info.Server = server
@@ -72,6 +75,9 @@ func (c *Client) lookupWHOIS(ctx context.Context, name string) (*Info, error) {
 	return info, nil
 }
 
+// errWHOISRefused: the server declined to answer (rate limit, block).
+var errWHOISRefused = fmt.Errorf("%w: the WHOIS server refused the query (rate limit or block)", errThrottled)
+
 // errNoWHOIS: IANA lists no WHOIS server for the TLD.
 var errNoWHOIS = errors.New("no WHOIS service for this TLD")
 
@@ -86,6 +92,9 @@ func (c *Client) whoisRoot() string {
 // the context deadline and maxWHOISBytes. host is always a validated
 // hostname (whoisReferral) or the configured root.
 func (c *Client) whoisQuery(ctx context.Context, host, query string) (string, error) {
+	if err := c.Directory.acquire(host); err != nil {
+		return "", err
+	}
 	conn, err := c.Dial(ctx, "tcp", net.JoinHostPort(host, whoisPort))
 	if err != nil {
 		return "", lookupError(ctx, err)
@@ -187,9 +196,14 @@ var (
 		"no matching record",
 	}
 	// whoisRefusal are phrases of a server that declined to answer (rate
-	// limit, quota): never read as "not registered".
+	// limit, quota, block). A refusal often also says "not found", so it is
+	// checked first and never read as "not registered". They are broad on
+	// purpose: they only apply to an answer that carries no registration
+	// data, and reading a real "no match" as a refusal costs an unknown
+	// expiry, never a false outage.
 	whoisRefusal = []string{
-		"limit exceeded", "too many", "try again later", "rate limit", "quota", "access denied", "blacklisted",
+		"exceeded", "too many", "try later", "try again", "query rate", "rate limit", "limit", "quota",
+		"blocked", "blacklist", "denied", "refused", "temporarily unavailable",
 	}
 )
 
@@ -302,7 +316,7 @@ func parseWHOIS(text, name string, now time.Time) (*Info, error) {
 	lower := strings.ToLower(text)
 	for _, marker := range whoisRefusal {
 		if strings.Contains(lower, marker) {
-			return nil, errors.New("the WHOIS server refused the query")
+			return nil, errWHOISRefused
 		}
 	}
 	// Some registries echo the queried name above a "free" status, so the

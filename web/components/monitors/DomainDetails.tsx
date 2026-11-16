@@ -59,12 +59,14 @@ export default function DomainDetails({ monitor, results, size = 'default' }: Do
             <span className={`${valueClass} ${UPTIME_TONE_TEXT[state.tone]}`}>{state.headline}</span>
           </div>
           {state.reason && (
-            <p className={`text-amber-300 ${size === 'compact' ? 'text-2xs' : 'text-xs'}`}>{state.reason}</p>
+            <p className={`${state.tone === 'none' ? 'text-slate-400' : 'text-amber-300'} ${size === 'compact' ? 'text-2xs' : 'text-xs'}`}>
+              {state.reason}
+            </p>
           )}
           {domainFacts(latest.info).map((fact) => (
             <div key={fact.label} className={rowClass}>
               <span className={labelClass}>{fact.label}</span>
-              <span className={`${valueClass} break-words`}>{fact.value}</span>
+              <span className={`${fact.warning ? 'min-w-0 text-right text-amber-300' : valueClass} break-words`}>{fact.value}</span>
             </div>
           ))}
           <div className={rowClass}>

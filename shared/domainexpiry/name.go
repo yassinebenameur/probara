@@ -17,6 +17,7 @@ var (
 	ErrNameIP       = errors.New("domain must be a domain name, not an IP address")
 	ErrNameInvalid  = errors.New("domain must be a valid domain name such as example.com")
 	ErrNameSuffix   = errors.New("domain must be a registered domain such as example.com, not a top-level domain or public suffix")
+	ErrNameTLD      = errors.New("domain must end in a known top-level domain")
 )
 
 // RegistrableDomain returns the name a registry sells for input, in the
@@ -28,7 +29,11 @@ var (
 // section (github.io, blogspot.com, …) names hosting platforms, not
 // registries: "me.github.io" is a subdomain of the registered github.io, and
 // asking the .io registry for "me.github.io" would find nothing. A TLD the
-// list does not know is taken as a single-label suffix.
+// list does not know is refused (ErrNameTLD): no registry can answer for it,
+// and each made-up TLD would otherwise cost a query to IANA's WHOIS. The
+// list ships with golang.org/x/net and lists every ICANN TLD (the RDAP
+// bootstrap lists only those with RDAP), so a TLD delegated after the
+// dependency was last updated is refused until it is bumped.
 //
 // It refuses IP addresses, a bare TLD or public suffix, and anything with a
 // scheme, port, path or user part.
@@ -57,6 +62,9 @@ func RegistrableDomain(input string) (string, error) {
 	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
 		return "", ErrNameIP
 	}
+	if _, icann := publicsuffix.PublicSuffix(labels[len(labels)-1]); !icann {
+		return "", ErrNameTLD
+	}
 	suffix := icannSuffix(ascii)
 	suffixLabels := strings.Count(suffix, ".") + 1
 	if suffixLabels >= len(labels) {
@@ -67,7 +75,7 @@ func RegistrableDomain(input string) (string, error) {
 
 // icannSuffix is name's public suffix from the ICANN section of the list.
 // A private suffix (github.io) is walked up to the ICANN one beneath it
-// (io); an unlisted TLD comes back as itself.
+// (io).
 func icannSuffix(name string) string {
 	suffix, icann := publicsuffix.PublicSuffix(name)
 	for !icann {

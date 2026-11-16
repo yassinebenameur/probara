@@ -29,8 +29,10 @@ func TestRegistrableDomain(t *testing.T) {
 		{in: "www.Bücher.DE", want: "xn--bcher-kva.de"},
 		{in: "例え.jp", want: "xn--r8jz45g.jp"},
 		{in: "xn--bcher-kva.de", want: "xn--bcher-kva.de"},
-		// An unlisted TLD is a single-label suffix.
-		{in: "host.example.notatld", want: "example.notatld"},
+		// A TLD the list does not know has no registry to ask.
+		{in: "host.example.notatld", wantErr: ErrNameTLD},
+		{in: "printer.local", wantErr: ErrNameTLD},
+		{in: "db.internal", wantErr: ErrNameTLD},
 
 		{in: "", wantErr: ErrNameRequired},
 		{in: "   ", wantErr: ErrNameRequired},
@@ -47,6 +49,7 @@ func TestRegistrableDomain(t *testing.T) {
 		{in: "user@example.com", wantErr: ErrNameNotBare},
 		{in: "exa mple.com", wantErr: ErrNameNotBare},
 		{in: "-bad.com", wantErr: ErrNameInvalid},
+		{in: "localhost", wantErr: ErrNameTLD},
 		{in: "under_score.com", wantErr: ErrNameInvalid},
 	}
 	for _, tt := range tests {

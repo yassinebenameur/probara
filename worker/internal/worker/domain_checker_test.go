@@ -62,7 +62,20 @@ func TestDomainCheckerVerdicts(t *testing.T) {
 		{name: "expired days ago", info: registeredInfo("example.com", "2026-11-12T00:00:00Z"), wantStatus: "failure", wantMsg: "domain: registration expired 3 days ago (2026-11-12)"},
 		{name: "redemption", info: registeredInfo("example.com", "2027-01-01T00:00:00Z", "redemption period"), wantStatus: "failure", wantMsg: "domain: registration is in redemption period"},
 		{name: "pending delete epp", info: registeredInfo("example.com", "", "pendingDelete"), wantStatus: "failure", wantMsg: "domain: registration is in pendingDelete"},
-		{name: "not registered", info: &domainexpiry.Info{Domain: "example.com", Registered: &no, Source: "rdap"}, wantStatus: "failure", wantMsg: "domain: example.com is not registered (rdap)"},
+		{name: "not registered, one source", info: &domainexpiry.Info{Domain: "example.com", Registered: &no, Source: "rdap"}, wantStatus: "failure", wantMsg: "domain: example.com is reported as not registered by RDAP"},
+		{name: "not registered, confirmed", info: &domainexpiry.Info{Domain: "example.com", Registered: &no, Source: "rdap", NotFoundConfirmed: true}, wantStatus: "failure", wantMsg: "domain: example.com is not registered (RDAP and WHOIS agree)"},
+		// A passed date inside the auto-renew grace period is not expired.
+		{name: "renewal grace", info: func() *domainexpiry.Info {
+			i := registeredInfo("example.com", "2026-11-12T00:00:00Z", "auto renew period")
+			i.RenewalGrace = true
+			return i
+		}(), wantStatus: "success"},
+		// On hold: registered, so the check passes; the page shows the hold.
+		{name: "on hold", info: func() *domainexpiry.Info {
+			i := registeredInfo("example.com", "2027-08-13T04:00:00Z", "client hold")
+			i.OnHold = true
+			return i
+		}(), wantStatus: "success"},
 		// Undetermined expiry never fails the check.
 		{name: "no date published", info: func() *domainexpiry.Info {
 			i := registeredInfo("example.de", "")
@@ -133,7 +146,7 @@ func TestDomainCheckerRefusesBadConfigWithoutLookup(t *testing.T) {
 		`not json`:                   "invalid domain config",
 		`{"domain":""}`:              "domain is required",
 		`{"domain":"127.0.0.1"}`:     "not an IP address",
-		`{"domain":"localhost"}`:     "public suffix",
+		`{"domain":"localhost"}`:     "known top-level domain",
 		`{"domain":"example.com/x"}`: "bare domain name",
 	} {
 		res := c.Check(context.Background(), json.RawMessage(cfg), 30)

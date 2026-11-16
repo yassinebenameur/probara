@@ -49,6 +49,7 @@ type Directory struct {
 	nextRefresh time.Time
 	refreshing  bool
 	whois       map[string]whoisServerEntry
+	hosts       map[string]*hostBucket
 }
 
 type whoisServerEntry struct {
@@ -64,12 +65,12 @@ func NewDirectory(fetch func(ctx context.Context, url string) ([]byte, error)) *
 	if err != nil {
 		panic("domainexpiry: embedded RDAP bootstrap: " + err.Error())
 	}
-	return &Directory{fetch: fetch, now: time.Now, rdap: services, whois: map[string]whoisServerEntry{}}
+	return &Directory{fetch: fetch, now: time.Now, rdap: services, whois: map[string]whoisServerEntry{}, hosts: map[string]*hostBucket{}}
 }
 
 // newDirectoryWith is a Directory over a fixed RDAP table (tests).
 func newDirectoryWith(rdap map[string][]string) *Directory {
-	return &Directory{now: time.Now, rdap: rdap, whois: map[string]whoisServerEntry{}}
+	return &Directory{now: time.Now, rdap: rdap, whois: map[string]whoisServerEntry{}, hosts: map[string]*hostBucket{}}
 }
 
 // RDAPServers returns the RDAP base URLs (https, ending in "/") for a TLD,
@@ -113,10 +114,17 @@ func (d *Directory) cachedWHOISServer(tld string) (string, bool) {
 	return e.host, true
 }
 
+// storeWHOISServer caches a TLD's WHOIS server, or "" for none. The cache is
+// bounded (maxCachedWHOISes): TLDs are validated against the public suffix
+// list, but the bound holds whatever reaches it.
 func (d *Directory) storeWHOISServer(tld, host string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.whois[tld] = whoisServerEntry{host: host, expires: d.now().Add(whoisServerTTL)}
+	now := d.now()
+	if _, ok := d.whois[tld]; !ok && len(d.whois) >= maxCachedWHOISes {
+		d.evictWHOISLocked(now)
+	}
+	d.whois[tld] = whoisServerEntry{host: host, expires: now.Add(whoisServerTTL)}
 }
 
 // Fetcher returns a fetch function for NewDirectory that downloads over

@@ -219,9 +219,17 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   dial only through the worker's `domainDialGuard`, which blocks private
   destinations whatever `HTTP_BLOCK_PRIVATE_IPS` says (servers come from
   bootstrap data and referrals); keep redirect/referral targets validated
-  there. An undetermined expiry is a `success` with `unknown_reason`, never a
-  failure; the alerter's `evaluateDomainExpiry` (`domain_expiry.go`) turns a
-  persistent one into a valueless `domain_expiry` alert.
+  there. An undetermined expiry (including a throttled or refused lookup)
+  is a `success` with `unknown_reason`, never a failure; the alerter's
+  `evaluateDomainExpiry` (`domain_expiry.go`) turns a persistent one into a
+  valueless `domain_expiry` alert (not for `PublishesNoExpiry` TLDs), and
+  resolves-and-reopens when the alert switches between valueless and dated.
+  One registry answer never pages: `ValidateDomainMonitorRules`
+  (`shared/models/domain.go`) holds domain monitors to a threshold of at
+  least 2 and at most one location, and an RDAP 404 yields to a WHOIS that
+  holds the name. Lookups are throttled per registry host in the worker
+  (`throttle.go`), and `POST /monitors/test` of this type needs write
+  access (`handlers/monitors/checks.go`, beside the saved-secret gate).
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
@@ -726,7 +734,9 @@ or imported groups come back empty. Any other path that creates groups through
   `Kind*` constants in `shared/notifications/event.go` list the same kinds;
   a new kind rewrites the CHECK in one migration and adds its constant, its
   wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
-  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last).
+  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last). A
+  kind that notifies must also be listed in `openAlertDispatchablePredicate`
+  (`alerter/internal/alerter/lifecycle.go`), or it opens and never pages.
 - **Transactional mail** (invites, resets, subscriber mail, reports) goes
   through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
   MIME builder; `Message.Validate` is the header-injection guard and accepts

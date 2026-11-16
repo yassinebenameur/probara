@@ -438,14 +438,14 @@ export const MONITORS_PAGE: DocPage = {
           type: "table",
           columns: ["Field", "Purpose"],
           rows: [
-            ["`domain`", "Required. The name to watch, without scheme, port or path. A subdomain is watched through its registered domain (`www.shop.example.co.uk` checks `example.co.uk`), found with the ICANN section of the public suffix list; a platform suffix such as `github.io` counts as the platform's own domain. Internationalized names are looked up in punycode. IP addresses and bare top-level domains or public suffixes are refused."],
+            ["`domain`", "Required. The name to watch, without scheme, port or path. A subdomain is watched through its registered domain (`www.shop.example.co.uk` checks `example.co.uk`), found with the ICANN section of the public suffix list; a platform suffix such as `github.io` counts as the platform's own domain. Internationalized names are looked up in punycode. IP addresses, bare top-level domains or public suffixes, and names under a TLD the list does not know (`.local`, `.internal`, a made-up TLD) are refused. The list ships with each release, so a TLD delegated after it is refused until an update."],
             ["`min_days_valid`", "Warning window in days, 0 to 3650, default 30: a registration with fewer days left opens a `domain_expiry` alert. 0 alerts only once it has expired."],
           ],
         },
         {
           type: "paragraph",
           text:
-            "The schedule has a floor of one hour (`interval_seconds` of at least 3600, refused below by the API and the form), because registries rate-limit lookups and a registration date moves in days. The form starts at once a day with a 30 s timeout and marks the monitor down at the first failed check, since a failure is an expired or unregistered name that a second lookup would only confirm. **Test lookup** in the form asks the registry through a worker without saving.",
+            "The schedule has a floor of one hour (`interval_seconds` of at least 3600), the monitor runs from at most one location (a registry answers the same from everywhere, so more would only multiply lookups), and \"mark down after\" (`consecutive_failures_threshold`) is at least 2, so a single registry answer never marks a domain down. The API refuses anything else, on create and on every update, a type change included. The form starts at once a day with a 30 s timeout. **Test lookup** in the form asks the registry through a worker without saving; it needs write permission, since every lookup spends the registries' rate limit on the worker's shared address.",
         },
         {
           type: "table",
@@ -453,21 +453,29 @@ export const MONITORS_PAGE: DocPage = {
           rows: [
             ["Expiry known, outside the window", "`success`", "Any open `domain_expiry` alert resolves"],
             ["Expiry known, inside the window", "`success` (the monitor stays up)", "`domain_expiry` with the days left, the date and the registrar"],
-            ["Expired, in redemption or pending delete", "`failure`", "Availability alert, and `domain_expiry` reads as expired"],
-            ["Not registered (RDAP 404 or a WHOIS \"no match\")", "`failure`", "Availability alert"],
+            ["Date passed, registry reports an auto-renew or renew grace period", "`success`", "`domain_expiry` at 0 days left, noting the grace period"],
+            ["Expired, in redemption or pending delete", "`failure`", "Availability alert after two failing lookups, and `domain_expiry` reads as expired"],
+            ["Not registered", "`failure`", "Availability alert after two failing lookups"],
+            ["On hold (`clientHold`, `serverHold`)", "`success`", "None: the page shows the hold; the outage it causes (no DNS) is for a DNS or HTTP monitor"],
             ["Expiry cannot be determined", "`success`, with `unknown_reason`", "`domain_expiry` with no value, once it persists (below)"],
           ],
         },
         {
           type: "paragraph",
           text:
-            "An undetermined expiry is not an outage of the domain, so it never fails the check, and it is not left silent either. It happens when the registry publishes no expiration date (DENIC, for `.de`, publishes none at all), when neither RDAP nor WHOIS is known for the TLD, when a WHOIS answer cannot be parsed, or when every lookup fails. The monitor page then shows **expiry unknown** and the reason. A recorded expiry keeps counting for 7 days, so a registry outage or a rate limit does not lose it; once no lookup in the last 7 days found a date and at least two lookups could not determine one, the alerter opens a `domain_expiry` alert without a value (\"Domain Expiry Unknown\") that resolves when a date is read again.",
+            "\"Not registered\" needs more than one answer. An RDAP `404` counts only when it is an RDAP answer (an `application/rdap+json` or JSON body), not a plain web page where an RDAP server used to be; WHOIS is then asked too, and when WHOIS holds the name, its answer wins. `not_found_confirmed` records that RDAP and WHOIS both said so. Either way, the check fails and the monitor goes down only when the next lookup says so again. A WHOIS reply that refuses the query (a rate limit, a block, \"try later\", \"query rate exceeded\") is never read as \"not registered\", even when it also says \"not found\": it is an undetermined expiry.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "An undetermined expiry is not an outage of the domain, so it never fails the check, and it is not left silent either. It happens when the registry publishes no expiration date, when neither RDAP nor WHOIS is known for the TLD, when a WHOIS answer cannot be parsed, or when every lookup fails or is throttled. The monitor page then shows **expiry unknown** and the reason. A recorded expiry keeps counting for 7 days, so a registry outage or a rate limit does not lose it; once no lookup in the last 7 days found a date and at least two check rounds could not determine one (the results of one round from several sources count once), the alerter opens a `domain_expiry` alert without a value (\"Domain Expiry Unknown\") that resolves when a date is read again. Some registries never publish an expiry date at all; for those (`.de` today) the form and the monitor page say that the monitor can only detect that the domain stops being registered, and no \"expiry unknown\" alert opens.",
         },
         {
           type: "list",
           items: [
-            "RDAP servers come from the IANA bootstrap registry. Workers ship a snapshot of it and refresh it from `data.iana.org` once a day in the background; a worker that cannot reach IANA, such as one at a private location with restricted egress, keeps using the snapshot. Only `https` RDAP servers are used; a TLD whose registry lists plain `http` only falls back to WHOIS.",
-            "WHOIS asks `whois.iana.org` which server holds the TLD (cached for a day), asks that server, and follows one registrar referral when a thin registry's answer has no expiry date: at most three queries, all to port 43 of a hostname. Dates are read from the formats the common registries use; a day/month-ambiguous date such as `03/04/2027` is not guessed at and reads as unknown.",
+            "RDAP servers come from the IANA bootstrap registry. Workers ship a snapshot of it and refresh it from `data.iana.org` once a day in the background; a worker that cannot reach IANA, such as one at a private location with restricted egress, keeps using the snapshot shipped with its release. Only `https` RDAP servers are used; a TLD whose registry lists plain `http` only falls back to WHOIS.",
+            "WHOIS asks `whois.iana.org` which server holds the TLD (cached for a day, at most 2048 TLDs), asks that server, and follows one registrar referral when a thin registry's answer has no expiry date: at most three queries, all to port 43 of a hostname. Dates are read from the formats the common registries use; a day/month-ambiguous date such as `03/04/2027` is not guessed at and reads as unknown. A date without a time zone is read as UTC.",
+            "Each worker throttles its own lookups per registry server: a burst of 20, then one a second. A server that answers HTTP `429` (honouring `Retry-After`) or refuses a WHOIS query is left alone for 5 minutes (between 1 minute and 1 hour). A throttled lookup is an undetermined expiry with the reason, never a failure.",
             "Lookups always refuse private, loopback, link-local and other reserved destinations, even on a worker with `HTTP_BLOCK_PRIVATE_IPS=false`: every server is chosen by the bootstrap data or by a remote referral, never by the monitor, so an answer cannot steer the worker into its own network. `HTTP_ALLOWED_CIDRS` still admits ranges you trust. RDAP redirects are followed only to `https` on a hostname and the default port, at most three hops; WHOIS referrals must name a hostname.",
             "RDAP gets at most two thirds of the timeout when WHOIS may still have to answer. Responses are capped at 1 MiB (RDAP) and 256 KiB (WHOIS).",
             "A worker at a private location needs outbound HTTPS to the registries' RDAP servers and TCP 43 to their WHOIS servers.",
@@ -476,7 +484,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every lookup records `metrics_data.domain`: `domain` (the registered name looked up), `expires_at`, `days_until_expiry`, `registered_at`, `updated_at`, `registrar`, `statuses`, `registered` (`false` when the registry does not hold the name, absent when no registry answered), `source` (`rdap` or `whois`), `server`, `rdap_error` (why RDAP did not answer when WHOIS did) and `unknown_reason`. The monitor page's Registration panel shows the latest.",
+            "Every lookup records `metrics_data.domain`: `domain` (the registered name looked up), `expires_at`, `days_until_expiry`, `registered_at`, `updated_at`, `registrar`, `statuses`, `registered` (`false` when a registry does not hold the name, absent when no registry answered), `not_found_confirmed`, `source` (`rdap` or `whois`), `server`, `rdap_error` (why RDAP did not answer, or what it said, when WHOIS did), `unknown_reason`, `no_expiry_published`, `renewal_grace` and `on_hold`. The monitor page's Registration panel shows the latest.",
         },
       ],
     },

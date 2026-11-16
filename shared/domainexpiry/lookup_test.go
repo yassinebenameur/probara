@@ -202,18 +202,61 @@ func TestLookupRDAP(t *testing.T) {
 	}
 }
 
-func TestLookupRDAPNotFoundIsFinal(t *testing.T) {
-	n := newFakeNet(t)
-	n.rdap(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
-	n.whois(whoisRoot, func(string) string { return "whois: " + whoisRegistry + "\n" })
-	info := n.client(rdapDir(), true).Lookup(lookupCtx(t), "example.com")
-	if !info.IsNotRegistered() || info.Source != SourceRDAP || info.UnknownReason != "" {
-		t.Fatalf("info = %+v", info)
+// rdapNotFound answers the way registries do: 404 with an RDAP media type.
+func rdapNotFound(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/rdap+json")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(`{"errorCode":404,"title":"Not Found"}`))
+}
+
+// An RDAP "not found" stands only when WHOIS does not hold the name, and is
+// confirmed only when WHOIS says so too.
+func TestLookupRDAPNotFoundNeedsWHOISAgreement(t *testing.T) {
+	tests := []struct {
+		name           string
+		registry       func(string) string // nil: no WHOIS server answers
+		wantRegistered *bool
+		wantConfirmed  bool
+	}{
+		{name: "whois agrees", registry: func(string) string { return string(fixture(t, "whois-gtld-not-found.txt")) }, wantRegistered: boolPtr(false), wantConfirmed: true},
+		{name: "whois holds the name", registry: func(string) string { return string(fixture(t, "whois-gtld-example-com.txt")) }, wantRegistered: boolPtr(true)},
+		{name: "whois unavailable", wantRegistered: boolPtr(false)},
+		{name: "whois refuses", registry: func(string) string { return "Number of allowed queries exceeded.\nNOT FOUND\n" }, wantRegistered: boolPtr(false)},
 	}
-	if q := n.queriesTo(whoisRoot); len(q) != 0 {
-		t.Fatalf("WHOIS asked after an RDAP 404: %v", q)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := newFakeNet(t)
+			n.rdap(rdapNotFound)
+			n.whois(whoisRoot, func(string) string { return "whois: " + whoisRegistry + "\n" })
+			if tt.registry != nil {
+				n.whois(whoisRegistry, tt.registry)
+			}
+			info := n.client(rdapDir(), true).Lookup(lookupCtx(t), "example.com")
+			if (info.Registered == nil) != (tt.wantRegistered == nil) || (info.Registered != nil && *info.Registered != *tt.wantRegistered) {
+				t.Fatalf("registered = %v, want %v (%+v)", info.Registered, *tt.wantRegistered, info)
+			}
+			if info.NotFoundConfirmed != tt.wantConfirmed {
+				t.Fatalf("confirmed = %v, want %v", info.NotFoundConfirmed, tt.wantConfirmed)
+			}
+			if info.IsRegistered() && (info.Source != SourceWHOIS || info.RDAPError == "" || info.ExpiresAt == "") {
+				t.Fatalf("whois should win over a stale RDAP 404: %+v", info)
+			}
+		})
 	}
 }
+
+// A 404 that is not an RDAP answer (a web server where RDAP used to be) is
+// a failed lookup, not "not registered".
+func TestLookupPlainHTTP404IsNotAnAnswer(t *testing.T) {
+	n := newFakeNet(t)
+	n.rdap(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+	info := n.client(rdapDir(), true).Lookup(lookupCtx(t), "example.com")
+	if info.Registered != nil || !strings.HasPrefix(info.UnknownReason, "rdap: HTTP 404;") {
+		t.Fatalf("info = %+v", info)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 func TestLookupRDAPRedirects(t *testing.T) {
 	body := fixture(t, "rdap-example-com.json")
@@ -427,7 +470,7 @@ func TestLookupErrorsNameNoAddress(t *testing.T) {
 	n := newFakeNet(t)
 	n.rdap(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTooManyRequests) })
 	info := n.client(rdapDir(), true).Lookup(lookupCtx(t), "example.com")
-	if !strings.HasPrefix(info.UnknownReason, "rdap: rate limited by the registry (HTTP 429); whois: ") {
+	if !strings.HasPrefix(info.UnknownReason, "rdap: throttled: rate limited by the registry (HTTP 429); whois: ") {
 		t.Fatalf("reason = %q", info.UnknownReason)
 	}
 	if strings.Contains(info.UnknownReason, "127.0.0.1") || strings.Contains(info.UnknownReason, fmt.Sprint(n.routes[rdapHost+":443"])) {

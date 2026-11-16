@@ -507,4 +507,12 @@ export interface DomainInfo {
   server?: string;
   rdap_error?: string;
   unknown_reason?: string;
+  /** RDAP and WHOIS both said "not registered". */
+  not_found_confirmed?: boolean;
+  /** The registry is known never to publish an expiry date. */
+  no_expiry_published?: boolean;
+  /** The date has passed but the registry reports a renew grace period. */
+  renewal_grace?: boolean;
+  /** clientHold/serverHold: registered but not delegated, so it does not resolve. */
+  on_hold?: boolean;
 }

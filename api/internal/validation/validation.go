@@ -221,6 +221,15 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if err := ValidateMonitorLocationFields(req.Type, req.LocationIDs, req.LocationQuorum); err != nil {
 		return err
 	}
+	if req.Type == models.MonitorTypeDomain {
+		threshold := 2 // the create default (services/monitors)
+		if req.ConsecutiveFailuresThreshold != nil {
+			threshold = *req.ConsecutiveFailuresThreshold
+		}
+		if err := sharedmodels.ValidateDomainMonitorRules(threshold, len(req.LocationIDs)); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -310,6 +319,21 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 	}
 	if req.LocationIDs != nil || req.LocationQuorum != nil {
 		if err := ValidateMonitorLocationFields(monitorType, locationIDs, req.LocationQuorum); err != nil {
+			return err
+		}
+	}
+	if monitorType == models.MonitorTypeDomain {
+		// The monitor as it will be: a PATCH of the type alone must not
+		// keep another type's threshold of 1 or its several locations.
+		threshold := existingMonitor.ConsecutiveFailuresThreshold
+		if req.ConsecutiveFailuresThreshold != nil {
+			threshold = *req.ConsecutiveFailuresThreshold
+		}
+		locations := len(existingMonitor.LocationIDs)
+		if req.LocationIDs != nil {
+			locations = len(locationIDs)
+		}
+		if err := sharedmodels.ValidateDomainMonitorRules(threshold, locations); err != nil {
 			return err
 		}
 	}

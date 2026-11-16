@@ -5,22 +5,17 @@ import {
   initialDomainFormState,
   validateDomainForm,
 } from './monitor-form/domain';
-import { domainExpiryState, domainFacts } from './domain-expiry';
+import { NO_EXPIRY_PUBLISHED_NOTE, domainExpiryState, domainFacts } from './domain-expiry';
 import { buildClonedMonitorInitialData } from './monitor-clone';
 import { monitorTarget, monitorTargetLabel } from './monitor-utils';
-import { CLONED_SCHEDULE, CLONED_TAIL, STORED_ALERTING, assertWire, cloneSource, storedMonitor } from './monitor-form/testing';
+import { CLONED_SCHEDULE, CLONED_TAIL, DEFAULT_ALERTING, STORED_ALERTING, assertWire, cloneSource, storedMonitor } from './monitor-form/testing';
 import type { DomainInfo } from './types';
 
 // DomainForm's payloads. A domain monitor has no secrets; its defaults are a
-// daily schedule, a 30 s timeout, a 30-day window and down at the first
-// failed check.
+// daily schedule, a 30 s timeout, a 30-day window and the usual "down after
+// 2 failed checks", which is also the floor (one registry answer never pages).
 
-const DOMAIN_DEFAULT_ALERTING = {
-  consecutive_failures_threshold: 1,
-  notification_mode: 'default',
-  dependency_suppression: 'inherit',
-  notification_channels: [],
-} as const;
+const DOMAIN_DEFAULT_ALERTING = DEFAULT_ALERTING;
 
 test('domain: create from defaults', () => {
   const form = { ...initialDomainFormState(), name: 'example.com registration', domain: ' example.com ' };
@@ -119,6 +114,11 @@ test('domain: client-side checks mirror the API', () => {
   assert.ok(errors({ interval_seconds: 1800, timeout_seconds: 30 }).interval_seconds);
   assert.equal(errors({ interval_seconds: 3600, timeout_seconds: 30 }).interval_seconds, undefined);
   assert.ok(errors({ interval_seconds: 3600, timeout_seconds: 3600 }).timeout_seconds);
+  // One registry answer never pages, and one location is enough.
+  assert.ok(errors({ consecutive_failures_threshold: 1 }).consecutive_failures_threshold);
+  assert.equal(errors({ consecutive_failures_threshold: 2 }).consecutive_failures_threshold, undefined);
+  assert.ok(errors({ location_ids: ['a', 'b'] }).location_ids);
+  assert.equal(errors({ location_ids: ['a'] }).location_ids, undefined);
 });
 
 test('domain: list target is the watched name', () => {
@@ -132,7 +132,7 @@ test('domain: snapshot headline and tone', () => {
   assert.deepEqual(domainExpiryState(info({ expires_at: '2027-08-13T04:00:00Z' }), 30, now), { headline: 'expires in 270 days', tone: 'good' });
   assert.deepEqual(domainExpiryState(info({ expires_at: '2026-11-27T12:00:00Z' }), 30, now), { headline: 'expires in 12 days', tone: 'warn' });
   assert.deepEqual(domainExpiryState(info({ expires_at: '2026-11-12T12:00:00Z' }), 30, now), { headline: 'expired 3 days ago', tone: 'bad' });
-  assert.deepEqual(domainExpiryState(info({ registered: false }), 30, now), { headline: 'not registered', tone: 'bad' });
+  assert.deepEqual(domainExpiryState(info({ registered: false, not_found_confirmed: true }), 30, now), { headline: 'not registered', tone: 'bad' });
   assert.deepEqual(domainExpiryState(info({ unknown_reason: 'the registry publishes no expiration date' }), 30, now), {
     headline: 'expiry unknown',
     tone: 'warn',
@@ -144,4 +144,20 @@ test('domain: snapshot headline and tone', () => {
     ['Expires', 'Registrar', 'Source']
   );
   assert.equal(facts[2].value, 'RDAP · https://rdap.example');
+});
+
+test('domain: no-date registries, grace, unconfirmed "not registered" and holds read plainly', () => {
+  const now = new Date('2026-11-15T12:00:00Z');
+  const info = (extra: Partial<DomainInfo>): DomainInfo => ({ domain: 'example.com', registered: true, source: 'rdap', ...extra });
+  const de = domainExpiryState(info({ domain: 'example.de', no_expiry_published: true, unknown_reason: 'x' }), 30, now);
+  assert.equal(de.headline, 'no expiry date published');
+  assert.equal(de.tone, 'none');
+  assert.equal(de.reason, NO_EXPIRY_PUBLISHED_NOTE);
+  assert.match(NO_EXPIRY_PUBLISHED_NOTE, /can only detect that the domain stops being registered/);
+  assert.equal(domainExpiryState(info({ expires_at: '2026-11-12T12:00:00Z', renewal_grace: true }), 30, now).headline, 'in renew grace period');
+  assert.equal(domainExpiryState(info({ registered: false }), 30, now).headline, 'reported as not registered');
+  assert.equal(domainExpiryState(info({ registered: false, not_found_confirmed: true }), 30, now).headline, 'not registered');
+  const hold = domainFacts(info({ on_hold: true }));
+  assert.equal(hold[0].label, 'Hold');
+  assert.equal(hold[0].warning, true);
 });

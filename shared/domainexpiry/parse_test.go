@@ -1,6 +1,7 @@
 package domainexpiry
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,5 +238,64 @@ func TestWHOISReferral(t *testing.T) {
 		if got := whoisReferral(text, "whois", "refer", "registrar whois server"); got != want {
 			t.Errorf("whoisReferral(%q) = %q, want %q", strings.TrimSpace(text), got, want)
 		}
+	}
+}
+
+// Rate-limit and block replies often also say "not found": they must read
+// as a refusal (unknown expiry), never as "not registered".
+func TestParseWHOISRefusalPhrasings(t *testing.T) {
+	for _, text := range []string{
+		"Number of allowed queries exceeded.\nNOT FOUND",
+		"Please try later.\nDomain not found.",
+		"%% Maximum query rate reached\n%% not found",
+		"Your IP has been blocked. No match for EXAMPLE.COM",
+		"Access denied\nno entries found",
+		"WHOIS LIMIT EXCEEDED - SEE WWW.EXAMPLE/WHOIS FOR DETAILS",
+		"Too many requests, try again in 60 seconds",
+	} {
+		_, err := parseWHOIS(text, "example.com", parseNow)
+		if !errors.Is(err, errWHOISRefused) {
+			t.Errorf("parseWHOIS(%q) = %v, want a refusal", text, err)
+		}
+	}
+}
+
+func TestParseRDAPDateWithoutZoneIsUTC(t *testing.T) {
+	for in, want := range map[string]string{
+		"2027-08-13T04:00:00":       "2027-08-13T04:00:00Z",
+		"2027-08-13T04:00:00.123":   "2027-08-13T04:00:00Z",
+		"2027-08-13":                "2027-08-13T00:00:00Z",
+		"2027-08-13T04:00:00+02:00": "2027-08-13T02:00:00Z",
+	} {
+		info, err := parseRDAPDomain([]byte(`{"objectClassName":"domain","events":[{"eventAction":"expiration","eventDate":"`+in+`"}]}`), "example.com", parseNow)
+		if err != nil || info.ExpiresAt != want {
+			t.Errorf("%s: expires_at = %q, %v; want %q", in, info.ExpiresAt, err, want)
+		}
+	}
+}
+
+func TestAnnotateStatuses(t *testing.T) {
+	yes := true
+	past := &Info{Domain: "example.com", Registered: &yes, ExpiresAt: "2026-11-10T00:00:00Z", Statuses: []string{"auto renew period", "client hold"}}
+	past.annotate(parseNow)
+	if !past.RenewalGrace || !past.OnHold {
+		t.Fatalf("grace %v hold %v", past.RenewalGrace, past.OnHold)
+	}
+	// Grace only matters once the date has passed.
+	future := &Info{Domain: "example.com", Registered: &yes, ExpiresAt: "2027-11-10T00:00:00Z", Statuses: []string{"renewPeriod", "serverHold"}}
+	future.annotate(parseNow)
+	if future.RenewalGrace || !future.OnHold {
+		t.Fatalf("grace %v hold %v", future.RenewalGrace, future.OnHold)
+	}
+	// A registry known to publish no date says so plainly.
+	de := &Info{Domain: "example.de", Registered: &yes, Source: SourceWHOIS, UnknownReason: noDateReason}
+	de.annotate(parseNow)
+	if !de.NoExpiryPublished || !strings.HasPrefix(de.UnknownReason, "the .de registry does not publish an expiry date") {
+		t.Fatalf("de: %+v", de)
+	}
+	other := &Info{Domain: "example.fr", Registered: &yes, UnknownReason: noDateReason}
+	other.annotate(parseNow)
+	if other.NoExpiryPublished || other.UnknownReason != noDateReason {
+		t.Fatalf("fr: %+v", other)
 	}
 }
