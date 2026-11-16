@@ -25,6 +25,13 @@ type AlertChannel struct {
 	IsActive  bool             `json:"is_active"`
 	CreatedAt time.Time        `json:"created_at"`
 	UpdatedAt time.Time        `json:"updated_at"`
+	// From the notification delivery history (deliverylog.ChannelHealth):
+	// the latest delivered and failed attempts, test sends included, and
+	// whether the channel is failing (a failure in the last 24 hours with no
+	// success since). Set on reads and updates.
+	LastDeliveredAt *time.Time `json:"last_delivered_at"`
+	LastFailedAt    *time.Time `json:"last_failed_at"`
+	Failing         bool       `json:"failing"`
 }
 
 // CreateAlertChannelRequest represents a request to create an alert channel

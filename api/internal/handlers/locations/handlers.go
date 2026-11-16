@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -159,6 +160,10 @@ func (h *Handlers) DeleteLocation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, locationservice.ErrNotFound) {
 			apierrors.WriteNotFoundError(w, "location not found")
+			return
+		}
+		if dbtx.IsConflict(err) {
+			apierrors.WriteError(w, http.StatusServiceUnavailable, "conflict", dbtx.ErrConflict.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "location_id": id}).Error("Failed to delete location")

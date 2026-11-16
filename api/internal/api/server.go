@@ -312,6 +312,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			monitorService := monitorservice.NewService(monitorservice.NewPostgresRepository(dbClient))
 			monitorService.ConfigureHistoryDependencies(groupSvc, monitorStatusNotifier{publisher: statusPublisher})
 			monitorService.ConfigureEncryption(secretsEncryptor)
+			monitorService.ConfigureVersionLog(log)
 			resultSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
 			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)
@@ -378,9 +379,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			mountRetiredAlertPolicyRoutes(r)
 
 			// Alert channels
-			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor)
+			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor).WithLogger(log)
 			alertChannelHandlers := alertchannelhandlers.NewHandlers(alertChannelService, log)
 			mountAlertChannelRoutes(r, alertChannelHandlers)
+			mountDeliveryRoutes(r, dbClient, log) // notification delivery history (routes_deliveries.go)
 
 			// Notification settings (workspace default routing, reminders, auto-incident)
 			notificationSettingsSvc := notificationsettingsservice.NewService(dbClient)

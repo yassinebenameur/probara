@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import { AlertChannel, CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
 import { getAlertChannel, updateAlertChannel } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
+import ChannelDeliveries from '@/components/alert-channels/ChannelDeliveries';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
@@ -16,6 +17,7 @@ import useDocumentTitle from '@/lib/useDocumentTitle';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 import { errorMessage } from '@/lib/errors';
 import { useAsyncData } from '@/lib/useAsyncData';
+import { CHANNEL_FAILING_HINT } from '@/lib/deliveries';
 
 export default function EditAlertChannelPage() {
   const router = useRouter();
@@ -101,12 +103,33 @@ export default function EditAlertChannelPage() {
             </div>
             <div>
               <dt className="text-xs text-slate-500">Status</dt>
-              <dd className="mt-1">
+              <dd className="mt-1 flex flex-wrap items-center gap-1.5">
                 <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
                   {channel.is_active ? 'Active' : 'Inactive'}
                 </Pill>
+                {channel.failing && (
+                  <span title={CHANNEL_FAILING_HINT}>
+                    <Pill tone="danger" size="xs" dot>
+                      Failing
+                    </Pill>
+                  </span>
+                )}
               </dd>
             </div>
+            <div>
+              <dt className="text-xs text-slate-500">Last delivered</dt>
+              <dd className="mt-0.5 text-ui text-slate-300" title={formatDateTimeFull(channel.last_delivered_at ?? undefined)}>
+                {formatDateTime(channel.last_delivered_at ?? undefined, 'Never')}
+              </dd>
+            </div>
+            {channel.last_failed_at && (
+              <div>
+                <dt className="text-xs text-slate-500">Last failed</dt>
+                <dd className="mt-0.5 text-ui text-slate-300" title={formatDateTimeFull(channel.last_failed_at)}>
+                  {formatDateTime(channel.last_failed_at)}
+                </dd>
+              </div>
+            )}
             <div>
               <dt className="text-xs text-slate-500">Created</dt>
               <dd className="mt-0.5 text-ui text-slate-300" title={formatDateTimeFull(channel.created_at)}>
@@ -122,6 +145,8 @@ export default function EditAlertChannelPage() {
           </dl>
         </Panel>
       </div>
+
+      <ChannelDeliveries channelId={channel.id} />
     </Page>
   );
 }

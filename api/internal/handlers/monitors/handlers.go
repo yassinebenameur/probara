@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -120,7 +121,76 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	monitor, err := h.service.CreateMonitor(r.Context(), tenantUUID, &req)
+	// One save, in one transaction: the monitor, its members and
+	// dependencies, and its first version, recorded once they are synced.
+	var monitor *models.Monitor
+	_, err := h.inSave(r.Context(), func(ctx context.Context) error {
+		// The targets of the new monitor's member and dependency edges are
+		// locked before the first write (lock order, api/internal/dbtx).
+		var targets []string
+		if req.Type == models.MonitorTypeGroup {
+			targets = groupMemberIDs(req.Config)
+		} else {
+			targets = req.DependsOnIDs
+		}
+		if err := h.lockForSave(ctx, tenantUUID, nil, targets); err != nil {
+			return err
+		}
+		var err error
+		if monitor, err = h.service.CreateMonitor(ctx, tenantUUID, &req); err != nil {
+			return err
+		}
+
+		// If this is a group monitor, add its members to the junction table
+		if req.Type == models.MonitorTypeGroup {
+			var groupConfig models.GroupConfig
+			if err := json.Unmarshal(req.Config, &groupConfig); err == nil && len(groupConfig.MonitorIDs) > 0 {
+				// Convert string IDs to UUIDs
+				monitorIDs := make([]uuid.UUID, 0, len(groupConfig.MonitorIDs))
+				for _, idStr := range groupConfig.MonitorIDs {
+					if monitorID, err := uuid.Parse(idStr); err == nil {
+						monitorIDs = append(monitorIDs, monitorID)
+					} else {
+						h.logger.WithFields(map[string]interface{}{
+							"error":      err.Error(),
+							"monitor_id": idStr,
+							"tenant_id":  tenantID,
+							"group_id":   monitor.ID,
+						}).Warn("Invalid monitor ID in group config")
+					}
+				}
+
+				if len(monitorIDs) > 0 {
+					err = h.groupService.AddMonitorsToGroup(ctx, tenantUUID, monitor.ID, monitorIDs)
+					if err != nil {
+						// Log the error but don't fail the creation - the group exists, just without members
+						h.logger.WithFields(map[string]interface{}{
+							"error":      err.Error(),
+							"tenant_id":  tenantID,
+							"monitor_id": monitor.ID,
+						}).Warn("Failed to add monitors to newly created group")
+					}
+				}
+			}
+		}
+
+		// Sync dependencies (best-effort, like group members: a brand-new monitor
+		// cannot create a cycle, so failures here are only bad target IDs).
+		if len(req.DependsOnIDs) > 0 && req.Type != models.MonitorTypeGroup {
+			if err := h.syncDependencies(ctx, tenantUUID, monitor.ID, req.DependsOnIDs); err != nil {
+				h.logger.WithFields(map[string]interface{}{
+					"error":      err.Error(),
+					"tenant_id":  tenantID,
+					"monitor_id": monitor.ID,
+				}).Warn("Failed to set dependencies on newly created monitor")
+			} else {
+				monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(ctx, monitor.ID)
+			}
+		}
+
+		h.recordVersion(ctx, tenantUUID, monitor.ID)
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
 			apierrors.WriteForbiddenError(w, err.Error())
@@ -130,59 +200,16 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
 		}).Error("Failed to create monitor")
 		apierrors.WriteInternalError(w, "failed to create monitor")
 		return
-	}
-
-	// If this is a group monitor, add its members to the junction table
-	if req.Type == models.MonitorTypeGroup {
-		var groupConfig models.GroupConfig
-		if err := json.Unmarshal(req.Config, &groupConfig); err == nil && len(groupConfig.MonitorIDs) > 0 {
-			// Convert string IDs to UUIDs
-			monitorIDs := make([]uuid.UUID, 0, len(groupConfig.MonitorIDs))
-			for _, idStr := range groupConfig.MonitorIDs {
-				if monitorID, err := uuid.Parse(idStr); err == nil {
-					monitorIDs = append(monitorIDs, monitorID)
-				} else {
-					h.logger.WithFields(map[string]interface{}{
-						"error":      err.Error(),
-						"monitor_id": idStr,
-						"tenant_id":  tenantID,
-						"group_id":   monitor.ID,
-					}).Warn("Invalid monitor ID in group config")
-				}
-			}
-
-			if len(monitorIDs) > 0 {
-				err = h.groupService.AddMonitorsToGroup(r.Context(), tenantUUID, monitor.ID, monitorIDs)
-				if err != nil {
-					// Log the error but don't fail the creation - the group exists, just without members
-					h.logger.WithFields(map[string]interface{}{
-						"error":      err.Error(),
-						"tenant_id":  tenantID,
-						"monitor_id": monitor.ID,
-					}).Warn("Failed to add monitors to newly created group")
-				}
-			}
-		}
-	}
-
-	// Sync dependencies (best-effort, like group members: a brand-new monitor
-	// cannot create a cycle, so failures here are only bad target IDs).
-	if len(req.DependsOnIDs) > 0 && req.Type != models.MonitorTypeGroup {
-		if err := h.syncDependencies(r.Context(), tenantUUID, monitor.ID, req.DependsOnIDs); err != nil {
-			h.logger.WithFields(map[string]interface{}{
-				"error":      err.Error(),
-				"tenant_id":  tenantID,
-				"monitor_id": monitor.ID,
-			}).Warn("Failed to set dependencies on newly created monitor")
-		} else {
-			monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitor.ID)
-		}
 	}
 
 	h.logger.WithFields(map[string]interface{}{
@@ -326,8 +353,70 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	monitor, err := h.service.UpdateMonitor(r.Context(), tenantUUID, monitorID, &req)
+	// One save, in one transaction: the update, the member and dependency
+	// syncs and the version, recorded once they are done. A dependency the
+	// payload cannot have (a cycle) rolls the whole update back.
+	var monitor *models.Monitor
+	var dependencyErr error
+	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		// Row locks before the first write, in lock order: this monitor,
+		// and the targets of the member and dependency edges it may add.
+		var targets []string
+		if existingMonitor.Type == models.MonitorTypeGroup {
+			targets = groupMemberIDs(req.Config)
+		} else if req.DependsOnIDs != nil {
+			targets = *req.DependsOnIDs
+		}
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{monitorID}, targets); err != nil {
+			return err
+		}
+		if !monitorservice.OnlyPause(&req) {
+			h.captureBaseline(ctx, tenantUUID, monitorID)
+		}
+		var err error
+		if monitor, err = h.service.UpdateMonitor(ctx, tenantUUID, monitorID, &req); err != nil {
+			return err
+		}
+
+		// If this is a group monitor, sync the junction table with the new
+		// member list. A member that cannot be added fails the whole save,
+		// so the config never names members monitor_groups lacks.
+		if existingMonitor.Type == models.MonitorTypeGroup && req.Config != nil {
+			if err := h.syncGroupMembersFromConfig(ctx, tenantUUID, monitorID, req.Config); err != nil {
+				return err
+			}
+		}
+
+		// Sync dependencies when the payload carries them (nil = unchanged).
+		// Cycles are user-fixable, so they surface as 409 instead of a warn log.
+		if req.DependsOnIDs != nil && existingMonitor.Type != models.MonitorTypeGroup {
+			if err := h.syncDependencies(ctx, tenantUUID, monitorID, *req.DependsOnIDs); err != nil {
+				dependencyErr = err
+				return err
+			}
+			monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(ctx, monitorID)
+		}
+
+		// Pausing or resuming is not configuration and records nothing.
+		if !monitorservice.OnlyPause(&req) {
+			h.recordVersion(ctx, tenantUUID, monitorID)
+		}
+		return nil
+	})
 	if err != nil {
+		var members *groupMembersError
+		if errors.As(err, &members) {
+			apierrors.WriteValidationError(w, members.Error()+"; nothing was saved")
+			return
+		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
+			return
+		}
+		if dependencyErr != nil {
+			h.writeDependencyError(w, tenantUUID, monitorID, dependencyErr)
+			return
+		}
 		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
 			apierrors.WriteForbiddenError(w, err.Error())
 			return
@@ -351,84 +440,6 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		}).Error("Failed to update monitor")
 		apierrors.WriteInternalError(w, "failed to update monitor")
 		return
-	}
-
-	// If this is a group monitor, sync the junction table with the new member list
-	if existingMonitor.Type == models.MonitorTypeGroup && req.Config != nil {
-		var groupConfig models.GroupConfig
-		if err := json.Unmarshal(req.Config, &groupConfig); err == nil {
-			// Convert string IDs to UUIDs
-			newMonitorIDs := make([]uuid.UUID, 0, len(groupConfig.MonitorIDs))
-			for _, idStr := range groupConfig.MonitorIDs {
-				if monitorID, err := uuid.Parse(idStr); err == nil {
-					newMonitorIDs = append(newMonitorIDs, monitorID)
-				}
-			}
-
-			// Get current members
-			currentMembers, err := h.groupService.GetGroupMembers(r.Context(), tenantUUID, monitorID)
-			if err == nil {
-				// Build map of current member IDs
-				currentIDs := make(map[uuid.UUID]bool)
-				for _, member := range currentMembers {
-					currentIDs[member.ID] = true
-				}
-
-				// Build map of new member IDs
-				newIDs := make(map[uuid.UUID]bool)
-				for _, id := range newMonitorIDs {
-					newIDs[id] = true
-				}
-
-				// Find IDs to add (in new but not in current)
-				var toAdd []uuid.UUID
-				for _, id := range newMonitorIDs {
-					if !currentIDs[id] {
-						toAdd = append(toAdd, id)
-					}
-				}
-
-				// Find IDs to remove (in current but not in new)
-				var toRemove []uuid.UUID
-				for _, member := range currentMembers {
-					if !newIDs[member.ID] {
-						toRemove = append(toRemove, member.ID)
-					}
-				}
-
-				// Add new members
-				if len(toAdd) > 0 {
-					if err := h.groupService.AddMonitorsToGroup(r.Context(), tenantUUID, monitorID, toAdd); err != nil {
-						h.logger.WithFields(map[string]interface{}{
-							"error":      err.Error(),
-							"tenant_id":  tenantID,
-							"monitor_id": monitorID,
-						}).Warn("Failed to add monitors to group during update")
-					}
-				}
-
-				// Remove old members
-				if len(toRemove) > 0 {
-					if err := h.groupService.RemoveMonitorsFromGroup(r.Context(), tenantUUID, monitorID, toRemove); err != nil {
-						h.logger.WithFields(map[string]interface{}{
-							"error":      err.Error(),
-							"tenant_id":  tenantID,
-							"monitor_id": monitorID,
-						}).Warn("Failed to remove monitors from group during update")
-					}
-				}
-			}
-		}
-	}
-
-	// Sync dependencies when the payload carries them (nil = unchanged).
-	// Cycles are user-fixable, so they surface as 409 instead of a warn log.
-	if req.DependsOnIDs != nil && existingMonitor.Type != models.MonitorTypeGroup {
-		if err := h.syncDependencies(r.Context(), tenantUUID, monitorID, *req.DependsOnIDs); err != nil {
-			h.writeDependencyError(w, tenantUUID, monitorID, err)
-			return
-		}
-		monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitorID)
 	}
 
 	h.logger.WithFields(map[string]interface{}{
@@ -459,6 +470,10 @@ func (h *Handlers) DeleteMonitor(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrMonitorNotFound) {
 			apierrors.WriteNotFoundError(w, "monitor not found")
+			return
+		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -511,6 +526,10 @@ func (h *Handlers) BulkDeleteMonitors(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrMonitorsNotInTenant) {
 			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		if dbtx.IsConflict(err) {
+			writeConflict(w)
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
