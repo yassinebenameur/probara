@@ -2,128 +2,125 @@ package monitors
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// RestoreRequest turns a version's snapshot into the update that re-applies
-// it to a monitor whose live configuration is current. Only fields that
-// differ are sent, so a restore writes (and resets) nothing it does not
-// change; ok is false when the monitor already matches.
-//
-// The config goes in masked, so the write-only secret merge keeps every
-// secret the monitor holds now: "***" keeps a stored value and an absent
-// field keeps it too. A restore therefore never brings a secret back and
-// never removes one. Secret map keys added since the version are submitted
-// as "***" as well (keepCurrentSecretKeys), because a submitted secret map
-// is edited per key and would otherwise lose them. Group members travel as
-// config.monitor_ids, which the handler syncs into monitor_groups like any
-// group update.
-func RestoreRequest(snapshot models.MonitorConfigSnapshot, current *models.MonitorConfigSnapshot) (req *models.UpdateMonitorRequest, ok bool, err error) {
-	req = &models.UpdateMonitorRequest{}
-	if snapshot.Name != current.Name {
-		name := snapshot.Name
-		req.Name = &name
-		ok = true
+// RestorePlan is the update that re-applies a version, and what it cannot
+// bring back.
+type RestorePlan struct {
+	Request *models.UpdateMonitorRequest
+	// Changed is false when the monitor already matches the version.
+	Changed bool
+	// SecretsToReenter are secrets the version had set that the monitor no
+	// longer holds ("password", "secret_variables.token",
+	// "headers.X-Api-Key"); they stay empty after the restore.
+	SecretsToReenter []string
+}
+
+// PlanRestore builds the restore of a version onto the monitor, whose live
+// configuration is current. See planRestore.
+func (s *Service) PlanRestore(ctx context.Context, tenantID, monitorID uuid.UUID, version models.MonitorConfigSnapshot, current *models.MonitorConfigSnapshot) (*RestorePlan, error) {
+	stored, err := s.repo.GetByID(ctx, tenantID, monitorID)
+	if err != nil {
+		return nil, err
 	}
-	if snapshot.Type != current.Type {
-		typ := snapshot.Type
+	return planRestore(version, current, stored.Config)
+}
+
+// planRestore turns a version's snapshot into the update that re-applies it.
+// Only settings that differ from current are sent, so a restore writes (and
+// resets) nothing it does not change.
+//
+// No secret value coming from a version is ever written: versions hold none
+// by construction (MaskStoredMonitorConfig), and restoreConfig enforces it
+// again, so a restore keeps every secret the monitor holds now and never
+// brings one back or removes one. Group members travel as config.monitor_ids,
+// which the handler syncs into monitor_groups like any group update.
+// stored is the live monitor's stored config, read server-side only.
+func planRestore(version models.MonitorConfigSnapshot, current *models.MonitorConfigSnapshot, stored json.RawMessage) (*RestorePlan, error) {
+	plan := &RestorePlan{Request: &models.UpdateMonitorRequest{}, SecretsToReenter: []string{}}
+	req := plan.Request
+	for _, c := range snapshotColumns {
+		if c.restore(&version, current, req) {
+			plan.Changed = true
+		}
+	}
+	if version.Type != current.Type {
+		typ := version.Type
 		req.Type = &typ
-		ok = true
+		plan.Changed = true
 	}
 
-	isGroup := snapshot.Type == models.MonitorTypeGroup
-	configDiffers := !bytes.Equal(snapshot.Config, current.Config) || snapshot.Type != current.Type
-	membersDiffer := isGroup && !reflect.DeepEqual(snapshot.MemberIDs, current.MemberIDs)
+	isGroup := version.Type == models.MonitorTypeGroup
+	configDiffers := !bytes.Equal(version.Config, current.Config) || version.Type != current.Type
+	membersDiffer := isGroup && !reflect.DeepEqual(version.MemberIDs, current.MemberIDs)
 	if configDiffers || membersDiffer {
-		config := snapshot.Config
-		if snapshot.Type == current.Type {
-			if config, err = keepCurrentSecretKeys(string(current.Type), config, current.Config); err != nil {
-				return nil, false, err
-			}
+		config, reenter, err := restoreConfig(string(version.Type), version.Config, stored, version.Type == current.Type)
+		if err != nil {
+			return nil, err
 		}
 		if isGroup {
-			if config, err = withGroupMembers(config, snapshot.MemberIDs); err != nil {
-				return nil, false, err
+			if config, err = withGroupMembers(config, version.MemberIDs); err != nil {
+				return nil, err
 			}
 		}
 		req.Config = config
-		ok = true
+		plan.SecretsToReenter = reenter
+		plan.Changed = true
 	}
 
-	if snapshot.IntervalSeconds != current.IntervalSeconds {
-		interval := snapshot.IntervalSeconds
-		req.IntervalSeconds = &interval
-		ok = true
-	}
-	if snapshot.TimeoutSeconds != current.TimeoutSeconds {
-		timeout := snapshot.TimeoutSeconds
-		req.TimeoutSeconds = &timeout
-		ok = true
-	}
-	if !reflect.DeepEqual(snapshot.Tags, current.Tags) {
-		tags := append([]string{}, snapshot.Tags...)
+	if !reflect.DeepEqual(version.Tags, current.Tags) {
+		tags := append([]string{}, version.Tags...)
 		req.Tags = &tags
-		ok = true
+		plan.Changed = true
 	}
-	if snapshot.ConsecutiveFailuresThreshold != current.ConsecutiveFailuresThreshold {
-		threshold := snapshot.ConsecutiveFailuresThreshold
-		req.ConsecutiveFailuresThreshold = &threshold
-		ok = true
-	}
-	modeDiffers := snapshot.NotificationMode != current.NotificationMode
+	modeDiffers := version.NotificationMode != current.NotificationMode
 	if modeDiffers {
-		mode := snapshot.NotificationMode
+		mode := version.NotificationMode
 		req.NotificationMode = &mode
-		ok = true
+		plan.Changed = true
 	}
-	if snapshot.NotificationMode == "custom" &&
-		(modeDiffers || !reflect.DeepEqual(snapshot.NotificationChannels, current.NotificationChannels)) {
+	if version.NotificationMode == "custom" &&
+		(modeDiffers || !reflect.DeepEqual(version.NotificationChannels, current.NotificationChannels)) {
 		// Non-nil even when empty: the update replaces the route set.
-		req.NotificationChannels = make([]models.MonitorChannelAssignment, 0, len(snapshot.NotificationChannels))
-		for _, channel := range snapshot.NotificationChannels {
+		req.NotificationChannels = make([]models.MonitorChannelAssignment, 0, len(version.NotificationChannels))
+		for _, channel := range version.NotificationChannels {
 			req.NotificationChannels = append(req.NotificationChannels, models.MonitorChannelAssignment{
 				ChannelID:    channel.ChannelID,
 				DelaySeconds: channel.DelaySeconds,
 			})
 		}
-		ok = true
-	}
-	if snapshot.MemberAlertRollup != current.MemberAlertRollup {
-		rollup := snapshot.MemberAlertRollup
-		req.MemberAlertRollup = &rollup
-		ok = true
-	}
-	if snapshot.DependencySuppression != current.DependencySuppression {
-		suppression := snapshot.DependencySuppression
-		req.DependencySuppression = &suppression
-		ok = true
+		plan.Changed = true
 	}
 	// The location set and its quorum go together: a new set re-clamps the
 	// quorum, so it is always sent with one.
-	if !reflect.DeepEqual(snapshot.LocationIDs, current.LocationIDs) {
-		locations := append([]string{}, snapshot.LocationIDs...)
+	if !reflect.DeepEqual(version.LocationIDs, current.LocationIDs) {
+		locations := append([]string{}, version.LocationIDs...)
 		req.LocationIDs = &locations
-		quorum := snapshot.LocationQuorum
+		quorum := version.LocationQuorum
 		req.LocationQuorum = &quorum
-		ok = true
-	} else if snapshot.LocationQuorum != current.LocationQuorum {
-		quorum := snapshot.LocationQuorum
+		plan.Changed = true
+	} else if version.LocationQuorum != current.LocationQuorum {
+		quorum := version.LocationQuorum
 		req.LocationQuorum = &quorum
-		ok = true
+		plan.Changed = true
 	}
-	if !isGroup && !reflect.DeepEqual(snapshot.DependsOnIDs, current.DependsOnIDs) {
-		deps := append([]string{}, snapshot.DependsOnIDs...)
+	if !isGroup && !reflect.DeepEqual(version.DependsOnIDs, current.DependsOnIDs) {
+		deps := append([]string{}, version.DependsOnIDs...)
 		req.DependsOnIDs = &deps
-		ok = true
+		plan.Changed = true
 	}
-	return req, ok, nil
+	return plan, nil
 }
 
 // withGroupMembers sets config.monitor_ids to the snapshot's members: the
@@ -141,43 +138,115 @@ func withGroupMembers(config json.RawMessage, memberIDs []string) (json.RawMessa
 	return json.Marshal(fields)
 }
 
-// keepCurrentSecretKeys adds to each secret map field the version's config
-// carries (secrets.MonitorSecretMapFields) the keys the live config holds and
-// the version lacks, valued "***", so the merge keeps them. A map field
-// absent from the version needs nothing: an absent map is kept whole.
-func keepCurrentSecretKeys(monitorType string, config, currentConfig json.RawMessage) (json.RawMessage, error) {
-	mapFields := secrets.MonitorSecretMapFields[monitorType]
-	if len(mapFields) == 0 || len(currentConfig) == 0 {
-		return config, nil
-	}
-	current := decodeConfigMap(currentConfig)
-	value, err := decodeJSONValue(config)
+// plainSecretTwin is the secret map a top-level plain credential map moves
+// into on a save (secrets.NormalizeSensitiveHeaders).
+var plainSecretTwin = map[string]string{"headers": "secret_headers", "metadata": "secret_metadata", "variables": "secret_variables"}
+
+// restoreConfig prepares a version's config so the save path keeps every
+// secret stored now and writes no secret value from the version, whatever
+// the version holds (all through the secret registry and the credential
+// name rules, no per-type code):
+//
+//   - a registry secret field in the version is sent as "***": the stored
+//     value is kept, and nothing is written when none is stored ("" would
+//     clear it, a literal would replace it);
+//   - every value of a registry secret map is sent as "***", and when the
+//     type is unchanged the keys stored now that the version lacks are added
+//     as "***", because a submitted secret map is edited per key;
+//   - a plain credential entry (a credential-named header, metadata key or
+//     variable) takes the value stored now under the same name, or is left
+//     out: moving it on save would replace a stored secret;
+//   - a miscased spelling of a secret key is dropped.
+//
+// It also returns the secrets the version had that the monitor no longer
+// holds, which the restore leaves empty.
+func restoreConfig(monitorType string, versionConfig, stored json.RawMessage, sameType bool) (json.RawMessage, []string, error) {
+	value, err := decodeJSONValue(versionConfig)
 	if err != nil {
-		return nil, fmt.Errorf("decode version config: %w", err)
+		return nil, nil, fmt.Errorf("decode version config: %w", err)
 	}
-	fields, _ := value.(map[string]any)
-	if fields == nil {
-		return config, nil
+	cfg, _ := value.(map[string]any)
+	if cfg == nil {
+		return versionConfig, []string{}, nil
 	}
-	changed := false
-	for _, field := range mapFields {
-		restored, ok := fields[field].(map[string]any)
-		if !ok {
-			continue
-		}
-		live, _ := current[field].(map[string]any)
-		for key := range live {
-			// The merge matches keys case-insensitively (header names).
-			if _, found := lookupKeyFold(restored, key); !found {
-				restored[key] = secrets.MaskedSecret
-				changed = true
+	storedCfg := decodeConfigMap(stored)
+	reenter := map[string]struct{}{}
+	set := func(v any) bool { return v != nil && v != "" }
+
+	fields := secrets.MonitorSecretFields[monitorType]
+	mapFields := secrets.MonitorSecretMapFields[monitorType]
+	for key := range cfg {
+		for _, field := range append(append([]string{}, fields...), mapFields...) {
+			if key != field && strings.EqualFold(key, field) {
+				delete(cfg, key)
 			}
 		}
 	}
-	if !changed {
-		return config, nil
+	for _, field := range fields {
+		v, present := cfg[field]
+		if !present {
+			continue
+		}
+		if set(v) && !set(storedCfg[field]) {
+			reenter[field] = struct{}{}
+		}
+		cfg[field] = secrets.MaskedSecret
 	}
-	return json.Marshal(fields)
+	for _, field := range mapFields {
+		v, present := cfg[field]
+		if !present {
+			continue
+		}
+		entries, ok := v.(map[string]any)
+		if !ok {
+			delete(cfg, field)
+			continue
+		}
+		live, _ := storedCfg[field].(map[string]any)
+		for key, entry := range entries {
+			if storedEntry, found := lookupKeyFold(live, key); set(entry) && (!found || !set(storedEntry)) {
+				reenter[field+"."+key] = struct{}{}
+			}
+			entries[key] = secrets.MaskedSecret
+		}
+		if sameType {
+			for key := range live {
+				if _, found := lookupKeyFold(entries, key); !found {
+					entries[key] = secrets.MaskedSecret
+				}
+			}
+		}
+	}
+
+	storedPlain := map[string]any{}
+	secrets.WalkPlainCredentials(monitorType, storedCfg, func(where string, entries map[string]any, name string) {
+		storedPlain[strings.ToLower(where+"\x00"+name)] = entries[name]
+	})
+	secrets.WalkPlainCredentials(monitorType, cfg, func(where string, entries map[string]any, name string) {
+		if live, found := storedPlain[strings.ToLower(where+"\x00"+name)]; found {
+			entries[name] = live
+			return
+		}
+		delete(entries, name)
+		if twin, ok := plainSecretTwin[strings.ToLower(where)]; ok {
+			twinEntries, _ := storedCfg[twin].(map[string]any)
+			if storedEntry, found := lookupKeyFold(twinEntries, name); found && set(storedEntry) {
+				return
+			}
+		}
+		reenter[where+"."+name] = struct{}{}
+	})
+
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	list := make([]string, 0, len(reenter))
+	for path := range reenter {
+		list = append(list, path)
+	}
+	sort.Strings(list)
+	return out, list, nil
 }
 
 func lookupKeyFold(values map[string]any, key string) (any, bool) {
@@ -190,37 +259,4 @@ func lookupKeyFold(values map[string]any, key string) (any, bool) {
 		}
 	}
 	return nil, false
-}
-
-// SecretsToReenter names the secret fields a version had set that the live
-// monitor no longer holds ("password", "secret_variables.token"): the merge
-// drops a kept "***" with nothing stored behind it, so after a restore they
-// are empty until entered again. Both configs are masked or stored; only the
-// presence of a value is read.
-func SecretsToReenter(snapshot models.MonitorConfigSnapshot, currentConfig json.RawMessage) []string {
-	version := decodeConfigMap(snapshot.Config)
-	current := decodeConfigMap(currentConfig)
-	out := []string{}
-	for _, field := range secrets.MonitorSecretFields[string(snapshot.Type)] {
-		if value, _ := version[field].(string); value != secrets.MaskedSecret {
-			continue
-		}
-		if value, _ := current[field].(string); value == "" {
-			out = append(out, field)
-		}
-	}
-	for _, field := range secrets.MonitorSecretMapFields[string(snapshot.Type)] {
-		restored, _ := version[field].(map[string]any)
-		live, _ := current[field].(map[string]any)
-		for key, value := range restored {
-			if value != secrets.MaskedSecret {
-				continue
-			}
-			if liveValue, found := lookupKeyFold(live, key); !found || liveValue == "" {
-				out = append(out, field+"."+key)
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
 }

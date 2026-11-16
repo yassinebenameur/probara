@@ -39,6 +39,12 @@ const (
 	VersionSourceImport    = "import"
 	VersionSourceDiscovery = "discovery"
 	VersionSourceRestore   = "restore"
+	// VersionSourceBaseline is the configuration a monitor had before its
+	// first recorded save (recordVersionTx).
+	VersionSourceBaseline = "baseline"
+	// VersionSourceSystem is a change made outside a save: a deleted
+	// location, channel or member monitor (RecordSystemVersionsTx).
+	VersionSourceSystem = "system"
 )
 
 // Version actor types.
@@ -175,6 +181,10 @@ func (b *VersionBatch) add(svc *Service, tenantID, monitorID uuid.UUID, secretCh
 // Flush records a version for every monitor saved since DeferVersions (or
 // the previous Flush) and returns the version recorded per monitor (absent
 // when the save changed nothing). Safe on a nil batch and when called twice.
+// Callers flush inside the save's transaction, so the versions commit with
+// it; recording ignores ctx cancellation (recordVersionNow), so a client
+// that disconnects after a save outside a transaction committed still gets
+// its version written.
 func (b *VersionBatch) Flush(ctx context.Context) map[uuid.UUID]int {
 	recorded := map[uuid.UUID]int{}
 	if b == nil {
@@ -217,14 +227,17 @@ func (s *Service) recordVersion(ctx context.Context, tenantID, monitorID uuid.UU
 	s.recordVersionNow(ctx, tenantID, monitorID, secretChanges)
 }
 
-// recordVersionNow writes the version and returns its number (0 when nothing
-// was recorded). A failure is logged, never returned: the save it describes
-// has already committed, and failing the request would invite a retry of a
-// write that succeeded.
+// recordVersionNow writes the version, in the save's transaction when ctx
+// carries one, and returns its number (0 when nothing was recorded). A
+// failure is logged, never returned: it rolls back to a savepoint and leaves
+// the save itself alone, and failing the request would invite a retry of a
+// save that succeeded. The write ignores ctx cancellation: a save that
+// committed must not lose its version to a client that went away.
 func (s *Service) recordVersionNow(ctx context.Context, tenantID, monitorID uuid.UUID, secretChanges []string) int {
 	if s.versions == nil {
 		return 0
 	}
+	ctx = context.WithoutCancel(ctx)
 	version, err := s.versions.record(ctx, tenantID, monitorID, versionMetaFromContext(ctx, secretChanges))
 	if err != nil {
 		s.versionLogger().WithFields(map[string]interface{}{

@@ -18,9 +18,9 @@ import (
 // log, and a restore must not silently pause or resume a monitor), runtime
 // state, and the generated push token and agent ID.
 //
-// A field added to UpdateMonitorRequest belongs here too, read in
-// loadSnapshot and written back in RestoreRequest
-// (api/internal/services/monitors).
+// A top-level setting added to UpdateMonitorRequest belongs here too, plus
+// one entry in snapshotColumns (api/internal/services/monitors/
+// versions_fields.go), which reads and restores it.
 type MonitorConfigSnapshot struct {
 	Name                         string                   `json:"name"`
 	Type                         MonitorType              `json:"type"`
@@ -49,7 +49,9 @@ type MonitorSnapshotChannel struct {
 type MonitorVersionSummary struct {
 	Version int `json:"version"`
 	// Source is the surface the save came through: ui, api, mcp, import,
-	// discovery or restore.
+	// discovery or restore; baseline for the configuration a monitor had
+	// before its first recorded save; system for a change made outside a
+	// save (a deleted location, channel or member monitor).
 	Source string `json:"source"`
 	// ActorType is user, api_key or system; ActorLabel the username or key
 	// name at the time of the save.
@@ -120,12 +122,13 @@ type RestoreMonitorVersionResponse struct {
 	Version *int `json:"version,omitempty"`
 	// DroppedReferences are channels, locations, dependencies and group
 	// members the version named that no longer exist ("channel:<id>",
-	// "location:<id>", "dependency:<id>", "member:<id>"); everything else was
-	// applied.
+	// "location:<id>", "dependency:<id>", "member:<id>"), and dependencies or
+	// members that would now close a cycle ("dependency_cycle:<id>",
+	// "member_cycle:<id>"); everything else was applied.
 	DroppedReferences []string `json:"dropped_references"`
-	// SecretsToReenter are secret config fields the version had set that the
-	// monitor no longer holds (password, secret_variables.token, …). A
-	// restore never brings a secret back, so these stay empty until entered
-	// again.
+	// SecretsToReenter are secrets the version had set that the monitor no
+	// longer holds (password, secret_variables.token, a credential-named
+	// plain header such as headers.X-Api-Key, …). A restore never writes a
+	// secret from a version, so these stay empty until entered again.
 	SecretsToReenter []string `json:"secrets_to_reenter"`
 }

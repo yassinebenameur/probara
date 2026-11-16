@@ -14,7 +14,8 @@ func historyTools() []spec {
 			Name:  "list_monitor_versions",
 			Title: "List monitor versions",
 			Description: "List a monitor's configuration versions, newest first: who saved it (actor, source: ui, api, " +
-				"mcp, import, discovery, restore), when, which fields changed and which secret fields were set, " +
+				"mcp, import, discovery, restore; baseline for the configuration before the first recorded save, " +
+				"system for a change made by deleting a location, channel or member monitor), when, which fields changed and which secret fields were set, " +
 				"replaced or cleared (never their values). Each monitor keeps its last 100 versions; history starts " +
 				"at its first save recorded (history_starts_at).",
 			Method: http.MethodGet, Route: "/monitors/{id}/versions",
@@ -45,10 +46,12 @@ func historyTools() []spec {
 			Title: "Restore monitor version",
 			Description: "Re-apply a version's configuration (name, type, config, schedule, alerting, channels, " +
 				"locations, dependencies, group members) to the monitor through the normal update path, recorded as " +
-				"a new version. Secrets are never restored or removed: every secret keeps its current value, and " +
-				"secrets the version had that the monitor no longer holds are listed in secrets_to_reenter. Channels, " +
-				"locations and monitors that no longer exist are dropped and listed in dropped_references. Pause " +
-				"state is left as is. Check the effect first with diff_monitor_version against=current.",
+				"a new version, all or nothing. Secrets are never restored or removed: every secret keeps its current " +
+				"value, and secrets the version had that the monitor no longer holds are listed in secrets_to_reenter; " +
+				"a version that cannot be valid without them, or that conflicts with a secret held now, is refused " +
+				"with nothing changed. Channels, locations and monitors that no longer exist, and dependencies or " +
+				"members that would now close a cycle, are dropped and listed in dropped_references. Pause state is " +
+				"left as is. Check the effect first with diff_monitor_version against=current.",
 			Method: http.MethodPost, Route: "/monitors/{id}/versions/{version}/restore",
 			PathDocs: monitorVersion, Destructive: true,
 		},

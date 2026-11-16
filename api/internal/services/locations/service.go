@@ -21,6 +21,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
+	"github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/locationauth"
@@ -437,6 +438,13 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 	}
 
 	if err := monitorstate.RecordIntervalsTx(ctx, tx, resetIDs, monitorstate.StateUnknown, monitorstate.IntervalReasonLocationChange); err != nil {
+		return 0, err
+	}
+
+	// The affected monitors' location settings changed outside a save:
+	// record that as a system version, or the next save would be credited
+	// with it.
+	if err := monitors.RecordSystemVersionsTx(ctx, tx, s.db, tenantID, affected); err != nil {
 		return 0, err
 	}
 

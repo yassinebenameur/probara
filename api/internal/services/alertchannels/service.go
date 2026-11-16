@@ -12,6 +12,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
+	"github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
@@ -235,9 +236,41 @@ func (s *Service) UpdateAlertChannel(ctx context.Context, tenantID, channelID uu
 	return &ch, nil
 }
 
-// DeleteAlertChannel removes an alert channel.
+// DeleteAlertChannel removes an alert channel. Monitors routing to it lose
+// it from their custom channels (ON DELETE CASCADE), a change made outside
+// a save, so each gets a system configuration version in the same
+// transaction.
 func (s *Service) DeleteAlertChannel(ctx context.Context, tenantID, channelID uuid.UUID) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM alert_channels WHERE id = $1 AND tenant_id = $2`, channelID, tenantID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT mc.monitor_id FROM monitor_channels mc
+		JOIN monitors m ON m.id = mc.monitor_id AND m.tenant_id = $2 AND m.deleted_at IS NULL
+		WHERE mc.channel_id = $1
+		ORDER BY mc.monitor_id
+	`, channelID, tenantID)
+	if err != nil {
+		return fmt.Errorf("failed to find monitors routing to the channel: %w", err)
+	}
+	var affected []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan monitor: %w", err)
+		}
+		affected = append(affected, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to list monitors routing to the channel: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM alert_channels WHERE id = $1 AND tenant_id = $2`, channelID, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to delete alert channel: %w", err)
 	}
@@ -247,6 +280,12 @@ func (s *Service) DeleteAlertChannel(ctx context.Context, tenantID, channelID uu
 	}
 	if rowsAffected == 0 {
 		return ErrAlertChannelNotFound
+	}
+	if err := monitors.RecordSystemVersionsTx(ctx, tx, s.db, tenantID, affected); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
 }

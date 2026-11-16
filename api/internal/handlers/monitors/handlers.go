@@ -120,12 +120,65 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One version for the whole save, recorded once members and
-	// dependencies are synced below.
-	r, versions := h.deferVersions(r)
-	defer versions.Flush(r.Context())
+	// One save, in one transaction: the monitor, its members and
+	// dependencies, and its first version, recorded once they are synced.
+	var monitor *models.Monitor
+	_, err := h.inSave(r.Context(), func(ctx context.Context) error {
+		var err error
+		if monitor, err = h.service.CreateMonitor(ctx, tenantUUID, &req); err != nil {
+			return err
+		}
 
-	monitor, err := h.service.CreateMonitor(r.Context(), tenantUUID, &req)
+		// If this is a group monitor, add its members to the junction table
+		if req.Type == models.MonitorTypeGroup {
+			var groupConfig models.GroupConfig
+			if err := json.Unmarshal(req.Config, &groupConfig); err == nil && len(groupConfig.MonitorIDs) > 0 {
+				// Convert string IDs to UUIDs
+				monitorIDs := make([]uuid.UUID, 0, len(groupConfig.MonitorIDs))
+				for _, idStr := range groupConfig.MonitorIDs {
+					if monitorID, err := uuid.Parse(idStr); err == nil {
+						monitorIDs = append(monitorIDs, monitorID)
+					} else {
+						h.logger.WithFields(map[string]interface{}{
+							"error":      err.Error(),
+							"monitor_id": idStr,
+							"tenant_id":  tenantID,
+							"group_id":   monitor.ID,
+						}).Warn("Invalid monitor ID in group config")
+					}
+				}
+
+				if len(monitorIDs) > 0 {
+					err = h.groupService.AddMonitorsToGroup(ctx, tenantUUID, monitor.ID, monitorIDs)
+					if err != nil {
+						// Log the error but don't fail the creation - the group exists, just without members
+						h.logger.WithFields(map[string]interface{}{
+							"error":      err.Error(),
+							"tenant_id":  tenantID,
+							"monitor_id": monitor.ID,
+						}).Warn("Failed to add monitors to newly created group")
+					}
+				}
+			}
+		}
+
+		// Sync dependencies (best-effort, like group members: a brand-new monitor
+		// cannot create a cycle, so failures here are only bad target IDs).
+		if len(req.DependsOnIDs) > 0 && req.Type != models.MonitorTypeGroup {
+			if err := h.syncDependencies(ctx, tenantUUID, monitor.ID, req.DependsOnIDs); err != nil {
+				h.logger.WithFields(map[string]interface{}{
+					"error":      err.Error(),
+					"tenant_id":  tenantID,
+					"monitor_id": monitor.ID,
+				}).Warn("Failed to set dependencies on newly created monitor")
+			} else {
+				monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(ctx, monitor.ID)
+			}
+		}
+
+		h.recordVersion(ctx, tenantUUID, monitor.ID)
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
 			apierrors.WriteForbiddenError(w, err.Error())
@@ -142,56 +195,6 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteInternalError(w, "failed to create monitor")
 		return
 	}
-
-	// If this is a group monitor, add its members to the junction table
-	if req.Type == models.MonitorTypeGroup {
-		var groupConfig models.GroupConfig
-		if err := json.Unmarshal(req.Config, &groupConfig); err == nil && len(groupConfig.MonitorIDs) > 0 {
-			// Convert string IDs to UUIDs
-			monitorIDs := make([]uuid.UUID, 0, len(groupConfig.MonitorIDs))
-			for _, idStr := range groupConfig.MonitorIDs {
-				if monitorID, err := uuid.Parse(idStr); err == nil {
-					monitorIDs = append(monitorIDs, monitorID)
-				} else {
-					h.logger.WithFields(map[string]interface{}{
-						"error":      err.Error(),
-						"monitor_id": idStr,
-						"tenant_id":  tenantID,
-						"group_id":   monitor.ID,
-					}).Warn("Invalid monitor ID in group config")
-				}
-			}
-
-			if len(monitorIDs) > 0 {
-				err = h.groupService.AddMonitorsToGroup(r.Context(), tenantUUID, monitor.ID, monitorIDs)
-				if err != nil {
-					// Log the error but don't fail the creation - the group exists, just without members
-					h.logger.WithFields(map[string]interface{}{
-						"error":      err.Error(),
-						"tenant_id":  tenantID,
-						"monitor_id": monitor.ID,
-					}).Warn("Failed to add monitors to newly created group")
-				}
-			}
-		}
-	}
-
-	// Sync dependencies (best-effort, like group members: a brand-new monitor
-	// cannot create a cycle, so failures here are only bad target IDs).
-	if len(req.DependsOnIDs) > 0 && req.Type != models.MonitorTypeGroup {
-		if err := h.syncDependencies(r.Context(), tenantUUID, monitor.ID, req.DependsOnIDs); err != nil {
-			h.logger.WithFields(map[string]interface{}{
-				"error":      err.Error(),
-				"tenant_id":  tenantID,
-				"monitor_id": monitor.ID,
-			}).Warn("Failed to set dependencies on newly created monitor")
-		} else {
-			monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitor.ID)
-		}
-	}
-
-	h.recordVersion(r.Context(), tenantUUID, monitor.ID)
-	versions.Flush(r.Context())
 
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":  tenantID,
@@ -334,14 +337,49 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One version for the whole save, recorded once members and
-	// dependencies are synced below (also when the dependency sync fails:
-	// what was written is recorded).
-	r, versions := h.deferVersions(r)
-	defer versions.Flush(r.Context())
+	// One save, in one transaction: the update, the member and dependency
+	// syncs and the version, recorded once they are done. A dependency the
+	// payload cannot have (a cycle) rolls the whole update back.
+	var monitor *models.Monitor
+	var dependencyErr error
+	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		var err error
+		if monitor, err = h.service.UpdateMonitor(ctx, tenantUUID, monitorID, &req); err != nil {
+			return err
+		}
 
-	monitor, err := h.service.UpdateMonitor(r.Context(), tenantUUID, monitorID, &req)
+		// If this is a group monitor, sync the junction table with the new member list
+		if existingMonitor.Type == models.MonitorTypeGroup && req.Config != nil {
+			if err := h.syncGroupMembersFromConfig(ctx, tenantUUID, monitorID, req.Config); err != nil {
+				h.logger.WithFields(map[string]interface{}{
+					"error":      err.Error(),
+					"tenant_id":  tenantID,
+					"monitor_id": monitorID,
+				}).Warn("Failed to sync group members during update")
+			}
+		}
+
+		// Sync dependencies when the payload carries them (nil = unchanged).
+		// Cycles are user-fixable, so they surface as 409 instead of a warn log.
+		if req.DependsOnIDs != nil && existingMonitor.Type != models.MonitorTypeGroup {
+			if err := h.syncDependencies(ctx, tenantUUID, monitorID, *req.DependsOnIDs); err != nil {
+				dependencyErr = err
+				return err
+			}
+			monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(ctx, monitorID)
+		}
+
+		// Pausing or resuming is not configuration and records nothing.
+		if !monitorservice.OnlyPause(&req) {
+			h.recordVersion(ctx, tenantUUID, monitorID)
+		}
+		return nil
+	})
 	if err != nil {
+		if dependencyErr != nil {
+			h.writeDependencyError(w, tenantUUID, monitorID, dependencyErr)
+			return
+		}
 		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
 			apierrors.WriteForbiddenError(w, err.Error())
 			return
@@ -366,24 +404,6 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteInternalError(w, "failed to update monitor")
 		return
 	}
-
-	// If this is a group monitor, sync the junction table with the new member list
-	if existingMonitor.Type == models.MonitorTypeGroup && req.Config != nil {
-		h.syncGroupMembersFromConfig(r.Context(), tenantUUID, monitorID, req.Config)
-	}
-
-	// Sync dependencies when the payload carries them (nil = unchanged).
-	// Cycles are user-fixable, so they surface as 409 instead of a warn log.
-	if req.DependsOnIDs != nil && existingMonitor.Type != models.MonitorTypeGroup {
-		if err := h.syncDependencies(r.Context(), tenantUUID, monitorID, *req.DependsOnIDs); err != nil {
-			h.writeDependencyError(w, tenantUUID, monitorID, err)
-			return
-		}
-		monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitorID)
-	}
-
-	h.recordVersion(r.Context(), tenantUUID, monitorID)
-	versions.Flush(r.Context())
 
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":  tenantID,

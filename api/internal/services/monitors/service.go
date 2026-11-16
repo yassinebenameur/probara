@@ -3,15 +3,18 @@ package monitors
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/validation"
@@ -174,8 +177,35 @@ func (s *Service) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, mon
 	return merged, nil
 }
 
-// CreateMonitor creates a new monitor
+// InTx runs fn as one save: every monitor, group member, dependency and
+// configuration version write made with the ctx it passes commits together
+// or not at all (api/internal/dbtx). Inside an outer save it joins it.
+// Without a Postgres-backed repository (unit tests) fn runs as is.
+func (s *Service) InTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if s.versions == nil {
+		return fn(ctx)
+	}
+	return dbtx.Run(ctx, s.versions.db, func(ctx context.Context, _ *sql.Tx) error {
+		return fn(ctx)
+	})
+}
+
+// CreateMonitor creates a new monitor and records its first version, in one
+// transaction.
 func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
+	var monitor *models.Monitor
+	err := s.InTx(ctx, func(ctx context.Context) error {
+		var err error
+		monitor, err = s.createMonitor(ctx, tenantID, req)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return monitor, nil
+}
+
+func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
 	if err := RequireCallPermission(ctx, req.Type, req.Config); err != nil {
 		return nil, err
 	}
@@ -396,8 +426,34 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 	}, nil
 }
 
-// UpdateMonitor updates a monitor (partial update)
+// UpdateMonitor updates a monitor (partial update) and records the version,
+// in one transaction: a write that fails half way leaves nothing behind.
 func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, req *models.UpdateMonitorRequest) (*models.Monitor, error) {
+	var monitor *models.Monitor
+	err := s.InTx(ctx, func(ctx context.Context) error {
+		var err error
+		monitor, err = s.updateMonitor(ctx, tenantID, monitorID, req)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return monitor, nil
+}
+
+// OnlyPause reports whether an update changes nothing but the pause state.
+// Pausing is not configuration: it records no version (it shows in the
+// state timeline and the audit log instead).
+func OnlyPause(req *models.UpdateMonitorRequest) bool {
+	if req == nil || req.Enabled == nil {
+		return false
+	}
+	rest := *req
+	rest.Enabled = nil
+	return reflect.ValueOf(rest).IsZero()
+}
+
+func (s *Service) updateMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, req *models.UpdateMonitorRequest) (*models.Monitor, error) {
 	// Load straight from the repo: the stored (unmasked) config is needed to
 	// resolve write-only secret placeholders in the incoming config.
 	existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
@@ -637,7 +693,9 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		}
 	}
 
-	s.recordVersion(ctx, tenantID, monitorID, secretChanges)
+	if !OnlyPause(req) {
+		s.recordVersion(ctx, tenantID, monitorID, secretChanges)
+	}
 	return monitor, nil
 }
 
@@ -680,9 +738,55 @@ func effectiveLocationQuorum(requested *int, locationCount int) int {
 	return quorum
 }
 
-// DeleteMonitor deletes a monitor
+// DeleteMonitor deletes a monitor. Groups holding it and monitors
+// depending on it lose it from their settings, so each gets a system
+// version in the same transaction.
 func (s *Service) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error {
-	return s.repo.Delete(ctx, tenantID, monitorID)
+	return s.InTx(ctx, func(ctx context.Context) error {
+		if err := s.repo.Delete(ctx, tenantID, monitorID); err != nil {
+			return err
+		}
+		return s.recordDeleteCascade(ctx, tenantID, []uuid.UUID{monitorID})
+	})
+}
+
+// recordDeleteCascade records system versions for the monitors whose
+// settings named the deleted ones (see DeleteMonitor).
+func (s *Service) recordDeleteCascade(ctx context.Context, tenantID uuid.UUID, deleted []uuid.UUID) error {
+	if s.versions == nil {
+		return nil
+	}
+	affected, err := s.versions.MonitorsAffectedByDelete(ctx, tenantID, deleted)
+	if err != nil {
+		return err
+	}
+	return s.versions.recordSystem(ctx, tenantID, affected)
+}
+
+// ValidateMergedConfig validates config the way a save of it would store it
+// for the monitor: merged with the secrets it holds now and normalized. A
+// restore checks this before writing, because a version's masked config can
+// rely on a secret the monitor no longer holds (a connection string, say),
+// and the saved monitor would then lack a required field.
+func (s *Service) ValidateMergedConfig(ctx context.Context, tenantID, monitorID uuid.UUID, monitorType models.MonitorType, config json.RawMessage) error {
+	existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
+	if err != nil {
+		return err
+	}
+	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), config, existing.Config)
+	if err != nil {
+		return err
+	}
+	if merged, _, err = secrets.NormalizeSensitiveHeaders(string(monitorType), merged); err != nil {
+		return err
+	}
+	// A conflict with a kept secret (basic auth beside a stored
+	// Authorization secret header) is reported as such, the way a save
+	// reports it.
+	if err := validation.ValidateMergedSecretPairs(monitorType, merged); err != nil {
+		return fmt.Errorf("%w: %v", ErrSecretConflict, err)
+	}
+	return validation.DefaultRegistry.Validate(monitorType, merged)
 }
 
 // DeleteMonitorHistory clears raw checks, alert events, and persisted analytics state.
@@ -731,7 +835,15 @@ func (s *Service) BulkDeleteMonitors(
 	if err := s.repo.VerifyMonitorsBelongToTenant(ctx, tenantID, monitorIDs); err != nil {
 		return 0, err
 	}
-	return s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs)
+	var deleted int64
+	err := s.InTx(ctx, func(ctx context.Context) error {
+		var err error
+		if deleted, err = s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs); err != nil {
+			return err
+		}
+		return s.recordDeleteCascade(ctx, tenantID, monitorIDs)
+	})
+	return deleted, err
 }
 
 // BulkUpdateAlerting applies alerting fields to many monitors in a tenant-scoped way.
@@ -765,15 +877,23 @@ func (s *Service) BulkUpdateAlerting(
 		}
 	}
 
-	for _, monitorID := range monitorIDs {
-		req := &models.UpdateMonitorRequest{
-			ConsecutiveFailuresThreshold: threshold,
-			NotificationMode:             mode,
-			NotificationChannels:         channels,
+	// One transaction for the whole edit: every monitor and its version, or
+	// nothing.
+	err := s.InTx(ctx, func(ctx context.Context) error {
+		for _, monitorID := range monitorIDs {
+			req := &models.UpdateMonitorRequest{
+				ConsecutiveFailuresThreshold: threshold,
+				NotificationMode:             mode,
+				NotificationChannels:         channels,
+			}
+			if _, err := s.updateMonitor(ctx, tenantID, monitorID, req); err != nil {
+				return fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
+			}
 		}
-		if _, err := s.UpdateMonitor(ctx, tenantID, monitorID, req); err != nil {
-			return 0, fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
-		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	return len(monitorIDs), nil
 }

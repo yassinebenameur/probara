@@ -6,17 +6,14 @@
 -- save set, replaced or cleared. A save that changes nothing is not recorded.
 -- Each monitor keeps its newest 100 versions (older ones are pruned when a new
 -- one is written), and rows go with the monitor and with the workspace.
--- There is no backfill: a monitor's history starts at its first save after
--- this migration.
+-- There is no backfill: a monitor's first save after this migration records
+-- the configuration it had before as a baseline version.
 CREATE TABLE monitor_config_versions (
     id BIGSERIAL PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     monitor_id UUID NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
     version INTEGER NOT NULL CHECK (version > 0),
     snapshot JSONB NOT NULL,
-    -- SHA-256 (hex) of the canonical snapshot: a save hashing like the
-    -- latest version that changed no secret records nothing.
-    snapshot_hash TEXT NOT NULL,
     -- Snapshot paths that differ from the previous version (config.url,
     -- tags, ...); empty for a monitor's first version.
     changed_fields TEXT[] NOT NULL DEFAULT '{}',
@@ -26,7 +23,10 @@ CREATE TABLE monitor_config_versions (
     -- whose name at the time is kept in actor_label.
     actor_id UUID,
     actor_label TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL CHECK (source IN ('ui', 'api', 'mcp', 'import', 'discovery', 'restore')),
+    -- baseline: the configuration a monitor had before its first recorded
+    -- save; system: a change made outside a save (a deleted location,
+    -- channel or member monitor).
+    source TEXT NOT NULL CHECK (source IN ('ui', 'api', 'mcp', 'import', 'discovery', 'restore', 'baseline', 'system')),
     -- The version a restore re-applied; NULL for every other source.
     restored_from INTEGER,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

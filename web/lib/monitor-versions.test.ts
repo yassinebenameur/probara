@@ -70,4 +70,12 @@ test('actors fall back to the credential kind', () => {
 test('dropped references name what was left out', () => {
   assert.equal(droppedReferenceLabel('member:m-1', { 'm-1': 'API' }), 'member API');
   assert.equal(droppedReferenceLabel('channel:c-9'), 'channel c-9');
+  assert.equal(droppedReferenceLabel('dependency_cycle:m-1', { 'm-1': 'API' }), 'dependency (would form a cycle) API');
+});
+
+test('a baseline reads as the configuration before the first change', () => {
+  assert.equal(
+    summarizeVersion({ source: 'baseline', changed_fields: [], changed_secret_fields: [], version: 1 }),
+    'Configuration before the first recorded change',
+  );
 });

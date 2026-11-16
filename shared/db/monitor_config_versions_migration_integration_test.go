@@ -62,8 +62,8 @@ func TestMonitorConfigVersionsMigrationUpDownUp(t *testing.T) {
 
 	tenant := testutil.InsertTenant(ctx, t, dbc, "versions-migration")
 	monitor := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "versioned")
-	insert := `INSERT INTO monitor_config_versions (tenant_id, monitor_id, version, snapshot, snapshot_hash, actor_type, source)
-		VALUES ($1, $2, $3, '{}', 'h', 'system', $4)`
+	insert := `INSERT INTO monitor_config_versions (tenant_id, monitor_id, version, snapshot, actor_type, source)
+		VALUES ($1, $2, $3, '{}', 'system', $4)`
 	exec(insert, tenant, monitor, 1, "ui")
 	if _, err := dbc.ExecContext(ctx, insert, tenant, monitor, 1, "ui"); err == nil {
 		t.Fatal("a duplicate (monitor, version) was accepted")

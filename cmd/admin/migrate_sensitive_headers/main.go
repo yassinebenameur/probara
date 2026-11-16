@@ -15,7 +15,7 @@
 // them (`Headers`, `Variables`, `Metadata`, a step's `Request`/`Headers`,
 // `Basic_Auth_Password`, …) to their exact spelling, for every type with
 // secret fields, merging two spellings when they agree and reporting the
-// monitor when they do not (canonicalizeCredentialKeys). A credential-named
+// monitor when they do not (secrets.CanonicalizeCredentialKeys). A credential-named
 // variable whose move would create a secret name validation refuses stays
 // plain and is reported. Then it applies exactly the function every write
 // applies, so the backfill and the write path cannot disagree. Moved values are encrypted with the current
@@ -24,6 +24,13 @@
 // and a credential at rest is one whether or not the monitor is listed. Safe
 // to run multiple times: a second run finds nothing to do. Values never
 // reach the log, only monitor ids.
+//
+// It also scrubs monitor configuration history (monitor_config_versions):
+// a version recorded from a row like the above, before snapshots applied the
+// same rules, can hold such a credential. Each snapshot's config is passed
+// through secrets.MaskStoredMonitorConfig, the function versions are taken
+// with now, so every credential in it reads "***"; rows already clean are
+// left alone, so this part is idempotent too.
 //
 // Usage:
 //
@@ -40,6 +47,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -109,9 +117,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
-	fmt.Printf("\nprocessed=%d updated=%d skipped=%d errored=%d conflicted=%d unmovable=%d dry_run=%v\n",
-		result.Processed, result.Updated, result.Skipped, result.Errored, result.Conflicted, result.Unmovable, *dryRun)
-	if result.Errored > 0 || result.Conflicted > 0 {
+	versions, err := scrubVersions(ctx, db, !*dryRun, log.Printf)
+	if err != nil {
+		log.Fatalf("scrub versions: %v", err)
+	}
+	fmt.Printf("\nprocessed=%d updated=%d skipped=%d errored=%d conflicted=%d unmovable=%d versions_scrubbed=%d versions_errored=%d dry_run=%v\n",
+		result.Processed, result.Updated, result.Skipped, result.Errored, result.Conflicted, result.Unmovable,
+		versions.Scrubbed, versions.Errored, *dryRun)
+	if result.Errored > 0 || result.Conflicted > 0 || versions.Errored > 0 {
 		os.Exit(1)
 	}
 }
@@ -212,7 +225,7 @@ func migrateConfig(enc secrets.Encryptor, monitorType string, raw json.RawMessag
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return rowResult{}, fmt.Errorf("decode config: %w", err)
 	}
-	renamed, conflicts := canonicalizeCredentialKeys(monitorType, cfg)
+	renamed, conflicts := secrets.CanonicalizeCredentialKeys(monitorType, cfg)
 	if len(conflicts) > 0 {
 		return rowResult{conflicts: conflicts}, nil
 	}
@@ -259,4 +272,121 @@ func writeRow(ctx context.Context, db *sql.DB, id uuid.UUID, original, newRaw js
 		return errors.New("monitor changed or was purged since it was read; run again")
 	}
 	return nil
+}
+
+// versionStats counts configuration history rows scrubbed or failed.
+type versionStats struct {
+	Scrubbed, Errored int
+}
+
+// scrubVersions masks every credential left in a configuration version's
+// snapshot (see the package doc). A row is rewritten only when masking
+// changes it, and only if it is still the one read. Without apply it only
+// counts. A database without the history table has nothing to scrub.
+func scrubVersions(ctx context.Context, db *sql.DB, apply bool, logf func(string, ...any)) (versionStats, error) {
+	var result versionStats
+	var exists bool
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass('monitor_config_versions') IS NOT NULL`).Scan(&exists); err != nil {
+		return result, fmt.Errorf("check history table: %w", err)
+	}
+	if !exists {
+		return result, nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id, monitor_id, version, snapshot FROM monitor_config_versions ORDER BY id`)
+	if err != nil {
+		return result, fmt.Errorf("scan versions: %w", err)
+	}
+	type pending struct {
+		id        int64
+		label     string
+		original  []byte
+		rewritten []byte
+	}
+	var updates []pending
+	for rows.Next() {
+		var (
+			id        int64
+			monitorID uuid.UUID
+			version   int
+			raw       []byte
+		)
+		if err := rows.Scan(&id, &monitorID, &version, &raw); err != nil {
+			logf("scan version row: %v", err)
+			result.Errored++
+			continue
+		}
+		label := fmt.Sprintf("monitor %s version %d", monitorID, version)
+		rewritten, changed, err := scrubSnapshot(raw)
+		if err != nil {
+			logf("[err] %s: %v", label, err)
+			result.Errored++
+			continue
+		}
+		if changed {
+			updates = append(updates, pending{id: id, label: label, original: raw, rewritten: rewritten})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return result, fmt.Errorf("version row iter: %w", err)
+	}
+	rows.Close()
+
+	for _, u := range updates {
+		if !apply {
+			logf("[dry-run] would mask credentials in %s", u.label)
+			result.Scrubbed++
+			continue
+		}
+		res, err := db.ExecContext(ctx, `UPDATE monitor_config_versions SET snapshot = $1 WHERE id = $2 AND snapshot = $3::jsonb`,
+			u.rewritten, u.id, u.original)
+		if err != nil {
+			logf("[err] %s: write: %v", u.label, err)
+			result.Errored++
+			continue
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			logf("[err] %s: changed or pruned since it was read; run again", u.label)
+			result.Errored++
+			continue
+		}
+		result.Scrubbed++
+		logf("[ok] masked credentials in %s", u.label)
+	}
+	return result, nil
+}
+
+// scrubSnapshot masks the config of one stored snapshot. changed is false
+// when it already held no credential.
+func scrubSnapshot(raw []byte) ([]byte, bool, error) {
+	var snapshot map[string]any
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return nil, false, fmt.Errorf("decode snapshot: %w", err)
+	}
+	monitorType, _ := snapshot["type"].(string)
+	config, ok := snapshot["config"]
+	if !ok || config == nil {
+		return raw, false, nil
+	}
+	configRaw, err := json.Marshal(config)
+	if err != nil {
+		return nil, false, err
+	}
+	masked, err := secrets.MaskStoredMonitorConfig(monitorType, configRaw)
+	if err != nil {
+		return nil, false, err
+	}
+	var maskedValue any
+	if err := json.Unmarshal(masked, &maskedValue); err != nil {
+		return nil, false, err
+	}
+	if reflect.DeepEqual(maskedValue, config) {
+		return raw, false, nil
+	}
+	snapshot["config"] = maskedValue
+	out, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
 }

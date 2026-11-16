@@ -159,7 +159,7 @@ export default function MonitorConfigHistory({ monitor, onRestored }: MonitorCon
       setReenter(response.secrets_to_reenter.length > 0 ? { version, secrets: response.secrets_to_reenter } : null);
       const dropped = response.dropped_references.map((reference) => droppedReferenceLabel(reference, names));
       const notes: string[] = [];
-      if (dropped.length > 0) notes.push(`Left out (no longer exists): ${dropped.join(', ')}.`);
+      if (dropped.length > 0) notes.push(`Left out: ${dropped.join(', ')}.`);
       if (response.secrets_to_reenter.length > 0) {
         notes.push(`${pluralize(response.secrets_to_reenter.length, 'secret')} to enter again.`);
       }
@@ -189,7 +189,7 @@ export default function MonitorConfigHistory({ monitor, onRestored }: MonitorCon
       <EmptyState
         icon={<History className="h-5 w-5" aria-hidden="true" />}
         title="No changes recorded yet"
-        description="Every save of this monitor's configuration from now on is recorded here. Earlier changes were not."
+        description="Every save of this monitor's configuration is recorded here. Its first save also keeps the configuration it has now, so that change can be undone."
       />
     );
   }

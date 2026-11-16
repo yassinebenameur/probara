@@ -203,9 +203,8 @@ func TestMonitorConfigHistoryHTTP_Integration(t *testing.T) {
 		t.Fatalf("restored dependencies = %s", deps)
 	}
 
-	// A version re-applied goes through the save path: a credential header in
-	// its plain headers is moved into the secret map like on any save, and a
-	// secret the version had that is gone is reported, not invented.
+	// A secret the version had and the monitor no longer holds is reported,
+	// never invented; the rest of the version is applied.
 	var api models.Monitor
 	_ = json.Unmarshal(call(editor, "POST", "/", map[string]any{
 		"name": "api", "type": "http", "interval_seconds": 60, "timeout_seconds": 10,
@@ -217,11 +216,6 @@ func TestMonitorConfigHistoryHTTP_Integration(t *testing.T) {
 		"config": map[string]any{"url": "https://a2.example", "method": "GET", "expected_status": 200,
 			"basic_auth_username": "", "basic_auth_password": ""},
 	}, http.StatusOK)
-	if _, err := db.ExecContext(ctx, `
-		UPDATE monitor_config_versions SET snapshot = jsonb_set(snapshot, '{config,headers}', '{"X-Api-Key":"plain-key"}')
-		WHERE monitor_id = $1 AND version = 1`, api.ID); err != nil {
-		t.Fatal(err)
-	}
 	restored = models.RestoreMonitorVersionResponse{}
 	_ = json.Unmarshal(call(editor, "POST", apiBase+"/versions/1/restore", nil, http.StatusOK), &restored)
 	if strings.Join(restored.SecretsToReenter, ",") != "basic_auth_password" {
@@ -233,9 +227,7 @@ func TestMonitorConfigHistoryHTTP_Integration(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = json.Unmarshal(raw, &storedConfig)
-	secretHeaders, _ := storedConfig["secret_headers"].(map[string]any)
-	if storedConfig["url"] != "https://a.example" || storedConfig["basic_auth_username"] != "ops" ||
-		secretHeaders["X-Api-Key"] != "plain-key" || storedConfig["headers"] != nil || storedConfig["basic_auth_password"] != nil {
+	if storedConfig["url"] != "https://a.example" || storedConfig["basic_auth_username"] != "ops" || storedConfig["basic_auth_password"] != nil {
 		t.Fatalf("restored config = %s", raw)
 	}
 

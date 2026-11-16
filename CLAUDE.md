@@ -300,17 +300,22 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   cascades only on tenant delete. The label routes are writes (never in
   `postReadPaths`); export is `RequireTenantAdmin`.
 - **Monitor config history**: every path that creates or changes a monitor
-  records a version through `api/internal/services/monitors/versions.go`.
+  records a version through `api/internal/services/monitors/versions.go`,
+  inside the save's transaction (`api/internal/dbtx` carries it through the
+  monitors, groups and dependencies services; `Service.InTx`).
   `CreateMonitor`/`UpdateMonitor` do it; a write beside them calls
   `RecordVersion` (member and dependency routes) or `RecordVersionTx`
-  (discovery approval, inside its transaction); a save made of several writes
-  (handler create/update with member and dependency syncs, import, restore)
-  runs under `DeferVersions` and flushes once, so one save is one version. A
-  new monitor write path that skips this leaves a gap in history. Snapshots
-  are masked through the secret registry. A field added to
-  `UpdateMonitorRequest` must also go into `models.MonitorConfigSnapshot`,
-  `loadSnapshot` and `RestoreRequest`, or it is neither versioned nor
-  restored.
+  (discovery approval); a change made outside a save (location, channel or
+  monitor delete) calls `RecordSystemVersionsTx`; a save made of several
+  writes (handler create/update/restore, import row) runs in one `InTx` under
+  `DeferVersions` and flushes before commit, so one save is one version. A
+  monitor without history gets a baseline from the committed row on its
+  first recorded change. Snapshots are masked with
+  `secrets.MaskStoredMonitorConfig`; restore never writes a secret from a
+  version (`restoreConfig`). A new top-level setting accepted by
+  `UpdateMonitorRequest` is one `snapshotColumns` entry
+  (`versions_fields.go`) plus its `models.MonitorConfigSnapshot` field, or it
+  is neither versioned nor restored.
 
 ## Monitor import
 

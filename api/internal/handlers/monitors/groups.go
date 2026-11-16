@@ -3,6 +3,7 @@
 package monitors
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,7 +56,14 @@ func (h *Handlers) AddMonitorsToGroup(w http.ResponseWriter, r *http.Request) {
 		monitorIDs[i] = monitorID
 	}
 
-	err = h.groupService.AddMonitorsToGroup(r.Context(), tenantUUID, groupID, monitorIDs)
+	// The membership edit and the group's version, in one transaction.
+	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		if err := h.groupService.AddMonitorsToGroup(ctx, tenantUUID, groupID, monitorIDs); err != nil {
+			return err
+		}
+		h.recordVersion(ctx, tenantUUID, groupID)
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrMonitorNotFound) || errors.Is(err, groupservice.ErrNotGroup) {
 			apierrors.WriteNotFoundError(w, err.Error())
@@ -73,8 +81,6 @@ func (h *Handlers) AddMonitorsToGroup(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteInternalError(w, err.Error())
 		return
 	}
-
-	h.recordVersion(r.Context(), tenantUUID, groupID)
 
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":   tenantID,
@@ -122,7 +128,14 @@ func (h *Handlers) RemoveMonitorsFromGroup(w http.ResponseWriter, r *http.Reques
 		monitorIDs[i] = monitorID
 	}
 
-	err = h.groupService.RemoveMonitorsFromGroup(r.Context(), tenantUUID, groupID, monitorIDs)
+	// The membership edit and the group's version, in one transaction.
+	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		if err := h.groupService.RemoveMonitorsFromGroup(ctx, tenantUUID, groupID, monitorIDs); err != nil {
+			return err
+		}
+		h.recordVersion(ctx, tenantUUID, groupID)
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, monitorservice.ErrMonitorNotFound) || errors.Is(err, groupservice.ErrNotGroup) {
 			apierrors.WriteNotFoundError(w, err.Error())
@@ -136,8 +149,6 @@ func (h *Handlers) RemoveMonitorsFromGroup(w http.ResponseWriter, r *http.Reques
 		apierrors.WriteInternalError(w, "failed to remove monitors from group")
 		return
 	}
-
-	h.recordVersion(r.Context(), tenantUUID, groupID)
 
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":   tenantID,

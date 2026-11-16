@@ -775,7 +775,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A version is recorded for every save, whatever it came through: the operator UI, the API, MCP, an import (both mapping paths), a Kubernetes discovery approval, a bulk alerting edit, adding or removing group members or dependencies, and a restore. A save that changes nothing records nothing. Each version keeps who made it (the user or API key, by its name at the time, or the system), when, the source, and the fields that changed from the previous version.",
+            "A version is recorded for every save, whatever it came through: the operator UI, the API, MCP, an import (both mapping paths), a Kubernetes discovery approval, a bulk alerting edit, adding or removing group members or dependencies, and a restore. A save that changes nothing records nothing, and pausing or resuming records nothing. Each version keeps who made it (the user or API key, by its name at the time, or the system), when, the source, and the fields that changed from the previous version. A version is written in the same transaction as the save it describes, so it credits that save and no concurrent one, and a save that fails leaves no version behind.",
         },
         {
           type: "table",
@@ -790,11 +790,14 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "list",
           items: [
-            "Secret values are never stored in a version, in plain text or encrypted. A version holds the masked config (`***` for a set secret) and the names of the secrets that save set, replaced or cleared, so the diff can say a password changed without showing it.",
+            "A monitor that existed before history did gets a **baseline** on its first recorded change: version 1 is the configuration it had just before, version 2 the change, so even that first change can be compared and undone. Monitors created since start at their creation.",
+            "Deleting a location, an alert channel or a monitor changes the monitors that used it (their locations, custom channels, group members or dependencies). Each affected monitor gets a **system** version at that moment, so the change is never credited to whoever saves the monitor next.",
+            "Secret values are never stored in a version, in plain text or encrypted. A version holds the masked config (`***` for a set secret) and the names of the secrets that save set, replaced or cleared, so the diff can say a password changed without showing it. This also holds for monitors saved before credential-named headers, metadata and variables were moved into secret fields on every save: a version masks such a credential wherever the stored config still has it, under any key spelling.",
             "Compare a version with the one before it, any other version, or the live monitor. Secret fields read as set, not set, or changed, never as values.",
-            "Restore re-applies every non-secret setting of the version through the same validation and save path as an edit (the SIP test-call rule and the move of credential-named headers into secret fields included) and records a new version that names the one restored. Only the settings that differ are written. A monitor that already matches is left alone.",
-            "Restore keeps the secrets stored now: it never brings back or removes a password, token, connection string, client key, secret header, secret metadata or secret variable, and keeps secret keys added since the version. A secret the version had and the monitor no longer holds, such as a removed secret variable a `{{name}}` step still references, stays empty: the restore still applies everything else and lists the secrets to enter again in Settings.",
-            "Channels, locations, dependencies and group members the version names that no longer exist are left out and reported. The pause state is left as it is.",
+            "Restore re-applies every non-secret setting of the version through the same validation and save path as an edit (the SIP test-call rule included) and records a new version that names the one restored. Only the settings that differ are written, and the restore is all or nothing: if any part fails, nothing changes and no version is recorded.",
+            "Restore keeps the secrets stored now and never writes a secret from a version: it never brings back or removes a password, token, connection string, client key, secret header, secret metadata or secret variable, keeps secret keys added since the version, and leaves out a credential-named plain header or variable unless the monitor holds that same value now. A secret the version had and the monitor no longer holds, such as a removed secret variable a `{{name}}` step still references, stays empty: the restore applies everything else and lists the secrets to enter again in Settings.",
+            "A restore is refused, with nothing changed, when the version cannot be valid without such a secret (a version in connection-string mode restored onto a monitor that no longer stores a connection string), or when it conflicts with a secret the monitor holds now (a version using basic auth restored onto a monitor that now authenticates with a secret `Authorization` header). The message names what to enter or clear in Settings before restoring again.",
+            "Channels, locations, dependencies and group members the version names that no longer exist are left out and reported, and so are dependencies and members that would now close a cycle. The pause state is left as it is.",
             "Reading history follows monitor read access, so viewers can browse it. Restoring needs write access (and a signed-in tenant admin for a SIP test-call monitor) and is audited as `monitor.restore`.",
           ],
         },
@@ -803,7 +806,7 @@ export const MONITORS_PAGE: DocPage = {
           tone: "info",
           title: "Bounds",
           text:
-            "Each monitor keeps its newest 100 versions; older ones are pruned as new ones are recorded. History is deleted with the monitor and with its workspace. It is not backfilled: a monitor's history starts at its first save after the upgrade that introduced it. The one-off [backfill tools](/docs/security/#encryption-at-rest) rewrite stored configs directly and record no version, so the next save's version also shows what they moved.",
+            "Each monitor keeps its newest 100 versions; older ones are pruned as new ones are recorded. History is deleted with the monitor and with its workspace. The one-off [backfill tools](/docs/security/#encryption-at-rest) rewrite stored configs directly and record no version, so the next save's version also shows what they moved; the credential backfill also scrubs existing versions.",
         },
       ],
     },

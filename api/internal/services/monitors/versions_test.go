@@ -104,26 +104,37 @@ func TestWithSecretChanges_ShowsRotationWithoutValue(t *testing.T) {
 	}
 }
 
-func TestRestoreRequest_SendsOnlyDifferencesAndKeepsSecretKeys(t *testing.T) {
+func TestPlanRestore_SendsOnlyDifferencesAndKeepsSecretKeys(t *testing.T) {
 	version := snapshotFor(t, models.MonitorTypeHTTP, `{"url":"https://a","secret_headers":{"Authorization":"***"}}`)
 	current := snapshotFor(t, models.MonitorTypeHTTP, `{"url":"https://b","secret_headers":{"Authorization":"***","X-Api-Key":"***"}}`)
+	stored := json.RawMessage(`{"url":"https://b","secret_headers":{"Authorization":"env-a","X-Api-Key":"env-k"}}`)
 
-	same, ok, err := RestoreRequest(current, &current)
-	if err != nil || ok {
-		t.Fatalf("restoring the live config = %+v, %v, %v", same, ok, err)
+	same, err := planRestore(current, &current, stored)
+	if err != nil || same.Changed {
+		t.Fatalf("restoring the live config = %+v, %v", same, err)
 	}
 
-	req, ok, err := RestoreRequest(version, &current)
-	if err != nil || !ok {
-		t.Fatalf("RestoreRequest = %v, %v", ok, err)
+	plan, err := planRestore(version, &current, stored)
+	if err != nil || !plan.Changed {
+		t.Fatalf("planRestore = %+v, %v", plan, err)
 	}
+	req := plan.Request
 	if req.Name != nil || req.IntervalSeconds != nil || req.LocationIDs != nil || req.NotificationMode != nil || req.Type != nil {
 		t.Fatalf("unchanged fields were sent: %+v", req)
 	}
 	config := decodeConfigMap(req.Config)
 	headers, _ := config["secret_headers"].(map[string]any)
-	if config["url"] != "https://a" || headers["Authorization"] != "***" || headers["X-Api-Key"] != "***" {
-		t.Fatalf("restored config = %s", req.Config)
+	if config["url"] != "https://a" || headers["Authorization"] != "***" || headers["X-Api-Key"] != "***" || len(plan.SecretsToReenter) != 0 {
+		t.Fatalf("restored config = %s, reenter %v", req.Config, plan.SecretsToReenter)
+	}
+
+	// The field list drives the plain columns.
+	renamed := current
+	renamed.Name = "other"
+	renamed.ConsecutiveFailuresThreshold = 7
+	plan, _ = planRestore(renamed, &current, stored)
+	if plan.Request.Name == nil || *plan.Request.Name != "other" || plan.Request.ConsecutiveFailuresThreshold == nil || plan.Request.Config != nil {
+		t.Fatalf("column restore = %+v", plan.Request)
 	}
 
 	// Group members ride in config.monitor_ids; locations carry the quorum.
@@ -132,37 +143,62 @@ func TestRestoreRequest_SendsOnlyDifferencesAndKeepsSecretKeys(t *testing.T) {
 	group.LocationIDs = []string{"l1", "l2"}
 	group.LocationQuorum = 2
 	liveGroup := snapshotFor(t, models.MonitorTypeGroup, `{"monitor_ids":["a"]}`)
-	req, ok, err = RestoreRequest(group, &liveGroup)
-	if err != nil || !ok {
-		t.Fatalf("group restore = %v, %v", ok, err)
+	plan, err = planRestore(group, &liveGroup, nil)
+	if err != nil || !plan.Changed {
+		t.Fatalf("group restore = %+v, %v", plan, err)
 	}
 	var groupConfig models.GroupConfig
-	_ = json.Unmarshal(req.Config, &groupConfig)
-	if strings.Join(groupConfig.MonitorIDs, ",") != "m1,m2" || req.LocationIDs == nil || *req.LocationQuorum != 2 || req.DependsOnIDs != nil {
-		t.Fatalf("group request = %+v (%s)", req, req.Config)
+	_ = json.Unmarshal(plan.Request.Config, &groupConfig)
+	if strings.Join(groupConfig.MonitorIDs, ",") != "m1,m2" || plan.Request.LocationIDs == nil || *plan.Request.LocationQuorum != 2 || plan.Request.DependsOnIDs != nil {
+		t.Fatalf("group request = %+v (%s)", plan.Request, plan.Request.Config)
 	}
 
 	// A custom route set is sent whole, non-nil even when empty.
 	custom := current
 	custom.NotificationMode = "custom"
-	req, _, _ = RestoreRequest(custom, &current)
-	if req.NotificationMode == nil || req.NotificationChannels == nil {
-		t.Fatalf("custom routing request = %+v", req)
+	plan, _ = planRestore(custom, &current, stored)
+	if plan.Request.NotificationMode == nil || plan.Request.NotificationChannels == nil {
+		t.Fatalf("custom routing request = %+v", plan.Request)
 	}
 }
 
-func TestSecretsToReenter(t *testing.T) {
-	version := snapshotFor(t, models.MonitorTypeSyntheticAPI, `{"secret_variables":{"token":"***","user":"***"},"steps":[]}`)
-	got := SecretsToReenter(version, json.RawMessage(`{"secret_variables":{"USER":"***"}}`))
-	if strings.Join(got, ",") != "secret_variables.token" {
-		t.Fatalf("missing = %v", got)
+// Whatever a version holds, a restore writes no secret value from it: a
+// literal secret (a version recorded before snapshots were scrubbed), an
+// emptied secret ("" would clear the stored one) or a plain credential
+// header (the save would move it over the stored secret).
+func TestRestoreConfig_NeverWritesASecretFromAVersion(t *testing.T) {
+	versionConfig := json.RawMessage(`{"url":"https://a","basic_auth_username":"ops","basic_auth_password":"leaked",` +
+		`"headers":{"Authorization":"Bearer leaked","Accept":"json"},"Basic_Auth_Password":"leaked-2",` +
+		`"secret_headers":{"X-Old":"leaked-3"}}`)
+	stored := json.RawMessage(`{"url":"https://b","basic_auth_username":"ops","basic_auth_password":"env-pw","secret_headers":{"Authorization":"env-auth"}}`)
+	out, reenter, err := restoreConfig("http", versionConfig, stored, true)
+	if err != nil {
+		t.Fatal(err)
 	}
-	db := snapshotFor(t, models.MonitorTypePostgres, `{"host":"h","password":"***"}`)
-	if got := SecretsToReenter(db, json.RawMessage(`{"host":"h"}`)); strings.Join(got, ",") != "password" {
-		t.Fatalf("missing = %v", got)
+	if strings.Contains(string(out), "leaked") {
+		t.Fatalf("restore would write a version's secret: %s", out)
 	}
-	if got := SecretsToReenter(db, json.RawMessage(`{"host":"h","password":"env"}`)); len(got) != 0 {
-		t.Fatalf("kept secret reported missing: %v", got)
+	cfg := decodeConfigMap(out)
+	headers, _ := cfg["headers"].(map[string]any)
+	secretHeaders, _ := cfg["secret_headers"].(map[string]any)
+	if cfg["basic_auth_password"] != "***" || headers["Accept"] != "json" || headers["Authorization"] != nil ||
+		secretHeaders["Authorization"] != "***" || secretHeaders["X-Old"] != "***" {
+		t.Fatalf("restore config = %s", out)
+	}
+	if strings.Join(reenter, ",") != "secret_headers.X-Old" {
+		t.Fatalf("reenter = %v", reenter)
+	}
+
+	// An emptied secret keeps the stored one; a removed secret variable and
+	// a plain credential nothing stored backs are reported.
+	out, reenter, _ = restoreConfig("postgres", json.RawMessage(`{"host":"db","connection_string":"","password":"***"}`), json.RawMessage(`{"host":"db","connection_string":"env"}`), true)
+	if decodeConfigMap(out)["connection_string"] != "***" || strings.Join(reenter, ",") != "password" {
+		t.Fatalf("postgres restore = %s, %v", out, reenter)
+	}
+	_, reenter, _ = restoreConfig("synthetic_api", json.RawMessage(`{"secret_variables":{"token":"***","user":"***"},"variables":{"api_key":"***"},"steps":[]}`),
+		json.RawMessage(`{"secret_variables":{"USER":"env"},"steps":[]}`), true)
+	if strings.Join(reenter, ",") != "secret_variables.token,variables.api_key" {
+		t.Fatalf("synthetic reenter = %v", reenter)
 	}
 }
 

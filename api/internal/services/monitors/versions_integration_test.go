@@ -189,15 +189,21 @@ func TestMonitorConfigVersions_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, ok, err := RestoreRequest(stored1.Snapshot, current)
-	if err != nil || !ok || req.Config != nil {
-		t.Fatalf("restore request = %+v, %v, %v", req, ok, err)
+	plan, err := svc.PlanRestore(ctx, tenant, created.ID, stored1.Snapshot, current)
+	if err != nil || !plan.Changed || plan.Request.Config != nil {
+		t.Fatalf("restore plan = %+v, %v", plan, err)
 	}
-	restoreCtx, batch := DeferVersions(WithVersionRestore(session, 1))
-	if _, err := svc.UpdateMonitor(restoreCtx, tenant, created.ID, req); err != nil {
+	var recorded map[uuid.UUID]int
+	if err := svc.InTx(WithVersionRestore(session, 1), func(ctx context.Context) error {
+		ctx, batch := DeferVersions(ctx)
+		if _, err := svc.UpdateMonitor(ctx, tenant, created.ID, plan.Request); err != nil {
+			return err
+		}
+		recorded = batch.Flush(ctx)
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	recorded := batch.Flush(restoreCtx)
 	if recorded[created.ID] != 4 {
 		t.Fatalf("restore recorded %v", recorded)
 	}
@@ -322,19 +328,14 @@ func TestMonitorConfigVersions_RestoreSecrets_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		live, err := svc.GetMonitor(ctx, tenant, id)
-		if err != nil {
+		plan, err := svc.PlanRestore(ctx, tenant, id, stored.Snapshot, current)
+		if err != nil || !plan.Changed {
+			t.Fatalf("restore plan: %+v %v", plan, err)
+		}
+		if _, err := svc.UpdateMonitor(WithVersionRestore(ctx, version), tenant, id, plan.Request); err != nil {
 			t.Fatal(err)
 		}
-		missing := SecretsToReenter(stored.Snapshot, live.Config)
-		req, ok, err := RestoreRequest(stored.Snapshot, current)
-		if err != nil || !ok {
-			t.Fatalf("restore request: %v %v", ok, err)
-		}
-		if _, err := svc.UpdateMonitor(WithVersionRestore(ctx, version), tenant, id, req); err != nil {
-			t.Fatal(err)
-		}
-		return missing
+		return plan.SecretsToReenter
 	}
 
 	created, err := svc.CreateMonitor(ctx, tenant, &models.CreateMonitorRequest{

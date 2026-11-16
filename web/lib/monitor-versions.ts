@@ -4,7 +4,9 @@
 // secret only ever reads "***" (set) or is absent, and restore never brings
 // one back.
 
-export type MonitorVersionSource = 'ui' | 'api' | 'mcp' | 'import' | 'discovery' | 'restore';
+// baseline: the configuration before a monitor's first recorded save;
+// system: a change made outside a save (a deleted location, channel or member).
+export type MonitorVersionSource = 'ui' | 'api' | 'mcp' | 'import' | 'discovery' | 'restore' | 'baseline' | 'system';
 export type MonitorVersionActorType = 'user' | 'api_key' | 'system';
 
 export interface MonitorSnapshotChannel {
@@ -86,6 +88,8 @@ export const VERSION_SOURCE_LABEL: Record<MonitorVersionSource, string> = {
   import: 'Import',
   discovery: 'Discovery',
   restore: 'Restore',
+  baseline: 'Baseline',
+  system: 'System',
 };
 
 /** Who made a change: the username or key name, else the credential kind. */
@@ -131,6 +135,7 @@ export function summarizeVersion(
   max = 3,
 ): string {
   if (v.source === 'restore' && v.restored_from) return `Restored version ${v.restored_from}`;
+  if (v.source === 'baseline') return 'Configuration before the first recorded change';
   const labels: string[] = [];
   for (const field of v.changed_fields) {
     const head = field.split('.')[0];
@@ -193,6 +198,14 @@ export function secretChangeText(change: MonitorVersionChange): { before: string
  */
 export function droppedReferenceLabel(reference: string, names: Record<string, string> = {}): string {
   const [kind, id] = reference.split(':', 2);
-  const label = { channel: 'channel', location: 'location', dependency: 'dependency', member: 'member' }[kind] ?? kind;
+  const label =
+    {
+      channel: 'channel',
+      location: 'location',
+      dependency: 'dependency',
+      member: 'member',
+      dependency_cycle: 'dependency (would form a cycle)',
+      member_cycle: 'member (would nest the group in itself)',
+    }[kind] ?? kind;
   return `${label} ${id ? names[id] ?? id : ''}`.trim();
 }

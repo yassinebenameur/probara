@@ -135,16 +135,24 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	if op == "add" {
-		err = h.dependencyService.AddDependency(r.Context(), tenantUUID, monitorID, dependsOnID)
-	} else {
-		err = h.dependencyService.RemoveDependency(r.Context(), tenantUUID, monitorID, dependsOnID)
-	}
+	// The edge and the monitor's version, in one transaction.
+	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		var err error
+		if op == "add" {
+			err = h.dependencyService.AddDependency(ctx, tenantUUID, monitorID, dependsOnID)
+		} else {
+			err = h.dependencyService.RemoveDependency(ctx, tenantUUID, monitorID, dependsOnID)
+		}
+		if err != nil {
+			return err
+		}
+		h.recordVersion(ctx, tenantUUID, monitorID)
+		return nil
+	})
 	if err != nil {
 		h.writeDependencyError(w, tenantUUID, monitorID, err)
 		return
 	}
-	h.recordVersion(r.Context(), tenantUUID, monitorID)
 
 	w.WriteHeader(http.StatusNoContent)
 }
