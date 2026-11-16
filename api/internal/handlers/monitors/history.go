@@ -406,6 +406,21 @@ func (h *Handlers) RestoreMonitorVersion(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			return err
 		}
+		snapshot, dropped, err := store.LiveReferences(ctx, tenantUUID, stored.Snapshot)
+		if err != nil {
+			return err
+		}
+		// Row locks before the first write, in lock order: this monitor, and
+		// the targets of the dependency and member edges it may write.
+		// Everything the restore decides on is read after them, so a
+		// concurrent save (a type change, say) cannot slip in between.
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{existing.ID}, append(append([]string{}, snapshot.DependsOnIDs...), snapshot.MemberIDs...)); err != nil {
+			return err
+		}
+		live, err := h.service.GetMonitor(ctx, tenantUUID, existing.ID)
+		if err != nil {
+			return err
+		}
 		current, err := store.CurrentSnapshot(ctx, tenantUUID, existing.ID)
 		if err != nil {
 			return err
@@ -417,15 +432,6 @@ func (h *Handlers) RestoreMonitorVersion(w http.ResponseWriter, r *http.Request)
 			return &restoreRefusal{status: http.StatusBadRequest, code: "validation_error",
 				msg: fmt.Sprintf("version %d cannot be restored: it is a %s monitor and this monitor is now %s; a restore never changes the type",
 					version, stored.Snapshot.Type, current.Type)}
-		}
-		snapshot, dropped, err := store.LiveReferences(ctx, tenantUUID, stored.Snapshot)
-		if err != nil {
-			return err
-		}
-		// Row locks before the first write, in lock order: this monitor, and
-		// the targets of the dependency and member edges it may write.
-		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{existing.ID}, append(append([]string{}, snapshot.DependsOnIDs...), snapshot.MemberIDs...)); err != nil {
-			return err
 		}
 		cycles, err := h.dropCycles(ctx, tenantUUID, existing.ID, &snapshot)
 		if err != nil {
@@ -445,11 +451,11 @@ func (h *Handlers) RestoreMonitorVersion(w http.ResponseWriter, r *http.Request)
 			return &restoreRefusal{status: http.StatusBadRequest, code: "validation_error",
 				msg: fmt.Sprintf("version %d cannot be restored: ", version) + fmt.Sprintf(format, args...)}
 		}
-		if err := validation.ValidateMonitorUpdate(req, existing); err != nil {
+		if err := validation.ValidateMonitorUpdate(req, live); err != nil {
 			return refuse("%s", err.Error())
 		}
 		if len(req.Config) > 0 {
-			monitorType := existing.Type
+			monitorType := live.Type
 			if req.Type != nil {
 				monitorType = *req.Type
 			}

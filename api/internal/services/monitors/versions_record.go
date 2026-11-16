@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -21,11 +20,6 @@ import (
 // systemVersionLog reports failed system versions (RecordTx), which never
 // fail the change they describe.
 var systemVersionLog = logger.New("api", "info")
-
-// lockVersionsSQL takes the configuration-version advisory locks of the
-// monitors in $1 in array order; callers pass ids sorted ascending (lock
-// order, api/internal/dbtx).
-const lockVersionsSQL = `SELECT count(pg_advisory_xact_lock(hashtextextended('monitor_config_versions:' || id::text, 0))) FROM unnest($1::uuid[]) AS id`
 
 func sortedIDs(ids []uuid.UUID) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{}, len(ids))
@@ -44,10 +38,12 @@ func sortedIDs(ids []uuid.UUID) []uuid.UUID {
 // LockMonitorsTx takes, on tx and before the first write, the row locks of
 // every monitor a transaction touches, in the documented lock order
 // (api/internal/dbtx): ascending id, FOR UPDATE for the monitors it changes
-// (write), FOR KEY SHARE for those it only points at (read: the targets of
-// new dependency or group member edges, whose foreign-key check would
-// otherwise take that lock later, out of order). Ids of other tenants lock
-// nothing.
+// or records a configuration version of (write), FOR KEY SHARE for those it
+// only points at (read: the other end of a new dependency or group member
+// edge, whose foreign-key check would otherwise take that lock later, out of
+// order). The FOR UPDATE lock is also what serializes version numbering:
+// every path that records a monitor's version holds its row. Ids of other
+// tenants lock nothing.
 func LockMonitorsTx(ctx context.Context, tx versionDB, tenantID uuid.UUID, write, read []uuid.UUID) error {
 	write = sortedIDs(write)
 	writeSet := make(map[uuid.UUID]bool, len(write))
@@ -110,68 +106,95 @@ func scopeFrom(ctx context.Context) *saveScope {
 	return scope
 }
 
-func (scope *saveScope) baseline(monitorID uuid.UUID) *models.MonitorConfigSnapshot {
+func (scope *saveScope) baselinesFor(ids []uuid.UUID) map[uuid.UUID]*models.MonitorConfigSnapshot {
+	out := map[uuid.UUID]*models.MonitorConfigSnapshot{}
 	if scope == nil {
-		return nil
+		return out
 	}
 	scope.mu.Lock()
 	defer scope.mu.Unlock()
-	return scope.baselines[monitorID]
+	for _, id := range ids {
+		if baseline := scope.baselines[id]; baseline != nil {
+			out[id] = baseline
+		}
+	}
+	return out
 }
 
-// CaptureBaseline reads, on the save's transaction and before its first
-// write, the configuration of a monitor that has no history yet, so the
+// captureBaselinesTx reads, set-based, the configuration of the monitors
+// among ids that have no history yet (two statements plus a snapshot load,
+// whatever the count).
+func captureBaselinesTx(ctx context.Context, tx versionDB, tenantID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]*models.MonitorConfigSnapshot, error) {
+	versioned, err := queryStrings(ctx, tx, `
+		SELECT DISTINCT monitor_id::text FROM monitor_config_versions WHERE tenant_id = $1 AND monitor_id = ANY($2)
+	`, tenantID, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	has := make(map[string]bool, len(versioned))
+	for _, id := range versioned {
+		has[id] = true
+	}
+	var missing []uuid.UUID
+	for _, id := range ids {
+		if !has[id.String()] {
+			missing = append(missing, id)
+		}
+	}
+	return loadSnapshots(ctx, tx, tenantID, missing)
+}
+
+// CaptureBaselines reads, on the save's transaction and before its first
+// write, the configuration of the monitors that have no history yet, so the
 // version the save records can be preceded by a baseline: version 1 is the
 // configuration before the monitor's first recorded change. Every save path
-// that changes an existing monitor calls it first (updateMonitor, the member
-// and dependency routes); a create has nothing to capture. It reads through
+// that changes existing monitors calls it first (updateMonitor, the bulk
+// edit for a whole batch, the member and dependency routes); a create has
+// nothing to capture. It runs set-based under one savepoint, reads through
 // the transaction itself, never a second connection, and a failure only
-// loses the baseline.
-func (s *Service) CaptureBaseline(ctx context.Context, tenantID, monitorID uuid.UUID) {
+// loses the baselines.
+func (s *Service) CaptureBaselines(ctx context.Context, tenantID uuid.UUID, monitorIDs ...uuid.UUID) {
 	scope := scopeFrom(ctx)
 	tx, ok := dbtx.From(ctx)
 	if s.versions == nil || scope == nil || !ok {
 		return
 	}
 	scope.mu.Lock()
-	_, done := scope.baselines[monitorID]
-	if !done {
-		scope.baselines[monitorID] = nil
+	var todo []uuid.UUID
+	for _, id := range sortedIDs(monitorIDs) {
+		if _, done := scope.baselines[id]; !done {
+			scope.baselines[id] = nil
+			todo = append(todo, id)
+		}
 	}
 	scope.mu.Unlock()
-	if done {
+	if len(todo) == 0 {
 		return
 	}
-	var snapshot *models.MonitorConfigSnapshot
+	var captured map[uuid.UUID]*models.MonitorConfigSnapshot
 	err := dbtx.Savepoint(ctx, tx, "monitor_config_baseline", func() error {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS (SELECT 1 FROM monitor_config_versions WHERE tenant_id = $1 AND monitor_id = $2)
-		`, tenantID, monitorID).Scan(&exists); err != nil {
-			return err
-		}
-		if exists {
-			return nil
-		}
-		found := false
 		var err error
-		snapshot, found, err = loadSnapshot(ctx, tx, tenantID, monitorID)
-		if !found {
-			snapshot = nil
-		}
+		captured, err = captureBaselinesTx(ctx, tx, tenantID, todo)
 		return err
 	})
 	if err != nil {
 		s.versionLogger().WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID,
-		}).Warn("Failed to capture monitor config baseline")
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+			"monitors":  len(todo),
+		}).Warn("Failed to capture monitor config baselines")
 		return
 	}
 	scope.mu.Lock()
-	scope.baselines[monitorID] = snapshot
+	for id, snapshot := range captured {
+		scope.baselines[id] = snapshot
+	}
 	scope.mu.Unlock()
+}
+
+// CaptureBaseline is CaptureBaselines for one monitor.
+func (s *Service) CaptureBaseline(ctx context.Context, tenantID, monitorID uuid.UUID) {
+	s.CaptureBaselines(ctx, tenantID, monitorID)
 }
 
 // RecordVersionTx records a version inside the caller's transaction, for
@@ -180,50 +203,121 @@ func (s *Service) CaptureBaseline(ctx context.Context, tenantID, monitorID uuid.
 // the actor comes from ctx. Unlike the service path it returns its error,
 // so the caller's transaction rolls back with it.
 func RecordVersionTx(ctx context.Context, tx *sql.Tx, tenantID, monitorID uuid.UUID, source string) error {
-	_, err := recordVersionTx(ctx, tx, nil, tenantID, monitorID, versionMetaFromContext(WithVersionSource(ctx, source), nil))
+	meta := versionMetaFromContext(WithVersionSource(ctx, source), nil)
+	_, err := recordSetTx(ctx, tx, tenantID, []recordEntry{{monitorID: monitorID}}, meta)
 	return err
 }
 
-// recordVersionTx snapshots the monitor and inserts the next version unless
-// it would repeat the latest one, then prunes beyond MaxVersionsPerMonitor.
-// It returns the recorded version, or 0 when nothing was recorded. A monitor
-// without any version yet gets baseline — its configuration before this
-// save, captured by CaptureBaseline — as version 1 (source "baseline") and
-// the change as version 2; without a baseline (a create) the save is
-// version 1.
-func recordVersionTx(ctx context.Context, tx versionDB, baseline *models.MonitorConfigSnapshot, tenantID, monitorID uuid.UUID, meta versionMeta) (int, error) {
-	// Serialize version numbering per monitor until commit. Taken after the
-	// save's row locks (lock order, api/internal/dbtx) and before the
-	// snapshot is read, so concurrent saves record in commit order, each
-	// crediting its own change.
-	if _, err := tx.ExecContext(ctx, lockVersionsSQL, pq.Array([]uuid.UUID{monitorID})); err != nil {
-		return 0, fmt.Errorf("lock monitor versions: %w", err)
+// recordEntry is one monitor a save records: its secret changes and, for a
+// monitor without history, its baseline.
+type recordEntry struct {
+	monitorID     uuid.UUID
+	secretChanges []string
+	baseline      *models.MonitorConfigSnapshot
+}
+
+// recordSetTx records the versions of every monitor of one save in a handful
+// of statements, whatever their number: the row locks (a no-op, the save
+// holds them already), the latest versions, the new snapshots, one INSERT per
+// systemVersionChunk rows, one prune. Each monitor's snapshot is compared
+// with its latest version (or its baseline): a repeat that changed no secret
+// records nothing; a monitor without history gets its baseline as version 1
+// (source "baseline") and the change as version 2. meta is the save's actor,
+// source and restore. It returns the version recorded per monitor.
+func recordSetTx(ctx context.Context, tx versionDB, tenantID uuid.UUID, entries []recordEntry, meta versionMeta) (map[uuid.UUID]int, error) {
+	recorded := map[uuid.UUID]int{}
+	ids := make([]uuid.UUID, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.monitorID)
 	}
-	snapshot, found, err := loadSnapshot(ctx, tx, tenantID, monitorID)
-	if err != nil || !found {
-		return 0, err
+	ids = sortedIDs(ids)
+	if len(ids) == 0 {
+		return recorded, nil
 	}
-	latest, err := latestVersions(ctx, tx, tenantID, []uuid.UUID{monitorID})
+	// Version numbering is serialized by the monitor rows (lock order,
+	// api/internal/dbtx): every recorder holds them FOR UPDATE, so this only
+	// re-asserts what the save took before its first write.
+	if err := LockMonitorsTx(ctx, tx, tenantID, ids, nil); err != nil {
+		return nil, err
+	}
+	latest, err := latestVersions(ctx, tx, tenantID, ids)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	rows, err := versionRows(snapshot, latest[monitorID], baseline, meta.secretChanges)
-	if err != nil || len(rows) == 0 {
-		return 0, err
+	current, err := loadSnapshots(ctx, tx, tenantID, ids)
+	if err != nil {
+		return nil, err
 	}
-	for _, row := range rows {
-		rowMeta := meta
-		if row.source == VersionSourceBaseline {
-			rowMeta = versionMeta{source: VersionSourceBaseline, actor: versionActor{typ: VersionActorSystem}}
+	type insertRow struct {
+		MonitorID           uuid.UUID       `json:"monitor_id"`
+		Version             int             `json:"version"`
+		Snapshot            json.RawMessage `json:"snapshot"`
+		ChangedFields       []string        `json:"changed_fields"`
+		ChangedSecretFields []string        `json:"changed_secret_fields"`
+		ActorType           string          `json:"actor_type"`
+		ActorID             *uuid.UUID      `json:"actor_id"`
+		Source              string          `json:"source"`
+		RestoredFrom        *int            `json:"restored_from"`
+	}
+	var pending []insertRow
+	for _, entry := range entries {
+		snapshot := current[entry.monitorID]
+		if snapshot == nil {
+			continue // deleted, or another tenant's
 		}
-		if err := insertVersion(ctx, tx, tenantID, monitorID, row.version, row.snapshot, row.changedFields, rowMeta); err != nil {
-			return 0, err
+		secretChanges := entry.secretChanges
+		if secretChanges == nil {
+			secretChanges = []string{}
+		}
+		rows, err := versionRows(snapshot, latest[entry.monitorID], entry.baseline, secretChanges)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			insert := insertRow{
+				MonitorID: entry.monitorID, Version: row.version, Snapshot: row.snapshot, ChangedFields: row.changedFields,
+				ChangedSecretFields: secretChanges, ActorType: meta.actor.typ, ActorID: meta.actor.id,
+				Source: meta.source, RestoredFrom: meta.restoredFrom,
+			}
+			if row.source == VersionSourceBaseline {
+				insert.ChangedSecretFields, insert.ActorType, insert.ActorID = []string{}, VersionActorSystem, nil
+				insert.Source, insert.RestoredFrom = VersionSourceBaseline, nil
+			}
+			pending = append(pending, insert)
+			recorded[entry.monitorID] = row.version
 		}
 	}
-	if err := pruneVersions(ctx, tx, tenantID, []uuid.UUID{monitorID}); err != nil {
-		return 0, err
+	for start := 0; start < len(pending); start += systemVersionChunk {
+		payload, err := json.Marshal(pending[start:min(start+systemVersionChunk, len(pending))])
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO monitor_config_versions
+				(tenant_id, monitor_id, version, snapshot, changed_fields, changed_secret_fields,
+				 actor_type, actor_id, actor_label, source, restored_from)
+			SELECT $1, r.monitor_id, r.version, r.snapshot,
+				ARRAY(SELECT jsonb_array_elements_text(r.changed_fields)),
+				ARRAY(SELECT jsonb_array_elements_text(r.changed_secret_fields)),
+				r.actor_type, r.actor_id,
+				COALESCE(CASE r.actor_type
+					WHEN 'user' THEN (SELECT username FROM admin_users WHERE id = r.actor_id)
+					WHEN 'api_key' THEN (SELECT name FROM api_keys WHERE id = r.actor_id)
+				END, ''),
+				r.source, r.restored_from
+			FROM jsonb_to_recordset($2::jsonb) AS r(monitor_id uuid, version int, snapshot jsonb,
+				changed_fields jsonb, changed_secret_fields jsonb, actor_type text, actor_id uuid,
+				source text, restored_from int)
+		`, tenantID, payload); err != nil {
+			return nil, fmt.Errorf("insert monitor versions: %w", err)
+		}
 	}
-	return rows[len(rows)-1].version, nil
+	if len(pending) > 0 {
+		if err := pruneVersions(ctx, tx, tenantID, ids); err != nil {
+			return nil, err
+		}
+	}
+	return recorded, nil
 }
 
 // latestVersion is a monitor's newest kept version.
@@ -259,7 +353,7 @@ func latestVersions(ctx context.Context, q versionDB, tenantID uuid.UUID, monito
 	return out, rows.Err()
 }
 
-// pendingVersion is one row to insert.
+// pendingVersionRow is one version to insert.
 type pendingVersionRow struct {
 	version       int
 	snapshot      []byte
@@ -306,28 +400,6 @@ func versionRows(snapshot *models.MonitorConfigSnapshot, latest *latestVersion, 
 	return append(rows, pendingVersionRow{version: next, snapshot: encoded, changedFields: changedFields}), nil
 }
 
-func insertVersion(ctx context.Context, tx versionDB, tenantID, monitorID uuid.UUID, version int, snapshot []byte, changedFields []string, meta versionMeta) error {
-	secretChanges := meta.secretChanges
-	if secretChanges == nil {
-		secretChanges = []string{}
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO monitor_config_versions
-			(tenant_id, monitor_id, version, snapshot, changed_fields, changed_secret_fields,
-			 actor_type, actor_id, actor_label, source, restored_from)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::text, $8::uuid,
-			COALESCE(CASE $7::text
-				WHEN 'user' THEN (SELECT username FROM admin_users WHERE id = $8::uuid)
-				WHEN 'api_key' THEN (SELECT name FROM api_keys WHERE id = $8::uuid)
-			END, ''),
-			$9, $10)
-	`, tenantID, monitorID, version, snapshot, pq.Array(changedFields), pq.Array(secretChanges),
-		meta.actor.typ, meta.actor.id, meta.source, meta.restoredFrom); err != nil {
-		return fmt.Errorf("insert monitor version: %w", err)
-	}
-	return nil
-}
-
 // pruneVersions keeps the newest MaxVersionsPerMonitor versions of each
 // monitor, in one statement.
 func pruneVersions(ctx context.Context, tx versionDB, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
@@ -344,26 +416,36 @@ func pruneVersions(ctx context.Context, tx versionDB, tenantID uuid.UUID, monito
 	return nil
 }
 
-// record writes a version in the save's transaction (or its own), under a
-// savepoint: a failure to record rolls back the version only, never the save
-// it describes. The baseline comes from the save's scope (CaptureBaseline).
-func (v *VersionStore) record(ctx context.Context, tenantID, monitorID uuid.UUID, meta versionMeta) (int, error) {
-	baseline := scopeFrom(ctx).baseline(monitorID)
-	version := 0
+// recordSet writes the versions of one save in its transaction (or its
+// own), under a single savepoint: a failure to record rolls back the
+// versions only, never the save they describe. Baselines come from the
+// save's scope (CaptureBaselines).
+func (v *VersionStore) recordSet(ctx context.Context, tenantID uuid.UUID, entries []recordEntry, meta versionMeta) (map[uuid.UUID]int, error) {
+	ids := make([]uuid.UUID, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.monitorID)
+	}
+	baselines := scopeFrom(ctx).baselinesFor(ids)
+	for i := range entries {
+		if entries[i].baseline == nil {
+			entries[i].baseline = baselines[entries[i].monitorID]
+		}
+	}
+	var recorded map[uuid.UUID]int
 	err := dbtx.Run(ctx, v.db, func(ctx context.Context, tx *sql.Tx) error {
 		return dbtx.Savepoint(ctx, tx, "monitor_config_version", func() error {
 			var err error
-			version, err = recordVersionTx(ctx, tx, baseline, tenantID, monitorID, meta)
+			recorded, err = recordSetTx(ctx, tx, tenantID, entries, meta)
 			return err
 		})
 	})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return version, nil
+	return recorded, nil
 }
 
-// systemVersionChunk bounds the rows one INSERT of system versions carries.
+// systemVersionChunk bounds the rows one INSERT of versions carries.
 const systemVersionChunk = 500
 
 // SystemVersions records a version with source and actor "system" for every
@@ -371,12 +453,15 @@ const systemVersionChunk = 500
 // location, channel or member monitor. Without it, the next save of each
 // monitor, whoever makes it, would be credited with that change.
 //
-// It is set-based, so a change touching thousands of monitors stays a short
+// The change must hold the affected monitors' rows FOR UPDATE before its
+// first write (lock order, api/internal/dbtx): that lock serializes their
+// version numbering, so no other lock is taken, whatever their number. It is
+// set-based, so a change touching thousands of monitors stays a short
 // transaction: PrepareSystemVersionsTx (before the change's writes) reads
 // the baselines of monitors without history in a handful of statements, and
-// RecordTx (after them) records every version in a handful more — whatever
-// the number of monitors. Both run under savepoints and only log a failure:
-// recording never fails or rolls back the change it describes.
+// RecordTx (after them) records every version in a handful more. Both run
+// under one savepoint each and only log a failure: recording never fails or
+// rolls back the change it describes.
 type SystemVersions struct {
 	tenantID  uuid.UUID
 	ids       []uuid.UUID
@@ -392,23 +477,8 @@ func PrepareSystemVersionsTx(ctx context.Context, tx versionDB, tenantID uuid.UU
 		return p
 	}
 	err := dbtx.Savepoint(ctx, tx, "monitor_system_versions", func() error {
-		versioned, err := queryStrings(ctx, tx, `
-			SELECT DISTINCT monitor_id::text FROM monitor_config_versions WHERE tenant_id = $1 AND monitor_id = ANY($2)
-		`, tenantID, pq.Array(p.ids))
-		if err != nil {
-			return err
-		}
-		has := make(map[string]bool, len(versioned))
-		for _, id := range versioned {
-			has[id] = true
-		}
-		var missing []uuid.UUID
-		for _, id := range p.ids {
-			if !has[id.String()] {
-				missing = append(missing, id)
-			}
-		}
-		p.baselines, err = loadSnapshots(ctx, tx, tenantID, missing)
+		var err error
+		p.baselines, err = captureBaselinesTx(ctx, tx, tenantID, p.ids)
 		return err
 	})
 	if err != nil {
@@ -432,67 +502,15 @@ func (p *SystemVersions) RecordTx(ctx context.Context, tx versionDB) {
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
-	err := dbtx.Savepoint(ctx, tx, "monitor_system_versions", func() error {
-		if _, err := tx.ExecContext(ctx, lockVersionsSQL, pq.Array(p.ids)); err != nil {
-			return fmt.Errorf("lock monitor versions: %w", err)
-		}
-		latest, err := latestVersions(ctx, tx, p.tenantID, p.ids)
-		if err != nil {
-			return err
-		}
-		current, err := loadSnapshots(ctx, tx, p.tenantID, p.ids)
-		if err != nil {
-			return err
-		}
-		type recordRow struct {
-			MonitorID     uuid.UUID       `json:"monitor_id"`
-			Version       int             `json:"version"`
-			Snapshot      json.RawMessage `json:"snapshot"`
-			ChangedFields []string        `json:"changed_fields"`
-			Source        string          `json:"source"`
-		}
-		var pending []recordRow
-		for _, id := range p.ids {
-			snapshot := current[id]
-			if snapshot == nil {
-				continue // deleted by the change itself
-			}
-			rows, err := versionRows(snapshot, latest[id], p.baselines[id], nil)
-			if err != nil {
-				return err
-			}
-			for _, row := range rows {
-				source := row.source
-				if source == "" {
-					source = VersionSourceSystem
-				}
-				pending = append(pending, recordRow{MonitorID: id, Version: row.version, Snapshot: row.snapshot, ChangedFields: row.changedFields, Source: source})
-			}
-		}
-		for start := 0; start < len(pending); start += systemVersionChunk {
-			end := min(start+systemVersionChunk, len(pending))
-			payload, err := json.Marshal(pending[start:end])
-			if err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO monitor_config_versions
-					(tenant_id, monitor_id, version, snapshot, changed_fields, changed_secret_fields,
-					 actor_type, actor_label, source)
-				SELECT $1, r.monitor_id, r.version, r.snapshot,
-					ARRAY(SELECT jsonb_array_elements_text(r.changed_fields)), '{}', 'system', '', r.source
-				FROM jsonb_to_recordset($2::jsonb)
-					AS r(monitor_id uuid, version int, snapshot jsonb, changed_fields jsonb, source text)
-			`, p.tenantID, payload); err != nil {
-				return fmt.Errorf("insert system versions: %w", err)
-			}
-		}
-		if len(pending) == 0 {
-			return nil
-		}
-		return pruneVersions(ctx, tx, p.tenantID, p.ids)
-	})
-	if err != nil && !errors.Is(err, context.Canceled) {
+	entries := make([]recordEntry, 0, len(p.ids))
+	for _, id := range p.ids {
+		entries = append(entries, recordEntry{monitorID: id, baseline: p.baselines[id]})
+	}
+	meta := versionMeta{source: VersionSourceSystem, actor: versionActor{typ: VersionActorSystem}}
+	if err := dbtx.Savepoint(ctx, tx, "monitor_system_versions", func() error {
+		_, err := recordSetTx(ctx, tx, p.tenantID, entries, meta)
+		return err
+	}); err != nil {
 		p.fail(err)
 	}
 }

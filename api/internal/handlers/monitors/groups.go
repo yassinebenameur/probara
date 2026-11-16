@@ -59,10 +59,12 @@ func (h *Handlers) AddMonitorsToGroup(w http.ResponseWriter, r *http.Request) {
 
 	// The membership edit and the group's version, in one transaction.
 	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
-		// The group and its members are locked in lock order before the
-		// edges change (api/internal/dbtx); the group's configuration before
-		// the change is kept when it has no history yet.
-		if err := h.lockForSave(ctx, tenantUUID, nil, append([]string{groupID.String()}, req.MonitorIDs...)); err != nil {
+		// The group (FOR UPDATE: two membership edits of nested groups
+		// serialize, so the second one's cycle check sees the first) and its
+		// members (FOR KEY SHARE) are locked in lock order before the edges
+		// change (api/internal/dbtx); the group's configuration before the
+		// change is kept when it has no history yet.
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{groupID}, req.MonitorIDs); err != nil {
 			return err
 		}
 		h.captureBaseline(ctx, tenantUUID, groupID)
@@ -142,10 +144,12 @@ func (h *Handlers) RemoveMonitorsFromGroup(w http.ResponseWriter, r *http.Reques
 
 	// The membership edit and the group's version, in one transaction.
 	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
-		// The group and its members are locked in lock order before the
-		// edges change (api/internal/dbtx); the group's configuration before
-		// the change is kept when it has no history yet.
-		if err := h.lockForSave(ctx, tenantUUID, nil, append([]string{groupID.String()}, req.MonitorIDs...)); err != nil {
+		// The group (FOR UPDATE: two membership edits of nested groups
+		// serialize, so the second one's cycle check sees the first) and its
+		// members (FOR KEY SHARE) are locked in lock order before the edges
+		// change (api/internal/dbtx); the group's configuration before the
+		// change is kept when it has no history yet.
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{groupID}, req.MonitorIDs); err != nil {
 			return err
 		}
 		h.captureBaseline(ctx, tenantUUID, groupID)

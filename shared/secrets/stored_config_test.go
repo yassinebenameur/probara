@@ -67,6 +67,10 @@ func TestMaskURLCredentials(t *testing.T) {
 	cases := map[string]string{
 		"https://ops:p-1@api.example/x?token=p-2&page=2#top": "https://ops:***@api.example/x?token=***&page=2#top",
 		"wss://h.example/ws?access_token=p-1&api_key=p-2":    "wss://h.example/ws?access_token=***&api_key=***",
+		"https://h.example/?api%5Fkey=p-1":                   "https://h.example/?api%5Fkey=***",
+		"https://ops:p/1#x@h.example/path":                   "https://ops:***@h.example/path",
+		"https://ops:p@1@h.example/path/@me":                 "https://ops:***@h.example/path/@me",
+		"https://h.example:8080/users/@me?q=1":               "https://h.example:8080/users/@me?q=1",
 		"https://ops@h.example/?token={{tok}}":               "https://ops@h.example/?token={{tok}}",
 		"https://h.example/?token_url=https://x&q=1":         "https://h.example/?token_url=https://x&q=1",
 		"not a url, token=p-1":                               "not a url, token=p-1",
@@ -81,10 +85,19 @@ func TestMaskURLCredentials(t *testing.T) {
 	if !changed || stripped != "https://ops@h.example/x?page=2" {
 		t.Fatalf("strip = %q %v", stripped, changed)
 	}
-	// Snapshots mask URL credentials for every type, nested ones included.
-	out, _ := MaskStoredMonitorConfig("synthetic_api", json.RawMessage(`{"base_url":"https://u:p-1@h","steps":[{"id":"a","request":{"method":"GET","url":"https://h/x?apikey=p-2"}}]}`))
-	if strings.Contains(string(out), "p-1") || strings.Contains(string(out), "p-2") {
-		t.Fatalf("URL credentials survived: %s", out)
+}
+
+// Only fields that are URLs by schema are scanned; bodies, assertion values
+// and typed text are stored as written.
+func TestMaskStoredMonitorConfig_URLFieldsOnly(t *testing.T) {
+	out, _ := MaskStoredMonitorConfig("synthetic_api", json.RawMessage(`{"base_url":"https://u:p-1@h","steps":[{"id":"a","request":{"method":"POST","url":"https://h/x?apikey=p-2","body":"https://u:kept-a@h"},"assert":[{"target":"body","op":"contains","value":"https://h/?token=kept-b"}]}]}`))
+	text := string(out)
+	if strings.Contains(text, "p-1") || strings.Contains(text, "p-2") || !strings.Contains(text, "kept-a") || !strings.Contains(text, "kept-b") {
+		t.Fatalf("URL fields = %s", text)
+	}
+	out, _ = MaskStoredMonitorConfig("synthetic_browser", json.RawMessage(`{"start_url":"https://h","steps":[{"id":"g","action":"goto","url":"https://h/?token=p-1"},{"id":"a","action":"assert_url","url":"https://h/?token=kept-a"}]}`))
+	if text := string(out); strings.Contains(text, "p-1") || !strings.Contains(text, "kept-a") {
+		t.Fatalf("browser URL fields = %s", text)
 	}
 	if out, _ := MaskStoredMonitorConfig("ping", json.RawMessage(`{"host":"h"}`)); string(out) != `{"host":"h"}` {
 		t.Fatalf("ping = %s", out)

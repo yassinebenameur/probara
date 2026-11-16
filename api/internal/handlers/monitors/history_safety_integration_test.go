@@ -55,6 +55,8 @@ func newHistoryHarness(t *testing.T, name string) (*historyHarness, func()) {
 		r.Get("/{id}/versions/{version}", h.GetMonitorVersion)
 		r.Get("/{id}/versions/{version}/diff", h.DiffMonitorVersion)
 		r.Post("/{id}/versions/{version}/restore", h.RestoreMonitorVersion)
+		r.Post("/{id}/dependencies", h.AddMonitorDependency)
+		r.Post("/{id}/members", h.AddMonitorsToGroup)
 	})
 	as := ctxpkg.WithRole(ctxpkg.WithTenantID(ctx, tenant.String()), "admin")
 	return &historyHarness{t: t, ctx: ctx, db: db, tenant: tenant, router: r, as: as}, cleanup
@@ -72,6 +74,17 @@ func (h *historyHarness) call(method, path string, body any, want int) []byte {
 		h.t.Fatalf("%s %s: status %d, want %d: %s", method, path, w.Code, want, w.Body.String())
 	}
 	return w.Body.Bytes()
+}
+
+func (h *historyHarness) status(method, path string, body any) int {
+	h.t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		_ = json.NewEncoder(&buf).Encode(body)
+	}
+	w := httptest.NewRecorder()
+	h.router.ServeHTTP(w, httptest.NewRequest(method, "/monitors"+path, &buf).WithContext(h.as))
+	return w.Code
 }
 
 func (h *historyHarness) storedConfig(id uuid.UUID) (map[string]any, string) {
@@ -350,5 +363,58 @@ func TestDependencyPatchRacingLocationDelete_Integration(t *testing.T) {
 		if deleteErr != nil {
 			t.Fatalf("location delete: %v", deleteErr)
 		}
+	}
+}
+
+// Two opposite edges added at once: the changed end is locked FOR UPDATE, so
+// they serialize and the second sees the first in its cycle check. Exactly
+// one commits, for dependencies and for group nesting alike.
+func TestOppositeEdgesAddedAtOnceNeverFormACycle_Integration(t *testing.T) {
+	h, cleanup := newHistoryHarness(t, "history-edge-race")
+	defer cleanup()
+	pairs := func(kind string, round int) (uuid.UUID, uuid.UUID, func(from, to uuid.UUID) (string, any)) {
+		if kind == "dependency" {
+			a := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, fmt.Sprintf("a-%d", round))
+			b := testutil.InsertHTTPMonitor(h.ctx, t, h.db, h.tenant, fmt.Sprintf("b-%d", round))
+			return a, b, func(from, to uuid.UUID) (string, any) {
+				return "/" + from.String() + "/dependencies", map[string]any{"depends_on_id": to.String()}
+			}
+		}
+		a := testutil.InsertGroupMonitor(h.ctx, t, h.db, h.tenant, fmt.Sprintf("ga-%d", round))
+		b := testutil.InsertGroupMonitor(h.ctx, t, h.db, h.tenant, fmt.Sprintf("gb-%d", round))
+		return a, b, func(from, to uuid.UUID) (string, any) {
+			return "/" + from.String() + "/members", map[string]any{"monitor_ids": []string{to.String()}}
+		}
+	}
+	for _, kind := range []string{"dependency", "member"} {
+		for round := 0; round < 6; round++ {
+			a, b, edge := pairs(kind, round)
+			codes := make([]int, 2)
+			var wg sync.WaitGroup
+			for i, ends := range [][2]uuid.UUID{{a, b}, {b, a}} {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					path, body := edge(ends[0], ends[1])
+					codes[i] = h.status("POST", path, body)
+				}()
+			}
+			wg.Wait()
+			ok := 0
+			for _, code := range codes {
+				if code == http.StatusNoContent {
+					ok++
+				}
+			}
+			if ok != 1 {
+				t.Fatalf("%s round %d: opposite edges answered %v, want exactly one 204", kind, round, codes)
+			}
+		}
+	}
+	var dependencyCycles, groupCycles int
+	_ = h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM monitor_dependencies x JOIN monitor_dependencies y ON x.monitor_id = y.depends_on_id AND x.depends_on_id = y.monitor_id`).Scan(&dependencyCycles)
+	_ = h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM monitor_groups x JOIN monitor_groups y ON x.monitor_id = y.group_id AND x.group_id = y.monitor_id`).Scan(&groupCycles)
+	if dependencyCycles != 0 || groupCycles != 0 {
+		t.Fatalf("cycles committed: %d dependency, %d group", dependencyCycles, groupCycles)
 	}
 }

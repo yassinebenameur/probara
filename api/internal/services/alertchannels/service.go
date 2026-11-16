@@ -255,11 +255,17 @@ func (s *Service) deleteAlertChannelOnce(ctx context.Context, tenantID, channelI
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The monitors routing to the channel are locked first, FOR UPDATE in
+	// ascending id order (lock order, api/internal/dbtx), before the delete
+	// takes the channel and its routes: a save of one of them, which holds
+	// its row and may replace its routes, then waits for the delete instead
+	// of deadlocking with it, and the lock serializes their system versions.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT mc.monitor_id FROM monitor_channels mc
-		JOIN monitors m ON m.id = mc.monitor_id AND m.tenant_id = $2 AND m.deleted_at IS NULL
-		WHERE mc.channel_id = $1
-		ORDER BY mc.monitor_id
+		SELECT m.id FROM monitors m
+		WHERE m.tenant_id = $2 AND m.deleted_at IS NULL
+			AND m.id IN (SELECT monitor_id FROM monitor_channels WHERE channel_id = $1)
+		ORDER BY m.id
+		FOR UPDATE
 	`, channelID, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to find monitors routing to the channel: %w", err)

@@ -1,43 +1,121 @@
 package secrets
 
 import (
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
+
+// urlField is a config field the worker dials as a URL. when names sibling
+// values the field's object must have (a browser step's url is a URL to
+// load only for `goto`; for `assert_url` it is an expected value).
+type urlField struct {
+	path []string
+	when map[string]string
+}
+
+// URLFields lists, per monitor type, the config fields that are URLs by
+// schema (shared/models: HTTPMonitorConfig.URL, WebSocketMonitorConfig.URL,
+// PrometheusMonitorConfig.URL, SyntheticAPIMonitorConfig.BaseURL and a
+// step's request URL, SyntheticBrowserMonitorConfig.StartURL and a goto
+// step's URL). Only these are scanned for URL credentials: bodies,
+// assertion values and typed text are free text, stored as written. A new
+// type with a URL field adds it here.
+var URLFields = map[string][]urlField{
+	"http":              {{path: []string{"url"}}},
+	"websocket":         {{path: []string{"url"}}},
+	"prometheus":        {{path: []string{"url"}}},
+	"synthetic_api":     {{path: []string{"base_url"}}, {path: []string{"steps", "*", "request", "url"}}},
+	"synthetic_browser": {{path: []string{"start_url"}}, {path: []string{"steps", "*", "url"}, when: map[string]string{"action": "goto"}}},
+}
+
+// WalkURLFields calls fn for every string value of a URL field
+// (URLFields) present in a decoded config. where is the field's path
+// ("url", "steps[0].request.url"); fn may replace parent[key].
+func WalkURLFields(monitorType string, cfg map[string]any, fn func(where string, parent map[string]any, key string)) {
+	for _, field := range URLFields[monitorType] {
+		walkURLField(cfg, field, field.path, "", fn)
+	}
+}
+
+func walkURLField(node any, field urlField, path []string, where string, fn func(string, map[string]any, string)) {
+	if path[0] == "*" {
+		items, _ := node.([]any)
+		for i, item := range items {
+			walkURLField(item, field, path[1:], where+"["+strconv.Itoa(i)+"]", fn)
+		}
+		return
+	}
+	object, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
+	if len(path) == 1 {
+		for key, want := range field.when {
+			if object[key] != want {
+				return
+			}
+		}
+		if _, isString := object[path[0]].(string); isString {
+			fn(joinPath(where, path[0]), object, path[0])
+		}
+		return
+	}
+	walkURLField(object[path[0]], field, path[1:], joinPath(where, path[0]), fn)
+}
 
 // urlScheme is the start of an absolute URL: a scheme, then "://".
 var urlScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 
+var allDigits = regexp.MustCompile(`^[0-9]+$`)
+
 // isSensitiveQueryName applies the credential name rules to a query
-// parameter: the variable rule, which reads a name by its last part
-// (token, access_token, api_key, password — not token_url), or one of the
-// exact credential header names (authorization, x-api-key, …).
+// parameter, after percent-decoding it (api%5Fkey is api_key): the variable
+// rule, which reads a name by its last part (token, access_token, api_key,
+// password — not token_url), or one of the exact credential header names
+// (authorization, x-api-key, …).
 func isSensitiveQueryName(name string) bool {
+	if decoded, err := url.QueryUnescape(name); err == nil {
+		name = decoded
+	}
 	return IsSensitiveVariableName(name) || sensitiveHeaderExact[strings.ToLower(strings.TrimSpace(name))]
 }
 
-// urlParts splits an absolute URL into what is before the userinfo, the
-// userinfo (without "@"), the rest of the authority and path, the raw query
-// (without "?") and the fragment (with "#"). ok is false for anything that
-// is not an absolute URL.
+// urlParts splits an absolute URL into the scheme with "://", the userinfo
+// (without "@"), the host and path, the raw query (without "?") and the
+// fragment (with "#"). The userinfo is found before the query and fragment
+// are split off, so a password holding an unencoded '/', '?', '#' or '@'
+// still reads as one: it ends at the last '@' before the first '/' that
+// follows the first '@', and must hold a ':' after a user name free of
+// '/', '?' and '#' (a host:port/path with an '@' later in the path is not a
+// userinfo). ok is false for anything that is not an absolute URL.
 func urlParts(s string) (scheme, userinfo, hostPath, query, fragment string, hasUserinfo, hasQuery, ok bool) {
 	loc := urlScheme.FindStringIndex(s)
 	if loc == nil {
 		return
 	}
 	scheme, rest := s[:loc[1]], s[loc[1]:]
+	if first := strings.IndexByte(rest, '@'); first >= 0 {
+		end := len(rest)
+		if slash := strings.IndexByte(rest[first:], '/'); slash >= 0 {
+			end = first + slash
+		}
+		at := strings.LastIndex(rest[:end], "@")
+		candidate := rest[:at]
+		if colon := strings.IndexByte(candidate, ':'); colon >= 0 && !strings.ContainsAny(candidate[:colon], "/?#") {
+			password := candidate[colon+1:]
+			beforeSlash, _, _ := strings.Cut(password, "/")
+			if !(strings.Contains(password, "/") && allDigits.MatchString(beforeSlash)) {
+				userinfo, rest, hasUserinfo = candidate, rest[at+1:], true
+			}
+		}
+	}
 	if i := strings.IndexByte(rest, '#'); i >= 0 {
 		rest, fragment = rest[:i], rest[i:]
 	}
 	if i := strings.IndexByte(rest, '?'); i >= 0 {
 		rest, query, hasQuery = rest[:i], rest[i+1:], true
-	}
-	authorityEnd := strings.IndexByte(rest, '/')
-	if authorityEnd < 0 {
-		authorityEnd = len(rest)
-	}
-	if at := strings.LastIndex(rest[:authorityEnd], "@"); at >= 0 {
-		userinfo, rest, hasUserinfo = rest[:at], rest[at+1:], true
 	}
 	return scheme, userinfo, rest, query, fragment, hasUserinfo, hasQuery, true
 }
@@ -67,7 +145,8 @@ func isLiteralCredential(value string) bool {
 // MaskURLCredentials replaces, in an absolute URL, the password of its
 // userinfo and the values of its credential-named query parameters with
 // "***", leaving the rest byte for byte. changed is false for anything else
-// (not a URL, no credential).
+// (not a URL, no credential). Credentials carried in path segments are not
+// recognized.
 func MaskURLCredentials(s string) (string, bool) {
 	scheme, userinfo, hostPath, query, fragment, hasUserinfo, hasQuery, ok := urlParts(s)
 	if !ok {
@@ -134,31 +213,15 @@ func StripMaskedURLCredentials(s string) (string, bool) {
 	return joinURL(scheme, userinfo, hostPath, query, fragment, hasUserinfo, hasQuery), true
 }
 
-// maskURLStrings applies MaskURLCredentials to every string in a decoded
-// config, at any depth. It reports whether anything changed.
-func maskURLStrings(node any) (any, bool) {
-	switch value := node.(type) {
-	case string:
-		return MaskURLCredentials(value)
-	case map[string]any:
-		changed := false
-		for key, child := range value {
-			if masked, did := maskURLStrings(child); did {
-				value[key] = masked
-				changed = true
-			}
+// maskURLFields applies MaskURLCredentials to the URL fields of a decoded
+// config (URLFields). It reports whether anything changed.
+func maskURLFields(monitorType string, cfg map[string]any) bool {
+	changed := false
+	WalkURLFields(monitorType, cfg, func(_ string, parent map[string]any, key string) {
+		if masked, did := MaskURLCredentials(parent[key].(string)); did {
+			parent[key] = masked
+			changed = true
 		}
-		return value, changed
-	case []any:
-		changed := false
-		for i, child := range value {
-			if masked, did := maskURLStrings(child); did {
-				value[i] = masked
-				changed = true
-			}
-		}
-		return value, changed
-	default:
-		return node, false
-	}
+	})
+	return changed
 }

@@ -139,8 +139,10 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 	// The edge and the monitor's version, in one transaction.
 	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
 		// Both ends locked in lock order before the edge changes
-		// (api/internal/dbtx).
-		if err := h.lockForSave(ctx, tenantUUID, nil, []string{monitorID.String(), dependsOnID.String()}); err != nil {
+		// (api/internal/dbtx): the monitor whose dependencies change FOR
+		// UPDATE, so two opposite edge adds serialize and the second one's
+		// cycle check sees the first; the target FOR KEY SHARE.
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{monitorID}, []string{dependsOnID.String()}); err != nil {
 			return err
 		}
 		h.captureBaseline(ctx, tenantUUID, monitorID)

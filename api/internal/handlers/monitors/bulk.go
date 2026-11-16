@@ -62,8 +62,16 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 	updated, err := h.service.BulkUpdateAlerting(r.Context(), tenantUUID, monitorIDs,
 		req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels)
 	if err != nil {
+		// Batches commit one after the other (BulkAlertingBatchSize): when
+		// earlier ones were applied, every answer says so. The edit sets the
+		// same values on every monitor, so repeating the request is safe.
+		partial := ""
+		if updated > 0 {
+			partial = fmt.Sprintf(" %d of %d monitors were already updated by earlier batches and keep the change; "+
+				"the edit is idempotent, so retrying the whole request is safe.", updated, len(monitorIDs))
+		}
 		if errors.Is(err, monitorservice.ErrCallMonitorForbidden) {
-			apierrors.WriteForbiddenError(w, err.Error())
+			apierrors.WriteForbiddenError(w, err.Error()+partial)
 			return
 		}
 		msg := err.Error()
@@ -75,14 +83,12 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
-		// Batches commit one after the other (BulkAlertingBatchSize): say
-		// how many monitors the earlier ones changed.
-		partial := ""
-		if updated > 0 {
-			partial = fmt.Sprintf(" after updating %d of %d monitors", updated, len(monitorIDs))
-		}
 		if dbtx.IsConflict(err) {
-			apierrors.WriteError(w, http.StatusServiceUnavailable, "conflict", dbtx.ErrConflict.Error()+partial)
+			text := dbtx.ErrConflict.Error()
+			if updated > 0 {
+				text = "another change to the same monitors was in progress; the remaining monitors were not updated." + partial
+			}
+			apierrors.WriteError(w, http.StatusServiceUnavailable, "conflict", text)
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{
@@ -90,7 +96,11 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 			"tenant_id": tenantID,
 			"updated":   updated,
 		}).Error("Failed to bulk update alerting")
-		apierrors.WriteInternalError(w, "failed to bulk update alerting"+partial)
+		text := "failed to bulk update alerting"
+		if updated > 0 {
+			text += "; the remaining monitors were not updated." + partial
+		}
+		apierrors.WriteInternalError(w, text)
 		return
 	}
 

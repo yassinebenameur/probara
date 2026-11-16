@@ -762,24 +762,29 @@ func (s *Service) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	})
 }
 
-// deleteMonitors runs a delete in one transaction: the deleted rows are
-// locked in id order, the affected groups and dependents are prepared for
-// their system versions (set-based, see SystemVersions), the delete runs,
-// and the versions are recorded; a recording failure never fails the delete.
+// deleteMonitors runs a delete in one transaction: the deleted monitors and
+// the groups and dependents that name them are locked together, FOR UPDATE
+// in one ascending pass before the first write (lock order,
+// api/internal/dbtx; the affected rows' lock is what their system versions
+// rely on), the affected monitors are prepared for their system versions
+// (set-based, see SystemVersions), the delete runs, and the versions are
+// recorded; a recording failure never fails the delete.
 func (s *Service) deleteMonitors(ctx context.Context, tenantID uuid.UUID, deleted []uuid.UUID, del func(ctx context.Context) error) error {
 	return s.InTx(ctx, func(ctx context.Context) error {
-		if err := s.LockMonitors(ctx, tenantID, deleted, nil); err != nil {
+		var affected []uuid.UUID
+		if s.versions != nil {
+			var err error
+			if affected, err = s.versions.MonitorsAffectedByDelete(ctx, tenantID, deleted); err != nil {
+				return err
+			}
+		}
+		if err := s.LockMonitors(ctx, tenantID, append(append([]uuid.UUID{}, deleted...), affected...), nil); err != nil {
 			return err
 		}
 		tx, inTx := dbtx.From(ctx)
 		var cascade *SystemVersions
 		if s.versions != nil && inTx {
-			if affected, err := s.versions.MonitorsAffectedByDelete(ctx, tenantID, deleted); err == nil {
-				cascade = PrepareSystemVersionsTx(ctx, tx, tenantID, affected)
-			} else {
-				s.versionLogger().WithFields(map[string]interface{}{"error": err.Error(), "tenant_id": tenantID}).
-					Error("Failed to find monitors affected by a delete")
-			}
+			cascade = PrepareSystemVersionsTx(ctx, tx, tenantID, affected)
 		}
 		if err := del(ctx); err != nil {
 			return err
@@ -960,9 +965,13 @@ func (s *Service) BulkUpdateAlerting(
 	for start := 0; start < len(ordered); start += BulkAlertingBatchSize {
 		batch := ordered[start:min(start+BulkAlertingBatchSize, len(ordered))]
 		err := s.InTx(ctx, func(ctx context.Context) error {
+			// Rows first, then the batch's baselines and versions set-based
+			// (one savepoint each, not one per monitor).
 			if err := s.LockMonitors(ctx, tenantID, batch, nil); err != nil {
 				return err
 			}
+			s.CaptureBaselines(ctx, tenantID, batch...)
+			ctx, versions := DeferVersions(ctx)
 			for _, monitorID := range batch {
 				req := &models.UpdateMonitorRequest{
 					ConsecutiveFailuresThreshold: threshold,
@@ -973,6 +982,7 @@ func (s *Service) BulkUpdateAlerting(
 					return fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
 				}
 			}
+			versions.Flush(ctx)
 			return nil
 		})
 		if err != nil {

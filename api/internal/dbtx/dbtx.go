@@ -8,17 +8,22 @@
 // transaction when there is one, so a save reads its own uncommitted writes
 // and never needs a second pool connection while it holds one.
 //
-// Lock order. Every transaction that locks more than one monitor takes its
-// locks in this order, so two of them can never wait on each other in a
-// cycle:
+// Lock order. Every transaction that touches monitors locks their rows
+// before its first write, in ascending id order, in one pass: FOR UPDATE for
+// a monitor it changes or records a configuration version of, FOR KEY SHARE
+// for one it only points at (the other end of a new dependency or group
+// member edge, whose foreign-key check would otherwise take that lock later,
+// out of order). Two such transactions can never wait on each other in a
+// cycle (api/internal/services/monitors LockMonitorsTx; location and channel
+// delete lock their monitors the same way).
 //
-//  1. monitor rows, in ascending id order — FOR UPDATE for a monitor the
-//     transaction changes, FOR KEY SHARE for one it only points at (a new
-//     dependency or group member edge) — all before the first write
-//     (api/internal/services/monitors LockMonitorsTx; location delete locks
-//     its monitors the same way);
-//  2. then the configuration-version advisory locks of those monitors, in
-//     ascending id order (monitors versions_store.go).
+// There are no other locks to order: a monitor's row, held FOR UPDATE by
+// every path that records its configuration version, is also what
+// serializes version numbering (monitors versions_record.go), so a change
+// touching thousands of monitors takes no lock per monitor beyond its row.
+// Changes outside a save follow the same rule: a location, channel or
+// monitor delete locks every monitor whose settings it rewrites, FOR UPDATE
+// and in this order, before its first write.
 //
 // A deadlock or serialization failure that still happens (an order a path
 // does not control) is retried once by RunRetry and otherwise reported with
@@ -30,6 +35,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/lib/pq"
 
@@ -53,11 +59,21 @@ func IsConflict(err error) bool {
 	return false
 }
 
+// retryOff disables the conflict retry (SetRetry).
+var retryOff atomic.Bool
+
+// SetRetry turns the one retry after a deadlock or serialization failure on
+// or off. Tests that prove the lock order turn it off, so a deadlock
+// surfaces instead of being retried away.
+func SetRetry(on bool) {
+	retryOff.Store(!on)
+}
+
 // Retry runs fn, a whole transaction of its own, once more after a deadlock
 // or serialization failure; a second conflict is wrapped in ErrConflict.
 func Retry(ctx context.Context, fn func() error) error {
 	err := fn()
-	if !IsConflict(err) || ctx.Err() != nil {
+	if !IsConflict(err) || ctx.Err() != nil || retryOff.Load() {
 		return err
 	}
 	if err = fn(); IsConflict(err) {
@@ -76,7 +92,7 @@ func RunRetry(ctx context.Context, database db.Transactor, fn func(ctx context.C
 		return fn(ctx, tx)
 	}
 	err := Run(ctx, database, fn)
-	if !IsConflict(err) || ctx.Err() != nil {
+	if !IsConflict(err) || ctx.Err() != nil || retryOff.Load() {
 		return err
 	}
 	if err = Run(ctx, database, fn); IsConflict(err) {

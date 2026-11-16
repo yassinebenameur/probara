@@ -81,9 +81,10 @@ func walkPlainPath(node any, path []string, where string, visit func(where strin
 // masks every secret (MaskMonitorConfig), and finally replaces any
 // credential the steps above could not place — a miscased spelling in
 // conflict, a credential-named variable that cannot move — with "***", as
-// well as URL credentials anywhere in the config: a userinfo password and
-// credential-named query parameter values (MaskURLCredentials). Request
-// bodies, browser fill values and other free text are not inspected.
+// well as the credentials of the fields that are URLs by schema (URLFields):
+// a userinfo password and credential-named query parameter values
+// (MaskURLCredentials). Request bodies, assertion values, browser fill
+// values and other free text are not inspected.
 // Configuration history snapshots go through it, so a version never holds a
 // secret whatever the stored row looks like.
 func MaskStoredMonitorConfig(monitorType string, raw json.RawMessage) (json.RawMessage, error) {
@@ -168,7 +169,7 @@ func scrubCredentials(monitorType string, cfg map[string]any) bool {
 			changed = true
 		}
 	})
-	if _, did := maskURLStrings(cfg); did {
+	if maskURLFields(monitorType, cfg) {
 		changed = true
 	}
 	return changed

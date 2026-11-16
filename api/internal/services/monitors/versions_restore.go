@@ -243,7 +243,7 @@ func restoreConfig(monitorType string, versionConfig, stored json.RawMessage) (j
 		reenter[where+"."+name] = struct{}{}
 	})
 
-	restoreURLs(cfg, storedCfg, "", reenter)
+	restoreURLs(monitorType, cfg, storedCfg, reenter)
 
 	out, err := json.Marshal(cfg)
 	if err != nil {
@@ -269,46 +269,29 @@ func lookupKeyFold(values map[string]any, key string) (any, bool) {
 	return nil, false
 }
 
-// restoreURLs replaces, at any depth of a version's config, each URL whose
-// credentials the snapshot masked (secrets.MaskURLCredentials): with the
-// stored value at the same place when that masks to the same URL (the
-// credential kept), otherwise with the URL without the masked parts, which
-// is reported to enter again. It edits node in place and returns it.
-func restoreURLs(node, stored any, where string, reenter map[string]struct{}) any {
-	switch value := node.(type) {
-	case string:
+// restoreURLs replaces each URL field (secrets.URLFields) whose
+// credentials the snapshot masked: with the stored value at the same place
+// when that masks to the same URL (the credential kept), otherwise with the
+// URL without the masked parts, which is reported to enter again. Other
+// fields are free text and restored as recorded.
+func restoreURLs(monitorType string, cfg, stored map[string]any, reenter map[string]struct{}) {
+	storedURLs := map[string]string{}
+	secrets.WalkURLFields(monitorType, stored, func(where string, parent map[string]any, key string) {
+		storedURLs[where] = parent[key].(string)
+	})
+	secrets.WalkURLFields(monitorType, cfg, func(where string, parent map[string]any, key string) {
+		value := parent[key].(string)
 		stripped, masked := secrets.StripMaskedURLCredentials(value)
 		if !masked {
-			return value
+			return
 		}
-		if storedString, ok := stored.(string); ok {
-			if remasked, _ := secrets.MaskURLCredentials(storedString); remasked == value {
-				return storedString
+		if storedURL, ok := storedURLs[where]; ok {
+			if remasked, _ := secrets.MaskURLCredentials(storedURL); remasked == value {
+				parent[key] = storedURL
+				return
 			}
 		}
+		parent[key] = stripped
 		reenter[where+" (URL credentials)"] = struct{}{}
-		return stripped
-	case map[string]any:
-		storedMap, _ := stored.(map[string]any)
-		for key, child := range value {
-			path := key
-			if where != "" {
-				path = where + "." + key
-			}
-			value[key] = restoreURLs(child, storedMap[key], path, reenter)
-		}
-		return value
-	case []any:
-		storedItems, _ := stored.([]any)
-		for i, child := range value {
-			var storedChild any
-			if i < len(storedItems) {
-				storedChild = storedItems[i]
-			}
-			value[i] = restoreURLs(child, storedChild, fmt.Sprintf("%s[%d]", where, i), reenter)
-		}
-		return value
-	default:
-		return node
-	}
+	})
 }

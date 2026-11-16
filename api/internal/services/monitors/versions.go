@@ -194,6 +194,14 @@ func (b *VersionBatch) Flush(ctx context.Context) map[uuid.UUID]int {
 	order, pending := b.order, b.pending
 	b.order, b.pending = nil, map[uuid.UUID]*pendingVersion{}
 	b.mu.Unlock()
+	// One set-based recording (one savepoint) per service and tenant,
+	// however many monitors the save touched.
+	type key struct {
+		svc      *Service
+		tenantID uuid.UUID
+	}
+	groups := map[key][]recordEntry{}
+	var keys []key
 	for _, monitorID := range order {
 		entry := pending[monitorID]
 		fields := make([]string, 0, len(entry.secrets))
@@ -201,8 +209,15 @@ func (b *VersionBatch) Flush(ctx context.Context) map[uuid.UUID]int {
 			fields = append(fields, field)
 		}
 		sort.Strings(fields)
-		if version := entry.svc.recordVersionNow(ctx, entry.tenantID, monitorID, fields); version > 0 {
-			recorded[monitorID] = version
+		k := key{entry.svc, entry.tenantID}
+		if _, seen := groups[k]; !seen {
+			keys = append(keys, k)
+		}
+		groups[k] = append(groups[k], recordEntry{monitorID: monitorID, secretChanges: fields})
+	}
+	for _, k := range keys {
+		for id, version := range k.svc.recordNow(ctx, k.tenantID, groups[k]) {
+			recorded[id] = version
 		}
 	}
 	return recorded
@@ -234,20 +249,26 @@ func (s *Service) recordVersion(ctx context.Context, tenantID, monitorID uuid.UU
 // save that succeeded. The write ignores ctx cancellation: a save that
 // committed must not lose its version to a client that went away.
 func (s *Service) recordVersionNow(ctx context.Context, tenantID, monitorID uuid.UUID, secretChanges []string) int {
+	return s.recordNow(ctx, tenantID, []recordEntry{{monitorID: monitorID, secretChanges: secretChanges}})[monitorID]
+}
+
+// recordNow records the versions of a save's monitors (see recordVersionNow)
+// and returns the version recorded per monitor.
+func (s *Service) recordNow(ctx context.Context, tenantID uuid.UUID, entries []recordEntry) map[uuid.UUID]int {
 	if s.versions == nil {
-		return 0
+		return map[uuid.UUID]int{}
 	}
 	ctx = context.WithoutCancel(ctx)
-	version, err := s.versions.record(ctx, tenantID, monitorID, versionMetaFromContext(ctx, secretChanges))
+	recorded, err := s.versions.recordSet(ctx, tenantID, entries, versionMetaFromContext(ctx, nil))
 	if err != nil {
 		s.versionLogger().WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID,
-		}).Error("Failed to record monitor config version")
-		return 0
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+			"monitors":  len(entries),
+		}).Error("Failed to record monitor config versions")
+		return map[uuid.UUID]int{}
 	}
-	return version
+	return recorded
 }
 
 // Versions returns the version history store (nil when the service runs on a
