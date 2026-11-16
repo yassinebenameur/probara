@@ -457,3 +457,50 @@ func TestHandle_RecordsNtfyAndGotify(t *testing.T) {
 		})
 	}
 }
+
+// A drop decided under the alert lock is recorded after the lock is released:
+// with a single pool connection, writing the row while the lock transaction
+// still held that connection would wait out the record timeout.
+func TestHandle_RecordsDropsAfterReleasingTheLock(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	f := newDeliveryFixture(ctx, t, dbClient, "delivery-lock")
+	alertID := f.alert("resolved")
+	ch := f.channel(deliveryLogStubType, true)
+	// The migration helper keeps a connection: leave the handler one.
+	dbClient.SetMaxOpenConns(dbClient.Stats().InUse + 1)
+	started := time.Now()
+	if err := f.handle(alertID, ch, deliveryLogStubType, "reminder", 1); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if waited := time.Since(started); waited > 3*time.Second {
+		t.Fatalf("the superseded drop took %s: its history write waited on the lock's connection", waited)
+	}
+	got := workerDeliveryRows(ctx, t, dbClient, alertID, ch)
+	if len(got) != 1 || got[0].Outcome != "dropped" || strOf(got[0].Reason) != "resolved" {
+		t.Fatalf("rows = %+v, want one dropped/resolved", got)
+	}
+}
+
+// A message nothing will redeliver says so whatever failed it: a missing
+// plugin on the last attempt is retries_exhausted, and the error keeps the
+// cause.
+func TestHandle_LastAttemptIsRetriesExhausted(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	f := newDeliveryFixture(ctx, t, dbClient, "delivery-last")
+	alertID := f.alert("active")
+	ch := f.channel(deliveryLogStubType, true)
+	for _, attempt := range []uint64{1, MaxDeliver} {
+		if err := f.handle(alertID, ch, "no_such_plugin_type", "created", attempt); err == nil {
+			t.Fatal("a missing plugin must be retried")
+		}
+	}
+	got := workerDeliveryRows(ctx, t, dbClient, alertID, ch)
+	if len(got) != 2 || strOf(got[0].Reason) != "plugin_missing" || strOf(got[1].Reason) != "retries_exhausted" ||
+		!strings.Contains(strOf(got[1].Error), "unknown plugin type") {
+		t.Fatalf("rows = %+v, want plugin_missing then retries_exhausted with the cause", got)
+	}
+}

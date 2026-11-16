@@ -289,3 +289,74 @@ func TestReadersAndChannelHealth(t *testing.T) {
 		t.Fatalf("cross-tenant channel read: %v, want ErrNotFound", err)
 	}
 }
+
+// A history write that cannot get its table (another session holds a lock on
+// it, as a slow database would make it wait) fails on the server within the
+// lock timeout and is rolled back to its savepoint: the caller's transaction
+// stays usable, keeps its own work and commits, and its own timeouts are
+// unchanged after a successful write.
+func TestRecordTxBlockedWriteKeepsTheCallerTransaction(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "deliveries-blocked")
+	alertID := insertAlert(ctx, t, db, tenantID, "a")
+	channelID := insertChannel(ctx, t, db, tenantID, "hook")
+	attempt := deliverylog.Attempt{
+		AlertID: alertID, ChannelID: channelID, EventType: "created", Path: deliverylog.PathSync,
+		Outcome: deliverylog.OutcomeDelivered,
+	}
+
+	locker, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := locker.ExecContext(ctx, `LOCK TABLE alert_notification_deliveries IN EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE alerts SET failure_count = 7 WHERE id = $1`, alertID); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := deliverylog.RecordTx(ctx, tx, attempt); err == nil {
+		t.Fatal("a blocked history write reported success")
+	}
+	if waited := time.Since(started); waited > 5*time.Second {
+		t.Fatalf("the blocked write held the caller for %s", waited)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("the caller's transaction did not survive a blocked history write: %v", err)
+	}
+	_ = locker.Rollback()
+	var fc int
+	if err := db.QueryRowContext(ctx, `SELECT failure_count FROM alerts WHERE id = $1`, alertID).Scan(&fc); err != nil || fc != 7 {
+		t.Fatalf("caller's update = %d (%v), want 7", fc, err)
+	}
+	if n := countRows(ctx, t, db, `alert_id = $1`, alertID); n != 0 {
+		t.Fatalf("rows = %d, want 0", n)
+	}
+
+	// After a successful write the caller's own timeouts are back.
+	tx, err = db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL statement_timeout = '45s'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := deliverylog.RecordTx(ctx, tx, attempt); err != nil {
+		t.Fatal(err)
+	}
+	var st, lt string
+	if err := tx.QueryRowContext(ctx, `SELECT current_setting('statement_timeout'), current_setting('lock_timeout')`).Scan(&st, &lt); err != nil {
+		t.Fatal(err)
+	}
+	if st != "45s" || lt != "0" {
+		t.Fatalf("caller's timeouts after RecordTx = %s / %s, want 45s / 0", st, lt)
+	}
+}

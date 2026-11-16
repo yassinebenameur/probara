@@ -31,6 +31,7 @@ type deliveryRecord struct {
 	started   time.Time
 
 	secrets    []string
+	addresses  []string
 	recipients *deliverylog.Tracker
 }
 
@@ -51,9 +52,10 @@ func (c *Consumer) deliveryRecord(entry *logrus.Entry, envelope notifications.Di
 }
 
 // channelLoaded notes the decrypted channel config's secret values, masked
-// out of any stored error.
+// out of any stored error, and its configured recipients, masked in it.
 func (r *deliveryRecord) channelLoaded(manifest plugin.Manifest, config map[string]any) {
 	r.secrets = deliverylog.SecretValues(manifest, config)
+	r.addresses = deliverylog.RecipientValues(manifest, config)
 }
 
 // track wraps the send's recipient ledger so the history gets one row per
@@ -78,14 +80,28 @@ func (r *deliveryRecord) row(outcome deliverylog.Outcome, reason deliverylog.Rea
 		Reason:      reason,
 		Err:         err,
 		Secrets:     r.secrets,
+		Addresses:   r.addresses,
 		Duration:    time.Since(r.started),
 		Recipients:  r.recipients,
 	}
 }
 
+// releaseLock rolls back lock, the alert-lock transaction of a path that
+// returns right after recording without committing it, so the pool write that
+// follows never runs while the alert row is held: with more handlers than pool
+// connections it could wait, and an acknowledge or resolve with it. Nil (no
+// lock taken, or a resolve) is a no-op; the caller's deferred rollback then
+// finds the transaction done.
+func releaseLock(lock *sql.Tx) {
+	if lock != nil {
+		_ = lock.Rollback()
+	}
+}
+
 // dropped records an event the consumer decided not to send, through the
-// pool.
-func (r *deliveryRecord) dropped(ctx context.Context, reason deliverylog.Reason) {
+// pool, after releasing lock.
+func (r *deliveryRecord) dropped(ctx context.Context, reason deliverylog.Reason, lock *sql.Tx) {
+	releaseLock(lock)
 	r.write(ctx, nil, r.row(deliverylog.OutcomeDropped, reason, nil))
 }
 
@@ -95,22 +111,27 @@ func (r *deliveryRecord) droppedTx(ctx context.Context, tx *sql.Tx, reason deliv
 	r.write(ctx, tx, r.row(deliverylog.OutcomeDropped, reason, nil))
 }
 
-// failed records an attempt that failed before reaching the plugin's Send.
-func (r *deliveryRecord) failed(ctx context.Context, outcome deliverylog.Outcome, reason deliverylog.Reason, err error) {
+// failed records an attempt that failed before reaching the plugin's Send,
+// through the pool, after releasing lock.
+func (r *deliveryRecord) failed(ctx context.Context, outcome deliverylog.Outcome, reason deliverylog.Reason, err error, lock *sql.Tx) {
+	releaseLock(lock)
 	r.write(ctx, nil, r.row(outcome, r.finalReason(outcome, reason), err))
 }
 
-// finished records the plugin's Send result, through the pool: the lock
-// transaction around Send always rolls back.
-func (r *deliveryRecord) finished(ctx context.Context, sendErr error) {
+// finished records the plugin's Send result through the pool, after releasing
+// lock: the lock transaction around Send always rolls back.
+func (r *deliveryRecord) finished(ctx context.Context, sendErr error, lock *sql.Tx) {
+	releaseLock(lock)
 	outcome, reason := deliverylog.SendOutcome(sendErr)
 	r.write(ctx, nil, r.row(outcome, r.finalReason(outcome, reason), sendErr))
 }
 
 // finalReason marks a transient failure on the last delivery JetStream will
-// make: nothing retries it, so "failed" alone would read as pending.
+// make: nothing retries it, so "failed" alone would read as pending. It
+// replaces any other reason (plugin_missing included); the stored error
+// still names the cause.
 func (r *deliveryRecord) finalReason(outcome deliverylog.Outcome, reason deliverylog.Reason) deliverylog.Reason {
-	if outcome == deliverylog.OutcomeFailed && reason == "" && r.attempt >= MaxDeliver {
+	if outcome == deliverylog.OutcomeFailed && r.attempt >= MaxDeliver {
 		return deliverylog.ReasonRetriesExhausted
 	}
 	return reason

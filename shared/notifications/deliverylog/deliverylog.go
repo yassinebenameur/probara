@@ -45,9 +45,15 @@ const (
 	// recordTimeout bounds a pool write. It runs detached from the delivery
 	// deadline: an attempt that timed out is exactly the one worth recording.
 	recordTimeout = 5 * time.Second
-	// recordTxTimeout bounds a write inside the caller's claim transaction,
-	// which holds the alert row and the claim while it runs.
-	recordTxTimeout = 2 * time.Second
+	// txStatementTimeout and txLockTimeout bound a write inside the caller's
+	// claim transaction, which holds the alert row and the claim while it
+	// runs. They are server-side limits (SET LOCAL) on purpose: lib/pq closes
+	// the connection when a client context fires mid-statement, which would
+	// take the caller's transaction, and with it the claim, down with the
+	// history write. A server-side timeout is an ordinary statement error the
+	// savepoint rolls back.
+	txStatementTimeout = "2s"
+	txLockTimeout      = "1s"
 )
 
 // Outcome is what one attempt came to.
@@ -161,8 +167,12 @@ type Attempt struct {
 	Err error
 	// Secrets are the channel's secret config values (SecretValues), masked
 	// out of the stored error wherever they appear.
-	Secrets  []string
-	Duration time.Duration
+	Secrets []string
+	// Addresses are the channel's configured recipients (RecipientValues),
+	// masked in the stored error like stored recipients are. The recipients
+	// a tracked fan-out tried are added automatically.
+	Addresses []string
+	Duration  time.Duration
 	// Recipients is the send's per-recipient progress, when it went through
 	// a recipient ledger (Track); nil records one row for the channel.
 	Recipients *Tracker
@@ -223,7 +233,11 @@ func (a Attempt) args() ([]any, bool) {
 	}
 	var errText string
 	if a.Err != nil {
-		errText = SanitizeError(a.Err.Error(), a.Secrets...)
+		addresses := a.Addresses
+		if a.Recipients != nil {
+			addresses = append(append([]string(nil), addresses...), a.Recipients.tried()...)
+		}
+		errText = sanitize(a.Err.Error(), a.Secrets, addresses)
 	}
 	var status sql.NullInt64
 	if s, ok := plugin.ResponseStatus(a.Err); ok {
@@ -261,9 +275,12 @@ func Record(ctx context.Context, db Execer, a Attempt) error {
 
 // RecordTx appends the attempt inside tx, the caller's claim or lock
 // transaction, so the row commits (or not) with the delivery state it
-// describes. It runs under a savepoint: a failed write is rolled back to it
-// and returned, and tx stays usable, so the caller's commit never fails
-// because of the history. Use it only on a path where tx commits.
+// describes. It runs under a savepoint with server-side statement and lock
+// timeouts (never a client deadline: see txStatementTimeout): a failed or
+// slow write is rolled back to the savepoint and returned, and tx stays
+// usable, so the caller's commit never fails because of the history. The
+// caller's own timeouts are back in force afterwards. Use it only on a path
+// where tx commits.
 func RecordTx(ctx context.Context, tx *sql.Tx, a Attempt) error {
 	if tx == nil {
 		return nil
@@ -275,9 +292,23 @@ func RecordTx(ctx context.Context, tx *sql.Tx, a Attempt) error {
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT delivery_log`); err != nil {
 		return fmt.Errorf("record notification delivery: savepoint: %w", err)
 	}
-	wctx, cancel := context.WithTimeout(ctx, recordTxTimeout)
-	_, err := tx.ExecContext(wctx, recordSQL, args...)
-	cancel()
+	// Bound the write on the server. Settings changed inside a savepoint
+	// are undone by ROLLBACK TO SAVEPOINT; on success they are put back by
+	// hand before the release.
+	var prevStatement, prevLock string
+	err := tx.QueryRowContext(ctx, `SELECT current_setting('statement_timeout'), current_setting('lock_timeout')`).
+		Scan(&prevStatement, &prevLock)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)`,
+			txStatementTimeout, txLockTimeout)
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, recordSQL, args...)
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)`,
+			prevStatement, prevLock)
+	}
 	if err != nil {
 		if _, rerr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT delivery_log`); rerr != nil {
 			return fmt.Errorf("record notification delivery: %v; roll back to savepoint: %w", err, rerr)

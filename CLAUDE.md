@@ -797,7 +797,9 @@ or imported groups come back empty. Any other path that creates groups through
   tx when it commits, through the pool after a rollback) and the worker
   consumer (`worker/.../notifications/delivery_log.go`, one call per outcome,
   drops included) — plus the API test send. Never write it elsewhere, never
-  let a failed write fail a delivery (`RecordTx` uses a savepoint), and never
+  let a failed write fail a delivery (`RecordTx`: a savepoint plus server-side
+  `SET LOCAL` timeouts — never a client context deadline inside a caller's
+  transaction, lib/pq closes the connection when one fires), and never
   store raw error text: `deliverylog` sanitizes it and masks the channel's
   secrets (`SecretValues`). Fan-out rows follow the recipient ledger
   (`deliverylog.Track`), one per recipient an attempt tried. A held page's

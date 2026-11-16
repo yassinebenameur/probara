@@ -24,8 +24,9 @@ type sendTrace struct {
 	// nothing.
 	queued bool
 	// secrets are the channel's decrypted secret values, masked out of the
-	// stored error.
-	secrets []string
+	// stored error; addresses its configured recipients, masked in it.
+	secrets   []string
+	addresses []string
 	// recipients is the send's recipient ledger as the plugin used it.
 	recipients *deliverylog.Tracker
 }
@@ -56,6 +57,7 @@ func traceSend(ctx context.Context, recipients plugin.RecipientLedger, manifest 
 		return recipients
 	}
 	t.secrets = deliverylog.SecretValues(manifest, config)
+	t.addresses = deliverylog.RecipientValues(manifest, config)
 	if recipients == nil {
 		return nil
 	}
@@ -82,6 +84,7 @@ func (a *Alerter) recordDelivery(ctx context.Context, tx *sql.Tx, t *sendTrace, 
 		Reason:      reason,
 		Err:         sendErr,
 		Secrets:     t.secrets,
+		Addresses:   t.addresses,
 		Duration:    time.Since(t.started),
 		Recipients:  t.recipients,
 	}

@@ -303,3 +303,55 @@ func TestDeliveryHistoryRecordsLocationAndMeshAlerts(t *testing.T) {
 		t.Fatalf("per-alert read of a monitor-less alert = %+v, %v", alertPage, err)
 	}
 }
+
+// A history write that cannot complete (the table locked by another session,
+// as an overloaded database would leave it waiting) must not cost the claim:
+// the page went out, so its claim commits, the next cycle does not send it
+// again, and a permanent failure keeps the claim that stops re-sends.
+func TestDeliveryHistoryBlockedWriteKeepsTheClaim(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "delivery-blocked")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	sentOK := insertTypedChannel(ctx, t, dbClient, tenantID, "webhook")
+	rejected := insertTypedChannel(ctx, t, dbClient, tenantID, "slack")
+	alertID := openDownAlert(ctx, t, dbClient, tenantID, monitorID)
+
+	sends := map[uuid.UUID]int{}
+	var mu sync.Mutex
+	a := newIntegrationAlerter(dbClient)
+	a.sendFunc = func(_ context.Context, ch alertChannel, _ string, _ alertSubject, _ *alertRecord, _ *groupDetail, _ time.Time) error {
+		mu.Lock()
+		sends[ch.ID]++
+		mu.Unlock()
+		if ch.ID == rejected {
+			return plugin.Permanent(errors.New("webhook deleted"))
+		}
+		return nil
+	}
+
+	locker, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locker.Rollback() }()
+	if _, err := locker.ExecContext(ctx, `LOCK TABLE alert_notification_deliveries IN EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.dispatchOpenAlerts(ctx); err != nil {
+		t.Fatalf("dispatch with the history blocked: %v", err)
+	}
+	for _, ch := range []uuid.UUID{sentOK, rejected} {
+		if ev, _, ok := notificationStateFor(ctx, t, dbClient, alertID, ch); !ok || ev != "created" {
+			t.Fatalf("claim on %s = (%q, %v), want created kept", ch, ev, ok)
+		}
+	}
+	_ = locker.Rollback()
+	if err := a.dispatchOpenAlerts(ctx); err != nil {
+		t.Fatalf("next cycle: %v", err)
+	}
+	if sends[sentOK] != 1 || sends[rejected] != 1 {
+		t.Fatalf("sends = %v, want one each: a lost claim would page again", sends)
+	}
+}

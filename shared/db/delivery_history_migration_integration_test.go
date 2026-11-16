@@ -86,4 +86,10 @@ func TestDeliveryHistoryMigrationUpDownUp(t *testing.T) {
 	if !tableExists() {
 		t.Fatal("alert_notification_deliveries missing after re-applying 000107")
 	}
+	// The writer's attempt numbering counts under the alerter's claim; it
+	// needs its own index.
+	var indexed bool
+	if err := dbc.QueryRowContext(ctx, `SELECT to_regclass('idx_alert_notification_deliveries_attempts') IS NOT NULL`).Scan(&indexed); err != nil || !indexed {
+		t.Fatalf("attempt-numbering index missing (%v)", err)
+	}
 }

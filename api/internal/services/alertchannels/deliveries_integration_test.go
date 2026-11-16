@@ -105,3 +105,35 @@ func TestTestSendRecordedAndFlagsFailing(t *testing.T) {
 		t.Fatalf("another workspace read the channel: %v", err)
 	}
 }
+
+// The delivery health is an annotation: when it cannot be read, channel
+// reads and an update that already committed still succeed, without it.
+func TestChannelReadsSurviveAHealthFailure(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, db, "health-failure")
+	svc := NewService(db, secrets.NoOpEncryptor{}).WithLogger(logger.New("test", "error"))
+	ch, err := svc.CreateAlertChannel(ctx, tenantID, &models.CreateAlertChannelRequest{
+		Name: "hook", Type: testSendStubType, Config: json.RawMessage(`{"url":"https://hooks.example.com/x"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Any read error will do; a missing column is one Postgres reports
+	// whatever the data.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE alert_notification_deliveries DROP COLUMN outcome CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetAlertChannel(ctx, tenantID, ch.ID); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if list, err := svc.ListAlertChannels(ctx, tenantID, 1, 20); err != nil || len(list.Items) != 1 {
+		t.Fatalf("list: %v, %v", list, err)
+	}
+	name := "renamed"
+	updated, err := svc.UpdateAlertChannel(ctx, tenantID, ch.ID, &models.UpdateAlertChannelRequest{Name: &name})
+	if err != nil || updated.Name != name || updated.Failing {
+		t.Fatalf("update = %+v, %v; want the committed rename without health", updated, err)
+	}
+}

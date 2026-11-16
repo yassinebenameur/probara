@@ -145,3 +145,95 @@ func TestSendOutcome(t *testing.T) {
 		t.Errorf("429 retry-after = %v %v", d, ok)
 	}
 }
+
+// Recipients a provider echoed are stored masked like stored recipients: an
+// SMS API's number, an SMTP rejection's address, and the channel's configured
+// recipients in any shape.
+func TestSanitizeMasksRecipients(t *testing.T) {
+	for _, tc := range []struct {
+		in         string
+		recipients []string
+		absent     []string
+		present    []string
+	}{
+		{
+			in:      `twilio messages api returned status 400: {"code":21211,"message":"Invalid 'To' Phone Number: +33612344321"}`,
+			absent:  []string{"+33612344321", "33612344321"},
+			present: []string{"********4321", "Invalid 'To' Phone Number"},
+		},
+		{
+			in:      "smtp: 550 5.1.1 <jane.doe@corp.example>: Recipient address rejected",
+			absent:  []string{"jane.doe@"},
+			present: []string{"<j***@corp.example>", "Recipient address rejected"},
+		},
+		{
+			in:         "provider refused 0612344321 (national format)",
+			recipients: []string{"0612344321"},
+			absent:     []string{"0612344321"},
+			present:    []string{"******4321"},
+		},
+	} {
+		got := sanitize(tc.in, nil, tc.recipients)
+		for _, s := range tc.absent {
+			if strings.Contains(got, s) {
+				t.Errorf("sanitize(%q) = %q, still contains %q", tc.in, got, s)
+			}
+		}
+		for _, s := range tc.present {
+			if !strings.Contains(got, s) {
+				t.Errorf("sanitize(%q) = %q, want %q", tc.in, got, s)
+			}
+		}
+	}
+	manifest := plugin.Manifest{Fields: []plugin.Field{
+		{Key: "to", Type: plugin.FieldTypeTextarea},
+		{Key: "cc", Type: plugin.FieldTypeEmailList},
+	}}
+	got := RecipientValues(manifest, map[string]any{"to": "+15550000001, +15550000002\n+15550000003", "cc": []any{"a@x.example", "b@y.example"}})
+	if len(got) != 5 {
+		t.Fatalf("RecipientValues = %v, want 5", got)
+	}
+}
+
+// Text cut inside a secret, and a URL echoed with JSON-escaped slashes,
+// leak nothing.
+func TestSanitizeTruncatedAndEscaped(t *testing.T) {
+	const secret = "sk_live_51HxYzVerySecretKey"
+	for _, tc := range []struct {
+		name, in string
+		secrets  []string
+		absent   []string
+	}{
+		{
+			name:   "credential-named value cut by the excerpt",
+			in:     `pagerduty returned status 400: {"routing_key":"R0123456789abcd…`,
+			absent: []string{"R0123456789abcd"},
+		},
+		{
+			name:    "known secret cut at the excerpt mark",
+			in:      `stub returned status 400: {"echo":"sk_live_51HxYzVer…`,
+			secrets: []string{secret},
+			absent:  []string{"sk_live_51HxYzVer"},
+		},
+		{
+			name:    "known secret cut at the end of the text",
+			in:      `stub returned status 400: echo sk_live_51HxYzVery`,
+			secrets: []string{secret},
+			absent:  []string{"sk_live_51HxYzVery"},
+		},
+		{
+			name:   "webhook URL with JSON-escaped slashes",
+			in:     `webhook returned status 404: {"url":"https:\/\/hooks.slack.com\/services\/T0001\/B0002\/XYZsecretPath"}`,
+			absent: []string{"XYZsecretPath", "services"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeError(tc.in, tc.secrets...)
+			for _, s := range tc.absent {
+				if strings.Contains(got, s) {
+					t.Errorf("SanitizeError(%q) = %q, still contains %q", tc.in, got, s)
+				}
+			}
+		})
+	}
+}

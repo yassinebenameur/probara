@@ -104,9 +104,7 @@ func (s *Service) GetAlertChannel(ctx context.Context, tenantID, channelID uuid.
 	if err := maskInPlace(channel); err != nil {
 		return nil, err
 	}
-	if err := s.attachHealth(ctx, tenantID, channel); err != nil {
-		return nil, err
-	}
+	s.attachHealth(ctx, tenantID, channel)
 	return channel, nil
 }
 
@@ -179,9 +177,7 @@ func (s *Service) ListAlertChannels(ctx context.Context, tenantID uuid.UUID, pag
 	for i := range items {
 		listed[i] = &items[i]
 	}
-	if err := s.attachHealth(ctx, tenantID, listed...); err != nil {
-		return nil, err
-	}
+	s.attachHealth(ctx, tenantID, listed...)
 
 	return &models.AlertChannelListResponse{
 		Items:    items,
@@ -251,9 +247,7 @@ func (s *Service) UpdateAlertChannel(ctx context.Context, tenantID, channelID uu
 	if err := maskInPlace(&ch); err != nil {
 		return nil, err
 	}
-	if err := s.attachHealth(ctx, tenantID, &ch); err != nil {
-		return nil, err
-	}
+	s.attachHealth(ctx, tenantID, &ch)
 	return &ch, nil
 }
 

@@ -69,6 +69,14 @@ func (t *Tracker) fannedOut() bool {
 	return t.asked
 }
 
+// tried is every recipient this attempt asked the ledger about and found
+// pending.
+func (t *Tracker) tried() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.pending...)
+}
+
 type recipientResult struct {
 	recipient string
 	outcome   Outcome

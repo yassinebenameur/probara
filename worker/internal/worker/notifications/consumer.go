@@ -162,7 +162,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// the consumer falling behind, then ship the missing plugin.
 		entry.Error("No registered plugin for channel type")
 		err := fmt.Errorf("unknown plugin type: %s", envelope.ChannelType)
-		record.failed(ctx, deliverylog.OutcomeFailed, deliverylog.ReasonPluginMissing, err)
+		record.failed(ctx, deliverylog.OutcomeFailed, deliverylog.ReasonPluginMissing, err, nil)
 		return err
 	}
 
@@ -179,14 +179,14 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	}
 	if !channel.IsActive {
 		entry.Info("Channel deactivated; dropping message")
-		record.dropped(ctx, deliverylog.ReasonChannelInactive)
+		record.dropped(ctx, deliverylog.ReasonChannelInactive, nil)
 		return nil
 	}
 	if channel.Type != envelope.ChannelType {
 		// Edge case: the channel was repurposed (type changed). Drop because
 		// the plugin we'd dispatch to no longer matches the stored config.
 		entry.WithField("current_type", channel.Type).Warn("Channel type changed since publish; dropping message")
-		record.dropped(ctx, deliverylog.ReasonChannelChanged)
+		record.dropped(ctx, deliverylog.ReasonChannelChanged, nil)
 		return nil
 	}
 
@@ -234,7 +234,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// have yet as a no-op, so a late trigger would open an incident that
 		// nothing ever closes.
 		entry.Info("Alert resolved since publish; dropping superseded event")
-		record.dropped(ctx, supersededReason(alertStatus))
+		record.dropped(ctx, supersededReason(alertStatus), tx)
 		return nil
 	}
 
@@ -242,14 +242,14 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	if len(channel.Config) > 0 {
 		if err := json.Unmarshal(channel.Config, &configMap); err != nil {
 			entry.WithError(err).Error("Failed to decode channel config")
-			record.failed(ctx, deliverylog.OutcomePermanentFailure, deliverylog.ReasonInvalidConfig, err)
+			record.failed(ctx, deliverylog.OutcomePermanentFailure, deliverylog.ReasonInvalidConfig, err, tx)
 			return nil
 		}
 	}
 	configMap, err = secrets.DecryptConfig(c.encryptor, p.Manifest(), configMap)
 	if err != nil {
 		entry.WithError(err).Error("Failed to decrypt channel config")
-		record.failed(ctx, deliverylog.OutcomeFailed, "", err)
+		record.failed(ctx, deliverylog.OutcomeFailed, "", err, tx)
 		return err
 	}
 	record.channelLoaded(p.Manifest(), configMap)
@@ -288,10 +288,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	c.settlePage(ctx, entry, envelope, marked, err)
 	// Delivery history: Send is done, so the alert lock goes first (tx only
 	// ever rolls back on this path) and the row is written through the pool.
-	if tx != nil {
-		_ = tx.Rollback()
-	}
-	record.finished(ctx, err)
+	record.finished(ctx, err, tx)
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted

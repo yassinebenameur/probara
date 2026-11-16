@@ -41,6 +41,12 @@ CREATE TABLE alert_notification_deliveries (
 CREATE INDEX idx_alert_notification_deliveries_alert
     ON alert_notification_deliveries(alert_id, created_at)
     WHERE alert_id IS NOT NULL;
+-- The writer's attempt numbering (deliverylog recordSQL counts the earlier
+-- rows of one event, path and recipient). It runs inside the alerter's
+-- claim, so it must stay a narrow range however long the alert lives.
+CREATE INDEX idx_alert_notification_deliveries_attempts
+    ON alert_notification_deliveries(alert_id, channel_id, delivery_key, path, recipient_hash)
+    WHERE alert_id IS NOT NULL;
 -- A channel's recent attempts, unfiltered.
 CREATE INDEX idx_alert_notification_deliveries_channel
     ON alert_notification_deliveries(channel_id, created_at DESC);

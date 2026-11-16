@@ -63,5 +63,8 @@
 // children, so one permanent child would stop the retry for every other
 // recipient. Return Permanent only when every failure is permanent; otherwise
 // flatten the join into a plain error and carry the longest RetryAfterDelay
-// onto it (see builtin/twilio).
+// onto it (see builtin/twilio). The same holds for NotDelivered:
+// IsNotDelivered matches when any joined child is marked, so a join must
+// never mix "proven not delivered" with an ambiguous failure (a timeout after
+// sending), or a page that may have reached someone reads as reaching nobody.
 package plugin

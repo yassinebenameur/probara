@@ -12,10 +12,12 @@ import (
 )
 
 // attachHealth sets each channel's last delivery times and failing flag from
-// the delivery history.
-func (s *Service) attachHealth(ctx context.Context, tenantID uuid.UUID, channels ...*models.AlertChannel) error {
+// the delivery history. Best effort: the history is an annotation, so a
+// failed read is logged and the channels go out without it (a PATCH that
+// already committed must not answer 500 over it).
+func (s *Service) attachHealth(ctx context.Context, tenantID uuid.UUID, channels ...*models.AlertChannel) {
 	if len(channels) == 0 || s.db == nil {
-		return nil
+		return
 	}
 	ids := make([]uuid.UUID, len(channels))
 	for i, ch := range channels {
@@ -23,13 +25,15 @@ func (s *Service) attachHealth(ctx context.Context, tenantID uuid.UUID, channels
 	}
 	health, err := deliverylog.ChannelHealth(ctx, s.db, tenantID, ids)
 	if err != nil {
-		return err
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to load alert channel delivery health")
+		}
+		return
 	}
 	for _, ch := range channels {
 		h := health[ch.ID]
 		ch.LastDeliveredAt, ch.LastFailedAt, ch.Failing = h.LastDeliveredAt, h.LastFailedAt, h.Failing
 	}
-	return nil
 }
 
 // recordTestSend appends a test send to the channel's delivery history,
@@ -50,6 +54,7 @@ func (s *Service) recordTestSend(ctx context.Context, channelID uuid.UUID, manif
 		Reason:    reason,
 		Err:       sendErr,
 		Secrets:   deliverylog.SecretValues(manifest, config),
+		Addresses: deliverylog.RecipientValues(manifest, config),
 		Duration:  time.Since(started),
 	})
 }

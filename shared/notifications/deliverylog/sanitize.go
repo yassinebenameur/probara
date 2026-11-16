@@ -27,10 +27,21 @@ var (
 	schemeAuthRE = regexp.MustCompile(`(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=\-]{8,}`)
 	// keyValueRE finds credential-named parameters in text, query-string or
 	// JSON form.
-	keyValueRE = regexp.MustCompile(`(?i)("?\b(?:access_token|refresh_token|token|api[_-]?key|apikey|app[_-]?key|routing[_-]?key|integration[_-]?key|secret|client_secret|password|passwd|pwd|authorization|signature|sig|auth_token)"?\s*[:=]\s*)("[^"]*"|[^\s&,;"'}]+)`)
+	// A quoted value may be unterminated: provider bodies are excerpted, and
+	// the cut can fall inside the value.
+	keyValueRE = regexp.MustCompile(`(?i)("?\b(?:access_token|refresh_token|token|api[_-]?key|apikey|app[_-]?key|routing[_-]?key|integration[_-]?key|secret|client_secret|password|passwd|pwd|authorization|signature|sig|auth_token)"?\s*[:=]\s*)("[^"]*"?|[^\s&,;"'}]+)`)
 	// botTokenRE finds Telegram-style bot tokens outside a URL.
 	botTokenRE = regexp.MustCompile(`\b\d{6,}:[A-Za-z0-9_\-]{30,}\b`)
+	// emailRE and phoneRE find recipients a provider echoed (an SMTP
+	// rejection names the address, an SMS API the number); they are masked
+	// the way stored recipients are.
+	emailRE = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+`)
+	phoneRE = regexp.MustCompile(`\+[1-9][0-9]{6,14}\b`)
 )
+
+// excerptCut is the mark plugin.CheckResponse leaves where it cut a
+// provider body.
+const excerptCut = "…"
 
 // SanitizeError makes a send error safe to store and show. plugin.Post
 // already drops the request URL from network errors, but provider responses
@@ -39,16 +50,28 @@ var (
 // credential in the path or query (Slack, Discord and Teams webhooks,
 // Telegram bot tokens). So, in order:
 //
-//  1. every URL is reduced to its scheme and host (which provider failed
+//  1. JSON-escaped slashes are unescaped, so an echoed `https:\/\/…` URL is
+//     seen as one;
+//  2. every URL is reduced to its scheme and host (which provider failed
 //     stays readable; paths, queries and user info go);
-//  2. every value in secrets (the channel's secret config, SecretValues) is
-//     replaced wherever it still appears, raw or URL-escaped;
-//  3. bot tokens, bearer/basic tokens and credential-named parameters are
-//     masked;
-//  4. the text is cut to MaxErrorLength characters.
+//  3. every value in secrets (the channel's secret config, SecretValues) is
+//     replaced wherever it still appears, raw or URL-escaped, and so is any
+//     prefix of one where the text was cut (an excerpt ending inside it);
+//  4. the channel's configured recipients (recipients, RecipientValues) and
+//     anything shaped like an email address or an E.164 number are masked
+//     the way stored recipients are (MaskRecipient);
+//  5. bot tokens, bearer/basic tokens and credential-named parameters
+//     (quoted values terminated or not) are masked;
+//  6. the text is cut to MaxErrorLength characters.
 func SanitizeError(text string, secrets ...string) string {
+	return sanitize(text, secrets, nil)
+}
+
+func sanitize(text string, secrets, recipients []string) string {
+	text = strings.ReplaceAll(text, `\/`, "/")
 	text = urlRE.ReplaceAllStringFunc(text, redactURL)
 	text = maskSecrets(text, secrets)
+	text = maskRecipients(text, recipients)
 	// Bot tokens first: the other patterns would mask only their prefix.
 	text = botTokenRE.ReplaceAllString(text, mask)
 	text = schemeAuthRE.ReplaceAllString(text, "$1 "+mask)
@@ -74,7 +97,78 @@ func maskSecrets(text string, secrets []string) string {
 	for _, f := range forms {
 		text = strings.ReplaceAll(text, f, mask)
 	}
+	// An excerpt cut inside a secret leaves only its prefix, which the exact
+	// match misses: mask the longest prefix that ends at a cut or at the end
+	// of the text. URL-shaped values are left to the URL step, which already
+	// cut them to their host (whose "https://host/…" would otherwise read as
+	// a cut prefix).
+	for _, f := range forms {
+		if strings.Contains(f, "://") || strings.Contains(f, "%2F%2F") {
+			continue
+		}
+		for k := len(f) - 1; k >= minSecretLength; k-- {
+			prefix := f[:k]
+			if strings.Contains(text, prefix+excerptCut) {
+				text = strings.ReplaceAll(text, prefix+excerptCut, mask+excerptCut)
+				break
+			}
+			if strings.HasSuffix(text, prefix) {
+				text = strings.TrimSuffix(text, prefix) + mask
+				break
+			}
+		}
+	}
 	return text
+}
+
+// maskRecipients replaces the known recipients, then anything that looks
+// like an email address or a phone number, with its masked form.
+func maskRecipients(text string, recipients []string) string {
+	known := append([]string(nil), recipients...)
+	sort.Slice(known, func(i, j int) bool { return len(known[i]) > len(known[j]) })
+	for _, r := range known {
+		if len(r) < minSecretLength {
+			continue
+		}
+		text = strings.ReplaceAll(text, r, MaskRecipient(r))
+	}
+	text = emailRE.ReplaceAllStringFunc(text, MaskRecipient)
+	return phoneRE.ReplaceAllStringFunc(text, MaskRecipient)
+}
+
+// RecipientValues returns a channel's configured recipients (email lists, the
+// `to` field of an SMS or email channel), which a provider error may echo and
+// SanitizeError masks.
+func RecipientValues(manifest plugin.Manifest, config map[string]any) []string {
+	var out []string
+	for _, f := range manifest.Fields {
+		if f.Type != plugin.FieldTypeEmailList && f.Key != "to" {
+			continue
+		}
+		var raw []string
+		switch v := config[f.Key].(type) {
+		case string:
+			raw = []string{v}
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					raw = append(raw, s)
+				}
+			}
+		case []string:
+			raw = v
+		}
+		for _, r := range raw {
+			for _, part := range strings.FieldsFunc(r, func(c rune) bool {
+				return c == ',' || c == ';' || c == '\n' || c == '\r' || c == ' ' || c == '\t'
+			}) {
+				if part = strings.TrimSpace(part); part != "" {
+					out = append(out, part)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // redactURL keeps a URL's scheme and host (which provider failed is useful)
