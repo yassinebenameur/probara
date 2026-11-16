@@ -1,4 +1,6 @@
-import type { Sla, SlaExportFormat, SlaInput, SlaReport, SlaReportQuery, SlaReportRef } from '../sla';
+import type {
+  Sla, SlaExportFormat, SlaInput, SlaReport, SlaReportQuery, SlaReportRef, SlaReportScheduleInput, SlaReportScheduleResponse,
+} from '../sla';
 import { slaReportQueryString } from '../sla';
 import { apiDownload, apiRequest, withQuery } from './core';
 
@@ -43,4 +45,17 @@ export function issueSlaReport(id: string, period?: string) {
 
 export function downloadIssuedSlaReport(reportId: string, format: SlaExportFormat) {
   return apiDownload(withQuery(`/v1/sla-reports/${reportId}`, { format }), `sla-report.${format}`);
+}
+
+// An SLA's emailed report schedule (one per SLA, keyed by the SLA's ID)
+export function getSlaReportSchedule(slaId: string) {
+  return apiRequest<SlaReportScheduleResponse>('GET', `/v1/sla-report-schedules/${slaId}`);
+}
+
+export function putSlaReportSchedule(slaId: string, data: SlaReportScheduleInput) {
+  return apiRequest<SlaReportScheduleResponse>('PUT', `/v1/sla-report-schedules/${slaId}`, data);
+}
+
+export function deleteSlaReportSchedule(slaId: string) {
+  return apiRequest<void>('DELETE', `/v1/sla-report-schedules/${slaId}`);
 }

@@ -160,7 +160,7 @@ export const MCP_PAGE: DocPage = {
             ["Incidents", "create, update, state transitions, timeline entries, alert/monitor links, status-page publishing, AI analysis request/read/label"],
             ["Operations", "maintenance windows, private locations and their deploy info, `get_mesh`, `get_mesh_edge_history`, `probe_mesh_edge`"],
             ["Kubernetes discovery", "`list_discovery_integrations`, `create_discovery_integration`, `update_discovery_integration` (rename, location, namespace add/remove; destructive), `get_discovery_namespaces`, `get_discovery_coverage`, `approve_discovery_suggestion`, monitor link/unlink, collector token rotation"],
-            ["Reporting", "SLAs, live reports (`format` json/csv/pdf returns a file), issued reports"],
+            ["Reporting", "SLAs, live reports (`format` json/csv/pdf returns a file), issued reports, `get_sla_report_schedule`, `set_sla_report_schedule`, `delete_sla_report_schedule`"],
             ["Status pages", "pages, sections and settings, custom template draft/publish/revert, template library"],
             ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message), `list_channel_deliveries` (a channel's delivery history, filterable by outcome)"],
             ["Workspace", "local AI settings, `export_ai_labels`, API keys, workspace settings, audit log"],

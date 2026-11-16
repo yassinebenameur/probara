@@ -140,6 +140,24 @@ func WriteCSV(w io.Writer, r *models.SLAReport) error {
 		}
 	}
 
+	// The S-U8 burn section comes last, and only on reports computed since
+	// burn existed, so no older row moves and older reports export as before.
+	if b := r.Burn; b != nil {
+		rows = append(rows, nil, []string{"Burn window", "Start", "End", "Availability %", "Burn rate"})
+		for _, w := range b.Windows {
+			rows = append(rows, []string{w.Key, ts(w.Start), ts(w.End), pctString(w.AvailabilityPct, 5), optFloat(w.BurnRate, 4)})
+		}
+		exhaustionAt := ""
+		if b.ProjectedExhaustionAt != nil {
+			exhaustionAt = ts(*b.ProjectedExhaustionAt)
+		}
+		rows = append(rows, nil, []string{"Budget exhaustion", b.Exhaustion, exhaustionAt},
+			nil, []string{"Date", "Budget consumed seconds", "Budget remaining %"})
+		for _, p := range b.BurnDown {
+			rows = append(rows, []string{p.Date, secondsString(p.ConsumedSeconds), pctString(p.RemainingPct, 3)})
+		}
+	}
+
 	for _, row := range rows {
 		if row == nil {
 			row = []string{}
@@ -168,12 +186,61 @@ func metString(m *bool) string {
 	return strconv.FormatBool(*m)
 }
 
+func optFloat(v *float64, decimals int) string {
+	if v == nil {
+		return ""
+	}
+	return strconv.FormatFloat(*v, 'f', decimals, 64)
+}
+
+// BurnRateText renders a burn rate as "1.39x" ("-" without data).
+func BurnRateText(v *float64) string {
+	if v == nil {
+		return "-"
+	}
+	return strconv.FormatFloat(*v, 'f', 2, 64) + "x"
+}
+
+// burnWindowLabels name the S-U8 windows in the PDF and the report email.
+var burnWindowLabels = map[string]string{
+	models.SLABurnWindowHour:   "Burn rate, last hour",
+	models.SLABurnWindowDay:    "Burn rate, last 24 hours",
+	models.SLABurnWindowPeriod: "Burn rate, period to date",
+}
+
+// ExhaustionText is the S-U8 exhaustion state as a sentence, the same in
+// the PDF and the report email; "" for a report without a burn section.
+func ExhaustionText(r *models.SLAReport, loc *time.Location) string {
+	b := r.Burn
+	if b == nil {
+		return ""
+	}
+	switch b.Exhaustion {
+	case models.SLABudgetExhausted:
+		return "Exhausted: the period's error budget is spent"
+	case models.SLABudgetProjected:
+		if b.ProjectedExhaustionAt != nil {
+			return "Runs out " + b.ProjectedExhaustionAt.In(loc).Format("2 Jan 2006 15:04") + " at the last 24 hours' pace"
+		}
+	case models.SLABudgetNotProjected:
+		if r.Period.IsClosed {
+			return "Lasted the period"
+		}
+		return "Not projected to run out this period"
+	}
+	return "No data to project"
+}
+
 func optSeconds(v *float64) string {
 	if v == nil {
 		return ""
 	}
 	return secondsString(*v)
 }
+
+// HumanDuration renders seconds as the PDF does: "2h 05m", "43m 49s",
+// "12s" ("1d 02h 05m" past a day).
+func HumanDuration(seconds float64) string { return humanDuration(seconds) }
 
 // humanDuration renders seconds as "2h 05m", "43m 49s" or "12s".
 func humanDuration(seconds float64) string {
@@ -312,12 +379,24 @@ func WritePDF(w io.Writer, r *models.SLAReport) error {
 
 	// Error budget.
 	section(pdf, tr, "Error budget")
-	kv(pdf, tr, [][2]string{
+	budgetRows := [][2]string{
 		{"Allowed downtime (full period)", humanDuration(r.Budget.AllowedFullPeriodSeconds)},
 		{"Allowed so far (eligible time)", humanDuration(r.Budget.AllowedSeconds)},
 		{"Consumed", humanDuration(r.Budget.ConsumedSeconds)},
 		{"Remaining", budgetRemaining(r.Budget)},
-	})
+	}
+	// S-U8 rows and chart only on reports computed since burn existed, so
+	// an older issued report prints exactly as it did.
+	if b := r.Burn; b != nil {
+		for _, w := range b.Windows {
+			budgetRows = append(budgetRows, [2]string{burnWindowLabels[w.Key] + " (1x = on budget)", BurnRateText(w.BurnRate)})
+		}
+		budgetRows = append(budgetRows, [2]string{"Budget exhaustion", ExhaustionText(r, loc)})
+	}
+	kv(pdf, tr, budgetRows)
+	if r.Burn != nil && len(r.Burn.BurnDown) > 0 {
+		burnDownChart(pdf, tr, r, loc)
+	}
 
 	// Daily strip.
 	if len(r.Daily) > 0 {
@@ -452,6 +531,74 @@ func WritePDF(w io.Writer, r *models.SLAReport) error {
 	}
 
 	return pdf.Output(w)
+}
+
+// burnDownChart draws the S-U8 burn-down across the whole period: the full
+// period's budget left after each day, against the even-spend line from 100%
+// at the start to 0% at the end, with a rule at 0%.
+func burnDownChart(pdf *fpdf.Fpdf, tr func(string) string, r *models.SLAReport, loc *time.Location) {
+	const x0, w, h, labelW = 15.0, 180.0, 26.0, 12.0
+	if pdf.GetY() > 240 {
+		pdf.AddPage()
+	}
+	pdf.SetFont("Helvetica", "", 8)
+	pdf.SetTextColor(pdfMuted.r, pdfMuted.g, pdfMuted.b)
+	pdf.CellFormat(w, 4, tr("Budget left, by day"), "", 1, "L", false, 0, "")
+	y0 := pdf.GetY() + 1
+	lo := 0.0
+	for _, p := range r.Burn.BurnDown {
+		if p.RemainingPct != nil && *p.RemainingPct < lo {
+			lo = *p.RemainingPct
+		}
+	}
+	lo = math.Max(lo, -100) // a deep overspend is clipped at -100%
+	span := r.Period.End.Sub(r.Period.Start).Seconds()
+	px := func(t time.Time) float64 {
+		f := 0.0
+		if span > 0 {
+			f = t.Sub(r.Period.Start).Seconds() / span
+		}
+		return x0 + labelW + math.Max(0, math.Min(1, f))*(w-labelW)
+	}
+	py := func(pct float64) float64 {
+		pct = math.Max(lo, math.Min(100, pct))
+		return y0 + (100-pct)/(100-lo)*h
+	}
+	pdf.SetXY(x0, py(100)-2)
+	pdf.CellFormat(labelW-1, 4, "100%", "", 0, "R", false, 0, "")
+	pdf.SetXY(x0, py(0)-2)
+	pdf.CellFormat(labelW-1, 4, "0%", "", 0, "R", false, 0, "")
+	pdf.SetDrawColor(pdfRule.r, pdfRule.g, pdfRule.b)
+	pdf.SetLineWidth(0.2)
+	pdf.Line(x0+labelW, py(0), x0+w, py(0))
+	pdf.Line(x0+labelW, py(100), x0+w, py(100))
+	pdf.SetDrawColor(pdfMuted.r, pdfMuted.g, pdfMuted.b)
+	pdf.SetDashPattern([]float64{1, 1}, 0)
+	pdf.Line(px(r.Period.Start), py(100), px(r.Period.End), py(0))
+	pdf.SetDashPattern([]float64{}, 0)
+	pdf.SetDrawColor(pdfAccent.r, pdfAccent.g, pdfAccent.b)
+	pdf.SetLineWidth(0.5)
+	// Starts full at the period start; a day without data breaks the line.
+	prevX, prevY, have := px(r.Period.Start), py(100), true
+	for _, p := range r.Burn.BurnDown {
+		if p.RemainingPct == nil {
+			have = false
+			continue
+		}
+		x, y := px(p.End), py(*p.RemainingPct)
+		if have {
+			pdf.Line(prevX, prevY, x, y)
+		} else {
+			pdf.Circle(x, y, 0.4, "D")
+		}
+		prevX, prevY, have = x, y, true
+	}
+	pdf.SetLineWidth(0.2)
+	pdf.SetXY(x0+labelW, y0+h+1)
+	pdf.CellFormat((w-labelW)/2, 4, r.Period.Start.In(loc).Format("2 Jan"), "", 0, "L", false, 0, "")
+	pdf.CellFormat((w-labelW)/2, 4, r.Period.End.Add(-time.Second).In(loc).Format("2 Jan"), "", 1, "R", false, 0, "")
+	pdf.CellFormat(w, 4, tr("Dashed: an even spend that uses the whole budget by the period end."), "", 1, "L", false, 0, "")
+	pdf.Ln(3)
 }
 
 // causesCaveat is the PDF's note under the suspected-cause table.
