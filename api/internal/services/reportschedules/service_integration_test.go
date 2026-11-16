@@ -1,3 +1,5 @@
+//go:build !unit
+
 package reportschedules
 
 // Emailed SLA report schedules against Postgres: due selection, the claim
