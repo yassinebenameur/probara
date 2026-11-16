@@ -1,6 +1,7 @@
 'use client';
 
 import PrometheusDetails from '@/components/monitors/PrometheusDetails';
+import DomainDetails from '@/components/monitors/DomainDetails';
 import Image from 'next/image';
 import { Monitor, MonitorResultsResponse, CheckResult } from '@/lib/types';
 import { GroupMembersCard } from '@/components/monitors/GroupMembersCard';
@@ -43,6 +44,12 @@ export default function MonitorDetailAside({
       {monitor.type === 'prometheus' && (
         <Panel title="Query">
           <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />
+        </Panel>
+      )}
+
+      {monitor.type === 'domain' && (
+        <Panel title="Registration">
+          <DomainDetails monitor={monitor} results={results?.results || []} />
         </Panel>
       )}
 

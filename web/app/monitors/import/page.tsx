@@ -92,6 +92,7 @@ const SUPPORTED_TYPES = [
   { value: 'rabbitmq', description: 'AMQP connect + auth checks' },
   { value: 'websocket', description: 'WebSocket connect + message checks' },
   { value: 'prometheus', description: 'PromQL query + numeric threshold checks' },
+  { value: 'domain', description: 'Domain registration expiry (RDAP/WHOIS)' },
 ];
 
 // Step indicator component
@@ -330,6 +331,8 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
         const port = getConfigValue(row, 'port');
         return port ? `${host}:${port}` : host;
       }
+      case 'domain':
+        return getConfigValue(row, 'domain') ?? '-';
       case 'push':
         return getConfigValue(row, 'expected_interval_seconds')
           ? `every ${getConfigValue(row, 'expected_interval_seconds')}s`

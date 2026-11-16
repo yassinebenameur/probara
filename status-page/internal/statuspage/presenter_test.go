@@ -33,6 +33,7 @@ func TestMonitorPresenter_ConfigureExtractsMonitorURLs(t *testing.T) {
 		{name: "sip invite target uri", monitorType: "sip", configJSON: []byte(`{"host":"sip.example.com","method":"invite","call":{"target_uri":"sip:bob@pbx.example.com"}}`), wantURL: "sip.example.com:5060"},
 		{name: "tcp", monitorType: "tcp", configJSON: []byte(`{"host":"db.example.com","port":5432}`), wantURL: "db.example.com:5432"},
 		{name: "tcp without port", monitorType: "tcp", configJSON: []byte(`{"host":"db.example.com"}`), wantURL: "db.example.com"},
+		{name: "domain", monitorType: "domain", configJSON: []byte(`{"domain":"example.com","min_days_valid":30}`), wantURL: "example.com"},
 		{name: "agent", monitorType: "agent", configJSON: nil, wantURL: "System Agent"},
 		{name: "push", monitorType: "push", configJSON: nil, wantURL: "Push Monitor"},
 		{name: "group", monitorType: "group", configJSON: nil, wantURL: "Group Monitor"},

@@ -50,6 +50,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateTLSExpiry(ctx); err != nil {
 		a.logger.WithError(err).Error("TLS expiry evaluation failed")
 	}
+	// Domain expiry is advisory in the same way.
+	if err := a.evaluateDomainExpiry(ctx); err != nil {
+		a.logger.WithError(err).Error("Domain expiry evaluation failed")
+	}
 	// Before mesh edges, so a dead location's alert opens in the same tick
 	// its edges go quiet. A failure here must not stop availability alerting
 	// further down the lifecycle.
@@ -93,6 +97,7 @@ func openAlertDispatchablePredicate() string {
 			OR al.kind = 'latency_anomaly'
 			OR al.kind = 'host_metric'
 			OR al.kind = 'tls_expiry'
+			OR al.kind = 'domain_expiry'
 		  )
 		  AND NOT ` + maintenance.InMaintenancePredicate("m") + `
 		  -- A 'per_monitor' group does not dispatch its own alert (if one is still

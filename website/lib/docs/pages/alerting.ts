@@ -53,6 +53,11 @@ export const ALERTING_PAGE: DocPage = {
               "A renewed certificate is observed, or the threshold is removed",
             ],
             [
+              "`domain_expiry`",
+              "A [domain monitor](/docs/monitors/#domain)'s registration has fewer days left than `min_days_valid` (default 30), or its expiry date has not been determinable for a while",
+              "A renewed registration or a readable date is observed, the window is narrowed, or the monitor is paused or deleted",
+            ],
+            [
               "`location_offline`",
               "A check location that has reported before sends no worker heartbeat for 180 seconds ([details](/docs/locations/#heartbeats)); always on, routed to the default channels",
               "The location reports again, or is disabled or deleted; the closing notification says which",
@@ -523,6 +528,11 @@ export const ALERTING_PAGE: DocPage = {
           type: "paragraph",
           text:
             "An HTTPS or SIP-over-TLS monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A [domain monitor](/docs/monitors/#domain) opens a `domain_expiry` alert when the newest expiry date recorded in the last 7 days leaves fewer days than `min_days_valid` (default 30); a passed date inside the registry's renew grace period counts as 0 days left. The monitor stays `up` meanwhile, as with certificates; once the registration has expired the check fails too, so the availability alert pages as well (after two failing lookups), and the `domain_expiry` alert reads as expired. The open alert's days left, date and registrar follow every evaluation, so reminders stay current. When no lookup in those 7 days found a date and at least two check rounds could not determine one (the registry publishes none, the TLD has no RDAP or WHOIS service, every lookup failed or was throttled), the alert opens without a value as \"Domain Expiry Unknown\", with the reason in its last error: a warning, never an outage. It never opens for a registry known to publish no date at all (`.de`), where nobody could act on it. When the alert changes between that form and a dated one, it is resolved and a new one opens, so channels hear about the change. It resolves when a renewed registration or a readable date is observed, the window is narrowed, or the monitor is paused or deleted.",
         },
         {
           type: "callout",

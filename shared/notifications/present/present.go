@@ -357,6 +357,9 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		case alert.IsTLSExpiry():
 			return ToneUp, "CERTIFICATE RENEWED"
 		case alert.IsDomainExpiry():
+			if alert.MetricValue == nil {
+				return ToneUp, "RESOLVED"
+			}
 			return ToneUp, "DOMAIN RENEWED"
 		case alert.IsLocationOffline():
 			if locationClosedWithoutRecovery(alert) {
@@ -388,6 +391,9 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 		// outage, not a warning.
 		if alert.MetricValue != nil && *alert.MetricValue < 0 {
 			return ToneDown, "DOMAIN EXPIRED"
+		}
+		if alert.MetricValue == nil {
+			return ToneWarn, "EXPIRY UNKNOWN"
 		}
 		return ToneWarn, "EXPIRING SOON"
 	case alert.IsMeshEdge():
@@ -434,6 +440,14 @@ func labelFor(alert notifications.AlertDetails, eventType string) string {
 	case alert.IsTLSExpiry():
 		return alert.TLSExpiryLabel(eventType)
 	case alert.IsDomainExpiry():
+		// No value: the alerter could not determine the expiry date
+		// (domain_expiry with metric_value NULL).
+		if alert.MetricValue == nil {
+			if eventType == EventResolved {
+				return "Domain Expiry Alert Resolved"
+			}
+			return "Domain Expiry Unknown"
+		}
 		switch eventType {
 		case EventResolved:
 			return "Domain Renewed"
@@ -541,20 +555,23 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		return "The TLS certificate is approaching expiry."
 
 	case alert.IsDomainExpiry():
+		if alert.MetricValue == nil {
+			if resolved {
+				return "The registration expiry date can be read again, or the monitor no longer runs."
+			}
+			return "The registration expiry date could not be determined, so this domain is not being watched for expiry. The last error says why."
+		}
 		if resolved {
 			return "The domain registration has been renewed."
 		}
-		if alert.MetricValue != nil && *alert.MetricValue < 0 {
+		if *alert.MetricValue < 0 {
 			return fmt.Sprintf("The domain registration expired %s ago. Renew it before the registry releases the name.", dayValue(-*alert.MetricValue))
 		}
-		if alert.MetricValue != nil {
-			s := fmt.Sprintf("The domain registration expires in %s", dayValue(*alert.MetricValue))
-			if alert.ThresholdValue != nil {
-				s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
-			}
-			return s + "."
+		s := fmt.Sprintf("The domain registration expires in %s", dayValue(*alert.MetricValue))
+		if alert.ThresholdValue != nil {
+			s += fmt.Sprintf(", inside the %s warning window", dayAdjective(*alert.ThresholdValue))
 		}
-		return "The domain registration is approaching expiry."
+		return s + "."
 
 	case alert.IsLocationOffline():
 		name := locationName(alert)

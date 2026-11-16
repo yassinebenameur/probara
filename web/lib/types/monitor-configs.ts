@@ -17,7 +17,8 @@ export type MonitorType =
   | "tcp"
   | "mysql"
   | "websocket"
-  | "prometheus";
+  | "prometheus"
+  | "domain";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -480,4 +481,38 @@ export type MonitorConfig =
   | RabbitMQMonitorConfig
   | MySQLMonitorConfig
   | WebSocketMonitorConfig
-  | PrometheusMonitorConfig;
+  | PrometheusMonitorConfig
+  | DomainMonitorConfig;
+
+// Domain registration expiry (shared/models/domain.go). min_days_valid absent
+// means 30 days.
+export interface DomainMonitorConfig {
+  domain: string;
+  min_days_valid?: number;
+}
+
+// metrics_data.domain of a domain check (shared/domainexpiry Info): the
+// expiry is known (expires_at), the name is not registered (registered
+// false), or the expiry could not be determined (unknown_reason).
+export interface DomainInfo {
+  domain: string;
+  expires_at?: string;
+  days_until_expiry?: number;
+  registered_at?: string;
+  updated_at?: string;
+  registrar?: string;
+  statuses?: string[];
+  registered?: boolean;
+  source?: 'rdap' | 'whois';
+  server?: string;
+  rdap_error?: string;
+  unknown_reason?: string;
+  /** RDAP and WHOIS both said "not registered". */
+  not_found_confirmed?: boolean;
+  /** The registry is known never to publish an expiry date. */
+  no_expiry_published?: boolean;
+  /** The date has passed but the registry reports a renew grace period. */
+  renewal_grace?: boolean;
+  /** clientHold/serverHold: registered but not delegated, so it does not resolve. */
+  on_hold?: boolean;
+}

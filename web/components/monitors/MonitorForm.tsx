@@ -31,6 +31,7 @@ import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
 import PrometheusForm from './PrometheusForm';
+import DomainForm from './DomainForm';
 import WebsocketForm from './WebsocketForm';
 import DatabaseForm from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow, sectionsWithErrors } from './HttpMonitorForm';
@@ -79,6 +80,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   typeMeta('grpc', { description: 'gRPC health checks', category: 'Network', namePlaceholder: 'My gRPC service' }),
   typeMeta('tcp', { description: 'Connect to a host and port', category: 'Network', namePlaceholder: 'Postgres port reachability' }),
   typeMeta('sip', { description: 'OPTIONS, REGISTER, test calls', category: 'Network', namePlaceholder: 'My SIP server' }),
+  typeMeta('domain', { description: 'Registration expiry via RDAP/WHOIS', category: 'Network', namePlaceholder: 'example.com registration' }),
   typeMeta('postgres', { description: 'Connect, auth and query', category: 'Databases & brokers', namePlaceholder: 'Postgres production' }),
   typeMeta('mysql', { description: 'Connect, auth and query', category: 'Databases & brokers', namePlaceholder: 'MySQL production' }),
   typeMeta('redis', { description: 'Connect and PING latency', category: 'Databases & brokers', namePlaceholder: 'Redis cache' }),
@@ -107,6 +109,7 @@ const TYPE_FORMS: Partial<Record<MonitorType, ComponentType<MonitorFormProps>>> 
   prometheus: PrometheusForm,
   tcp: TcpForm,
   websocket: WebsocketForm,
+  domain: DomainForm,
 };
 
 const isDatabaseType = (type: MonitorType): type is DatabaseMonitorType => type in DB_TYPE_META;

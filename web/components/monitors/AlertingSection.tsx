@@ -81,6 +81,8 @@ interface AlertingSectionProps {
   intervalSeconds: number;
   threshold: number;
   onThresholdChange: (n: number) => void;
+  /** Lowest "mark down after" a type allows (domain monitors: 2). */
+  minThreshold?: number;
   mode: NotificationMode;
   onModeChange: (m: NotificationMode) => void;
   customChannels: ChannelAssignment[];
@@ -113,7 +115,7 @@ function detectionHint(threshold: number, intervalSeconds: number): string {
 }
 
 export function AlertingSection({
-  isGroup, intervalSeconds, threshold, onThresholdChange,
+  isGroup, intervalSeconds, threshold, onThresholdChange, minThreshold = 1,
   mode, onModeChange, customChannels, onCustomChannelsChange,
   rollup, onRollupChange,
   dependencySuppression, onDependencySuppressionChange, hasDependencies,
@@ -237,7 +239,7 @@ export function AlertingSection({
               value={threshold}
               onChange={(e) => onThresholdChange(Number(e.target.value))}
             >
-              {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+              {Array.from({ length: 11 - minThreshold }, (_, i) => i + minThreshold).map((n) => (
                 <option key={n} value={n}>
                   {n} failed check{n === 1 ? '' : 's'}
                 </option>

@@ -77,6 +77,7 @@ var typeIcons = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "link",
 	models.MonitorTypeWebSocket:        "repeat",
 	models.MonitorTypePrometheus:       "bar-chart-2",
+	models.MonitorTypeDomain:           "calendar",
 }
 
 // TypeIcon maps a monitor type to the feather-style icon name templates get

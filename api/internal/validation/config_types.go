@@ -81,3 +81,6 @@ func (*MySQLConfigValidator) ConfigType() reflect.Type {
 func (*RabbitMQConfigValidator) ConfigType() reflect.Type {
 	return reflect.TypeFor[sharedmodels.RabbitMQMonitorConfig]()
 }
+func (*DomainConfigValidator) ConfigType() reflect.Type {
+	return reflect.TypeFor[sharedmodels.DomainMonitorConfig]()
+}

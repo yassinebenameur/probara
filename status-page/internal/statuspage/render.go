@@ -762,6 +762,7 @@ var typeLabels = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "TCP",
 	models.MonitorTypeWebSocket:        "WebSocket",
 	models.MonitorTypePrometheus:       "Prometheus",
+	models.MonitorTypeDomain:           "Domain expiry",
 }
 
 var typeBadges = map[models.MonitorType]string{
@@ -783,6 +784,7 @@ var typeBadges = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "TCP",
 	models.MonitorTypeWebSocket:        "WS",
 	models.MonitorTypePrometheus:       "PROM",
+	models.MonitorTypeDomain:           "DOMN",
 }
 
 func typeLabel(kind string) string {

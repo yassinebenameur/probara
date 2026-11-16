@@ -1,6 +1,7 @@
 'use client';
 
 import PrometheusDetails from '@/components/monitors/PrometheusDetails';
+import DomainDetails from '@/components/monitors/DomainDetails';
 import Link from 'next/link';
 import { X } from 'lucide-react';
 import Button from '@/components/ui/Button';
@@ -249,6 +250,13 @@ export function DetailPanel({
           <div>
             <h4 className={sectionTitle}>Prometheus query</h4>
             <PrometheusDetails monitor={monitor} result={results[0]} size="compact" />
+          </div>
+        )}
+
+        {monitor.type === 'domain' && (
+          <div>
+            <h4 className={sectionTitle}>Registration</h4>
+            <DomainDetails monitor={monitor} results={results} size="compact" />
           </div>
         )}
 

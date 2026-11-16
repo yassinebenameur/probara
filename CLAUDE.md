@@ -211,6 +211,25 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   reads through `SQLExpr`, the status page and AI evidence through
   `Extract`; `TestSQLExprMatchesExtract` pins the pair. A new TLS-capable
   type adds its path there, never a hard-coded `#> '{x,tls}'`.
+- **Domain registration snapshot**: `shared/domainexpiry` owns the domain
+  check's `metrics_data.domain` (`Info`, `MetricsPaths`, `SQLExpr`/
+  `ExpiresAtSQL`/`UnknownReasonSQL`, `Extract`; its own
+  `TestSQLExprMatchesExtract`), the lookups (RDAP via the embedded IANA
+  bootstrap in `Directory`, WHOIS fallback) and `RegistrableDomain`. Lookups
+  dial only through the worker's `domainDialGuard`, which blocks private
+  destinations whatever `HTTP_BLOCK_PRIVATE_IPS` says (servers come from
+  bootstrap data and referrals); keep redirect/referral targets validated
+  there. An undetermined expiry (including a throttled or refused lookup)
+  is a `success` with `unknown_reason`, never a failure; the alerter's
+  `evaluateDomainExpiry` (`domain_expiry.go`) turns a persistent one into a
+  valueless `domain_expiry` alert (not for `PublishesNoExpiry` TLDs), and
+  resolves-and-reopens when the alert switches between valueless and dated.
+  One registry answer never pages: `ValidateDomainMonitorRules`
+  (`shared/models/domain.go`) holds domain monitors to a threshold of at
+  least 2 and at most one location, and an RDAP 404 yields to a WHOIS that
+  holds the name. Lookups are throttled per registry host in the worker
+  (`throttle.go`), and `POST /monitors/test` of this type needs write
+  access (`handlers/monitors/checks.go`, beside the saved-secret gate).
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
@@ -370,7 +389,13 @@ or imported groups come back empty. Any other path that creates groups through
    `MonitorType`, so a missing icon does not compile), `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
    `badge`), and the type count + `monitorGroups` on the
-   landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
+   landing page (`website/app/page.tsx`, three counts; `website/app/docs/page.tsx`,
+   README). Also per type: the status page's target extractor
+   (`newMonitorPresenters`, `status-page/internal/statuspage/presenter.go`),
+   `monitorTarget`/`monitorTargetLabel` (`web/lib/monitor-utils.ts`), the
+   clone case (`web/lib/monitor-clone.ts`), the import page's `getTarget`,
+   and any spelling worth an alias in the importer's `typeAliases`
+   (`api/internal/services/import/mapping.go`)
 
 ## Cross-service contracts
 
@@ -739,7 +764,9 @@ or imported groups come back empty. Any other path that creates groups through
   `Kind*` constants in `shared/notifications/event.go` list the same kinds;
   a new kind rewrites the CHECK in one migration and adds its constant, its
   wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
-  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last).
+  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last). A
+  kind that notifies must also be listed in `openAlertDispatchablePredicate`
+  (`alerter/internal/alerter/lifecycle.go`), or it opens and never pages.
 - **Location liveness** (S-F6) is `shared/monitorstate/freshness.go`:
   offline is `LocationOfflinePredicate`, disconnected
   `LocationDisconnectedPredicate`, each with a Go twin
