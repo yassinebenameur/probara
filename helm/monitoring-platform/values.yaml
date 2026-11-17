@@ -221,12 +221,22 @@ secrets:
   statusPagePreviewSecretExistingSecretKey: status_page_preview_secret
   # Signs visitor sessions on password and private status pages
   # (STATUS_PAGE_SESSION_SECRET, canonical key status_page_session_secret,
-  # status-page only). At least 32 characters: `openssl rand -hex 32`. Unset
-  # leaves password and private pages closed (they cannot be unlocked) while
-  # public and unlisted pages serve as usual; changing it signs every visitor
-  # out. With only the chart-wide secrets.existingSecret set, the key is
-  # optional in that Secret; a Secret named in
-  # statusPageSessionSecretExistingSecret must exist and hold the key.
+  # status-page only). At least 32 characters: `openssl rand -hex 32`.
+  # Changing it signs every visitor out, kiosk displays included.
+  #
+  # Left empty with a chart-managed adminJwtSecret, the chart DERIVES it
+  # (sha256 of a domain-separated adminJwtSecret), for the same reasons as
+  # localAiToken below: stable across upgrades and GitOps renders, never a
+  # random re-roll, and as private as the JWT secret (a well-known value with
+  # the shipped placeholder). Rotating adminJwtSecret rotates it.
+  #
+  # The chart cannot read Secrets, so it derives nothing when adminJwtSecret
+  # comes from an existing Secret: set this value or a Secret below, or
+  # password and private pages stay closed (the install notes say so). With
+  # the chart-wide secrets.existingSecret, add status_page_session_secret to
+  # that Secret (optional there, so older Secrets keep working with those
+  # pages closed); a Secret named in statusPageSessionSecretExistingSecret must
+  # exist and hold the key.
   statusPageSessionSecret: ""
   statusPageSessionSecretExistingSecret: ""
   statusPageSessionSecretExistingSecretKey: status_page_session_secret
@@ -565,6 +575,12 @@ statusPage:
   logLevel: "info"
   # Base URL for status page links
   baseUrl: ""
+  # Secure attribute of the visitor session cookie on password and private
+  # pages (STATUS_PAGE_COOKIE_SECURE). Empty derives it: on when baseUrl is
+  # https://, else set per request when it arrived over HTTPS (which behind a
+  # TLS-terminating ingress needs trustedProxyCIDRs). Set "true" behind TLS
+  # without a baseUrl, or "false" to force it off.
+  cookieSecure: ""
   service:
     type: ClusterIP
     port: 8080

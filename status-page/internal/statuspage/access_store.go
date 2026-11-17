@@ -109,3 +109,15 @@ func (s *Service) PageVisibilityByID(ctx context.Context, id uuid.UUID) (string,
 	}
 	return visibility, nil
 }
+
+// HasGatedPages reports whether any page is password or private, for the
+// startup warning about unconfigured trusted proxies. False before migration
+// 000114, when none can be.
+func (s *Service) HasGatedPages(ctx context.Context) (bool, error) {
+	var gated bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM status_pages WHERE visibility IN ('password', 'private'))`).Scan(&gated)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		return false, nil
+	}
+	return gated, err
+}

@@ -54,8 +54,15 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		store = service
 	}
 	secret := ""
+	cookieSecure := cookieSecureDetect
 	if cfg != nil {
 		secret = cfg.SessionSecret
+		if secure, detect := cfg.SessionCookieSecure(); !detect {
+			cookieSecure = cookieSecureNever
+			if secure {
+				cookieSecure = cookieSecureAlways
+			}
+		}
 	}
 	return &Handlers{
 		service:     service,
@@ -66,7 +73,7 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		pushStore:   pushes,
 		pushLimiter: newPushRateLimiter(),
 		clientIPs:   newClientIPResolver(cfg),
-		access:      newAccessGate(store, secret),
+		access:      newAccessGate(store, secret, cookieSecure),
 	}
 }
 
@@ -193,8 +200,13 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The CSP (and its per-response nonce) goes only on a full response; see
-	// pageCSP.apply for why a 304 must not carry one.
-	html := page.csp.apply(aw.Header(), page.html)
+	// pageCSP.apply for why a 304 must not carry one. A gated page may be
+	// framed only by the operator UI, never by another page of this origin.
+	csp := page.csp
+	if gated {
+		csp.frameAncestors = gatedFrameAncestors(h.appBaseURL())
+	}
+	html := csp.apply(aw.Header(), page.html)
 	if pageaccess.NoIndex(acc.Visibility) {
 		html = noIndexMeta(html)
 	}
@@ -378,9 +390,10 @@ func (h *Handlers) HandleStatusPageData(w http.ResponseWriter, r *http.Request) 
 }
 
 // streamStatusPage handles GET /public/status/{slug}/stream, after
-// authorize. A gated page's stream re-runs the gate on every heartbeat and
-// ends once the visitor's session no longer opens the page (expired, password
-// changed, token revoked), so an open stream never outlives its credential.
+// authorize. Every stream re-runs the gate on each heartbeat and ends once it
+// no longer opens the page (the page turned password or private, the session
+// expired, the password changed, the token was revoked), so an open stream
+// never outlives its access even when the access-change event is lost.
 func (h *Handlers) streamStatusPage(w http.ResponseWriter, r *http.Request, slug string, gated bool) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -436,7 +449,7 @@ func (h *Handlers) streamStatusPage(w http.ResponseWriter, r *http.Request, slug
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, event.Data)
 			flusher.Flush()
 		case <-heartbeatTicker.C:
-			if gated && !h.stillAuthorized(r.Context(), r, slug) {
+			if !h.stillAuthorized(r.Context(), r, slug) {
 				return
 			}
 			fmt.Fprintf(w, "event: heartbeat\ndata: {\"time\":\"%s\"}\n\n", time.Now().UTC().Format(time.RFC3339))

@@ -241,12 +241,19 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A visitor who enters the right password, or opens a kiosk URL, gets a session cookie: signed with `STATUS_PAGE_SESSION_SECRET`, `HttpOnly`, `SameSite=Lax`, `Secure` when the request arrived over HTTPS, and scoped to the page's path. Nothing about the session is stored. A password session lasts 7 days and ends early when the password is set, changed or removed; a kiosk session lasts 400 days (the browser maximum) and ends at once when its token is revoked or the page stops accepting tokens. Open live streams re-check the session every 15 seconds, and a visibility or password change closes them so they reconnect through the check.",
+            "A visitor who enters the right password, or opens a kiosk URL, gets a session cookie: signed with `STATUS_PAGE_SESSION_SECRET`, `HttpOnly`, `SameSite=Lax`, scoped to the page's path, and `Secure` per `STATUS_PAGE_COOKIE_SECURE` — by default on when `STATUS_PAGE_BASE_URL` is `https://`, else only for requests that arrived over HTTPS (behind a TLS-terminating proxy that needs `TRUSTED_PROXY_CIDRS`, so set the base URL or the flag). Nothing about the session is stored. A password session lasts 30 days and ends early when the password is set, changed or removed; a kiosk session lasts 400 days (the browser maximum) and ends at once when its token is revoked or the page stops accepting tokens. Every open live stream re-checks the page and the session every 15 seconds, so a stream opened while the page was public ends once it is not, and a visibility or password change also closes the page's streams at once so they reconnect through the check.",
         },
         {
           type: "paragraph",
           text:
-            "**Kiosk tokens** are for wall displays and dashboards. Create one from the page's Kiosk tokens panel (or `POST /api/v1/status-pages/{id}/access-tokens` with a label); the token is shown once, and only its SHA-256 hash is stored. Open `/public/status/{slug}?token=<token>` on the display once: the page swaps the token for a session cookie and redirects to the same URL without it, so the token does not stay in the address bar, the history or a `Referer`. A token opens a private page and also bypasses the password on a password page. Each page can hold 50 active tokens; revoked ones stay listed with who created them and when.",
+            "**Kiosk tokens** are for wall displays and dashboards. Create one from the page's Kiosk tokens panel (or `POST /api/v1/status-pages/{id}/access-tokens` with a label); the token is shown once, and only its SHA-256 hash is stored. Open `/public/status/{slug}?token=<token>` on the display once: the page swaps the token for a session cookie and redirects to the same URL without it, so the token leaves the address bar and is not re-sent by the page's refreshes or carried in a `Referer`. The page does this for every visibility, so a token never lingers in the URL of a page that was made public or unlisted. A token opens a private page and also bypasses the password on a password page. Each page can hold 50 active tokens; revoked ones stay listed with who created them and when.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Kiosk URLs are bearer credentials until first use",
+          text:
+            "The browser still records the kiosk URL it was given as the source of the redirect, so it stays in that browser's history; use a dedicated browser profile on the display. Any proxy, ingress or load balancer in front of the status service that logs query strings records the full kiosk URL, token included. Turn query-string logging off for `/public/status/` (or strip the `token` parameter from access logs) on those hops, and revoke a token whose URL was exposed.",
         },
         {
           type: "table",
@@ -263,7 +270,24 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every response for a password or private page — allowed or refused — is `Cache-Control: private, no-store` with no `ETag`, so neither a shared cache nor a browser revalidation can hand it to someone else. The status service checks visibility before its render cache, on every request, so a page rendered while it was public is never served from the cache once it is not. Unlock attempts are limited per visitor address and per page, and a wrong password gets one generic message.",
+            "Every response for a password or private page — allowed or refused — is `Cache-Control: private, no-store` with no `ETag`, no CORS grant and `Cross-Origin-Resource-Policy: same-origin`, so neither a shared cache, a browser revalidation nor another site can hand it to someone else. The status service checks visibility before its render cache, on every request, so a page rendered while it was public is never served from the cache once it is not.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Wrong passwords and wrong kiosk tokens share one failure budget: 5 a minute per visitor address (IPv6 counted per /64) and 30 a minute per page. Only failures count, so the right password never costs anything. When a page's budget is spent, only visitors who already failed are refused (`429`); everyone else still gets a check. A visitor whose address cannot be told apart — every visitor arrives from the proxy's address when `TRUSTED_PROXY_CIDRS` is unset — has no budget of its own and is limited by the page budget alone, so one guesser can hold every such visitor at the unlock form; the service logs a warning at startup when password or private pages exist without trusted proxies. A wrong password gets one generic message.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Pages on one origin are isolated from each other as far as the browser allows: a password or private page answers a request from another status page on the same origin — a script fetching it, or a frame — as if the visitor had no credential (`Sec-Fetch-Site` together with `Referer`; a same-origin sub-request without a `Referer` is refused; browsers without `Sec-Fetch-*` get the `Referer` check alone), and its `frame-ancestors` names only the operator UI, never `'self'`. A link from another page (a top-level navigation) still works.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Pages sharing an origin trust each other's authors",
+          text:
+            "Custom templates and custom head/footer HTML run script on the status origin. That script cannot fetch or frame another page's gated content, but it can open another page in a window it controls and read it, and it can read anything the visitor's browser shows on this origin. Give template-editing rights only to people you would trust with every gated page on the installation. Full isolation needs a hostname per page, which custom domains will provide. Slugs are unique across the installation, so someone who can create status pages learns that a slug is taken, including a private page's.",
         },
         {
           type: "callout",
@@ -277,6 +301,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           items: [
             "Custom templates are covered too: the unlock form is its own small page (title, logo and primary colour only) and never uses the page template.",
             "The built-in template reloads when a live refresh is refused (`401`/`404`), so a wall display whose token was revoked shows that instead of freezing on the last render. A custom template's own script does what its author wrote.",
+            "Notifications already queued for a page when it turns password or private are closed without being sent.",
             "A visitor session belongs to the page's current URL: renaming the slug signs its visitors out, and a kiosk display must open the new URL with its token.",
           ],
         },

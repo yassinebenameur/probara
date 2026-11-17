@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,27 @@ type StatusPageConfig struct {
 	// serve as usual. Shorter than MinStatusPageSessionSecretLength refuses
 	// to start rather than leaving gated pages quietly unavailable.
 	SessionSecret string
+	// CookieSecure is STATUS_PAGE_COOKIE_SECURE: nil when unset. See
+	// SessionCookieSecure.
+	CookieSecure *bool
+}
+
+// SessionCookieSecure decides the visitor session cookie's Secure flag, like
+// the API's ADMIN_COOKIE_SECURE: STATUS_PAGE_COOKIE_SECURE when set, else on
+// when STATUS_PAGE_BASE_URL is https. detect is true when neither decides,
+// and the service then sets it exactly for requests that arrived over HTTPS
+// (which behind a TLS-terminating proxy needs TRUSTED_PROXY_CIDRS).
+func (c *StatusPageConfig) SessionCookieSecure() (secure, detect bool) {
+	if c == nil {
+		return false, true
+	}
+	if c.CookieSecure != nil {
+		return *c.CookieSecure, false
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.StatusPageBaseURL)), "https://") {
+		return true, false
+	}
+	return false, true
 }
 
 // MinStatusPageSessionSecretLength is the shortest STATUS_PAGE_SESSION_SECRET
@@ -96,6 +118,14 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 		cfg.LegacyTrustedProxy = true
 	}
 	cfg.AppBaseURL = loadAppBaseURL()
+
+	if raw := strings.TrimSpace(os.Getenv("STATUS_PAGE_COOKIE_SECURE")); raw != "" {
+		secure, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid STATUS_PAGE_COOKIE_SECURE: %w", err)
+		}
+		cfg.CookieSecure = &secure
+	}
 
 	cfg.SessionSecret = strings.TrimSpace(os.Getenv("STATUS_PAGE_SESSION_SECRET"))
 	if cfg.SessionSecret != "" && len(cfg.SessionSecret) < MinStatusPageSessionSecretLength {

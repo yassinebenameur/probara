@@ -6,6 +6,7 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -78,6 +79,24 @@ func TestStatusPageAccessMigrationUpDownUp(t *testing.T) {
 	if exists(`SELECT EXISTS (SELECT 1 FROM status_page_access_tokens)`) {
 		t.Fatal("tokens outlived their page")
 	}
+
+	// Rolling back while a page is not public would publish it: the down
+	// migration refuses and changes nothing.
+	gated := testutil.InsertStatusPage(ctx, t, dbc, tenant, "gated-at-rollback", "Gated")
+	exec(`UPDATE status_pages SET visibility = 'unlisted' WHERE id = $1`, gated)
+	err = m.Migrate(113)
+	if err == nil || !strings.Contains(err.Error(), "refusing to roll back 000114") {
+		t.Fatalf("down migration with an unlisted page: err = %v", err)
+	}
+	if !hasColumn("visibility") || !exists(`SELECT visibility = 'unlisted' FROM status_pages WHERE id = $1`, gated) {
+		t.Fatal("the refused down migration changed the schema or the page")
+	}
+	// golang-migrate leaves the version dirty after a failed step; the
+	// documented way out is to make the pages public, force and retry.
+	if err := m.Force(114); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE status_pages SET visibility = 'public' WHERE id = $1`, gated)
 
 	migrateTo(113)
 	if hasColumn("visibility") || hasColumn("password_hash") || hasColumn("password_version") {

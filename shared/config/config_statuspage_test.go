@@ -34,3 +34,36 @@ func TestLoadStatusPageConfig_SessionSecret(t *testing.T) {
 		t.Fatalf("secret = %q, want it trimmed", cfg.SessionSecret)
 	}
 }
+
+// The session cookie's Secure flag follows STATUS_PAGE_COOKIE_SECURE, else an
+// https STATUS_PAGE_BASE_URL, else request detection (like the API's
+// ADMIN_COOKIE_SECURE).
+func TestLoadStatusPageConfig_CookieSecure(t *testing.T) {
+	cases := []struct {
+		raw, baseURL   string
+		secure, detect bool
+	}{
+		{"", "", false, true},
+		{"", "http://localhost:8082", false, true},
+		{"", "HTTPS://status.example.com", true, false},
+		{"false", "https://status.example.com", false, false},
+		{"true", "", true, false},
+	}
+	for _, c := range cases {
+		setRequiredStatusPageEnv(t)
+		t.Setenv("STATUS_PAGE_COOKIE_SECURE", c.raw)
+		t.Setenv("STATUS_PAGE_BASE_URL", c.baseURL)
+		cfg, err := LoadStatusPageConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if secure, detect := cfg.SessionCookieSecure(); secure != c.secure || detect != c.detect {
+			t.Errorf("%q/%q: secure=%v detect=%v, want %v %v", c.raw, c.baseURL, secure, detect, c.secure, c.detect)
+		}
+	}
+	setRequiredStatusPageEnv(t)
+	t.Setenv("STATUS_PAGE_COOKIE_SECURE", "sometimes")
+	if _, err := LoadStatusPageConfig(); err == nil || !strings.Contains(err.Error(), "STATUS_PAGE_COOKIE_SECURE") {
+		t.Fatalf("invalid value: err = %v", err)
+	}
+}

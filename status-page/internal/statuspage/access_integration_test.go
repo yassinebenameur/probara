@@ -188,6 +188,39 @@ func TestAccessIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("pending notifications of a gated page are closed unsent", func(t *testing.T) {
+		publicID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "int-public", "Public Status")
+		var gatedDelivery, publicDelivery uuid.UUID
+		insert := func(pageID uuid.UUID) uuid.UUID {
+			var id uuid.UUID
+			if err := dbClient.QueryRowContext(ctx, `
+				INSERT INTO status_page_push_deliveries (status_page_id, monitor_id, interval_id, kind, monitor_name)
+				VALUES ($1, $2, $3, 'down', 'Checkout API') RETURNING id`, pageID, monitorID, uuid.New()).Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			return id
+		}
+		gatedDelivery = insert(lockedID)
+		publicDelivery = insert(publicID)
+
+		claimed, err := newPushStore(dbClient.DB).ClaimDeliveries(ctx, 10, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(claimed) != 1 || claimed[0].ID != publicDelivery {
+			t.Fatalf("claimed = %+v, want only the public page's", claimed)
+		}
+		var status string
+		var sent, failed int
+		if err := dbClient.QueryRowContext(ctx, `SELECT status, sent_count, failed_count FROM status_page_push_deliveries WHERE id = $1`, gatedDelivery).
+			Scan(&status, &sent, &failed); err != nil {
+			t.Fatal(err)
+		}
+		if status != "sent" || sent != 0 || failed != 0 {
+			t.Fatalf("gated delivery = %s %d/%d, want closed unsent", status, sent, failed)
+		}
+	})
+
 	t.Run("push is off on gated pages", func(t *testing.T) {
 		exec(`UPDATE status_pages SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{enable_push_notifications}', 'true') WHERE id = $1`, lockedID)
 		store := newPushStore(dbClient.DB)

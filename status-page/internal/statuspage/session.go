@@ -35,7 +35,7 @@ const sessionCookieName = "probara_sp_session"
 // checked on every request, so the lifetime is not what ends it. Browsers cap
 // cookie lifetimes at 400 days.
 const (
-	passwordSessionTTL = 7 * 24 * time.Hour
+	passwordSessionTTL = 30 * 24 * time.Hour
 	tokenSessionTTL    = 400 * 24 * time.Hour
 )
 

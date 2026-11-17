@@ -583,50 +583,6 @@ func TestAccess_UnlockOnOtherVisibilities(t *testing.T) {
 	}
 }
 
-// Unlock attempts are throttled per client per page and per page; buckets
-// key on the page ID, so a missing slug never creates one.
-func TestAccess_UnlockThrottle(t *testing.T) {
-	f := newAccessFixture(t, testSessionSecret)
-	// A frozen clock: no bucket refills while the bcrypt checks run.
-	frozen := time.Now()
-	f.h.access.unlockByClient.now = func() time.Time { return frozen }
-	f.h.access.unlockByPage.now = func() time.Time { return frozen }
-	post := func(slug, remote string) int {
-		req := httptest.NewRequest(http.MethodPost, "/public/status/"+slug+"/unlock", strings.NewReader("password=wrong-guess"))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.RemoteAddr = remote
-		return f.do(req).Code
-	}
-	for i := 0; i < unlockPerClientBurst; i++ {
-		if code := post("locked", "203.0.113.7:1"); code != http.StatusUnauthorized {
-			t.Fatalf("attempt %d = %d", i, code)
-		}
-	}
-	if code := post("locked", "203.0.113.7:1"); code != http.StatusTooManyRequests {
-		t.Fatalf("attempt over the client burst = %d, want 429", code)
-	}
-	// Other clients still get the page's remaining budget, then the page
-	// ceiling holds against a distributed guess.
-	limited := false
-	for i := 0; i < unlockPerPageBurst+5; i++ {
-		if post("locked", "198.51.100."+strconv.Itoa(i)+":1") == http.StatusTooManyRequests {
-			limited = true
-			break
-		}
-	}
-	if !limited {
-		t.Fatal("per-page ceiling never applied")
-	}
-
-	before := len(f.h.access.unlockByPage.limiters)
-	for i := 0; i < 20; i++ {
-		post("no-such-page-"+strconv.Itoa(i), "192.0.2.1:1")
-	}
-	if after := len(f.h.access.unlockByPage.limiters); after != before {
-		t.Fatalf("missing slugs created %d buckets", after-before)
-	}
-}
-
 func TestAccess_KioskTokenExchange(t *testing.T) {
 	f := newAccessFixture(t, testSessionSecret)
 
@@ -683,9 +639,13 @@ func TestAccess_KioskTokenExchange(t *testing.T) {
 	if rec := f.get("/public/status/locked?token=" + url.QueryEscape(f.token)); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("another page's token = %d, want 401", rec.Code)
 	}
-	// Public pages ignore the parameter, as before.
-	if rec := f.get("/public/status/open?token=x"); rec.Code != http.StatusOK {
-		t.Fatalf("public page with ?token= = %d", rec.Code)
+	// Public and unlisted pages strip it too, without a session or a lookup.
+	for _, slug := range []string{"open", "hidden"} {
+		rec := f.get("/public/status/" + slug + "?token=" + url.QueryEscape(f.token) + "&mode=kiosk")
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/public/status/"+slug+"?mode=kiosk" ||
+			len(rec.Result().Cookies()) != 0 {
+			t.Fatalf("%s with ?token= = %d → %q", slug, rec.Code, rec.Header().Get("Location"))
+		}
 	}
 }
 

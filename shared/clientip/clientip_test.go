@@ -3,6 +3,7 @@ package clientip
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 )
 
@@ -182,5 +183,42 @@ func TestAttributable(t *testing.T) {
 				t.Fatalf("Attributable = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// BucketKey applies the Attributable rule to the resolver's own answer and
+// groups IPv6 by /64, for limiters outside a router that runs Middleware.
+func TestBucketKey(t *testing.T) {
+	r := NewResolver([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+	cases := []struct {
+		remote, xff, want string
+	}{
+		{"203.0.113.7:1", "", "203.0.113.7"},
+		{"[2001:db8:1:2::1]:1", "", "2001:db8:1:2::/64"},
+		{"[2001:db8:1:2:ffff::9]:1", "", "2001:db8:1:2::/64"},
+		{"[::ffff:203.0.113.8]:1", "", "203.0.113.8"},
+		// An untrusted private peer pools every visitor behind it.
+		{"172.16.0.5:1", "", ""},
+		{"127.0.0.1:1", "", ""},
+		// A trusted proxy without a forwarding header is not the client.
+		{"10.1.2.3:1", "", ""},
+		// Forwarded by a trusted proxy: attributable, private or not.
+		{"10.1.2.3:1", "198.51.100.9", "198.51.100.9"},
+		{"10.1.2.3:1", "192.168.1.20", "192.168.1.20"},
+		// A forwarding header from an untrusted peer is ignored.
+		{"203.0.113.7:1", "198.51.100.9", "203.0.113.7"},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = c.remote
+		if c.xff != "" {
+			req.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if got := r.BucketKey(req); got != c.want {
+			t.Errorf("%s via %q: BucketKey = %q, want %q", c.remote, c.xff, got, c.want)
+		}
+	}
+	if BucketAddress("not-an-ip") != "not-an-ip" {
+		t.Fatal("unparseable address changed")
 	}
 }

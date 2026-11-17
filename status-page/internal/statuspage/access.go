@@ -44,19 +44,20 @@ const unlockSuffix = "/unlock"
 // a visitor session.
 const previewSuffix = "/preview/draft"
 
-// tokenParam carries a kiosk token on the page URL. It is swapped for a
-// session cookie and the browser is sent back to the URL without it.
+// tokenParam carries a kiosk token on the page URL. On a gated page a valid
+// one is swapped for a session cookie; on every page the browser is sent back
+// to the URL without it.
 const tokenParam = "token"
 
-// Unlock throttling, per client per page and per page across all clients so
-// a distributed guess still meets a ceiling. Each attempt costs one bcrypt
-// comparison, which this bounds as well.
+// unlockMaxBody bounds the unlock form. Failed attempts are throttled by
+// failureThrottle (unlock_throttle.go).
+const unlockMaxBody = 4096
+
+// Session cookie Secure modes (config.StatusPageConfig.SessionCookieSecure).
 const (
-	unlockPerClientPerMinute = 5
-	unlockPerClientBurst     = 5
-	unlockPerPagePerMinute   = 30
-	unlockPerPageBurst       = 10
-	unlockMaxBody            = 4096
+	cookieSecureDetect = iota // Secure exactly when the request arrived over HTTPS
+	cookieSecureAlways
+	cookieSecureNever
 )
 
 //go:embed unlock.gohtml
@@ -69,20 +70,20 @@ type accessGate struct {
 	store accessQuery
 	// sessions signs visitor cookies; nil without STATUS_PAGE_SESSION_SECRET,
 	// which leaves every password and private page closed.
-	sessions       *sessionSigner
-	unlockByClient *pushRateLimiter
-	unlockByPage   *pushRateLimiter
-	warnNoSecret   sync.Once
-	now            func() time.Time
+	sessions     *sessionSigner
+	failures     *failureThrottle
+	cookieSecure int
+	warnNoSecret sync.Once
+	now          func() time.Time
 }
 
-func newAccessGate(store accessQuery, secret string) *accessGate {
+func newAccessGate(store accessQuery, secret string, cookieSecure int) *accessGate {
 	return &accessGate{
-		store:          store,
-		sessions:       newSessionSigner(secret),
-		unlockByClient: newKeyedRateLimiter(unlockPerClientPerMinute, unlockPerClientBurst),
-		unlockByPage:   newKeyedRateLimiter(unlockPerPagePerMinute, unlockPerPageBurst),
-		now:            time.Now,
+		store:        store,
+		sessions:     newSessionSigner(secret),
+		failures:     newFailureThrottle(),
+		cookieSecure: cookieSecure,
+		now:          time.Now,
 	}
 }
 
@@ -128,7 +129,23 @@ func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, slug, rest 
 
 	aw := &accessWriter{ResponseWriter: w, noIndex: pageaccess.NoIndex(acc.Visibility), noStore: pageaccess.Gated(acc.Visibility)}
 	if !pageaccess.Gated(acc.Visibility) {
+		if hasToken {
+			// A token stays out of the address bar on every page: a private
+			// page made unlisted for a while must not leave its kiosk tokens
+			// in URLs that the page's own scripts (a custom template) can
+			// read and its refreshes re-send.
+			redirectWithoutToken(aw, r)
+			return nil, nil, false
+		}
 		return aw, acc, true
+	}
+
+	// Pages on one origin share it, so another page's script (a custom
+	// template runs script) could otherwise request this page with the
+	// visitor's cookie and read the answer, or frame it.
+	if crossPageRequest(r, slug) {
+		h.denyAccess(w, aw, r, acc, slug, rest, false)
+		return nil, nil, false
 	}
 
 	if h.access.sessions == nil {
@@ -141,13 +158,18 @@ func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request, slug, rest 
 
 	sessionOK := h.sessionValid(sessionValue, acc)
 	if hasToken {
-		// A token in the URL is always taken out of it, so it is not kept in
-		// history, re-sent by the page's own refreshes, or carried in a
-		// Referer. A valid one becomes the session first.
-		if acc.PresentedTokenID != uuid.Nil && pageaccess.AcceptsTokens(acc.Visibility) {
-			h.setSession(aw, r, slug, acc.ID, sessionCredential{kind: sessionKindToken, tokenID: acc.PresentedTokenID})
-			redirectWithoutToken(aw, r)
-			return nil, nil, false
+		// A token in the URL is always taken out of it, so it is not re-sent
+		// by the page's own refreshes or carried in a Referer. A valid one
+		// becomes the session first. Wrong tokens spend the same failure
+		// budget as wrong passwords, and a client over it gets no check.
+		client := h.clientIPs.BucketKey(r)
+		if token != "" && h.access.failures.allowed(client, acc.ID) {
+			if acc.PresentedTokenID != uuid.Nil && pageaccess.AcceptsTokens(acc.Visibility) {
+				h.setSession(aw, r, slug, acc.ID, sessionCredential{kind: sessionKindToken, tokenID: acc.PresentedTokenID})
+				redirectWithoutToken(aw, r)
+				return nil, nil, false
+			}
+			h.access.failures.fail(client, acc.ID)
 		}
 		if sessionOK {
 			redirectWithoutToken(aw, r)
@@ -206,8 +228,11 @@ func (h *Handlers) sessionValid(value string, acc *pageAccess) bool {
 }
 
 // stillAuthorized re-runs the gate for a long-lived response (the SSE
-// stream) without answering anything: false once the session expired, the
+// stream) without answering anything: false once the page is gone, it turned
+// password or private under a public stream, or the session expired, the
 // password changed, the token was revoked or the page stopped accepting it.
+// It runs for every stream, so a lost access-change event cannot leave one
+// open.
 func (h *Handlers) stillAuthorized(ctx context.Context, r *http.Request, slug string) bool {
 	sessionValue := ""
 	if c, err := r.Cookie(sessionCookieName); err == nil {
@@ -249,8 +274,95 @@ func (h *Handlers) setSession(w http.ResponseWriter, r *http.Request, slug strin
 		// Lax: a kiosk link or a bookmark is a top-level navigation. A gated
 		// page framed by another site gets no cookie.
 		SameSite: http.SameSiteLaxMode,
-		Secure:   securityheaders.IsHTTPS(r, h.clientIPs),
+		Secure:   h.cookieSecure(r),
 	})
+}
+
+// cookieSecure is the session cookie's Secure flag: STATUS_PAGE_COOKIE_SECURE
+// when set, else on when STATUS_PAGE_BASE_URL is https (the usual setup is
+// TLS terminated at an ingress, which request detection cannot see unless
+// TRUSTED_PROXY_CIDRS names it), else detected from the request.
+func (h *Handlers) cookieSecure(r *http.Request) bool {
+	switch h.access.cookieSecure {
+	case cookieSecureAlways:
+		return true
+	case cookieSecureNever:
+		return false
+	}
+	return securityheaders.IsHTTPS(r, h.clientIPs)
+}
+
+// crossPageRequest reports whether r for the gated page at slug was made by
+// another status page on this origin rather than by the page itself or by a
+// top-level navigation. Same-origin pages share cookies' reach, so without
+// this a custom template on page A could fetch page B's /data with the
+// visitor's session for B and read it, or frame B.
+//
+//   - Sec-Fetch-Site cross-site: the Lax session cookie is not sent on a
+//     cross-site sub-request anyway; none: the visitor typed or bookmarked it.
+//   - A top-level navigation (Sec-Fetch-Mode navigate, Dest document) is
+//     allowed from anywhere; the navigating page cannot read the result.
+//   - Any other same-origin or same-site request must name this page (or a
+//     non-status-page path, such as the operator UI's preview) in Referer;
+//     the page's own requests always carry one (strict-origin-when-cross-
+//     origin), so a missing Referer is refused.
+//   - Browsers that send no Sec-Fetch-* headers get the Referer check alone.
+//
+// What this cannot stop is a same-origin window the other page opened itself
+// (a navigation it can then read); the docs state that limit.
+func crossPageRequest(r *http.Request, slug string) bool {
+	site := r.Header.Get("Sec-Fetch-Site")
+	switch site {
+	case "cross-site", "none":
+		return false
+	}
+	refSlug, hasReferer := refererPage(r)
+	if site == "" {
+		return hasReferer && refSlug != "" && refSlug != slug
+	}
+	if r.Header.Get("Sec-Fetch-Mode") == "navigate" {
+		if dest := r.Header.Get("Sec-Fetch-Dest"); dest == "document" || dest == "" {
+			return false
+		}
+	}
+	if !hasReferer {
+		return true
+	}
+	return refSlug != "" && refSlug != slug
+}
+
+// refererPage returns the status page slug a same-host Referer names ("" for
+// any other path), and whether a usable same-host Referer was sent at all.
+func refererPage(r *http.Request) (slug string, ok bool) {
+	raw := r.Header.Get("Referer")
+	if raw == "" {
+		return "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Host, r.Host) {
+		// Another host's page is not a status page of this origin.
+		return "", err == nil
+	}
+	rest, isPage := strings.CutPrefix(u.Path, "/public/status/")
+	if !isPage {
+		return "", true
+	}
+	slug, _ = splitStatusPath(rest)
+	return slug, true
+}
+
+// gatedFrameAncestors is a password or private page's frame-ancestors list:
+// only the operator UI origin, for the template editor, and never 'self'. A
+// CSP source cannot name a path, so 'self' would let every other page on
+// this origin frame it (crossPageRequest refuses those loads too).
+func gatedFrameAncestors(appBaseURL string) []string {
+	var out []string
+	for _, a := range securityheaders.FrameAncestors(appBaseURL) {
+		if a != "'self'" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // redirectWithoutToken sends the browser back to the URL it asked for minus
@@ -327,7 +439,7 @@ func (h *Handlers) writeUnlockPage(w http.ResponseWriter, acc *pageAccess, slug 
 	}
 	csp := pageCSP{
 		mode:           securityheaders.CSPModeStrict,
-		frameAncestors: securityheaders.FrameAncestors(h.appBaseURL()),
+		frameAncestors: gatedFrameAncestors(h.appBaseURL()),
 	}
 	html := csp.apply(w.Header(), buf.String())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -378,10 +490,11 @@ func (h *Handlers) HandleUnlock(w http.ResponseWriter, r *http.Request, slug str
 		http.Error(gw, "Forbidden", http.StatusForbidden)
 		return
 	}
-	// Buckets key on the resolved page ID, never the slug: the slug is raw
-	// request text, and a fresh slug per request would mint a fresh bucket.
-	pageKey := acc.ID.String()
-	if !h.access.unlockByClient.allow(h.clientIPs.Resolve(r)+"|"+pageKey) || !h.access.unlockByPage.allow(pageKey) {
+	// The page budget keys on the resolved page ID, never the slug: the slug
+	// is raw request text, and a fresh slug per request would mint a fresh
+	// bucket. Only a failure is charged, after the check.
+	client := h.clientIPs.BucketKey(r)
+	if !h.access.failures.allowed(client, acc.ID) {
 		gw.Header().Set("Retry-After", "60")
 		h.writeUnlockPage(gw, acc, slug, http.StatusTooManyRequests, "Too many attempts. Try again in a minute.")
 		return
@@ -398,6 +511,7 @@ func (h *Handlers) HandleUnlock(w http.ResponseWriter, r *http.Request, slug str
 		return
 	}
 	if !pageaccess.CheckPassword(acc.PasswordHash, r.PostForm.Get("password")) {
+		h.access.failures.fail(client, acc.ID)
 		h.writeUnlockPage(gw, acc, slug, http.StatusUnauthorized, "That password is not correct.")
 		return
 	}
@@ -451,12 +565,27 @@ func (a *accessWriter) WriteHeader(code int) {
 			h.Set("X-Robots-Tag", "noindex")
 		}
 		if a.noStore {
-			h.Set("Cache-Control", "private, no-store")
-			// No validator: a no-store body must never come back as a 304.
-			h.Del("ETag")
+			markGatedResponse(h)
 		}
 	}
 	a.ResponseWriter.WriteHeader(code)
+}
+
+// gated reports whether this response is for a password or private page.
+// A route behind authorize (the page, /data, add-ons such as a summary or a
+// badge) reads it to decide what it may expose; the headers are forced by
+// WriteHeader either way.
+func (a *accessWriter) gated() bool { return a.noStore }
+
+// markGatedResponse sets what every response of a password or private page
+// carries, whatever its route set: no shared or revalidated caching (no
+// validator, so never a 304), no cross-origin read (no CORS grant, and a
+// same-origin resource policy against no-cors embedding).
+func markGatedResponse(h http.Header) {
+	h.Set("Cache-Control", "private, no-store")
+	h.Del("ETag")
+	h.Del("Access-Control-Allow-Origin")
+	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 }
 
 func (a *accessWriter) Write(b []byte) (int, error) {

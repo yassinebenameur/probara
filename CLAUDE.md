@@ -965,9 +965,16 @@ or imported groups come back empty. Any other path that creates groups through
   package). Private-without-credential answers via `writeNotFound`, identical
   to a missing slug, from the same single `PageAccess` query. The API alone
   writes visibility, password hashes and token hashes; sessions are stateless
-  HMAC cookies (`session.go`, `STATUS_PAGE_SESSION_SECRET`, path-scoped). No
+  HMAC cookies (`session.go`, `STATUS_PAGE_SESSION_SECRET`, path-scoped;
+  Helm derives it from a chart-managed `adminJwtSecret`). No
   push on password/private pages; a surface that enumerates pages lists only
-  `pageaccess.Listed` ones.
+  `pageaccess.Listed` ones. A route behind the gate writes through the
+  returned `accessWriter` (`gated()`; `markGatedResponse` forces no-store, no
+  ETag, no CORS, same-origin CORP) and gets `crossPageRequest` (another page
+  on the origin may not fetch or frame a gated page) for free. Wrong passwords
+  and kiosk tokens share `failureThrottle` (`unlock_throttle.go`: failures
+  only, `clientip` `BucketKey`, LRU-capped). Every SSE stream re-checks access
+  on its heartbeat. Migration 000114's down refuses while a page is not public.
 
 ## Web UI conventions
 

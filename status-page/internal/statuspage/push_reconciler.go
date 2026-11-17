@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
@@ -115,7 +116,7 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 		WHERE COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
 		  -- Password and private pages notify nobody (see PageIDForSlug),
 		  -- including browsers that subscribed while the page was public.
-		  AND sp.visibility IN ('public', 'unlisted')
+		  AND ` + pushVisiblePages + `
 		  -- No subscribers, no work. This also bounds the blast radius when
 		  -- an operator first enables the setting on a busy page.
 		  AND EXISTS (
@@ -130,6 +131,12 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 		pushNotificationHorizon.Seconds(),
 		pushFlapDebounce.Seconds(),
 	)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		res, err = s.db.ExecContext(ctx, withoutVisibility(query),
+			pushNotificationHorizon.Seconds(),
+			pushFlapDebounce.Seconds(),
+		)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("reconcile push notifications: %w", err)
 	}

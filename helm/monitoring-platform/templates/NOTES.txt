@@ -110,6 +110,22 @@ WARNING: CLIENT ADDRESSES
   failed credentials are not limited per address), and HSTS is never sent.
   Set trustedProxyCIDRs to the CIDR your ingress controller pods use.
 {{- end }}
+{{- if .Values.statusPage.enabled }}
+{{- if and (not .Values.secrets.statusPageSessionSecretExistingSecret) (not .Values.secrets.existingSecret) (not (include "monitoring-platform.statusPageSessionSecret" .)) }}
+
+WARNING: PASSWORD AND PRIVATE STATUS PAGES ARE CLOSED
+  The chart cannot derive STATUS_PAGE_SESSION_SECRET because adminJwtSecret
+  comes from an existing Secret. Set secrets.statusPageSessionSecret or
+  secrets.statusPageSessionSecretExistingSecret; until then password pages
+  answer 503 and private pages 404.
+{{- else if and .Values.secrets.existingSecret (not .Values.secrets.statusPageSessionSecretExistingSecret) }}
+
+NOTE: STATUS PAGE SESSIONS
+  Password and private status pages read status_page_session_secret from
+  {{ .Values.secrets.existingSecret }}. Add that key (at least 32 characters)
+  or they stay closed.
+{{- end }}
+{{- end }}
 
 ===============================================================================
 

@@ -495,7 +495,12 @@ kubectl -n probara get jobs`,
             [
               '`secrets.statusPageSessionSecret`',
               'Empty',
-              'Signs visitor sessions on [password and private status pages](/docs/status-pages/#visibility) (`STATUS_PAGE_SESSION_SECRET`, status service only, at least 32 characters). Empty: those pages cannot be opened. Or name a Secret in `secrets.statusPageSessionSecretExistingSecret` (key `status_page_session_secret`), which must then exist and hold the key; with only the chart-wide `secrets.existingSecret`, the key is optional.',
+              'Signs visitor sessions on [password and private status pages](/docs/status-pages/#visibility) (`STATUS_PAGE_SESSION_SECRET`, status service only, at least 32 characters). Empty with a chart-managed `adminJwtSecret`: derived from it (a domain-separated SHA-256), stable across upgrades and GitOps renders; rotating the JWT secret rotates it and signs visitors out, and with the shipped placeholder JWT secret it is a well-known value like that secret. When `adminJwtSecret` comes from an existing Secret the chart cannot derive it: set this value or `secrets.statusPageSessionSecretExistingSecret` (key `status_page_session_secret`, which must exist), or those pages stay closed and the install notes say so. With the chart-wide `secrets.existingSecret`, add `status_page_session_secret` to that Secret (optional there).',
+            ],
+            [
+              '`statusPage.cookieSecure`',
+              'Empty (derived)',
+              'Secure attribute of the visitor session cookie (`STATUS_PAGE_COOKIE_SECURE`). Empty: on when `statusPage.baseUrl` is `https://`, else per request over HTTPS, which behind the ingress needs `trustedProxyCIDRs`. Set `"true"` behind TLS without a base URL.',
             ],
             [
               '`api.cookieSecure`',
@@ -997,6 +1002,13 @@ api:
           title: 'A Helm rollback is not a database rollback',
           text:
             'The migration hook changes shared PostgreSQL state. Keep backups and review migration compatibility before upgrading; never assume an application rollback will undo schema or data changes.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Rolling back below status page visibility publishes gated pages',
+          text:
+            'A status-page image older than the release that added [page visibility](/docs/status-pages/#visibility) ignores it and serves every unlisted, password and private page publicly, even while the schema still holds the setting. Do not roll the status service back below that release while such pages exist. The schema migration (`000114`) refuses to roll back while any page is not public; to roll it back, set those pages to public first, deliberately. A refused rollback leaves the migration version marked dirty: run `migrate force 114` and retry after making the pages public.',
         },
         {
           type: 'callout',

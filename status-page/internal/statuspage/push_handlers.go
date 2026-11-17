@@ -49,45 +49,29 @@ const (
 
 // pushRateLimiter is a per-IP token bucket, mirroring the OTLP ingest limiter
 // (api/internal/services/otlp/service.go). In-memory and per-replica, which is
-// fine: this is a spam control, not a quota. The unlock route (access.go)
-// reuses it with its own rate; keys must come from a bounded space (a
-// resolved client address, a page ID), never raw request text.
+// fine: this is a spam control, not a quota.
 type pushRateLimiter struct {
-	mu        sync.Mutex
-	limiters  map[string]*rate.Limiter
-	seen      map[string]time.Time
-	perMinute float64
-	burst     int
-	// now is the limiter's clock; tests freeze it.
-	now func() time.Time
+	mu       sync.Mutex
+	limiters map[string]*rate.Limiter
+	seen     map[string]time.Time
 }
 
 func newPushRateLimiter() *pushRateLimiter {
-	return newKeyedRateLimiter(pushRatePerMinute, pushRateBurst)
-}
-
-// newKeyedRateLimiter is a per-key token bucket refilling perMinute tokens a
-// minute and holding at most burst.
-func newKeyedRateLimiter(perMinute float64, burst int) *pushRateLimiter {
 	return &pushRateLimiter{
-		limiters:  make(map[string]*rate.Limiter),
-		seen:      make(map[string]time.Time),
-		perMinute: perMinute,
-		burst:     burst,
-		now:       time.Now,
+		limiters: make(map[string]*rate.Limiter),
+		seen:     make(map[string]time.Time),
 	}
 }
 
 func (l *pushRateLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := l.now()
 
 	// Bound the map: without this, one host cycling source addresses would
 	// grow it without limit. Eviction is coarse on purpose -- an evicted
 	// client simply gets a fresh bucket.
 	if len(l.limiters) > 10000 {
-		cutoff := now.Add(-time.Hour)
+		cutoff := time.Now().Add(-time.Hour)
 		for k, at := range l.seen {
 			if at.Before(cutoff) {
 				delete(l.limiters, k)
@@ -98,11 +82,11 @@ func (l *pushRateLimiter) allow(key string) bool {
 
 	lim, ok := l.limiters[key]
 	if !ok {
-		lim = rate.NewLimiter(rate.Limit(l.perMinute/60.0), l.burst)
+		lim = rate.NewLimiter(rate.Limit(float64(pushRatePerMinute)/60.0), pushRateBurst)
 		l.limiters[key] = lim
 	}
-	l.seen[key] = now
-	return lim.AllowN(now, 1)
+	l.seen[key] = time.Now()
+	return lim.Allow()
 }
 
 // pushSubscribeRequest is the W3C PushSubscriptionJSON shape, so the page can
