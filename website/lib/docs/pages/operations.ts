@@ -35,7 +35,7 @@ export const OPERATIONS_PAGE: DocPage = {
             [
               'Scheduler',
               'PostgreSQL and NATS',
-              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors, enforces retention, and schedules mesh probes.',
+              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors and deleted workspaces, enforces retention, and schedules mesh probes.',
             ],
             [
               'Worker',
@@ -241,6 +241,11 @@ make healthcheck`,
               'Growing errors or deleted monitors never becoming fully purged.',
             ],
             [
+              'Workspace purge',
+              '`workspace_purge_rows_total`, `workspace_purge_workspaces_total`, `workspace_purge_errors_total`, `workspace_purge_pending`, `workspace_purge_run_duration_seconds`',
+              'Growing errors, or `workspace_purge_pending` staying above zero while `workspace_purge_rows_total` no longer grows.',
+            ],
+            [
               'Worker execution',
               '`probara_worker_jobs_total{status=…}`, `job_duration_seconds`, `http_request_duration_seconds`, `http_errors_total{reason=…}`',
               'Failure-rate changes, high latency, timeouts, and policy blocks.',
@@ -355,6 +360,13 @@ go run ./cmd/migrate`,
             'Migration 000105 only adds columns, a table and constraints that skip scanning existing rows, so it is quick at any size. Upgrade the delivery workers before the alerter, or together with it: with asynchronous dispatch an older worker would send a [relapse notice](/docs/alerting/#relapses) under the first episode\'s PagerDuty or Opsgenie key, folding it into the earlier incident instead of opening a new one. Nothing relapses until a workspace sets its reopen cooldown, so upgrading in that order is enough.',
         },
         {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to sign-in lockout and sessions',
+          text:
+            'Migrations 000117 and 000118 add columns to `admin_users`, the `admin_session_families` table and a column and index on `admin_sessions`; 000118 turns every live refresh token into its own [session](/docs/security/#sign-in-lockout-sessions), so nobody is signed out by the upgrade. Complete the rollout of every API replica before revoking sessions: during a rolling upgrade an API replica still on the previous version ignores sessions, honours the refresh token of a revoked one, and the token it issues starts a fresh session, so revocations made while old replicas run may not hold. Access tokens issued before the upgrade carry no session id and stay valid until they expire (15 minutes).',
+        },
+        {
           type: 'code',
           language: 'bash',
           title: 'Create or update the initial administrator',
@@ -463,6 +475,11 @@ make db-restore`,
                 'Soft-deleted monitors are later purged with dependent rows in bounded batches.',
             },
             {
+              term: 'Workspace purge',
+              description:
+                'A deleted [workspace](/docs/administration/#workspaces) is erased by the scheduler in bounded batches, table by table, and its row goes last; every pass first blanks its stored secrets (channel and monitor credentials, push tokens, worker credentials). It shares the `MONITOR_PURGE_*` settings (cadence, batch size, per-run cap) but holds its own lock, so one replica runs it at a time and a run that stops (budget, restart, lost lock) simply resumes on the next tick. Each run logs `workspace purge progress` with the rows deleted per table, and `deleted workspace fully purged` when the row is gone. Audit log entries are kept.',
+            },
+            {
               term: 'Rollups',
               description:
                 'Result ingestion marks each affected hour in a dirty-bucket ledger within the same transaction, and scheduler maintenance rebuilds marked buckets wholesale from raw results — late or redelivered rows can never be permanently skipped. A failed batch leaves its marks for the next run.',
@@ -486,9 +503,9 @@ make db-restore`,
             ['`METRIC_RAW_RETENTION_DAYS`', '`30`', 'Raw OTLP metric samples (daily partitions); a tenant\'s `data_retention_days` can tighten it. Hourly metric rollups are kept 400 days.'],
             ['`OTLP_MAX_SERIES_PER_MONITOR`', '`2000`', 'Metric-series cardinality cap per agent monitor; overflow points are rejected via OTLP `partial_success`.'],
             ['`OTLP_MONITOR_RATE_PER_MIN`', '`60`', 'OTLP ingest requests per minute per monitor; excess returns `429` with `Retry-After`.'],
-            ['`MONITOR_PURGE_INTERVAL_SECONDS`', '`30`', 'Soft-delete purge cadence.'],
-            ['`MONITOR_PURGE_BATCH_SIZE`', '`5000`', 'Child-row purge batch size.'],
-            ['`MONITOR_PURGE_MAX_ROWS_PER_RUN`', '`200000`', 'Purge safety cap.'],
+            ['`MONITOR_PURGE_INTERVAL_SECONDS`', '`30`', 'Soft-delete purge cadence (deleted monitors and deleted workspaces).'],
+            ['`MONITOR_PURGE_BATCH_SIZE`', '`5000`', 'Purge batch size (rows per statement).'],
+            ['`MONITOR_PURGE_MAX_ROWS_PER_RUN`', '`200000`', 'Purge safety cap, per run of each purge.'],
           ],
         },
         {

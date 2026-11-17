@@ -15,6 +15,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -94,7 +95,9 @@ type APIKeyIdentity struct {
 
 // ValidateAPIKey validates an API key and returns its identity (tenant,
 // scope, expiry). Uses key_prefix for fast direct lookup, then verifies with
-// bcrypt. Expired keys are rejected at the SQL level.
+// bcrypt. Expired keys and keys of a deleted workspace are rejected at the
+// SQL level (tenancy.LiveTenantSQL), so deleting a workspace ends its keys at
+// once, a key minted by a request racing the delete included.
 func ValidateAPIKey(ctx context.Context, dbClient *db.Client, key string) (*APIKeyIdentity, error) {
 	if key == "" {
 		return nil, fmt.Errorf("API key cannot be empty")
@@ -109,6 +112,7 @@ func ValidateAPIKey(ctx context.Context, dbClient *db.Client, key string) (*APIK
 		FROM api_keys
 		WHERE key_prefix = $1 AND revoked_at IS NULL
 		  AND (expires_at IS NULL OR expires_at > NOW())
+		  AND ` + tenancy.LiveTenantSQL("api_keys.tenant_id") + `
 		LIMIT 1
 	`
 
@@ -124,6 +128,7 @@ func ValidateAPIKey(ctx context.Context, dbClient *db.Client, key string) (*APIK
 			SELECT id, tenant_id, name, key_hash
 			FROM api_keys
 			WHERE key_prefix = $1 AND revoked_at IS NULL
+			  AND ` + tenancy.LiveTenantSQL("api_keys.tenant_id") + `
 			LIMIT 1
 		`
 		err = dbClient.QueryRowContext(ctx, legacy, keyPrefix).

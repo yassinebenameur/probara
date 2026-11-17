@@ -846,14 +846,14 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A version is recorded for every save, whatever it came through: the operator UI, the API, MCP, an import (both mapping paths), a Kubernetes discovery approval, a bulk alerting edit, adding or removing group members or dependencies, and a restore. A save that changes nothing records nothing, and pausing or resuming records nothing. Each version keeps who made it (the user or API key, by its name at the time, or the system), when, the source, and the fields that changed from the previous version. A version is written in the same transaction as the save it describes, so it credits that save and no concurrent one, and a save that fails leaves no version behind. A save whose member list names a monitor that cannot be added (deleted, another workspace's, or nesting the group in itself) is refused as a whole.",
+            "A version is recorded for every save, whatever it came through: the operator UI, the API, MCP, an import (both mapping paths), a Kubernetes discovery approval, a bulk alerting edit, adding or removing group members or dependencies, a restore, and a [config-as-code apply](#config-as-code) (source `apply`). A save that changes nothing records nothing, and pausing or resuming records nothing. Each version keeps who made it (the user or API key, by its name at the time, or the system), when, the source, and the fields that changed from the previous version. A version is written in the same transaction as the save it describes, so it credits that save and no concurrent one, and a save that fails leaves no version behind. A save whose member list names a monitor that cannot be added (deleted, another workspace's, or nesting the group in itself) is refused as a whole.",
         },
         {
           type: "table",
           columns: ["Recorded in a version", "Not recorded"],
           rows: [
             [
-              "Name, type, `config`, interval, timeout, tags, failure threshold, notification mode and custom channels with their delays, member alert roll-up, dependency suppression, locations and quorum, dependencies, and a group's members",
+              "Name, the config-as-code key (shown in the history, never restored: a restore never changes which file manages a monitor), type, `config`, interval, timeout, tags, failure threshold, notification mode and custom channels with their delays, member alert roll-up, dependency suppression, locations and quorum, dependencies, and a group's members",
               "Pause state (`enabled`: pausing and resuming show in the state timeline and the audit log), the generated push token and agent ID, current state, results, alerts and maintenance windows",
             ],
           ],
@@ -879,6 +879,86 @@ export const MONITORS_PAGE: DocPage = {
           title: "Bounds",
           text:
             "Each monitor keeps its newest 100 versions; older ones are pruned as new ones are recorded. History is deleted with the monitor and with its workspace. The one-off [backfill tools](/docs/security/#encryption-at-rest) rewrite stored configs directly and record no version, so the next save's version also shows what they moved; the credential backfill also scrubs existing versions.",
+        },
+      ],
+    },
+    {
+      id: "config-as-code",
+      title: "Config as code (apply)",
+      intro:
+        "Keep monitors in a file under version control and apply it: `POST /api/v1/monitors/apply/plan` shows what would change, `POST /api/v1/monitors/apply` makes the workspace match. It manages monitors only (with their group members and dependencies), not alert channels, status pages or maintenance windows. There is no apply screen in the UI: it is an API, CI and [MCP](/docs/mcp/#tools) feature.",
+      blocks: [
+        {
+          type: "definitions",
+          items: [
+            {
+              term: "Key",
+              description:
+                "A monitor is managed when it has a **key**: a name you choose, set on the monitor's settings (Labels & display), with `key` on `POST`/`PATCH /monitors`, or by the file itself. Lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit, at most 64 characters, unique among the workspace's monitors (a deleted monitor frees its key; `PATCH` with `\"key\": \"\"` removes one). The file names monitors by key, so renaming a monitor in the file keeps its identity, history and alerts. **Treat a key as permanent**: changing it in the file creates a new monitor and, with prune, deletes the old one, whose history, SLA intervals, locations, quorum, custom routing, status-page sections and maintenance targets do not follow. A plan marks a create and a delete with the same name and type as a probable rename (`probable_renames`, and `probable_rename` on both items), and apply refuses it with 409 `probable_rename` unless you send `force: true`. To re-key deliberately, change the key on the monitor first (Settings or `PATCH /monitors/{id}` with `\"key\"`), then in the file: the next plan is then unchanged. Monitors without a key are **unmanaged**: apply never changes or deletes them.",
+            },
+            {
+              term: "The file",
+              description:
+                "The portable export, version 2: `GET /api/v1/monitors/export?keyed=true` (or the Export dialog's \"Monitors with a key\") writes every keyed monitor with its `key`, name, type, interval, timeout, `enabled`, tags, `config` (secrets as `***`), failure and recovery thresholds, a group's keyed members as `member_keys` and a monitor's keyed upstream dependencies as `depends_on`, both by key. A keyed export names group members by key only. Without `keyed=true` the export holds every monitor (those without a key have none, and group members are also listed by name in `group_members`) and is for importing elsewhere: when no monitor has a key it is written as version 1, which older releases import. The importer reads versions 1 and 2 and does not set keys. Every export masks secrets as configuration history does: secret fields, credentials in plain headers or variables, and the credentials of URLs a check dials (the password of a `user:password@` part, a credential-named query parameter such as `?api_key=`). An apply keeps the stored URL when the file's masked URL matches it; a masked URL that matches nothing (a new monitor, another URL) loses its masked parts and is listed as a secret to re-enter, and an import leaves them out with a preview warning. An apply needs version 2 and a key on every monitor; a field the format does not know is refused, so a misspelling fails instead of being ignored, and a `group_members` list (by name) must name the same monitors as `member_keys`, which is what apply reads.",
+            },
+            {
+              term: "What the file sets",
+              description:
+                "Everything the format carries, as a whole: a field left out takes its default (no tags, failure threshold 2, recovery threshold 1, `enabled` true, no keyed members or dependencies), except a secret, which is kept. Settings the format does not carry are left as they are on an existing monitor and take their defaults on a new one: notification mode and channels, locations and quorum, member alert roll-up and dependency suppression. Group members and dependencies that are unmanaged monitors are kept too: apply only manages edges between keyed monitors. The server-owned `monitor_ids` of a group and `agent_id` of an agent are not in the file and never change; a monitor's type never changes either (give it a new key to replace it). References name keys of the same file.",
+            },
+          ],
+        },
+        {
+          type: "table",
+          columns: ["Plan action", "Meaning"],
+          rows: [
+            ["`create`", "The key is not in the workspace: apply creates the monitor with that key."],
+            ["`update`", "The monitor exists and differs; `changes` lists each path with before and after values, as the [history diff](#config-history) does, with `member_keys` and `depends_on` by key and `enabled` for the pause state."],
+            ["`unchanged`", "The monitor already matches the file: apply does not touch it and records no version."],
+            ["`delete`", "A keyed monitor the file leaves out. Listed by every plan; deleted only by an apply with `prune: true`."],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "**Validation first.** A plan checks every monitor the way a save would (the type registry, schedule rules such as the SIP test-call interval, domain monitor rules, the test-call permission, secret conflicts) and what only a file can get wrong: a missing, malformed or repeated key, a reference to a key the file lacks, a change of type, and group or dependency cycles, including cycles that close through the workspace's unmanaged edges. Problems are listed in `errors` with the monitor's index and key, and `valid` is false. Plan answers 200 either way; an apply of an invalid file answers 422 `invalid_document` with the same plan and writes nothing.",
+            "**All or nothing.** An apply is one database transaction: it creates, updates, re-links and (with prune) deletes, and either everything commits or nothing does. Two applies to one workspace never interleave: each holds a per-workspace lock for its whole transaction, so the second waits and then plans against the first's result. Each created or changed monitor records one configuration version with source `apply` and the user or API key that applied (a pause or resume alone records none, as everywhere); a delete records none, as any delete. A large file keeps the changed monitors' rows locked until it commits, which delays their check results that long, so a file holds at most 1000 monitors.",
+            "**Idempotent.** Applying the same file twice changes nothing the second time and records no version, secrets included: a secret value written in the file that equals the stored one is no change.",
+            "**Fingerprint.** Every plan returns a `fingerprint` of the file (secret values masked), the prune scope and the workspace's keyed monitors: an HMAC under a key the server derives from `PROBARA_SECRETS_KEY`, so it reveals nothing about the file and can be logged. Pass it to apply and the apply is refused with 409 `plan_changed`, writing nothing, if any of them changed since: what you reviewed is what runs (a change of a secret value alone is not detected, as the plan shows no values). Without `PROBARA_SECRETS_KEY` the key is random per API process, and rotating the secrets key changes it: a fingerprint then no longer matches after a restart or on another replica, so plan again. Without a fingerprint, apply plans again and applies that.",
+            "**Saved meanwhile.** Apply re-plans under its workspace lock, then locks the rows of the monitors it changes and checks they are still as planned. A save that committed in between (a member added to a group in the UI, say) refuses the apply with 409 `apply_conflict`, writing nothing; apply again and it plans against that save.",
+            "**One file per workspace, or one prefix per team.** Without a scope, prune covers every keyed monitor of the workspace: a file that holds only some of them deletes the rest. When several teams or repositories manage one workspace, give each a key prefix (`payments.`, `search.`) and send it as `prune_scope`: only keyed monitors whose key starts with it can be deleted, the guard counts only them, and a file with a key outside its scope is refused.",
+            "**Prune guard.** `prune: true` deletes the keyed monitors in scope the file leaves out, never an unmanaged one. It is refused with 409 `prune_refused`, writing nothing, when the file lists no monitors at all, or when it would delete more than half of the keyed monitors in scope; both usually mean the wrong file or the wrong workspace. Add `force: true` to go ahead. The plan's `prune` block shows `scope`, `deletes`, `keyed_monitors` (in scope), whether `needs_force`, and `affected`: the monitors outside the file whose settings the prune changes (a group losing a deleted member, a monitor losing a deleted upstream), each recorded as a system version when it runs.",
+            "**Secrets.** Per secret field, as on every save: absent or `***` keeps the stored value, so an exported file can be applied again safely; a value replaces it; `\"\"` clears it. Values never appear in a plan, an apply answer, a log or the audit log: a changed secret shows as a `changes` entry with `\"secret\": true` and `***` at most. A plan compares a value written in the file with the stored one only for a caller with write access (as testing with saved credentials requires); for a viewer or read-scope key it reports the field as set by the file, with a note. A new monitor whose file entry masks a secret (`***`) it would need is created paused with a note, as the importers do, and a later apply never resumes a monitor whose entry still masks a secret it lacks: enter the secret, then resume it. Keep real secrets out of the repository: write them into the file in CI from your secret store, or leave them `***` and manage them in the UI.",
+            "**Access.** Plan needs read access (viewers and read-scope API keys); apply needs write access, so a write-scope API key is the CI credential. A SIP test-call monitor (each check places a real call) can only be created or changed by a signed-in tenant admin, through apply as everywhere; an unchanged one in the file needs nothing. Both are audited: `monitor.plan` and `monitor.apply`, with the counts and the keys created, updated and deleted, never configuration.",
+          ],
+        },
+        {
+          type: "code",
+          language: "bash",
+          title: "Export, edit, plan, apply",
+          code:
+            "export PROBARA=\"$PROBARA_API_ORIGIN/api/v1\"\nAUTH='Authorization: Bearer pk_<write-scope key>'\n\n# 1. Export the managed monitors (give monitors a key first).\ncurl -sf -H \"$AUTH\" \"$PROBARA/monitors/export?keyed=true\" -o monitors.yaml\n\n# 2. Edit monitors.yaml, commit it.\n\n# 3. Plan: what would change, nothing written.\njq -Rs '{document: .}' monitors.yaml |\n  curl -sf -H \"$AUTH\" -H 'Content-Type: application/json' --data @- \\\n    \"$PROBARA/monitors/apply/plan\" > plan.json\njq '{valid, summary, errors, prune}' plan.json\n\n# 4. Apply exactly that plan (refused with 409 if anything changed since).\njq -Rs --arg fp \"$(jq -r .fingerprint plan.json)\" \\\n    '{document: ., fingerprint: $fp, prune: true}' monitors.yaml |\n  curl -sf -H \"$AUTH\" -H 'Content-Type: application/json' --data @- \\\n    \"$PROBARA/monitors/apply\" | jq '{applied, pruned, summary}'",
+        },
+        {
+          type: "code",
+          language: "yaml",
+          title: "monitors.yaml",
+          code:
+            "kind: monitor_export\nversion: 2\nmonitors:\n  - key: db\n    name: Database\n    type: tcp\n    interval_seconds: 60\n    timeout_seconds: 10\n    enabled: true\n    config: {host: db.internal, port: 5432}\n  - key: api\n    name: Public API\n    type: http\n    interval_seconds: 60\n    timeout_seconds: 10\n    enabled: true\n    tags: [prod]\n    depends_on: [db]\n    config:\n      url: https://api.example.com/health\n      method: GET\n      expected_status: 200\n      basic_auth_username: probe\n      basic_auth_password: \"***\"   # kept as stored\n  - key: prod\n    name: Production\n    type: group\n    interval_seconds: 60\n    timeout_seconds: 0\n    enabled: true\n    member_keys: [api, db]\n    config: {}",
+        },
+        {
+          type: "code",
+          language: "yaml",
+          title: "CI: plan on every pull request, apply on the main branch",
+          code:
+            "# GitHub Actions for the payments team's file. PROBARA_API_ORIGIN and PROBARA_API_KEY\n# (write scope) are repository secrets; every key in payments.yaml starts with \"payments.\".\n# EXPECTED_DELETES lists keys the change means to delete (comma-separated), else empty.\non:\n  pull_request: {paths: [payments.yaml]}\n  push: {branches: [main], paths: [payments.yaml]}\njobs:\n  monitors:\n    runs-on: ubuntu-latest\n    env:\n      PROBARA: ${{ secrets.PROBARA_API_ORIGIN }}/api/v1\n      AUTH: \"Authorization: Bearer ${{ secrets.PROBARA_API_KEY }}\"\n      SCOPE: payments.\n      EXPECTED_DELETES: \"\"\n    steps:\n      - uses: actions/checkout@v4\n      - name: Plan\n        run: |\n          jq -Rs --arg scope \"$SCOPE\" '{document: ., prune_scope: $scope}' payments.yaml |\n            curl -sf -H \"$AUTH\" -H 'Content-Type: application/json' --data @- \\\n              \"$PROBARA/monitors/apply/plan\" > plan.json\n          jq '{summary, errors, prune, probable_renames}' plan.json\n          jq -e .valid plan.json > /dev/null\n          # Fail on deletes (and key renames) nobody asked for.\n          jq -e --arg expected \"$EXPECTED_DELETES\" '\n            ([.monitors[] | select(.action == \"delete\") | .key]\n              - ($expected | split(\",\") | map(select(. != \"\")))) == [] and\n            (.probable_renames | length) == 0' plan.json > /dev/null\n      - name: Apply\n        if: github.ref == 'refs/heads/main'\n        run: |\n          jq -Rs --arg fp \"$(jq -r .fingerprint plan.json)\" --arg scope \"$SCOPE\" \\\n              '{document: ., fingerprint: $fp, prune: true, prune_scope: $scope}' payments.yaml |\n            curl -sf -H \"$AUTH\" -H 'Content-Type: application/json' --data @- \\\n              \"$PROBARA/monitors/apply\"",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Limits",
+          text:
+            "Monitors only: alert channels, status pages and maintenance windows are not managed. Notification routing, locations and quorum, member alert roll-up and dependency suppression are not in the file and are left as they are. At most 1000 monitors and 10 MB per request. A deleted monitor records no version (its history goes with it). There is no CLI or Terraform provider: the API, `curl` and MCP are the clients. Changing a key in the file replaces the monitor (see Key above). A credential in a URL path is not recognized as one, in an export as in configuration history.",
         },
       ],
     },

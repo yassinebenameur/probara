@@ -122,10 +122,10 @@ export const API_PAGE: DocPage = {
           type: "table",
           columns: ["Public authentication route", "Purpose"],
           rows: [
-            ["`POST /api/v1/auth/login`", "Local username/password login"],
-            ["`POST /api/v1/auth/refresh`", "Rotate and refresh an admin session"],
-            ["`POST /api/v1/auth/logout`", "Revoke the current refresh session and clear cookies"],
-            ["`GET /api/v1/auth/me`", "Read the current session user when present"],
+            ["`POST /api/v1/auth/login`", "Local username/password login; every refusal (unknown user, wrong password, [locked account](/docs/security/#sign-in-lockout-sessions)) is the same `401`"],
+            ["`POST /api/v1/auth/refresh`", "Rotate the refresh token inside its session; a token rotated less than 60 seconds ago gets an access token only (no new refresh cookie), and one presented after that signs the session out"],
+            ["`POST /api/v1/auth/logout`", "Sign the current session out (its refresh and access tokens) and clear cookies"],
+            ["`GET /api/v1/auth/me`", "Read the current session user when present (`401` once the session is signed out)"],
             ["`GET /api/v1/auth/oidc/status`", "Report OIDC availability"],
             ["`GET /api/v1/auth/oidc/start`", "Begin authorization-code + PKCE login"],
             ["`GET /api/v1/auth/oidc/callback`", "Complete the provider callback"],
@@ -148,7 +148,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "For an administrator cookie, send `X-Tenant-ID: <tenant-id>` to select an allowed membership. A supported `tenant_id` query fallback can select context where middleware permits it. API keys ignore caller-selected tenant values and remain pinned to one tenant. A malformed `X-Tenant-ID` or `tenant_id` is rejected with HTTP 400 (`bad_request`) before the route runs. Tenant-scoped routes apply the same rule to the tenant context they are handed: `400 validation_error` when it is not a UUID, `401 unauthorized` when there is none.",
+            "For an administrator cookie, send `X-Tenant-ID: <tenant-id>` to select an allowed membership. A supported `tenant_id` query fallback can select context where middleware permits it. API keys ignore caller-selected tenant values and remain pinned to one tenant. A malformed `X-Tenant-ID` or `tenant_id` is rejected with HTTP 400 (`bad_request`) before the route runs. Tenant-scoped routes apply the same rule to the tenant context they are handed: `400 validation_error` when it is not a UUID, `401 unauthorized` when there is none. A session or MCP token that selects a workspace it cannot open gets `404` with the error code `workspace_not_found`: a [deleted](/docs/administration/#workspaces) or unknown workspace (superadmins too) and, for a member, one they do not belong to; the answer is the same in every case. A deleted workspace's API keys get `401`. Do not send `X-Tenant-ID` on the platform-scoped `/tenants` routes.",
         },
         {
           type: "code",
@@ -186,7 +186,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only. The [AI label routes](#ai-labels) persist operator verdicts, so they are writes: viewers and read keys get HTTP 403.",
+            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/apply/plan`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only. The [AI label routes](#ai-labels) persist operator verdicts, so they are writes: viewers and read keys get HTTP 403.",
         },
       ],
     },
@@ -395,7 +395,15 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/monitors/export`",
-              "Export a versioned YAML configuration bundle",
+              "Export a versioned YAML configuration bundle, secrets and URL credentials masked: version 2 with each monitor's key when any has one, else version 1; `keyed=true` exports only the monitors with a key, the file [config as code](/docs/monitors/#config-as-code) applies",
+            ],
+            [
+              "`POST /api/v1/monitors/apply/plan`",
+              "Read; what applying a monitors file (`{document, prune, prune_scope, force, fingerprint}`) would create, update, leave unchanged or delete, with validation errors, probable key renames, the monitors a prune would change, and a fingerprint; writes nothing",
+            ],
+            [
+              "`POST /api/v1/monitors/apply`",
+              "Write; apply a monitors file to the workspace's keyed monitors, all or nothing: 422 `invalid_document`, 409 `plan_changed`, `prune_refused`, `probable_rename` or `apply_conflict` (saved meanwhile; retry), each with the plan and nothing written",
             ],
             [
               "`POST /api/v1/monitors/import/preview`",
@@ -410,7 +418,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Dependency creation rejects self-reference and transitive cycles with HTTP 409; a `PATCH /monitors/{id}` whose `depends_on_ids` would form one is refused as a whole, with nothing in it applied. A create or update and its member and dependency changes are saved in one transaction. `POST /monitors/bulk/alerting` checks every monitor and channel first, then applies the edit in batches of 100 monitors, each one transaction; an error after earlier batches committed says how many monitors were already updated; the edit is idempotent, so retrying the request is safe. A save that loses a database lock conflict twice answers 503 `conflict` with nothing saved; retry it. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate.",
+            "Dependency creation rejects self-reference and transitive cycles with HTTP 409; a `PATCH /monitors/{id}` whose `depends_on_ids` would form one is refused as a whole, with nothing in it applied. A create or update and its member and dependency changes are saved in one transaction. `POST /monitors/bulk/alerting` checks every monitor and channel first, then applies the edit in batches of 100 monitors, each one transaction; an error after earlier batches committed says how many monitors were already updated; the edit is idempotent, so retrying the request is safe. A save that loses a database lock conflict twice answers 503 `conflict` with nothing saved; retry it. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate. `POST /monitors` and `PATCH /monitors/{id}` accept a `key` (`\"\"` removes it on `PATCH`); a key another monitor of the workspace has answers 409 `key_taken`. The [config as code](/docs/monitors/#config-as-code) section covers the apply endpoints, the file format and a `curl` workflow.",
         },
       ],
     },
@@ -910,7 +918,24 @@ export const API_PAGE: DocPage = {
               "`POST /api/v1/status-pages/{id}/template/revert`",
               "Republish archived source as a new version",
             ],
+            [
+              "`GET /api/v1/status-pages/{id}/access-tokens`",
+              "List the page's kiosk tokens (never their values), revoked ones included",
+            ],
+            [
+              "`POST /api/v1/status-pages/{id}/access-tokens`",
+              "Create a kiosk token (`{\"label\"}`); the only response carrying the token",
+            ],
+            [
+              "`POST /api/v1/status-pages/{id}/access-tokens/{accessTokenId}/revoke`",
+              "Revoke a kiosk token (idempotent)",
+            ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Create and update take `visibility` (`public`, `unlisted`, `password`, `private`) and a write-only `password`; reads return `visibility` and `has_password`. See [visibility and kiosk tokens](/docs/status-pages/#visibility).",
         },
         {
           type: "table",
@@ -939,7 +964,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, plus [draft preview](/docs/status-pages/#preview-security). Do not use those public routes to mutate configuration.",
+            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, the [feed, `summary.json` and badges](/docs/status-pages/#feed-summary-badges), plus [draft preview](/docs/status-pages/#preview-security). Do not use those public routes to mutate configuration.",
         },
       ],
     },
@@ -1084,6 +1109,22 @@ export const API_PAGE: DocPage = {
               "Admin session; list membership-filtered tenants or all for superadmin",
             ],
             [
+              "`GET /api/v1/tenants/overview`",
+              "Superadmin; every live [workspace](/docs/administration/#workspaces) with `member_count`, `monitor_count` and `protected` (cannot be deleted)",
+            ],
+            [
+              "`POST /api/v1/tenants`",
+              "Superadmin; create a workspace from `{\"name\"}` (1–100 characters, unique among live workspaces; `409` when taken)",
+            ],
+            [
+              "`PATCH /api/v1/tenants/{id}`",
+              "Superadmin; rename a workspace (`{\"name\"}`)",
+            ],
+            [
+              "`DELETE /api/v1/tenants/{id}`",
+              "Superadmin; delete a workspace for good. The body `{\"confirm_name\"}` must repeat its name (`400` otherwise); `409` for the default workspace, the SSO provisioning one and the last one. Answers `{id, name, deleted_at}`; the data is purged in the background",
+            ],
+            [
               "`GET /api/v1/tenant-settings`",
               "Authenticated; read retention and dashboard tags",
             ],
@@ -1142,6 +1183,34 @@ export const API_PAGE: DocPage = {
             [
               "`DELETE /api/v1/users/{id}`",
               "Superadmin; delete subject to last-admin/self safeguards",
+            ],
+            [
+              "`POST /api/v1/users/{id}/unlock`",
+              "Superadmin; lift a password sign-in lockout and clear the failure count; returns `was_locked`",
+            ],
+            [
+              "`GET /api/v1/users/{id}/sessions`",
+              "Superadmin; the user's live sessions (`client`, `ip`, `auth_method`, `created_at`, `last_used_at`, `expires_at`)",
+            ],
+            [
+              "`DELETE /api/v1/users/{id}/sessions/{sessionId}`",
+              "Superadmin; sign one of the user's sessions out",
+            ],
+            [
+              "`DELETE /api/v1/users/{id}/sessions`",
+              "Superadmin; sign the user out everywhere (your own account: everywhere else); returns `revoked`",
+            ],
+            [
+              "`GET /api/v1/account/sessions`",
+              "Signed-in browser session only (no API key or MCP token); your live sessions, `current` marking this one",
+            ],
+            [
+              "`DELETE /api/v1/account/sessions/{id}`",
+              "Signed-in browser session only; sign one of your sessions out",
+            ],
+            [
+              "`POST /api/v1/account/sessions/revoke-others`",
+              "Signed-in browser session only; sign out everywhere but this session; returns `revoked`",
             ],
             [
               "`GET /api/v1/oidc-group-mappings`",

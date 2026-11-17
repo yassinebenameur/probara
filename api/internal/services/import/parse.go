@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // ParseFile auto-detects the file format and parses its contents
@@ -124,6 +125,18 @@ func (s *Service) parseJSON(data []byte) (*parsedSource, error) {
 	} else if ok {
 		return src, nil
 	}
+	// Better Stack's JSON:API `data` and UptimeRobot's `monitors` would
+	// otherwise land in the generic wrappers below.
+	if src, ok, err := s.parseBetterStackExport(data); err != nil {
+		return nil, err
+	} else if ok {
+		return src, nil
+	}
+	if src, ok, err := s.parseUptimeRobotExport(data); err != nil {
+		return nil, err
+	} else if ok {
+		return src, nil
+	}
 
 	// Try to parse as array first
 	var arrayData []map[string]interface{}
@@ -164,6 +177,13 @@ func (s *Service) parseYAML(data []byte) (*parsedSource, error) {
 		return nil, err
 	} else if ok {
 		return &parsedSource{Rows: rows, Schema: models.ImportSchemaPortableMonitorExport}, nil
+	}
+	// A Gatus file's `endpoints` would otherwise land in the generic
+	// wrapper loop below.
+	if src, ok, err := s.parseGatusConfig(data); err != nil {
+		return nil, err
+	} else if ok {
+		return src, nil
 	}
 
 	// First, try to parse as a generic interface to see what we have
@@ -221,40 +241,107 @@ func (s *Service) parsePortableExport(data []byte) ([]models.ImportRow, bool, er
 		return nil, false, nil
 	}
 
-	if bundle.Kind != "monitor_export" || bundle.Version != 1 {
+	if bundle.Kind != models.PortableMonitorExportKind ||
+		(bundle.Version != models.PortableExportVersion1 && bundle.Version != models.PortableExportVersion2) {
 		return nil, false, nil
 	}
 
+	// A keyed export names group members by key only; the importer
+	// resolves members by name, so it reads them from member_keys.
+	nameByKey := map[string]string{}
+	for _, monitor := range bundle.Monitors {
+		if monitor.Key != "" {
+			nameByKey[monitor.Key] = monitor.Name
+		}
+	}
 	rows := make([]models.ImportRow, 0, len(bundle.Monitors))
 	for i, monitor := range bundle.Monitors {
-		fields := map[string]interface{}{
-			"name":             monitor.Name,
-			"type":             string(monitor.Type),
-			"config":           monitor.Config,
-			"interval_seconds": monitor.IntervalSeconds,
-			"timeout_seconds":  monitor.TimeoutSeconds,
-			"enabled":          monitor.Enabled,
+		if len(monitor.GroupMembers) == 0 && len(monitor.MemberKeys) > 0 {
+			for _, key := range monitor.MemberKeys {
+				if name, ok := nameByKey[key]; ok {
+					monitor.GroupMembers = append(monitor.GroupMembers, name)
+				}
+			}
 		}
-		if len(monitor.Tags) > 0 {
-			fields["tags"] = monitor.Tags
+		row := portableRow(i, monitor)
+		if where := maskedURLCredentials(string(monitor.Type), monitor.Config); len(where) > 0 {
+			row.Warnings = append(row.Warnings, fmt.Sprintf("credentials in %s were masked by the export and are not imported: re-enter them", strings.Join(where, ", ")))
 		}
-		if len(monitor.GroupMembers) > 0 {
-			fields["group_members"] = monitor.GroupMembers
-		}
-		if monitor.ConsecutiveFailuresThreshold > 0 {
-			fields["consecutive_failures_threshold"] = monitor.ConsecutiveFailuresThreshold
-		}
-		if monitor.RecoveryThreshold > 0 {
-			fields["recovery_threshold"] = monitor.RecoveryThreshold
-		}
-
-		rows = append(rows, models.ImportRow{
-			Index:  i,
-			Fields: fields,
-		})
+		rows = append(rows, row)
 	}
 
 	return rows, true, nil
+}
+
+// maskedURLCredentials names the URL fields of a config whose credentials an
+// export masked (secrets.StripMaskedURLCredentials).
+func maskedURLCredentials(monitorType string, config interface{}) []string {
+	cfg, ok := config.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	var where []string
+	secrets.WalkURLFields(monitorType, cfg, func(path string, parent map[string]any, key string) {
+		if _, masked := secrets.StripMaskedURLCredentials(parent[key].(string)); masked {
+			where = append(where, path)
+		}
+	})
+	return where
+}
+
+// stripMaskedURLCredentials removes the credentials an export masked from a
+// config's URLs, so an import never stores "***" as a password.
+func stripMaskedURLCredentials(monitorType string, config json.RawMessage) json.RawMessage {
+	var cfg map[string]interface{}
+	if json.Unmarshal(config, &cfg) != nil || cfg == nil {
+		return config
+	}
+	changed := false
+	secrets.WalkURLFields(monitorType, cfg, func(_ string, parent map[string]any, key string) {
+		if stripped, masked := secrets.StripMaskedURLCredentials(parent[key].(string)); masked {
+			parent[key] = stripped
+			changed = true
+		}
+	})
+	if !changed {
+		return config
+	}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return config
+	}
+	return out
+}
+
+// portableRow is one portable export monitor as an import row, the shape
+// both the importer and apply build monitors from. Only the importer's
+// fields go in: a version 2 key and its by-key references are apply's
+// (an imported key could only collide with the target workspace's own).
+func portableRow(index int, monitor models.PortableExportMonitor) models.ImportRow {
+	// An absent enabled imports as false, as it always has; the export
+	// always writes it.
+	enabled := monitor.Enabled != nil && *monitor.Enabled
+	fields := map[string]interface{}{
+		"name":             monitor.Name,
+		"type":             string(monitor.Type),
+		"config":           monitor.Config,
+		"interval_seconds": monitor.IntervalSeconds,
+		"timeout_seconds":  monitor.TimeoutSeconds,
+		"enabled":          enabled,
+	}
+	if len(monitor.Tags) > 0 {
+		fields["tags"] = monitor.Tags
+	}
+	if len(monitor.GroupMembers) > 0 {
+		fields["group_members"] = monitor.GroupMembers
+	}
+	if monitor.ConsecutiveFailuresThreshold > 0 {
+		fields["consecutive_failures_threshold"] = monitor.ConsecutiveFailuresThreshold
+	}
+	if monitor.RecoveryThreshold > 0 {
+		fields["recovery_threshold"] = monitor.RecoveryThreshold
+	}
+	return models.ImportRow{Index: index, Fields: fields}
 }
 
 // parseCSV parses CSV data

@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "page": {
+    "slug": "acme",
+    "title": "Acme",
+    "url": "https://status.example.com/public/status/acme"
+  },
+  "status": {
+    "indicator": "issues",
+    "description": "Issues detected",
+    "counts": {
+      "total": 2,
+      "operational": 1,
+      "degraded": 1,
+      "down": 0,
+      "maintenance": 0,
+      "unknown": 0
+    }
+  },
+  "uptime": {
+    "1h": 100,
+    "24h": 95,
+    "7d": 99.9,
+    "30d": 99.8,
+    "90d": 99.7
+  },
+  "sections": [
+    {
+      "title": "Edge",
+      "status": "operational",
+      "components": [
+        {
+          "id": "0b6f0a7e-1111-4c2d-8e9f-000000000001",
+          "name": "Public API",
+          "status": "operational",
+          "uptime": {
+            "1h": 100,
+            "24h": 99.5,
+            "7d": 99.75,
+            "30d": 99.12,
+            "90d": 97
+          }
+        }
+      ]
+    },
+    {
+      "title": "Storage",
+      "status": "degraded",
+      "components": [
+        {
+          "id": "0b6f0a7e-1111-4c2d-8e9f-000000000002",
+          "name": "Database",
+          "status": "degraded",
+          "uptime": {
+            "1h": null,
+            "24h": 90,
+            "7d": null,
+            "30d": null,
+            "90d": null
+          }
+        }
+      ]
+    }
+  ],
+  "incidents": [
+    {
+      "id": "11111111-0000-0000-0000-000000000001",
+      "title": "Slow queries",
+      "state": "identified",
+      "published_at": "2026-11-10T08:00:00Z",
+      "affected_components": [
+        "Database"
+      ],
+      "latest_update": {
+        "message": "Index rebuilding",
+        "created_at": "2026-11-10T08:30:00Z"
+      }
+    }
+  ],
+  "maintenance": [
+    {
+      "title": "Kernel patching",
+      "starts_at": "2026-11-18T02:00:00Z",
+      "ends_at": "2026-11-18T03:00:00Z",
+      "in_progress": false,
+      "repeating": true,
+      "next_starts_at": [
+        "2026-11-25T02:00:00Z"
+      ],
+      "affected_components": [
+        "Public API"
+      ]
+    }
+  ],
+  "generated_at": "2026-11-16T12:00:00Z"
+}

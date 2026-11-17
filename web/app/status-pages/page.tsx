@@ -6,6 +6,7 @@ import { ArrowUpRight, Globe, Pencil, Plus, Trash2 } from 'lucide-react';
 import { StatusPage } from '@/lib/types';
 import { getStatusPages, deleteStatusPage } from '@/lib/api';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { visibilityLabel } from '@/lib/status-page-access';
 import { pluralize } from '@/lib/format';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import Button from '@/components/ui/Button';
@@ -178,6 +179,7 @@ export default function StatusPagesPage() {
           {sorted.map((page) => {
             const monitorCount = page.monitor_ids?.length || 0;
             const publicUrl = resolveStatusPagePublicUrl(page);
+            const visibility = visibilityLabel(page.visibility);
             return (
               // The title link stretches over the card; the footer controls sit
               // above that overlay (relative) so each keeps its own target.
@@ -188,7 +190,14 @@ export default function StatusPagesPage() {
                 >
                   {page.title}
                 </Link>
-                <p className="mt-0.5 truncate font-mono text-xs text-slate-500">/{page.slug}</p>
+                <p className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-slate-500">
+                  <span className="truncate font-mono">/{page.slug}</span>
+                  {visibility && (
+                    <Pill tone="neutral" size="xs">
+                      {visibility}
+                    </Pill>
+                  )}
+                </p>
 
                 <div className="flex-1">
                   {page.description && (

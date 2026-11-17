@@ -5,8 +5,9 @@
 // one back.
 
 // baseline: the configuration before a monitor's first recorded save;
-// system: a change made outside a save (a deleted location, channel or member).
-export type MonitorVersionSource = 'ui' | 'api' | 'mcp' | 'import' | 'discovery' | 'restore' | 'baseline' | 'system';
+// system: a change made outside a save (a deleted location, channel or member);
+// apply: a config-as-code apply (POST /monitors/apply).
+export type MonitorVersionSource = 'ui' | 'api' | 'mcp' | 'import' | 'discovery' | 'restore' | 'baseline' | 'system' | 'apply';
 export type MonitorVersionActorType = 'user' | 'api_key' | 'system';
 
 export interface MonitorSnapshotChannel {
@@ -16,6 +17,7 @@ export interface MonitorSnapshotChannel {
 
 export interface MonitorConfigSnapshot {
   name: string;
+  key?: string; // recorded, never restored
   type: string;
   config: Record<string, unknown>;
   interval_seconds: number;
@@ -90,6 +92,7 @@ export const VERSION_SOURCE_LABEL: Record<MonitorVersionSource, string> = {
   restore: 'Restore',
   baseline: 'Baseline',
   system: 'System',
+  apply: 'Config as code',
 };
 
 /** Who made a change: the username or key name, else the credential kind. */
@@ -102,6 +105,7 @@ export function versionActorLabel(v: Pick<MonitorVersionSummary, 'actor_type' | 
 
 const FIELD_LABEL: Record<string, string> = {
   name: 'Name',
+  key: 'Key',
   type: 'Type',
   config: 'Config',
   interval_seconds: 'Interval',

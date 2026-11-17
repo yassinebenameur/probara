@@ -26,6 +26,7 @@ var monitorFieldDocs = map[string]string{
 	"location_ids":                   "Private location IDs to run from (list_locations); empty means the default worker fleet.",
 	"location_quorum":                "How many locations must fail before the monitor is down (multi-location monitors).",
 	"recovery_threshold":             "Passing checks in a row before a down monitor is up again and its alert resolves, 1-10 (default 1). Unconfirmed time counts as downtime.",
+	"key":                            "Config-as-code key (apply_monitors): lowercase letters, digits, '.', '_' or '-', at most 64, unique in the workspace. On update \"\" removes it.",
 }
 
 var monitorEnums = func() map[string][]string {
@@ -286,14 +287,17 @@ func monitorTools() []spec {
 		{
 			Name:  "export_monitors",
 			Title: "Export monitors",
-			Description: "Every monitor in the workspace as portable YAML (secrets masked), suitable for " +
-				"preview_monitor_import / import_monitors in another workspace. Can be large.",
+			Description: "Every monitor in the workspace as portable YAML, version 2 (secrets masked), suitable for " +
+				"preview_monitor_import / import_monitors in another workspace, or with keyed=true as the " +
+				"document plan_monitor_apply and apply_monitors take. Can be large.",
 			Method: http.MethodGet, Route: "/monitors/export",
+			Query: []param{{Name: "keyed", Type: "boolean", Description: "Only the monitors with a key (config-as-code)."}},
 		},
 		{
 			Name:  "preview_monitor_import",
 			Title: "Preview monitor import",
-			Description: "Parse an import file (Probara export YAML/JSON, Uptime Kuma backup JSON, or CSV) without " +
+			Description: "Parse an import file (Probara export YAML/JSON, Uptime Kuma backup JSON, Better Stack or " +
+				"UptimeRobot API JSON, Gatus config YAML, or CSV) without " +
 				"creating anything. Returns rows, a suggested field mapping and type mapping, warnings and skipped " +
 				"records. Pass its rows and suggested_mapping to import_monitors.",
 			Method: http.MethodPost, Route: "/monitors/import/preview",

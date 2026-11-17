@@ -48,7 +48,9 @@ func loadSnapshots(ctx context.Context, q db.Querier, tenantID uuid.UUID, monito
 		return out, nil
 	}
 	ids := pq.Array(monitorIDs)
-	columns := []string{"id", "type", "config", "tags", "notification_mode", "location_quorum"}
+	// The key is read here rather than in snapshotColumns: it is versioned
+	// but never restored (models.MonitorConfigSnapshot).
+	columns := []string{"id", "type", "config", "tags", "notification_mode", "location_quorum", "COALESCE(key, '')"}
 	for _, c := range snapshotColumns {
 		columns = append(columns, c.name)
 	}
@@ -65,7 +67,7 @@ func loadSnapshots(ctx context.Context, q db.Querier, tenantID uuid.UUID, monito
 		var id uuid.UUID
 		var config []byte
 		var tags []string
-		dest := []any{&id, &snapshot.Type, &config, pq.Array(&tags), &snapshot.NotificationMode, &snapshot.LocationQuorum}
+		dest := []any{&id, &snapshot.Type, &config, pq.Array(&tags), &snapshot.NotificationMode, &snapshot.LocationQuorum, &snapshot.Key}
 		for _, c := range snapshotColumns {
 			dest = append(dest, c.dest(snapshot))
 		}

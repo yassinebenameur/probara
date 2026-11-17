@@ -200,6 +200,10 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
+		if errors.Is(err, monitorservice.ErrMonitorKeyTaken) {
+			apierrors.WriteError(w, http.StatusConflict, "key_taken", err.Error())
+			return
+		}
 		if dbtx.IsConflict(err) {
 			writeConflict(w)
 			return
@@ -431,6 +435,10 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, monitorservice.ErrSecretConflict) {
 			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		if errors.Is(err, monitorservice.ErrMonitorKeyTaken) {
+			apierrors.WriteError(w, http.StatusConflict, "key_taken", err.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{

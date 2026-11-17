@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/shared/actionlink"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // addressKey identifies one recipient of one schedule: the first 16 bytes
@@ -106,9 +107,10 @@ func (s *Service) resolveUnsubscribe(ctx context.Context, token string) (unsubsc
 		FROM sla_report_schedules sc
 		JOIN slas sl ON sl.id = sc.sla_id AND sl.tenant_id = sc.tenant_id
 		WHERE sc.tenant_id = $1 AND sc.id = $2
+		  AND `+tenancy.LiveTenantSQL("sc.tenant_id")+`
 	`, claims.TenantID, claims.AlertID, l.addressKey).Scan(&l.slaID, &l.slaName, &unsubscribed)
 	if errors.Is(err, sql.ErrNoRows) {
-		// A deleted schedule revokes every link it mailed.
+		// A deleted schedule, or workspace, revokes every link it mailed.
 		l.state = models.ReportUnsubscribeInvalid
 		return l, nil
 	}

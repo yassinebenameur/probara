@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"math"
 	"net/http"
-	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -209,21 +208,9 @@ func addressKey(prefix string, r *http.Request) (string, bool) {
 	return prefix + bucketAddress(clientip.FromRequest(r)), true
 }
 
-// bucketAddress groups IPv6 clients by /64: one host is usually handed a
-// whole /64, so per-address buckets would let it rotate to a fresh one on
-// every request.
+// bucketAddress groups IPv6 clients by /64 (clientip.BucketAddress).
 func bucketAddress(ip string) string {
-	a, err := netip.ParseAddr(ip)
-	if err != nil {
-		return ip
-	}
-	a = a.WithZone("").Unmap()
-	if a.Is6() {
-		if p, err := a.Prefix(64); err == nil {
-			return p.String()
-		}
-	}
-	return a.String()
+	return clientip.BucketAddress(ip)
 }
 
 func hashCredential(v string) string {

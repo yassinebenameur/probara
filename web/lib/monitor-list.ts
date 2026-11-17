@@ -109,6 +109,7 @@ export function monitorMatchesFilters(monitor: Monitor, filters: MonitorListFilt
   const matchesSearch =
     !query ||
     monitor.name.toLowerCase().includes(query) ||
+    Boolean(monitor.key?.includes(query)) ||
     Boolean(monitorTarget(monitor)?.toLowerCase().includes(query)) ||
     Boolean(monitor.tags?.some((tag) => tag.toLowerCase().includes(query)));
   const matchesType = ignore === 'type' || selectedTypes.size === 0 || selectedTypes.has(monitor.type);

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // CheckResultsRawRetentionDays caps raw check_results for every tenant,
@@ -211,12 +213,18 @@ func insertResult(ctx context.Context, db execer, r Result) (bool, error) {
 	}
 	r.ErrorMessage = pgSafeText(r.ErrorMessage) // pgsafe.go
 
+	// Every result writer (ingest, push, OTLP, the absence watchdog) inserts
+	// here, so this is where a deleted workspace stops gaining history: a
+	// result of a job dispatched just before the delete inserts nothing and
+	// reads as a duplicate, which also keeps it away from the state machine.
 	res, err := db.ExecContext(ctx, `
 		INSERT INTO check_results (
 			id, monitor_id, tenant_id, job_id, location_id, status, result_source,
 			http_status, latency_ms, error_message, matched_body_substring,
 			metrics_data, created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		)
+		SELECT $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+		WHERE `+tenancy.LiveTenantSQL("$3::uuid")+`
 		ON CONFLICT (job_id, result_source) DO NOTHING
 	`, uuid.New(), r.MonitorID, r.TenantID, r.JobID, r.LocationID, r.Status, r.ResultSource,
 		r.HTTPStatus, r.LatencyMs, r.ErrorMessage, r.MatchedBodySubstring, metricsData,

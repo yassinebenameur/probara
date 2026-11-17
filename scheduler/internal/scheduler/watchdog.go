@@ -34,6 +34,7 @@ import (
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -124,6 +125,7 @@ func (s *Scheduler) watchdogActivePass(ctx context.Context) error {
 		rows, err := s.db.QueryContext(ctx, `
 			SELECT m.id FROM monitors m
 			WHERE m.enabled = TRUE AND m.deleted_at IS NULL
+			  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 			  AND m.type <> ALL($5)
 			  AND m.current_state <> 'unknown'
 			  AND NOT EXISTS (SELECT 1 FROM monitor_locations ml WHERE ml.monitor_id = m.id)
@@ -216,6 +218,7 @@ func (s *Scheduler) watchdogQuorumPass(ctx context.Context) error {
 			LEFT JOIN monitor_location_state mls
 				ON mls.monitor_id = m.id AND mls.location_id = ml.location_id AND l.id IS NOT NULL
 			WHERE m.enabled = TRUE AND m.deleted_at IS NULL
+			  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 			  AND m.id > $4
 			  AND (l.id IS NULL
 			       OR mls.last_check_at IS NULL
@@ -336,6 +339,7 @@ func (s *Scheduler) watchdogHeartbeatPass(ctx context.Context, monitorType strin
 			       COALESCE(m.last_result_at, m.created_at)
 			FROM monitors m
 			WHERE m.type = $1 AND m.enabled = TRUE AND m.deleted_at IS NULL
+			  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 			  AND m.id > $4
 			  AND COALESCE(m.last_result_at, m.created_at) < NOW() - make_interval(secs => GREATEST(m.interval_seconds * $2, $3))
 			ORDER BY m.id

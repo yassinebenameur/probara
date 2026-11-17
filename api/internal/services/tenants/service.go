@@ -14,6 +14,7 @@ import (
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // ErrTenantNotFound: no tenant has that ID.
@@ -22,6 +23,9 @@ var ErrTenantNotFound = errors.New("tenant not found")
 // Service handles tenant operations.
 type Service struct {
 	db *db.Client
+	// protected are the workspaces that can never be deleted besides the
+	// default one (ProtectWorkspaces).
+	protected map[uuid.UUID]struct{}
 }
 
 // NewService creates a new tenant service.
@@ -45,6 +49,7 @@ func (s *Service) ListTenants(ctx context.Context) ([]models.Tenant, error) {
 		SELECT t.id, t.name, t.data_retention_days, t.dashboard_group_tags, m.role, t.created_at, t.updated_at
 		FROM tenants t
 		JOIN tenant_memberships m ON m.tenant_id = t.id AND m.admin_user_id = $1
+		WHERE ` + tenancy.LiveTenantSQL("t.id") + `
 		ORDER BY t.name ASC
 	`
 
@@ -86,6 +91,7 @@ func (s *Service) listAllTenants(ctx context.Context) ([]models.Tenant, error) {
 	query := `
 		SELECT id, name, data_retention_days, dashboard_group_tags, created_at, updated_at
 		FROM tenants
+		WHERE ` + tenancy.LiveTenantSQL("tenants.id") + `
 		ORDER BY name ASC
 	`
 

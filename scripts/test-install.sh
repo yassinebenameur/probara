@@ -28,7 +28,7 @@ defined() { grep -cE "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*[=:]" "$1/
 
 required_secrets=(ADMIN_JWT_SECRET PROBARA_SECRETS_KEY POSTGRES_PASSWORD NATS_PLATFORM_PASSWORD
   LOCAL_AI_TOKEN STATUS_PAGE_PREVIEW_SECRET NATS_LOCATION_AUTH_ISSUER_SEED NATS_LOCATION_AUTH_ISSUER_PUBLIC_KEY
-  BOOTSTRAP_SETUP_CODE)
+  BOOTSTRAP_SETUP_CODE STATUS_PAGE_SESSION_SECRET)
 
 # --- fresh install ----------------------------------------------------------
 fresh="$work/fresh"

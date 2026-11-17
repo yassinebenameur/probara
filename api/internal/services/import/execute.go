@@ -13,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 )
 
 // ExecuteImport executes the import with the given rows and mapping
@@ -292,6 +293,20 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, row mod
 }
 
 func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUID, row models.ImportRow, mapping models.FieldMapping, monitorType string) (*models.Monitor, error) {
+	req, err := s.buildMonitorRequestFromConfig(row, mapping, monitorType)
+	if err != nil {
+		return nil, err
+	}
+	// URL credentials an export masked are left out, as masked secret
+	// fields are (the preview warns about them).
+	req.Config = stripMaskedURLCredentials(monitorType, req.Config)
+	return s.monitorService.CreateMonitor(ctx, tenantID, req)
+}
+
+// buildMonitorRequestFromConfig turns a raw-config row into the create
+// request the importer saves, validated through the registry; apply builds
+// its monitors with it too, so both read a portable export the same way.
+func (s *Service) buildMonitorRequestFromConfig(row models.ImportRow, mapping models.FieldMapping, monitorType string) (*models.CreateMonitorRequest, error) {
 	name := s.extractString(row.Fields, mapping.Name)
 	if name == "" {
 		name = fmt.Sprintf("Monitor %d", row.Index+1)
@@ -337,8 +352,20 @@ func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUI
 	if err := validation.DefaultRegistry.ValidateSchedule(models.MonitorType(monitorType), config, intervalSeconds, timeoutSeconds); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
+	failureThreshold := s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold)
+	// The domain type's rules outside its config (failure threshold floor,
+	// one location) hold on import as on create; imports assign no locations.
+	if models.MonitorType(monitorType) == models.MonitorTypeDomain {
+		threshold := 2 // the create default (services/monitors)
+		if failureThreshold != nil {
+			threshold = *failureThreshold
+		}
+		if err := sharedmodels.ValidateDomainMonitorRules(threshold, 0); err != nil {
+			return nil, fmt.Errorf("config validation failed: %w", err)
+		}
+	}
 
-	req := &models.CreateMonitorRequest{
+	return &models.CreateMonitorRequest{
 		Name:                         name,
 		Type:                         models.MonitorType(monitorType),
 		Config:                       config,
@@ -346,11 +373,9 @@ func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUI
 		TimeoutSeconds:               timeoutSeconds,
 		Enabled:                      &enabled,
 		Tags:                         tags,
-		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
+		ConsecutiveFailuresThreshold: failureThreshold,
 		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
-	}
-
-	return s.monitorService.CreateMonitor(ctx, tenantID, req)
+	}, nil
 }
 
 // createGroupMonitor creates a group monitor with members
@@ -461,6 +486,45 @@ func (s *Service) syncGroupMembers(ctx context.Context, tenantID, groupID uuid.U
 }
 
 func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uuid.UUID, row models.ImportRow, mapping models.FieldMapping, nameToIDs map[string][]uuid.UUID) (*models.Monitor, error) {
+	memberNames := s.extractStrings(row.Fields, mapping.GroupMembers)
+	if len(memberNames) == 0 {
+		return nil, fmt.Errorf("group_members is required for portable group import")
+	}
+
+	memberIDs := make([]string, 0, len(memberNames))
+	for _, memberName := range memberNames {
+		ids := nameToIDs[memberName]
+		if len(ids) == 0 {
+			return nil, fmt.Errorf("group member name '%s' could not be resolved", memberName)
+		}
+		if len(ids) > 1 {
+			return nil, fmt.Errorf("group member name '%s' is ambiguous", memberName)
+		}
+		memberIDs = append(memberIDs, ids[0].String())
+	}
+
+	req, err := s.buildGroupRequestFromConfig(row, mapping, memberIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	monitor, err := s.monitorService.CreateMonitor(ctx, tenantID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.syncGroupMembers(ctx, tenantID, monitor.ID, memberIDs); err != nil {
+		return nil, err
+	}
+
+	return monitor, nil
+}
+
+// buildGroupRequestFromConfig turns a raw-config group row into the create
+// request the importer saves, its config.monitor_ids set to memberIDs (the
+// caller resolves them; membership is still the junction table, which the
+// caller syncs after the create). Apply builds groups with it too.
+func (s *Service) buildGroupRequestFromConfig(row models.ImportRow, mapping models.FieldMapping, memberIDs []string) (*models.CreateMonitorRequest, error) {
 	name := s.extractString(row.Fields, mapping.Name)
 	if name == "" {
 		name = fmt.Sprintf("Group %d", row.Index+1)
@@ -477,10 +541,6 @@ func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uui
 	}
 
 	tags := s.extractTags(row.Fields, mapping.Tags)
-	memberNames := s.extractStrings(row.Fields, mapping.GroupMembers)
-	if len(memberNames) == 0 {
-		return nil, fmt.Errorf("group_members is required for portable group import")
-	}
 
 	configValue, ok := row.Fields[mapping.Config]
 	if mapping.Config == "" || !ok {
@@ -489,18 +549,6 @@ func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uui
 	configMap, ok := configValue.(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("group config must be an object")
-	}
-
-	memberIDs := make([]string, 0, len(memberNames))
-	for _, memberName := range memberNames {
-		ids := nameToIDs[memberName]
-		if len(ids) == 0 {
-			return nil, fmt.Errorf("group member name '%s' could not be resolved", memberName)
-		}
-		if len(ids) > 1 {
-			return nil, fmt.Errorf("group member name '%s' is ambiguous", memberName)
-		}
-		memberIDs = append(memberIDs, ids[0].String())
 	}
 
 	configCopy := cloneMap(configMap)
@@ -514,7 +562,7 @@ func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uui
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
-	req := &models.CreateMonitorRequest{
+	return &models.CreateMonitorRequest{
 		Name:                         name,
 		Type:                         models.MonitorTypeGroup,
 		Config:                       config,
@@ -524,18 +572,7 @@ func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uui
 		Tags:                         tags,
 		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
 		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
-	}
-
-	monitor, err := s.monitorService.CreateMonitor(ctx, tenantID, req)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := s.syncGroupMembers(ctx, tenantID, monitor.ID, memberIDs); err != nil {
-		return nil, err
-	}
-
-	return monitor, nil
+	}, nil
 }
 
 func importDuplicateKey(name, monitorType string) string {

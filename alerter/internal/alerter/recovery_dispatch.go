@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // defaultRecoveryRetryBudget bounds one recovery retry sweep. Earlier,
@@ -65,6 +66,7 @@ func (a *Alerter) dispatchPendingRecoveries(ctx context.Context) error {
 			LEFT JOIN locations tl ON tl.id = al.target_location_id
 			WHERE al.status = 'resolved' AND al.id > $1
 			  AND al.resolved_at >= NOW() - make_interval(secs => $3)
+			  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 			  AND EXISTS (
 				SELECT 1 FROM alert_notification_states ans
 				JOIN alert_channels ac ON ac.id = ans.channel_id

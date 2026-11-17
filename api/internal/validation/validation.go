@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -177,6 +178,11 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if req.Name == "" {
 		return fmt.Errorf("name is required")
 	}
+	if req.Key != nil {
+		if err := ValidateMonitorKey(*req.Key); err != nil {
+			return err
+		}
+	}
 
 	// Validate type using registry
 	if !registry.Has(req.Type) {
@@ -245,6 +251,13 @@ func ValidateMonitorUpdate(req *models.UpdateMonitorRequest, existingMonitor *mo
 
 // ValidateMonitorUpdateWithRegistry validates an UpdateMonitorRequest using a custom registry
 func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existingMonitor *models.Monitor, registry *ValidatorRegistry) error {
+	// "" removes the key; anything else must be a valid key.
+	if req.Key != nil && *req.Key != "" {
+		if err := ValidateMonitorKey(*req.Key); err != nil {
+			return err
+		}
+	}
+
 	// Validate type if being updated
 	if req.Type != nil {
 		if !registry.Has(*req.Type) {
@@ -497,6 +510,10 @@ func ValidateStatusPage(req *models.CreateStatusPageRequest) error {
 		return err
 	}
 
+	if err := validateStatusPageAccess(req.Visibility, req.Password); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -530,6 +547,10 @@ func ValidateStatusPageUpdate(req *models.UpdateStatusPageRequest) error {
 		if err := validateStatusPageSections(*req.Sections); err != nil {
 			return err
 		}
+	}
+
+	if err := validateStatusPageAccess(req.Visibility, req.Password); err != nil {
+		return err
 	}
 
 	return nil
@@ -569,6 +590,12 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 		if _, ok := securityheaders.ParseCSPMode(*settings.CSPMode); !ok {
 			return fmt.Errorf("csp_mode must be strict, compatible, off, or empty for automatic")
 		}
+	}
+	if settings.SEOTitle != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEOTitle)) > models.MaxSEOTitleLength {
+		return fmt.Errorf("seo_title must be %d characters or less", models.MaxSEOTitleLength)
+	}
+	if settings.SEODescription != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEODescription)) > models.MaxSEODescriptionLength {
+		return fmt.Errorf("seo_description must be %d characters or less", models.MaxSEODescriptionLength)
 	}
 	return nil
 }

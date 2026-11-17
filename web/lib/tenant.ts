@@ -13,6 +13,30 @@ export function emitTenantChange(): void {
   window.dispatchEvent(new Event(TENANT_CHANGED_EVENT));
 }
 
+/**
+ * Fired when the list of workspaces may have changed: one was created,
+ * renamed or deleted, or the selected one turned out to be deleted. The
+ * tenant switcher (outside the page subtree) reloads its list and settles
+ * the selection again; pages never listen for it.
+ */
+export const TENANTS_CHANGED_EVENT = 'tenants-changed';
+
+export function emitTenantsChanged(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(new Event(TENANTS_CHANGED_EVENT));
+}
+
+/** The API's error code for a request scoped to a deleted workspace. */
+export const WORKSPACE_NOT_FOUND = 'workspace_not_found';
+
+/** Makes tenantId the selected workspace and announces the switch. */
+export function selectTenant(tenantId: string): void {
+  setSelectedTenantId(tenantId);
+  emitTenantChange();
+}
+
 export function getSelectedTenantId(): string | null {
   if (typeof window === 'undefined') {
     return null;
