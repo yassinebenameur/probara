@@ -47,6 +47,7 @@ type repository interface {
 	UpdateUser(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error)
 	RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error
 	AttachLockState(ctx context.Context, users []models.AdminUser) error
+	AttachSignInFactors(ctx context.Context, users []models.AdminUser) error
 	BootstrapClosed(ctx context.Context, untilSuperadmin bool) (bool, error)
 	DeleteUser(ctx context.Context, userID uuid.UUID) error
 	AttachMemberships(ctx context.Context, users []models.AdminUser) error
@@ -100,6 +101,9 @@ func (s *Service) ListUsers(ctx context.Context, page, pageSize int) (*models.Ad
 	if err := s.repo.AttachLockState(ctx, items); err != nil {
 		return nil, fmt.Errorf("failed to load lock state: %w", err)
 	}
+	if err := s.repo.AttachSignInFactors(ctx, items); err != nil {
+		return nil, fmt.Errorf("failed to load sign-in factors: %w", err)
+	}
 
 	return &models.AdminUserListResponse{
 		Items:    items,
@@ -125,6 +129,9 @@ func (s *Service) GetUser(ctx context.Context, userID uuid.UUID) (*models.AdminU
 	}
 	if err := s.repo.AttachLockState(ctx, users); err != nil {
 		return nil, fmt.Errorf("failed to load lock state: %w", err)
+	}
+	if err := s.repo.AttachSignInFactors(ctx, users); err != nil {
+		return nil, fmt.Errorf("failed to load sign-in factors: %w", err)
 	}
 	return &users[0], nil
 }
@@ -535,9 +542,53 @@ func insertMembershipsTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID, memb
 	return nil
 }
 
+// RevokeSessionsByAdminID runs after a password is set through user
+// management: it ends the user's sessions (but keep) and retires every open
+// invite, reset and email-change link and sign-in challenge, so nothing
+// started under the old password outlives it.
 func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error {
-	_, err := adminauth.RevokeUserSessions(ctx, r.db, adminID, keep, adminauth.RevokeReasonPasswordReset)
-	return err
+	if _, err := adminauth.RevokeUserSessions(ctx, r.db, adminID, keep, adminauth.RevokeReasonPasswordReset); err != nil {
+		return err
+	}
+	return adminauth.RetireAccountTokens(ctx, r.db, adminID)
+}
+
+// AttachSignInFactors fills HasPassword and TwoFactorEnabled (migration
+// 000125; before it nobody has a second factor).
+func (r *sqlRepository) AttachSignInFactors(ctx context.Context, users []models.AdminUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(users))
+	index := make(map[uuid.UUID]int, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+		index[u.ID] = i
+	}
+	const query = `
+		SELECT id, COALESCE(password_hash, '') <> '', %s
+		FROM admin_users WHERE id = ANY($1)
+	`
+	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(query, `totp_enabled_at IS NOT NULL`), pq.Array(ids))
+	if pgerr.IsUndefinedColumn(err) {
+		rows, err = r.db.QueryContext(ctx, fmt.Sprintf(query, `FALSE`), pq.Array(ids))
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var hasPassword, twoFactor bool
+		if err := rows.Scan(&id, &hasPassword, &twoFactor); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			users[i].HasPassword = &hasPassword
+			users[i].TwoFactorEnabled = twoFactor
+		}
+	}
+	return rows.Err()
 }
 
 // AttachLockState fills the sign-in lockout fields (migration 000117): the

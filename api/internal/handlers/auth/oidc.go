@@ -144,7 +144,7 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	if err := h.service.UpdateLastLogin(r.Context(), user.ID); err != nil {
 		h.logger.WithError(err).Warn("Failed to update last login")
 	}
-	if err := h.issueSession(w, r, user.ID, adminauth.AuthMethodOIDC); err != nil {
+	if err := h.issueSession(w, r, user.ID, adminauth.AuthMethodOIDC, ""); err != nil {
 		clearFlow()
 		h.logger.WithError(err).Error("Failed to issue session after OIDC login")
 		h.redirectLoginError(w, r, "internal")

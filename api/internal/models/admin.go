@@ -23,6 +23,11 @@ type AdminUser struct {
 	// only on the user-management reads (/users).
 	LockedUntil      *time.Time `json:"locked_until,omitempty"`
 	FailedLoginCount int        `json:"failed_login_count,omitempty"`
+	// HasPassword and TwoFactorEnabled appear only on the user-management
+	// reads too: whether the account can sign in with a password (no: send
+	// an invite) and whether two-factor sign-in is on.
+	HasPassword      *bool `json:"has_password,omitempty"`
+	TwoFactorEnabled bool  `json:"two_factor_enabled,omitempty"`
 }
 
 // TenantMembership represents a user's role within one tenant.

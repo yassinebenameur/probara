@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
@@ -27,6 +28,9 @@ type Service struct {
 	// clockOffset moves the lockout's database clock; zero except in tests,
 	// the one seam they use to let time pass (lockout.go, lockoutNow).
 	clockOffset time.Duration
+	// enc seals TOTP secrets (ConfigureEncryption); nil without
+	// PROBARA_SECRETS_KEY, which turns two-factor enrolment off.
+	enc secrets.Encryptor
 
 	dummyOnce sync.Once
 	dummyHash string

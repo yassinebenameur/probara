@@ -120,6 +120,70 @@ func TestUpsertSuperadmin_LiftsLockoutAndEndsSessions(t *testing.T) {
 	}
 }
 
+func TestResetTwoFactorTurnsItOffAndRetiresChallenges(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+
+	var userID string
+	if err := client.QueryRowContext(ctx, `
+		INSERT INTO admin_users (username, password_hash, platform_role, totp_secret_enc, totp_enabled_at, totp_last_step)
+		VALUES ('ops', 'hash', 'superadmin', '{"v":1}', NOW(), 1) RETURNING id
+	`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_user_recovery_codes (admin_user_id, code_hash) VALUES ($1, 'h1'), ($1, 'h2');
+	`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_account_tokens (admin_user_id, purpose, token_hash, expires_at, new_email)
+		VALUES ($1, 'mfa_challenge', 'c1', NOW() + INTERVAL '5 minutes', NULL),
+		       ($1, 'email_change', 'e1', NOW() + INTERVAL '1 day', 'x@example.com')
+	`, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	was, err := resetTwoFactor(ctx, client, "ops")
+	if err != nil || !was {
+		t.Fatalf("resetTwoFactor() = %v, %v; want true", was, err)
+	}
+	var enabled, secret bool
+	var codes, open int
+	if err := client.QueryRowContext(ctx, `
+		SELECT totp_enabled_at IS NOT NULL, totp_secret_enc IS NOT NULL,
+		       (SELECT COUNT(*) FROM admin_user_recovery_codes WHERE admin_user_id = $1),
+		       (SELECT COUNT(*) FROM admin_account_tokens WHERE admin_user_id = $1 AND revoked_at IS NULL)
+		FROM admin_users WHERE id = $1
+	`, userID).Scan(&enabled, &secret, &codes, &open); err != nil {
+		t.Fatal(err)
+	}
+	if enabled || secret || codes != 0 || open != 0 {
+		t.Fatalf("after reset: enabled=%v secret=%v codes=%d open tokens=%d", enabled, secret, codes, open)
+	}
+	if was, err := resetTwoFactor(ctx, client, "ops"); err != nil || was {
+		t.Fatalf("second reset = %v, %v; want false", was, err)
+	}
+	if _, err := resetTwoFactor(ctx, client, "nobody"); err != errUnknownUser {
+		t.Fatalf("unknown user: %v", err)
+	}
+
+	// The password upsert retires open links too.
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_account_tokens (admin_user_id, purpose, token_hash, expires_at)
+		VALUES ($1, 'password_reset', 'r1', NOW() + INTERVAL '1 hour')
+	`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSuperadmin(ctx, client, "ops", "new-hash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_account_tokens WHERE admin_user_id = $1 AND revoked_at IS NULL`, userID).Scan(&open); err != nil || open != 0 {
+		t.Fatalf("open tokens after the upsert: %d %v", open, err)
+	}
+}
+
 // The break-glass tool must work on a database whose migration job failed
 // before the lockout and session migrations (000117, 000118) ran.
 func TestUpsertSuperadmin_WorksBeforeTheIdentityMigrations(t *testing.T) {
@@ -158,5 +222,57 @@ func TestUpsertSuperadmin_WorksBeforeTheIdentityMigrations(t *testing.T) {
 	}
 	if role != auth.PlatformRoleSuperadmin || hash != "new-hash" {
 		t.Fatalf("got %s/%s, want superadmin/new-hash", role, hash)
+	}
+	// -reset-2fa on the old schema: nothing to reset, the user must exist.
+	if was, err := resetTwoFactor(ctx, client, "ops"); err != nil || was {
+		t.Fatalf("resetTwoFactor() on the old schema = %v, %v", was, err)
+	}
+	if _, err := resetTwoFactor(ctx, client, "nobody"); err != errUnknownUser {
+		t.Fatalf("unknown user on the old schema: %v", err)
+	}
+}
+
+// Migrations 000124 and 000125 go down and back up cleanly, and -reset-2fa
+// works between them (tokens table present, two-factor columns not).
+func TestAccountMigrationsDownAndUp(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+
+	_, file, _, _ := runtime.Caller(0)
+	driver, err := postgres.WithInstance(client.DB, &postgres.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := migrate.NewWithDatabaseInstance("file://"+filepath.Join(filepath.Dir(file), "..", "..", "shared", "db", "migrations"), "postgres", driver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ExecContext(ctx, `INSERT INTO admin_users (username, password_hash, platform_role) VALUES ('ops', 'h', 'superadmin')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Steps(-1); err != nil {
+		t.Fatalf("down 000125: %v", err)
+	}
+	if was, err := resetTwoFactor(ctx, client, "ops"); err != nil || was {
+		t.Fatalf("resetTwoFactor() without 000125 = %v, %v", was, err)
+	}
+	if err := upsertSuperadmin(ctx, client, "ops", "h2"); err != nil {
+		t.Fatalf("upsert without 000125: %v", err)
+	}
+	if err := m.Steps(-1); err != nil {
+		t.Fatalf("down 000124: %v", err)
+	}
+	if err := upsertSuperadmin(ctx, client, "ops", "h3"); err != nil {
+		t.Fatalf("upsert without 000124: %v", err)
+	}
+	if err := m.Steps(2); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	var tokens, codes bool
+	if err := client.QueryRowContext(ctx, `
+		SELECT to_regclass('admin_account_tokens') IS NOT NULL, to_regclass('admin_user_recovery_codes') IS NOT NULL
+	`).Scan(&tokens, &codes); err != nil || !tokens || !codes {
+		t.Fatalf("after up: tokens=%v codes=%v err=%v", tokens, codes, err)
 	}
 }

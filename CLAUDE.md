@@ -727,6 +727,22 @@ or imported groups come back empty. Any other path that creates groups through
   each heartbeat and end at `CredentialExpiry`; a new stream must too. The
   `admin_sessions_default_family` trigger (000118) is rolling-deploy
   compatibility only: drop it in a later release's migration.
+- **Account links and two-factor** (local password accounts only; an SSO
+  account never gets a reset, email change, password or second factor
+  here): invite / reset / email-change links and the sign-in challenge are
+  single-use rows in `admin_account_tokens` (random, SHA-256 stored,
+  purpose-bound; `adminauth/tokens.go`), never `shared/actionlink`. Every
+  path that sets a password or resets two-factor retires the user's open
+  tokens (`RetireAccountTokens`; `cmd/admin` does it in SQL), or a pending
+  email change survives the recovery. Link tokens ride in the URL fragment
+  and `X-Action-Token`; the pages are in `web/lib/public-routes.ts`. Without
+  `SMTP_*` + `APP_BASE_URL` on the API (`accountmail.Enabled`) only a
+  superadmin's response carries a link. TOTP secrets are sealed with
+  `PROBARA_SECRETS_KEY` (no key, no enrolment; never the no-op encryptor).
+  Failed second factors and account-page password checks reserve an attempt
+  through the lockout before comparing; a correct password releases only its
+  own count, and a reset keeps a two-factor account's lock. The rules and
+  expiries: `docs/auth-and-rbac.md`.
 
 ## MCP server
 

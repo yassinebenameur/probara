@@ -16,6 +16,10 @@ export interface AdminUser {
   locked_until?: string;
   /** Current run of failed sign-ins (/users reads only). */
   failed_login_count?: number;
+  /** Whether the account has a password (/users reads only). */
+  has_password?: boolean;
+  /** Whether two-factor sign-in is on (/users reads only). */
+  two_factor_enabled?: boolean;
 }
 
 export interface AdminUserListResponse {

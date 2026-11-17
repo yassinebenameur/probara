@@ -35,6 +35,7 @@ func catalog() []spec {
 		workspaceAdminTools(),
 		statusPageAccessTools(),
 		identityTools(),
+		accountActionTools(),
 	} {
 		all = append(all, group...)
 	}

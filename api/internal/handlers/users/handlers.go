@@ -17,8 +17,10 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/accountmail"
 	adminusers "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
+	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -27,8 +29,6 @@ import (
 const (
 	minUsernameLength = 3
 	maxUsernameLength = 64
-	minPasswordLength = 12
-	maxPasswordLength = 128
 )
 
 var usernameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -43,6 +43,11 @@ type Handlers struct {
 	setupCode string
 	// security serves unlock and the user's sessions (security.go).
 	security accountSecurity
+	// links, mail and sso serve invites, reset links and the two-factor
+	// reset (lifecycle.go).
+	links accountLinks
+	mail  *accountmail.Mailer
+	sso   ssoProvider
 }
 
 type userService interface {
@@ -448,12 +453,8 @@ func validateUsername(username string) error {
 	return nil
 }
 
+// validatePassword is the platform's one password rule (auth.ValidatePassword),
+// shared with invites, resets and the account page.
 func validatePassword(password string) error {
-	if password == "" {
-		return errors.New("password is required")
-	}
-	if len(password) < minPasswordLength || len(password) > maxPasswordLength {
-		return errors.New("password must be between 12 and 128 characters")
-	}
-	return nil
+	return auth.ValidatePassword(password)
 }

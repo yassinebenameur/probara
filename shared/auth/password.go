@@ -7,6 +7,26 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// Password length bounds for every password a person chooses: user create
+// and update, first-admin bootstrap, invite acceptance, password reset and
+// the account page. ValidatePassword is the one check.
+const (
+	MinPasswordLength = 12
+	MaxPasswordLength = 128
+)
+
+// ValidatePassword reports why a chosen password is refused. Its messages
+// reach API clients.
+func ValidatePassword(password string) error {
+	if password == "" {
+		return errors.New("password is required")
+	}
+	if len(password) < MinPasswordLength || len(password) > MaxPasswordLength {
+		return fmt.Errorf("password must be between %d and %d characters", MinPasswordLength, MaxPasswordLength)
+	}
+	return nil
+}
+
 // HashPassword hashes a plaintext password using bcrypt.
 func HashPassword(password string, cost int) (string, error) {
 	if password == "" {

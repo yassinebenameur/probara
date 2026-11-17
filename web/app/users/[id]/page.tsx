@@ -15,6 +15,7 @@ import Callout from '@/components/ui/Callout';
 import Button from '@/components/ui/Button';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
 import SessionsPanel from '@/components/account/SessionsPanel';
+import UserAccountActions from '@/components/users/UserAccountActions';
 import {
   getTenants,
   getUser,
@@ -278,6 +279,8 @@ export default function EditUserPage() {
           )}
         </Panel>
       </div>
+
+      <UserAccountActions user={user} onChanged={() => void getUser(id).then(setUser).catch(() => undefined)} />
 
       <SessionsPanel
         scope="user"

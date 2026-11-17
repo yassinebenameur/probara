@@ -252,7 +252,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		// (handlers/users/security.go), the signed-in user's own sessions
 		// (routes_account.go).
 		adminUsersHandlers.WithAccountSecurity(authService)
-		mountAccountRoutes(r, authMiddleware, authService, log, auditRecorder)
+		// Invites, resets, email change and two-factor (routes_account.go).
+		accountMailer := wireAccountSecurity(cfg, log, authService, secretsEncryptor, keyConfigured, authHandlers, adminUsersHandlers, oidcService)
+		mountAccountRoutes(r, authMiddleware, authService, accountMailer, log, auditRecorder)
 
 		mountAlertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_alertactions.go)
 		mountReportUnsubscribeRoutes(r, reportScheduleHandlers)           // signed unsubscribe links of report emails
