@@ -59,6 +59,9 @@ type spec struct {
 	BodyArg *param
 	// Multipart uploads the FileArg argument's text as the form file `file`.
 	Multipart *multipart
+	// BodyOptional marks a Body the handler also accepts empty (an absent
+	// body means the defaults); the OpenAPI request body is then optional.
+	BodyOptional bool
 	// Required names body fields the agent must send (reflection cannot
 	// tell; the API's validation remains the authority).
 	Required []string
@@ -132,7 +135,7 @@ type Handler struct {
 	tools   []*tool
 	extras  []extraTool
 	stream  http.Handler
-	openapi []byte
+	openapi *openAPIDocument
 
 	// resourceMetadata returns the RFC 9728 metadata URL advertised on a
 	// 401, which is how MCP clients discover OAuth sign-in.
@@ -170,14 +173,9 @@ func (h *Handler) Bind(router chi.Router, extras []extraTool) error {
 		return err
 	}
 	// The REST API's OpenAPI document is the same catalog, bound to the same
-	// router (openapi.go).
-	documented, err := resolveDocumented(routes)
-	if err != nil {
-		return err
-	}
-	if h.openapi, err = buildOpenAPI(tools, documented, h.version); err != nil {
-		return err
-	}
+	// router (openapi_serve.go). A generation failure degrades only that
+	// endpoint; TestOpenAPIGolden is where it must be caught.
+	h.prepareOpenAPI(routes, tools)
 	h.router = router
 	h.tools = tools
 	h.extras = extras

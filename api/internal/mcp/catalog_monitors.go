@@ -114,8 +114,9 @@ func monitorTools() []spec {
 			Description: "Queue an immediate check outside the schedule. The result is recorded like a scheduled " +
 				"check and can open or resolve alerts. Not for group, push or agent monitors.",
 			Method: http.MethodPost, Route: "/monitors/{id}/run",
-			PathDocs: map[string]string{"id": "Monitor ID."},
-			Body:     typeOf[monitorhandlers.RunMonitorNowRequest](),
+			PathDocs:     map[string]string{"id": "Monitor ID."},
+			Body:         typeOf[monitorhandlers.RunMonitorNowRequest](),
+			BodyOptional: true,
 			FieldDocs: map[string]string{
 				"location_id": "Run only from this one of the monitor's locations (default: every selected location).",
 			},

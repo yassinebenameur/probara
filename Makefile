@@ -315,7 +315,7 @@ test-unit:
 # The REST API's OpenAPI document (api/openapi.json) is generated from the MCP
 # tool catalog bound to the router; TestOpenAPIGolden fails when it is stale.
 openapi:
-	go test ./api/internal/api -run '^TestOpenAPIGolden$$' -count=1 -update
+	go test ./api/internal/api -run '^TestOpenAPIGolden$$' -count=1 -update -v
 
 test-cover: test
 	@echo "Opening coverage report..."

@@ -1,6 +1,12 @@
 package mcp
 
-import "net/http"
+import (
+	"net/http"
+	"reflect"
+
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	otlphandlers "github.com/yassinebenameur/probara/api/internal/handlers/otlp"
+)
 
 // documentedRoute is a REST route the OpenAPI document describes although
 // it is not an MCP tool (it stays in notExposed for MCP): machine ingest
@@ -13,12 +19,24 @@ type documentedRoute struct {
 	Public bool
 	// RequestMedia are raw request body types, described without a schema.
 	RequestMedia []string
-	// RequestOptional marks a request body the route accepts but does not need.
-	RequestOptional bool
-	Headers         []param
-	// Errors are the route's own error answers, in ErrorMedia.
-	Errors     map[int]string
-	ErrorMedia string
+	Headers      []param
+	// Errors are the route's own error answers; they replace the shared
+	// answer for the same status.
+	Errors map[int]routeError
+}
+
+// routeError is one error answer of a documented route: JSON Bodies (the
+// types the handlers write; several when the status comes in more than one
+// shape), or a schema-less Media type.
+type routeError struct {
+	Description string
+	Bodies      []reflect.Type
+	Media       string
+	RetryAfter  bool
+}
+
+func plainError(description string) routeError {
+	return routeError{Description: description, Media: "text/plain"}
 }
 
 func openAPIRoutes() []documentedRoute {
@@ -29,13 +47,15 @@ func openAPIRoutes() []documentedRoute {
 		{Name: "metrics", Type: "object", Description: "Any other query parameter is recorded as a metric of the " +
 			"same name; numeric and true/false values are parsed, everything else is kept as text."},
 	}
-	pushErrors := map[int]string{
-		400: "Invalid status, malformed JSON body, or a body that is not one JSON object.",
-		403: "The push monitor is disabled.",
-		404: "No push monitor has this token.",
-		413: "The body is larger than 64 KiB.",
-		414: "The query string is larger than 64 KiB.",
+	pushErrors := map[int]routeError{
+		400: plainError("Invalid status, malformed JSON body, or a body that is not one JSON object."),
+		403: plainError("The push monitor is disabled."),
+		404: plainError("No push monitor has this token."),
+		413: plainError("The body is larger than 64 KiB."),
+		414: plainError("The query string is larger than 64 KiB."),
 	}
+	otlpStatus := reflect.TypeFor[otlphandlers.Status]()
+	envelope := reflect.TypeFor[apierrors.ErrorResponse]()
 	return []documentedRoute{
 		{
 			spec: spec{
@@ -46,7 +66,7 @@ func openAPIRoutes() []documentedRoute {
 				Method: http.MethodGet, Route: "/push/{token}",
 				PathDocs: pushToken, Query: pushQuery, Platform: true,
 			},
-			Public: true, Errors: pushErrors, ErrorMedia: "text/plain",
+			Public: true, Errors: pushErrors,
 		},
 		{
 			spec: spec{
@@ -59,7 +79,7 @@ func openAPIRoutes() []documentedRoute {
 				PathDocs: pushToken, Query: pushQuery, Platform: true,
 				BodyArg: &param{Name: "report", Type: "object", Description: "status (up, down, error), error, and metrics as further keys."},
 			},
-			Public: true, Errors: pushErrors, ErrorMedia: "text/plain",
+			Public: true, Errors: pushErrors,
 		},
 		{
 			spec: spec{
@@ -70,18 +90,26 @@ func openAPIRoutes() []documentedRoute {
 					"The body is an ExportMetricsServiceRequest in protobuf or JSON, optionally gzip-compressed " +
 					"(Content-Encoding: gzip; 4 MiB compressed, 20 MiB expanded); the answer is an " +
 					"ExportMetricsServiceResponse in the request's encoding. Errors raised by the handler use the OTLP " +
-					"status shape {\"code\", \"message\"}; a per-monitor rate limit answers 429 with Retry-After.",
+					"status shape {\"code\", \"message\"}.",
 				Method: http.MethodPost, Route: "/otlp/v1/metrics",
 			},
 			RequestMedia: []string{"application/x-protobuf", "application/json"},
 			Headers: []param{{Name: "X-Probara-Agent-Id", Description: "The agent monitor's agent ID. Without it the " +
 				"probara.agent.id resource attribute is used."}},
-			Errors: map[int]string{
-				404: "No agent monitor matches the agent ID in this workspace.",
-				415: "Content-Type is neither application/x-protobuf nor application/json.",
-				503: "Metrics cannot be ingested right now; retry after Retry-After seconds.",
+			Errors: map[int]routeError{
+				400: {Description: "Unreadable, malformed or oversized payload (OTLP status); or, for a session, a " +
+					"malformed tenant_id (API error envelope).", Bodies: []reflect.Type{otlpStatus, envelope}},
+				403: {Description: "The agent monitor is disabled (OTLP status); or a read-only credential or a " +
+					"workspace the user is not a member of (API error envelope).", Bodies: []reflect.Type{otlpStatus, envelope}},
+				404: {Description: "No agent monitor matches the agent ID in this workspace.", Bodies: []reflect.Type{otlpStatus}},
+				415: {Description: "Content-Type is neither application/x-protobuf nor application/json.",
+					Bodies: []reflect.Type{otlpStatus}},
+				429: {Description: "The monitor's export rate limit (OTLP_MONITOR_RATE_PER_MIN; OTLP status, " +
+					"Retry-After: 30), or failed authentication from this address (API error envelope).",
+					Bodies: []reflect.Type{otlpStatus, envelope}, RetryAfter: true},
+				503: {Description: "Metrics cannot be ingested right now; retry after Retry-After seconds.",
+					Bodies: []reflect.Type{otlpStatus}, RetryAfter: true},
 			},
-			ErrorMedia: "application/json",
 		},
 		{
 			spec: spec{

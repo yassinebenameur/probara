@@ -110,7 +110,7 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	if slas == nil {
 		slas = []models.SLA{}
 	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{"items": slas})
+	writeJSONNoStore(w, http.StatusOK, models.SLAListResponse{Items: slas})
 }
 
 func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +221,7 @@ func (h *Handlers) listReports(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err, "list SLA reports")
 		return
 	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{"items": reports})
+	writeJSONNoStore(w, http.StatusOK, models.SLAReportRefListResponse{Items: reports})
 }
 
 func (h *Handlers) issue(w http.ResponseWriter, r *http.Request) {

@@ -1223,7 +1223,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "`GET /api/v1/openapi.json` returns an OpenAPI 3.1 description of the REST API. It needs a credential like any other route (an API key of either scope or a signed-in session) and is not workspace-scoped; anonymous requests get 401. There is no interactive documentation UI.",
+            "`GET /api/v1/openapi.json` returns an OpenAPI 3.1 description of the REST API. It needs a credential like any other route (an API key of either scope or a signed-in session) and is not workspace-scoped; anonymous requests get 401. There is no interactive documentation UI. Send `Accept-Encoding: gzip` for a compressed copy; the answer carries an `ETag` and `Cache-Control: private, max-age=300`, so `If-None-Match` revalidates with a 304. If the document could not be generated at startup the API still runs and this route answers 503 `openapi_unavailable`.",
         },
         {
           type: "code",

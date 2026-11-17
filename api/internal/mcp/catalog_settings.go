@@ -121,8 +121,9 @@ func notificationTools() []spec {
 			Description: "Download operator verdicts on AI output as JSONL (fine-tuning data). Tenant admins only; " +
 				"capped at 5,000 labels.",
 			Method: http.MethodPost, Route: "/ai-labels/export",
-			Body:  typeOf[models.AILabelExportFilter](),
-			Enums: map[string][]string{"subject_types": {"incident_analysis", "alert_triage", "dependency_pair"}},
+			Body:         typeOf[models.AILabelExportFilter](),
+			BodyOptional: true,
+			Enums:        map[string][]string{"subject_types": {"incident_analysis", "alert_triage", "dependency_pair"}},
 		},
 		{
 			Name:        "list_api_keys",
@@ -230,9 +231,10 @@ func slaTools() []spec {
 			Description: "Freeze a closed period's report as an immutable record (e.g. for a customer). Defaults to " +
 				"the last closed period; a period can be issued once.",
 			Method: http.MethodPost, Route: "/slas/{id}/reports",
-			PathDocs:  sla,
-			Body:      typeOf[models.IssueSLAReportRequest](),
-			FieldDocs: map[string]string{"period": "Closed period key (default: the last closed period)."},
+			PathDocs:     sla,
+			Body:         typeOf[models.IssueSLAReportRequest](),
+			BodyOptional: true,
+			FieldDocs:    map[string]string{"period": "Closed period key (default: the last closed period)."},
 		},
 		{
 			Name:        "get_issued_sla_report",

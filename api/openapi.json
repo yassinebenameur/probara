@@ -1635,7 +1635,7 @@
         ],
         "type": "object"
       },
-      "AuditActionList": {
+      "AuditActionListResponse": {
         "properties": {
           "actions": {
             "items": {
@@ -1703,7 +1703,7 @@
         ],
         "type": "object"
       },
-      "BulkAlertingResult": {
+      "BulkAlertingResponse": {
         "properties": {
           "updated": {
             "type": "integer"
@@ -3619,6 +3619,17 @@
         ],
         "type": "object"
       },
+      "DeleteLocationResponse": {
+        "properties": {
+          "monitors_detached": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "monitors_detached"
+        ],
+        "type": "object"
+      },
       "DependencyGraph": {
         "properties": {
           "edges": {
@@ -3730,33 +3741,6 @@
         },
         "required": [
           "items"
-        ],
-        "type": "object"
-      },
-      "DiscoveryApproval": {
-        "properties": {
-          "created": {
-            "type": "boolean"
-          },
-          "monitor_id": {
-            "format": "uuid",
-            "type": "string"
-          }
-        },
-        "required": [
-          "monitor_id",
-          "created"
-        ],
-        "type": "object"
-      },
-      "DiscoveryCollectorToken": {
-        "properties": {
-          "token": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "token"
         ],
         "type": "object"
       },
@@ -5134,17 +5118,6 @@
         ],
         "type": "object"
       },
-      "LocationDeleteResult": {
-        "properties": {
-          "monitors_detached": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "monitors_detached"
-        ],
-        "type": "object"
-      },
       "LocationDeployInfo": {
         "properties": {
           "docker_compose_yaml": {
@@ -5642,7 +5615,7 @@
         ],
         "type": "object"
       },
-      "MeshEdgeHistory": {
+      "MeshEdgeHistoryResponse": {
         "properties": {
           "points": {
             "items": {
@@ -5772,55 +5745,6 @@
           "locations",
           "edges",
           "probe_interval_seconds"
-        ],
-        "type": "object"
-      },
-      "MetricSeriesList": {
-        "properties": {
-          "items": {
-            "items": {
-              "properties": {
-                "attributes": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                },
-                "last_seen_at": {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                "metric_name": {
-                  "type": "string"
-                },
-                "metric_type": {
-                  "type": "string"
-                },
-                "series_key": {
-                  "type": "string"
-                },
-                "unit": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "series_key",
-                "metric_name",
-                "attributes",
-                "unit",
-                "metric_type",
-                "last_seen_at"
-              ],
-              "type": "object"
-            },
-            "type": [
-              "null",
-              "array"
-            ]
-          }
-        },
-        "required": [
-          "items"
         ],
         "type": "object"
       },
@@ -7276,7 +7200,7 @@
         ],
         "type": "object"
       },
-      "PushAccepted": {
+      "PushAcceptedResponse": {
         "properties": {
           "status": {
             "type": "string"
@@ -7785,7 +7709,7 @@
         ],
         "type": "object"
       },
-      "SLAList": {
+      "SLAListResponse": {
         "properties": {
           "items": {
             "items": {
@@ -8617,7 +8541,7 @@
         ],
         "type": "object"
       },
-      "SLAReportRefList": {
+      "SLAReportRefListResponse": {
         "properties": {
           "items": {
             "items": {
@@ -10551,6 +10475,33 @@
         ],
         "type": "object"
       },
+      "discovery.ApproveResponse": {
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "monitor_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "monitor_id",
+          "created"
+        ],
+        "type": "object"
+      },
+      "discovery.CollectorTokenResponse": {
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
       "discovery.Integration": {
         "properties": {
           "home_namespace": {
@@ -11063,6 +11014,55 @@
         ],
         "type": "object"
       },
+      "metricsquery.SeriesListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "properties": {
+                "attributes": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "last_seen_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "metric_name": {
+                  "type": "string"
+                },
+                "metric_type": {
+                  "type": "string"
+                },
+                "series_key": {
+                  "type": "string"
+                },
+                "unit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "series_key",
+                "metric_name",
+                "attributes",
+                "unit",
+                "metric_type",
+                "last_seen_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "notificationsettings.Settings": {
         "properties": {
           "alert_reminder_seconds": {
@@ -11136,6 +11136,21 @@
           "dependency_suppression_enabled",
           "dependency_suppression_grace_seconds",
           "alert_reopen_cooldown_minutes"
+        ],
+        "type": "object"
+      },
+      "otlp.Status": {
+        "properties": {
+          "code": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
         ],
         "type": "object"
       },
@@ -11403,7 +11418,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "200": {
@@ -13555,7 +13570,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuditActionList"
+                  "$ref": "#/components/schemas/AuditActionListResponse"
                 }
               }
             },
@@ -14504,7 +14519,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DiscoveryCollectorToken"
+                  "$ref": "#/components/schemas/discovery.CollectorTokenResponse"
                 }
               }
             },
@@ -14615,7 +14630,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DiscoveryApproval"
+                  "$ref": "#/components/schemas/discovery.ApproveResponse"
                 }
               }
             },
@@ -15076,7 +15091,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IncidentAIAnalysis"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/IncidentAIAnalysis"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               }
             },
@@ -15952,7 +15974,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LocationDeleteResult"
+                  "$ref": "#/components/schemas/DeleteLocationResponse"
                 }
               }
             },
@@ -16941,7 +16963,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MeshEdgeHistory"
+                  "$ref": "#/components/schemas/MeshEdgeHistoryResponse"
                 }
               }
             },
@@ -17462,7 +17484,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BulkAlertingResult"
+                  "$ref": "#/components/schemas/BulkAlertingResponse"
                 }
               }
             },
@@ -19699,7 +19721,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MetricSeriesList"
+                  "$ref": "#/components/schemas/metricsquery.SeriesListResponse"
                 }
               }
             },
@@ -19949,7 +19971,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "202": {
@@ -20775,7 +20797,7 @@
     },
     "/otlp/v1/metrics": {
       "post": {
-        "description": "OTLP/HTTP metrics export for agent monitors: point an OpenTelemetry collector's otlphttp exporter at <origin>/api/v1/otlp with a write-scope API key and the X-Probara-Agent-Id header. The body is an ExportMetricsServiceRequest in protobuf or JSON, optionally gzip-compressed (Content-Encoding: gzip; 4 MiB compressed, 20 MiB expanded); the answer is an ExportMetricsServiceResponse in the request's encoding. Errors raised by the handler use the OTLP status shape {\"code\", \"message\"}; a per-monitor rate limit answers 429 with Retry-After.\n\nAccess: Needs write access: viewers and read-scope API keys get 403.",
+        "description": "OTLP/HTTP metrics export for agent monitors: point an OpenTelemetry collector's otlphttp exporter at <origin>/api/v1/otlp with a write-scope API key and the X-Probara-Agent-Id header. The body is an ExportMetricsServiceRequest in protobuf or JSON, optionally gzip-compressed (Content-Encoding: gzip; 4 MiB compressed, 20 MiB expanded); the answer is an ExportMetricsServiceResponse in the request's encoding. Errors raised by the handler use the OTLP status shape {\"code\", \"message\"}.\n\nAccess: Needs write access: viewers and read-scope API keys get 403.",
         "operationId": "export_otlp_metrics",
         "parameters": [
           {
@@ -20806,34 +20828,104 @@
             "description": "Success."
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/otlp.Status"
+                    },
+                    {
+                      "$ref": "#/components/schemas/errors.ErrorResponse"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Unreadable, malformed or oversized payload (OTLP status); or, for a session, a malformed tenant_id (API error envelope)."
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
-            "$ref": "#/components/responses/Forbidden"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/otlp.Status"
+                    },
+                    {
+                      "$ref": "#/components/schemas/errors.ErrorResponse"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The agent monitor is disabled (OTLP status); or a read-only credential or a workspace the user is not a member of (API error envelope)."
           },
           "404": {
             "content": {
-              "application/json": {}
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/otlp.Status"
+                }
+              }
             },
             "description": "No agent monitor matches the agent ID in this workspace."
           },
           "415": {
             "content": {
-              "application/json": {}
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/otlp.Status"
+                }
+              }
             },
             "description": "Content-Type is neither application/x-protobuf nor application/json."
           },
           "429": {
-            "$ref": "#/components/responses/TooManyRequests"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/otlp.Status"
+                    },
+                    {
+                      "$ref": "#/components/schemas/errors.ErrorResponse"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The monitor's export rate limit (OTLP_MONITOR_RATE_PER_MIN; OTLP status, Retry-After: 30), or failed authentication from this address (API error envelope).",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until a request is accepted again.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "503": {
             "content": {
-              "application/json": {}
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/otlp.Status"
+                }
+              }
             },
-            "description": "Metrics cannot be ingested right now; retry after Retry-After seconds."
+            "description": "Metrics cannot be ingested right now; retry after Retry-After seconds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until a request is accepted again.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -20894,7 +20986,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PushAccepted"
+                  "$ref": "#/components/schemas/PushAcceptedResponse"
                 }
               }
             },
@@ -21002,7 +21094,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PushAccepted"
+                  "$ref": "#/components/schemas/PushAcceptedResponse"
                 }
               }
             },
@@ -21329,7 +21421,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SLAList"
+                  "$ref": "#/components/schemas/SLAListResponse"
                 }
               }
             },
@@ -21801,7 +21893,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SLAReportRefList"
+                  "$ref": "#/components/schemas/SLAReportRefListResponse"
                 }
               }
             },
@@ -21860,7 +21952,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "201": {

@@ -1287,9 +1287,12 @@ or imported groups come back empty. Any other path that creates groups through
 - OpenAPI: `api/openapi.json` is generated from the MCP tool catalog bound
   to the router (`api/internal/mcp/openapi*.go`) and served at
   `/api/v1/openapi.json`. Regenerate it with `make openapi` whenever a route
-  or catalog entry changes; `TestOpenAPIGolden` fails when it is stale. Typed
+  or catalog entry changes; `TestOpenAPIGolden` fails when it is stale, and
+  `make openapi` lists the operations still without a typed response. Typed
   success responses come from `successResponses` (`openapi_responses.go`):
-  add an entry only after reading the handler, never guess one. A route an
+  add an entry only after reading the handler, never guess one, and name the
+  type the handler writes (no map literals, no copies). A generation failure
+  at runtime only makes the endpoint answer 503. A route an
   agent must not call but the REST API documents goes in `openAPIRoutes`
   (and `notExposed`).
 - Helm: `helm lint helm/monitoring-platform` and

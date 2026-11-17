@@ -50,27 +50,46 @@ func routerOnlyServer(t *testing.T) *Server {
 }
 
 // generateOpenAPI binds a fresh MCP handler to the server's router, exactly
-// as NewServer does, and returns the document it generates.
+// as NewServer does, and returns the document it generates. At runtime a
+// generation failure only makes the endpoint answer 503; this is where it
+// fails loudly.
 func generateOpenAPI(t *testing.T, s *Server) []byte {
+	t.Helper()
+	return bindOpenAPI(t, s).OpenAPI()
+}
+
+func bindOpenAPI(t *testing.T, s *Server) *mcpserver.Handler {
 	t.Helper()
 	h := mcpserver.NewHandler(logger.New("api-test", "error"), nil)
 	if err := h.Bind(s.http.Handler.(chi.Router), nil); err != nil {
 		t.Fatal(err)
 	}
-	return h.OpenAPI()
+	if err := h.OpenAPIError(); err != nil {
+		t.Fatalf("OpenAPI generation failed: %v", err)
+	}
+	return h
 }
 
 // TestOpenAPIGolden keeps api/openapi.json equal to what the router and the
 // MCP catalog generate. Refresh it with `make openapi`.
 func TestOpenAPIGolden(t *testing.T) {
 	s := routerOnlyServer(t)
-	doc := generateOpenAPI(t, s)
+	h := bindOpenAPI(t, s)
+	doc := h.OpenAPI()
 	if again := generateOpenAPI(t, routerOnlyServer(t)); !bytes.Equal(doc, again) {
 		t.Fatal("OpenAPI generation is not deterministic: two runs differ")
 	}
 	if *updateOpenAPI {
 		if err := os.WriteFile(openAPIGolden, doc, 0o644); err != nil {
 			t.Fatal(err)
+		}
+		// make openapi runs with -v, so whoever regenerates sees what to fill
+		// in: an entry in successResponses (api/internal/mcp/openapi_responses.go)
+		// after reading the handler.
+		if untyped := h.OpenAPIUntyped(); len(untyped) > 0 {
+			t.Logf("%d operations have no typed success response yet: %s", len(untyped), strings.Join(untyped, ", "))
+		} else {
+			t.Log("every described operation has a typed success response")
 		}
 		return
 	}

@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"reflect"
 
-	"github.com/google/uuid"
-
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
@@ -21,13 +19,15 @@ import (
 )
 
 // successResponse is an operation's success answer as its handler writes
-// it. Body is the Go value the handler passes to httpx.WriteJSON (its JSON
-// schema is reflected, so field changes follow automatically); Media are
-// non-JSON bodies, described without a schema.
+// it. Body is the type of the value the handler writes, never a hand-made
+// copy of it: its JSON schema is reflected, so field changes follow
+// automatically. Media are non-JSON bodies, described without a schema.
 type successResponse struct {
 	Status int
 	Body   reflect.Type
-	Media  []string
+	// Nullable: the handler may write a bare JSON null instead of Body.
+	Nullable bool
+	Media    []string
 }
 
 func (r successResponse) description() string {
@@ -47,7 +47,15 @@ func jsonAnswer[T any](status int) successResponse {
 	return successResponse{Status: status, Body: reflect.TypeFor[T]()}
 }
 
-func ok[T any]() successResponse      { return jsonAnswer[T](http.StatusOK) }
+func ok[T any]() successResponse { return jsonAnswer[T](http.StatusOK) }
+
+// okOrNull is a 200 whose body is T or JSON null (a nil pointer the handler
+// writes on purpose, e.g. "no analysis yet").
+func okOrNull[T any]() successResponse {
+	r := ok[T]()
+	r.Nullable = true
+	return r
+}
 func created[T any]() successResponse { return jsonAnswer[T](http.StatusCreated) }
 
 var noContent = successResponse{Status: http.StatusNoContent}
@@ -55,56 +63,6 @@ var noContent = successResponse{Status: http.StatusNoContent}
 func mediaAnswer(media ...string) successResponse {
 	return successResponse{Status: http.StatusOK, Media: media}
 }
-
-// Shapes of the success bodies handlers build as maps. Each mirrors one
-// handler's literal; keep them in step with it.
-type (
-	// DependencyMonitorList: monitors.listDependencyRelation.
-	DependencyMonitorList struct {
-		Items []models.DependencyMonitor `json:"items"`
-	}
-	// BulkAlertingResult: monitors.BulkUpdateAlerting.
-	BulkAlertingResult struct {
-		Updated int `json:"updated"`
-	}
-	// LocationDeleteResult: locations.DeleteLocation.
-	LocationDeleteResult struct {
-		MonitorsDetached int `json:"monitors_detached"`
-	}
-	// SLAList: slas.list.
-	SLAList struct {
-		Items []models.SLA `json:"items"`
-	}
-	// SLAReportRefList: slas.listReports.
-	SLAReportRefList struct {
-		Items []models.SLAReportRef `json:"items"`
-	}
-	// AuditActionList: audit.Actions.
-	AuditActionList struct {
-		Actions []string `json:"actions"`
-	}
-	// MetricSeriesList: metricsquery.HandleListSeries.
-	MetricSeriesList struct {
-		Items []metricsquery.SeriesItem `json:"items"`
-	}
-	// MeshEdgeHistory: mesh.GetEdgeHistory.
-	MeshEdgeHistory struct {
-		Points []models.MeshEdgeHistoryPoint `json:"points"`
-	}
-	// DiscoveryCollectorToken: discovery.rotate.
-	DiscoveryCollectorToken struct {
-		Token string `json:"token"`
-	}
-	// DiscoveryApproval: discovery.approve.
-	DiscoveryApproval struct {
-		MonitorID uuid.UUID `json:"monitor_id"`
-		Created   bool      `json:"created"`
-	}
-	// PushAccepted: push.HandlePushGet and HandlePushPost.
-	PushAccepted struct {
-		Status string `json:"status"`
-	}
-)
 
 // successResponses gives the success answer of each operation whose handler
 // is known, keyed by operation ID. An operation missing here is documented
@@ -128,19 +86,19 @@ var successResponses = map[string]successResponse{
 	"list_group_members":                 ok[[]models.Monitor](),
 	"add_group_members":                  noContent,
 	"remove_group_members":               noContent,
-	"list_monitor_dependencies":          ok[DependencyMonitorList](),
+	"list_monitor_dependencies":          ok[models.DependencyMonitorList](),
 	"add_monitor_dependency":             noContent,
 	"remove_monitor_dependency":          noContent,
-	"list_monitor_dependents":            ok[DependencyMonitorList](),
+	"list_monitor_dependents":            ok[models.DependencyMonitorList](),
 	"get_dependency_graph":               ok[models.DependencyGraph](),
 	"suggest_dependencies":               ok[depsuggest.Result](),
 	"label_dependency_suggestion":        ok[models.AILabel](),
-	"bulk_update_alerting":               ok[BulkAlertingResult](),
+	"bulk_update_alerting":               ok[models.BulkAlertingResponse](),
 	"bulk_delete_monitors":               ok[models.BulkDeleteMonitorsResponse](),
 	"export_monitors":                    mediaAnswer("application/x-yaml"),
 	"preview_monitor_import":             ok[models.ImportPreviewResponse](),
 	"import_monitors":                    ok[models.ImportExecuteResponse](),
-	"list_metric_series":                 ok[MetricSeriesList](),
+	"list_metric_series":                 ok[metricsquery.SeriesListResponse](),
 	"query_metrics":                      ok[metricsquery.QueryResponse](),
 	"get_agent_install":                  ok[sharedmodels.AgentInstallCommand](),
 	"get_agent_collector_config":         mediaAnswer("application/yaml"),
@@ -164,13 +122,13 @@ var successResponses = map[string]successResponse{
 	"get_dashboard_recent_alerts": ok[models.DashboardRecentAlertsResponse](),
 	"get_group_sparkline":         ok[models.DashboardGroupSparklineResponse](),
 	"get_mesh":                    ok[models.MeshResponse](),
-	"get_mesh_edge_history":       ok[MeshEdgeHistory](),
+	"get_mesh_edge_history":       ok[models.MeshEdgeHistoryResponse](),
 	"probe_mesh_edge":             ok[sharedmodels.TestCheckResponse](),
 	"list_locations":              ok[models.LocationListResponse](),
 	"get_location":                ok[models.Location](),
 	"create_location":             created[models.Location](),
 	"update_location":             ok[models.Location](),
-	"delete_location":             ok[LocationDeleteResult](),
+	"delete_location":             ok[models.DeleteLocationResponse](),
 	"get_location_deploy_info":    ok[models.LocationDeployInfo](),
 
 	// Maintenance
@@ -190,9 +148,9 @@ var successResponses = map[string]successResponse{
 	"update_discovery_integration":     ok[discovery.Integration](),
 	"get_discovery_namespaces":         ok[discovery.NamespaceList](),
 	"delete_discovery_integration":     noContent,
-	"rotate_discovery_collector_token": ok[DiscoveryCollectorToken](),
+	"rotate_discovery_collector_token": ok[discovery.CollectorTokenResponse](),
 	"get_discovery_coverage":           ok[discovery.Overview](),
-	"approve_discovery_suggestion":     ok[DiscoveryApproval](),
+	"approve_discovery_suggestion":     ok[discovery.ApproveResponse](),
 	"link_discovery_monitor":           noContent,
 	"unlink_discovery_monitor":         noContent,
 
@@ -227,7 +185,7 @@ var successResponses = map[string]successResponse{
 	"publish_incident_to_status_page":     ok[models.IncidentDetail](),
 	"unpublish_incident_from_status_page": ok[models.IncidentDetail](),
 	"request_incident_ai_analysis":        jsonAnswer[models.IncidentAIAnalysis](http.StatusAccepted),
-	"get_incident_ai_analysis":            ok[models.IncidentAIAnalysis](),
+	"get_incident_ai_analysis":            okOrNull[models.IncidentAIAnalysis](),
 	"label_incident_ai_analysis":          ok[models.AILabel](),
 
 	// Notifications and workspace settings
@@ -252,17 +210,17 @@ var successResponses = map[string]successResponse{
 	"get_tenant_settings":          ok[models.TenantSettings](),
 	"update_tenant_settings":       ok[models.TenantSettings](),
 	"list_audit_log":               ok[auditservice.ListResponse](),
-	"list_audit_actions":           ok[AuditActionList](),
+	"list_audit_actions":           ok[models.AuditActionListResponse](),
 
 	// SLAs
-	"list_slas":  ok[SLAList](),
+	"list_slas":  ok[models.SLAListResponse](),
 	"create_sla": created[models.SLA](),
 	"get_sla":    ok[models.SLA](),
 	"update_sla": ok[models.SLA](),
 	"delete_sla": noContent,
 	"get_sla_report": {Status: http.StatusOK, Body: reflect.TypeFor[models.SLAReport](),
 		Media: []string{"text/csv", "application/pdf"}},
-	"list_sla_reports": ok[SLAReportRefList](),
+	"list_sla_reports": ok[models.SLAReportRefListResponse](),
 	"issue_sla_report": created[models.SLAReport](),
 	"get_issued_sla_report": {Status: http.StatusOK, Body: reflect.TypeFor[models.SLAReport](),
 		Media: []string{"text/csv", "application/pdf"}},
@@ -304,8 +262,8 @@ var successResponses = map[string]successResponse{
 	"delete_oidc_group_mapping": noContent,
 
 	// Routes documented outside the catalog (openapi_routes.go)
-	"push_heartbeat":        ok[PushAccepted](),
-	"push_heartbeat_report": ok[PushAccepted](),
+	"push_heartbeat":        ok[models.PushAcceptedResponse](),
+	"push_heartbeat_report": ok[models.PushAcceptedResponse](),
 	"export_otlp_metrics":   mediaAnswer("application/x-protobuf", "application/json"),
 	"stream_alerts":         mediaAnswer("text/event-stream"),
 	"get_openapi_document":  mediaAnswer("application/json"),

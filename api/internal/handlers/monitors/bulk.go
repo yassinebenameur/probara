@@ -109,5 +109,5 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, map[string]int{"updated": updated})
+	httpx.WriteJSON(w, http.StatusOK, models.BulkAlertingResponse{Updated: updated})
 }

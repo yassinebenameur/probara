@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
@@ -27,23 +26,6 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
-
-// OpenAPIPath is where the document is served, to authenticated callers.
-const OpenAPIPath = apiPrefix + "/openapi.json"
-
-// OpenAPI returns the document Bind generated (nil before Bind).
-func (h *Handler) OpenAPI() []byte { return h.openapi }
-
-// ServeOpenAPI serves the generated document. Mount it behind the API's auth
-// middleware: it lists every operation, including the admin ones.
-func (h *Handler) ServeOpenAPI(w http.ResponseWriter, _ *http.Request) {
-	if h.openapi == nil {
-		http.Error(w, "OpenAPI document not ready", http.StatusServiceUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(h.openapi)
-}
 
 // operation is one described route: a catalog tool or a documented route.
 type operation struct {
@@ -80,7 +62,10 @@ func resolveDocumented(routes map[string]gate) ([]operation, error) {
 // buildOpenAPI renders the document. Output is deterministic: every object
 // is a map, so encoding/json writes keys sorted, and nothing depends on
 // iteration order.
-func buildOpenAPI(tools []*tool, documented []operation, version string) ([]byte, error) {
+//
+// It also returns the operations without a typed success response, for
+// whoever regenerates the document to fill in.
+func buildOpenAPI(tools []*tool, documented []operation, version string) ([]byte, []string, error) {
 	ops := make([]operation, 0, len(tools)+len(documented))
 	for _, t := range tools {
 		ops = append(ops, operation{spec: t.spec, gate: t.gate, readOnly: t.readOnly})
@@ -89,11 +74,11 @@ func buildOpenAPI(tools []*tool, documented []operation, version string) ([]byte
 
 	b := &docBuilder{schemas: map[string]any{}, names: map[reflect.Type]string{}}
 	if err := b.nameTypes(ops); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	errSchema, err := b.ref(reflect.TypeFor[apierrors.ErrorResponse]())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	paths := map[string]map[string]any{}
@@ -105,11 +90,11 @@ func buildOpenAPI(tools []*tool, documented []operation, version string) ([]byte
 			paths[op.spec.Route] = map[string]any{}
 		}
 		if _, dup := paths[op.spec.Route][key]; dup {
-			return nil, fmt.Errorf("openapi: %s %s described twice", op.spec.Method, op.spec.Route)
+			return nil, nil, fmt.Errorf("openapi: %s %s described twice", op.spec.Method, op.spec.Route)
 		}
 		o, err := b.operation(op)
 		if err != nil {
-			return nil, fmt.Errorf("openapi: %s: %w", op.spec.Name, err)
+			return nil, nil, fmt.Errorf("openapi: %s: %w", op.spec.Name, err)
 		}
 		paths[op.spec.Route][key] = o
 		tags[tagOf(op.spec.Route)] = true
@@ -121,7 +106,7 @@ func buildOpenAPI(tools []*tool, documented []operation, version string) ([]byte
 			found = found || op.spec.Name == name
 		}
 		if !found {
-			return nil, fmt.Errorf("openapi: successResponses names %q, which is not a described operation", name)
+			return nil, nil, fmt.Errorf("openapi: successResponses names %q, which is not a described operation", name)
 		}
 	}
 
@@ -161,7 +146,15 @@ func buildOpenAPI(tools []*tool, documented []operation, version string) ([]byte
 		},
 		"x-probara-not-described": notDescribed,
 	}
-	return encodeDocument(doc)
+	var untyped []string
+	for _, op := range ops {
+		if _, ok := successResponses[op.spec.Name]; !ok {
+			untyped = append(untyped, op.spec.Name)
+		}
+	}
+	sort.Strings(untyped)
+	out, err := encodeDocument(doc)
+	return out, untyped, err
 }
 
 // encodeDocument round-trips through a generic value so every object,
@@ -226,6 +219,11 @@ var tenantParameter = map[string]any{
 		"workspace the user is not a member of, 403; no workspace at all on a workspace-scoped operation, 401.",
 }
 
+var retryAfterHeader = map[string]any{
+	"description": "Seconds until a request is accepted again.",
+	"schema":      map[string]any{"type": "integer"},
+}
+
 func errorResponses(errSchema any) map[string]any {
 	jsonError := func(description string) map[string]any {
 		return map[string]any{
@@ -235,12 +233,7 @@ func errorResponses(errSchema any) map[string]any {
 	}
 	tooMany := jsonError("Rate limited (API_RATE_LIMIT_PER_MINUTE, per credential, or per address for " +
 		"anonymous calls and failed authentication). error is rate_limited; wait Retry-After seconds.")
-	tooMany["headers"] = map[string]any{
-		"Retry-After": map[string]any{
-			"description": "Seconds until a request is accepted again.",
-			"schema":      map[string]any{"type": "integer"},
-		},
-	}
+	tooMany["headers"] = map[string]any{"Retry-After": retryAfterHeader}
 	return map[string]any{
 		"BadRequest": jsonError("Malformed tenant_id or X-Tenant-ID (error bad_request), or a request the handler " +
 			"rejected (validation_error)."),
@@ -308,6 +301,13 @@ func (b *docBuilder) nameTypes(ops []operation) error {
 		if r, ok := successResponses[op.spec.Name]; ok && r.Body != nil {
 			if c := componentType(r.Body); c != nil {
 				types = append(types, c)
+			}
+		}
+		if op.doc != nil {
+			for _, e := range op.doc.Errors {
+				for _, body := range e.Bodies {
+					types = append(types, componentType(body))
+				}
 			}
 		}
 	}
@@ -652,13 +652,11 @@ func requestBody(op operation) (map[string]any, error) {
 			addSecretFields(schema)
 		}
 		content["application/json"] = map[string]any{"schema": schema}
+		required = !s.BodyOptional
 	}
 	if op.doc != nil {
 		for _, media := range op.doc.RequestMedia {
 			content[media] = map[string]any{}
-		}
-		if op.doc.RequestOptional {
-			required = false
 		}
 	}
 	if len(content) == 0 {
@@ -678,6 +676,9 @@ func (b *docBuilder) responses(op operation, public bool) (map[string]any, error
 			if err != nil {
 				return nil, err
 			}
+			if success.Nullable {
+				schema = map[string]any{"oneOf": []any{schema, map[string]any{"type": "null"}}}
+			}
 			content["application/json"] = map[string]any{"schema": schema}
 		}
 		for _, media := range success.Media {
@@ -694,11 +695,12 @@ func (b *docBuilder) responses(op operation, public bool) (map[string]any, error
 		return map[string]any{"$ref": "#/components/responses/" + name}
 	}
 	if op.doc != nil {
-		for status, description := range op.doc.Errors {
-			out[strconv.Itoa(status)] = map[string]any{
-				"description": description,
-				"content":     map[string]any{op.doc.ErrorMedia: map[string]any{}},
+		for status, e := range op.doc.Errors {
+			r, err := b.routeError(e)
+			if err != nil {
+				return nil, err
 			}
+			out[strconv.Itoa(status)] = r
 		}
 	}
 	// A documented route's own error answers win over the shared ones.
@@ -715,4 +717,33 @@ func (b *docBuilder) responses(op operation, public bool) (map[string]any, error
 	setDefault("429", "TooManyRequests")
 	out["default"] = refTo("Error")
 	return out, nil
+}
+
+// routeError renders a documented route's own error answer: JSON bodies
+// (one schema, or oneOf when the route answers in two shapes) or a media
+// type without a schema.
+func (b *docBuilder) routeError(e routeError) (map[string]any, error) {
+	r := map[string]any{"description": e.Description}
+	switch {
+	case len(e.Bodies) > 0:
+		var shapes []any
+		for _, body := range e.Bodies {
+			schema, err := b.ref(body)
+			if err != nil {
+				return nil, err
+			}
+			shapes = append(shapes, schema)
+		}
+		schema := shapes[0]
+		if len(shapes) > 1 {
+			schema = map[string]any{"oneOf": shapes}
+		}
+		r["content"] = map[string]any{"application/json": map[string]any{"schema": schema}}
+	case e.Media != "":
+		r["content"] = map[string]any{e.Media: map[string]any{}}
+	}
+	if e.RetryAfter {
+		r["headers"] = map[string]any{"Retry-After": retryAfterHeader}
+	}
+	return r, nil
 }
