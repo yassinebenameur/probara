@@ -2572,7 +2572,11 @@
         const slug = body.dataset.statusPageSlug;
         if (!slug || typeof EventSource === 'undefined') return;
         try {
-          const source = new EventSource('/public/status/' + slug + '/stream');
+          // Derived from the current path, like pushPaths(), so the stream is
+          // found on a custom domain (the page at "/") and behind a path
+          // prefix; the draft preview sits one level below its page.
+          const pagePath = window.location.pathname.replace(/\/+$/, '').replace(/\/preview\/draft$/, '');
+          const source = new EventSource(pagePath + '/stream');
           function scheduleRefresh() {
             if (refreshTimer) {
               window.clearTimeout(refreshTimer);

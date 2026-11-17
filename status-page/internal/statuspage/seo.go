@@ -79,7 +79,8 @@ func resolvePageSEO(data *StatusPageData) pageSEO {
 
 	// Discovery links are absolute under the public origin when it is known,
 	// else root-relative like the page's own stream URL.
-	base := seo.CanonicalURL
+	// A custom domain's canonical URL is its root, with a trailing slash.
+	base := strings.TrimRight(seo.CanonicalURL, "/")
 	if base == "" {
 		base = "/public/status/" + data.Slug
 	}

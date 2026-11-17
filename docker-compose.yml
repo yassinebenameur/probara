@@ -197,6 +197,12 @@ services:
       API_RATE_LIMIT_PER_MINUTE: "${API_RATE_LIMIT_PER_MINUTE:-600}"
       API_RATE_LIMIT_BURST: "${API_RATE_LIMIT_BURST:-120}"
       API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-}"
+      # Status page custom domains: the host operators CNAME their domains
+      # to (empty turns the feature off), and the status-page base URL,
+      # whose host is never accepted as a custom domain. TLS for custom
+      # domains terminates at your own reverse proxy in front of status-page.
+      STATUS_PAGE_CNAME_TARGET: "${STATUS_PAGE_CNAME_TARGET:-}"
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -393,6 +399,10 @@ services:
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
       SECURITY_HSTS_MAX_AGE: "${SECURITY_HSTS_MAX_AGE:-0}"
       APP_BASE_URL: "${APP_BASE_URL:-}"
+      # Custom domains are matched on Host; "true" matches X-Forwarded-Host
+      # instead, believed only from TRUSTED_PROXY_CIDRS peers (for a proxy
+      # that rewrites Host).
+      STATUS_PAGE_TRUST_FORWARDED_HOST: "${STATUS_PAGE_TRUST_FORWARDED_HOST:-false}"
     ports:
       - "8082:8082"
       - "9093:9093"

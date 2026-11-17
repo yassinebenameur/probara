@@ -58,6 +58,21 @@ type StatusPageConfig struct {
 	// CookieSecure is STATUS_PAGE_COOKIE_SECURE: nil when unset. See
 	// SessionCookieSecure.
 	CookieSecure *bool
+	// TrustForwardedHost is STATUS_PAGE_TRUST_FORWARDED_HOST (default
+	// false): a custom domain is then matched on X-Forwarded-Host, but only
+	// from a TRUSTED_PROXY_CIDRS peer. For proxies that rewrite Host.
+	TrustForwardedHost bool
+}
+
+// CustomHostCookieSecure is the session cookie's Secure flag on a custom
+// domain: STATUS_PAGE_COOKIE_SECURE when set, else detect (per request). An
+// https STATUS_PAGE_BASE_URL describes the platform host only, so it never
+// decides for another origin.
+func (c *StatusPageConfig) CustomHostCookieSecure() (secure, detect bool) {
+	if c == nil || c.CookieSecure == nil {
+		return false, true
+	}
+	return *c.CookieSecure, false
 }
 
 // SessionCookieSecure decides the visitor session cookie's Secure flag, like
@@ -125,6 +140,14 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 			return nil, fmt.Errorf("invalid STATUS_PAGE_COOKIE_SECURE: %w", err)
 		}
 		cfg.CookieSecure = &secure
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("STATUS_PAGE_TRUST_FORWARDED_HOST")); raw != "" {
+		trust, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid STATUS_PAGE_TRUST_FORWARDED_HOST: %w", err)
+		}
+		cfg.TrustForwardedHost = trust
 	}
 
 	cfg.SessionSecret = strings.TrimSpace(os.Getenv("STATUS_PAGE_SESSION_SECRET"))

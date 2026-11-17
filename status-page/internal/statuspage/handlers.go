@@ -45,6 +45,9 @@ type Handlers struct {
 	clientIPs *clientip.Resolver
 	// access is the visibility gate every page route passes (access.go).
 	access *accessGate
+	// hosts maps verified custom domains to their pages (domains.go,
+	// custom_host.go). Nil without a service: no custom domain is served.
+	hosts *hostTable
 }
 
 // NewHandlers creates a new status page handlers
@@ -64,7 +67,12 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 			}
 		}
 	}
+	var hosts *hostTable
+	if service != nil {
+		hosts = newHostTable(service.CustomHostRoutes)
+	}
 	return &Handlers{
+		hosts:       hosts,
 		service:     service,
 		config:      cfg,
 		logger:      log,
@@ -239,7 +247,10 @@ func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage
 			data.PushPublicKey = h.webPushPublicKey()
 		}
 		data.Visibility = visibility
-		data.CanonicalURL = h.canonicalURL(slug)
+		// The same on every host the page is served from (domains.go), so
+		// the render, and this slug-keyed cache, never depend on the Host
+		// header.
+		data.CanonicalURL = h.pageCanonicalURL(ctx, data.ID, slug)
 		view := buildStatusPageRenderView(data, h.apiProxyEnabled())
 		html, customErr, err := renderStatusPageView(data, view)
 		if customErr != nil {
@@ -356,7 +367,7 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 	if !gated {
 		data.PushPublicKey = h.webPushPublicKey()
 	}
-	data.CanonicalURL = h.canonicalURL(slug)
+	data.CanonicalURL = h.pageCanonicalURL(ctx, data.ID, slug)
 	data.Visibility = pageVisibility(r.Context())
 
 	var html string

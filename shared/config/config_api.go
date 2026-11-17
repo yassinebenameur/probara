@@ -82,6 +82,8 @@ type APIConfig struct {
 	// limit (config_edge.go).
 	EdgeConfig
 	APIEdgeConfig
+	// Status page custom domains (config_api_domains.go).
+	StatusPageDomainsConfig
 }
 
 // LoadAPIConfig loads API service configuration
@@ -294,6 +296,9 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, err
 	}
 	if cfg.APIEdgeConfig, err = loadAPIEdgeConfig(cfg.AppBaseURL); err != nil {
+		return nil, err
+	}
+	if cfg.StatusPageDomainsConfig, err = loadStatusPageDomainsConfig(); err != nil {
 		return nil, err
 	}
 

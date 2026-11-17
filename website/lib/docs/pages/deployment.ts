@@ -289,10 +289,29 @@ cd /opt/probara && docker compose ps     # .env names both Compose files`,
             'Client IPs: every browser request reaches the API through the frontend, so without help the API would see one client for everyone. `edge` replaces any `X-Forwarded-For` with the client it resolves and drops every other client-address header (`X-Real-IP`, `True-Client-IP`, `Forwarded`, `X-Client-IP`, `CF-Connecting-IP`, `X-Cluster-Client-IP` and similar); the frontend, reachable only through `edge`, forwards that value, and the API trusts exactly the frontend\'s address (`TRUSTED_PROXY_CIDRS` = `PROBARA_FRONTEND_IP/32`, default `172.31.213.10`). `edge`, the frontend and the API share a separate `probara-front` network that the worker is not on, because the worker sends tenant-defined HTTP requests with arbitrary headers and must not be able to speak to a trusted proxy. If `probara-front`\'s subnet (`PROBARA_FRONT_SUBNET`, default `172.31.213.0/24`) collides with a host network, change it together with `PROBARA_FRONTEND_IP` (inside the subnet) and `PROBARA_FRONT_IP_RANGE` (default `172.31.213.128/25`, the range dynamic addresses come from, which must exclude the frontend\'s). A client cannot choose its address by sending its own header.',
             'Behind your own TLS proxy or load balancer, set `PROBARA_TRUSTED_PROXIES` (space-separated CIDRs) to its address as the `edge` container sees it, or every client looks like that proxy; `edge` then takes the rightmost untrusted address of the incoming chain, so that proxy must append to `X-Forwarded-For`. Where Docker\'s userland proxy handles published ports (Docker Desktop, rootless), every connection arrives from the network gateway and real client addresses are lost before `edge`; on Linux with the default iptables publishing they are preserved.',
             'Private locations: the broker\'s [websocket listener](#nats-websocket) is published on `127.0.0.1:8443` (`NATS_WEBSOCKET_PUBLISH`) for a TLS reverse proxy on the host to front on 443. Set `PUBLIC_NATS_URL=wss://<that host>` in `.env` to enable the deploy snippets.',
+            'Status page [custom domains](/docs/status-pages/#custom-domains): set `STATUS_PAGE_CNAME_TARGET` in `.env` to the host your status pages are published on, and terminate TLS for each custom domain in your own reverse proxy in front of the status-page port, passing the original `Host` header (see the example below). The bundled `edge` proxy serves only the UI.',
             'Local AI runs through the `local-ai` Compose profile, which the script puts in `COMPOSE_PROFILES`. To run without it, set `COMPOSE_PROFILES=` and `LOCAL_AI_DISABLED=true` in `.env`.',
             'SMTP: fill `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `APP_BASE_URL` in `.env`; the release override passes them to the API, worker and alerter.',
             'Container names are fixed (`probara-*`), so one host runs either this stack or the development stack, not both. Needs Docker Compose 2.24.4 or newer.',
           ],
+        },
+        {
+          type: 'code',
+          language: 'text',
+          title: 'Caddyfile on the host: status pages and their custom domains over HTTPS',
+          code: `# The platform's status host; also the CNAME target
+# (STATUS_PAGE_BASE_URL=https://status.example.com and
+# STATUS_PAGE_CNAME_TARGET=status.example.com in .env).
+status.example.com, status.customer.example {
+	# Caddy obtains a certificate per name and forwards the original Host,
+	# which is what selects a page on its custom domain.
+	reverse_proxy 127.0.0.1:8082
+}`,
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Add each custom domain to the site list once it is added in the UI; Caddy\'s certificate request succeeds only after the domain\'s CNAME resolves to this host. With TLS terminated there, set `STATUS_PAGE_COOKIE_SECURE=true` (or `TRUSTED_PROXY_CIDRS` with `X-Forwarded-Proto`) so visitor session cookies on custom domains are `Secure`.',
         },
       ],
     },
@@ -602,7 +621,27 @@ kubectl -n probara get jobs`,
             [
               '`statusPage.baseUrl`',
               'Empty',
-              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links. Empty omits the canonical link and `og:url` and keeps the other links root-relative.',
+              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links (a page with a verified [custom domain](/docs/status-pages/#custom-domains) uses that domain instead). Empty omits the canonical link and `og:url` and keeps the other links root-relative. Also rendered into the API, which refuses its host as a custom domain.',
+            ],
+            [
+              '`statusPage.cnameTarget`',
+              'Empty (host of `baseUrl`)',
+              'Host every status page [custom domain](/docs/status-pages/#custom-domains) must CNAME to (`STATUS_PAGE_CNAME_TARGET` on the API). Empty uses the host of `statusPage.baseUrl`; with both empty, custom domains are off.',
+            ],
+            [
+              '`statusPage.customDomains`',
+              '`[]`',
+              'One `{host, tlsSecretName}` per custom domain. With `ingress.enabled` the chart renders an Ingress per domain (`<release>-sp-<host>`) routing `/` to the status-page service, with the domain\'s TLS Secret and `ingress.className`/`ingress.annotations`. The render fails for an entry without `host` or `tlsSecretName`, a host also in `ingress.hosts`, or a host listed twice. Each host must also be added and verified on its page in the UI; until then its Ingress answers only not-found.',
+            ],
+            [
+              '`statusPage.customDomainsClusterIssuer`',
+              'Empty',
+              'cert-manager ClusterIssuer set as `cert-manager.io/cluster-issuer` on the custom-domain Ingresses, so cert-manager issues each domain\'s certificate into its `tlsSecretName`. Empty: no annotation (provide the Secrets yourself, or put the issuer in `ingress.annotations`).',
+            ],
+            [
+              '`statusPage.trustForwardedHost`',
+              '`false`',
+              '`STATUS_PAGE_TRUST_FORWARDED_HOST`: match custom domains on `X-Forwarded-Host` instead of `Host`, believed only from `trustedProxyCIDRs` peers. Only for a proxy in front of the Ingress that rewrites `Host`.',
             ],
             [
               '`statusPage.service.*`',
@@ -632,7 +671,7 @@ kubectl -n probara get jobs`,
             [
               '`ingress.enabled`, `.className`, `.annotations`, `.hosts`, `.tls`',
               'Disabled; nginx; example frontend and status hosts',
-              'The current routing template gives `/` to frontend and `/api` to API; see warning below.',
+              'The current routing template gives `/` to frontend and `/api` to API; see warning below. One Ingress per host, each its own YAML document.',
             ],
             [
               '`trustedProxyCIDRs`',

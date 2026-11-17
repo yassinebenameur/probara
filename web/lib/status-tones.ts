@@ -529,3 +529,19 @@ export function deliveryOutcomeTone(outcome: string | null | undefined, reason?:
       return 'neutral';
   }
 }
+
+/** Pill tone of a status page custom domain (statusPageDomainState). */
+export function statusPageDomainTone(state: string | null | undefined): StatusTone {
+  switch (state) {
+    case 'verified':
+      return 'success';
+    case 'failing':
+      return 'warning';
+    case 'failed':
+      return 'danger';
+    case 'pending':
+      return 'info';
+    default:
+      return 'neutral';
+  }
+}

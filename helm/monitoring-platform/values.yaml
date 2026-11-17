@@ -620,6 +620,31 @@ statusPage:
   # an entry here.
   extraEnv: []
 
+  # Custom domains: operators add a hostname to a status page in the UI and
+  # create the DNS records it shows (a CNAME to cnameTarget and a TXT
+  # record); the API verifies them, and only verified domains are served.
+  # TLS terminates at the Ingress: list each domain below as well, and the
+  # chart renders one Ingress per domain (needs ingress.enabled), routing it
+  # to the status-page service with its own TLS Secret.
+  #
+  # Host every custom domain must CNAME to (STATUS_PAGE_CNAME_TARGET on the
+  # api). Empty uses the host of baseUrl; with both empty, custom domains
+  # are off.
+  cnameTarget: ""
+  # One entry per custom domain: {host: status.example.org, tlsSecretName:
+  # status-example-org-tls}. Each host must also be verified in the UI; an
+  # Ingress for an unverified host serves nothing but not-found answers.
+  customDomains: []
+  # cert-manager ClusterIssuer that issues the custom domains' certificates
+  # (the cert-manager.io/cluster-issuer annotation on their Ingresses).
+  # Empty: no annotation; create the TLS Secrets yourself, or set the issuer
+  # in ingress.annotations, which these Ingresses carry too.
+  customDomainsClusterIssuer: ""
+  # Match custom domains on X-Forwarded-Host instead of Host
+  # (STATUS_PAGE_TRUST_FORWARDED_HOST), believed only from trustedProxyCIDRs
+  # peers. Only for a proxy in front of the Ingress that rewrites Host.
+  trustForwardedHost: false
+
 # =============================================================================
 # FRONTEND SERVICE
 # =============================================================================

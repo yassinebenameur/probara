@@ -448,3 +448,16 @@ secret comes from an existing Secret), which leaves gated pages closed.
 {{- sha256sum (printf "probara/status-page-session/v1:%s" .Values.secrets.adminJwtSecret) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+STATUS_PAGE_CNAME_TARGET for the api: statusPage.cnameTarget, else the host of
+statusPage.baseUrl (the host the chart's Ingress already serves status pages
+on), else empty, which turns custom domains off.
+*/}}
+{{- define "monitoring-platform.statusPageCnameTarget" -}}
+{{- if .Values.statusPage.cnameTarget -}}
+{{- .Values.statusPage.cnameTarget -}}
+{{- else if .Values.statusPage.baseUrl -}}
+{{- (urlParse .Values.statusPage.baseUrl).hostname -}}
+{{- end -}}
+{{- end }}

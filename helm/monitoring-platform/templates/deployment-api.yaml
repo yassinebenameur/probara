@@ -110,6 +110,17 @@ spec:
         - name: PUBLIC_NATS_URL
           value: {{ . | quote }}
         {{- end }}
+        # Status page custom domains: the CNAME target operators point their
+        # hostnames at (empty turns the feature off), and the status-page
+        # base URL, whose host is refused as a custom domain.
+        {{- with (include "monitoring-platform.statusPageCnameTarget" .) }}
+        - name: STATUS_PAGE_CNAME_TARGET
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.statusPage.baseUrl }}
+        - name: STATUS_PAGE_BASE_URL
+          value: {{ . | quote }}
+        {{- end }}
         # Deploy snippets for private locations reference the worker this
         # release ships, never a floating tag (see api.locationWorkerImage).
         - name: LOCATION_WORKER_IMAGE

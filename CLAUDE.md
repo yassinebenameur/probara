@@ -999,6 +999,25 @@ or imported groups come back empty. Any other path that creates groups through
   The gate passes its visibility on the request (`withPageVisibility`) and
   `cachedPage` rebuilds an entry built under another one; an access change
   invalidates the page, summary and feed together.
+- **Custom domains** (`shared/pagedomains` is the contract; the API alone
+  writes and verifies them in `api/internal/services/statuspagedomains`, TXT +
+  CNAME, DNS only, runner claims with `FOR UPDATE SKIP LOCKED`). On the status
+  page, `CustomHosts` (`custom_host.go`) runs **in front of the mux** and
+  rewrites a verified host onto `/public/status/{slug}/…` (`/sw.js` onto the
+  worker) so the gate, route table and caches apply unchanged; every path
+  there is a sub-route of that one page, so `/_sp_api`, `/metrics` and other
+  slugs are unreachable. Hosts resolve only through the in-memory `hostTable`
+  (`domains.go`: one join through `status_pages`, invalidated by page events
+  above the subscriber's guard, 30 s TTL) — never a per-request query on the
+  Host — and the gate refuses a slug whose page ID differs from the table's
+  (`customHostPageMismatch`). Visitor-facing paths go through `pagePath`,
+  `pageSubPath`, `visitorPath` and `sessionCookieScope` (host-only `/` on a
+  custom domain), never a literal `/public/status/`; the canonical URL
+  (`pageCanonicalURL`, `GetStatusPageFeed`) is the primary domain via
+  `pagedomains.PrimaryHostSQL` on every host, so the slug-keyed render stays
+  host-independent. Push subscriptions keep `origin_host` for their deep link
+  (`payloadsByOrigin`). New custom-host path forms go in
+  `customHostRouteTable` (`custom_host_test.go`).
 
 ## Web UI conventions
 

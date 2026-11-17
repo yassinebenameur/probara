@@ -67,3 +67,48 @@ func TestLoadStatusPageConfig_CookieSecure(t *testing.T) {
 		t.Fatalf("invalid value: err = %v", err)
 	}
 }
+
+// On a custom domain the Secure flag follows STATUS_PAGE_COOKIE_SECURE when
+// set and the request otherwise: an https STATUS_PAGE_BASE_URL describes the
+// platform host only.
+func TestStatusPageConfig_CustomHostCookieSecure(t *testing.T) {
+	on, off := true, false
+	cases := []struct {
+		flag           *bool
+		baseURL        string
+		secure, detect bool
+	}{
+		{nil, "", false, true},
+		{nil, "https://status.example.com", false, true},
+		{&on, "", true, false},
+		{&off, "https://status.example.com", false, false},
+	}
+	for _, c := range cases {
+		cfg := &StatusPageConfig{StatusPageBaseURL: c.baseURL, CookieSecure: c.flag}
+		if secure, detect := cfg.CustomHostCookieSecure(); secure != c.secure || detect != c.detect {
+			t.Errorf("%v/%q: secure=%v detect=%v, want %v %v", c.flag, c.baseURL, secure, detect, c.secure, c.detect)
+		}
+	}
+}
+
+// X-Forwarded-Host is believed only when STATUS_PAGE_TRUST_FORWARDED_HOST
+// says so (default off).
+func TestLoadStatusPageConfig_TrustForwardedHost(t *testing.T) {
+	setRequiredStatusPageEnv(t)
+	t.Setenv("STATUS_PAGE_TRUST_FORWARDED_HOST", "")
+	cfg, err := LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TrustForwardedHost {
+		t.Fatal("trusted X-Forwarded-Host by default")
+	}
+	t.Setenv("STATUS_PAGE_TRUST_FORWARDED_HOST", "true")
+	if cfg, err = LoadStatusPageConfig(); err != nil || !cfg.TrustForwardedHost {
+		t.Fatalf("true: trust=%v err=%v", cfg != nil && cfg.TrustForwardedHost, err)
+	}
+	t.Setenv("STATUS_PAGE_TRUST_FORWARDED_HOST", "maybe")
+	if _, err := LoadStatusPageConfig(); err == nil || !strings.Contains(err.Error(), "STATUS_PAGE_TRUST_FORWARDED_HOST") {
+		t.Fatalf("invalid value: err = %v", err)
+	}
+}

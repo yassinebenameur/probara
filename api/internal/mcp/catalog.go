@@ -33,6 +33,7 @@ func catalog() []spec {
 		deliveryTools(),
 		slaReportScheduleTools(),
 		statusPageAccessTools(),
+		statusPageDomainTools(),
 	} {
 		all = append(all, group...)
 	}

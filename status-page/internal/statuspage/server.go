@@ -31,8 +31,6 @@ type Server struct {
 
 // NewServer creates a new status page server
 func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry *metrics.Registry, dbClient *db.Client) *Server {
-	mux := http.NewServeMux()
-
 	// Initialize service and handlers
 	analyticsRepo := sharedanalytics.NewRepository(dbClient)
 	service := NewService(dbClient, analyticsRepo)
@@ -80,6 +78,9 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 		if sub, err := NewSubscriber(cfg.NATSURL, hub, dbClient, log, renderCache, pushSend); err != nil {
 			log.WithError(err).Error("Failed to initialize status update subscriber; live updates and event-driven cache invalidation are disabled")
 		} else {
+			if handlers.hosts != nil {
+				sub.hosts = handlers.hosts
+			}
 			if err := sub.Start(); err != nil {
 				log.WithError(err).Error("Failed to start status update subscriber; live updates and event-driven cache invalidation are disabled")
 			} else {
@@ -90,33 +91,7 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	}
 
 	// Register routes
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
-	mux.HandleFunc("/metrics", metricsRegistry.Handler().ServeHTTP)
-
-	// API proxy for the in-page status page customizer (optional via STATUS_PAGE_API_BASE_URL)
-	mux.HandleFunc("/_sp_api/", handlers.HandleAPIProxy)
-
-	// The service worker must be a real URL -- it is the one asset the page
-	// cannot inline. It is served from /public/status/ rather than from under
-	// a slug because a worker's default scope is its own directory: at
-	// /public/status/{slug}/sw.js the max scope would be
-	// /public/status/{slug}/, which is NOT a prefix of the page URL
-	// /public/status/{slug}, so registration would succeed and control
-	// nothing. From here the max scope covers every page, and the client
-	// narrows it to its own slug.
-	mux.HandleFunc("/public/status/sw.js", handlers.HandlePushServiceWorker)
-
-	// Public status page routes. This must stay registered last of the
-	// /public/status/ patterns; ServeMux resolves most-specific-first, so the
-	// exact sw.js pattern wins over this prefix.
-	mux.HandleFunc("/public/status/", handlers.HandleStatusPage)
+	mux := handlers.routes(metricsRegistry.Handler())
 
 	readTimeout := cfg.ReadTimeout
 	if readTimeout <= 0 {
@@ -129,7 +104,9 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 
 	// nosniff, referrer and permissions policies and HSTS on every response;
 	// each page's CSP and framing policy is set by its handler (csp.go).
-	handler := securityheaders.StatusPage(clientip.NewResolver(cfg.TrustedProxyCIDRs), cfg.HSTSMaxAge)(mux)
+	// A request on a verified custom domain is rewritten onto its page's
+	// slug paths before any route sees it (custom_host.go).
+	handler := securityheaders.StatusPage(clientip.NewResolver(cfg.TrustedProxyCIDRs), cfg.HSTSMaxAge)(handlers.CustomHosts(mux))
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.HTTPPort),
@@ -149,6 +126,43 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 		pushSender:   pushSend,
 		sseConnected: sseConnected,
 	}
+}
+
+// routes is the service's mux. CustomHosts wraps it, so on a custom domain
+// only the page's own routes are reachable through it.
+func (h *Handlers) routes(metricsHandler http.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	mux.HandleFunc("/metrics", metricsHandler.ServeHTTP)
+
+	// API proxy for the in-page status page customizer (optional via STATUS_PAGE_API_BASE_URL)
+	mux.HandleFunc("/_sp_api/", h.HandleAPIProxy)
+
+	// The service worker must be a real URL -- it is the one asset the page
+	// cannot inline. It is served from /public/status/ rather than from under
+	// a slug because a worker's default scope is its own directory: at
+	// /public/status/{slug}/sw.js the max scope would be
+	// /public/status/{slug}/, which is NOT a prefix of the page URL
+	// /public/status/{slug}, so registration would succeed and control
+	// nothing. From here the max scope covers every page, and the client
+	// narrows it to its own slug.
+	mux.HandleFunc("/public/status/sw.js", h.HandlePushServiceWorker)
+
+	// Public status page routes. This must stay registered last of the
+	// /public/status/ patterns; ServeMux resolves most-specific-first, so the
+	// exact sw.js pattern wins over this prefix.
+	mux.HandleFunc("/public/status/", h.HandleStatusPage)
+
+	// Anything else, on any host, gets the answer an unknown slug gets.
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { writeNotFound(w) })
+	return mux
 }
 
 // Start starts the HTTP server

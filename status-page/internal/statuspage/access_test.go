@@ -234,6 +234,9 @@ var routeTable = []struct {
 	{"/_sp_api/", classProxyGated, ""},
 	{"/public/status/sw.js", classNoPageData, ""},
 	{"/public/status/", classDispatcher, ""},
+	// custom_host.go: on a custom domain the worker is /sw.js; every other
+	// path there is one of the sub-routes below (customHostRouteTable).
+	{"/sw.js", classNoPageData, ""},
 	// HandleStatusPage sub-routes (after /public/status/{slug}).
 	{"", classGated, http.MethodGet},
 	{"/", classGated, http.MethodGet},
