@@ -19,6 +19,7 @@ import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
 import SectionList from './SectionList';
 import PagePreview from './PagePreview';
+import { SeoSection, ShareSection } from './SearchAndShare';
 import {
   DEFAULT_PRIMARY,
   DEFAULT_SECONDARY,
@@ -60,6 +61,11 @@ function snapshot(state: FormState): string {
       secondary_color: state.basics.secondary_color.trim(),
     },
     enablePushNotifications: state.enablePushNotifications,
+    seo: {
+      title: state.seo.title.trim(),
+      description: state.seo.description.trim(),
+      allowIndexing: state.seo.allowIndexing,
+    },
     sections: state.sections.map((section) => ({
       title: section.title.trim(),
       monitors: section.monitors.map((m) => ({
@@ -290,7 +296,13 @@ export default function StatusPageForm({
       monitor_ids: orderedMonitorIds,
       monitor_display_names: monitorDisplayNames,
       sections: normalizedSections,
-      settings: { enable_push_notifications: state.enablePushNotifications },
+      // '' clears an SEO override; the API trims and stores nothing.
+      settings: {
+        enable_push_notifications: state.enablePushNotifications,
+        seo_title: state.seo.title.trim(),
+        seo_description: state.seo.description.trim(),
+        allow_search_indexing: state.seo.allowIndexing,
+      },
     };
 
     await onSubmit(requestData);
@@ -436,6 +448,22 @@ export default function StatusPageForm({
           dispatch={dispatch}
           onAddSection={handleAddSection}
         />
+      </div>
+
+      <div className="min-w-0 space-y-6 xl:col-start-1 xl:row-start-3">
+        <SeoSection
+          pageTitle={state.basics.title}
+          value={state.seo}
+          onChange={(value) => dispatch({ type: 'set_seo', value })}
+        />
+        {/* From the saved page: its links and badges exist only once saved. */}
+        {statusPage && (
+          <ShareSection
+            statusPage={statusPage}
+            publicUrl={resolveStatusPagePublicUrl(statusPage)}
+            monitorsById={monitorsById}
+          />
+        )}
       </div>
 
       {/* Pinned to the viewport only while there is something to save: a clean
