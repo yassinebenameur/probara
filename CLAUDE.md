@@ -1394,9 +1394,10 @@ or imported groups come back empty. Any other path that creates groups through
   `make openapi` lists the operations still without a typed response. Typed
   success responses come from `successResponses` (`openapi_responses.go`):
   add an entry only after reading the handler, never guess one, and name the
-  type the handler writes (no map literals, no copies). A generation failure
-  at runtime only makes the endpoint answer 503. A route an
-  agent must not call but the REST API documents goes in `openAPIRoutes`
+  type the handler writes (no map literals, no copies); an error answer
+  richer than the envelope goes in `operationErrors`, same rule. A
+  generation failure at runtime only makes the endpoint answer 503. A route
+  an agent must not call but the REST API documents goes in `openAPIRoutes`
   (and `notExposed`).
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).

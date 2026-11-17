@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"reflect"
 
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
@@ -261,10 +262,42 @@ var successResponses = map[string]successResponse{
 	"update_oidc_group_mapping": ok[models.OIDCGroupMapping](),
 	"delete_oidc_group_mapping": noContent,
 
+	// Workspaces, sign-in security, status page access, config as code
+	"list_workspace_overview":         ok[models.WorkspaceOverviewResponse](),
+	"create_tenant":                   created[models.Tenant](),
+	"rename_tenant":                   ok[models.Tenant](),
+	"delete_tenant":                   ok[models.DeleteWorkspaceResponse](),
+	"unlock_user":                     ok[models.UnlockUserResponse](),
+	"list_user_sessions":              ok[models.AdminSessionListResponse](),
+	"revoke_user_session":             noContent,
+	"revoke_user_sessions":            ok[models.RevokeSessionsResponse](),
+	"list_status_page_access_tokens":  ok[models.StatusPageAccessTokenListResponse](),
+	"create_status_page_access_token": created[models.CreatedStatusPageAccessToken](),
+	"revoke_status_page_access_token": noContent,
+	"plan_monitor_apply":              ok[models.MonitorApplyPlan](),
+	"apply_monitors":                  ok[models.MonitorApplyResult](),
+
 	// Routes documented outside the catalog (openapi_routes.go)
 	"push_heartbeat":        ok[models.PushAcceptedResponse](),
 	"push_heartbeat_report": ok[models.PushAcceptedResponse](),
 	"export_otlp_metrics":   mediaAnswer("application/x-protobuf", "application/json"),
 	"stream_alerts":         mediaAnswer("text/event-stream"),
 	"get_openapi_document":  mediaAnswer("application/json"),
+}
+
+// operationErrors are error answers of catalog operations whose handler
+// writes more than the shared error envelope, keyed by operation ID. Like
+// successResponses, add one only after reading the handler.
+var operationErrors = map[string]map[int]routeError{
+	// import.writeApplyError: a refused apply answers with the plan it
+	// computed plus error and message, and wrote nothing.
+	"apply_monitors": {
+		422: {Description: "The document is invalid (error invalid_document): the body is the plan with each " +
+			"monitor's errors. Nothing was written.", Bodies: []reflect.Type{reflect.TypeFor[models.MonitorApplyResult]()}},
+		409: {Description: "Refused, nothing written. With the plan and the reason: the monitors changed since the " +
+			"fingerprinted plan (plan_changed), prune or a probable key rename needs force (prune_refused, " +
+			"probable_rename), a monitor was saved meanwhile (apply_conflict; retry). In the error envelope: a key " +
+			"already taken (key_taken).",
+			Bodies: []reflect.Type{reflect.TypeFor[models.MonitorApplyResult](), reflect.TypeFor[apierrors.ErrorResponse]()}},
+	},
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	mcpserver "github.com/yassinebenameur/probara/api/internal/mcp"
 	"github.com/yassinebenameur/probara/shared/config"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
 // TestOpenAPIServedToAPIKeys: any valid API key, even read scope, gets the
@@ -54,15 +56,17 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	key := f.apiKey(f.tenantA, "write")
 	doc := loadOpenAPIDoc(t)
 
-	check := func(method, route, target string, body any, want int) []byte {
+	// checkAs calls one route with a credential (an API key, or a session's
+	// cookie client) and validates the answer against the document.
+	checkAs := func(c caller, method, route, target string, body any, want int) []byte {
 		t.Helper()
-		status, raw, contentType := f.do(t, key, method, target, body)
+		status, raw, contentType := c(method, target, body)
 		if status != want {
 			t.Fatalf("%s %s: %d, want %d: %s", method, target, status, want, raw)
 		}
 		resp, ok := doc.response(method, route, status)
 		if !ok {
-			t.Fatalf("%s %s: the document has no %d success response", method, route, status)
+			t.Fatalf("%s %s: the document has no own %d response", method, route, status)
 		}
 		content, _ := resp["content"].(map[string]any)
 		media, _, _ := mime.ParseMediaType(contentType)
@@ -89,6 +93,13 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 			}
 		}
 		return raw
+	}
+	withKey := func(method, target string, body any) (int, []byte, string) {
+		return f.do(t, key, method, target, body)
+	}
+	check := func(method, route, target string, body any, want int) []byte {
+		t.Helper()
+		return checkAs(withKey, method, route, target, body, want)
 	}
 	idOf := func(raw []byte) string {
 		t.Helper()
@@ -204,7 +215,72 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 		t.Errorf("GET /tenants must list the session scheme only, got %v", security)
 	}
 
+	// A single check result.
+	resultID := testutil.InsertCheckResult(f.ctx, t, f.db, f.tenantA, uuid.MustParse(monitorID),
+		time.Now().Add(-time.Minute), "success", "monitor", testutil.IntPtr(120))
+	check(get, "/monitors/{id}/results/{resultId}", m+"/results/"+resultID.String(), nil, ok)
+
+	// Status page kiosk tokens: create (the one answer with the token), list, revoke.
+	tokenID := idOf(check(post, "/status-pages/{id}/access-tokens", "/api/v1/status-pages/"+pageID+"/access-tokens",
+		map[string]any{"label": "lobby screen"}, created))
+	nonEmptyList(check(get, "/status-pages/{id}/access-tokens", "/api/v1/status-pages/"+pageID+"/access-tokens", nil, ok))
+	check(post, "/status-pages/{id}/access-tokens/{accessTokenId}/revoke",
+		"/api/v1/status-pages/"+pageID+"/access-tokens/"+tokenID+"/revoke", nil, noContent)
+
+	// Config as code: plan, apply with the plan's fingerprint, and a refused
+	// apply (stale fingerprint), whose 409 carries the plan.
+	document := "kind: monitor_export\nversion: 2\nmonitors:\n  - key: openapi-apply\n    name: Applied\n" +
+		"    type: http\n    interval_seconds: 60\n    timeout_seconds: 10\n    config: {url: \"https://example.com\", method: GET}\n"
+	var plan struct {
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.Unmarshal(check(post, "/monitors/apply/plan", "/api/v1/monitors/apply/plan",
+		map[string]any{"document": document}, ok), &plan); err != nil || plan.Fingerprint == "" {
+		t.Fatalf("plan fingerprint: %v", err)
+	}
+	check(post, "/monitors/apply", "/api/v1/monitors/apply",
+		map[string]any{"document": document, "fingerprint": plan.Fingerprint}, ok)
+	check(post, "/monitors/apply", "/api/v1/monitors/apply",
+		map[string]any{"document": strings.Replace(document, "name: Applied", "name: Renamed", 1), "fingerprint": plan.Fingerprint},
+		http.StatusConflict)
+
 	check(post, "/monitors/bulk/delete", "/api/v1/monitors/bulk/delete", map[string]any{"monitor_ids": []string{monitorID}}, ok)
+
+	// Superadmin session: workspace management, sign-in lockout, sessions.
+	f.createUser("openapi-root", "superadmin", nil)
+	var rootID string
+	if err := f.db.QueryRowContext(f.ctx, `SELECT id FROM admin_users WHERE username = 'openapi-root'`).Scan(&rootID); err != nil {
+		t.Fatal(err)
+	}
+	session := f.sessionCaller(t, "openapi-root", "correct-horse-battery")
+	checkAs(session, get, "/tenants", "/api/v1/tenants", nil, ok)
+	checkAs(session, get, "/tenants/overview", "/api/v1/tenants/overview", nil, ok)
+	workspaceID := idOf(checkAs(session, post, "/tenants", "/api/v1/tenants", map[string]any{"name": "OpenAPI workspace"}, created))
+	checkAs(session, patch, "/tenants/{id}", "/api/v1/tenants/"+workspaceID, map[string]any{"name": "OpenAPI workspace 2"}, ok)
+	checkAs(session, del, "/tenants/{id}", "/api/v1/tenants/"+workspaceID, map[string]any{"confirm_name": "OpenAPI workspace 2"}, ok)
+	checkAs(session, post, "/users/{id}/unlock", "/api/v1/users/"+rootID+"/unlock", nil, ok)
+	nonEmptyList(checkAs(session, get, "/users/{id}/sessions", "/api/v1/users/"+rootID+"/sessions", nil, ok))
+	checkAs(session, del, "/users/{id}/sessions", "/api/v1/users/"+rootID+"/sessions", nil, ok)
+}
+
+// caller sends one request with some credential and returns status, body
+// and content type.
+type caller func(method, target string, body any) (int, []byte, string)
+
+// sessionCaller signs in through the browser login and returns a caller
+// that sends the session cookie.
+func (f *mcpFixture) sessionCaller(t *testing.T, username, password string) caller {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := &http.Client{Jar: jar}
+	postJSON(t, browser, f.http.URL+"/api/v1/auth/login", nil,
+		map[string]any{"username": username, "password": password}, http.StatusOK, nil)
+	return func(method, target string, body any) (int, []byte, string) {
+		return send(t, browser, f.http.URL+target, method, "", body)
+	}
 }
 
 // startJetStream runs an in-process NATS server with the check-job stream,
@@ -248,6 +324,11 @@ func keysOf(m map[string]any) []string {
 
 func (f *mcpFixture) do(t *testing.T, key, method, target string, body any) (int, []byte, string) {
 	t.Helper()
+	return send(t, http.DefaultClient, f.http.URL+target, method, key, body)
+}
+
+func send(t *testing.T, client *http.Client, url, method, key string, body any) (int, []byte, string) {
+	t.Helper()
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -256,15 +337,17 @@ func (f *mcpFixture) do(t *testing.T, key, method, target string, body any) (int
 		}
 		reader = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, f.http.URL+target, reader)
+	req, err := http.NewRequest(method, url, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,12 +382,9 @@ func loadOpenAPIDoc(t *testing.T) loadedOpenAPI {
 	return loadedOpenAPI{paths: doc.Paths, schemas: doc.Components.Schemas}
 }
 
-// response returns the document's response object for one success status
-// of an operation.
+// response returns the document's own response object for one status of an
+// operation (shared $ref responses are not resolved).
 func (d loadedOpenAPI) response(method, route string, status int) (map[string]any, bool) {
-	if status >= 300 {
-		return nil, false
-	}
 	op, _ := d.paths[route][strings.ToLower(method)].(map[string]any)
 	responses, _ := op["responses"].(map[string]any)
 	resp, ok := responses[strconv.Itoa(status)].(map[string]any)

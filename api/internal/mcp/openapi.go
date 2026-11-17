@@ -100,6 +100,11 @@ func buildOpenAPI(tools []*tool, documented []operation, version string) ([]byte
 		tags[tagOf(op.spec.Route)] = true
 		described[routeKey(op.spec.Method, apiPrefix+op.spec.Route)] = true
 	}
+	for name := range operationErrors {
+		if _, ok := successResponses[name]; !ok {
+			return nil, nil, fmt.Errorf("openapi: operationErrors names %q, which has no success response", name)
+		}
+	}
 	for name := range successResponses {
 		found := false
 		for _, op := range ops {
@@ -303,11 +308,9 @@ func (b *docBuilder) nameTypes(ops []operation) error {
 				types = append(types, c)
 			}
 		}
-		if op.doc != nil {
-			for _, e := range op.doc.Errors {
-				for _, body := range e.Bodies {
-					types = append(types, componentType(body))
-				}
+		for _, e := range op.errors() {
+			for _, body := range e.Bodies {
+				types = append(types, componentType(body))
 			}
 		}
 	}
@@ -694,14 +697,12 @@ func (b *docBuilder) responses(op operation, public bool) (map[string]any, error
 	refTo := func(name string) map[string]any {
 		return map[string]any{"$ref": "#/components/responses/" + name}
 	}
-	if op.doc != nil {
-		for status, e := range op.doc.Errors {
-			r, err := b.routeError(e)
-			if err != nil {
-				return nil, err
-			}
-			out[strconv.Itoa(status)] = r
+	for status, e := range op.errors() {
+		r, err := b.routeError(e)
+		if err != nil {
+			return nil, err
 		}
+		out[strconv.Itoa(status)] = r
 	}
 	// A documented route's own error answers win over the shared ones.
 	setDefault := func(status, name string) {
@@ -719,9 +720,19 @@ func (b *docBuilder) responses(op operation, public bool) (map[string]any, error
 	return out, nil
 }
 
-// routeError renders a documented route's own error answer: JSON bodies
-// (one schema, or oneOf when the route answers in two shapes) or a media
-// type without a schema.
+// errors are the operation's own error answers: a documented route's, or a
+// catalog tool's operationErrors entry.
+func (op operation) errors() map[int]routeError {
+	if op.doc != nil {
+		return op.doc.Errors
+	}
+	return operationErrors[op.spec.Name]
+}
+
+// routeError renders an operation's own error answer: JSON bodies (one
+// schema, or anyOf when the handler answers in more than one shape; anyOf
+// because a richer shape can also satisfy the envelope) or a media type
+// without a schema.
 func (b *docBuilder) routeError(e routeError) (map[string]any, error) {
 	r := map[string]any{"description": e.Description}
 	switch {
@@ -736,7 +747,7 @@ func (b *docBuilder) routeError(e routeError) (map[string]any, error) {
 		}
 		schema := shapes[0]
 		if len(shapes) > 1 {
-			schema = map[string]any{"oneOf": shapes}
+			schema = map[string]any{"anyOf": shapes}
 		}
 		r["content"] = map[string]any{"application/json": map[string]any{"schema": schema}}
 	case e.Media != "":
