@@ -58,7 +58,7 @@ func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) f
 				claims, err := auth.ParseAdminToken(cookie.Value, jwtSecret)
 				if err == nil && claims.AdminID != "" {
 					if adminID, err := uuid.Parse(claims.AdminID); err == nil {
-						r, ok := checkSession(w, r, dbClient, log, adminID, claims.SessionID)
+						r, ok := checkSession(w, r, dbClient, log, adminID, claims)
 						if !ok {
 							return
 						}
@@ -99,6 +99,11 @@ func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) f
 			ctx = ctxpkg.WithActorType(ctx, ctxpkg.ActorTypeAPIKey)
 			ctx = ctxpkg.WithAPIKeyID(ctx, identity.KeyID)
 			ctx = ctxpkg.WithAuthScope(ctx, identity.Scope)
+			var keyExpiry time.Time
+			if identity.ExpiresAt != nil {
+				keyExpiry = *identity.ExpiresAt
+			}
+			ctx = WithCredentialCheck(ctx, apiKeyRecheck(dbClient, identity.KeyID), keyExpiry)
 
 			touchAPIKeyLastUsed(dbClient, identity.KeyID)
 
@@ -150,6 +155,7 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	}
 
 	ctx := ctxpkg.WithAdminID(r.Context(), adminID.String())
+	ctx = WithCredentialCheck(ctx, adminIdentityRecheck(dbClient, adminID, tenantUUID), time.Time{})
 	ctx = ctxpkg.WithActorType(ctx, ctxpkg.ActorTypeAdminUser)
 	ctx = ctxpkg.WithPlatformRole(ctx, platformRole)
 
@@ -207,6 +213,7 @@ func handleMCPTokenRequest(w http.ResponseWriter, r *http.Request, next http.Han
 		r = r.Clone(r.Context())
 		r.Header.Set("X-Tenant-ID", identity.TenantID.String())
 	}
+	r = r.WithContext(WithCredentialCheck(r.Context(), mcpTokenRecheck(dbClient, token), time.Time{}))
 	scoped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r.WithContext(ctxpkg.WithAuthScope(r.Context(), identity.Scope)))
 	})

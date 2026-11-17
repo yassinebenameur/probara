@@ -4,7 +4,13 @@ package main
 
 import (
 	"context"
+	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/testutil"
@@ -111,5 +117,46 @@ func TestUpsertSuperadmin_LiftsLockoutAndEndsSessions(t *testing.T) {
 	}
 	if !familyRevoked || !tokenRevoked {
 		t.Fatalf("session revoked = %v/%v, want both", familyRevoked, tokenRevoked)
+	}
+}
+
+// The break-glass tool must work on a database whose migration job failed
+// before the lockout and session migrations (000117, 000118) ran.
+func TestUpsertSuperadmin_WorksBeforeTheIdentityMigrations(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+
+	_, file, _, _ := runtime.Caller(0)
+	driver, err := postgres.WithInstance(client.DB, &postgres.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := migrate.NewWithDatabaseInstance("file://"+filepath.Join(filepath.Dir(file), "..", "..", "shared", "db", "migrations"), "postgres", driver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Not m.Close(): the driver would close client.DB, which teardown owns.
+	if err := m.Migrate(113); err != nil {
+		t.Fatalf("migrate down to 113: %v", err)
+	}
+
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_users (username, password_hash, platform_role) VALUES ('ops', 'old-hash', 'member')
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertSuperadmin(ctx, client, "ops", "new-hash"); err != nil {
+		t.Fatalf("upsertSuperadmin() on the old schema: %v", err)
+	}
+	if err := upsertSuperadmin(ctx, client, "fresh", "hash"); err != nil {
+		t.Fatalf("upsertSuperadmin() of a new user on the old schema: %v", err)
+	}
+	var role, hash string
+	if err := client.QueryRowContext(ctx, `SELECT platform_role, password_hash FROM admin_users WHERE username = 'ops'`).Scan(&role, &hash); err != nil {
+		t.Fatal(err)
+	}
+	if role != auth.PlatformRoleSuperadmin || hash != "new-hash" {
+		t.Fatalf("got %s/%s, want superadmin/new-hash", role, hash)
 	}
 }

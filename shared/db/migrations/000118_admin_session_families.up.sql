@@ -55,7 +55,10 @@ WHERE f.id = s.id;
 
 -- An API binary older than this migration (rolling deploy) inserts tokens
 -- without a family. Give each such row its own family rather than leave it
--- unusable and sign the user out.
+-- unusable and sign the user out. Rollout-only: an old binary also honours
+-- tokens of revoked families, so revocations do not hold until every API
+-- replica runs the new version. Drop this trigger and its function in a
+-- migration of a later release, once no older API can still be running.
 CREATE FUNCTION admin_sessions_default_family() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN

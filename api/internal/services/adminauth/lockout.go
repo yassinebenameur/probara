@@ -16,10 +16,13 @@ import (
 
 // Password sign-in lockout. The streak and the lock live on the user row
 // (migration 000117), so every API replica sees the same state and it
-// survives restarts. Fixed policy, no configuration: LockoutThreshold
-// consecutive failures lock the account for LockoutDuration; a successful
-// sign-in resets the streak, the lock expires on its own, and a superadmin
-// can lift it sooner (UnlockUser). SSO sign-ins and API keys never pass here.
+// survives restarts, and every time is the database clock's -- the same clock
+// the users list and session expiry read -- so replicas with skewed clocks
+// still agree. Fixed policy, no configuration: LockoutThreshold consecutive
+// failures lock the account for LockoutDuration; a successful sign-in resets
+// the streak, a failure more than LockoutStreakMemory after the previous one
+// starts a new streak, the lock expires on its own, and a superadmin can
+// lift it sooner (UnlockUser). SSO sign-ins and API keys never pass here.
 //
 // The answer never tells an unknown username, a wrong password and a locked
 // account apart (Authenticate's callers send one generic 401 for every
@@ -29,6 +32,9 @@ import (
 const (
 	LockoutThreshold = 10
 	LockoutDuration  = 15 * time.Minute
+	// LockoutStreakMemory forgets a streak after this long without a
+	// failure, so occasional typos spread over weeks never add up to a lock.
+	LockoutStreakMemory = 24 * time.Hour
 )
 
 // ErrInvalidCredentials is every refused password sign-in. A refusal is
@@ -56,26 +62,37 @@ func (f *LoginFailure) Error() string { return ErrInvalidCredentials.Error() }
 // Is lets errors.Is(err, ErrInvalidCredentials) match every refusal.
 func (f *LoginFailure) Is(target error) bool { return target == ErrInvalidCredentials }
 
+// lockoutNow is the lockout's "now" in SQL: the database clock, moved by
+// $2 seconds -- always 0 outside tests (Service.clockOffset, the one seam
+// tests use to move time).
+const lockoutNow = `(NOW() + make_interval(secs => $2))`
+
 // countFailureSet records one failed attempt on an unlocked row: the streak
-// grows, and the attempt that reaches the threshold locks the account and
-// restarts the streak, so another full streak is needed after the lock ends.
-// It reads the row's current values, so when concurrent attempts serialize
-// on the row lock each sees the previous one's count: they cannot undercount.
-// $2 now, $3 threshold, $4 lock seconds.
+// grows (or restarts after LockoutStreakMemory of quiet), and the attempt
+// that reaches the threshold locks the account and restarts the streak, so
+// another full streak is needed after the lock ends. It reads the row's
+// current values, so when concurrent attempts serialize on the row lock each
+// sees the previous one's count: they cannot undercount.
+// $3 threshold, $4 lock seconds, $5 streak memory seconds.
 const countFailureSet = `
-	SET failed_login_count = CASE WHEN failed_login_count + 1 >= $3 THEN 0 ELSE failed_login_count + 1 END,
-	    locked_until = CASE WHEN failed_login_count + 1 >= $3
-	                        THEN $2::timestamptz + make_interval(secs => $4)
+	SET failed_login_count = CASE WHEN ` + streakAfterFailure + ` >= $3 THEN 0 ELSE ` + streakAfterFailure + ` END,
+	    last_failed_login_at = ` + lockoutNow + `,
+	    locked_until = CASE WHEN ` + streakAfterFailure + ` >= $3
+	                        THEN ` + lockoutNow + ` + make_interval(secs => $4)
 	                        ELSE locked_until END
 `
 
+const streakAfterFailure = `(CASE
+	WHEN last_failed_login_at IS NULL OR last_failed_login_at <= ` + lockoutNow + ` - make_interval(secs => $5)
+	THEN 1 ELSE failed_login_count + 1 END)`
+
 // unlockedRow limits a counting UPDATE to a password account that is not
-// locked at $2. A locked row matches nothing, so attempts during a lock
+// locked now. A locked row matches nothing, so attempts during a lock
 // neither extend it nor count toward the next one.
 const unlockedRow = `
 	disabled_at IS NULL
 	AND password_hash IS NOT NULL AND password_hash <> ''
-	AND (locked_until IS NULL OR locked_until <= $2)
+	AND (locked_until IS NULL OR locked_until <= ` + lockoutNow + `)
 `
 
 // reserveAttemptQuery counts a sign-in attempt as a failure BEFORE the
@@ -83,20 +100,20 @@ const unlockedRow = `
 // Reserving first bounds concurrent guessing: parallel requests cannot all
 // read "not locked yet" and all be compared, because the one that reaches the
 // threshold locks the row for every request after it.
-var reserveAttemptQuery = `
+const reserveAttemptQuery = `
 	UPDATE admin_users
 	` + countFailureSet + `
 	WHERE username = $1 AND ` + unlockedRow + `
 	RETURNING id, username, password_hash, created_at, updated_at, last_login_at, disabled_at,
-	          failed_login_count, locked_until
+	          failed_login_count, locked_until, COALESCE(locked_until > ` + lockoutNow + `, FALSE)
 `
 
 // recordFailureQuery is the same count for a known user, by id.
-var recordFailureQuery = `
+const recordFailureQuery = `
 	UPDATE admin_users
 	` + countFailureSet + `
 	WHERE id = $1 AND ` + unlockedRow + `
-	RETURNING failed_login_count, locked_until
+	RETURNING failed_login_count, locked_until, COALESCE(locked_until > ` + lockoutNow + `, FALSE)
 `
 
 // lockedAccountQuery tells a locked password account from no account at all,
@@ -106,14 +123,20 @@ const lockedAccountQuery = `
 	FROM admin_users
 	WHERE username = $1 AND disabled_at IS NULL
 	  AND password_hash IS NOT NULL AND password_hash <> ''
-	  AND locked_until > $2
-`
+	  AND locked_until > ` + lockoutNow
 
 const clearFailuresQuery = `
 	UPDATE admin_users
-	SET failed_login_count = 0, locked_until = NULL
-	WHERE id = $1 AND (failed_login_count <> 0 OR locked_until IS NOT NULL)
+	SET failed_login_count = 0, last_failed_login_at = NULL, locked_until = NULL
+	WHERE id = $1 AND (failed_login_count <> 0 OR last_failed_login_at IS NOT NULL OR locked_until IS NOT NULL)
 `
+
+// offsetSeconds is lockoutNow's $2.
+func (s *Service) offsetSeconds() float64 { return s.clockOffset.Seconds() }
+
+func (s *Service) countArgs(key any) []any {
+	return []any{key, s.offsetSeconds(), LockoutThreshold, LockoutDuration.Seconds(), LockoutStreakMemory.Seconds()}
+}
 
 // Authenticate checks a password sign-in under the lockout. A refusal is a
 // *LoginFailure (errors.Is ErrInvalidCredentials); any other error is
@@ -124,18 +147,16 @@ const clearFailuresQuery = `
 // a failed second factor counts through RecordFailedAttempt, toward the same
 // lock.
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*models.AdminUser, error) {
-	now := s.clock()
 	var (
 		user         models.AdminUser
 		passwordHash string
 		count        int
 		lockedUntil  sql.NullTime
+		lockedNow    bool
 	)
-	err := s.db.QueryRowContext(ctx, reserveAttemptQuery,
-		username, now, LockoutThreshold, LockoutDuration.Seconds(),
-	).Scan(
+	err := s.db.QueryRowContext(ctx, reserveAttemptQuery, s.countArgs(username)...).Scan(
 		&user.ID, &user.Username, &passwordHash, &user.CreatedAt, &user.UpdatedAt,
-		&user.LastLoginAt, &user.DisabledAt, &count, &lockedUntil,
+		&user.LastLoginAt, &user.DisabledAt, &count, &lockedUntil, &lockedNow,
 	)
 	switch {
 	case pgerr.IsMissingSchema(err):
@@ -143,7 +164,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		// lockout state to keep.
 		return s.authenticateWithoutLockout(ctx, username, password)
 	case errors.Is(err, sql.ErrNoRows):
-		return nil, s.refuseWithoutAccount(ctx, username, password, now)
+		return nil, s.refuseWithoutAccount(ctx, username, password)
 	case err != nil:
 		return nil, fmt.Errorf("failed to record sign-in attempt: %w", err)
 	}
@@ -154,7 +175,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	}
 	if !match {
 		failure := &LoginFailure{UserID: &user.ID, FailedAttempts: count}
-		if lockedUntil.Valid && lockedUntil.Time.After(now) {
+		if lockedNow {
 			failure.LockedNow = true
 			failure.LockedUntil = lockedUntil.Time
 		}
@@ -169,11 +190,11 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 // refuseWithoutAccount answers an attempt that counted nothing: the username
 // names no password account (unknown, SSO-only or disabled), or a locked one.
 // It costs the same bcrypt comparison as a wrong password.
-func (s *Service) refuseWithoutAccount(ctx context.Context, username, password string, now time.Time) error {
+func (s *Service) refuseWithoutAccount(ctx context.Context, username, password string) error {
 	failure := &LoginFailure{}
 	var id uuid.UUID
 	var until time.Time
-	if err := s.db.QueryRowContext(ctx, lockedAccountQuery, username, now).Scan(&id, &until); err == nil {
+	if err := s.db.QueryRowContext(ctx, lockedAccountQuery, username, s.offsetSeconds()).Scan(&id, &until); err == nil {
 		failure.UserID = &id
 		failure.Locked = true
 		failure.LockedUntil = until
@@ -186,12 +207,11 @@ func (s *Service) refuseWithoutAccount(ctx context.Context, username, password s
 // second factor) toward the same lock as wrong passwords. A locked account
 // counts nothing; the result says whether this failure locked it.
 func (s *Service) RecordFailedAttempt(ctx context.Context, userID uuid.UUID) (*LoginFailure, error) {
-	now := s.clock()
 	failure := &LoginFailure{UserID: &userID}
 	var lockedUntil sql.NullTime
-	err := s.db.QueryRowContext(ctx, recordFailureQuery,
-		userID, now, LockoutThreshold, LockoutDuration.Seconds(),
-	).Scan(&failure.FailedAttempts, &lockedUntil)
+	var lockedNow bool
+	err := s.db.QueryRowContext(ctx, recordFailureQuery, s.countArgs(userID)...).
+		Scan(&failure.FailedAttempts, &lockedUntil, &lockedNow)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		failure.Locked = true
@@ -199,7 +219,7 @@ func (s *Service) RecordFailedAttempt(ctx context.Context, userID uuid.UUID) (*L
 	case err != nil:
 		return nil, fmt.Errorf("failed to record sign-in attempt: %w", err)
 	}
-	if lockedUntil.Valid && lockedUntil.Time.After(now) {
+	if lockedNow {
 		failure.LockedNow = true
 		failure.LockedUntil = lockedUntil.Time
 	}
@@ -219,11 +239,11 @@ func (s *Service) UnlockUser(ctx context.Context, userID uuid.UUID) (bool, error
 	var wasLocked bool
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE admin_users u
-		SET failed_login_count = 0, locked_until = NULL
+		SET failed_login_count = 0, last_failed_login_at = NULL, locked_until = NULL
 		FROM (SELECT id, locked_until FROM admin_users WHERE id = $1 FOR UPDATE) prior
 		WHERE u.id = prior.id
-		RETURNING COALESCE(prior.locked_until > $2, FALSE)
-	`, userID, s.clock()).Scan(&wasLocked)
+		RETURNING COALESCE(prior.locked_until > `+lockoutNow+`, FALSE)
+	`, userID, s.offsetSeconds()).Scan(&wasLocked)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, ErrUserNotFound

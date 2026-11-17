@@ -122,7 +122,7 @@ export const API_PAGE: DocPage = {
           columns: ["Public authentication route", "Purpose"],
           rows: [
             ["`POST /api/v1/auth/login`", "Local username/password login; every refusal (unknown user, wrong password, [locked account](/docs/security/#sign-in-lockout-sessions)) is the same `401`"],
-            ["`POST /api/v1/auth/refresh`", "Rotate the refresh token inside its session; a rotated token presented again after 60 seconds signs the session out"],
+            ["`POST /api/v1/auth/refresh`", "Rotate the refresh token inside its session; a token rotated less than 60 seconds ago gets an access token only (no new refresh cookie), and one presented after that signs the session out"],
             ["`POST /api/v1/auth/logout`", "Sign the current session out (its refresh and access tokens) and clear cookies"],
             ["`GET /api/v1/auth/me`", "Read the current session user when present (`401` once the session is signed out)"],
             ["`GET /api/v1/auth/oidc/status`", "Report OIDC availability"],

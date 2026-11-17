@@ -41,13 +41,16 @@ const (
 	RevokeReasonRefreshReuse  = "refresh_reuse"
 )
 
-// refreshReuseGrace is how long a rotated refresh token is still accepted
-// after rotation. Concurrent refreshes race: when the access token expires,
-// parallel 401 retries and other browser tabs all POST /refresh with the same
-// cookie, only one rotation can win, and without a reuse interval the losers
-// would be treated as stolen. Past it, presenting a rotated token is reuse
-// (RefreshSession). The grace never outlives the family: a revoked sign-in
-// accepts none of its tokens.
+// refreshReuseGrace is how long a rotated refresh token still earns an access
+// token after rotation. Concurrent refreshes race: when the access token
+// expires, parallel 401 retries and other browser tabs all POST /refresh with
+// the same cookie, only one rotation can win, and without a grace the losers
+// would be treated as stolen. A loser gets a new access token only, never a
+// refresh token: the tabs share one cookie jar that already holds the
+// winner's, and a second refresh token would fork the session into two
+// chains that reuse detection could never tell apart. Past the grace,
+// presenting a rotated token is reuse (RefreshSession). The grace never
+// outlives the family: a revoked sign-in accepts none of its tokens.
 const refreshReuseGrace = 60 * time.Second
 
 // maxUserAgentLength bounds the stored user agent; the list shows a summary.
@@ -78,6 +81,10 @@ type Refreshed struct {
 	AdminID uuid.UUID
 	// FamilyID is uuid.Nil before migration 000118.
 	FamilyID uuid.UUID
+	// Rotated is false when the presented token had just been rotated by a
+	// concurrent refresh (within refreshReuseGrace): the caller issues an
+	// access token only, and no new refresh token was stored.
+	Rotated bool
 }
 
 // SessionQuerier is the database surface the package-level session helpers
@@ -124,9 +131,11 @@ func (s *Service) CreateSession(ctx context.Context, adminID uuid.UUID, refreshT
 
 // RefreshSession rotates a refresh token: the presented one is retired and
 // newHash continues its session family, whose last use, expiry, address and
-// user agent move forward. ErrInvalidRefreshToken for an unknown or expired
-// token or a revoked session; a *RefreshReuse when the token was already
-// rotated more than refreshReuseGrace ago, after revoking its whole session.
+// user agent move forward. A token another refresh rotated less than
+// refreshReuseGrace ago is not rotated again (Rotated false, newHash unused).
+// ErrInvalidRefreshToken for an unknown or expired token or a revoked
+// session; a *RefreshReuse when the token was already rotated more than
+// refreshReuseGrace ago, after revoking its whole session.
 func (s *Service) RefreshSession(ctx context.Context, oldHash, newHash string, expiresAt time.Time, ip, userAgent string) (*Refreshed, error) {
 	userAgent = truncateUserAgent(userAgent)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -178,13 +187,25 @@ func (s *Service) RefreshSession(ctx context.Context, oldHash, newHash string, e
 		return nil, &RefreshReuse{AdminID: out.AdminID, FamilyID: out.FamilyID}
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if rotated {
+		// Inside the grace: the concurrent winner already holds the
+		// session's newest refresh token.
+		return &out, nil
+	}
+	res, err := tx.ExecContext(ctx, `
 		UPDATE admin_sessions
 		SET revoked_at = NOW(), last_used_at = NOW()
 		WHERE refresh_token_hash = $1 AND revoked_at IS NULL
-	`, oldHash); err != nil {
+	`, oldHash)
+	if err != nil {
 		return nil, fmt.Errorf("failed to retire refresh token: %w", err)
 	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// A concurrent refresh rotated it after our snapshot was taken (the
+		// family lock serialized us behind it): same as inside the grace.
+		return &out, nil
+	}
+	out.Rotated = true
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO admin_sessions (admin_user_id, refresh_token_hash, expires_at, ip, user_agent, family_id)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -235,7 +256,7 @@ func (s *Service) refreshWithoutFamilies(ctx context.Context, oldHash, newHash s
 	`, adminID, newHash, expiresAt, ip, userAgent); err != nil {
 		return nil, fmt.Errorf("failed to issue refresh token: %w", err)
 	}
-	return &Refreshed{AdminID: adminID}, nil
+	return &Refreshed{AdminID: adminID, Rotated: true}, nil
 }
 
 // RevokeByRefreshToken ends the session a refresh token belongs to (sign

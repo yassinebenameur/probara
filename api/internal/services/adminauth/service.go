@@ -23,8 +23,9 @@ var ErrUserNotFound = errors.New("admin user not found")
 type Service struct {
 	db         *db.Client
 	bcryptCost int
-	// now is the lockout's clock (time.Now unless a test replaces it).
-	now func() time.Time
+	// clockOffset moves the lockout's database clock; zero except in tests,
+	// the one seam they use to let time pass (lockout.go, lockoutNow).
+	clockOffset time.Duration
 
 	dummyOnce sync.Once
 	dummyHash string
@@ -32,14 +33,7 @@ type Service struct {
 
 // NewService creates a new admin auth service.
 func NewService(dbClient *db.Client, bcryptCost int) *Service {
-	return &Service{db: dbClient, bcryptCost: bcryptCost, now: time.Now}
-}
-
-func (s *Service) clock() time.Time {
-	if s.now == nil {
-		return time.Now()
-	}
-	return s.now()
+	return &Service{db: dbClient, bcryptCost: bcryptCost}
 }
 
 // GetAdminByID retrieves an admin user by ID, including identity fields.

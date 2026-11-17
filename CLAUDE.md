@@ -691,7 +691,11 @@ or imported groups come back empty. Any other path that creates groups through
   its family. Password sign-in lockout (10 failures → 15 min, on
   `admin_users`) is `adminauth/lockout.go`: every refusal answers alike,
   and a second sign-in factor counts through `RecordFailedAttempt`. What
-  revokes what: `docs/auth-and-rbac.md`.
+  revokes what: `docs/auth-and-rbac.md`. Long-lived responses (the alert
+  SSE stream) re-check their credential with `middleware.StillAuthorized`
+  each heartbeat and end at `CredentialExpiry`; a new stream must too. The
+  `admin_sessions_default_family` trigger (000118) is rolling-deploy
+  compatibility only: drop it in a later release's migration.
 
 ## MCP server
 

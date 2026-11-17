@@ -69,13 +69,35 @@ func main() {
 // For the same reason it lifts a sign-in lockout (migration 000117), and, as
 // any password reset does, it ends the account's existing sessions (session
 // families, migration 000118; the API's adminauth.RevokeUserSessions).
+//
+// It must work before those migrations have run too -- a failed migration
+// job is exactly when an operator reaches for it -- so it looks for their
+// columns and table first and leaves out what is not there yet.
 func upsertSuperadmin(ctx context.Context, client *db.Client, username, passwordHash string) error {
+	var hasLockout, hasFamilies bool
+	if err := client.QueryRowContext(ctx, `
+		SELECT EXISTS (
+		           SELECT 1 FROM information_schema.columns
+		           WHERE table_schema = current_schema() AND table_name = 'admin_users'
+		             AND column_name = 'locked_until'),
+		       to_regclass('admin_session_families') IS NOT NULL
+	`).Scan(&hasLockout, &hasFamilies); err != nil {
+		return err
+	}
+
 	tx, err := client.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	clearLock := ""
+	if hasLockout {
+		clearLock = `,
+		              failed_login_count = 0,
+		              last_failed_login_at = NULL,
+		              locked_until = NULL`
+	}
 	var userID string
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO admin_users (username, password_hash, platform_role)
@@ -84,20 +106,21 @@ func upsertSuperadmin(ctx context.Context, client *db.Client, username, password
 		DO UPDATE SET password_hash = EXCLUDED.password_hash,
 		              platform_role = EXCLUDED.platform_role,
 		              updated_at = NOW(),
-		              disabled_at = NULL,
-		              failed_login_count = 0,
-		              locked_until = NULL
+		              disabled_at = NULL`+clearLock+`
 		RETURNING id
 	`, username, passwordHash, auth.PlatformRoleSuperadmin).Scan(&userID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE admin_session_families
-		SET revoked_at = NOW(), revoke_reason = 'password_reset'
-		WHERE admin_user_id = $1 AND revoked_at IS NULL
-	`, userID); err != nil {
-		return err
+	if hasFamilies {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE admin_session_families
+			SET revoked_at = NOW(), revoke_reason = 'password_reset'
+			WHERE admin_user_id = $1 AND revoked_at IS NULL
+		`, userID); err != nil {
+			return err
+		}
 	}
+	// admin_sessions predates both migrations.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE admin_sessions SET revoked_at = NOW()
 		WHERE admin_user_id = $1 AND revoked_at IS NULL

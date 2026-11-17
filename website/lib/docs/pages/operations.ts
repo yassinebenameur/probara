@@ -355,6 +355,13 @@ go run ./cmd/migrate`,
             'Migration 000105 only adds columns, a table and constraints that skip scanning existing rows, so it is quick at any size. Upgrade the delivery workers before the alerter, or together with it: with asynchronous dispatch an older worker would send a [relapse notice](/docs/alerting/#relapses) under the first episode\'s PagerDuty or Opsgenie key, folding it into the earlier incident instead of opening a new one. Nothing relapses until a workspace sets its reopen cooldown, so upgrading in that order is enough.',
         },
         {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to sign-in lockout and sessions',
+          text:
+            'Migrations 000117 and 000118 add columns to `admin_users`, the `admin_session_families` table and a column and index on `admin_sessions`; 000118 turns every live refresh token into its own [session](/docs/security/#sign-in-lockout-sessions), so nobody is signed out by the upgrade. Complete the rollout of every API replica before revoking sessions: during a rolling upgrade an API replica still on the previous version ignores sessions, honours the refresh token of a revoked one, and the token it issues starts a fresh session, so revocations made while old replicas run may not hold. Access tokens issued before the upgrade carry no session id and stay valid until they expire (15 minutes).',
+        },
+        {
           type: 'code',
           language: 'bash',
           title: 'Create or update the initial administrator',

@@ -527,7 +527,8 @@ func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID, ke
 }
 
 // AttachLockState fills the sign-in lockout fields (migration 000117): the
-// failure streak, and the lock's end while it is in force. Before the
+// live failure streak, and the lock's end while it is in force (database
+// clock, as the lockout itself). Before the
 // migration nothing is locked.
 func (r *sqlRepository) AttachLockState(ctx context.Context, users []models.AdminUser) error {
 	if len(users) == 0 {
@@ -539,11 +540,17 @@ func (r *sqlRepository) AttachLockState(ctx context.Context, users []models.Admi
 		ids[i] = u.ID
 		index[u.ID] = i
 	}
+	// A streak whose last failure is older than the lockout's memory is
+	// already forgotten (the next failure starts at 1), so it shows as 0.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, failed_login_count, CASE WHEN locked_until > NOW() THEN locked_until END
+		SELECT id,
+		       CASE WHEN last_failed_login_at > NOW() - make_interval(secs => $2) THEN failed_login_count ELSE 0 END,
+		       CASE WHEN locked_until > NOW() THEN locked_until END
 		FROM admin_users
-		WHERE id = ANY($1) AND (failed_login_count <> 0 OR locked_until > NOW())
-	`, pq.Array(ids))
+		WHERE id = ANY($1)
+		  AND ((failed_login_count <> 0 AND last_failed_login_at > NOW() - make_interval(secs => $2))
+		       OR locked_until > NOW())
+	`, pq.Array(ids), adminauth.LockoutStreakMemory.Seconds())
 	if pgerr.IsMissingSchema(err) {
 		return nil
 	}

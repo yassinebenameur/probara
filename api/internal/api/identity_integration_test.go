@@ -287,6 +287,28 @@ func TestRefreshKeepsTheSessionAndReuseEndsIt(t *testing.T) {
 		t.Fatalf("%d sessions after a refresh, want 1", n)
 	}
 
+	// A replay inside the 60-second grace (a second tab) gets an access
+	// token for the session but no refresh token: the session cannot fork.
+	req, _ := http.NewRequest(http.MethodPost, f.http.URL+"/api/v1/auth/refresh", nil)
+	req.AddCookie(&http.Cookie{Name: "admin_refresh", Value: firstRefresh})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	gotAccess, gotRefresh := false, false
+	for _, c := range res.Cookies() {
+		switch c.Name {
+		case "admin_access":
+			gotAccess = c.Value != ""
+		case "admin_refresh":
+			gotRefresh = true
+		}
+	}
+	if res.StatusCode != http.StatusOK || !gotAccess || gotRefresh {
+		t.Fatalf("replay within grace: %d access=%v refresh=%v, want 200 with an access token only", res.StatusCode, gotAccess, gotRefresh)
+	}
+
 	sum := sha256.Sum256([]byte(firstRefresh))
 	if _, err := f.db.ExecContext(f.ctx, `
 		UPDATE admin_sessions SET revoked_at = NOW() - INTERVAL '5 minutes' WHERE refresh_token_hash = $1

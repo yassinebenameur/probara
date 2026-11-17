@@ -145,7 +145,9 @@ func (h *Handlers) recordLoginFailure(r *http.Request, username string, failure 
 }
 
 // Refresh handles POST /api/v1/auth/refresh: rotates the refresh token
-// inside its session and issues an access token carrying the session id.
+// inside its session and issues an access token carrying the session id. A
+// token a concurrent refresh just rotated earns the access token only; the
+// browser already stores the winner's refresh cookie.
 func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	refreshToken, err := h.readRefreshToken(r)
 	if err != nil {
@@ -185,7 +187,9 @@ func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.setRefreshCookie(w, newToken, refreshTTL)
+	if refreshed.Rotated {
+		h.setRefreshCookie(w, newToken, refreshTTL)
+	}
 
 	user, err := h.service.GetAdminByID(r.Context(), adminID)
 	if err != nil {

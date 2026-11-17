@@ -58,9 +58,12 @@ rejected even with a live access token).
 Migrations 000117 (lockout) and 000118 (session families).
 
 **Lockout** (`api/internal/services/adminauth/lockout.go`, password sign-in
-only): 10 consecutive failures lock the account for 15 minutes, fixed. The
-streak (`failed_login_count`) and the lock (`locked_until`) live on
-`admin_users`, so replicas agree and restarts keep them. `Authenticate`
+only): 10 consecutive failures lock the account for 15 minutes, fixed; a
+failure more than 24 h after the previous one (`last_failed_login_at`)
+starts a new streak. The streak (`failed_login_count`) and the lock
+(`locked_until`) live on `admin_users` and are timed by the database clock
+(`NOW()`; tests move it through `Service.clockOffset` only), so replicas
+agree and restarts keep them. `Authenticate`
 reserves the attempt before comparing the password (one atomic `UPDATE`
 that only matches an unlocked password account), so parallel guesses cannot
 overshoot: exactly 10 are compared, the 10th locks and restarts the streak.
@@ -91,9 +94,20 @@ family id as `sid`. The family's `revoked_at` is the single authority:
   `/auth/me` checks it too. Tokens without a `sid` (minted before 000118)
   are honoured until they expire.
 - `RefreshSession` rotates inside the family under the family row lock. A
-  rotated token is accepted for 60 s (concurrent tabs); presented later it
-  is reuse: the family is revoked (`refresh_reuse`, audit
+  token rotated less than 60 s ago (concurrent tabs) earns an access token
+  only -- no new refresh token, so the family never forks into two chains;
+  presented later it is reuse: the family is revoked (`refresh_reuse`, audit
   `auth.session_reuse`).
+- Long-lived responses re-check: the auth middleware leaves
+  `middleware.StillAuthorized` / `CredentialExpiry` in the context
+  (`credential_recheck.go`: session, user enabled, tenant membership, MCP
+  token, API key); the alert SSE stream calls it every heartbeat and ends at
+  the access token's expiry with a `reauth` event the web client reconnects
+  on.
+- `SessionPruner` (API process, hourly, batches of 1000) deletes refresh
+  tokens expired longer than the refresh lifetime + 1 day ago and families
+  revoked or expired that long ago; reuse detection only needs rotated
+  tokens until they expire.
 - Last use, address (`shared/clientip`) and user agent move on sign-in and
   refresh only, never per request.
 - The rate limiter's verified-credential cache never authenticates: it only
@@ -120,7 +134,9 @@ sign out of the IdP.
 Migration 000118 turns every live refresh token into its own family (id =
 token row id), so signed-in users stay signed in; rotated/expired rows keep
 `family_id NULL` and are never accepted. A trigger gives a family to rows an
-older binary inserts during a rolling deploy.
+older binary inserts during a rolling deploy. An old binary also honours a
+revoked family's token, so revocations made mid-rollout may not hold:
+finish the rollout first. Drop the trigger in a later release.
 
 ## Enforcement layers
 

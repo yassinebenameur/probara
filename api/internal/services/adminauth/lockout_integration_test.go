@@ -21,33 +21,19 @@ const (
 	wrongPass    = "wrong password guess"
 )
 
-// fakeClock is the lockout's injectable clock.
-type fakeClock struct {
-	mu sync.Mutex
-	t  time.Time
-}
+// testClock lets lockout time pass: it moves the service's offset on the
+// database clock (Service.clockOffset). Not safe while attempts run.
+type testClock struct{ svc *Service }
 
-func (c *fakeClock) now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
-}
+func (c testClock) advance(d time.Duration) { c.svc.clockOffset += d }
 
-func (c *fakeClock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.t = c.t.Add(d)
-}
-
-func newLockoutService(t *testing.T) (*Service, *db.Client, *fakeClock) {
+func newLockoutService(t *testing.T) (*Service, *db.Client, testClock) {
 	t.Helper()
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	t.Cleanup(cleanup)
-	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Microsecond)}
 	svc := NewService(dbClient, 4)
-	svc.now = clock.now
-	return svc, dbClient, clock
+	return svc, dbClient, testClock{svc: svc}
 }
 
 func insertPasswordUser(t *testing.T, dbClient *db.Client, username string) uuid.UUID {
@@ -103,11 +89,13 @@ func TestLockoutTenthFailureLocksForFifteenMinutes(t *testing.T) {
 	if !f.LockedNow || f.UserID == nil || *f.UserID != id {
 		t.Fatalf("10th failure: %+v, want it to lock alice", f)
 	}
-	if want := clock.now().Add(LockoutDuration); !f.LockedUntil.Equal(want) {
-		t.Fatalf("locked until %v, want %v", f.LockedUntil, want)
+	// The database clock sets the lock (same host in tests, so close to ours).
+	if want := time.Now().Add(LockoutDuration); f.LockedUntil.Sub(want).Abs() > 5*time.Second {
+		t.Fatalf("locked until %v, want about %v", f.LockedUntil, want)
 	}
-	if count, until := lockState(t, dbClient, id); count != 0 || until == nil {
-		t.Fatalf("row = %d/%v, want streak restarted and a lock", count, until)
+	count, lockedAt := lockState(t, dbClient, id)
+	if count != 0 || lockedAt == nil || !lockedAt.Equal(f.LockedUntil) {
+		t.Fatalf("row = %d/%v, want streak restarted and the lock", count, lockedAt)
 	}
 
 	// The correct password is refused during the lock, with the same error,
@@ -118,12 +106,12 @@ func TestLockoutTenthFailureLocksForFifteenMinutes(t *testing.T) {
 	if !f.Locked {
 		t.Fatalf("correct password while locked: %+v, want refused as locked", f)
 	}
-	if _, until := lockState(t, dbClient, id); until == nil || !until.Equal(clock.now().Add(time.Second)) {
+	if _, until := lockState(t, dbClient, id); until == nil || !until.Equal(*lockedAt) {
 		t.Fatalf("lock moved to %v during the lock", until)
 	}
 
 	// The lock expires on its own.
-	clock.advance(time.Second)
+	clock.advance(2 * time.Second)
 	user, err := svc.Authenticate(ctx, "alice", testPassword)
 	if err != nil || user.ID != id {
 		t.Fatalf("after the lock: %v, want a successful sign-in", err)
@@ -284,5 +272,33 @@ func TestRecordFailedAttemptSharesTheLock(t *testing.T) {
 	}
 	if _, err := svc.Authenticate(ctx, "frank", testPassword); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("password during the lock = %v, want refused", err)
+	}
+}
+
+// A streak is forgotten after a day without failures: occasional typos never
+// add up to a lock, while a burst still does.
+func TestLockoutStreakDecaysAfterADayOfQuiet(t *testing.T) {
+	ctx := context.Background()
+	svc, dbClient, clock := newLockoutService(t)
+	id := insertPasswordUser(t, dbClient, "gina")
+	for i := 0; i < LockoutThreshold-1; i++ {
+		_, _ = svc.Authenticate(ctx, "gina", wrongPass)
+	}
+	clock.advance(LockoutStreakMemory - time.Minute)
+	_, err := svc.Authenticate(ctx, "gina", wrongPass)
+	if f := failure(t, err); !f.LockedNow {
+		t.Fatalf("10th failure within the day = %+v, want it to lock", f)
+	}
+	if _, err := svc.UnlockUser(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < LockoutThreshold-1; i++ {
+		_, _ = svc.Authenticate(ctx, "gina", wrongPass)
+	}
+	clock.advance(LockoutStreakMemory + time.Minute)
+	_, err = svc.Authenticate(ctx, "gina", wrongPass)
+	if f := failure(t, err); f.LockedNow || f.FailedAttempts != 1 {
+		t.Fatalf("failure after a quiet day = %+v, want a new streak of 1", f)
 	}
 }
