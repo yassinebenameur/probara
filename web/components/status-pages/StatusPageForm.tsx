@@ -19,6 +19,8 @@ import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
 import SectionList from './SectionList';
 import PagePreview from './PagePreview';
+import PageAccessFields from './PageAccessFields';
+import { pageAccessError, pageAccessPayload } from '@/lib/status-page-access';
 import { SeoSection, ShareSection } from './SearchAndShare';
 import {
   DEFAULT_PRIMARY,
@@ -61,6 +63,9 @@ function snapshot(state: FormState): string {
       secondary_color: state.basics.secondary_color.trim(),
     },
     enablePushNotifications: state.enablePushNotifications,
+    visibility: state.visibility,
+    password: state.password !== '',
+    clearPassword: state.clearPassword,
     seo: {
       title: state.seo.title.trim(),
       description: state.seo.description.trim(),
@@ -91,6 +96,7 @@ export default function StatusPageForm({
   const requestedGroupsRef = useRef(new Set<string>());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const formRef = useRef<HTMLFormElement>(null);
+  const accessRef = useRef<HTMLElement>(null);
   // Once the user edits the slug by hand, stop deriving it from the title.
   const slugTouchedRef = useRef(!!statusPage);
 
@@ -247,12 +253,18 @@ export default function StatusPageForm({
         nextErrors[`section-${section.id}`] = `Section ${index + 1} needs a title`;
       }
     });
+    const accessError = pageAccessError(state, statusPage?.has_password === true);
+    if (accessError) {
+      nextErrors.access = accessError;
+    }
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       if (nextErrors.slug || nextErrors.title) {
-        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         formRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      } else if (nextErrors.access) {
+        accessRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
       }
       return;
     }
@@ -303,6 +315,7 @@ export default function StatusPageForm({
         seo_description: state.seo.description.trim(),
         allow_search_indexing: state.seo.allowIndexing,
       },
+      ...pageAccessPayload(state),
     };
 
     await onSubmit(requestData);
@@ -451,9 +464,29 @@ export default function StatusPageForm({
       </div>
 
       <div className="min-w-0 space-y-6 xl:col-start-1 xl:row-start-3">
+        {/* Who may see the page comes first: it decides what SEO and Share
+            below can do (only public pages are indexed; a gated page's
+            feed and badges work only for visitors who unlocked it). */}
+        <section ref={accessRef} className="glass p-6" aria-labelledby="sp-access-heading">
+          <h3 id="sp-access-heading" className="mb-1 text-title font-semibold text-white">Access</h3>
+          <p className="mb-5 text-xs text-slate-400">
+            Who can open the page. Kiosk tokens for wall displays are managed below the form once the page is saved.
+          </p>
+          <PageAccessFields
+            visibility={state.visibility}
+            hasStoredPassword={statusPage?.has_password === true}
+            password={state.password}
+            clearPassword={state.clearPassword}
+            error={errors.access}
+            onVisibilityChange={(value) => dispatch({ type: 'set_visibility', value })}
+            onPasswordChange={(value) => dispatch({ type: 'set_password', value })}
+            onClearPasswordChange={(value) => dispatch({ type: 'set_clear_password', value })}
+          />
+        </section>
         <SeoSection
           pageTitle={state.basics.title}
           value={state.seo}
+          visibility={state.visibility}
           onChange={(value) => dispatch({ type: 'set_seo', value })}
         />
         {/* From the saved page: its links and badges exist only once saved. */}

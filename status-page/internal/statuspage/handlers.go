@@ -16,12 +16,17 @@ import (
 	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/pageaccess"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
 // statusPageBuildTimeout bounds a single load-and-render of a status page.
 // It is intentionally below the server's 60s WriteTimeout safety net.
 const statusPageBuildTimeout = 30 * time.Second
+
+// streamHeartbeatInterval paces the SSE heartbeat, which is also when a
+// gated page's stream re-checks the visitor's session. A variable for tests.
+var streamHeartbeatInterval = 15 * time.Second
 
 // Handlers handles status page HTTP requests
 type Handlers struct {
@@ -38,10 +43,27 @@ type Handlers struct {
 	// clientIPs keys pushLimiter: forwarding headers count only from
 	// TRUSTED_PROXY_CIDRS peers, so a visitor cannot spoof a fresh bucket.
 	clientIPs *clientip.Resolver
+	// access is the visibility gate every page route passes (access.go).
+	access *accessGate
 }
 
 // NewHandlers creates a new status page handlers
 func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Logger, hub *Hub, cache *renderCache, pushes *pushStore) *Handlers {
+	var store accessQuery
+	if service != nil {
+		store = service
+	}
+	secret := ""
+	cookieSecure := cookieSecureDetect
+	if cfg != nil {
+		secret = cfg.SessionSecret
+		if secure, detect := cfg.SessionCookieSecure(); !detect {
+			cookieSecure = cookieSecureNever
+			if secure {
+				cookieSecure = cookieSecureAlways
+			}
+		}
+	}
 	return &Handlers{
 		service:     service,
 		config:      cfg,
@@ -51,6 +73,7 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		pushStore:   pushes,
 		pushLimiter: newPushRateLimiter(),
 		clientIPs:   newClientIPResolver(cfg),
+		access:      newAccessGate(store, secret, cookieSecure),
 	}
 }
 
@@ -61,94 +84,126 @@ func newClientIPResolver(cfg *config.StatusPageConfig) *clientip.Resolver {
 	return clientip.NewResolver(cfg.TrustedProxyCIDRs)
 }
 
-// HandleStatusPage handles GET /public/status/{slug} and GET /public/status/{slug}/data
+// HandleStatusPage handles GET /public/status/{slug} and every sub-route of a
+// page: /data, /stream, /preview/draft, /push/subscribe, /push/unsubscribe
+// and /unlock. Every one but /unlock passes the visibility gate first.
 func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
-	// Extract slug from path
 	path := strings.TrimPrefix(r.URL.Path, "/public/status/")
-	if path == "" {
-		http.Error(w, "Status page not found", http.StatusNotFound)
+	slug, rest := splitStatusPath(path)
+	if slug == "" {
+		writeNotFound(w)
 		return
+	}
+
+	// The password form's target is the one sub-route the gate does not
+	// guard: the gate is what sends visitors there.
+	if rest == unlockSuffix {
+		h.HandleUnlock(w, r, slug)
+		return
+	}
+
+	// The visibility gate runs before the method guard, every sub-route and
+	// the render cache (access.go). From here on, routes write through aw,
+	// which forces the gate's noindex and no-store headers.
+	aw, acc, ok := h.authorize(w, r, slug, rest)
+	if !ok {
+		return
+	}
+	gated := pageaccess.Gated(acc.Visibility)
+	// Every route below reads the visibility from the request: cachedPage
+	// builds with it (no push key on gated pages, noindex unless public),
+	// and the add-ons answer privately for a gated page.
+	r = withPageVisibility(r, acc.Visibility)
+	if gated {
+		r = gatedPageRequest(r)
 	}
 
 	// The push routes are POST and do their own method checks. Every other
-	// route below is read-only, so the GET guard moved down here rather than
-	// staying above the sub-routing.
-	isPushRoute := strings.HasSuffix(path, "/push/subscribe") || strings.HasSuffix(path, "/push/unsubscribe")
+	// route below is read-only, so the GET guard sits here rather than above
+	// the sub-routing.
+	isPushRoute := rest == "/push/subscribe" || rest == "/push/unsubscribe"
 	if !isPushRoute && r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(aw, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Check if this is a data request
-	if strings.HasSuffix(path, "/data") {
-		h.HandleStatusPageData(w, r)
+	switch rest {
+	case "", "/":
+		// The page itself, below.
+	case "/data":
+		h.HandleStatusPageData(aw, r)
+		return
+	case "/stream":
+		h.streamStatusPage(aw, r, slug, gated)
+		return
+	case previewSuffix:
+		h.HandleDraftPreview(aw, r, slug, gated)
+		return
+	case "/push/subscribe":
+		h.HandlePushSubscribe(aw, r, slug)
+		return
+	case "/push/unsubscribe":
+		h.HandlePushUnsubscribe(aw, r, slug)
+		return
+	default:
+		// Page add-ons (addons.go): summary.json, badges and the Atom feed.
+		// They read the slug-keyed render and feed caches, so they are
+		// served only from here, after authorize; on a gated page r carries
+		// gatedPageRequest, so their responses are private and never
+		// readable cross-origin.
+		if h.servePageAddon(aw, r, path) {
+			return
+		}
+		writeNotFound(w)
 		return
 	}
 
-	// Check if this is a stream request
-	if strings.HasSuffix(path, "/stream") {
-		h.StreamStatusPage(w, r)
-		return
-	}
-
-	// Check if this is a draft template preview request
-	if strings.HasSuffix(path, "/preview/draft") {
-		h.HandleDraftPreview(w, r, strings.TrimSuffix(path, "/preview/draft"))
-		return
-	}
-
-	// Push subscription management. These are POST, so they are dispatched
-	// here rather than above the method guard being moved -- see the guard at
-	// the top of this function, which only ever sees the GET routes.
-	if slug, ok := strings.CutSuffix(path, "/push/subscribe"); ok {
-		h.HandlePushSubscribe(w, r, slug)
-		return
-	}
-	if slug, ok := strings.CutSuffix(path, "/push/unsubscribe"); ok {
-		h.HandlePushUnsubscribe(w, r, slug)
-		return
-	}
-
-	// Page add-ons: summary.json, badges and the Atom feed (addons.go).
-	// Read-only GETs, dispatched here like every other sub-route so that
-	// whatever gates this function gates them too.
-	if h.servePageAddon(w, r, path) {
-		return
-	}
-
-	// Extract slug (remove trailing slash if any)
-	slug := strings.TrimSuffix(path, "/")
-	if slug == "" {
-		http.Error(w, "Status page not found", http.StatusNotFound)
-		return
-	}
-
+	// Who may see the page was decided above, by authorize, never by the
+	// cache (cachedPage is keyed by slug alone).
 	page, etag, err := h.cachedPage(r.Context(), slug)
 	if err != nil {
-		h.writeStatusPageError(w, slug, err, "Failed to build status page")
+		h.writeStatusPageError(aw, slug, err, "Failed to build status page")
 		return
 	}
 
 	// Sent on a 304 too: unlike the CSP it has no per-response part, and the
 	// header protects a custom template that prints no robots meta.
 	if page.noindex {
-		w.Header().Set("X-Robots-Tag", robotsNoIndex)
+		aw.Header().Set("X-Robots-Tag", robotsNoIndex)
 	}
 
 	// no-cache (unlike no-store) lets the browser keep the body and
 	// revalidate it with If-None-Match; a 304 then skips the ~150KB page.
-	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "no-cache")
-	if etagMatches(r.Header.Get("If-None-Match"), etag) {
-		w.WriteHeader(http.StatusNotModified)
-		return
+	// A gated page is no-store and has no validator (accessWriter), so it
+	// never answers 304.
+	if !gated {
+		if pageaccess.NoIndex(acc.Visibility) {
+			// An unlisted page's body also carries the robots meta tag added
+			// below, so it must not revalidate against a copy stored while
+			// the page was public.
+			etag = strings.TrimSuffix(etag, `"`) + `-noindex"`
+		}
+		aw.Header().Set("ETag", etag)
+		aw.Header().Set("Cache-Control", "no-cache")
+		if etagMatches(r.Header.Get("If-None-Match"), etag) {
+			aw.WriteHeader(http.StatusNotModified)
+			return
+		}
 	}
 
 	// The CSP (and its per-response nonce) goes only on a full response; see
-	// pageCSP.apply for why a 304 must not carry one.
-	html := page.csp.apply(w.Header(), page.html)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if _, err := w.Write([]byte(html)); err != nil {
+	// pageCSP.apply for why a 304 must not carry one. A gated page may be
+	// framed only by the operator UI, never by another page of this origin.
+	csp := page.csp
+	if gated {
+		csp.frameAncestors = gatedFrameAncestors(h.appBaseURL())
+	}
+	html := csp.apply(aw.Header(), page.html)
+	if pageaccess.NoIndex(acc.Visibility) {
+		html = noIndexMeta(html)
+	}
+	aw.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := aw.Write([]byte(html)); err != nil {
 		h.logger.WithError(err).Error("Failed to write status page response")
 	}
 }
@@ -167,12 +222,23 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage, string, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), statusPageBuildTimeout)
 	defer cancel()
-	return h.cache.GetPage(slug, func() (renderedPage, error) {
+	// Visibility comes from the access gate that ran first. An access change
+	// invalidates the slug, its summary and its feed
+	// (status_page_access_changed); an entry built under another visibility
+	// (the event not here yet, or lost) is rebuilt on the spot, so a page
+	// that turned private never serves HTML that says index or offers push.
+	visibility := pageVisibility(parent)
+	build := func() (renderedPage, error) {
 		data, err := h.service.GetStatusPageBySlug(ctx, slug)
 		if err != nil {
 			return renderedPage{}, err
 		}
-		data.PushPublicKey = h.webPushPublicKey()
+		// No visitor push on password and private pages: a subscription
+		// would outlive the session that made it.
+		if !pageaccess.Gated(visibility) {
+			data.PushPublicKey = h.webPushPublicKey()
+		}
+		data.Visibility = visibility
 		data.CanonicalURL = h.canonicalURL(slug)
 		view := buildStatusPageRenderView(data, h.apiProxyEnabled())
 		html, customErr, err := renderStatusPageView(data, view)
@@ -197,8 +263,15 @@ func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage
 			summary:     summary,
 			summaryJSON: summaryJSON,
 			summaryETag: summaryETag,
+			visibility:  visibility,
 		}, nil
-	})
+	}
+	page, etag, err := h.cache.GetPage(slug, build)
+	if err == nil && page.visibility != visibility {
+		h.cache.Invalidate(slug)
+		page, etag, err = h.cache.GetPage(slug, build)
+	}
+	return page, etag, err
 }
 
 // canonicalURL is the page's absolute public URL from STATUS_PAGE_BASE_URL,
@@ -239,14 +312,23 @@ func (h *Handlers) webPushPublicKey() string {
 // because a draft only ever renders data already public on the live page.
 const previewSecretEnvVar = "STATUS_PAGE_PREVIEW_SECRET"
 
+// previewSecret is STATUS_PAGE_PREVIEW_SECRET, "" when unset.
+func previewSecret() string {
+	return strings.TrimSpace(os.Getenv(previewSecretEnvVar))
+}
+
 // HandleDraftPreview handles GET /public/status/{slug}/preview/draft.
 // It renders the page's draft template against live data, uncached, so the
 // template editor can show authors exactly what a publish would produce. A
 // page with no draft renders normally (published custom or built-in), and a
 // broken draft returns its parse/execute error instead of falling back.
-func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, slug string) {
+//
+// On a password or private page authorize lets this route through with a
+// visitor session or a valid preview token; gated turns visitor push off as
+// on the live page.
+func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, slug string, gated bool) {
 	if slug == "" {
-		http.Error(w, "Status page not found", http.StatusNotFound)
+		writeNotFound(w)
 		return
 	}
 
@@ -259,7 +341,7 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 		return
 	}
 
-	if secret := strings.TrimSpace(os.Getenv(previewSecretEnvVar)); secret != "" {
+	if secret := previewSecret(); secret != "" {
 		if !statustemplate.VerifyPreviewToken(secret, pageID.String(), r.URL.Query().Get("token"), time.Now()) {
 			http.Error(w, "Invalid or expired preview token", http.StatusForbidden)
 			return
@@ -271,8 +353,11 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 		h.writeStatusPageError(w, slug, err, "Failed to build draft preview")
 		return
 	}
-	data.PushPublicKey = h.webPushPublicKey()
+	if !gated {
+		data.PushPublicKey = h.webPushPublicKey()
+	}
 	data.CanonicalURL = h.canonicalURL(slug)
+	data.Visibility = pageVisibility(r.Context())
 
 	var html string
 	if hasDraft {
@@ -318,7 +403,7 @@ func slugFromPath(r *http.Request, suffix string) string {
 // otherwise a logged 500. what is the log line for the failed operation.
 func (h *Handlers) writeStatusPageError(w http.ResponseWriter, slug string, err error, what string) {
 	if errors.Is(err, ErrStatusPageNotFound) {
-		http.Error(w, "Status page not found", http.StatusNotFound)
+		writeNotFound(w)
 		return
 	}
 	h.logger.WithFields(map[string]interface{}{
@@ -373,16 +458,19 @@ func (h *Handlers) HandleStatusPageData(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// StreamStatusPage handles GET /public/status/{slug}/stream
-func (h *Handlers) StreamStatusPage(w http.ResponseWriter, r *http.Request) {
+// streamStatusPage handles GET /public/status/{slug}/stream, after
+// authorize. Every stream re-runs the gate on each heartbeat and ends once it
+// no longer opens the page (the page turned password or private, the session
+// expired, the password changed, the token was revoked), so an open stream
+// never outlives its access even when the access-change event is lost.
+func (h *Handlers) streamStatusPage(w http.ResponseWriter, r *http.Request, slug string, gated bool) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	slug := slugFromPath(r, "/stream")
 	if slug == "" {
-		http.Error(w, "Status page not found", http.StatusNotFound)
+		writeNotFound(w)
 		return
 	}
 
@@ -403,7 +491,10 @@ func (h *Handlers) StreamStatusPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if !gated {
+		// A gated stream is for the page's own (same-origin) visitors only.
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	// Register client
@@ -415,7 +506,7 @@ func (h *Handlers) StreamStatusPage(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	// Heartbeat ticker
-	heartbeatTicker := time.NewTicker(15 * time.Second)
+	heartbeatTicker := time.NewTicker(streamHeartbeatInterval)
 	defer heartbeatTicker.Stop()
 
 	for {
@@ -427,12 +518,50 @@ func (h *Handlers) StreamStatusPage(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, event.Data)
 			flusher.Flush()
 		case <-heartbeatTicker.C:
+			if !h.stillAuthorized(r.Context(), r, slug) {
+				return
+			}
 			fmt.Fprintf(w, "event: heartbeat\ndata: {\"time\":\"%s\"}\n\n", time.Now().UTC().Format(time.RFC3339))
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}
 	}
+}
+
+// proxyStatusPageID is the page a /_sp_api call acts on, which both the
+// access gate and the injected X-Tenant-ID use. A status-pages path names its
+// page in the path, and that is the page the API reads, so the path decides;
+// the X-Status-Page-ID header only names the page for calls whose path names
+// none (the monitors list). ok is false for a status-pages path whose first
+// segment is not a page ID, for a header naming a different page than the
+// path, and for a path with dot segments, so the gate can never check one
+// page while the API acts on another.
+func proxyStatusPageID(r *http.Request, upstreamPath string) (uuid.UUID, bool) {
+	var headerID uuid.UUID
+	if spIDHeader := r.Header.Get("X-Status-Page-ID"); spIDHeader != "" {
+		if parsed, err := uuid.Parse(spIDHeader); err == nil {
+			headerID = parsed
+		}
+	}
+	for _, seg := range strings.Split(upstreamPath, "/") {
+		if seg == "." || seg == ".." {
+			return uuid.Nil, false
+		}
+	}
+	rest, named := strings.CutPrefix(upstreamPath, "/api/v1/status-pages/")
+	if !named {
+		return headerID, true
+	}
+	first, _, _ := strings.Cut(rest, "/")
+	pathID, err := uuid.Parse(first)
+	if err != nil || pathID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	if headerID != uuid.Nil && headerID != pathID {
+		return uuid.Nil, false
+	}
+	return pathID, true
 }
 
 // HandleAPIProxy proxies a small subset of API calls to the API service.
@@ -481,19 +610,14 @@ func (h *Handlers) HandleAPIProxy(w http.ResponseWriter, r *http.Request) {
 
 	// If the caller includes a status page id, resolve its tenant id and inject X-Tenant-ID
 	// so admin-cookie auth (which is global) can operate tenant-scoped endpoints.
-	var statusPageID uuid.UUID
-	if spIDHeader := r.Header.Get("X-Status-Page-ID"); spIDHeader != "" {
-		if parsed, err := uuid.Parse(spIDHeader); err == nil {
-			statusPageID = parsed
-		}
+	statusPageID, ok := proxyStatusPageID(r, upstreamPath)
+	if !ok {
+		http.NotFound(w, r)
+		return
 	}
-	if statusPageID == uuid.Nil && strings.HasPrefix(upstreamPath, "/api/v1/status-pages/") {
-		parts := strings.Split(strings.TrimPrefix(upstreamPath, "/api/v1/status-pages/"), "/")
-		if len(parts) > 0 {
-			if parsed, err := uuid.Parse(parts[0]); err == nil {
-				statusPageID = parsed
-			}
-		}
+	// A password or private page is not reachable through the proxy.
+	if !h.authorizeProxy(w, r, statusPageID) {
+		return
 	}
 
 	tenantHeader := ""

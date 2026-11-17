@@ -587,7 +587,7 @@ or imported groups come back empty. Any other path that creates groups through
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
   `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
-  `status_page_preview_secret`, `bootstrap_setup_code`) are the contract external secret managers
+  `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
   in the Secret. `ADMIN_COOKIE_SECURE` comes from the
@@ -963,6 +963,25 @@ or imported groups come back empty. Any other path that creates groups through
   literal `{{cspNonce}}`. Every inline `<script>` in `default.gohtml` needs
   `nonce="{{cspNonce}}"` (`TestCSPNonceContract`), and a 304 never carries a
   CSP.
+- **Visibility gate before everything** (`statuspage/access.go`, contract
+  `shared/pageaccess`): `authorize` runs first in `HandleStatusPage`, before
+  the method guard, every sub-route and the slug-keyed render cache; deny by
+  default, exempt only `/unlock` and a valid preview token on
+  `/preview/draft`. A new route or suffix (feeds, summaries, badges) needs a
+  row in `routeTable` (`TestRouteAccess_EveryRouteIsClassified` scans the
+  package). Private-without-credential answers via `writeNotFound`, identical
+  to a missing slug, from the same single `PageAccess` query. The API alone
+  writes visibility, password hashes and token hashes; sessions are stateless
+  HMAC cookies (`session.go`, `STATUS_PAGE_SESSION_SECRET`, path-scoped;
+  Helm derives it from a chart-managed `adminJwtSecret`). No
+  push on password/private pages; a surface that enumerates pages lists only
+  `pageaccess.Listed` ones. A route behind the gate writes through the
+  returned `accessWriter` (`gated()`; `markGatedResponse` forces no-store, no
+  ETag, no CORS, same-origin CORP) and gets `crossPageRequest` (another page
+  on the origin may not fetch or frame a gated page) for free. Wrong passwords
+  and kiosk tokens share `failureThrottle` (`unlock_throttle.go`: failures
+  only, `clientip` `BucketKey`, LRU-capped). Every SSE stream re-checks access
+  on its heartbeat. Migration 000114's down refuses while a page is not public.
 - **Page add-ons** (`feed.atom`, `summary.json`, badges; `addons.go`) are
   sub-routes dispatched from `HandleStatusPage` (`parsePageAddon`, every
   shape in `pageAddonRoutes`), never mux routes, so a check there covers
@@ -975,7 +994,11 @@ or imported groups come back empty. Any other path that creates groups through
   call: private, no CORS). Affected lists use the page's display names
   (`pagePublicNameSQL`). The summary is a versioned contract pinned by
   `testdata/summary_v1.golden.json`: add fields, never repurpose them. Head
-  metadata and the indexing decision live in `seo.go` (`pageIndexable`).
+  metadata and the indexing decision live in `seo.go` (`pageIndexable`:
+  only public pages are indexable, whatever `allow_search_indexing` says).
+  The gate passes its visibility on the request (`withPageVisibility`) and
+  `cachedPage` rebuilds an entry built under another one; an access change
+  invalidates the page, summary and feed together.
 
 ## Web UI conventions
 

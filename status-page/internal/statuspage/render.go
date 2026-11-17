@@ -347,7 +347,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		}
 
 		for _, monitor := range section.Monitors {
-			renderMonitor := buildStatusPageMonitorView(monitor)
+			renderMonitor := buildStatusPageMonitorView(monitor, monitorViewOptionsFor(data))
 			renderSection.Monitors = append(renderSection.Monitors, renderMonitor)
 			view.Monitors = append(view.Monitors, renderMonitor)
 			renderSection.MonitorCount++
@@ -597,7 +597,23 @@ func incidentStateRank(state string) int {
 	}
 }
 
-func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
+// monitorViewOptions are the page settings that decide what a monitor row
+// may disclose. The view leaves out what they hide, so nothing hidden can
+// reach the HTML through an attribute (data-search) or an unguarded field;
+// /data applies the same settings (publicPageData).
+type monitorViewOptions struct {
+	showURL    bool
+	showUptime bool
+}
+
+func monitorViewOptionsFor(data *StatusPageData) monitorViewOptions {
+	return monitorViewOptions{showURL: data.ShowMonitorURL, showUptime: data.ShowMonitorUptime}
+}
+
+func buildStatusPageMonitorView(monitor MonitorStatus, opts monitorViewOptions) statusPageMonitorView {
+	if !opts.showURL {
+		monitor.URL = ""
+	}
 	lastCheckUnix := int64(0)
 	lastCheckAgo := "No recent check"
 	if monitor.LastCheckTime != nil {
@@ -638,7 +654,11 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 	}
 
 	searchParts := []string{monitor.Name, monitor.URL, monitor.MonitorType, strings.Join(monitor.Tags, " ")}
-	for _, metric := range []string{latencyText, uptimeText} {
+	metrics := []string{latencyText}
+	if opts.showUptime {
+		metrics = append(metrics, uptimeText)
+	}
+	for _, metric := range metrics {
 		if metric != "" {
 			searchParts = append(searchParts, metric)
 		}
@@ -662,6 +682,12 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 	uptime7Value := uptimeValue(averageBarPoints(history7Raw))
 	uptime30Value := uptimeValue(averageBarPoints(history30Raw))
 	uptime90Value := uptimeValue(averageBarPoints(history90Raw))
+	if !opts.showUptime {
+		// The template prints the summary metric and the range values in a
+		// row's metric column and kiosk tile whatever the setting.
+		uptime1hValue, uptime24Value, uptime7Value, uptime30Value, uptime90Value = "—", "—", "—", "—", "—"
+		uptimeSort = -1
+	}
 
 	return statusPageMonitorView{
 		ID:                     monitor.ID,

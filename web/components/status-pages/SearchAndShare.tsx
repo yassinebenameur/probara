@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import { Copy } from 'lucide-react';
-import type { Monitor, StatusPage } from '@/lib/types';
+import type { Monitor, StatusPage, StatusPageVisibility } from '@/lib/types';
+import { isGatedVisibility } from '@/lib/status-page-access';
 import {
   BADGE_UPTIME_RANGES,
   badgeHtml,
@@ -20,17 +21,24 @@ import IconButton from '@/components/ui/IconButton';
 import Select from '@/components/ui/Select';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import { useToast } from '@/components/ui/ToastProvider';
+import Callout from '@/components/ui/Callout';
 import { SEO_DESCRIPTION_MAX, SEO_TITLE_MAX, type SeoSettings } from './useStatusPageFormState';
 
 interface SeoSectionProps {
   pageTitle: string;
   value: SeoSettings;
+  /** The visibility being edited: only a public page can be indexed. */
+  visibility: StatusPageVisibility;
   onChange: (value: Partial<SeoSettings>) => void;
 }
 
 /** Title, description and indexing for search results and link previews. */
-export function SeoSection({ pageTitle, value, onChange }: SeoSectionProps) {
+export function SeoSection({ pageTitle, value, visibility, onChange }: SeoSectionProps) {
   const name = pageTitle.trim() || 'My service';
+  // Unlisted, password and private pages are always noindex (the status
+  // service's pageIndexable); the stored choice is kept for a return to
+  // public.
+  const indexingForcedOff = visibility !== 'public';
   return (
     <section className="glass p-6" aria-labelledby="sp-seo-heading">
       <h3 id="sp-seo-heading" className="mb-1 text-title font-semibold text-white">SEO</h3>
@@ -63,11 +71,16 @@ export function SeoSection({ pageTitle, value, onChange }: SeoSectionProps) {
         </FormField>
         <div className="glass-well p-4">
           <Checkbox
-            checked={value.allowIndexing}
+            checked={value.allowIndexing && !indexingForcedOff}
+            disabled={indexingForcedOff}
             onChange={(checked) => onChange({ allowIndexing: checked })}
             className="!py-0"
             label={<span className="font-medium text-white">Allow search engines to index this page</span>}
-            description="Off asks crawlers not to list the page (robots noindex). The page stays public to anyone with the link."
+            description={
+              indexingForcedOff
+                ? 'Off while the page is not public: unlisted, password and private pages are never indexed.'
+                : 'Off asks crawlers not to list the page (robots noindex). The page stays public to anyone with the link.'
+            }
           />
         </div>
       </div>
@@ -95,6 +108,7 @@ export function ShareSection({ statusPage, publicUrl, monitorsById }: ShareSecti
   const [metric, setMetric] = useState<BadgeMetric>('status');
   const [range, setRange] = useState<BadgeUptimeRange>('30d');
   const uptimeShown = statusPage.settings?.show_monitor_uptime !== false;
+  const gated = isGatedVisibility(statusPage.visibility);
 
   const components = useMemo(() => {
     const seen = new Set<string>();
@@ -129,9 +143,20 @@ export function ShareSection({ statusPage, publicUrl, monitorsById }: ShareSecti
   return (
     <section className="glass p-6" aria-labelledby="sp-share-heading">
       <h3 id="sp-share-heading" className="mb-1 text-title font-semibold text-white">Share</h3>
-      <p className="mb-5 text-xs text-slate-400">
-        Public and readable from any site, like the page itself. Uptime appears only where the page shows it.
-      </p>
+      {gated ? (
+        <Callout tone="warning" className="mb-5">
+          This page is password-protected or private, so its feed, summary and badges work only for visitors who
+          have unlocked it in the same browser. Embedded on another site or polled by a feed reader they are
+          refused.
+        </Callout>
+      ) : (
+        <p className="mb-5 text-xs text-slate-400">
+          {statusPage.visibility === 'unlisted'
+            ? 'Readable by anyone with these links, like the page itself; never indexed.'
+            : 'Public and readable from any site, like the page itself.'}{' '}
+          Uptime appears only where the page shows it.
+        </p>
+      )}
       <div className="space-y-5">
         <dl className="grid gap-3 sm:grid-cols-[8rem_minmax(0,1fr)] sm:items-center">
           <dt className="text-ui font-medium text-slate-300">Atom feed</dt>

@@ -70,6 +70,10 @@ type StatusPageData struct {
 	SEOTitle            string `json:"-"`
 	SEODescription      string `json:"-"`
 	AllowSearchIndexing bool   `json:"-"`
+	// Visibility is the page's access mode as the gate read it
+	// (shared/pageaccess), set by the handler; it forces noindex
+	// (pageIndexable) and turns push off for gated pages.
+	Visibility string `json:"-"`
 	// CanonicalURL is the page's absolute public URL, injected by the
 	// handler from STATUS_PAGE_BASE_URL like PushPublicKey; "" when the
 	// deployment does not name its public origin.

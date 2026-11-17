@@ -16,6 +16,7 @@ func mountStatusPageRoutes(r chi.Router, statusPageHandlers *statuspagehandlers.
 		r.Get("/{id}", statusPageHandlers.GetStatusPage)
 		r.Patch("/{id}", statusPageHandlers.UpdateStatusPage)
 		r.Delete("/{id}", statusPageHandlers.DeleteStatusPage)
+		registerStatusPageAccessRoutes(r, statusPageHandlers) // kiosk tokens (routes_statuspage_access.go)
 
 		// Custom UI template lifecycle: export default, draft, publish,
 		// revert, reset. Sources are validated against the shared

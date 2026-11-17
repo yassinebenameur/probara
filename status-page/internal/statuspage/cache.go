@@ -58,6 +58,9 @@ type renderedPage struct {
 	summary     *pageSummary
 	summaryJSON []byte
 	summaryETag string
+	// visibility is the page access mode the entry was built under
+	// (cachedPage rebuilds an entry built under another one).
+	visibility string
 }
 
 // feedCacheKey is the cache key of a page's rendered Atom feed. The feed

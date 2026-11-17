@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/yassinebenameur/probara/shared/pageaccess"
 )
 
 // maxMetaDescriptionRunes caps a description derived from the page's own
@@ -37,8 +39,11 @@ type pageSEO struct {
 
 // pageIndexable reports whether crawlers may index the page. It is the one
 // place that decides it, for the meta tag and the X-Robots-Tag header alike.
+// Only a public page may be indexed: unlisted, password and private pages
+// are noindex whatever allow_search_indexing says (an unknown or unset
+// visibility is too, failing closed).
 func pageIndexable(data *StatusPageData) bool {
-	return data.AllowSearchIndexing
+	return data.AllowSearchIndexing && !pageaccess.NoIndex(data.Visibility)
 }
 
 // resolvePageSEO derives the head metadata. The default description is a

@@ -256,6 +256,11 @@ func NewService(db *db.Client, publisher *statusupdates.Publisher) *Service {
 func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req *models.CreateStatusPageRequest) (*models.StatusPage, error) {
 	pageID := uuid.New()
 
+	access, err := newPageAccess(req.Visibility, req.Password)
+	if err != nil {
+		return nil, err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -265,8 +270,9 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 	query := `
 		INSERT INTO status_pages (
 			id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash, password_version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), $10, $11, $12)
 	`
 
 	settingsStored := defaultStatusPageSettings().applyPatch(req.Settings)
@@ -274,6 +280,7 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 	if _, err := tx.ExecContext(ctx, query,
 		pageID, tenantID, req.Slug, req.Title, req.Description,
 		req.LogoURL, req.PrimaryColor, req.SecondaryColor, settingsJSON,
+		access.visibility, access.passwordHash, access.passwordVersion,
 	); err != nil {
 		if pgerr.IsUniqueViolation(err) {
 			return nil, ErrSlugExists
@@ -300,7 +307,8 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID) (*models.StatusPage, error) {
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash IS NOT NULL
 		FROM status_pages
 		WHERE id = $1 AND tenant_id = $2
 	`
@@ -311,6 +319,7 @@ func (s *Service) GetStatusPage(ctx context.Context, tenantID, pageID uuid.UUID)
 		&page.ID, &page.TenantID, &page.Slug, &page.Title,
 		&page.Description, &page.LogoURL, &page.PrimaryColor,
 		&page.SecondaryColor, &settingsJSON, &page.CreatedAt, &page.UpdatedAt,
+		&page.Visibility, &page.HasPassword,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrStatusPageNotFound
@@ -342,7 +351,8 @@ func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page,
 
 	query := `
 		SELECT id, tenant_id, slug, title, description, logo_url,
-			primary_color, secondary_color, settings, created_at, updated_at
+			primary_color, secondary_color, settings, created_at, updated_at,
+			visibility, password_hash IS NOT NULL
 		FROM status_pages
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -363,6 +373,7 @@ func (s *Service) ListStatusPages(ctx context.Context, tenantID uuid.UUID, page,
 			&item.ID, &item.TenantID, &item.Slug, &item.Title,
 			&item.Description, &item.LogoURL, &item.PrimaryColor,
 			&item.SecondaryColor, &settingsJSON, &item.CreatedAt, &item.UpdatedAt,
+			&item.Visibility, &item.HasPassword,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan status page: %w", err)
 		}
@@ -444,6 +455,18 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 		argIndex++
 	}
 
+	accessChanged := false
+	if req.Visibility != nil || req.Password != nil {
+		parts, accessArgs, changed, err := s.accessUpdate(ctx, tx, tenantID, pageID, req.Visibility, req.Password, argIndex)
+		if err != nil {
+			return nil, err
+		}
+		setParts = append(setParts, parts...)
+		args = append(args, accessArgs...)
+		argIndex += len(accessArgs)
+		accessChanged = changed
+	}
+
 	sectionsUpdated := false
 	switch {
 	case req.Sections != nil:
@@ -492,8 +515,13 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 	}
 
 	// Invalidate the public renderer's cached HTML so branding/settings edits
-	// show up immediately instead of after the render-cache TTL.
-	s.notifyStatusPage(tenantID, pageID, "status_page_updated")
+	// show up immediately instead of after the render-cache TTL. An access
+	// change also closes the page's open live streams (statusupdates).
+	if accessChanged {
+		s.notifyStatusPage(tenantID, pageID, statusupdates.EventStatusPageAccessChanged)
+	} else {
+		s.notifyStatusPage(tenantID, pageID, "status_page_updated")
+	}
 
 	return s.GetStatusPage(ctx, tenantID, pageID)
 }

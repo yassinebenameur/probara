@@ -266,16 +266,17 @@ func setIfAbsent(header http.Header, key, value string) {
 // own setting.
 func writeAddon(w http.ResponseWriter, r *http.Request, resp addonResponse) {
 	header := w.Header()
+	gated := isGatedPage(r)
 	etag := resp.etag
 	if etag == "" {
 		etag = computeETag(string(resp.body))
 	}
-	header.Set("ETag", etag)
-	if isGatedPage(r) {
-		header.Set("Cache-Control", "private, no-store")
-		header.Del("Access-Control-Allow-Origin")
-		header.Set("Cross-Origin-Resource-Policy", "same-origin")
+	if gated {
+		// No validator and never a 304: a no-store response must not be
+		// confirmed from a stored copy (access.go markGatedResponse).
+		markGatedResponse(header)
 	} else {
+		header.Set("ETag", etag)
 		setIfAbsent(header, "Cache-Control", "public, max-age="+strconv.Itoa(resp.maxAge))
 		setIfAbsent(header, "Access-Control-Allow-Origin", "*")
 		setIfAbsent(header, "Cross-Origin-Resource-Policy", "cross-origin")
@@ -283,7 +284,7 @@ func writeAddon(w http.ResponseWriter, r *http.Request, resp addonResponse) {
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("X-Robots-Tag", "noindex")
 	header.Set("Content-Security-Policy", resp.csp)
-	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+	if !gated && etagMatches(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}

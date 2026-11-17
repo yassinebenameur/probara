@@ -2527,6 +2527,13 @@
               'X-Requested-With': 'status-page-live-refresh'
             }
           });
+          if (response.status === 401 || response.status === 404) {
+            // The page went away or this visitor's session ended (password
+            // changed, kiosk token revoked): reload to show that instead of
+            // freezing on the last good render.
+            window.location.reload();
+            return;
+          }
           if (!response.ok) {
             return;
           }
@@ -2578,6 +2585,13 @@
           source.addEventListener('update', scheduleRefresh);
           source.addEventListener('connected', function () {});
           source.addEventListener('heartbeat', function () {});
+          source.addEventListener('error', function () {
+            // CLOSED means the server refused the reconnect (not a network
+            // blip): check the page itself, which reloads if access ended.
+            if (source.readyState === EventSource.CLOSED) {
+              void refreshLiveContent();
+            }
+          });
         } catch (err) {}
       }
 

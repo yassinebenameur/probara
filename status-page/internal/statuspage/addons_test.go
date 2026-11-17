@@ -20,6 +20,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/pageaccess"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite status-page/internal/statuspage/testdata golden files")
@@ -55,6 +56,7 @@ func addonTestData() *StatusPageData {
 		ShowGlobalUptime:    true,
 		ShowMonitorUptime:   true,
 		AllowSearchIndexing: true,
+		Visibility:          pageaccess.Public,
 		CanonicalURL:        "https://status.example.com/public/status/acme",
 		Sections: []StatusPageSectionData{
 			{ID: "s1", Title: "Edge", Monitors: []MonitorStatus{api}},
@@ -425,12 +427,15 @@ func primedHandlers(t *testing.T, data *StatusPageData) *Handlers {
 		}
 		summary := buildPageSummaryFromView(data, view, addonTestNow)
 		summaryJSON, summaryETag, err := encodeSummary(summary)
-		return renderedPage{html: html, noindex: !pageIndexable(data), summary: summary, summaryJSON: summaryJSON, summaryETag: summaryETag}, err
+		return renderedPage{html: html, noindex: !pageIndexable(data), summary: summary, summaryJSON: summaryJSON, summaryETag: summaryETag, visibility: data.Visibility}, err
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewHandlers(NewService(nil, nil), &config.StatusPageConfig{}, logger.New("status-page", "error"), NewHub(), cache, nil)
+	h := NewHandlers(NewService(nil, nil), &config.StatusPageConfig{}, logger.New("status-page", "error"), NewHub(), cache, nil)
+	// The access gate runs before the add-ons; every slug is public here.
+	h.access.store = allPublicAccess{}
+	return h
 }
 
 func serveAddonTest(h *Handlers, method, target string, header map[string]string) *httptest.ResponseRecorder {
@@ -867,6 +872,7 @@ func TestFeedIsCachedWithThePage(t *testing.T) {
 	}
 	// The service has no database: a rebuild would panic.
 	h := NewHandlers(NewService(nil, nil), &config.StatusPageConfig{}, logger.New("status-page", "error"), NewHub(), cache, nil)
+	h.access.store = allPublicAccess{}
 	for _, target := range []string{"/public/status/acme/feed.atom", "/public/status/acme/feed.atom?nocache=123"} {
 		rec := serveAddonTest(h, http.MethodGet, target, nil)
 		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/atom+xml; charset=utf-8" || rec.Header().Get("Cache-Control") != "public, max-age=300" {

@@ -51,6 +51,10 @@ func (h *Handlers) CreateStatusPage(w http.ResponseWriter, r *http.Request) {
 
 	page, err := h.service.CreateStatusPage(r.Context(), tenantUUID, &req)
 	if err != nil {
+		if errors.Is(err, statuspageservice.ErrPasswordRequired) {
+			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
 		if errors.Is(err, statuspageservice.ErrSlugExists) {
 			apierrors.WriteValidationError(w, "slug already exists")
 			return
@@ -156,6 +160,10 @@ func (h *Handlers) UpdateStatusPage(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, statuspageservice.ErrSlugExists) {
 			apierrors.WriteValidationError(w, "slug already exists")
+			return
+		}
+		if errors.Is(err, statuspageservice.ErrPasswordRequired) {
+			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{

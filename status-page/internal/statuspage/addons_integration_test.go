@@ -197,7 +197,9 @@ func TestPageAddons(t *testing.T) {
 			if rec.Code != http.StatusNotFound {
 				t.Errorf("%s = %d, want 404", target, rec.Code)
 			}
-			if rec.Header().Get("Access-Control-Allow-Origin") != "" || rec.Header().Get("Cache-Control") != "" {
+			// The not-found answer is the one a private page also gets
+			// (writeNotFound), and it is explicitly uncacheable.
+			if cc := rec.Header().Get("Cache-Control"); rec.Header().Get("Access-Control-Allow-Origin") != "" || (cc != "" && cc != "private, no-store") {
 				t.Errorf("%s: a 404 must not be marked shareable or cacheable: %v", target, rec.Header())
 			}
 		}

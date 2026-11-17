@@ -376,6 +376,15 @@ services:
       STATUS_PAGE_VAPID_PUBLIC_KEY: "${STATUS_PAGE_VAPID_PUBLIC_KEY:-}"
       STATUS_PAGE_VAPID_PRIVATE_KEY: "${STATUS_PAGE_VAPID_PRIVATE_KEY:-}"
       STATUS_PAGE_VAPID_SUBJECT: "${STATUS_PAGE_VAPID_SUBJECT:-}"
+      # Signs visitor sessions on password and private status pages (at
+      # least 32 characters; `openssl rand -hex 32`). Unset leaves those pages
+      # closed while public and unlisted pages serve as usual;
+      # scripts/install.sh generates one for release installs.
+      STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:-}"
+      # Secure flag of that session cookie: empty is on when
+      # STATUS_PAGE_BASE_URL is https://, else per request over HTTPS (behind
+      # a TLS proxy that needs TRUSTED_PROXY_CIDRS). "true"/"false" force it.
+      STATUS_PAGE_COOKIE_SECURE: "${STATUS_PAGE_COOKIE_SECURE:-}"
       # Same TRUSTED_PROXY_CIDRS and HSTS max-age as on api (the push rate
       # limit keys on the resolved client address). APP_BASE_URL, the
       # operator UI origin, joins every page's CSP frame-ancestors; empty

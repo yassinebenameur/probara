@@ -14,12 +14,15 @@ import (
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
-// pushTestHandlers builds Handlers with no database. Every test below is
+// pushTestHandlers builds Handlers with no database. The access gate answers
+// every slug as a public page from memory; past it, every test below is
 // rejected by a guard that runs before any query, which is the point: these
 // are the checks that must hold without touching Postgres.
 func pushTestHandlers(t *testing.T, cfg *config.StatusPageConfig) *Handlers {
 	t.Helper()
-	return NewHandlers(nil, cfg, logger.New("status-page", "error"), NewHub(), newRenderCache(0), nil)
+	h := NewHandlers(nil, cfg, logger.New("status-page", "error"), NewHub(), newRenderCache(0), nil)
+	h.access.store = allPublicAccess{}
+	return h
 }
 
 func pushConfiguredConfig() *config.StatusPageConfig {
