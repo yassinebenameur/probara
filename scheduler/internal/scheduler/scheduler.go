@@ -23,6 +23,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -128,6 +129,9 @@ type Scheduler struct {
 	purger *purger
 
 	occurrences *occurrenceRoller
+
+	// workspacePurge removes soft-deleted workspaces (purger_tenants.go).
+	workspacePurge *workspacePurger
 }
 
 // NewScheduler creates a new scheduler instance
@@ -255,6 +259,21 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		BatchSize:     cfg.MonitorPurgeBatchSize,
 		MaxRowsPerRun: cfg.MonitorPurgeMaxRowsPerRun,
 	})
+	s.workspacePurge = newWorkspacePurger(dbClient, log, &workspacePurgeMetrics{
+		rows: metricsRegistry.NewCounter(
+			"workspace_purge_rows_total", "Rows deleted by the purge of deleted workspaces", []string{}).With(prometheus.Labels{}),
+		workspaces: metricsRegistry.NewCounter(
+			"workspace_purge_workspaces_total", "Deleted workspaces fully purged", []string{}).With(prometheus.Labels{}),
+		errors: metricsRegistry.NewCounter(
+			"workspace_purge_errors_total", "Failed workspace purge runs", []string{}).With(prometheus.Labels{}),
+		pending: metricsRegistry.NewGauge(
+			"workspace_purge_pending", "Deleted workspaces whose data is still being purged", []string{}).With(prometheus.Labels{}),
+		runDuration: metricsRegistry.NewHistogram(
+			"workspace_purge_run_duration_seconds", "Duration of workspace purge runs", []string{}, nil).With(prometheus.Labels{}),
+	}, purgerOptions{
+		BatchSize:     cfg.MonitorPurgeBatchSize,
+		MaxRowsPerRun: cfg.MonitorPurgeMaxRowsPerRun,
+	})
 	s.occurrences = &occurrenceRoller{
 		added: metricsRegistry.NewCounter(
 			"maintenance_occurrences_added_total", "Maintenance occurrences materialized by the horizon roll", []string{}),
@@ -350,6 +369,9 @@ func (s *Scheduler) Start() error {
 			s.triggerRollupMaintenance()
 		case <-purgeTicker.C:
 			s.triggerMonitorPurge()
+			if s.config.MonitorPurgeEnabled {
+				s.workspacePurge.trigger(s.ctx)
+			}
 		case <-meshTicker.C:
 			if s.config.MeshEnabled {
 				s.runMeshBatch(s.ctx)
@@ -447,9 +469,12 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 	// Every tenant, including data_retention_days = 0: raw check results are
 	// capped at monitorstate.CheckResultsRawRetentionDays even when the tenant
 	// keeps telemetry forever.
+	// Deleted workspaces are left to the workspace purge, which removes
+	// everything they hold.
 	query := `
 		SELECT id, data_retention_days
 		FROM tenants
+		WHERE ` + tenancy.LiveTenantSQL("tenants.id") + `
 		ORDER BY id
 	`
 	rows, err := s.db.QueryContext(ctx, query)
@@ -613,6 +638,8 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 		WHERE enabled = true
 		  AND deleted_at IS NULL
 		  AND type <> ALL($2)
+		  -- A deleted workspace's monitors are never dispatched again.
+		  AND ` + tenancy.LiveTenantSQL("monitors.tenant_id") + `
 		  AND (next_run_at IS NULL OR next_run_at <= NOW())
 		ORDER BY next_run_at NULLS FIRST, id
 		LIMIT $1

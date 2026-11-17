@@ -1026,6 +1026,13 @@ api:
         },
         {
           type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to workspace management: migrate first',
+          text:
+            'Workspace delete (migration 000116 adds `tenants.deleted_at`) is checked by API-key validation, workspace lists and every scheduler, alerter, worker and status-page loop, which read that column directly so the database can plan them well. Until the migration has run, new pods fail those queries (API keys are refused, checks stop being dispatched). Run the migrations first (the `migrate` command or Job, before upgrading the chart, whose own migration Job is a post-upgrade hook), then roll every service, as for the maintenance migrations above. Session sign-in tolerates the old schema and never grants more access because of it.',
+        },
+        {
+          type: 'callout',
           tone: 'info',
           title: 'Upgrading to a release with chain expiry, multi-echo ping and failure capture',
           text:

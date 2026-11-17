@@ -147,7 +147,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "For an administrator cookie, send `X-Tenant-ID: <tenant-id>` to select an allowed membership. A supported `tenant_id` query fallback can select context where middleware permits it. API keys ignore caller-selected tenant values and remain pinned to one tenant. A malformed `X-Tenant-ID` or `tenant_id` is rejected with HTTP 400 (`bad_request`) before the route runs. Tenant-scoped routes apply the same rule to the tenant context they are handed: `400 validation_error` when it is not a UUID, `401 unauthorized` when there is none.",
+            "For an administrator cookie, send `X-Tenant-ID: <tenant-id>` to select an allowed membership. A supported `tenant_id` query fallback can select context where middleware permits it. API keys ignore caller-selected tenant values and remain pinned to one tenant. A malformed `X-Tenant-ID` or `tenant_id` is rejected with HTTP 400 (`bad_request`) before the route runs. Tenant-scoped routes apply the same rule to the tenant context they are handed: `400 validation_error` when it is not a UUID, `401 unauthorized` when there is none. A session or MCP token that selects a workspace it cannot open gets `404` with the error code `workspace_not_found`: a [deleted](/docs/administration/#workspaces) or unknown workspace (superadmins too) and, for a member, one they do not belong to; the answer is the same in every case. A deleted workspace's API keys get `401`. Do not send `X-Tenant-ID` on the platform-scoped `/tenants` routes.",
         },
         {
           type: "code",
@@ -1098,6 +1098,22 @@ export const API_PAGE: DocPage = {
             [
               "`GET /api/v1/tenants`",
               "Admin session; list membership-filtered tenants or all for superadmin",
+            ],
+            [
+              "`GET /api/v1/tenants/overview`",
+              "Superadmin; every live [workspace](/docs/administration/#workspaces) with `member_count`, `monitor_count` and `protected` (cannot be deleted)",
+            ],
+            [
+              "`POST /api/v1/tenants`",
+              "Superadmin; create a workspace from `{\"name\"}` (1–100 characters, unique among live workspaces; `409` when taken)",
+            ],
+            [
+              "`PATCH /api/v1/tenants/{id}`",
+              "Superadmin; rename a workspace (`{\"name\"}`)",
+            ],
+            [
+              "`DELETE /api/v1/tenants/{id}`",
+              "Superadmin; delete a workspace for good. The body `{\"confirm_name\"}` must repeat its name (`400` otherwise); `409` for the default workspace, the SSO provisioning one and the last one. Answers `{id, name, deleted_at}`; the data is purged in the background",
             ],
             [
               "`GET /api/v1/tenant-settings`",

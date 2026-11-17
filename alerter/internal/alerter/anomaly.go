@@ -12,6 +12,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/anomaly"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // anomalyConfig is the effective latency-anomaly config for one monitor,
@@ -121,6 +122,7 @@ func (a *Alerter) loadAnomalyConfigs(ctx context.Context) ([]anomalyConfig, erro
 		JOIN tenants t ON t.id = m.tenant_id
 		WHERE t.latency_anomaly_enabled = TRUE
 		  AND m.enabled = TRUE AND m.deleted_at IS NULL
+		  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 		  AND m.type <> 'group'
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`)
@@ -362,6 +364,7 @@ func (a *Alerter) resolveOrphanLatencyAlerts(ctx context.Context, keep []uuid.UU
 		JOIN monitors m ON m.id = al.monitor_id
 		WHERE al.kind = 'latency_anomaly'
 		  AND al.status IN ('active', 'acknowledged')
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND NOT (al.monitor_id = ANY($1))
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`, pq.Array(keep))

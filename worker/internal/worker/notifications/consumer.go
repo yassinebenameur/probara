@@ -35,6 +35,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // DefaultBackOff is the delayed-NAK schedule after a failed attempt:
@@ -169,8 +170,8 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	channel, err := c.loadChannel(ctx, envelope.ChannelID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// Channel was deleted while the message was in flight. Drop —
-			// retrying won't help.
+			// Channel (or its workspace) was deleted while the message was
+			// in flight. Drop — retrying won't help.
 			entry.Warn("Channel no longer exists; dropping message")
 			return nil
 		}
@@ -544,10 +545,13 @@ func (c *Consumer) loadChannel(ctx context.Context, channelIDStr string) (*loade
 		return nil, fmt.Errorf("invalid channel id %q: %w", channelIDStr, err)
 	}
 
+	// A channel of a deleted workspace reads as gone, so a notification
+	// queued before the delete is dropped like one for a deleted channel:
+	// nothing is sent and nothing is recorded (shared/tenancy).
 	row := c.db.QueryRowContext(ctx, `
 		SELECT name, type, config, is_active
 		FROM alert_channels
-		WHERE id = $1
+		WHERE id = $1 AND `+tenancy.LiveTenantSQL("alert_channels.tenant_id")+`
 	`, id)
 
 	var channel loadedChannel

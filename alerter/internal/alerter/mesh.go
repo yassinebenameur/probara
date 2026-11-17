@@ -11,6 +11,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // meshEdgeSubject holds the identity of one mesh alert's directed edge.
@@ -79,6 +80,7 @@ func (a *Alerter) openMeshEdgeAlerts(ctx context.Context) error {
 		JOIN locations sl ON sl.id = ms.source_location_id
 		JOIN locations tl ON tl.id = ms.target_location_id
 		WHERE ms.current_state = 'down'
+		  AND `+tenancy.LiveTenantSQL("ms.tenant_id")+`
 		  AND NOT EXISTS (
 			SELECT 1 FROM alerts al
 			WHERE al.kind = 'mesh_edge'
@@ -188,6 +190,7 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 			AND ms.target_location_id = al.target_location_id
 		WHERE al.kind = 'mesh_edge'
 		  AND al.status IN ('active', 'acknowledged')
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND (ms.source_location_id IS NULL OR ms.current_state = 'up')
 	`)
 	if err != nil {
@@ -281,6 +284,7 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 		WHERE al.kind = 'mesh_edge'
 		  AND al.status IN ('active', 'acknowledged')
 		  AND ms.current_state = 'down'
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND NOT `+alertrouting.SuppressedByOfflineLocationPredicate("al")+`
 	`)
 	if err != nil {

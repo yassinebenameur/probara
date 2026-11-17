@@ -24,6 +24,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -475,7 +476,9 @@ func LookupAccessToken(ctx context.Context, dbClient *db.Client, token string) (
 	err := dbClient.QueryRowContext(ctx, `
 		SELECT g.id, g.admin_user_id, g.tenant_id, g.scope, g.last_used_at
 		FROM mcp_oauth_tokens t JOIN mcp_oauth_grants g ON g.id = t.grant_id
-		WHERE t.token_hash = $1 AND t.kind = 'access' AND t.expires_at > NOW() AND g.revoked_at IS NULL`,
+		WHERE t.token_hash = $1 AND t.kind = 'access' AND t.expires_at > NOW() AND g.revoked_at IS NULL
+		  -- A grant's workspace deleted: its connection ends with it.
+		  AND `+tenancy.LiveTenantSQL("g.tenant_id"),
 		hashToken(token)).Scan(&id.GrantID, &id.AdminUserID, &id.TenantID, &id.Scope, &lastUsed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrInvalidGrant
@@ -497,6 +500,7 @@ func (s *Service) ListGrants(ctx context.Context, adminUserID uuid.UUID) ([]Gran
 		JOIN mcp_oauth_clients c ON c.id = g.client_id
 		JOIN tenants t ON t.id = g.tenant_id
 		WHERE g.admin_user_id = $1 AND g.revoked_at IS NULL
+		  AND `+tenancy.LiveTenantSQL("g.tenant_id")+`
 		ORDER BY g.created_at DESC`, adminUserID)
 	if err != nil {
 		return nil, err

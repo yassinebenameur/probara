@@ -1,25 +1,37 @@
 'use client';
 
-import { KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { KeyboardEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronsUpDown } from 'lucide-react';
+import { Check, ChevronsUpDown, Plus } from 'lucide-react';
 import { hasApiKey } from '@/lib/auth';
 import {
+  TENANTS_CHANGED_EVENT,
   clearSelectedTenantId,
   emitTenantChange,
+  emitTenantsChanged,
   getSelectedTenantId,
+  selectTenant,
   setSelectedTenantId,
 } from '@/lib/tenant';
-import { getTenants } from '@/lib/api';
+import { createWorkspace, getTenants } from '@/lib/api';
 import type { Tenant } from '@/lib/types';
 import { useSelectedTenantId } from '@/components/providers/TenantProvider';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 import { useTooltip } from '@/components/ui/Tooltip';
+import { useToast } from '@/components/ui/ToastProvider';
+import WorkspaceNameDialog from '@/components/workspaces/WorkspaceNameDialog';
+
+// The select's value for its "New workspace" entry; never a tenant ID.
+const NEW_WORKSPACE = '__new_workspace__';
 
 /**
  * Tenant picker in the sidebar foot. Admin sessions load the tenant list,
  * settle the selection (stored id if still valid, else the first tenant) and
- * announce it; the picker only renders when there is more than one tenant.
+ * announce it, again whenever the list may have changed
+ * (TENANTS_CHANGED_EVENT: a workspace created, renamed or deleted, or the
+ * selected one found deleted). The picker renders when there is more than one
+ * tenant, and always for superadmins, whose picker ends in "New workspace".
  * Mounted once: the sidebar is a single instance on every breakpoint, and
  * the collapsed rail passes `rail` to this same instance (a square initials
  * button opening a portaled menu) rather than rendering a second copy, so the
@@ -29,12 +41,21 @@ export default function TenantSwitcher({ rail = false }: { rail?: boolean }) {
   const [mounted, setMounted] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const { isSuperadmin, loading: userLoading } = useCurrentUser();
+  const { showToast } = useToast();
+  const canCreate = isAdmin && isSuperadmin && !userLoading;
   // The provider is the single source of truth for the selection; this picker
   // only writes to it, so no local copy can drift out of sync.
   const selectedTenantId = useSelectedTenantId();
+  // Bumped by TENANTS_CHANGED_EVENT to load the list again.
+  const [listVersion, setListVersion] = useState(0);
 
   useEffect(() => {
     setMounted(true);
+    const reload = () => setListVersion((v) => v + 1);
+    window.addEventListener(TENANTS_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(TENANTS_CHANGED_EVENT, reload);
   }, []);
 
   useEffect(() => {
@@ -72,20 +93,57 @@ export default function TenantSwitcher({ rail = false }: { rail?: boolean }) {
     return () => {
       isActive = false;
     };
-  }, [mounted]);
+  }, [mounted, listVersion]);
 
-  if (!isAdmin || tenants.length <= 1) return null;
+  // Creating switches into the new workspace at once.
+  const create = useCallback(
+    async (name: string) => {
+      const tenant = await createWorkspace(name);
+      setCreating(false);
+      selectTenant(tenant.id);
+      emitTenantsChanged();
+      showToast(`Workspace “${tenant.name}” created`, 'success');
+    },
+    [showToast]
+  );
+
+  if (!isAdmin || (tenants.length <= 1 && !canCreate)) return null;
 
   const select = (tenantId: string) => {
+    if (tenantId === NEW_WORKSPACE) {
+      setCreating(true);
+      return;
+    }
     setSelectedTenantId(tenantId);
     emitTenantChange();
   };
 
+  const createDialog = creating ? (
+    <WorkspaceNameDialog
+      title="New workspace"
+      description="An empty workspace with its own monitors, alerting, status pages and members. You switch to it once it is created."
+      submitLabel="Create workspace"
+      onSubmit={create}
+      onClose={() => setCreating(false)}
+    />
+  ) : null;
+
   if (rail) {
-    return <TenantRailMenu tenants={tenants} selectedTenantId={selectedTenantId} onSelect={select} />;
+    return (
+      <>
+        <TenantRailMenu
+          tenants={tenants}
+          selectedTenantId={selectedTenantId}
+          onSelect={select}
+          onCreate={canCreate ? () => setCreating(true) : undefined}
+        />
+        {createDialog}
+      </>
+    );
   }
 
   return (
+    <>
     <label className="block">
       <span className="mb-1 block px-1 text-2xs font-medium text-slate-500">Workspace</span>
       <span className="relative block">
@@ -99,6 +157,7 @@ export default function TenantSwitcher({ rail = false }: { rail?: boolean }) {
             {tenant.name}
           </option>
         ))}
+        {canCreate && <option value={NEW_WORKSPACE}>New workspace…</option>}
       </select>
       <ChevronsUpDown
         className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500"
@@ -107,6 +166,8 @@ export default function TenantSwitcher({ rail = false }: { rail?: boolean }) {
       />
       </span>
     </label>
+    {createDialog}
+    </>
   );
 }
 
@@ -134,10 +195,13 @@ function TenantRailMenu({
   tenants,
   selectedTenantId,
   onSelect,
+  onCreate,
 }: {
   tenants: Tenant[];
   selectedTenantId: string | null;
   onSelect: (tenantId: string) => void;
+  /** Superadmins only: the "New workspace" item at the end of the menu. */
+  onCreate?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -206,7 +270,9 @@ function TenantRailMenu({
       closeToTrigger();
       return;
     }
-    const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? []);
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"], [role="menuitem"]') ?? []
+    );
     if (items.length === 0) return;
     const index = items.indexOf(document.activeElement as HTMLElement);
     let next: number | null = null;
@@ -285,6 +351,26 @@ function TenantRailMenu({
                 );
               })}
             </div>
+            {onCreate && (
+              <>
+                <div className="my-1 border-t border-[var(--input-edge)]" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  tabIndex={-1}
+                  onClick={() => {
+                    close();
+                    onCreate();
+                  }}
+                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui text-slate-300 transition-colors duration-fast ${FOCUS_RING_INSET} hover:bg-well-hover hover:text-white focus-visible:bg-well-hover focus-visible:text-white active:bg-control-hover`}
+                >
+                  <span aria-hidden="true" className="flex h-6 w-6 flex-shrink-0 items-center justify-center">
+                    <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">New workspace</span>
+                </button>
+              </>
+            )}
           </div>,
           document.body
         )}

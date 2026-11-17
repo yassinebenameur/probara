@@ -126,6 +126,30 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- **Deleted workspaces are refused at the shared lookup.** Workspace delete
+  is a soft delete (`tenants.deleted_at`, superadmins only,
+  `api/internal/services/tenants/workspaces.go`); the API never runs
+  `DELETE FROM tenants`. Every query that resolves a credential or tenant, or
+  iterates tenant data in a background loop, adds
+  `shared/tenancy.LiveTenantSQL` (or `DeletedTenantSQL` where an unknown ID
+  must stay distinct), filtered before any `LIMIT`; the alerter's
+  notification claim and the check-result insert (`monitorstate.insertResult`)
+  are the last gates. The fragments name `tenants.deleted_at` so the planner
+  has statistics: migration 000116 must run before the binaries serve
+  (upgrade notes in `website/lib/docs/pages/deployment.ts`). The one tolerant
+  read is the auth `identityQuery` (`to_jsonb`), because its missing-schema
+  fallback treats every admin as a superadmin; never add another. It answers
+  `404 workspace_not_found` for any workspace the caller cannot open
+  (deleted, purged, unknown, or a member's non-membership). The scheduler's
+  workspace purge (`scheduler/internal/scheduler/purger_tenants.go`, own
+  advisory lock) removes the data, blanking secret columns first
+  (`workspaceScrubPlan`): a new table holding tenant data (a `tenant_id`
+  column or a foreign key into such a table) goes into `workspacePurgePlan`
+  (before the tables it references) or `workspacePurgeExempt`, gets a row in
+  the test's `workspaceFixtureSQL`, and any secret column gets a scrub step
+  (`TestWorkspacePurgePlanCoversEveryTenantTable`,
+  `TestWorkspacePurge_RemovesEveryRowAndSparesOtherWorkspaces`,
+  `TestWorkspacePurge_ScrubsSecretsFirst`).
 - API routes are registered by the `mount*Routes` functions in
   `api/internal/api/routes_*.go`; `NewServer` (`server.go`) builds the
   services and handlers and calls them in order.
@@ -1010,7 +1034,10 @@ or imported groups come back empty. Any other path that creates groups through
   listeners — only components *outside* that subtree (Sidebar,
   `useFleetHealth`, CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
   redirect to their list page on a switch (`/users/[id]` excepted: users are
-  platform-scoped).
+  platform-scoped). A change to the workspace list (create, rename, delete,
+  or a `workspace_not_found` answer, handled in `lib/api/core.ts`) emits
+  `TENANTS_CHANGED_EVENT`, which only `TenantSwitcher` listens to: it reloads
+  the list and settles the selection again.
 - **Folded routes stay as redirects**: Mesh is a tab of Locations and
   the alert channel list is a tab of Settings (`?tab=`, via
   `components/ui/Tabs.tsx` `useUrlTab`). `/mesh` and `/alert-channels` are

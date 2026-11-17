@@ -13,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // offlineLocation is one location_offline alert's subject.
@@ -179,6 +180,8 @@ func (a *Alerter) loadLocationFleet(ctx context.Context) (locationFleet, error) 
 			SELECT l.*, MAX(l.last_seen_at) FILTER (WHERE `+recent+`) OVER () AS newest
 			FROM locations l
 			WHERE l.deleted_at IS NULL
+			  -- A deleted workspace's locations are cut off, not silent.
+			  AND `+tenancy.LiveTenantSQL("l.tenant_id")+`
 		)
 		SELECT
 			COUNT(*) FILTER (WHERE l.enabled AND l.last_seen_at IS NOT NULL AND NOT `+offline+`),
@@ -268,6 +271,7 @@ func (a *Alerter) openLocationOfflineAlerts(ctx context.Context, fleet locationF
 		FROM locations l
 		WHERE `+monitorstate.LocationOfflinePredicate("l")+`
 		  AND `+monitorstate.LocationWithinOfflineHorizonPredicate("l")+`
+		  AND `+tenancy.LiveTenantSQL("l.tenant_id")+`
 		  AND NOT EXISTS (
 			SELECT 1 FROM alerts al
 			WHERE al.kind = 'location_offline'
@@ -381,6 +385,7 @@ func (a *Alerter) resolveLocationOfflineAlerts(ctx context.Context) error {
 		LEFT JOIN locations l ON l.id = al.source_location_id
 		WHERE al.kind = 'location_offline'
 		  AND al.status IN ('active', 'acknowledged')
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND NOT COALESCE(`+monitorstate.LocationOfflinePredicate("l")+`, FALSE)
 	`)
 	if err != nil {
@@ -437,6 +442,7 @@ func (a *Alerter) dispatchOpenLocationOfflineAlerts(ctx context.Context) error {
 		WHERE al.kind = 'location_offline'
 		  AND al.status IN ('active', 'acknowledged')
 		  AND `+monitorstate.LocationOfflinePredicate("l")+`
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 	`)
 	if err != nil {
 		return fmt.Errorf("query open location offline alerts: %w", err)
