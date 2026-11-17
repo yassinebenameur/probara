@@ -121,10 +121,10 @@ export const API_PAGE: DocPage = {
           type: "table",
           columns: ["Public authentication route", "Purpose"],
           rows: [
-            ["`POST /api/v1/auth/login`", "Local username/password login"],
-            ["`POST /api/v1/auth/refresh`", "Rotate and refresh an admin session"],
-            ["`POST /api/v1/auth/logout`", "Revoke the current refresh session and clear cookies"],
-            ["`GET /api/v1/auth/me`", "Read the current session user when present"],
+            ["`POST /api/v1/auth/login`", "Local username/password login; every refusal (unknown user, wrong password, [locked account](/docs/security/#sign-in-lockout-sessions)) is the same `401`"],
+            ["`POST /api/v1/auth/refresh`", "Rotate the refresh token inside its session; a rotated token presented again after 60 seconds signs the session out"],
+            ["`POST /api/v1/auth/logout`", "Sign the current session out (its refresh and access tokens) and clear cookies"],
+            ["`GET /api/v1/auth/me`", "Read the current session user when present (`401` once the session is signed out)"],
             ["`GET /api/v1/auth/oidc/status`", "Report OIDC availability"],
             ["`GET /api/v1/auth/oidc/start`", "Begin authorization-code + PKCE login"],
             ["`GET /api/v1/auth/oidc/callback`", "Complete the provider callback"],
@@ -1141,6 +1141,34 @@ export const API_PAGE: DocPage = {
             [
               "`DELETE /api/v1/users/{id}`",
               "Superadmin; delete subject to last-admin/self safeguards",
+            ],
+            [
+              "`POST /api/v1/users/{id}/unlock`",
+              "Superadmin; lift a password sign-in lockout and clear the failure count; returns `was_locked`",
+            ],
+            [
+              "`GET /api/v1/users/{id}/sessions`",
+              "Superadmin; the user's live sessions (`client`, `ip`, `auth_method`, `created_at`, `last_used_at`, `expires_at`)",
+            ],
+            [
+              "`DELETE /api/v1/users/{id}/sessions/{sessionId}`",
+              "Superadmin; sign one of the user's sessions out",
+            ],
+            [
+              "`DELETE /api/v1/users/{id}/sessions`",
+              "Superadmin; sign the user out everywhere (your own account: everywhere else); returns `revoked`",
+            ],
+            [
+              "`GET /api/v1/account/sessions`",
+              "Signed-in browser session only (no API key or MCP token); your live sessions, `current` marking this one",
+            ],
+            [
+              "`DELETE /api/v1/account/sessions/{id}`",
+              "Signed-in browser session only; sign one of your sessions out",
+            ],
+            [
+              "`POST /api/v1/account/sessions/revoke-others`",
+              "Signed-in browser session only; sign out everywhere but this session; returns `revoked`",
             ],
             [
               "`GET /api/v1/oidc-group-mappings`",

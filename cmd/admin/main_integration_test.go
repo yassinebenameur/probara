@@ -64,3 +64,52 @@ func TestUpsertSuperadmin_ExistingUserIsResetPromotedAndReenabled(t *testing.T) 
 		t.Fatalf("got role=%q hash=%q disabled=%v, want superadmin/new-hash/enabled", role, hash, disabled)
 	}
 }
+
+func TestUpsertSuperadmin_LiftsLockoutAndEndsSessions(t *testing.T) {
+	ctx := context.Background()
+	client, teardown := testutil.SetupPostgresDB(ctx, t)
+	defer teardown()
+
+	var userID string
+	if err := client.QueryRowContext(ctx, `
+		INSERT INTO admin_users (username, password_hash, platform_role, failed_login_count, locked_until)
+		VALUES ('locked-ops', 'old-hash', 'superadmin', 3, NOW() + INTERVAL '10 minutes')
+		RETURNING id
+	`).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	var familyID string
+	if err := client.QueryRowContext(ctx, `
+		INSERT INTO admin_session_families (admin_user_id, auth_method, expires_at)
+		VALUES ($1, 'password', NOW() + INTERVAL '1 day') RETURNING id
+	`, userID).Scan(&familyID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := client.ExecContext(ctx, `
+		INSERT INTO admin_sessions (admin_user_id, refresh_token_hash, expires_at, family_id)
+		VALUES ($1, 'h', NOW() + INTERVAL '1 day', $2)
+	`, userID, familyID); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+
+	if err := upsertSuperadmin(ctx, client, "locked-ops", "new-hash"); err != nil {
+		t.Fatalf("upsertSuperadmin() error = %v", err)
+	}
+
+	var count int
+	var locked, familyRevoked, tokenRevoked bool
+	if err := client.QueryRowContext(ctx, `
+		SELECT u.failed_login_count, u.locked_until IS NOT NULL,
+		       (SELECT revoked_at IS NOT NULL FROM admin_session_families WHERE id = $2),
+		       (SELECT revoked_at IS NOT NULL FROM admin_sessions WHERE family_id = $2)
+		FROM admin_users u WHERE u.id = $1
+	`, userID, familyID).Scan(&count, &locked, &familyRevoked, &tokenRevoked); err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if count != 0 || locked {
+		t.Fatalf("lockout = %d/%v, want cleared", count, locked)
+	}
+	if !familyRevoked || !tokenRevoked {
+		t.Fatalf("session revoked = %v/%v, want both", familyRevoked, tokenRevoked)
+	}
+}

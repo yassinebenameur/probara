@@ -164,7 +164,7 @@ export const MCP_PAGE: DocPage = {
             ["Status pages", "pages, sections and settings, custom template draft/publish/revert, template library"],
             ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message), `list_channel_deliveries` (a channel's delivery history, filterable by outcome)"],
             ["Workspace", "local AI settings, `export_ai_labels`, API keys, workspace settings, audit log"],
-            ["Platform", "`list_tenants`, users, SSO group mappings (superadmins)"],
+            ["Platform", "`list_tenants`, users, SSO group mappings (superadmins), and another user's sign-in: `unlock_user`, `list_user_sessions`, `revoke_user_session`, `revoke_user_sessions` (superadmins). Your own sessions (Account → Sessions) are browser-only and not tools"],
           ],
         },
         {

@@ -39,6 +39,7 @@ import {
   sidebarShortcutLabel,
 } from '@/lib/sidebar-shortcut';
 import TenantSwitcher from './TenantSwitcher';
+import AccountLink from './AccountLink';
 import FleetHealth, { CountBadge } from './FleetHealth';
 import { RAIL_ROW_MOTION, railGutter, railLabel, railRowPadding } from './rail';
 import { useSidebarCollapsed } from './useSidebarCollapsed';
@@ -468,6 +469,7 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
             <TenantSwitcher rail={footerRail} />
             <div className={`flex ${footerRail ? 'flex-col items-start gap-0.5' : 'items-center gap-1'}`}>
               <SignOutButton rail={footerRail} onClick={handleLogout} />
+              {!apiKeyMode && <AccountLink rail={footerRail} onNavigate={onClose} />}
               <ThemeToggle tooltip={footerRail} className={footerRail ? '!h-10 !w-10' : ''} />
             </div>
           </div>

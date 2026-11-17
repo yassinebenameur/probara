@@ -49,7 +49,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token stays valid for a 60-second reuse window so concurrent refreshes from parallel requests or multiple tabs do not end the session. Disabled users are checked against database state on authenticated requests.",
+            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token stays valid for a 60-second reuse window so concurrent refreshes from parallel requests or multiple tabs do not end the session; presented again after that window, it signs its session out. Each sign-in is one [session](#sign-in-lockout-sessions) across those rotations, checked on every request, so signing a session out takes effect at once. Disabled users are checked against database state on authenticated requests.",
         },
       ],
     },
@@ -151,6 +151,22 @@ export const ADMINISTRATION_PAGE: DocPage = {
           title: "Membership patches replace the list",
           text:
             "When updating memberships, send the complete intended set. Treating the field as an incremental add operation can accidentally remove tenant access.",
+        },
+      ],
+    },
+    {
+      id: "sign-in-lockout-sessions",
+      title: "Sign-in lockout and sessions",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Ten failed password sign-ins in a row lock that account's password sign-in for 15 minutes; a successful sign-in resets the count and the lock lifts on its own. The sign-in page answers a locked account exactly like a wrong password, so the user is not told they are locked beyond the rule the page states. Users shows a **Locked** badge, and the user's page shows when the lock ends, the current run of failures, and **Unlock sign-in** (`POST /api/v1/users/{id}/unlock`, MCP `unlock_user`), which lifts the lock and clears the count. Unlocking and locking are audited (`user.unlock`, `auth.lockout`). SSO sign-ins are never locked. What bounds abuse of the lock, and its anti-enumeration design, are in [Security](/docs/security/#sign-in-lockout-sessions).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every user manages their own sessions under **Account → Sessions** (the account menu in the sidebar): each sign-in, password or SSO, with its browser, client address, sign-in time and last activity, this device marked; sign out one, or everywhere else. A superadministrator sees and signs out any user's sessions on that user's page (`GET`/`DELETE /api/v1/users/{id}/sessions`, `DELETE /api/v1/users/{id}/sessions/{sessionId}`; MCP `list_user_sessions`, `revoke_user_session`, `revoke_user_sessions`). A signed-out session stops working on its next request. Setting a user's password signs them out everywhere (your own: everywhere else); deleting a user ends all their sessions; a lockout, an unlock and role or membership changes end none. Signing out an SSO session does not sign the user out of the identity provider. API keys and MCP connections are not sessions and are managed under Settings.",
         },
       ],
     },
