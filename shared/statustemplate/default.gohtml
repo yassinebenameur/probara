@@ -3,7 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{.Title}} · Status</title>
+  <title>{{.SEOTitle}}</title>
+  <meta name="description" content="{{.MetaDescription}}" />
+  <meta name="robots" content="{{.Robots}}" />
+  {{if .CanonicalURL}}<link rel="canonical" href="{{.CanonicalURL}}" />
+  <meta property="og:url" content="{{.CanonicalURL}}" />
+  {{end}}<meta property="og:type" content="website" />
+  <meta property="og:site_name" content="{{.SiteName}}" />
+  <meta property="og:title" content="{{.SEOTitle}}" />
+  <meta property="og:description" content="{{.MetaDescription}}" />
+  {{if .OGImageURL}}<meta property="og:image" content="{{.OGImageURL}}" />
+  {{end}}<meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="{{.SEOTitle}}" />
+  <meta name="twitter:description" content="{{.MetaDescription}}" />
+  <link rel="alternate" type="application/atom+xml" title="{{.SEOTitle}}" href="{{.FeedURL}}" />
+  <link rel="alternate" type="application/json" title="{{.SEOTitle}} summary" href="{{.SummaryURL}}" />
   <!-- Monochrome trace mark, inlined as a data URI so it needs no asset route
        and survives any path prefix or custom domain. Inverts with the browser
        chrome so the tile never disappears into the tab strip. A page's

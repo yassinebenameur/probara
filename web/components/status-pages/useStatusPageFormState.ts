@@ -40,7 +40,21 @@ export interface FormState {
   password: string;
   /** Submit password: '' to remove the stored password. */
   clearPassword: boolean;
+  /** Search and link-preview settings, also stored in the settings JSONB. */
+  seo: SeoSettings;
 }
+
+export interface SeoSettings {
+  /** '' uses "<title> · Status". */
+  title: string;
+  /** '' uses the page description, else a fixed sentence naming the page. */
+  description: string;
+  /** On by default: a public page is meant to be found. */
+  allowIndexing: boolean;
+}
+
+export const SEO_TITLE_MAX = 120;
+export const SEO_DESCRIPTION_MAX = 300;
 
 export const DEFAULT_PRIMARY = '#ff8a5c';
 export const DEFAULT_SECONDARY = '#64748b';
@@ -108,6 +122,11 @@ export function initialState(statusPage?: StatusPage): FormState {
     visibility: statusPage?.visibility ?? 'public',
     password: '',
     clearPassword: false,
+    seo: {
+      title: statusPage?.settings?.seo_title || '',
+      description: statusPage?.settings?.seo_description || '',
+      allowIndexing: statusPage?.settings?.allow_search_indexing !== false,
+    },
   };
 }
 
@@ -140,7 +159,8 @@ export type Action =
   | { type: 'set_push_notifications'; value: boolean }
   | { type: 'set_visibility'; value: StatusPageVisibility }
   | { type: 'set_password'; value: string }
-  | { type: 'set_clear_password'; value: boolean };
+  | { type: 'set_clear_password'; value: boolean }
+  | { type: 'set_seo'; value: Partial<SeoSettings> };
 
 export function reducer(state: FormState, action: Action): FormState {
   switch (action.type) {
@@ -162,6 +182,9 @@ export function reducer(state: FormState, action: Action): FormState {
 
     case 'set_clear_password':
       return { ...state, clearPassword: action.value, password: action.value ? '' : state.password };
+
+    case 'set_seo':
+      return { ...state, seo: { ...state.seo, ...action.value } };
 
     case 'add_section': {
       const section = makeSection(action.title || 'New section', action.id);

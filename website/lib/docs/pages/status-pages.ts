@@ -14,6 +14,8 @@ export const STATUS_PAGES_PAGE: DocPage = {
     "status page template",
     "SSE",
     "custom CSS",
+    "status badge",
+    "Atom feed",
   ],
   sections: [
     {
@@ -85,9 +87,9 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`show_monitor_url`",
-              "Present in the settings schema; not currently wired into the built-in template",
+              "Off keeps each monitor's target out of the built-in page, including its search filter and the row's detail line (which otherwise falls back to the target), and out of `/data`",
             ],
-            ["`show_monitor_uptime`", "Controls per-monitor uptime in the built-in view"],
+            ["`show_monitor_uptime`", "Controls per-monitor uptime in the built-in view. Off removes it everywhere on the page: the uptime strips, the metric column and kiosk tiles (shown as `—`), the search filter, `/data`, `summary.json` and the uptime badges"],
             [
               "`show_monitor_tls`",
               "Present in the settings schema; not currently wired into the built-in template",
@@ -125,6 +127,18 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`csp_mode`",
               "The page's [Content-Security-Policy](#content-security-policy): `strict`, `compatible`, `off`, or empty for automatic. Set in the template editor's Quick branding panel",
             ],
+            [
+              "`seo_title`",
+              "The page's `<title>`, `og:title` and `twitter:title`, up to 120 characters. Empty uses `<title> · Status`. See [search and link previews](#search-and-previews)",
+            ],
+            [
+              "`seo_description`",
+              "The meta, Open Graph and Twitter description, up to 300 characters. Empty uses the page description, else a fixed sentence naming the page",
+            ],
+            [
+              "`allow_search_indexing`",
+              "On by default. Off sends `noindex, nofollow` in a robots meta tag and an `X-Robots-Tag` header; the page stays public. Applies to public pages only: unlisted, password and private pages are always `noindex, nofollow` (the settings UI shows the toggle forced off)",
+            ],
           ],
         },
         {
@@ -160,7 +174,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`GET /public/status/{slug}/data`",
-              "Public JSON-shaped page data used by the renderer and clients",
+              "Public JSON-shaped page data for clients. It carries only what the page's settings show: no uptime with `show_monitor_uptime` off, no target URL with `show_monitor_url` off, no average latency with `show_latency_charts` off, no tags with `show_monitor_tags` off and no certificate dates with `show_monitor_tls` off",
             ],
             [
               "`GET /public/status/{slug}/stream`",
@@ -186,6 +200,22 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`POST /public/status/{slug}/unlock`",
               "The password form's target on a password page; sets the visitor session cookie. `GET` returns to the page",
             ],
+            [
+              "`GET /public/status/{slug}/feed.atom`",
+              "Atom feed of published incidents and listed maintenance; see [feed, summary and badges](#feed-summary-badges)",
+            ],
+            [
+              "`GET /public/status/{slug}/summary.json`",
+              "Versioned machine-readable summary of the page",
+            ],
+            [
+              "`GET /public/status/{slug}/badge.svg`",
+              "Overall status badge",
+            ],
+            [
+              "`GET /public/status/{slug}/monitors/{id}/badge.svg` and `…/uptime.svg`",
+              "Status and uptime badges of a component the page shows",
+            ],
           ],
         },
         {
@@ -208,28 +238,143 @@ export const STATUS_PAGES_PAGE: DocPage = {
       ],
     },
     {
+      id: "search-and-previews",
+      title: "Search and link previews",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The built-in head carries a `<title>`, a meta description, a robots meta tag, Open Graph tags (`og:type`, `og:site_name`, `og:title`, `og:description`, and `og:image` when the page logo is an absolute `http`/`https` URL) and a `summary` Twitter card. With `STATUS_PAGE_BASE_URL` set on the status service it also carries a canonical link and `og:url`; without it they are left out rather than guessed. Two `<link rel=\"alternate\">` tags point feed readers and tools at the page's Atom feed and `summary.json`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The default description never states the current status. Search engines and link previews keep a snapshot for days, and \"All systems operational\" frozen in a search result during an outage misleads more than it helps; the page title already says what the page is. Set `seo_description` to describe your services in your own words.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Custom templates receive the same values as `.SEOTitle`, `.MetaDescription`, `.SiteName`, `.CanonicalURL` (empty without a public origin), `.OGImageURL` (empty unless the logo is absolute), `.Robots` (`index, follow` or `noindex, nofollow`), `.FeedURL` and `.SummaryURL`. A template that prints no robots tag is still covered: with indexing off every page response carries `X-Robots-Tag: noindex, nofollow`. Indexing is off for every page that is not [public](#visibility). The unlock form of a password page carries none of these tags: only the page title, its logo and `noindex, nofollow`; a private page without a credential answers `404` with no head at all.",
+        },
+      ],
+    },
+    {
+      id: "feed-summary-badges",
+      title: "Feed, summary and badges",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Each page publishes three read-only add-ons beside it. They show nothing the page itself does not: the same rendered components, the same published incidents and the same maintenance list. Components are named as the page names them, including in incident and maintenance \"affected\" lists: the display name the page gives the monitor, else the monitor's own name. For a public or unlisted page they are readable from any site (`Access-Control-Allow-Origin: *`, never with credentials), carry an `ETag` and answer `If-None-Match` with `304`; every add-on is sent with `X-Content-Type-Options: nosniff`, a `default-src 'none'` Content-Security-Policy and `X-Robots-Tag: noindex`, and returns `404` for an unknown page. A password or private page's add-ons pass the same [access check](#visibility) as the page and work only for a browser that has unlocked it, privately — see the table there.",
+        },
+        {
+          type: "table",
+          columns: ["Add-on", "Content and caching"],
+          rows: [
+            [
+              "`feed.atom`",
+              "Atom 1.0 (`application/atom+xml`). One entry per published incident, the 50 most recently changed that are unresolved or changed in the last 90 days, each quoting its five newest public updates; unpublished incidents and internal notes never appear. One entry per maintenance window the page lists, at its occurrence in progress or next one. Entry ids are stable and specific to the page: an incident keeps its id through every update, the same incident on two pages is a different entry in each feed, and each occurrence of a repeating window is its own entry. Text is plain (`type=\"text\"`), so incident wording never becomes markup in a reader. Built at most once per render-cache TTL and dropped with the page's cache on a change, whatever query string a request carries. `Cache-Control: public, max-age=300`",
+            ],
+            [
+              "`summary.json`",
+              "The page summary described below. Shares the page's render, so it is at most as stale as the page (the render cache TTL, `STATUS_PAGE_CACHE_TTL`). Its `ETag` ignores `generated_at`, so a poll answers `304` while the data is unchanged. `Cache-Control: public, max-age=60`",
+            ],
+            [
+              "`badge.svg`",
+              "Overall status: `operational`, `maintenance`, or on an \"Issues detected\" page the worst component state (`outage`, `degraded`, `unknown`). `Cache-Control: public, max-age=60`",
+            ],
+            [
+              "`monitors/{id}/badge.svg`",
+              "A component's status: `operational`, `degraded`, `down`, `maintenance` or `unknown`. `{id}` is the monitor id; a monitor the page does not render has no badge (`404`), including the members of a group the page shows only as the group",
+            ],
+            [
+              "`monitors/{id}/uptime.svg?range=30d`",
+              "A component's uptime over `1h`, `24h`, `7d`, `30d` (default) or `90d`, computed and rounded exactly as the page shows it. `404` when the page hides per-component uptime (`show_monitor_uptime` off)",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Badges are SVG images measured on the server with fixed 11 px text, so they keep their size whatever font the viewer has, and use mid-tone colours that read on light and dark backgrounds. `?style=flat` (default, rounded) or `?style=square` is the only style parameter; the label is always the component's public name or `status`, never caller text. The operator UI's Share panel on each page's settings builds the URLs and Markdown/HTML snippets.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "`summary.json` (`schema_version` 1) is a stable contract: fields are only added, and a removal or change of meaning bumps the version. Its fields:",
+        },
+        {
+          type: "table",
+          columns: ["Field", "Meaning"],
+          rows: [
+            ["`schema_version`", "Contract version, currently `1`"],
+            [
+              "`page`",
+              "`slug`, `title`, and `url` (the canonical URL; omitted without `STATUS_PAGE_BASE_URL`)",
+            ],
+            [
+              "`status`",
+              "`indicator` (`operational`, `issues` or `maintenance`, the page headline's rule), `description` (the headline text) and `counts` of components: `total`, `operational`, `degraded`, `down`, `maintenance`, `unknown`",
+            ],
+            [
+              "`uptime`",
+              "Page-level availability in percent for `1h`, `24h`, `7d`, `30d` and `90d` (each `null` without data), or `null` when the page hides its uptime summary (`show_global_uptime` off)",
+            ],
+            [
+              "`sections[]`",
+              "`title`, `status` (worst component) and `components[]`, each with `id`, `name`, `status` and `uptime` (the same shape, or `null` when `show_monitor_uptime` is off)",
+            ],
+            [
+              "`incidents[]`",
+              "Unresolved published incidents: `id`, `title`, `state`, `published_at`, `affected_components` and `latest_update` (`message`, `created_at`, or `null`)",
+            ],
+            [
+              "`maintenance[]`",
+              "Listed windows: `title`, `starts_at`, `ends_at`, `in_progress`, `repeating`, `next_starts_at` and `affected_components`",
+            ],
+            ["`generated_at`", "When the page data was read (RFC 3339 UTC)"],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Shared caches may hold an add-on for its max-age",
+          text:
+            "A proxy or image cache (for example a README image proxy) may keep serving a badge or summary for up to 60 seconds, and a feed for up to 5 minutes, after the page changes. Plan around that delay when you remove a component or change what a page shows.",
+        },
+      ],
+    },
+    {
       id: "visibility",
       title: "Visibility and kiosk tokens",
       blocks: [
         {
           type: "table",
-          columns: ["Visibility", "Who can view it", "Search engines"],
+          columns: ["Visibility", "Who can view it", "Search engines", "Feed, summary and badges"],
           rows: [
-            ["`public` (default)", "Anyone with the URL", "May index it"],
+            [
+              "`public` (default)",
+              "Anyone with the URL",
+              "May index it (`allow_search_indexing`)",
+              "Public: readable from any site, cached by shared caches for their max-age, embeddable",
+            ],
             [
               "`unlisted`",
               "Anyone with the URL. A hidden link, not access control: anyone who learns the URL can share it",
-              "Asked not to: every response carries `X-Robots-Tag: noindex` and the page a robots meta tag. Never named on a listing, sitemap or other discovery surface",
+              "Never: every response carries `X-Robots-Tag: noindex, nofollow` and the page a robots meta tag, whatever `allow_search_indexing` says. Never named on a listing, sitemap or other discovery surface",
+              "As for a public page: anyone with the URLs can read and embed them",
             ],
             [
               "`password`",
               "Visitors who enter the page's password, and browsers opened with a kiosk token. Everyone else gets the unlock form",
-              "Not indexed",
+              "Never",
+              "Only for a browser that unlocked the page: `private, no-store`, no `ETag`, no CORS grant, `Cross-Origin-Resource-Policy: same-origin`. Refused (`401`) to everyone else, so they cannot be embedded on another site or polled by a feed reader",
             ],
             [
               "`private`",
               "Only browsers opened with a kiosk token. Everyone else gets exactly the response of a page that does not exist",
-              "Not indexed",
+              "Never",
+              "Only for a browser with a kiosk session, privately as for a password page. Everyone else gets `404`, the same as a page that does not exist",
             ],
           ],
         },
@@ -260,7 +405,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           columns: ["Route", "Password page, no session", "Private page, no session"],
           rows: [
             ["The page", "Unlock form (`401`)", "`404`, same as a missing page"],
-            ["`/data`, `/stream`, and every other sub-route, including ones added later", "`401`", "`404`, same as a missing page"],
+            ["`/data`, `/stream`, `summary.json`, `feed.atom`, the badges, and every other sub-route, including ones added later", "`401`", "`404`, same as a missing page"],
             ["`/preview/draft`", "`401` unless it carries a valid preview token", "`404` unless it carries a valid preview token"],
             ["`/push/subscribe`", "`401`; with a session still `404` — no notifications on gated pages", "`404`"],
             ["`/unlock`", "Checks the password", "`404`, same as a missing page"],
@@ -280,7 +425,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Pages on one origin are isolated from each other as far as the browser allows: a password or private page answers a request from another status page on the same origin — a script fetching it, or a frame — as if the visitor had no credential (`Sec-Fetch-Site` together with `Referer`; a same-origin sub-request without a `Referer` is refused; browsers without `Sec-Fetch-*` get the `Referer` check alone), and its `frame-ancestors` names only the operator UI, never `'self'`. A link from another page (a top-level navigation) still works.",
+            "Pages on one origin are isolated from each other as far as the browser allows: a password or private page answers a request from another status page on the same origin — a script fetching it, or a frame — as if the visitor had no credential (`Sec-Fetch-Site` together with `Referer`; a same-origin sub-request without a `Referer` is refused; browsers without `Sec-Fetch-*` get the `Referer` check alone), and its `frame-ancestors` names only the operator UI, never `'self'`. A link from another page (a top-level navigation) still works. The add-ons follow the same rules: another status page cannot read a gated page's summary or feed, or show its badge, with the visitor's cookie. A gated badge embedded on another site is refused as well: the session cookie is `SameSite=Lax`, which browsers do not attach to a cross-site image or `fetch`, so the request arrives with no credential.",
         },
         {
           type: "callout",
@@ -634,7 +779,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Exercise unknown, suspect, degraded, down, maintenance, and incident states in a safe preview environment.",
             "Check custom HTML/CSS for content security, accessibility, focus states, contrast, and responsive overflow.",
             "Configure the preview secret and confirm the public status service has a reachable API/data path.",
-            "Choose the page's visibility; for a password or private page, confirm `STATUS_PAGE_SESSION_SECRET` is set and open it once through the unlock form or a kiosk URL.",
+            "Choose the page's visibility; for a password or private page, confirm `STATUS_PAGE_SESSION_SECRET` is set and open it once through the unlock form or a kiosk URL. Its feed, summary and badges then work only in a browser that unlocked it.",
             "Publish, open the anonymous route in a clean browser session, and verify SSE/fallback refresh behavior.",
           ],
         },

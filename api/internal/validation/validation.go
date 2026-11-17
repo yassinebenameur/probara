@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -577,6 +578,12 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 		if _, ok := securityheaders.ParseCSPMode(*settings.CSPMode); !ok {
 			return fmt.Errorf("csp_mode must be strict, compatible, off, or empty for automatic")
 		}
+	}
+	if settings.SEOTitle != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEOTitle)) > models.MaxSEOTitleLength {
+		return fmt.Errorf("seo_title must be %d characters or less", models.MaxSEOTitleLength)
+	}
+	if settings.SEODescription != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEODescription)) > models.MaxSEODescriptionLength {
+		return fmt.Errorf("seo_description must be %d characters or less", models.MaxSEODescriptionLength)
 	}
 	return nil
 }

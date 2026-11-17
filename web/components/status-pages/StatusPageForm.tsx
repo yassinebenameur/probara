@@ -21,6 +21,7 @@ import SectionList from './SectionList';
 import PagePreview from './PagePreview';
 import PageAccessFields from './PageAccessFields';
 import { pageAccessError, pageAccessPayload } from '@/lib/status-page-access';
+import { SeoSection, ShareSection } from './SearchAndShare';
 import {
   DEFAULT_PRIMARY,
   DEFAULT_SECONDARY,
@@ -65,6 +66,11 @@ function snapshot(state: FormState): string {
     visibility: state.visibility,
     password: state.password !== '',
     clearPassword: state.clearPassword,
+    seo: {
+      title: state.seo.title.trim(),
+      description: state.seo.description.trim(),
+      allowIndexing: state.seo.allowIndexing,
+    },
     sections: state.sections.map((section) => ({
       title: section.title.trim(),
       monitors: section.monitors.map((m) => ({
@@ -90,6 +96,7 @@ export default function StatusPageForm({
   const requestedGroupsRef = useRef(new Set<string>());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const formRef = useRef<HTMLFormElement>(null);
+  const accessRef = useRef<HTMLElement>(null);
   // Once the user edits the slug by hand, stop deriving it from the title.
   const slugTouchedRef = useRef(!!statusPage);
 
@@ -253,9 +260,11 @@ export default function StatusPageForm({
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
-      if (nextErrors.slug || nextErrors.title || nextErrors.access) {
-        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (nextErrors.slug || nextErrors.title) {
         formRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      } else if (nextErrors.access) {
+        accessRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
       }
       return;
     }
@@ -299,7 +308,13 @@ export default function StatusPageForm({
       monitor_ids: orderedMonitorIds,
       monitor_display_names: monitorDisplayNames,
       sections: normalizedSections,
-      settings: { enable_push_notifications: state.enablePushNotifications },
+      // '' clears an SEO override; the API trims and stores nothing.
+      settings: {
+        enable_push_notifications: state.enablePushNotifications,
+        seo_title: state.seo.title.trim(),
+        seo_description: state.seo.description.trim(),
+        allow_search_indexing: state.seo.allowIndexing,
+      },
       ...pageAccessPayload(state),
     };
 
@@ -417,17 +432,6 @@ export default function StatusPageForm({
               description="Let visitors opt in to a browser notification when a component here goes down, and when it recovers. Requires a VAPID keypair on the status-page service; without one the control is not shown."
             />
           </div>
-
-          <PageAccessFields
-            visibility={state.visibility}
-            hasStoredPassword={statusPage?.has_password === true}
-            password={state.password}
-            clearPassword={state.clearPassword}
-            error={errors.access}
-            onVisibilityChange={(value) => dispatch({ type: 'set_visibility', value })}
-            onPasswordChange={(value) => dispatch({ type: 'set_password', value })}
-            onClearPasswordChange={(value) => dispatch({ type: 'set_clear_password', value })}
-          />
         </div>
       </section>
 
@@ -457,6 +461,42 @@ export default function StatusPageForm({
           dispatch={dispatch}
           onAddSection={handleAddSection}
         />
+      </div>
+
+      <div className="min-w-0 space-y-6 xl:col-start-1 xl:row-start-3">
+        {/* Who may see the page comes first: it decides what SEO and Share
+            below can do (only public pages are indexed; a gated page's
+            feed and badges work only for visitors who unlocked it). */}
+        <section ref={accessRef} className="glass p-6" aria-labelledby="sp-access-heading">
+          <h3 id="sp-access-heading" className="mb-1 text-title font-semibold text-white">Access</h3>
+          <p className="mb-5 text-xs text-slate-400">
+            Who can open the page. Kiosk tokens for wall displays are managed below the form once the page is saved.
+          </p>
+          <PageAccessFields
+            visibility={state.visibility}
+            hasStoredPassword={statusPage?.has_password === true}
+            password={state.password}
+            clearPassword={state.clearPassword}
+            error={errors.access}
+            onVisibilityChange={(value) => dispatch({ type: 'set_visibility', value })}
+            onPasswordChange={(value) => dispatch({ type: 'set_password', value })}
+            onClearPasswordChange={(value) => dispatch({ type: 'set_clear_password', value })}
+          />
+        </section>
+        <SeoSection
+          pageTitle={state.basics.title}
+          value={state.seo}
+          visibility={state.visibility}
+          onChange={(value) => dispatch({ type: 'set_seo', value })}
+        />
+        {/* From the saved page: its links and badges exist only once saved. */}
+        {statusPage && (
+          <ShareSection
+            statusPage={statusPage}
+            publicUrl={resolveStatusPagePublicUrl(statusPage)}
+            monitorsById={monitorsById}
+          />
+        )}
       </div>
 
       {/* Pinned to the viewport only while there is something to save: a clean

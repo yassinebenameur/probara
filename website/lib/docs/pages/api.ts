@@ -955,7 +955,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, plus [draft preview](/docs/status-pages/#preview-security). Do not use those public routes to mutate configuration.",
+            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, the [feed, `summary.json` and badges](/docs/status-pages/#feed-summary-badges), plus [draft preview](/docs/status-pages/#preview-security). Do not use those public routes to mutate configuration.",
         },
       ],
     },

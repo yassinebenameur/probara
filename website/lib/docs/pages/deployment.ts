@@ -602,7 +602,7 @@ kubectl -n probara get jobs`,
             [
               '`statusPage.baseUrl`',
               'Empty',
-              'Passed as `STATUS_PAGE_BASE_URL`, which currently has no runtime use.',
+              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links. Empty omits the canonical link and `og:url` and keeps the other links root-relative.',
             ],
             [
               '`statusPage.service.*`',

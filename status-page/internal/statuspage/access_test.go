@@ -30,6 +30,9 @@ import (
 
 const testSessionSecret = "test-session-secret-0123456789abcdef"
 
+// addonRouteTestID is a component ID for the monitor add-on routes.
+const addonRouteTestID = "00000000-0000-0000-0000-000000000001"
+
 // allPublicAccess answers every slug as a public page.
 type allPublicAccess struct{}
 
@@ -155,9 +158,12 @@ func newAccessFixture(t *testing.T, secret string) *accessFixture {
 	h.access.store = store
 	// Every page already rendered and cached, as after a visit while it
 	// was public: the gate, not the cache, must decide.
-	for slug := range store.pages {
+	for slug, p := range store.pages {
 		html := "<!DOCTYPE html><html><head><title>t</title></head><body><header>h</header>" + pageSentinel + "</body></html>"
-		_, _, _ = h.cache.GetPage(slug, func() (renderedPage, error) { return renderedPage{html: html}, nil })
+		visibility := p.Visibility
+		_, _, _ = h.cache.GetPage(slug, func() (renderedPage, error) {
+			return renderedPage{html: html, visibility: visibility}, nil
+		})
 	}
 	return &accessFixture{h: h, store: store, password: "open sesame", token: token, tokenID: tokenID, logs: logs}
 }
@@ -237,6 +243,13 @@ var routeTable = []struct {
 	{"/push/subscribe", classGated, http.MethodPost},
 	{"/push/unsubscribe", classGated, http.MethodPost},
 	{"/unlock", classUnlock, http.MethodPost},
+	// Page add-ons (addons.go pageAddonRoutes): gated like the page, and
+	// private on a gated page (gatedPageRequest).
+	{"/summary.json", classGated, http.MethodGet},
+	{"/feed.atom", classGated, http.MethodGet},
+	{"/badge.svg", classGated, http.MethodGet},
+	{"/monitors/" + addonRouteTestID + "/badge.svg", classGated, http.MethodGet},
+	{"/monitors/" + addonRouteTestID + "/uptime.svg", classGated, http.MethodGet},
 	// Not routed: proves an unknown sub-route is gated too.
 	{"/some-future-route.json", classGated, http.MethodGet},
 }
@@ -333,6 +346,15 @@ func TestRouteAccess_EveryRouteIsClassified(t *testing.T) {
 	}
 	if len(found) == 0 {
 		t.Fatal("found no route literals; did the dispatcher change shape?")
+	}
+	// Add-on routes are matched by segment (parsePageAddon), not by a path
+	// literal, so their table is checked directly.
+	for _, route := range pageAddonRoutes {
+		concrete := strings.ReplaceAll(strings.TrimPrefix(route, "{slug}"), "{id}", addonRouteTestID)
+		if _, ok := parsePageAddon("acme" + concrete); !ok {
+			t.Fatalf("pageAddonRoutes entry %q does not parse", route)
+		}
+		found = append(found, concrete)
 	}
 
 	var missing []string
@@ -463,7 +485,7 @@ func TestAccess_ModesOnEveryRoute(t *testing.T) {
 			}
 			if acc.Visibility == pageaccess.Unlisted {
 				aw.WriteHeader(http.StatusOK)
-				if rec.Header().Get("X-Robots-Tag") != "noindex" {
+				if rec.Header().Get("X-Robots-Tag") != robotsNoIndex {
 					t.Errorf("unlisted %s: missing X-Robots-Tag", row.route)
 				}
 			}
@@ -480,7 +502,7 @@ func TestAccess_PasswordPageShowsUnlockForm(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`action="/public/status/locked/unlock"`, "Locked &lt;Corp&gt;", `name="robots" content="noindex"`, "--accent: #123abc"} {
+	for _, want := range []string{`action="/public/status/locked/unlock"`, "Locked &lt;Corp&gt;", `name="robots" content="noindex, nofollow"`, "--accent: #123abc"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("unlock page lacks %q", want)
 		}
@@ -541,7 +563,7 @@ func TestAccess_PasswordUnlockFlow(t *testing.T) {
 	if page.Header().Get("Cache-Control") != "private, no-store" || page.Header().Get("ETag") != "" {
 		t.Fatalf("gated page headers: %v", page.Header())
 	}
-	if page.Header().Get("X-Robots-Tag") != "noindex" || !strings.Contains(page.Body.String(), `<head><meta name="robots" content="noindex" />`) {
+	if page.Header().Get("X-Robots-Tag") != robotsNoIndex || !strings.Contains(page.Body.String(), `<head><meta name="robots" content="noindex, nofollow" />`) {
 		t.Fatal("gated page is not noindex")
 	}
 	// A validator never turns a gated response into a 304.
@@ -785,8 +807,8 @@ func TestAccess_TokenNotLogged(t *testing.T) {
 func TestAccess_UnlistedAndPublicHeaders(t *testing.T) {
 	f := newAccessFixture(t, testSessionSecret)
 	unlisted := f.get("/public/status/hidden")
-	if unlisted.Code != http.StatusOK || unlisted.Header().Get("X-Robots-Tag") != "noindex" ||
-		!strings.Contains(unlisted.Body.String(), `name="robots" content="noindex"`) {
+	if unlisted.Code != http.StatusOK || unlisted.Header().Get("X-Robots-Tag") != robotsNoIndex ||
+		!strings.Contains(unlisted.Body.String(), `name="robots" content="noindex, nofollow"`) {
 		t.Fatalf("unlisted page = %d %v", unlisted.Code, unlisted.Header())
 	}
 	public := f.get("/public/status/open")
@@ -845,9 +867,9 @@ func TestAccess_ProxyRefusesGatedPages(t *testing.T) {
 
 func TestNoIndexMeta(t *testing.T) {
 	cases := map[string]string{
-		"<html><head><title>x</title></head></html>":           `<html><head><meta name="robots" content="noindex" /><title>x</title></head></html>`,
-		`<html><HEAD lang="en"><title>x</title></head></html>`: `<html><HEAD lang="en"><meta name="robots" content="noindex" /><title>x</title></head></html>`,
-		"<body><header>h</header></body>":                      `<meta name="robots" content="noindex" /><body><header>h</header></body>`,
+		"<html><head><title>x</title></head></html>":           `<html><head><meta name="robots" content="noindex, nofollow" /><title>x</title></head></html>`,
+		`<html><HEAD lang="en"><title>x</title></head></html>`: `<html><HEAD lang="en"><meta name="robots" content="noindex, nofollow" /><title>x</title></head></html>`,
+		"<body><header>h</header></body>":                      `<meta name="robots" content="noindex, nofollow" /><body><header>h</header></body>`,
 	}
 	for in, want := range cases {
 		if got := noIndexMeta(in); got != want {

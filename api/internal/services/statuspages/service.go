@@ -62,6 +62,10 @@ type statusPageSettingsStored struct {
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
 
 	CSPMode string `json:"csp_mode,omitempty"`
+
+	SEOTitle            *string `json:"seo_title,omitempty"`
+	SEODescription      *string `json:"seo_description,omitempty"`
+	AllowSearchIndexing bool    `json:"allow_search_indexing"`
 }
 
 type statusPageSectionInput struct {
@@ -97,6 +101,8 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		// Off by default: it makes the public page ask visitors for a browser
 		// permission, which is the operator's call to make.
 		EnablePushNotifications: false,
+		// A public page is meant to be found; the operator opts out.
+		AllowSearchIndexing: true,
 	}
 }
 
@@ -164,6 +170,15 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 		// row) reads as automatic.
 		s.CSPMode, _ = securityheaders.ParseCSPMode(*patch.CSPMode)
 	}
+	if patch.SEOTitle != nil {
+		s.SEOTitle = trimOptionalString(patch.SEOTitle)
+	}
+	if patch.SEODescription != nil {
+		s.SEODescription = trimOptionalString(patch.SEODescription)
+	}
+	if patch.AllowSearchIndexing != nil {
+		s.AllowSearchIndexing = *patch.AllowSearchIndexing
+	}
 	return s
 }
 
@@ -192,6 +207,7 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 	allowThemeToggle := s.AllowThemeToggle
 	enablePushNotifications := s.EnablePushNotifications
 	cspMode := s.CSPMode
+	allowSearchIndexing := s.AllowSearchIndexing
 	return &models.StatusPageSettings{
 		ShowMonitorTags:         &showMonitorTags,
 		ShowMonitorURL:          &showMonitorURL,
@@ -209,6 +225,9 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 		CustomHeadHTML:          s.CustomHeadHTML,
 		CustomFooterHTML:        s.CustomFooterHTML,
 		CSPMode:                 &cspMode,
+		SEOTitle:                s.SEOTitle,
+		SEODescription:          s.SEODescription,
+		AllowSearchIndexing:     &allowSearchIndexing,
 	}
 }
 

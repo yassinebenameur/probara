@@ -36,7 +36,24 @@ type StatusPageSettings struct {
 	// custom CSS, custom head/footer HTML or a published custom template,
 	// else strict). See shared/securityheaders.
 	CSPMode *string `json:"csp_mode,omitempty"`
+	// SEOTitle and SEODescription override the public page's <title> and
+	// search/link-preview description (up to MaxSEOTitleLength and
+	// MaxSEODescriptionLength characters). "" clears an override: the page
+	// then uses "<title> · Status" and its description, else a fixed
+	// sentence naming the page.
+	SEOTitle       *string `json:"seo_title,omitempty"`
+	SEODescription *string `json:"seo_description,omitempty"`
+	// AllowSearchIndexing lets search engines index the page. On by
+	// default; off sends noindex in a robots meta tag and X-Robots-Tag.
+	AllowSearchIndexing *bool `json:"allow_search_indexing,omitempty"`
 }
+
+// Bounds of the SEO overrides. Search results show about 60 and 160
+// characters; link previews a little more.
+const (
+	MaxSEOTitleLength       = 120
+	MaxSEODescriptionLength = 300
+)
 
 // StatusPageTemplateVersion summarizes one stored custom-template row.
 type StatusPageTemplateVersion struct {

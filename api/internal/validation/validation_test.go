@@ -419,6 +419,36 @@ func TestValidateStatusPageUpdate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "seo overrides within bounds",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					SEOTitle:       ptr(strings.Repeat("é", models.MaxSEOTitleLength)),
+					SEODescription: ptr(strings.Repeat("é", models.MaxSEODescriptionLength)),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "seo title too long",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					SEOTitle: ptr(strings.Repeat("a", models.MaxSEOTitleLength+1)),
+				},
+			},
+			wantErr:     true,
+			errContains: "seo_title must be 120 characters or less",
+		},
+		{
+			name: "seo description too long",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					SEODescription: ptr(strings.Repeat("a", models.MaxSEODescriptionLength+1)),
+				},
+			},
+			wantErr:     true,
+			errContains: "seo_description must be 300 characters or less",
+		},
+		{
 			name: "invalid csp mode update",
 			req: &models.UpdateStatusPageRequest{
 				Settings: &models.StatusPageSettings{

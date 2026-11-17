@@ -577,7 +577,7 @@ func TestBuildStatusPageMonitorView_SIPShowsTLSDays(t *testing.T) {
 		MonitorType:        "sip",
 		Status:             "up",
 		TLSDaysUntilExpiry: &days,
-	})
+	}, monitorViewOptions{showURL: true, showUptime: true})
 	if view.TLSDetail != "TLS expires in 12 days" {
 		t.Fatalf("TLSDetail = %q, want %q", view.TLSDetail, "TLS expires in 12 days")
 	}
@@ -597,9 +597,10 @@ func TestBuildStatusPageRenderView_OneHourStrips(t *testing.T) {
 	minutes[21].Uptime = -1
 
 	view := buildStatusPageRenderView(&StatusPageData{
-		ID:              "page-1",
-		Title:           "Example Status",
-		UptimeHistory1h: minutes,
+		ShowMonitorUptime: true,
+		ID:                "page-1",
+		Title:             "Example Status",
+		UptimeHistory1h:   minutes,
 		Monitors: []MonitorStatus{{
 			ID:              "monitor-1",
 			Name:            "API",
@@ -644,5 +645,51 @@ func TestBuildStatusPageRenderView_OneHourStrips(t *testing.T) {
 	}
 	if got := monitorUptimeLabel("1h"); got != "1h uptime" {
 		t.Fatalf("monitorUptimeLabel(1h) = %q", got)
+	}
+}
+
+// show_monitor_url and show_monitor_uptime off: neither the target nor the
+// component's uptime reaches the HTML, including the data-search attribute
+// the client-side filter reads and the metric column the template prints
+// whatever the setting.
+func TestRenderPublicStatusPage_HidesURLAndUptimeTheSettingsHide(t *testing.T) {
+	uptime := 97.31
+	render := func(showURL, showUptime bool) string {
+		t.Helper()
+		html, err := renderPublicStatusPage(&StatusPageData{
+			ID:                "page-1",
+			Slug:              "acme",
+			Title:             "Acme",
+			DefaultTheme:      "dark",
+			ShowMonitorURL:    showURL,
+			ShowMonitorUptime: showUptime,
+			Monitors: []MonitorStatus{{
+				ID:          "monitor-1",
+				Name:        "API",
+				MonitorType: "push",
+				Status:      "up",
+				URL:         "https://internal-target.example/health",
+				Uptime24h:   &uptime,
+				UptimeHistory24h: []HourlyUptime{
+					{Hour: "2026-03-01T00:00", Uptime: 97.31},
+				},
+			}},
+		}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return html
+	}
+	hidden := render(false, false)
+	for _, leak := range []string{"internal-target.example", "97.31"} {
+		if strings.Contains(hidden, leak) {
+			t.Errorf("hidden setting leaked %q into the page", leak)
+		}
+	}
+	shown := render(true, true)
+	for _, want := range []string{"internal-target.example", "97.31"} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("shown setting lost %q", want)
+		}
 	}
 }

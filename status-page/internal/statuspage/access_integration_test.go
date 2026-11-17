@@ -81,6 +81,14 @@ func TestAccessIntegration(t *testing.T) {
 	if rec := get("/public/status/int-private"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Checkout API") {
 		t.Fatalf("public render = %d", rec.Code)
 	}
+	// Its add-ons too: summary and badges share the page's cache entry, the
+	// feed has its own, all keyed by slug.
+	for _, p := range []string{"/summary.json", "/feed.atom", "/badge.svg"} {
+		rec := get("/public/status/int-private" + p)
+		if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Cache-Control"), "public") {
+			t.Fatalf("public %s = %d %v", p, rec.Code, rec.Header())
+		}
+	}
 	exec(`UPDATE status_pages SET visibility = 'private' WHERE id = $1`, privateID)
 
 	t.Run("private is indistinguishable from missing on every route", func(t *testing.T) {
@@ -115,7 +123,7 @@ func TestAccessIntegration(t *testing.T) {
 		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Checkout API") {
 			t.Fatalf("page with token session = %d", page.Code)
 		}
-		if page.Header().Get("Cache-Control") != "private, no-store" || page.Header().Get("X-Robots-Tag") != "noindex" {
+		if page.Header().Get("Cache-Control") != "private, no-store" || page.Header().Get("X-Robots-Tag") != robotsNoIndex {
 			t.Fatalf("gated page headers = %v", page.Header())
 		}
 		data := get("/public/status/int-private/data", session)
@@ -125,6 +133,16 @@ func TestAccessIntegration(t *testing.T) {
 		}
 		if data.Header().Get("Cache-Control") != "private, no-store" {
 			t.Fatal("/data of a gated page is cacheable")
+		}
+		for _, p := range []string{"/summary.json", "/feed.atom", "/badge.svg", "/monitors/" + monitorID.String() + "/badge.svg"} {
+			rec := get("/public/status/int-private"+p, session)
+			if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "private, no-store" ||
+				rec.Header().Get("Access-Control-Allow-Origin") != "" || rec.Header().Get("ETag") != "" {
+				t.Fatalf("%s with a token session = %d %v", p, rec.Code, rec.Header())
+			}
+		}
+		if !strings.Contains(get("/public/status/int-private", session).Body.String(), `content="noindex, nofollow"`) {
+			t.Fatal("private page head is not noindex")
 		}
 
 		exec(`UPDATE status_page_access_tokens SET revoked_at = NOW() WHERE token_hash = $1`, liveHash)

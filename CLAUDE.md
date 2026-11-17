@@ -975,6 +975,23 @@ or imported groups come back empty. Any other path that creates groups through
   and kiosk tokens share `failureThrottle` (`unlock_throttle.go`: failures
   only, `clientip` `BucketKey`, LRU-capped). Every SSE stream re-checks access
   on its heartbeat. Migration 000114's down refuses while a page is not public.
+- **Page add-ons** (`feed.atom`, `summary.json`, badges; `addons.go`) are
+  sub-routes dispatched from `HandleStatusPage` (`parsePageAddon`, every
+  shape in `pageAddonRoutes`), never mux routes, so a check there covers
+  them. `summary.json` and the badges come from the page's own render
+  (`cachedPage`, keyed by slug alone, so access checks run before it) and
+  show only rendered components; hidden uptime stays `null` and uptime
+  badges 404 (`summary.go`); `/data` applies the same rule
+  (`publicPageData`). The feed is cached under `feedCacheKey` and dropped
+  with the page. A gated page's add-ons go through `gatedPageRequest` (one
+  call: private, no CORS). Affected lists use the page's display names
+  (`pagePublicNameSQL`). The summary is a versioned contract pinned by
+  `testdata/summary_v1.golden.json`: add fields, never repurpose them. Head
+  metadata and the indexing decision live in `seo.go` (`pageIndexable`:
+  only public pages are indexable, whatever `allow_search_indexing` says).
+  The gate passes its visibility on the request (`withPageVisibility`) and
+  `cachedPage` rebuilds an entry built under another one; an access change
+  invalidates the page, summary and feed together.
 
 ## Web UI conventions
 

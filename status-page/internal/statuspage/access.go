@@ -546,6 +546,21 @@ func (h *Handlers) authorizeProxy(w http.ResponseWriter, r *http.Request, pageID
 	return true
 }
 
+type pageVisibilityKey struct{}
+
+// withPageVisibility records on r the visibility the gate read, for the
+// routes behind it (cachedPage, the add-ons, the draft preview).
+func withPageVisibility(r *http.Request, visibility string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), pageVisibilityKey{}, visibility))
+}
+
+// pageVisibility is the visibility withPageVisibility recorded, or "" when
+// no gate ran, which pageaccess reads as gated and noindex (fail closed).
+func pageVisibility(ctx context.Context) string {
+	v, _ := ctx.Value(pageVisibilityKey{}).(string)
+	return v
+}
+
 // accessWriter forces the access headers onto whatever a route writes: a
 // route's own Cache-Control or validator (the page's no-cache revalidation, a
 // public max-age) must not let a shared cache keep a gated response, and
@@ -562,7 +577,7 @@ func (a *accessWriter) WriteHeader(code int) {
 		a.wroteHeader = true
 		h := a.ResponseWriter.Header()
 		if a.noIndex {
-			h.Set("X-Robots-Tag", "noindex")
+			h.Set("X-Robots-Tag", robotsNoIndex)
 		}
 		if a.noStore {
 			markGatedResponse(h)
@@ -612,8 +627,14 @@ func (a *accessWriter) Unwrap() http.ResponseWriter { return a.ResponseWriter }
 // not public, so custom templates carry it too. The header already says it;
 // the tag covers saved copies.
 func noIndexMeta(html string) string {
-	const tag = `<meta name="robots" content="noindex" />`
+	const tag = `<meta name="robots" content="noindex, nofollow" />`
 	lower := strings.ToLower(html)
+	if strings.Contains(lower, `name="robots"`) {
+		// The template printed its robots tag (seo.go decides it, and
+		// pageIndexable already says noindex for every page that is not
+		// public).
+		return html
+	}
 	for from := 0; ; {
 		i := strings.Index(lower[from:], "<head")
 		if i < 0 {
