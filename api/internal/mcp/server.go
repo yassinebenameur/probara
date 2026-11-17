@@ -76,6 +76,10 @@ type spec struct {
 	// Platform marks routes that do not act in a tenant (users, OIDC
 	// mappings, the tenant list): no tenant_id argument.
 	Platform bool
+	// SessionOnly marks routes whose handler refuses API keys although no
+	// role gate on the router shows it (the tenant list). Hidden from API-key
+	// sessions; the OpenAPI document lists only the session scheme.
+	SessionOnly bool
 }
 
 type multipart struct {
@@ -128,6 +132,7 @@ type Handler struct {
 	tools   []*tool
 	extras  []extraTool
 	stream  http.Handler
+	openapi []byte
 
 	// resourceMetadata returns the RFC 9728 metadata URL advertised on a
 	// 401, which is how MCP clients discover OAuth sign-in.
@@ -162,6 +167,15 @@ func (h *Handler) Bind(router chi.Router, extras []extraTool) error {
 		return err
 	}
 	if err := checkCoverage(routes, tools); err != nil {
+		return err
+	}
+	// The REST API's OpenAPI document is the same catalog, bound to the same
+	// router (openapi.go).
+	documented, err := resolveDocumented(routes)
+	if err != nil {
+		return err
+	}
+	if h.openapi, err = buildOpenAPI(tools, documented, h.version); err != nil {
 		return err
 	}
 	h.router = router
@@ -386,7 +400,7 @@ func (h *Handler) visibleTools(c capability) []*tool {
 		switch {
 		case t.gate == gateSuperadmin && !c.superadmin:
 			continue
-		case t.gate == gateTenantAdmin && c.apiKey:
+		case (t.gate == gateTenantAdmin || t.spec.SessionOnly) && c.apiKey:
 			continue
 		case (!t.readOnly || t.spec.NeedsWrite) && !c.write:
 			continue

@@ -446,7 +446,7 @@ func platformTools() []spec {
 			Name:        "list_tenants",
 			Title:       "List workspaces",
 			Description: "Workspaces (tenants) you can act in, with your role in each. Pass an ID as tenant_id to other tools. Sign-in connections only.",
-			Method:      http.MethodGet, Route: "/tenants", Platform: true,
+			Method:      http.MethodGet, Route: "/tenants", Platform: true, SessionOnly: true,
 		},
 		{
 			Name:        "list_users",

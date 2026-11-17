@@ -1,0 +1,312 @@
+package mcp
+
+import (
+	"net/http"
+	"reflect"
+
+	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/aisettings"
+	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
+	auditservice "github.com/yassinebenameur/probara/api/internal/services/audit"
+	"github.com/yassinebenameur/probara/api/internal/services/depsuggest"
+	"github.com/yassinebenameur/probara/api/internal/services/discovery"
+	"github.com/yassinebenameur/probara/api/internal/services/metricsquery"
+	"github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
+	"github.com/yassinebenameur/probara/api/internal/services/results"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/notifications/deliverylog"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+)
+
+// successResponse is an operation's success answer as its handler writes
+// it. Body is the Go value the handler passes to httpx.WriteJSON (its JSON
+// schema is reflected, so field changes follow automatically); Media are
+// non-JSON bodies, described without a schema.
+type successResponse struct {
+	Status int
+	Body   reflect.Type
+	Media  []string
+}
+
+func (r successResponse) description() string {
+	switch {
+	case r.Body == nil && len(r.Media) == 0:
+		return "Success, no body."
+	case r.Status == http.StatusCreated:
+		return "Created."
+	case r.Status == http.StatusAccepted:
+		return "Accepted."
+	default:
+		return "Success."
+	}
+}
+
+func jsonAnswer[T any](status int) successResponse {
+	return successResponse{Status: status, Body: reflect.TypeFor[T]()}
+}
+
+func ok[T any]() successResponse      { return jsonAnswer[T](http.StatusOK) }
+func created[T any]() successResponse { return jsonAnswer[T](http.StatusCreated) }
+
+var noContent = successResponse{Status: http.StatusNoContent}
+
+func mediaAnswer(media ...string) successResponse {
+	return successResponse{Status: http.StatusOK, Media: media}
+}
+
+// Shapes of the success bodies handlers build as maps. Each mirrors one
+// handler's literal; keep them in step with it.
+type (
+	// DependencyMonitorList: monitors.listDependencyRelation.
+	DependencyMonitorList struct {
+		Items []models.DependencyMonitor `json:"items"`
+	}
+	// BulkAlertingResult: monitors.BulkUpdateAlerting.
+	BulkAlertingResult struct {
+		Updated int `json:"updated"`
+	}
+	// LocationDeleteResult: locations.DeleteLocation.
+	LocationDeleteResult struct {
+		MonitorsDetached int `json:"monitors_detached"`
+	}
+	// SLAList: slas.list.
+	SLAList struct {
+		Items []models.SLA `json:"items"`
+	}
+	// SLAReportRefList: slas.listReports.
+	SLAReportRefList struct {
+		Items []models.SLAReportRef `json:"items"`
+	}
+	// AuditActionList: audit.Actions.
+	AuditActionList struct {
+		Actions []string `json:"actions"`
+	}
+	// MetricSeriesList: metricsquery.HandleListSeries.
+	MetricSeriesList struct {
+		Items []metricsquery.SeriesItem `json:"items"`
+	}
+	// MeshEdgeHistory: mesh.GetEdgeHistory.
+	MeshEdgeHistory struct {
+		Points []models.MeshEdgeHistoryPoint `json:"points"`
+	}
+	// DiscoveryCollectorToken: discovery.rotate.
+	DiscoveryCollectorToken struct {
+		Token string `json:"token"`
+	}
+	// DiscoveryApproval: discovery.approve.
+	DiscoveryApproval struct {
+		MonitorID uuid.UUID `json:"monitor_id"`
+		Created   bool      `json:"created"`
+	}
+	// PushAccepted: push.HandlePushGet and HandlePushPost.
+	PushAccepted struct {
+		Status string `json:"status"`
+	}
+)
+
+// successResponses gives the success answer of each operation whose handler
+// is known, keyed by operation ID. An operation missing here is documented
+// as an undescribed 2XX, never guessed. Read the handler before adding one.
+var successResponses = map[string]successResponse{
+	// Monitors
+	"list_monitors":                      ok[models.MonitorListResponse](),
+	"get_monitor":                        ok[models.Monitor](),
+	"create_monitor":                     created[models.Monitor](),
+	"update_monitor":                     ok[models.Monitor](),
+	"delete_monitor":                     noContent,
+	"test_monitor_config":                ok[sharedmodels.TestCheckResponse](),
+	"run_monitor_now":                    jsonAnswer[models.RunMonitorNowResponse](http.StatusAccepted),
+	"get_monitor_analytics":              ok[models.MonitorAnalyticsResponse](),
+	"get_monitor_results":                ok[models.MonitorResultsResponse](),
+	"get_monitor_result":                 ok[models.CheckResult](),
+	"get_monitor_results_batch":          ok[results.MonitorResultsBatchResponse](),
+	"get_monitor_metrics_snapshots":      ok[models.MonitorMetricsSnapshotsResponse](),
+	"delete_monitor_history":             noContent,
+	"get_synthetic_screenshot":           mediaAnswer("image/png"),
+	"list_group_members":                 ok[[]models.Monitor](),
+	"add_group_members":                  noContent,
+	"remove_group_members":               noContent,
+	"list_monitor_dependencies":          ok[DependencyMonitorList](),
+	"add_monitor_dependency":             noContent,
+	"remove_monitor_dependency":          noContent,
+	"list_monitor_dependents":            ok[DependencyMonitorList](),
+	"get_dependency_graph":               ok[models.DependencyGraph](),
+	"suggest_dependencies":               ok[depsuggest.Result](),
+	"label_dependency_suggestion":        ok[models.AILabel](),
+	"bulk_update_alerting":               ok[BulkAlertingResult](),
+	"bulk_delete_monitors":               ok[models.BulkDeleteMonitorsResponse](),
+	"export_monitors":                    mediaAnswer("application/x-yaml"),
+	"preview_monitor_import":             ok[models.ImportPreviewResponse](),
+	"import_monitors":                    ok[models.ImportExecuteResponse](),
+	"list_metric_series":                 ok[MetricSeriesList](),
+	"query_metrics":                      ok[metricsquery.QueryResponse](),
+	"get_agent_install":                  ok[sharedmodels.AgentInstallCommand](),
+	"get_agent_collector_config":         mediaAnswer("application/yaml"),
+	"get_agent_install_script_unix":      mediaAnswer("text/x-shellscript"),
+	"get_agent_install_script_windows":   mediaAnswer("text/plain"),
+	"get_agent_uninstall_script_unix":    mediaAnswer("text/x-shellscript"),
+	"get_agent_uninstall_script_windows": mediaAnswer("text/plain"),
+	"get_push_info":                      ok[models.PushInfo](),
+	"snooze_monitor":                     created[models.MaintenanceWindow](),
+	"list_monitor_versions":              ok[models.MonitorVersionListResponse](),
+	"get_monitor_version":                ok[models.MonitorVersion](),
+	"diff_monitor_version":               ok[models.MonitorVersionDiffResponse](),
+	"restore_monitor_version":            ok[models.RestoreMonitorVersionResponse](),
+
+	// Identity, dashboard, mesh, locations
+	"whoami":                      ok[models.AuthContextResponse](),
+	"get_dashboard_overview":      ok[models.DashboardOverviewResponse](),
+	"get_dashboard_summary":       ok[models.DashboardSummaryResponse](),
+	"list_problem_monitors":       ok[models.DashboardProblemMonitorsResponse](),
+	"list_recent_failures":        ok[models.DashboardRecentFailuresResponse](),
+	"get_dashboard_recent_alerts": ok[models.DashboardRecentAlertsResponse](),
+	"get_group_sparkline":         ok[models.DashboardGroupSparklineResponse](),
+	"get_mesh":                    ok[models.MeshResponse](),
+	"get_mesh_edge_history":       ok[MeshEdgeHistory](),
+	"probe_mesh_edge":             ok[sharedmodels.TestCheckResponse](),
+	"list_locations":              ok[models.LocationListResponse](),
+	"get_location":                ok[models.Location](),
+	"create_location":             created[models.Location](),
+	"update_location":             ok[models.Location](),
+	"delete_location":             ok[LocationDeleteResult](),
+	"get_location_deploy_info":    ok[models.LocationDeployInfo](),
+
+	// Maintenance
+	"list_maintenance_windows":         ok[models.MaintenanceWindowListResponse](),
+	"get_maintenance_window":           ok[models.MaintenanceWindow](),
+	"create_maintenance_window":        created[models.MaintenanceWindow](),
+	"update_maintenance_window":        ok[models.MaintenanceWindow](),
+	"delete_maintenance_window":        noContent,
+	"preview_maintenance_recurrence":   ok[models.PreviewMaintenanceRecurrenceResponse](),
+	"list_maintenance_occurrences":     ok[models.MaintenanceOccurrenceListResponse](),
+	"end_maintenance_occurrence":       ok[models.MaintenanceWindow](),
+	"skip_next_maintenance_occurrence": ok[models.MaintenanceWindow](),
+
+	// Discovery
+	"list_discovery_integrations":      ok[[]discovery.Integration](),
+	"create_discovery_integration":     created[discovery.Integration](),
+	"update_discovery_integration":     ok[discovery.Integration](),
+	"get_discovery_namespaces":         ok[discovery.NamespaceList](),
+	"delete_discovery_integration":     noContent,
+	"rotate_discovery_collector_token": ok[DiscoveryCollectorToken](),
+	"get_discovery_coverage":           ok[discovery.Overview](),
+	"approve_discovery_suggestion":     ok[DiscoveryApproval](),
+	"link_discovery_monitor":           noContent,
+	"unlink_discovery_monitor":         noContent,
+
+	// Alerts
+	"list_alerts":               ok[models.AlertListResponse](),
+	"list_recent_alerts":        ok[[]models.AlertWithDetails](),
+	"get_alert":                 ok[models.AlertWithDetails](),
+	"acknowledge_alert":         ok[models.AlertWithDetails](),
+	"resolve_alert":             ok[models.AlertWithDetails](),
+	"unacknowledge_alert":       ok[models.AlertWithDetails](),
+	"snooze_alert":              ok[models.AlertWithDetails](),
+	"unsnooze_alert":            ok[models.AlertWithDetails](),
+	"bulk_acknowledge_alerts":   ok[alertservice.BulkResult](),
+	"bulk_resolve_alerts":       ok[alertservice.BulkResult](),
+	"bulk_unacknowledge_alerts": ok[alertservice.BulkResult](),
+	"bulk_snooze_alerts":        ok[alertservice.BulkResult](),
+	"bulk_unsnooze_alerts":      ok[alertservice.BulkResult](),
+	"label_alert_triage":        ok[models.AILabel](),
+	"list_alert_deliveries":     ok[deliverylog.Page](),
+
+	// Incidents
+	"list_incidents":                      ok[models.IncidentListResponse](),
+	"create_incident":                     created[models.IncidentDetail](),
+	"get_incident":                        ok[models.IncidentDetail](),
+	"update_incident":                     ok[models.IncidentDetail](),
+	"transition_incident_state":           ok[models.IncidentDetail](),
+	"add_incident_timeline_entry":         created[models.IncidentDetail](),
+	"attach_alert_to_incident":            ok[models.IncidentDetail](),
+	"detach_alert_from_incident":          ok[models.IncidentDetail](),
+	"attach_monitor_to_incident":          ok[models.IncidentDetail](),
+	"detach_monitor_from_incident":        ok[models.IncidentDetail](),
+	"publish_incident_to_status_page":     ok[models.IncidentDetail](),
+	"unpublish_incident_from_status_page": ok[models.IncidentDetail](),
+	"request_incident_ai_analysis":        jsonAnswer[models.IncidentAIAnalysis](http.StatusAccepted),
+	"get_incident_ai_analysis":            ok[models.IncidentAIAnalysis](),
+	"label_incident_ai_analysis":          ok[models.AILabel](),
+
+	// Notifications and workspace settings
+	"list_alert_channels":          ok[models.AlertChannelListResponse](),
+	"get_alert_channel":            ok[models.AlertChannel](),
+	"create_alert_channel":         created[models.AlertChannel](),
+	"update_alert_channel":         ok[models.AlertChannel](),
+	"delete_alert_channel":         noContent,
+	"test_alert_channel":           noContent,
+	"list_channel_deliveries":      ok[deliverylog.Page](),
+	"list_alert_channel_plugins":   ok[[]plugin.Manifest](),
+	"get_alert_channel_plugin":     ok[plugin.Manifest](),
+	"get_notification_settings":    ok[notificationsettings.Settings](),
+	"update_notification_settings": ok[notificationsettings.Settings](),
+	"get_ai_settings":              ok[aisettings.Settings](),
+	"update_ai_settings":           ok[aisettings.Settings](),
+	"test_ai_connection":           ok[aisettings.TestResult](),
+	"export_ai_labels":             mediaAnswer("application/x-ndjson"),
+	"list_api_keys":                ok[models.ApiKeyListResponse](),
+	"create_api_key":               created[models.ApiKey](),
+	"revoke_api_key":               noContent,
+	"get_tenant_settings":          ok[models.TenantSettings](),
+	"update_tenant_settings":       ok[models.TenantSettings](),
+	"list_audit_log":               ok[auditservice.ListResponse](),
+	"list_audit_actions":           ok[AuditActionList](),
+
+	// SLAs
+	"list_slas":  ok[SLAList](),
+	"create_sla": created[models.SLA](),
+	"get_sla":    ok[models.SLA](),
+	"update_sla": ok[models.SLA](),
+	"delete_sla": noContent,
+	"get_sla_report": {Status: http.StatusOK, Body: reflect.TypeFor[models.SLAReport](),
+		Media: []string{"text/csv", "application/pdf"}},
+	"list_sla_reports": ok[SLAReportRefList](),
+	"issue_sla_report": created[models.SLAReport](),
+	"get_issued_sla_report": {Status: http.StatusOK, Body: reflect.TypeFor[models.SLAReport](),
+		Media: []string{"text/csv", "application/pdf"}},
+	"get_sla_report_schedule":    ok[models.SLAReportScheduleResponse](),
+	"set_sla_report_schedule":    ok[models.SLAReportScheduleResponse](),
+	"delete_sla_report_schedule": noContent,
+
+	// Status pages
+	"list_status_pages":                       ok[models.StatusPageListResponse](),
+	"get_status_page":                         ok[models.StatusPage](),
+	"create_status_page":                      created[models.StatusPage](),
+	"update_status_page":                      ok[models.StatusPage](),
+	"delete_status_page":                      noContent,
+	"get_status_page_template":                ok[models.StatusPageTemplateState](),
+	"reset_status_page_template":              ok[models.StatusPageTemplateState](),
+	"get_default_status_page_template":        mediaAnswer("text/plain"),
+	"get_status_page_template_version":        mediaAnswer("text/plain"),
+	"save_status_page_template_draft":         ok[models.StatusPageTemplateState](),
+	"discard_status_page_template_draft":      ok[models.StatusPageTemplateState](),
+	"publish_status_page_template":            ok[models.StatusPageTemplateState](),
+	"revert_status_page_template":             ok[models.StatusPageTemplateState](),
+	"list_status_page_library_templates":      ok[models.StatusPageLibraryTemplateListResponse](),
+	"create_status_page_library_template":     created[models.StatusPageLibraryTemplate](),
+	"get_status_page_library_template":        ok[models.StatusPageLibraryTemplate](),
+	"get_status_page_library_template_source": mediaAnswer("text/plain"),
+	"update_status_page_library_template":     ok[models.StatusPageLibraryTemplate](),
+	"delete_status_page_library_template":     noContent,
+
+	// Platform
+	"list_tenants":              ok[models.TenantListResponse](),
+	"list_users":                ok[models.AdminUserListResponse](),
+	"get_user":                  ok[models.AdminUser](),
+	"create_user":               created[models.AdminUser](),
+	"update_user":               ok[models.AdminUser](),
+	"delete_user":               noContent,
+	"list_oidc_group_mappings":  ok[models.OIDCGroupMappingListResponse](),
+	"create_oidc_group_mapping": created[models.OIDCGroupMapping](),
+	"update_oidc_group_mapping": ok[models.OIDCGroupMapping](),
+	"delete_oidc_group_mapping": noContent,
+
+	// Routes documented outside the catalog (openapi_routes.go)
+	"push_heartbeat":        ok[PushAccepted](),
+	"push_heartbeat_report": ok[PushAccepted](),
+	"export_otlp_metrics":   mediaAnswer("application/x-protobuf", "application/json"),
+	"stream_alerts":         mediaAnswer("text/event-stream"),
+	"get_openapi_document":  mediaAnswer("application/json"),
+}

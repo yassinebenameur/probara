@@ -143,7 +143,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "`tools/list` is tailored to the connection: read-only connections see no write tools, API keys see no tenant-admin or superadmin tools, and only superadmins see user and SSO-mapping tools. This is a convenience; the API enforces access on every call regardless. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) derived from the route, so clients can ask before running deletes.",
+            "`tools/list` is tailored to the connection: read-only connections see no write tools, API keys see no tenant-admin, superadmin or sign-in-only tools (`list_tenants`), and only superadmins see user and SSO-mapping tools. This is a convenience; the API enforces access on every call regardless. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) derived from the route, so clients can ask before running deletes.",
         },
         {
           type: "table",
@@ -191,6 +191,11 @@ export const MCP_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); and the OAuth protocol routes themselves.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The same catalog generates the REST API's [OpenAPI document](/docs/api/#openapi), where each operation's `operationId` is the tool name, so the tools and the documented REST surface cannot drift apart.",
         },
       ],
     },
