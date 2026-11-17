@@ -48,13 +48,23 @@ type cacheEntry struct {
 // placeholder) and the page's CSP inputs, so every response can mint its own
 // nonce without re-rendering. noindex is the page's indexing opt-out, sent
 // as X-Robots-Tag with the HTML. summary is the summary.json document built
-// from the same data, which the badges read too; it is never served with
-// the HTML, so it is not part of the ETag.
+// from the same data, which the badges read too, and summaryJSON/summaryETag
+// its encoded body and validator; none of them is served with the HTML, so
+// they are not part of the page's ETag.
 type renderedPage struct {
-	html    string
-	csp     pageCSP
-	noindex bool
-	summary *pageSummary
+	html        string
+	csp         pageCSP
+	noindex     bool
+	summary     *pageSummary
+	summaryJSON []byte
+	summaryETag string
+}
+
+// feedCacheKey is the cache key of a page's rendered Atom feed. The feed
+// shares the page's TTL and invalidation (Invalidate drops both); a NUL
+// cannot appear in a slug, so the key never names a page.
+func feedCacheKey(slug string) string {
+	return slug + "\x00feed"
 }
 
 // renderCache caches the rendered HTML of public status pages per slug so N
@@ -152,21 +162,27 @@ func (p renderedPage) etag() string {
 	return computeETag(p.html + "\x00" + p.csp.mode + "\x00" + strings.Join(p.csp.frameAncestors, " ") + robots)
 }
 
-// Invalidate drops the cached entry for slug so the next Get rebuilds it.
-// In-flight builds for the slug are detached (singleflight Forget) and their
-// result is discarded, since it was computed from pre-invalidation data.
+// Invalidate drops the cached entries for slug (its page and its feed) so
+// the next Get rebuilds them. In-flight builds for the slug are detached
+// (singleflight Forget) and their result is discarded, since it was computed
+// from pre-invalidation data.
 func (c *renderCache) Invalidate(slug string) {
 	if c == nil {
 		return
 	}
+	keys := [2]string{slug, feedCacheKey(slug)}
 	c.mu.Lock()
-	delete(c.entries, slug)
-	if _, seen := c.gens[slug]; !seen && len(c.gens) >= renderCacheGenerationCap {
-		c.gens = make(map[string]uint64)
+	for _, key := range keys {
+		delete(c.entries, key)
+		if _, seen := c.gens[key]; !seen && len(c.gens) >= renderCacheGenerationCap {
+			c.gens = make(map[string]uint64)
+		}
+		c.gens[key]++
 	}
-	c.gens[slug]++
 	c.mu.Unlock()
-	c.group.Forget(slug)
+	for _, key := range keys {
+		c.group.Forget(key)
+	}
 }
 
 // HasEntries reports whether any unexpired rendered page is currently cached.

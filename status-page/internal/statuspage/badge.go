@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 )
 
 // Badge colours: mid-tones that keep white text readable (contrast >= 4.5)
@@ -34,6 +35,14 @@ var badgeRanges = map[string]bool{"1h": true, "24h": true, "7d": true, "30d": tr
 
 // defaultBadgeRange is the uptime badge's range when ?range= is absent.
 const defaultBadgeRange = "30d"
+
+// uptimeBadgeLabel is a component name and the range, the name shortened
+// first so a long name never loses the range (a 7d and a 90d badge must not
+// look alike).
+func uptimeBadgeLabel(name, rangeName string) string {
+	suffix := " " + rangeName
+	return truncateRunes(strings.TrimSpace(name), maxBadgeLabelRunes-utf8.RuneCountInString(suffix)) + suffix
+}
 
 // pageStatusBadge is the overall badge. Its word follows the page headline
 // (summary.status.indicator); an "issues" page names its worst component

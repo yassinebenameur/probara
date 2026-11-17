@@ -259,12 +259,20 @@ func atomTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// maintenanceEntryID is the Atom id of one listed maintenance occurrence: a
-// name-based UUID of the window and the occurrence start, so the entry keeps
-// its id across polls and edits of the window's text, and each new
-// occurrence of a repeating window is a new entry.
-func maintenanceEntryID(windowID uuid.UUID, startsAt time.Time) string {
-	return "urn:uuid:" + uuid.NewSHA1(windowID, []byte("occurrence:"+startsAt.UTC().Format(time.RFC3339))).String()
+// Atom entry ids are name-based UUIDs under the page's id: an entry keeps
+// its id across polls and edits, and the same incident or occurrence shown
+// on two pages (with page-specific names) is a different entry in each
+// feed, as Atom requires of entries whose content differs.
+
+// incidentEntryID is the id of a published incident in pageID's feed.
+func incidentEntryID(pageID uuid.UUID, incidentID string) string {
+	return "urn:uuid:" + uuid.NewSHA1(pageID, []byte("incident:"+incidentID)).String()
+}
+
+// maintenanceEntryID is the id of one listed maintenance occurrence in
+// pageID's feed; each new occurrence of a repeating window is a new entry.
+func maintenanceEntryID(pageID, windowID uuid.UUID, startsAt time.Time) string {
+	return "urn:uuid:" + uuid.NewSHA1(pageID, []byte("maintenance:"+windowID.String()+":"+startsAt.UTC().Format(time.RFC3339))).String()
 }
 
 // renderAtomFeed renders the feed as Atom 1.0. Links are absolute under the
@@ -314,7 +322,7 @@ func renderAtomFeed(feed *statusPageFeed) ([]byte, error) {
 		entries = append(entries, datedEntry{
 			updated: incident.UpdatedAt,
 			entry: atomEntry{
-				ID:         "urn:uuid:" + incident.ID,
+				ID:         incidentEntryID(feed.PageID, incident.ID),
 				Title:      plainText(view.StateLabel + ": " + view.Title),
 				Updated:    atomTime(incident.UpdatedAt),
 				Published:  atomTime(incident.PublishedAt),
@@ -352,7 +360,7 @@ func renderAtomFeed(feed *statusPageFeed) ([]byte, error) {
 		entries = append(entries, datedEntry{
 			updated: updated,
 			entry: atomEntry{
-				ID:         maintenanceEntryID(window.ID, window.StartsAt),
+				ID:         maintenanceEntryID(feed.PageID, window.ID, window.StartsAt),
 				Title:      plainText(title),
 				Updated:    atomTime(updated),
 				Links:      pageLinks,

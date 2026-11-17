@@ -2,7 +2,7 @@ package statuspage
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -87,6 +87,16 @@ func parsePageAddon(path string) (pageAddon, bool) {
 
 // servePageAddon serves path when it names a page add-on and reports whether
 // it did.
+//
+// Access: every add-on reads the page through the slug-keyed render cache
+// (summary and badges via cachedPage, the feed via feedCacheKey), so any
+// access check must run before this call. A page that is not public is
+// served by passing r through gatedPageRequest first: writeAddon then sends
+// Cache-Control "private, no-store", no Access-Control-Allow-Origin and
+// Cross-Origin-Resource-Policy "same-origin", so neither a shared cache nor
+// another site can read the response. Short of that, Cache-Control,
+// Access-Control-Allow-Origin and Cross-Origin-Resource-Policy values set
+// on w before the call are kept as they are.
 func (h *Handlers) servePageAddon(w http.ResponseWriter, r *http.Request, path string) bool {
 	addon, ok := parsePageAddon(path)
 	if !ok {
@@ -109,15 +119,10 @@ func (h *Handlers) handleSummary(w http.ResponseWriter, r *http.Request, slug st
 		h.writeStatusPageError(w, slug, err, "Failed to build status page summary")
 		return
 	}
-	body, err := json.Marshal(page.summary)
-	if err != nil {
-		h.logger.WithError(err).Error("Failed to encode status page summary")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
 	writeAddon(w, r, addonResponse{
 		contentType: "application/json; charset=utf-8",
-		body:        append(body, '\n'),
+		body:        page.summaryJSON,
+		etag:        page.summaryETag,
 		maxAge:      addonDataMaxAge,
 		csp:         addonDocumentCSP,
 	})
@@ -173,7 +178,7 @@ func (h *Handlers) handleBadge(w http.ResponseWriter, r *http.Request, addon pag
 				http.Error(w, "Uptime is not shown on this status page", http.StatusNotFound)
 				return
 			}
-			label = component.Name + " " + rangeName
+			label = uptimeBadgeLabel(component.Name, rangeName)
 			value, color = uptimeBadge(component.Uptime.forRange(rangeName))
 		} else {
 			value, color = componentStatusBadge(component.Status)
@@ -188,23 +193,32 @@ func (h *Handlers) handleBadge(w http.ResponseWriter, r *http.Request, addon pag
 	})
 }
 
+// handleFeed serves the Atom feed from the render cache: one build per page
+// per TTL however many readers poll, invalidated with the page. The feed
+// depends on the slug alone, so query strings are ignored and cannot force
+// a rebuild.
 func (h *Handlers) handleFeed(w http.ResponseWriter, r *http.Request, slug string) {
-	ctx, cancel := context.WithTimeout(r.Context(), statusPageBuildTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), statusPageBuildTimeout)
 	defer cancel()
-	feed, err := h.service.GetStatusPageFeed(ctx, slug, h.canonicalURL(slug))
+	page, etag, err := h.cache.GetPage(feedCacheKey(slug), func() (renderedPage, error) {
+		feed, err := h.service.GetStatusPageFeed(ctx, slug, h.canonicalURL(slug))
+		if err != nil {
+			return renderedPage{}, err
+		}
+		body, err := renderAtomFeed(feed)
+		if err != nil {
+			return renderedPage{}, fmt.Errorf("encode feed: %w", err)
+		}
+		return renderedPage{html: string(body)}, nil
+	})
 	if err != nil {
 		h.writeStatusPageError(w, slug, err, "Failed to build status page feed")
 		return
 	}
-	body, err := renderAtomFeed(feed)
-	if err != nil {
-		h.logger.WithError(err).Error("Failed to encode status page feed")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
 	writeAddon(w, r, addonResponse{
 		contentType: "application/atom+xml; charset=utf-8",
-		body:        body,
+		body:        []byte(page.html),
+		etag:        etag,
 		maxAge:      addonFeedMaxAge,
 		csp:         addonDocumentCSP,
 	})
@@ -213,28 +227,59 @@ func (h *Handlers) handleFeed(w http.ResponseWriter, r *http.Request, slug strin
 type addonResponse struct {
 	contentType string
 	body        []byte
-	maxAge      int
-	csp         string
+	// etag is the validator; computed from body when empty.
+	etag   string
+	maxAge int
+	csp    string
+}
+
+type gatedPageKey struct{}
+
+// gatedPageRequest marks r as serving a page that is not public (password,
+// private or token-gated): writeAddon then makes the response private and
+// unreadable cross-origin. It is the one call an access check makes before
+// servePageAddon for such a page.
+func gatedPageRequest(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), gatedPageKey{}, true))
+}
+
+func isGatedPage(r *http.Request) bool {
+	gated, _ := r.Context().Value(gatedPageKey{}).(bool)
+	return gated
+}
+
+// setIfAbsent sets key unless a value was set before dispatch.
+func setIfAbsent(header http.Header, key, value string) {
+	if len(header.Values(key)) == 0 {
+		header.Set(key, value)
+	}
 }
 
 // writeAddon writes an add-on response with an ETag (a 304 for a matching
-// If-None-Match) and a short public Cache-Control. A Cache-Control set
-// before dispatch wins, so an access check that serves a non-public page can
-// mark the response private and no shared cache keeps it.
+// If-None-Match), a short public Cache-Control, and cross-origin access.
 //
-// Every add-on is readable from any origin without credentials: it is the
-// page's public data, and a browser never attaches cookies to a request
-// answered with Access-Control-Allow-Origin "*". X-Robots-Tag keeps these
-// machine documents out of search results whatever the page's own setting.
+// A public page's add-ons are readable from any origin without credentials:
+// they are the page's public data, and a browser never attaches cookies to a
+// request answered with Access-Control-Allow-Origin "*". A gated page
+// (gatedPageRequest) gets none of that; see servePageAddon. X-Robots-Tag
+// keeps these machine documents out of search results whatever the page's
+// own setting.
 func writeAddon(w http.ResponseWriter, r *http.Request, resp addonResponse) {
 	header := w.Header()
-	etag := computeETag(string(resp.body))
-	header.Set("ETag", etag)
-	if header.Get("Cache-Control") == "" {
-		header.Set("Cache-Control", "public, max-age="+strconv.Itoa(resp.maxAge))
+	etag := resp.etag
+	if etag == "" {
+		etag = computeETag(string(resp.body))
 	}
-	header.Set("Access-Control-Allow-Origin", "*")
-	header.Set("Cross-Origin-Resource-Policy", "cross-origin")
+	header.Set("ETag", etag)
+	if isGatedPage(r) {
+		header.Set("Cache-Control", "private, no-store")
+		header.Del("Access-Control-Allow-Origin")
+		header.Set("Cross-Origin-Resource-Policy", "same-origin")
+	} else {
+		setIfAbsent(header, "Cache-Control", "public, max-age="+strconv.Itoa(resp.maxAge))
+		setIfAbsent(header, "Access-Control-Allow-Origin", "*")
+		setIfAbsent(header, "Cross-Origin-Resource-Policy", "cross-origin")
+	}
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("X-Robots-Tag", "noindex")
 	header.Set("Content-Security-Policy", resp.csp)

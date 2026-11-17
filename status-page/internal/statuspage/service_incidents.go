@@ -14,6 +14,30 @@ import (
 	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
+// pagePublicNameSQL is the name the page shows for the monitor aliased by
+// monAlias on the page pageExpr: its section display name, else its legacy
+// flat-layout display name, else the monitor's own name, trimmed the way
+// scanMonitorStatuses trims it. Incident and maintenance "affected" lists
+// use it so they never print an internal name the component list hides.
+// Both arguments are trusted SQL (an alias and a placeholder).
+func pagePublicNameSQL(pageExpr, monAlias string) string {
+	return `COALESCE((
+		SELECT NULLIF(btrim(dn.display_name), '')
+		FROM (
+			SELECT spsm.display_name, 0 AS priority
+			FROM status_page_section_monitors spsm
+			JOIN status_page_sections sps ON sps.id = spsm.section_id
+			WHERE sps.status_page_id = ` + pageExpr + ` AND spsm.monitor_id = ` + monAlias + `.id
+			UNION ALL
+			SELECT spm.display_name, 1 AS priority
+			FROM status_page_monitors spm
+			WHERE spm.status_page_id = ` + pageExpr + ` AND spm.monitor_id = ` + monAlias + `.id
+		) dn
+		ORDER BY dn.priority
+		LIMIT 1
+	), btrim(` + monAlias + `.name))`
+}
+
 // loadMaintenanceWindows returns the maintenance windows with an occurrence
 // in progress or starting in the next 14 days that covers at least one
 // monitor on this status page, directly or via a targeted group. Coverage is
@@ -26,7 +50,7 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 		SELECT mw.id, mw.title, mw.description, mo.occurrence_starts_at, MAX(mo.ends_at),
 			NOW() >= mo.occurrence_starts_at AS is_active,
 			mw.recurrence_weekdays IS NOT NULL AS repeating,
-			array_agg(DISTINCT pm.name) AS affected,
+			array_agg(DISTINCT `+pagePublicNameSQL("$1", "pm")+`) AS affected,
 			mw.updated_at
 		FROM monitors pm
 		CROSS JOIN LATERAL `+maintenance.OccurrenceRangesSQL("$2", "pm.id", "NOW()", "NOW() + INTERVAL '14 days'")+` mo
@@ -139,9 +163,9 @@ func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tena
 	return incidents, nil
 }
 
-// batchIncidentAffectedComponents fetches the affected component names for all
-// given incidents in a single query, keyed by incident ID. Per-incident
-// ordering (monitor name ASC) matches the previous per-incident query.
+// batchIncidentAffectedComponents fetches the affected component names (the
+// page's public names) for all given incidents in a single query, keyed by
+// incident ID, each list in name order.
 func (s *Service) batchIncidentAffectedComponents(ctx context.Context, statusPageID uuid.UUID, incidentIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
 	result := make(map[uuid.UUID][]string, len(incidentIDs))
 	if len(incidentIDs) == 0 {
@@ -149,11 +173,14 @@ func (s *Service) batchIncidentAffectedComponents(ctx context.Context, statusPag
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT ispm.incident_id, m.name
-		FROM incident_status_page_monitors ispm
-		JOIN monitors m ON m.id = ispm.monitor_id
-		WHERE ispm.incident_id = ANY($1) AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
-		ORDER BY m.name ASC
+		SELECT incident_id, name
+		FROM (
+			SELECT ispm.incident_id, `+pagePublicNameSQL("$2", "m")+` AS name
+			FROM incident_status_page_monitors ispm
+			JOIN monitors m ON m.id = ispm.monitor_id
+			WHERE ispm.incident_id = ANY($1) AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
+		) affected
+		ORDER BY name ASC
 	`, pq.Array(incidentIDs), statusPageID)
 	if err != nil {
 		return nil, fmt.Errorf("query incident affected components: %w", err)

@@ -1,6 +1,7 @@
 package statuspage
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -296,6 +297,23 @@ func buildPageSummaryFromView(data *StatusPageData, view statusPageRenderView, n
 	}
 
 	return summary
+}
+
+// encodeSummary returns the summary.json body and its ETag. The validator
+// leaves generated_at out: the render cache rebuilds every TTL, and a
+// polling client must get a 304 while the page data is unchanged.
+func encodeSummary(summary *pageSummary) ([]byte, string, error) {
+	body, err := json.Marshal(summary)
+	if err != nil {
+		return nil, "", err
+	}
+	stable := *summary
+	stable.GeneratedAt = time.Time{}
+	validator, err := json.Marshal(&stable)
+	if err != nil {
+		return nil, "", err
+	}
+	return append(body, '\n'), computeETag(string(validator)), nil
 }
 
 // component returns the rendered component with the given monitor ID. Only

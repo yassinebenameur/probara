@@ -182,13 +182,22 @@ func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage
 				"slug":  slug,
 			}).Warn("Custom status page template failed; serving built-in template")
 		}
-		csp := pageCSPFor(data, h.appBaseURL(), strings.TrimSpace(data.CustomTemplateSource) != "")
+		if err != nil {
+			return renderedPage{}, err
+		}
+		summary := buildPageSummaryFromView(data, view, h.service.now())
+		summaryJSON, summaryETag, err := encodeSummary(summary)
+		if err != nil {
+			return renderedPage{}, err
+		}
 		return renderedPage{
-			html:    html,
-			csp:     csp,
-			noindex: !pageIndexable(data),
-			summary: buildPageSummaryFromView(data, view, h.service.now()),
-		}, err
+			html:        html,
+			csp:         pageCSPFor(data, h.appBaseURL(), strings.TrimSpace(data.CustomTemplateSource) != ""),
+			noindex:     !pageIndexable(data),
+			summary:     summary,
+			summaryJSON: summaryJSON,
+			summaryETag: summaryETag,
+		}, nil
 	})
 }
 
@@ -355,9 +364,9 @@ func (h *Handlers) HandleStatusPageData(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Return JSON
+	// Only what the page's settings show (data_view.go).
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(data); err != nil {
+	if err := json.NewEncoder(w).Encode(publicPageData(data)); err != nil {
 		h.logger.WithError(err).Error("Failed to encode JSON response")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return

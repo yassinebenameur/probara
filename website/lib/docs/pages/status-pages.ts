@@ -166,7 +166,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`GET /public/status/{slug}/data`",
-              "Public JSON-shaped page data used by the renderer and clients",
+              "Public JSON-shaped page data for clients. It carries only what the page's settings show: no uptime with `show_monitor_uptime` off, no target URL with `show_monitor_url` off, no average latency with `show_latency_charts` off, no tags with `show_monitor_tags` off and no certificate dates with `show_monitor_tls` off",
             ],
             [
               "`GET /public/status/{slug}/stream`",
@@ -248,7 +248,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Each page publishes three read-only add-ons beside it. They show nothing the page itself does not: the same rendered components under their public names, the same published incidents and the same maintenance list. They are readable from any site (`Access-Control-Allow-Origin: *`, never with credentials), carry an `ETag` and answer `If-None-Match` with `304`, are sent with `X-Content-Type-Options: nosniff`, a `default-src 'none'` Content-Security-Policy and `X-Robots-Tag: noindex`, and return `404` for an unknown page.",
+            "Each page publishes three read-only add-ons beside it. They show nothing the page itself does not: the same rendered components, the same published incidents and the same maintenance list. Components are named as the page names them, including in incident and maintenance \"affected\" lists: the display name the page gives the monitor, else the monitor's own name. They are readable from any site (`Access-Control-Allow-Origin: *`, never with credentials), carry an `ETag` and answer `If-None-Match` with `304`, are sent with `X-Content-Type-Options: nosniff`, a `default-src 'none'` Content-Security-Policy and `X-Robots-Tag: noindex`, and return `404` for an unknown page.",
         },
         {
           type: "table",
@@ -256,11 +256,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
           rows: [
             [
               "`feed.atom`",
-              "Atom 1.0 (`application/atom+xml`). One entry per published incident, the 50 most recently changed that are unresolved or changed in the last 90 days, each quoting its five newest public updates; unpublished incidents and internal notes never appear. One entry per maintenance window the page lists, at its occurrence in progress or next one. Entry ids are stable: an incident keeps its id through every update, and each occurrence of a repeating window is its own entry. Text is plain (`type=\"text\"`), so incident wording never becomes markup in a reader. `Cache-Control: public, max-age=300`",
+              "Atom 1.0 (`application/atom+xml`). One entry per published incident, the 50 most recently changed that are unresolved or changed in the last 90 days, each quoting its five newest public updates; unpublished incidents and internal notes never appear. One entry per maintenance window the page lists, at its occurrence in progress or next one. Entry ids are stable and specific to the page: an incident keeps its id through every update, the same incident on two pages is a different entry in each feed, and each occurrence of a repeating window is its own entry. Text is plain (`type=\"text\"`), so incident wording never becomes markup in a reader. Built at most once per render-cache TTL and dropped with the page's cache on a change, whatever query string a request carries. `Cache-Control: public, max-age=300`",
             ],
             [
               "`summary.json`",
-              "The page summary described below. Shares the page's render, so it is at most as stale as the page (the render cache TTL, `STATUS_PAGE_CACHE_TTL`). `Cache-Control: public, max-age=60`",
+              "The page summary described below. Shares the page's render, so it is at most as stale as the page (the render cache TTL, `STATUS_PAGE_CACHE_TTL`). Its `ETag` ignores `generated_at`, so a poll answers `304` while the data is unchanged. `Cache-Control: public, max-age=60`",
             ],
             [
               "`badge.svg`",

@@ -420,7 +420,12 @@ func primedHandlers(t *testing.T, data *StatusPageData) *Handlers {
 	_, _, err := cache.GetPage(data.Slug, func() (renderedPage, error) {
 		view := buildStatusPageRenderView(data, false)
 		html, _, err := renderStatusPageView(data, view)
-		return renderedPage{html: html, noindex: !pageIndexable(data), summary: buildPageSummaryFromView(data, view, addonTestNow)}, err
+		if err != nil {
+			return renderedPage{}, err
+		}
+		summary := buildPageSummaryFromView(data, view, addonTestNow)
+		summaryJSON, summaryETag, err := encodeSummary(summary)
+		return renderedPage{html: html, noindex: !pageIndexable(data), summary: summary, summaryJSON: summaryJSON, summaryETag: summaryETag}, err
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -711,7 +716,7 @@ func TestAtomFeed_StableEntryIDs(t *testing.T) {
 	if sameSet(first, ids(next)) {
 		t.Fatal("the next occurrence of a repeating window must be a new entry")
 	}
-	want := maintenanceEntryID(uuid.MustParse("22222222-0000-0000-0000-000000000001"), time.Date(2026, 11, 18, 2, 0, 0, 0, time.UTC))
+	want := maintenanceEntryID(uuid.MustParse(addonTestPageID), uuid.MustParse("22222222-0000-0000-0000-000000000001"), time.Date(2026, 11, 18, 2, 0, 0, 0, time.UTC))
 	if !strings.HasPrefix(want, "urn:uuid:") || !contains(first, want) {
 		t.Fatalf("maintenance id %s not in %v", want, first)
 	}
@@ -751,4 +756,159 @@ func contains(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// The same incident and occurrence shown on two pages are different
+// entries: their content (public names, links) is page-specific.
+func TestAtomFeed_EntryIDsArePerPage(t *testing.T) {
+	ids := func(feed *statusPageFeed) []string {
+		body, err := renderAtomFeed(feed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, e := range decodeAtom(t, body).Entries {
+			out = append(out, e.ID)
+		}
+		return out
+	}
+	first := feedFixture()
+	other := feedFixture()
+	other.PageID = uuid.MustParse("5f0c6a3e-9a4f-4d55-9c39-2c3bbd1f0a02")
+	a, b := ids(first), ids(other)
+	for _, id := range a {
+		if contains(b, id) {
+			t.Fatalf("entry id %s is shared by two pages", id)
+		}
+	}
+	if !sameSet(a, ids(feedFixture())) {
+		t.Fatal("entry ids are not stable for one page")
+	}
+}
+
+// The summary is rebuilt every render-cache TTL; with unchanged data its
+// validator must not move, or a polling client never gets a 304.
+func TestSummaryETagIgnoresGeneratedAt(t *testing.T) {
+	data := addonTestData()
+	body1, etag1, err := encodeSummary(buildPageSummary(data, addonTestNow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body2, etag2, err := encodeSummary(buildPageSummary(data, addonTestNow.Add(10*time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(body1, body2) {
+		t.Fatal("fixture should differ in generated_at")
+	}
+	if etag1 != etag2 {
+		t.Fatal("two builds of unchanged data have different ETags")
+	}
+	data.Sections[0].Monitors[0].Status = "down"
+	if _, etag3, _ := encodeSummary(buildPageSummary(data, addonTestNow)); etag3 == etag1 {
+		t.Fatal("a status change must change the ETag")
+	}
+}
+
+func TestUptimeBadgeLabelKeepsRange(t *testing.T) {
+	name := strings.Repeat("Customer-facing API gateway ", 3)
+	l7, l90 := uptimeBadgeLabel(name, "7d"), uptimeBadgeLabel(name, "90d")
+	if !strings.HasSuffix(l7, " 7d") || !strings.HasSuffix(l90, " 90d") || l7 == l90 {
+		t.Fatalf("labels lost the range: %q %q", l7, l90)
+	}
+	for _, l := range []string{l7, l90} {
+		if utf8.RuneCountInString(l) > maxBadgeLabelRunes {
+			t.Fatalf("label %q exceeds %d runes", l, maxBadgeLabelRunes)
+		}
+		svg := string(renderBadge(l, "99.00%", badgeGreen, badgeStyleFlat))
+		if !strings.Contains(svg, "<title>"+escapeBadgeText(l)+": ") {
+			t.Fatalf("renderBadge cut the label again: %s", svg)
+		}
+	}
+	if got := uptimeBadgeLabel("API", "30d"); got != "API 30d" {
+		t.Fatalf("short label = %q", got)
+	}
+}
+
+// One call marks a gated page's add-on: private, not shareable, not
+// readable cross-origin. Without it, values set before dispatch are kept.
+func TestWriteAddon_GatedAndPresetHeaders(t *testing.T) {
+	resp := addonResponse{contentType: "image/svg+xml", body: []byte("<svg/>"), maxAge: 60, csp: addonImageCSP}
+
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Access-Control-Allow-Origin", "*")
+	writeAddon(rec, gatedPageRequest(httptest.NewRequest(http.MethodGet, "/", nil)), resp)
+	h := rec.Header()
+	if h.Get("Cache-Control") != "private, no-store" || h.Get("Access-Control-Allow-Origin") != "" || h.Get("Cross-Origin-Resource-Policy") != "same-origin" {
+		t.Fatalf("gated headers: %v", h)
+	}
+
+	rec = httptest.NewRecorder()
+	rec.Header().Set("Access-Control-Allow-Origin", "https://ops.example.com")
+	rec.Header().Set("Cross-Origin-Resource-Policy", "same-site")
+	writeAddon(rec, httptest.NewRequest(http.MethodGet, "/", nil), resp)
+	h = rec.Header()
+	if h.Get("Access-Control-Allow-Origin") != "https://ops.example.com" || h.Get("Cross-Origin-Resource-Policy") != "same-site" || h.Get("Cache-Control") != "public, max-age=60" {
+		t.Fatalf("preset headers not kept: %v", h)
+	}
+}
+
+// The feed is served from the render cache: a query string cannot force a
+// rebuild, and invalidating the page drops its feed too.
+func TestFeedIsCachedWithThePage(t *testing.T) {
+	cache := newRenderCache(time.Hour)
+	builds := 0
+	build := func() (renderedPage, error) {
+		builds++
+		return renderedPage{html: `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"/>`}, nil
+	}
+	if _, _, err := cache.GetPage(feedCacheKey("acme"), build); err != nil {
+		t.Fatal(err)
+	}
+	// The service has no database: a rebuild would panic.
+	h := NewHandlers(NewService(nil, nil), &config.StatusPageConfig{}, logger.New("status-page", "error"), NewHub(), cache, nil)
+	for _, target := range []string{"/public/status/acme/feed.atom", "/public/status/acme/feed.atom?nocache=123"} {
+		rec := serveAddonTest(h, http.MethodGet, target, nil)
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/atom+xml; charset=utf-8" || rec.Header().Get("Cache-Control") != "public, max-age=300" {
+			t.Fatalf("%s = %d %v", target, rec.Code, rec.Header())
+		}
+	}
+	cache.Invalidate("acme")
+	if _, _, err := cache.GetPage(feedCacheKey("acme"), build); err != nil || builds != 2 {
+		t.Fatalf("invalidating the page kept its feed (builds = %d)", builds)
+	}
+}
+
+func TestPublicPageData_HidesWhatSettingsHide(t *testing.T) {
+	uptime, latency, days := 99.5, 120.0, 30
+	monitor := MonitorStatus{
+		ID: addonTestAPI, Name: "API", URL: "https://internal.example.com/health", Status: "up",
+		Tags: []string{"core"}, Uptime1h: &uptime, Uptime24h: &uptime, AvgLatency1h: &latency, AvgLatency24h: &latency,
+		TLSDaysUntilExpiry: &days, TLSNotAfter: "2027-01-01",
+	}
+	data := &StatusPageData{
+		Slug: "acme", Title: "Acme",
+		Sections: []StatusPageSectionData{{Title: "Edge", Monitors: []MonitorStatus{monitor}}},
+		Monitors: []MonitorStatus{monitor},
+	}
+	body, err := json.Marshal(publicPageData(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"uptime_1h", "uptime_24h", "internal.example.com", "avg_latency", "core", "tls_days_until_expiry", "2027-01-01"} {
+		if strings.Contains(string(body), leaked) {
+			t.Errorf("/data published hidden %s: %s", leaked, body)
+		}
+	}
+	if data.Monitors[0].Uptime24h == nil || data.Sections[0].Monitors[0].URL == "" {
+		t.Fatal("redaction modified the cached page data")
+	}
+
+	data.ShowMonitorUptime, data.ShowMonitorURL, data.ShowLatencyCharts, data.ShowMonitorTags, data.ShowMonitorTLS = true, true, true, true, true
+	body, _ = json.Marshal(publicPageData(data))
+	for _, shown := range []string{"uptime_1h", "uptime_24h", "internal.example.com", "avg_latency_24h", "core", "tls_days_until_expiry"} {
+		if !strings.Contains(string(body), shown) {
+			t.Errorf("/data dropped %s although the page shows it", shown)
+		}
+	}
 }

@@ -68,7 +68,8 @@ func TestPageAddons(t *testing.T) {
 
 	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient))
 	cfg := &config.StatusPageConfig{StatusPageBaseURL: "https://status.example.com/"}
-	h := NewHandlers(svc, cfg, logger.New("status-page", "error"), NewHub(), newRenderCache(time.Minute), nil)
+	cache := newRenderCache(time.Minute)
+	h := NewHandlers(svc, cfg, logger.New("status-page", "error"), NewHub(), cache, nil)
 	serve := func(target string) *httptest.ResponseRecorder {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -135,6 +136,12 @@ func TestPageAddons(t *testing.T) {
 				updatedAt: at, resolvedAt: &at, publishedAt: at,
 			})
 		}
+		// Still the cached feed until the page is invalidated, as the
+		// status-update subscriber does when an incident changes.
+		if cached := decodeAtom(t, serve("/public/status/addons/feed.atom").Body.Bytes()); len(cached.Entries) != 2 {
+			t.Fatalf("cached feed has %d entries, want the 2 from before the insert", len(cached.Entries))
+		}
+		cache.Invalidate("addons")
 		doc := decodeAtom(t, serve("/public/status/addons/feed.atom").Body.Bytes())
 		incidents := 0
 		for _, e := range doc.Entries {
@@ -163,6 +170,26 @@ func TestPageAddons(t *testing.T) {
 		}
 	})
 
+	t.Run("data follows the page settings", func(t *testing.T) {
+		before := serve("/public/status/addons/data").Body.String()
+		if !strings.Contains(before, "https://example.com") {
+			t.Fatalf("fixture: /data should show the URL while the page does: %s", before)
+		}
+		if _, err := dbClient.ExecContext(ctx, `UPDATE status_pages SET settings = settings || $2::jsonb WHERE id = $1`, pageID,
+			`{"show_monitor_uptime":false,"show_monitor_url":false}`); err != nil {
+			t.Fatal(err)
+		}
+		rec := serve("/public/status/addons/data")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("/data = %d", rec.Code)
+		}
+		for _, leaked := range []string{"uptime_24h", "uptime_1h", "https://example.com"} {
+			if strings.Contains(rec.Body.String(), leaked) {
+				t.Errorf("/data published hidden %s: %s", leaked, rec.Body)
+			}
+		}
+	})
+
 	t.Run("unknown page serves no add-on", func(t *testing.T) {
 		for _, route := range pageAddonRoutes {
 			target := "/public/status/" + strings.NewReplacer("{slug}", "no-such-page", "{id}", onPage.String()).Replace(route)
@@ -175,4 +202,77 @@ func TestPageAddons(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Incident and maintenance "affected" lists name a monitor the way the page
+// does (its display name on that page), on the page, in the feed and in
+// summary.json, never by its internal name.
+func TestAffectedComponentsUsePublicNames(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "status-names")
+	db := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "pg-prod-eu-1 primary")
+	api := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "edge-api")
+
+	// Page A uses sections: the database is shown as "Database", the API
+	// under its own name.
+	pageA := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "names-a", "Names A")
+	sectionID := uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `INSERT INTO status_page_sections (id, status_page_id, title, position) VALUES ($1, $2, 'Storage', 0)`, sectionID, pageA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO status_page_section_monitors (section_id, monitor_id, position, display_name)
+		VALUES ($1, $2, 0, ' Database '), ($1, $3, 1, NULL)`, sectionID, db, api); err != nil {
+		t.Fatal(err)
+	}
+	// Page B uses the flat layout and calls the database "Primary DB".
+	pageB := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "names-b", "Names B")
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO status_page_monitors (status_page_id, monitor_id, position, display_name)
+		VALUES ($1, $2, 0, 'Primary DB')`, pageB, db); err != nil {
+		t.Fatal(err)
+	}
+
+	insertIncidentFixture(ctx, t, dbClient, incidentFixture{
+		tenantID: tenantID, statusPageID: pageA, title: "Slow reads", state: "investigating",
+		updatedAt: now, publishedAt: now.Add(-time.Hour), monitorIDs: []uuid.UUID{db, api},
+	})
+	insertIncidentFixture(ctx, t, dbClient, incidentFixture{
+		tenantID: tenantID, statusPageID: pageB, title: "Slow reads", state: "investigating",
+		updatedAt: now, publishedAt: now.Add(-time.Hour), monitorIDs: []uuid.UUID{db},
+	})
+	insertTestMaintenanceWindow(ctx, t, dbClient, tenantID, "Failover drill", now.Add(24*time.Hour), now.Add(25*time.Hour), db)
+
+	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient))
+	for slug, want := range map[string]string{"names-a": "Database,edge-api", "names-b": "Primary DB"} {
+		page, err := svc.GetStatusPageBySlug(ctx, slug)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Incidents) != 1 || strings.Join(page.Incidents[0].AffectedComponents, ",") != want {
+			t.Errorf("%s incident affected = %v, want %s", slug, page.Incidents, want)
+		}
+		wantMaint := strings.Split(want, ",")[0]
+		if len(page.MaintenanceWindows) != 1 || strings.Join(page.MaintenanceWindows[0].AffectedMonitors, ",") != wantMaint {
+			t.Errorf("%s maintenance affected = %v, want %s", slug, page.MaintenanceWindows, wantMaint)
+		}
+	}
+
+	h := NewHandlers(svc, &config.StatusPageConfig{}, logger.New("status-page", "error"), NewHub(), newRenderCache(time.Minute), nil)
+	for _, target := range []string{"/public/status/names-a", "/public/status/names-a/feed.atom", "/public/status/names-a/summary.json", "/public/status/names-b/feed.atom"} {
+		rec := httptest.NewRecorder()
+		h.HandleStatusPage(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d", target, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "pg-prod-eu-1") {
+			t.Errorf("%s shows the internal monitor name", target)
+		}
+	}
 }
