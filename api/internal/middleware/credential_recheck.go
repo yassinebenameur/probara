@@ -109,7 +109,8 @@ func adminIdentityRecheck(dbClient *db.Client, adminID, tenantUUID uuid.UUID) fu
 		var platformRole string
 		var disabledAt *time.Time
 		var membershipRole sql.NullString
-		err := dbClient.QueryRowContext(ctx, identityQuery, adminID, tenantUUID).Scan(&platformRole, &disabledAt, &membershipRole)
+		var tenantGone bool
+		err := dbClient.QueryRowContext(ctx, identityQuery, adminID, tenantUUID).Scan(&platformRole, &disabledAt, &membershipRole, &tenantGone)
 		switch {
 		case pgerr.IsMissingSchema(err):
 			return nil
@@ -119,6 +120,11 @@ func adminIdentityRecheck(dbClient *db.Client, adminID, tenantUUID uuid.UUID) fu
 			return err
 		}
 		if disabledAt != nil {
+			return ErrCredentialRevoked
+		}
+		// A deleted workspace ends its streams like any other loss of access,
+		// superadmins included.
+		if tenantGone {
 			return ErrCredentialRevoked
 		}
 		if platformRole != auth.PlatformRoleSuperadmin && tenantUUID != uuid.Nil && !membershipRole.Valid {
