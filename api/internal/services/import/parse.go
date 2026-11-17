@@ -221,40 +221,48 @@ func (s *Service) parsePortableExport(data []byte) ([]models.ImportRow, bool, er
 		return nil, false, nil
 	}
 
-	if bundle.Kind != "monitor_export" || bundle.Version != 1 {
+	if bundle.Kind != models.PortableMonitorExportKind ||
+		(bundle.Version != models.PortableExportVersion1 && bundle.Version != models.PortableExportVersion2) {
 		return nil, false, nil
 	}
 
 	rows := make([]models.ImportRow, 0, len(bundle.Monitors))
 	for i, monitor := range bundle.Monitors {
-		fields := map[string]interface{}{
-			"name":             monitor.Name,
-			"type":             string(monitor.Type),
-			"config":           monitor.Config,
-			"interval_seconds": monitor.IntervalSeconds,
-			"timeout_seconds":  monitor.TimeoutSeconds,
-			"enabled":          monitor.Enabled,
-		}
-		if len(monitor.Tags) > 0 {
-			fields["tags"] = monitor.Tags
-		}
-		if len(monitor.GroupMembers) > 0 {
-			fields["group_members"] = monitor.GroupMembers
-		}
-		if monitor.ConsecutiveFailuresThreshold > 0 {
-			fields["consecutive_failures_threshold"] = monitor.ConsecutiveFailuresThreshold
-		}
-		if monitor.RecoveryThreshold > 0 {
-			fields["recovery_threshold"] = monitor.RecoveryThreshold
-		}
-
-		rows = append(rows, models.ImportRow{
-			Index:  i,
-			Fields: fields,
-		})
+		rows = append(rows, portableRow(i, monitor))
 	}
 
 	return rows, true, nil
+}
+
+// portableRow is one portable export monitor as an import row, the shape
+// both the importer and apply build monitors from. Only the importer's
+// fields go in: a version 2 key and its by-key references are apply's
+// (an imported key could only collide with the target workspace's own).
+func portableRow(index int, monitor models.PortableExportMonitor) models.ImportRow {
+	// An absent enabled imports as false, as it always has; the export
+	// always writes it.
+	enabled := monitor.Enabled != nil && *monitor.Enabled
+	fields := map[string]interface{}{
+		"name":             monitor.Name,
+		"type":             string(monitor.Type),
+		"config":           monitor.Config,
+		"interval_seconds": monitor.IntervalSeconds,
+		"timeout_seconds":  monitor.TimeoutSeconds,
+		"enabled":          enabled,
+	}
+	if len(monitor.Tags) > 0 {
+		fields["tags"] = monitor.Tags
+	}
+	if len(monitor.GroupMembers) > 0 {
+		fields["group_members"] = monitor.GroupMembers
+	}
+	if monitor.ConsecutiveFailuresThreshold > 0 {
+		fields["consecutive_failures_threshold"] = monitor.ConsecutiveFailuresThreshold
+	}
+	if monitor.RecoveryThreshold > 0 {
+		fields["recovery_threshold"] = monitor.RecoveryThreshold
+	}
+	return models.ImportRow{Index: index, Fields: fields}
 }
 
 // parseCSV parses CSV data

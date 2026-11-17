@@ -327,6 +327,7 @@ test('monitorMatchesFilters: search covers name, target and tags', () => {
   assert.equal(monitorMatchesFilters(api, filters({ query: 'pay.example' })), true);
   assert.equal(monitorMatchesFilters(api, filters({ query: 'prod' })), true);
   assert.equal(monitorMatchesFilters(api, filters({ query: 'staging' })), false);
+  assert.equal(monitorMatchesFilters({ ...api, key: 'payments-api' }, filters({ query: 'payments-' })), true);
 });
 
 test('monitorMatchesFilters: type, tags, status and routing all have to pass; ignore drops one', () => {

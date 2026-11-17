@@ -236,11 +236,13 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	// No expectations: an export reads monitors through the monitor service
-	// and must not query the database itself.
+	// An export reads monitors through the monitor service; its one query
+	// of its own reads the dependency edges, which version 2 names by key.
+	sqlMock.ExpectQuery("FROM monitor_dependencies").WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"monitor_id", "depends_on_id"}))
 	groupSvc := &groupMembershipMock{}
 	svc := NewService(&db.Client{DB: sqlDB}, monitorSvc, groupSvc)
-	data, err := svc.ExportMonitors(context.Background(), tenantID)
+	data, err := svc.ExportMonitors(context.Background(), tenantID, ExportOptions{})
 	if err != nil {
 		t.Fatalf("ExportMonitors() error = %v", err)
 	}
@@ -250,7 +252,7 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 		t.Fatalf("failed to unmarshal bundle: %v", err)
 	}
 
-	if bundle.Kind != "monitor_export" || bundle.Version != 1 {
+	if bundle.Kind != "monitor_export" || bundle.Version != 2 {
 		t.Fatalf("unexpected bundle header: %+v", bundle)
 	}
 	if len(bundle.Monitors) != 3 {
@@ -267,6 +269,9 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 	}
 	if len(bundle.Monitors[2].GroupMembers) != 2 {
 		t.Fatalf("expected group_members for exported group, got %+v", bundle.Monitors[2].GroupMembers)
+	}
+	if strings.Contains(string(data), "monitor_ids") {
+		t.Fatalf("export wrote a group's server-owned monitor_ids: %s", string(data))
 	}
 	if strings.Contains(string(data), "key:") || strings.Contains(string(data), "group_member_keys") {
 		t.Fatalf("export leaked hidden references: %s", string(data))

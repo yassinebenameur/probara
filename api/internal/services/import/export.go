@@ -11,19 +11,38 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 )
 
-// ExportMonitors exports all tenant monitors as a portable YAML bundle.
-func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byte, error) {
+// ExportOptions narrows an export.
+type ExportOptions struct {
+	// KeyedOnly exports only the monitors with a key: the document apply
+	// manages (POST /monitors/apply).
+	KeyedOnly bool
+}
+
+// serverOwnedConfigFields are config fields the server writes, which a
+// document neither carries nor changes: a group's monitor_ids (membership is
+// group_members / member_keys, and the junction table), an agent's
+// agent_id. The export leaves them out and apply keeps the stored values.
+// (A push monitor's push_token is a registry secret: masked, and kept.)
+var serverOwnedConfigFields = map[models.MonitorType][]string{
+	models.MonitorTypeGroup: {"monitor_ids"},
+	models.MonitorTypeAgent: {"agent_id"},
+}
+
+// ExportMonitors exports the tenant's monitors as a portable YAML document,
+// version 2: each monitor's key, and its keyed group members and
+// dependencies by key, beside what version 1 carried. Secrets are masked.
+func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID, opts ExportOptions) ([]byte, error) {
 	monitors, err := s.loadAllMonitors(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-
-	nameByMonitorID := make(map[uuid.UUID]string, len(monitors))
-	for _, monitor := range monitors {
-		nameByMonitorID[monitor.ID] = monitor.Name
+	dependsOn, err := s.loadDependencies(ctx, tenantID)
+	if err != nil {
+		return nil, err
 	}
 
 	sort.SliceStable(monitors, func(i, j int) bool {
@@ -36,39 +55,103 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byt
 		return monitors[i].CreatedAt.Before(monitors[j].CreatedAt)
 	})
 
+	// After the sort, which moves the elements these point at.
+	byID := make(map[uuid.UUID]*models.Monitor, len(monitors))
+	for i := range monitors {
+		byID[monitors[i].ID] = &monitors[i]
+	}
+	included := func(m *models.Monitor) bool { return !opts.KeyedOnly || m.Key != nil }
+
 	exported := make([]models.PortableExportMonitor, 0, len(monitors))
 	for _, monitor := range monitors {
+		if !included(&monitor) {
+			continue
+		}
 		configValue, err := decodeRawJSON(monitor.Config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode config for monitor %s: %w", monitor.ID, err)
 		}
-
-		groupMembers := make([]string, 0, len(monitor.MemberIDs))
-		for _, memberID := range monitor.MemberIDs {
-			if name, ok := nameByMonitorID[memberID]; ok {
-				groupMembers = append(groupMembers, name)
+		if configMap, ok := configValue.(map[string]interface{}); ok {
+			for _, field := range serverOwnedConfigFields[monitor.Type] {
+				delete(configMap, field)
 			}
 		}
 
-		exported = append(exported, models.PortableExportMonitor{
+		// Members and dependencies outside the export are left out: a file
+		// only names monitors it holds.
+		groupMembers := make([]string, 0, len(monitor.MemberIDs))
+		var memberKeys []string
+		for _, memberID := range monitor.MemberIDs {
+			member, ok := byID[memberID]
+			if !ok || !included(member) {
+				continue
+			}
+			groupMembers = append(groupMembers, member.Name)
+			if member.Key != nil {
+				memberKeys = append(memberKeys, *member.Key)
+			}
+		}
+		var dependencyKeys []string
+		for _, upstreamID := range dependsOn[monitor.ID] {
+			if upstream, ok := byID[upstreamID]; ok && upstream.Key != nil {
+				dependencyKeys = append(dependencyKeys, *upstream.Key)
+			}
+		}
+		sort.Strings(memberKeys)
+		sort.Strings(dependencyKeys)
+
+		entry := models.PortableExportMonitor{
 			Name:                         monitor.Name,
 			Type:                         monitor.Type,
 			IntervalSeconds:              monitor.IntervalSeconds,
 			TimeoutSeconds:               monitor.TimeoutSeconds,
-			Enabled:                      monitor.Enabled,
+			Enabled:                      &monitor.Enabled,
 			Tags:                         monitor.Tags,
 			Config:                       configValue,
 			GroupMembers:                 groupMembers,
+			MemberKeys:                   memberKeys,
+			DependsOn:                    dependencyKeys,
 			ConsecutiveFailuresThreshold: monitor.ConsecutiveFailuresThreshold,
 			RecoveryThreshold:            monitor.RecoveryThreshold,
-		})
+		}
+		if monitor.Key != nil {
+			entry.Key = *monitor.Key
+		}
+		exported = append(exported, entry)
 	}
 
 	return yaml.Marshal(models.PortableMonitorExport{
-		Kind:     "monitor_export",
-		Version:  1,
+		Kind:     models.PortableMonitorExportKind,
+		Version:  models.PortableExportVersion2,
 		Monitors: exported,
 	})
+}
+
+// loadDependencies reads every dependency edge between the tenant's live
+// monitors, by dependent monitor, in one query.
+func (s *Service) loadDependencies(ctx context.Context, tenantID uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	out := map[uuid.UUID][]uuid.UUID{}
+	if s.db == nil {
+		return out, nil
+	}
+	rows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, `
+		SELECT md.monitor_id, md.depends_on_id
+		FROM monitor_dependencies md
+		JOIN monitors m ON m.id = md.monitor_id AND m.tenant_id = $1 AND m.deleted_at IS NULL
+		JOIN monitors u ON u.id = md.depends_on_id AND u.tenant_id = $1 AND u.deleted_at IS NULL
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load dependencies: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var monitorID, upstreamID uuid.UUID
+		if err := rows.Scan(&monitorID, &upstreamID); err != nil {
+			return nil, fmt.Errorf("failed to scan dependency: %w", err)
+		}
+		out[monitorID] = append(out[monitorID], upstreamID)
+	}
+	return out, rows.Err()
 }
 
 func (s *Service) loadAllMonitors(ctx context.Context, tenantID uuid.UUID) ([]models.Monitor, error) {

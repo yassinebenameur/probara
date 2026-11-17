@@ -177,6 +177,11 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if req.Name == "" {
 		return fmt.Errorf("name is required")
 	}
+	if req.Key != nil {
+		if err := ValidateMonitorKey(*req.Key); err != nil {
+			return err
+		}
+	}
 
 	// Validate type using registry
 	if !registry.Has(req.Type) {
@@ -245,6 +250,13 @@ func ValidateMonitorUpdate(req *models.UpdateMonitorRequest, existingMonitor *mo
 
 // ValidateMonitorUpdateWithRegistry validates an UpdateMonitorRequest using a custom registry
 func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existingMonitor *models.Monitor, registry *ValidatorRegistry) error {
+	// "" removes the key; anything else must be a valid key.
+	if req.Key != nil && *req.Key != "" {
+		if err := ValidateMonitorKey(*req.Key); err != nil {
+			return err
+		}
+	}
+
 	// Validate type if being updated
 	if req.Type != nil {
 		if !registry.Has(*req.Type) {

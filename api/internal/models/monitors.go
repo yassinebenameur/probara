@@ -50,6 +50,7 @@ type Monitor struct {
 	ID                           uuid.UUID                  `json:"id"`
 	TenantID                     uuid.UUID                  `json:"tenant_id"`
 	Name                         string                     `json:"name"`
+	Key                          *string                    `json:"key,omitempty"` // Stable config-as-code identity (POST /monitors/apply); nil = unmanaged
 	Type                         MonitorType                `json:"type"`
 	Config                       json.RawMessage            `json:"config"`
 	IntervalSeconds              int                        `json:"interval_seconds"`
@@ -86,6 +87,7 @@ type Monitor struct {
 // CreateMonitorRequest represents a request to create a monitor
 type CreateMonitorRequest struct {
 	Name                         string                     `json:"name"`
+	Key                          *string                    `json:"key,omitempty"`
 	Type                         MonitorType                `json:"type"`
 	Config                       json.RawMessage            `json:"config"`
 	IntervalSeconds              int                        `json:"interval_seconds"`
@@ -106,6 +108,7 @@ type CreateMonitorRequest struct {
 // UpdateMonitorRequest represents a request to update a monitor
 type UpdateMonitorRequest struct {
 	Name                         *string                    `json:"name,omitempty"`
+	Key                          *string                    `json:"key,omitempty"` // nil = unchanged, "" = remove the key
 	Type                         *MonitorType               `json:"type,omitempty"`
 	Config                       json.RawMessage            `json:"config,omitempty"`
 	IntervalSeconds              *int                       `json:"interval_seconds,omitempty"`

@@ -185,7 +185,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only. The [AI label routes](#ai-labels) persist operator verdicts, so they are writes: viewers and read keys get HTTP 403.",
+            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/apply/plan`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only. The [AI label routes](#ai-labels) persist operator verdicts, so they are writes: viewers and read keys get HTTP 403.",
         },
       ],
     },
@@ -394,7 +394,15 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/monitors/export`",
-              "Export a versioned YAML configuration bundle",
+              "Export a versioned YAML configuration bundle (version 2, with each monitor's key); `keyed=true` exports only the monitors with a key, the file [config as code](/docs/monitors/#config-as-code) applies",
+            ],
+            [
+              "`POST /api/v1/monitors/apply/plan`",
+              "Read; what applying a monitors file (`{document, prune, force, fingerprint}`) would create, update, leave unchanged or delete, with validation errors and a fingerprint; writes nothing",
+            ],
+            [
+              "`POST /api/v1/monitors/apply`",
+              "Write; apply a monitors file to the workspace's keyed monitors, all or nothing: 422 `invalid_document`, 409 `plan_changed` or `prune_refused`, each with the plan and nothing written",
             ],
             [
               "`POST /api/v1/monitors/import/preview`",
@@ -409,7 +417,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Dependency creation rejects self-reference and transitive cycles with HTTP 409; a `PATCH /monitors/{id}` whose `depends_on_ids` would form one is refused as a whole, with nothing in it applied. A create or update and its member and dependency changes are saved in one transaction. `POST /monitors/bulk/alerting` checks every monitor and channel first, then applies the edit in batches of 100 monitors, each one transaction; an error after earlier batches committed says how many monitors were already updated; the edit is idempotent, so retrying the request is safe. A save that loses a database lock conflict twice answers 503 `conflict` with nothing saved; retry it. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate.",
+            "Dependency creation rejects self-reference and transitive cycles with HTTP 409; a `PATCH /monitors/{id}` whose `depends_on_ids` would form one is refused as a whole, with nothing in it applied. A create or update and its member and dependency changes are saved in one transaction. `POST /monitors/bulk/alerting` checks every monitor and channel first, then applies the edit in batches of 100 monitors, each one transaction; an error after earlier batches committed says how many monitors were already updated; the edit is idempotent, so retrying the request is safe. A save that loses a database lock conflict twice answers 503 `conflict` with nothing saved; retry it. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate. `POST /monitors` and `PATCH /monitors/{id}` accept a `key` (`\"\"` removes it on `PATCH`); a key another monitor of the workspace has answers 409 `key_taken`. The [config as code](/docs/monitors/#config-as-code) section covers the apply endpoints, the file format and a `curl` workflow.",
         },
       ],
     },

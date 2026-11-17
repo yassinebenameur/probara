@@ -45,8 +45,9 @@ import { useSyntheticLiveTest } from './useSyntheticLiveTest';
 import { MonitorTypeBar, MonitorTypePicker, type MonitorTypeMeta } from './MonitorTypePicker';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FormInput, FormPanel, LabelsSection, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar, WIDE_STACK_OFFSET, useWideForm } from './form-kit';
+import { FormInput, FormPanel, LabelsSection, MonitorKeyContext, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar, WIDE_STACK_OFFSET, useWideForm } from './form-kit';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import { monitorKeyError, monitorKeyPatch } from '@/lib/monitor-key';
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -171,6 +172,29 @@ export default function MonitorForm({
   const liveTest = useSyntheticLiveTest({ monitorId: monitor?.id, monitorType, locationIds: formData.location_ids });
   const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
 
+  // The config-as-code key, for every type: the type forms submit their
+  // request through submitWithKey, which adds the key (lib/monitor-key).
+  const [keyValue, setKeyValue] = useState(monitor?.key ?? '');
+  const [keyError, setKeyError] = useState<string | undefined>();
+  const keyField = {
+    value: keyValue,
+    onChange: (value: string) => {
+      setKeyValue(value);
+      setKeyError(undefined);
+    },
+    error: keyError,
+    original: monitor?.key,
+  };
+  const submitWithKey = async (data: CreateMonitorRequest | UpdateMonitorRequest) => {
+    const error = monitorKeyError(keyValue);
+    if (error) {
+      setKeyError(error);
+      revealFirstError(shellRef.current);
+      return;
+    }
+    await onSubmit({ ...data, ...monitorKeyPatch(monitor?.key, keyValue, isEditMode) });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (reportConstraintViolation(formRef.current)) return;
@@ -184,7 +208,7 @@ export default function MonitorForm({
       return;
     }
 
-    await onSubmit(buildMonitorFormRequest(monitorType, formData, browserSetup.guided));
+    await submitWithKey(buildMonitorFormRequest(monitorType, formData, browserSetup.guided));
   };
 
   const selectType = (type: MonitorType) => {
@@ -243,13 +267,13 @@ export default function MonitorForm({
         // Hidden rather than unmounted while the picker is reopened, so a
         // half-filled form survives a look at the other types.
         <div ref={formBodyRef} hidden={typePickerOpen} className={`${formWidth} ${wide ? WIDE_STACK_OFFSET : ''}`}>
-          {body}
+          <MonitorKeyContext.Provider value={keyField}>{body}</MonitorKeyContext.Provider>
         </div>
       )}
     </div>
   );
 
-  const typeFormProps: MonitorFormProps = { monitor, initialData, onSubmit, onCancel, loading };
+  const typeFormProps: MonitorFormProps = { monitor, initialData, onSubmit: submitWithKey, onCancel, loading };
   const TypeForm = TYPE_FORMS[monitorType];
   if (TypeForm) {
     return shell(<TypeForm {...typeFormProps} />);

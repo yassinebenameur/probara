@@ -101,6 +101,17 @@ type ImportExecuteResponse struct {
 	SkippedCount int               `json:"skipped_count"`
 }
 
+// PortableMonitorExportKind is the kind of every portable export document.
+const PortableMonitorExportKind = "monitor_export"
+
+// Portable export versions. Version 2 adds each monitor's key and, by key,
+// its keyed group members and dependencies; the importer reads both, apply
+// (POST /monitors/apply) needs version 2.
+const (
+	PortableExportVersion1 = 1
+	PortableExportVersion2 = 2
+)
+
 type PortableMonitorExport struct {
 	Kind     string                  `json:"kind" yaml:"kind"`
 	Version  int                     `json:"version" yaml:"version"`
@@ -108,14 +119,24 @@ type PortableMonitorExport struct {
 }
 
 type PortableExportMonitor struct {
-	Name                         string      `json:"name" yaml:"name"`
-	Type                         MonitorType `json:"type" yaml:"type"`
-	IntervalSeconds              int         `json:"interval_seconds" yaml:"interval_seconds"`
-	TimeoutSeconds               int         `json:"timeout_seconds" yaml:"timeout_seconds"`
-	Enabled                      bool        `json:"enabled" yaml:"enabled"`
-	Tags                         []string    `json:"tags,omitempty" yaml:"tags,omitempty"`
-	Config                       interface{} `json:"config" yaml:"config"`
-	GroupMembers                 []string    `json:"group_members,omitempty" yaml:"group_members,omitempty"`
-	ConsecutiveFailuresThreshold int         `json:"consecutive_failures_threshold,omitempty" yaml:"consecutive_failures_threshold,omitempty"`
-	RecoveryThreshold            int         `json:"recovery_threshold,omitempty" yaml:"recovery_threshold,omitempty"`
+	// Key is the monitor's config-as-code identity (version 2); empty for
+	// a monitor without one.
+	Key             string      `json:"key,omitempty" yaml:"key,omitempty"`
+	Name            string      `json:"name" yaml:"name"`
+	Type            MonitorType `json:"type" yaml:"type"`
+	IntervalSeconds int         `json:"interval_seconds" yaml:"interval_seconds"`
+	TimeoutSeconds  int         `json:"timeout_seconds" yaml:"timeout_seconds"`
+	// Enabled is always written; a document that leaves it out means true
+	// to apply (the importer has always read it as false).
+	Enabled *bool       `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Tags    []string    `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Config  interface{} `json:"config" yaml:"config"`
+	// GroupMembers names a group's members by monitor name (the importer).
+	GroupMembers []string `json:"group_members,omitempty" yaml:"group_members,omitempty"`
+	// MemberKeys are a group's keyed members by key, DependsOn a monitor's
+	// keyed upstream dependencies by key (version 2; apply reads these).
+	MemberKeys                   []string `json:"member_keys,omitempty" yaml:"member_keys,omitempty"`
+	DependsOn                    []string `json:"depends_on,omitempty" yaml:"depends_on,omitempty"`
+	ConsecutiveFailuresThreshold int      `json:"consecutive_failures_threshold,omitempty" yaml:"consecutive_failures_threshold,omitempty"`
+	RecoveryThreshold            int      `json:"recovery_threshold,omitempty" yaml:"recovery_threshold,omitempty"`
 }

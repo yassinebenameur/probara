@@ -25,6 +25,8 @@ var auditSkipPrefixes = []string{
 var auditItemizedPrefixes = []string{
 	"/api/v1/alerts/bulk/",
 	"/api/v1/discovery/",
+	// Plan and apply record one event each with counts and keys.
+	"/api/v1/monitors/apply",
 }
 
 // itemizedSuccess reports whether a request's own handler audited it item by

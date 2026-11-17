@@ -26,13 +26,15 @@ func TestRecoveryThreshold_PortableRoundTrip(t *testing.T) {
 		ConsecutiveFailuresThreshold: 2, RecoveryThreshold: 3,
 		CreatedAt: time.Unix(10, 0), UpdatedAt: time.Unix(10, 0),
 	}}}
-	sqlDB, _, err := sqlmock.New()
+	sqlDB, sqlMock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New() error = %v", err)
 	}
 	defer sqlDB.Close()
+	sqlMock.ExpectQuery("FROM monitor_dependencies").
+		WillReturnRows(sqlmock.NewRows([]string{"monitor_id", "depends_on_id"}))
 
-	data, err := NewService(&db.Client{DB: sqlDB}, source, &groupMembershipMock{}).ExportMonitors(context.Background(), tenantID)
+	data, err := NewService(&db.Client{DB: sqlDB}, source, &groupMembershipMock{}).ExportMonitors(context.Background(), tenantID, ExportOptions{})
 	if err != nil {
 		t.Fatalf("ExportMonitors() error = %v", err)
 	}
