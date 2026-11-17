@@ -193,11 +193,14 @@ func TestWorkspacePurge_ScrubsSecretsFirst(t *testing.T) {
 			SELECT (SELECT COUNT(*) FROM alert_channels WHERE tenant_id = $1 AND config <> '{}'::jsonb)
 			     + (SELECT COUNT(*) FROM monitors WHERE tenant_id = $1 AND (config ? 'secret_headers' OR push_token IS NOT NULL))
 			     + (SELECT COUNT(*) FROM locations WHERE tenant_id = $1 AND worker_credential IS NOT NULL)
-			     + (SELECT COUNT(*) FROM ai_settings WHERE tenant_id = $1 AND api_key_encrypted <> '')`, victim).Scan(&n))
+			     + (SELECT COUNT(*) FROM ai_settings WHERE tenant_id = $1 AND api_key_encrypted <> '')
+			     + (SELECT COUNT(*) FROM status_pages WHERE tenant_id = $1 AND password_hash IS NOT NULL)
+			     + (SELECT COUNT(*) FROM status_page_access_tokens t JOIN status_pages p ON p.id = t.status_page_id
+			         WHERE p.tenant_id = $1 AND t.token_hash NOT LIKE 'scrubbed:%')`, victim).Scan(&n))
 		return n
 	}
 	scrubRows := secretsLeft()
-	require.Equal(t, 5, scrubRows, "fixture: one channel, two monitors, one location, one AI key")
+	require.Equal(t, 7, scrubRows, "fixture: one channel, two monitors, one location, one AI key, one page password, one kiosk token")
 	before := purgeTableCounts(ctx, t, dbClient)
 
 	p := newWorkspacePurger(dbClient, testLogger(t), nil, purgerOptions{BatchSize: 10, MaxRowsPerRun: scrubRows})
@@ -397,7 +400,8 @@ INSERT INTO incident_monitors (incident_id, monitor_id) VALUES ('{I}', '{M1}');
 INSERT INTO incident_timeline_entries (tenant_id, incident_id, entry_type, message) VALUES ('{T}', '{I}', 'system', 'opened');
 INSERT INTO incident_ai_analyses (tenant_id, incident_id, status) VALUES ('{T}', '{I}', 'pending');
 
-INSERT INTO status_pages (id, tenant_id, slug, title) VALUES ('{P}', '{T}', 'page-{X}', 'Status');
+INSERT INTO status_pages (id, tenant_id, slug, title, visibility, password_hash) VALUES ('{P}', '{T}', 'page-{X}', 'Status', 'password', '$2a$04$hash');
+INSERT INTO status_page_access_tokens (status_page_id, label, token_hash) VALUES ('{P}', 'lobby', 'kiosk-{X}');
 INSERT INTO status_page_sections (id, status_page_id, title) VALUES ('{S}', '{P}', 'Section');
 INSERT INTO status_page_section_monitors (section_id, monitor_id) VALUES ('{S}', '{M1}');
 INSERT INTO status_page_monitors (status_page_id, monitor_id) VALUES ('{P}', '{M1}');

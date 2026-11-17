@@ -62,6 +62,16 @@ type StatusPageService interface {
 
 	// DeleteLibraryTemplate removes a library template (pages keep applied copies)
 	DeleteLibraryTemplate(ctx context.Context, tenantID, templateID uuid.UUID) error
+
+	// ListAccessTokens lists a page's kiosk tokens (never their values)
+	ListAccessTokens(ctx context.Context, tenantID, pageID uuid.UUID) (*models.StatusPageAccessTokenListResponse, error)
+
+	// CreateAccessToken mints a kiosk token; the response is the only one
+	// carrying its value
+	CreateAccessToken(ctx context.Context, tenantID, pageID uuid.UUID, by TokenCreator, label string) (*models.CreatedStatusPageAccessToken, error)
+
+	// RevokeAccessToken revokes a kiosk token (idempotent)
+	RevokeAccessToken(ctx context.Context, tenantID, pageID, tokenID uuid.UUID) error
 }
 
 // Ensure Service implements StatusPageService

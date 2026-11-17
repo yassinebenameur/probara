@@ -909,7 +909,24 @@ export const API_PAGE: DocPage = {
               "`POST /api/v1/status-pages/{id}/template/revert`",
               "Republish archived source as a new version",
             ],
+            [
+              "`GET /api/v1/status-pages/{id}/access-tokens`",
+              "List the page's kiosk tokens (never their values), revoked ones included",
+            ],
+            [
+              "`POST /api/v1/status-pages/{id}/access-tokens`",
+              "Create a kiosk token (`{\"label\"}`); the only response carrying the token",
+            ],
+            [
+              "`POST /api/v1/status-pages/{id}/access-tokens/{accessTokenId}/revoke`",
+              "Revoke a kiosk token (idempotent)",
+            ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Create and update take `visibility` (`public`, `unlisted`, `password`, `private`) and a write-only `password`; reads return `visibility` and `has_password`. See [visibility and kiosk tokens](/docs/status-pages/#visibility).",
         },
         {
           type: "table",
@@ -938,7 +955,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, plus [draft preview](/docs/status-pages/#preview-security). Do not use those public routes to mutate configuration.",
+            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, the [feed, `summary.json` and badges](/docs/status-pages/#feed-summary-badges), plus [draft preview](/docs/status-pages/#preview-security). Do not use those public routes to mutate configuration.",
         },
       ],
     },

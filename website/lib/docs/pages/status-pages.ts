@@ -14,6 +14,8 @@ export const STATUS_PAGES_PAGE: DocPage = {
     "status page template",
     "SSE",
     "custom CSS",
+    "status badge",
+    "Atom feed",
   ],
   sections: [
     {
@@ -47,6 +49,14 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`sections`",
               "Ordered groups with titles up to 80 characters and ordered monitor entries",
             ],
+            [
+              "`visibility`",
+              "Who may view the page: `public` (default), `unlisted`, `password` or `private` — see [visibility and kiosk tokens](#visibility)",
+            ],
+            [
+              "`password`",
+              "Write-only visitor password, 8–72 characters; reads report `has_password` only",
+            ],
           ],
         },
         {
@@ -59,7 +69,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           tone: "warning",
           title: "A public page exposes operational information",
           text:
-            "Only select monitors, names, descriptions, incidents, and maintenance details intended for unauthenticated visitors. The active built-in template does not currently render monitor target URLs, but custom templates and future use of schema-reserved fields must still be reviewed for disclosure.",
+            "A public or unlisted page is readable by anyone who has its URL. Only select monitors, names, descriptions, incidents, and maintenance details intended for unauthenticated visitors, or make the page password-protected or private. The active built-in template does not currently render monitor target URLs, but custom templates and future use of schema-reserved fields must still be reviewed for disclosure.",
         },
       ],
     },
@@ -77,9 +87,9 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`show_monitor_url`",
-              "Present in the settings schema; not currently wired into the built-in template",
+              "Off keeps each monitor's target out of the built-in page, including its search filter and the row's detail line (which otherwise falls back to the target), and out of `/data`",
             ],
-            ["`show_monitor_uptime`", "Controls per-monitor uptime in the built-in view"],
+            ["`show_monitor_uptime`", "Controls per-monitor uptime in the built-in view. Off removes it everywhere on the page: the uptime strips, the metric column and kiosk tiles (shown as `—`), the search filter, `/data`, `summary.json` and the uptime badges"],
             [
               "`show_monitor_tls`",
               "Present in the settings schema; not currently wired into the built-in template",
@@ -117,6 +127,18 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`csp_mode`",
               "The page's [Content-Security-Policy](#content-security-policy): `strict`, `compatible`, `off`, or empty for automatic. Set in the template editor's Quick branding panel",
             ],
+            [
+              "`seo_title`",
+              "The page's `<title>`, `og:title` and `twitter:title`, up to 120 characters. Empty uses `<title> · Status`. See [search and link previews](#search-and-previews)",
+            ],
+            [
+              "`seo_description`",
+              "The meta, Open Graph and Twitter description, up to 300 characters. Empty uses the page description, else a fixed sentence naming the page",
+            ],
+            [
+              "`allow_search_indexing`",
+              "On by default. Off sends `noindex, nofollow` in a robots meta tag and an `X-Robots-Tag` header; the page stays public. Applies to public pages only: unlisted, password and private pages are always `noindex, nofollow` (the settings UI shows the toggle forced off)",
+            ],
           ],
         },
         {
@@ -152,7 +174,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`GET /public/status/{slug}/data`",
-              "Public JSON-shaped page data used by the renderer and clients",
+              "Public JSON-shaped page data for clients. It carries only what the page's settings show: no uptime with `show_monitor_uptime` off, no target URL with `show_monitor_url` off, no average latency with `show_latency_charts` off, no tags with `show_monitor_tags` off and no certificate dates with `show_monitor_tls` off",
             ],
             [
               "`GET /public/status/{slug}/stream`",
@@ -172,9 +194,34 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`POST /public/status/{slug}/push/unsubscribe`",
-              "Removes a browser push subscription. Always 204, so it cannot be used to probe which endpoints exist",
+              "Removes a browser push subscription. Always 204 for a page the visitor may see, so it cannot be used to probe which endpoints exist",
+            ],
+            [
+              "`POST /public/status/{slug}/unlock`",
+              "The password form's target on a password page; sets the visitor session cookie. `GET` returns to the page",
+            ],
+            [
+              "`GET /public/status/{slug}/feed.atom`",
+              "Atom feed of published incidents and listed maintenance; see [feed, summary and badges](#feed-summary-badges)",
+            ],
+            [
+              "`GET /public/status/{slug}/summary.json`",
+              "Versioned machine-readable summary of the page",
+            ],
+            [
+              "`GET /public/status/{slug}/badge.svg`",
+              "Overall status badge",
+            ],
+            [
+              "`GET /public/status/{slug}/monitors/{id}/badge.svg` and `…/uptime.svg`",
+              "Status and uptime badges of a component the page shows",
             ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every route under `/public/status/{slug}/` — those above and any added later — passes the page's [visibility](#visibility) check before it does anything else, including serving the cached render. The only exceptions are `/unlock`, which is how a visitor gets through the check, and `sw.js`, which serves no page data.",
         },
         {
           type: "paragraph",
@@ -187,6 +234,221 @@ export const STATUS_PAGES_PAGE: DocPage = {
           title: "Live delivery is eventually consistent",
           text:
             "Core NATS status messages are not durable. PostgreSQL/API data remains authoritative, and the fallback refresh repairs a missed invalidation without requiring the visitor to reload manually.",
+        },
+      ],
+    },
+    {
+      id: "search-and-previews",
+      title: "Search and link previews",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "The built-in head carries a `<title>`, a meta description, a robots meta tag, Open Graph tags (`og:type`, `og:site_name`, `og:title`, `og:description`, and `og:image` when the page logo is an absolute `http`/`https` URL) and a `summary` Twitter card. With `STATUS_PAGE_BASE_URL` set on the status service it also carries a canonical link and `og:url`; without it they are left out rather than guessed. Two `<link rel=\"alternate\">` tags point feed readers and tools at the page's Atom feed and `summary.json`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The default description never states the current status. Search engines and link previews keep a snapshot for days, and \"All systems operational\" frozen in a search result during an outage misleads more than it helps; the page title already says what the page is. Set `seo_description` to describe your services in your own words.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Custom templates receive the same values as `.SEOTitle`, `.MetaDescription`, `.SiteName`, `.CanonicalURL` (empty without a public origin), `.OGImageURL` (empty unless the logo is absolute), `.Robots` (`index, follow` or `noindex, nofollow`), `.FeedURL` and `.SummaryURL`. A template that prints no robots tag is still covered: with indexing off every page response carries `X-Robots-Tag: noindex, nofollow`. Indexing is off for every page that is not [public](#visibility). The unlock form of a password page carries none of these tags: only the page title, its logo and `noindex, nofollow`; a private page without a credential answers `404` with no head at all.",
+        },
+      ],
+    },
+    {
+      id: "feed-summary-badges",
+      title: "Feed, summary and badges",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Each page publishes three read-only add-ons beside it. They show nothing the page itself does not: the same rendered components, the same published incidents and the same maintenance list. Components are named as the page names them, including in incident and maintenance \"affected\" lists: the display name the page gives the monitor, else the monitor's own name. For a public or unlisted page they are readable from any site (`Access-Control-Allow-Origin: *`, never with credentials), carry an `ETag` and answer `If-None-Match` with `304`; every add-on is sent with `X-Content-Type-Options: nosniff`, a `default-src 'none'` Content-Security-Policy and `X-Robots-Tag: noindex`, and returns `404` for an unknown page. A password or private page's add-ons pass the same [access check](#visibility) as the page and work only for a browser that has unlocked it, privately — see the table there.",
+        },
+        {
+          type: "table",
+          columns: ["Add-on", "Content and caching"],
+          rows: [
+            [
+              "`feed.atom`",
+              "Atom 1.0 (`application/atom+xml`). One entry per published incident, the 50 most recently changed that are unresolved or changed in the last 90 days, each quoting its five newest public updates; unpublished incidents and internal notes never appear. One entry per maintenance window the page lists, at its occurrence in progress or next one. Entry ids are stable and specific to the page: an incident keeps its id through every update, the same incident on two pages is a different entry in each feed, and each occurrence of a repeating window is its own entry. Text is plain (`type=\"text\"`), so incident wording never becomes markup in a reader. Built at most once per render-cache TTL and dropped with the page's cache on a change, whatever query string a request carries. `Cache-Control: public, max-age=300`",
+            ],
+            [
+              "`summary.json`",
+              "The page summary described below. Shares the page's render, so it is at most as stale as the page (the render cache TTL, `STATUS_PAGE_CACHE_TTL`). Its `ETag` ignores `generated_at`, so a poll answers `304` while the data is unchanged. `Cache-Control: public, max-age=60`",
+            ],
+            [
+              "`badge.svg`",
+              "Overall status: `operational`, `maintenance`, or on an \"Issues detected\" page the worst component state (`outage`, `degraded`, `unknown`). `Cache-Control: public, max-age=60`",
+            ],
+            [
+              "`monitors/{id}/badge.svg`",
+              "A component's status: `operational`, `degraded`, `down`, `maintenance` or `unknown`. `{id}` is the monitor id; a monitor the page does not render has no badge (`404`), including the members of a group the page shows only as the group",
+            ],
+            [
+              "`monitors/{id}/uptime.svg?range=30d`",
+              "A component's uptime over `1h`, `24h`, `7d`, `30d` (default) or `90d`, computed and rounded exactly as the page shows it. `404` when the page hides per-component uptime (`show_monitor_uptime` off)",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Badges are SVG images measured on the server with fixed 11 px text, so they keep their size whatever font the viewer has, and use mid-tone colours that read on light and dark backgrounds. `?style=flat` (default, rounded) or `?style=square` is the only style parameter; the label is always the component's public name or `status`, never caller text. The operator UI's Share panel on each page's settings builds the URLs and Markdown/HTML snippets.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "`summary.json` (`schema_version` 1) is a stable contract: fields are only added, and a removal or change of meaning bumps the version. Its fields:",
+        },
+        {
+          type: "table",
+          columns: ["Field", "Meaning"],
+          rows: [
+            ["`schema_version`", "Contract version, currently `1`"],
+            [
+              "`page`",
+              "`slug`, `title`, and `url` (the canonical URL; omitted without `STATUS_PAGE_BASE_URL`)",
+            ],
+            [
+              "`status`",
+              "`indicator` (`operational`, `issues` or `maintenance`, the page headline's rule), `description` (the headline text) and `counts` of components: `total`, `operational`, `degraded`, `down`, `maintenance`, `unknown`",
+            ],
+            [
+              "`uptime`",
+              "Page-level availability in percent for `1h`, `24h`, `7d`, `30d` and `90d` (each `null` without data), or `null` when the page hides its uptime summary (`show_global_uptime` off)",
+            ],
+            [
+              "`sections[]`",
+              "`title`, `status` (worst component) and `components[]`, each with `id`, `name`, `status` and `uptime` (the same shape, or `null` when `show_monitor_uptime` is off)",
+            ],
+            [
+              "`incidents[]`",
+              "Unresolved published incidents: `id`, `title`, `state`, `published_at`, `affected_components` and `latest_update` (`message`, `created_at`, or `null`)",
+            ],
+            [
+              "`maintenance[]`",
+              "Listed windows: `title`, `starts_at`, `ends_at`, `in_progress`, `repeating`, `next_starts_at` and `affected_components`",
+            ],
+            ["`generated_at`", "When the page data was read (RFC 3339 UTC)"],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Shared caches may hold an add-on for its max-age",
+          text:
+            "A proxy or image cache (for example a README image proxy) may keep serving a badge or summary for up to 60 seconds, and a feed for up to 5 minutes, after the page changes. Plan around that delay when you remove a component or change what a page shows.",
+        },
+      ],
+    },
+    {
+      id: "visibility",
+      title: "Visibility and kiosk tokens",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Visibility", "Who can view it", "Search engines", "Feed, summary and badges"],
+          rows: [
+            [
+              "`public` (default)",
+              "Anyone with the URL",
+              "May index it (`allow_search_indexing`)",
+              "Public: readable from any site, cached by shared caches for their max-age, embeddable",
+            ],
+            [
+              "`unlisted`",
+              "Anyone with the URL. A hidden link, not access control: anyone who learns the URL can share it",
+              "Never: every response carries `X-Robots-Tag: noindex, nofollow` and the page a robots meta tag, whatever `allow_search_indexing` says. Never named on a listing, sitemap or other discovery surface",
+              "As for a public page: anyone with the URLs can read and embed them",
+            ],
+            [
+              "`password`",
+              "Visitors who enter the page's password, and browsers opened with a kiosk token. Everyone else gets the unlock form",
+              "Never",
+              "Only for a browser that unlocked the page: `private, no-store`, no `ETag`, no CORS grant, `Cross-Origin-Resource-Policy: same-origin`. Refused (`401`) to everyone else, so they cannot be embedded on another site or polled by a feed reader",
+            ],
+            [
+              "`private`",
+              "Only browsers opened with a kiosk token. Everyone else gets exactly the response of a page that does not exist",
+              "Never",
+              "Only for a browser with a kiosk session, privately as for a password page. Everyone else gets `404`, the same as a page that does not exist",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Set visibility and the password on the page's settings in the UI, or with `visibility` and `password` on [create and update](/docs/api/). The password is write-only: omit it to keep the stored one, send `\"\"` to remove it (refused while the page is password-protected), anything else replaces it. Leaving `password` visibility keeps the stored password, so switching back needs no new one.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A visitor who enters the right password, or opens a kiosk URL, gets a session cookie: signed with `STATUS_PAGE_SESSION_SECRET`, `HttpOnly`, `SameSite=Lax`, scoped to the page's path, and `Secure` per `STATUS_PAGE_COOKIE_SECURE` — by default on when `STATUS_PAGE_BASE_URL` is `https://`, else only for requests that arrived over HTTPS (behind a TLS-terminating proxy that needs `TRUSTED_PROXY_CIDRS`, so set the base URL or the flag). Nothing about the session is stored. A password session lasts 30 days and ends early when the password is set, changed or removed; a kiosk session lasts 400 days (the browser maximum) and ends at once when its token is revoked or the page stops accepting tokens. Every open live stream re-checks the page and the session every 15 seconds, so a stream opened while the page was public ends once it is not, and a visibility or password change also closes the page's streams at once so they reconnect through the check.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Kiosk tokens** are for wall displays and dashboards. Create one from the page's Kiosk tokens panel (or `POST /api/v1/status-pages/{id}/access-tokens` with a label); the token is shown once, and only its SHA-256 hash is stored. Open `/public/status/{slug}?token=<token>` on the display once: the page swaps the token for a session cookie and redirects to the same URL without it, so the token leaves the address bar and is not re-sent by the page's refreshes or carried in a `Referer`. The page does this for every visibility, so a token never lingers in the URL of a page that was made public or unlisted. A token opens a private page and also bypasses the password on a password page. Each page can hold 50 active tokens; revoked ones stay listed with who created them and when.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Kiosk URLs are bearer credentials until first use",
+          text:
+            "The browser still records the kiosk URL it was given as the source of the redirect, so it stays in that browser's history; use a dedicated browser profile on the display. Any proxy, ingress or load balancer in front of the status service that logs query strings records the full kiosk URL, token included. Turn query-string logging off for `/public/status/` (or strip the `token` parameter from access logs) on those hops, and revoke a token whose URL was exposed.",
+        },
+        {
+          type: "table",
+          columns: ["Route", "Password page, no session", "Private page, no session"],
+          rows: [
+            ["The page", "Unlock form (`401`)", "`404`, same as a missing page"],
+            ["`/data`, `/stream`, `summary.json`, `feed.atom`, the badges, and every other sub-route, including ones added later", "`401`", "`404`, same as a missing page"],
+            ["`/preview/draft`", "`401` unless it carries a valid preview token", "`404` unless it carries a valid preview token"],
+            ["`/push/subscribe`", "`401`; with a session still `404` — no notifications on gated pages", "`404`"],
+            ["`/unlock`", "Checks the password", "`404`, same as a missing page"],
+            ["The in-page API proxy (`/_sp_api/`)", "Refused for calls naming the page", "Refused for calls naming the page"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Every response for a password or private page — allowed or refused — is `Cache-Control: private, no-store` with no `ETag`, no CORS grant and `Cross-Origin-Resource-Policy: same-origin`, so neither a shared cache, a browser revalidation nor another site can hand it to someone else. The status service checks visibility before its render cache, on every request, so a page rendered while it was public is never served from the cache once it is not.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Wrong passwords and wrong kiosk tokens share one failure budget: 5 a minute per visitor address (IPv6 counted per /64) and 30 a minute per page. Only failures count, so the right password never costs anything. When a page's budget is spent, only visitors who already failed are refused (`429`); everyone else still gets a check. A visitor whose address cannot be told apart — every visitor arrives from the proxy's address when `TRUSTED_PROXY_CIDRS` is unset — has no budget of its own and is limited by the page budget alone, so one guesser can hold every such visitor at the unlock form; the service logs a warning at startup when password or private pages exist without trusted proxies. A wrong password gets one generic message.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Pages on one origin are isolated from each other as far as the browser allows: a password or private page answers a request from another status page on the same origin — a script fetching it, or a frame — as if the visitor had no credential (`Sec-Fetch-Site` together with `Referer`; a same-origin sub-request without a `Referer` is refused; browsers without `Sec-Fetch-*` get the `Referer` check alone), and its `frame-ancestors` names only the operator UI, never `'self'`. A link from another page (a top-level navigation) still works. The add-ons follow the same rules: another status page cannot read a gated page's summary or feed, or show its badge, with the visitor's cookie. A gated badge embedded on another site is refused as well: the session cookie is `SameSite=Lax`, which browsers do not attach to a cross-site image or `fetch`, so the request arrives with no credential.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Pages sharing an origin trust each other's authors",
+          text:
+            "Custom templates and custom head/footer HTML run script on the status origin. That script cannot fetch or frame another page's gated content, but it can open another page in a window it controls and read it, and it can read anything the visitor's browser shows on this origin. Give template-editing rights only to people you would trust with every gated page on the installation. Full isolation needs a hostname per page, which custom domains will provide. Slugs are unique across the installation, so someone who can create status pages learns that a slug is taken, including a private page's.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Password and private pages need STATUS_PAGE_SESSION_SECRET",
+          text:
+            "Without the [session secret](/docs/configuration/#status-page-service) on the status-page service, a password page answers `503` and a private page `404` — they cannot be opened, and the service logs a warning — while public and unlisted pages serve as usual. The API does not hold the secret, so it accepts these visibilities either way. The release installer and `scripts/start-local-services.sh` generate one; on Helm set `secrets.statusPageSessionSecret` or an existing Secret. Changing it signs every visitor out.",
+        },
+        {
+          type: "list",
+          items: [
+            "Custom templates are covered too: the unlock form is its own small page (title, logo and primary colour only) and never uses the page template.",
+            "The built-in template reloads when a live refresh is refused (`401`/`404`), so a wall display whose token was revoked shows that instead of freezing on the last render. A custom template's own script does what its author wrote.",
+            "Notifications already queued for a page when it turns password or private are closed without being sent.",
+            "A visitor session belongs to the page's current URL: renaming the slug signs its visitors out, and a kiosk display must open the new URL with its token.",
+          ],
         },
       ],
     },
@@ -237,6 +499,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Rotating the VAPID keypair invalidates every stored subscription — push services bind an endpoint to the key that created it — and every visitor must opt in again.",
             "A page rendered by a custom template gets no control unless the author adds one; `.PushEnabled` and `.PushPublicKey` are available in the template context.",
             "Subscriptions store only the opaque browser endpoint and its public keys. No visitor identity, email address, or visit history is recorded.",
+            "Password and private pages offer no notifications: a subscription outlives the visitor session that made it. Switching a page to password or private stops notifications to its existing subscribers; switching it back resumes them.",
           ],
         },
         {
@@ -467,6 +730,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "When `STATUS_PAGE_PREVIEW_SECRET` is configured, draft preview URLs require a [signed preview token](/docs/security/#status-pages-artifacts). Without that secret, the development preview path is open to anyone who can reach it.",
         },
         {
+          type: "paragraph",
+          text:
+            "On a password or private page the preview token also stands in for the visitor's credential, so the template editor works without a password or kiosk token. That holds only while the secret is set: without it a gated page's preview needs a visitor session like any other route, and the editor's preview cannot open it.",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Configure preview signing outside local development",
@@ -511,6 +779,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Exercise unknown, suspect, degraded, down, maintenance, and incident states in a safe preview environment.",
             "Check custom HTML/CSS for content security, accessibility, focus states, contrast, and responsive overflow.",
             "Configure the preview secret and confirm the public status service has a reachable API/data path.",
+            "Choose the page's visibility; for a password or private page, confirm `STATUS_PAGE_SESSION_SECRET` is set and open it once through the unlock form or a kiosk URL. Its feed, summary and badges then work only in a browser that unlocked it.",
             "Publish, open the anonymous route in a clean browser session, and verify SSE/fallback refresh behavior.",
           ],
         },

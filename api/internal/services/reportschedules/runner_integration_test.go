@@ -1,3 +1,5 @@
+//go:build !unit
+
 package reportschedules
 
 // Runner failure modes against Postgres: a batch spanning schedules with a

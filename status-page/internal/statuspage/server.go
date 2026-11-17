@@ -50,6 +50,7 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 		log.Warn("STATUS_PAGE_TRUSTED_PROXY is deprecated and trusts X-Forwarded-For from any peer; set TRUSTED_PROXY_CIDRS to your proxies' ranges instead")
 	}
 	handlers := NewHandlers(service, cfg, log, hub, renderCache, pushes)
+	warnUntrustedProxyWithGatedPages(cfg, service, log)
 
 	// The push sender owns the reconcile-and-send loop. It exists only when
 	// VAPID keys are configured, so an unconfigured deployment starts no loop
@@ -172,4 +173,26 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 	return s.http.Shutdown(ctx)
+}
+
+// warnUntrustedProxyWithGatedPages logs once at startup when password or
+// private pages exist and no trusted proxy is configured: every visitor
+// behind an ingress then resolves to the ingress address, which is not
+// attributable, so failed-credential throttling falls back to the per-page
+// budget alone and one guesser can hold every visitor of a page at the
+// unlock form.
+func warnUntrustedProxyWithGatedPages(cfg *config.StatusPageConfig, service *Service, log *logger.Logger) {
+	if len(cfg.TrustedProxyCIDRs) > 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	gated, err := service.HasGatedPages(ctx)
+	if err != nil {
+		log.WithError(err).Warn("Could not check for password or private status pages")
+		return
+	}
+	if gated {
+		log.Warn("Password or private status pages exist but TRUSTED_PROXY_CIDRS is unset: behind a proxy every visitor shares one address, so failed-credential throttling falls back to a per-page budget that one client can exhaust. Set TRUSTED_PROXY_CIDRS to your proxies' ranges.")
+	}
 }

@@ -177,6 +177,10 @@ func Attributable(req *http.Request) bool {
 	if !ok {
 		v = resolved{ip: remoteHost(req.RemoteAddr)}
 	}
+	return v.attributable()
+}
+
+func (v resolved) attributable() bool {
 	if v.forwarded {
 		return true
 	}
@@ -186,6 +190,35 @@ func Attributable(req *http.Request) bool {
 	}
 	a = normalize(a)
 	return !(a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsUnspecified() || sharedAddressSpace.Contains(a))
+}
+
+// BucketKey is the key a per-client limit should use for req: the resolved
+// address under the Attributable rule, IPv6 grouped by /64 (BucketAddress).
+// "" when the address is not attributable, so callers fall back to a limit
+// that does not pool every visitor behind one hop into one bucket.
+func (r *Resolver) BucketKey(req *http.Request) string {
+	ip, forwarded := r.resolve(req)
+	if !(resolved{ip: ip, forwarded: forwarded}).attributable() {
+		return ""
+	}
+	return BucketAddress(ip)
+}
+
+// BucketAddress groups IPv6 clients by /64: one host is usually handed a
+// whole /64, so per-address buckets would let it rotate to a fresh one on
+// every request. IPv4 addresses are returned as they are.
+func BucketAddress(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	a = a.WithZone("").Unmap()
+	if a.Is6() {
+		if p, err := a.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
+	return a.String()
 }
 
 // sharedAddressSpace is RFC 6598 carrier-grade NAT space, also used by some

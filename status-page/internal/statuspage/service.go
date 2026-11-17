@@ -66,6 +66,19 @@ type StatusPageData struct {
 	// Published custom template ("" = render with the built-in template).
 	CustomTemplateSource  string `json:"-"` // For template use only
 	CustomTemplateVersion int    `json:"-"` // For template use only
+	// SEOTitle and SEODescription are the stored overrides ("" = derived in
+	// seo.go); AllowSearchIndexing is the page's indexing opt-out.
+	SEOTitle            string `json:"-"`
+	SEODescription      string `json:"-"`
+	AllowSearchIndexing bool   `json:"-"`
+	// Visibility is the page's access mode as the gate read it
+	// (shared/pageaccess), set by the handler; it forces noindex
+	// (pageIndexable) and turns push off for gated pages.
+	Visibility string `json:"-"`
+	// CanonicalURL is the page's absolute public URL, injected by the
+	// handler from STATUS_PAGE_BASE_URL like PushPublicKey; "" when the
+	// deployment does not name its public origin.
+	CanonicalURL string `json:"-"`
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (1-min buckets)
@@ -113,6 +126,10 @@ type StatusPageMaintenanceWindow struct {
 	// three, within the 14-day look-ahead).
 	Repeating    bool        `json:"repeating,omitempty"`
 	NextStartsAt []time.Time `json:"next_starts_at,omitempty"`
+	// ID and UpdatedAt (the window's last edit) identify the listed
+	// occurrence in the Atom feed; not part of the /data JSON.
+	ID        uuid.UUID `json:"-"`
+	UpdatedAt time.Time `json:"-"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -395,6 +412,9 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.CustomHeadHTML = settings.CustomHeadHTML
 	page.CustomFooterHTML = settings.CustomFooterHTML
 	page.CSPMode = settings.CSPMode
+	page.SEOTitle = settings.SEOTitle
+	page.SEODescription = settings.SEODescription
+	page.AllowSearchIndexing = settings.AllowSearchIndexing
 
 	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
 		return nil, fmt.Errorf("failed to get custom template: %w", err)

@@ -42,6 +42,12 @@ export interface StatusPageSettings {
    * nonce="{{cspNonce}}".
    */
   csp_mode?: StatusPageCSPMode;
+  /** Overrides the public page's <title> and og:title (up to 120 characters). '' clears it. */
+  seo_title?: string;
+  /** Overrides the search and link-preview description (up to 300 characters). '' clears it. */
+  seo_description?: string;
+  /** Let search engines index the page. On by default; off sends noindex. */
+  allow_search_indexing?: boolean;
 }
 
 export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';
@@ -61,6 +67,10 @@ export interface StatusPage {
   settings?: StatusPageSettings;
   created_at: string;
   updated_at: string;
+  /** Who may view the page; see lib/status-page-access.ts. */
+  visibility?: StatusPageVisibility;
+  /** A visitor password is stored. The password itself is write-only. */
+  has_password?: boolean;
 }
 
 export interface StatusPageTemplateVersion {
@@ -108,6 +118,9 @@ export interface CreateStatusPageRequest {
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
   settings?: StatusPageSettings;
+  visibility?: StatusPageVisibility;
+  /** Visitor password (required for password visibility). */
+  password?: string;
 }
 
 export interface UpdateStatusPageRequest {
@@ -121,6 +134,9 @@ export interface UpdateStatusPageRequest {
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
   settings?: StatusPageSettings;
+  visibility?: StatusPageVisibility;
+  /** Write-only: omitted keeps the stored password, '' removes it. */
+  password?: string;
 }
 
 export interface StatusPageListResponse {
@@ -128,4 +144,28 @@ export interface StatusPageListResponse {
   page: number;
   page_size: number;
   total: number;
+}
+
+/** Who may view a status page (status_pages.visibility, shared/pageaccess). */
+export type StatusPageVisibility = 'public' | 'unlisted' | 'password' | 'private';
+
+/** A kiosk token of a status page; its value is shown once, at creation. */
+export interface StatusPageAccessToken {
+  id: string;
+  label: string;
+  created_by_user_id?: string;
+  created_by_api_key_id?: string;
+  /** Operator username or API key name; empty once the creator is gone. */
+  created_by?: string;
+  created_at: string;
+  revoked_at?: string;
+}
+
+/** The one response that carries a kiosk token's value. */
+export interface CreatedStatusPageAccessToken extends StatusPageAccessToken {
+  token: string;
+}
+
+export interface StatusPageAccessTokenListResponse {
+  items: StatusPageAccessToken[];
 }

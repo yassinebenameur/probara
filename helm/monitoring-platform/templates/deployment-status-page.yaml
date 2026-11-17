@@ -83,6 +83,17 @@ spec:
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
         {{- end }}
+        {{- /* Visitor sessions on password and private pages: a per-field
+        Secret (must hold the key), the chart-wide Secret (key optional, so
+        an older Secret keeps working with those pages closed), or the
+        chart-managed Secret with a literal or derived value. */}}
+        {{- if or .Values.secrets.statusPageSessionSecretExistingSecret .Values.secrets.existingSecret (include "monitoring-platform.statusPageSessionSecret" .) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_SESSION_SECRET" "key" "status_page_session_secret" "secret" .Values.secrets.statusPageSessionSecretExistingSecret "secretKey" .Values.secrets.statusPageSessionSecretExistingSecretKey "optional" (and (not .Values.secrets.statusPageSessionSecretExistingSecret) .Values.secrets.existingSecret)) | nindent 8 }}
+        {{- end }}
+        {{- if or (kindIs "bool" .Values.statusPage.cookieSecure) .Values.statusPage.cookieSecure }}
+        - name: STATUS_PAGE_COOKIE_SECURE
+          value: {{ toString .Values.statusPage.cookieSecure | quote }}
+        {{- end }}
         {{- include "monitoring-platform.edgeEnv" (dict "ctx" . "component" "status-page") | nindent 8 }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}

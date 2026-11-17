@@ -83,7 +83,9 @@ func viaParent(table, join string) purgeStep {
 // SET NULL (check_results.location_id, discovery_integrations.location_id)
 // is emptied before that parent goes.
 var workspacePurgePlan = []purgeStep{
-	// Access and credentials.
+	// Access and credentials. Kiosk tokens go before api_keys, which they
+	// reference ON DELETE SET NULL (created_by_api_key_id).
+	viaParent("status_page_access_tokens", `JOIN status_pages p ON p.id = c.status_page_id WHERE p.tenant_id = $1`),
 	byTenant("api_keys"),
 	viaParent("mcp_oauth_tokens", `JOIN mcp_oauth_grants g ON g.id = c.grant_id WHERE g.tenant_id = $1`),
 	byTenant("mcp_oauth_codes"),
@@ -181,7 +183,8 @@ var workspacePurgePlan = []purgeStep{
 // order): channel configs (provider tokens, webhook URLs, passwords), monitor
 // config secrets (every field secrets.MonitorSecretFields and
 // MonitorSecretMapFields know, of any type) and push tokens, private-location
-// worker credentials, and the legacy AI provider key. Each step updates only
+// worker credentials, the legacy AI provider key, and status page passwords
+// and kiosk tokens (hashes). Each step updates only
 // rows still holding a secret, in bounded batches, so it is a no-op once done.
 // Visitor push keys (status_page_push_subscriptions) and the token, key and
 // code hashes are whole rows deleted in the plan's first steps.
@@ -196,6 +199,18 @@ func workspaceScrubPlan() []purgeStep {
 		{table: "locations (secrets)", sql: `UPDATE locations SET worker_credential = NULL
 			WHERE ctid = ANY(ARRAY(SELECT ctid FROM locations
 				WHERE tenant_id = $1 AND worker_credential IS NOT NULL LIMIT $2))`},
+		// Page passwords and kiosk tokens are stored as hashes, not
+		// reversible secrets, but go now too: nothing can unlock a deleted
+		// workspace's page from a stale cache. A token keeps a unique
+		// placeholder that no SHA-256 hex digest can equal.
+		{table: "status_pages (secrets)", sql: `UPDATE status_pages SET password_hash = NULL
+			WHERE ctid = ANY(ARRAY(SELECT ctid FROM status_pages
+				WHERE tenant_id = $1 AND password_hash IS NOT NULL LIMIT $2))`},
+		{table: "status_page_access_tokens (secrets)", sql: `UPDATE status_page_access_tokens
+			SET token_hash = 'scrubbed:' || id::text, revoked_at = COALESCE(revoked_at, NOW())
+			WHERE ctid = ANY(ARRAY(SELECT c.ctid FROM status_page_access_tokens c
+				JOIN status_pages p ON p.id = c.status_page_id
+				WHERE p.tenant_id = $1 AND c.token_hash NOT LIKE 'scrubbed:%' LIMIT $2))`},
 		{table: "ai_settings (secrets)", sql: `UPDATE ai_settings SET api_key_encrypted = ''
 			WHERE ctid = ANY(ARRAY(SELECT ctid FROM ai_settings
 				WHERE tenant_id = $1 AND api_key_encrypted <> '' LIMIT $2))`},

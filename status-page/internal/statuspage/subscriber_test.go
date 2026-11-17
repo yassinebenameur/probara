@@ -723,3 +723,45 @@ func assertNoSSEEvent(t *testing.T, ch <-chan SSEEvent) {
 	default:
 	}
 }
+
+// An access change (visibility, password, revoked token) ends the page's
+// open streams so each reconnects through the access gate; other pages'
+// streams are untouched.
+func TestSubscriberHandleEventAccessChangeClosesStreams(t *testing.T) {
+	hub := NewHub()
+	alpha := hub.Register("alpha")
+	beta := hub.Register("beta")
+	defer hub.Unregister("beta", beta)
+	cache := &spyRenderCache{}
+
+	subscriber := &Subscriber{
+		hub:    hub,
+		cache:  cache,
+		logger: logger.New("status-page", "debug"),
+		resolveSlugs: func(context.Context, statusupdates.Event) ([]string, error) {
+			return []string{"alpha"}, nil
+		},
+	}
+	subscriber.handleEvent(statusupdates.Event{
+		Type:         statusupdates.EventStatusPageAccessChanged,
+		TenantID:     uuid.New().String(),
+		StatusPageID: uuid.New().String(),
+	})
+
+	select {
+	case _, ok := <-alpha:
+		if ok {
+			t.Fatal("alpha received an event instead of being closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("alpha's stream was not closed")
+	}
+	hub.Unregister("alpha", alpha) // must not double-close
+	assertNoSSEEvent(t, beta)
+	if hub.ClientCount("alpha") != 0 || hub.ClientCount("beta") != 1 {
+		t.Fatalf("clients alpha=%d beta=%d", hub.ClientCount("alpha"), hub.ClientCount("beta"))
+	}
+	if len(cache.invalidated) != 1 || cache.invalidated[0] != "alpha" {
+		t.Fatalf("invalidated = %v, want [alpha]", cache.invalidated)
+	}
+}
