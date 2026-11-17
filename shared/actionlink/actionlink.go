@@ -1,6 +1,7 @@
 // Package actionlink mints and verifies the signed tokens behind one-click
 // alert actions in notifications ("acknowledge this alert") and the
-// unsubscribe links in emailed SLA reports. *Signer
+// unsubscribe links in emailed SLA reports and status-page subscriber mail,
+// and the confirmation link of a status-page subscription. *Signer
 // implements present.LinkSigner, the seam package present renders action
 // links through, and the API verifies the same tokens.
 //
@@ -47,6 +48,15 @@ const ActionAcknowledge = "ack"
 // in the channel slot, so the address itself never appears in the link.
 const ActionUnsubscribeReport = "report-unsubscribe"
 
+// ActionConfirmSubscription authorizes confirming one pending status-page
+// email subscription (double opt-in). Its token carries the tenant, the
+// status page in the alert slot and the subscriber row in the channel slot.
+const ActionConfirmSubscription = "page-subscription-confirm"
+
+// ActionUnsubscribePage authorizes removing one status-page email
+// subscriber; the token's IDs are those of ActionConfirmSubscription.
+const ActionUnsubscribePage = "page-unsubscribe"
+
 // TTL is how long an acknowledge link stays valid after the notification
 // carrying it was built: long enough to cover a weekend of reminders, short
 // enough that a forwarded message goes stale.
@@ -56,6 +66,11 @@ const TTL = 72 * time.Hour
 // unsubscribe from a report weeks after it arrived, and mail rules require
 // the link to keep working well beyond the next send.
 const UnsubscribeTTL = 365 * 24 * time.Hour
+
+// ConfirmSubscriptionTTL is how long a subscription confirmation link works:
+// long enough for a weekend, short enough that a stale invitation to an
+// address that never answered goes dead. Pending rows are pruned later.
+const ConfirmSubscriptionTTL = 48 * time.Hour
 
 // hkdfInfo separates the link-signing key from every other use of the
 // secrets keyring (AES-GCM envelopes use the raw key). Changing it revokes
@@ -78,10 +93,15 @@ const (
 // actionCodes maps an action to its byte in the token. A code is never
 // reused for a different action, and the MAC covers it, so a token minted
 // for one action never authorizes another.
-var actionCodes = map[string]byte{ActionAcknowledge: 1, ActionUnsubscribeReport: 2}
+var actionCodes = map[string]byte{
+	ActionAcknowledge: 1, ActionUnsubscribeReport: 2, ActionConfirmSubscription: 3, ActionUnsubscribePage: 4,
+}
 
 // actionTTL is each action's link lifetime.
-var actionTTL = map[string]time.Duration{ActionAcknowledge: TTL, ActionUnsubscribeReport: UnsubscribeTTL}
+var actionTTL = map[string]time.Duration{
+	ActionAcknowledge: TTL, ActionUnsubscribeReport: UnsubscribeTTL,
+	ActionConfirmSubscription: ConfirmSubscriptionTTL, ActionUnsubscribePage: UnsubscribeTTL,
+}
 
 // Errors. ErrExpired is returned only for an authentic token, together with
 // its claims, so a caller may still say which alert the stale link was for.

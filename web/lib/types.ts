@@ -23,3 +23,4 @@ export * from './types/groups';
 export * from './types/import';
 export * from './types/mcp';
 export * from './types/deliveries';
+export * from './types/status-page-subscribers';

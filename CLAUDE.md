@@ -999,6 +999,22 @@ or imported groups come back empty. Any other path that creates groups through
   The gate passes its visibility on the request (`withPageVisibility`) and
   `cachedPage` rebuilds an entry built under another one; an access change
   invalidates the page, summary and feed together.
+- **Email subscribers are written by the API alone**
+  (`api/internal/services/pagesubscribers`); the status-page service only
+  forwards the form and links (`subscribe.go`: sub-routes behind the gate,
+  per-client `subscribeThrottle`, nothing identifying the visitor forwarded,
+  `STATUS_PAGE_INTERNAL_API_URL`). Public and unlisted pages only. The
+  notification outbox (`status_page_notification_outbox`, written by
+  `api/internal/services/pagenotify` in the trigger's own transaction) is the
+  single trigger for subscriber mail and incident push: a new trigger is a
+  `pagenotify` call inside that transaction, never a send. The runner follows
+  the report schedules' claimed/sending/uncertain rules; every subscriber link
+  is built by `Service.pageURL` (`STATUS_PAGE_BASE_URL` on the API); tokens
+  are `shared/actionlink` actions in the URL fragment. Subscribe answers alike
+  for every address state and never mails from the request. Automatic outage
+  publishing (`autopublish.go`) finds or creates incidents only through
+  `shared/autoincident`, the alerter's lock and lookup; page component names
+  come from `shared/statuspagesql`.
 
 ## Web UI conventions
 

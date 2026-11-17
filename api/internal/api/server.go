@@ -68,6 +68,7 @@ import (
 	oidcauthservice "github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	oidcmappingsservice "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
+	pagesubscriberservice "github.com/yassinebenameur/probara/api/internal/services/pagesubscribers"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	reportscheduleservice "github.com/yassinebenameur/probara/api/internal/services/reportschedules"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
@@ -98,6 +99,7 @@ type Server struct {
 	auditRecorder      *auditservice.Recorder
 	auditPruner        *auditservice.Pruner
 	reportRunner       *reportscheduleservice.Runner
+	subscriberRunner   *pagesubscriberservice.Runner
 	locationAuthorizer *locationnatsauthservice.Service
 	locationAuth       *callout.AuthorizationService
 	locationAuthConn   *nats.Conn
@@ -211,6 +213,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	// Emailed SLA report schedules and their runner (routes_reportschedules.go).
 	reportScheduleHandlers, reportRunner := newReportSchedules(cfg, dbClient, auditRecorder, log)
+	// Status-page email subscribers and their runner (routes_statuspage_subscribers.go).
+	subscriberHandlers, subscriberRunner := newStatusPageSubscribers(cfg, dbClient, auditRecorder, statusPublisher, log)
 
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
@@ -248,6 +252,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		mountAuthRoutes(r, authHandlers, adminUsersHandlers)
 		mountAlertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_alertactions.go)
 		mountReportUnsubscribeRoutes(r, reportScheduleHandlers)           // signed unsubscribe links of report emails
+		mountStatusPageSubscriberPublicRoutes(r, subscriberHandlers)      // status-page subscribe forward and subscriber mail links
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -396,8 +401,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Status pages
 			statusPageService := statuspageservice.NewService(dbClient, statusPublisher)
+			statusPageService.ConfigureSubscriberMail(subscriberHandlers.Service.MailProblems)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
-			mountStatusPageRoutes(r, statusPageHandlers)
+			mountStatusPageRoutes(r, statusPageHandlers, subscriberHandlers.Routes)
 
 			// Tenants (membership-filtered for members, all for superadmins)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
@@ -440,6 +446,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		auditRecorder:      auditRecorder,
 		auditPruner:        auditPruner,
 		reportRunner:       reportRunner,
+		subscriberRunner:   subscriberRunner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
 		mcpErr:             mcpErr,
@@ -489,6 +496,9 @@ func (s *Server) Start() error {
 	if s.reportRunner != nil {
 		s.reportRunner.Start()
 	}
+	if s.subscriberRunner != nil {
+		s.subscriberRunner.Start()
+	}
 
 	return s.http.ListenAndServe()
 }
@@ -511,6 +521,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// records its send event.
 	if s.reportRunner != nil {
 		s.reportRunner.Stop()
+	}
+	if s.subscriberRunner != nil {
+		s.subscriberRunner.Stop()
 	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Stop()

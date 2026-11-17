@@ -144,6 +144,53 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+// reconcileOutboxNotifications turns recent incident events of the
+// status-page notification outbox (migration 000122) into pending delivery
+// rows: an incident published on a page, a public update posted on it, its
+// resolution. The API writes each outbox row in the same transaction as the
+// change, one row per page the incident is on, so fan-out is to exactly the
+// pages that publish it; the row's ID is the delivery's interval_id, which
+// the existing (status_page_id, interval_id) index keeps exactly once per
+// replica race, like a state transition. Monitor transitions keep their
+// own rule (reconcileNotifications and its classify twin); this adds
+// nothing to it. Same horizon and the same page conditions: push on,
+// public or unlisted, at least one subscriber, and the incident still on the
+// page.
+func (s *pushStore) reconcileOutboxNotifications(ctx context.Context) (int64, error) {
+	query := `
+		INSERT INTO status_page_push_deliveries
+			(status_page_id, incident_id, interval_id, kind, monitor_name)
+		SELECT o.status_page_id, o.incident_id, o.id, o.event_kind, LEFT(btrim(i.title), 200)
+		FROM status_page_notification_outbox o
+		JOIN incidents i ON i.id = o.incident_id AND i.tenant_id = o.tenant_id
+		JOIN status_pages sp ON sp.id = o.status_page_id
+		WHERE o.event_kind IN ('incident_published', 'incident_updated', 'incident_resolved')
+		  AND o.created_at > NOW() - make_interval(secs => $1)
+		  AND COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
+		  AND ` + pushVisiblePages + `
+		  AND EXISTS (
+			  SELECT 1 FROM incident_status_page_publications isp
+			  WHERE isp.incident_id = o.incident_id AND isp.status_page_id = o.status_page_id
+			    AND isp.unpublished_at IS NULL
+		  )
+		  AND EXISTS (
+			  SELECT 1 FROM status_page_push_subscriptions subs
+			  WHERE subs.status_page_id = o.status_page_id
+		  )
+		ON CONFLICT (status_page_id, interval_id) DO NOTHING
+	`
+	res, err := s.db.ExecContext(ctx, query, pushNotificationHorizon.Seconds())
+	if err != nil && pgerr.IsMissingSchema(err) {
+		// The outbox (000122/000123) is not there yet: nothing to announce.
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("reconcile incident push notifications: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // pruneDeliveries drops delivery rows past their retention. The ledger only
 // needs to remember long enough to deduplicate against the reconciler's own
 // lookback window; a week is generous.

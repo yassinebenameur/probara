@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight, EyeOff, Globe } from 'lucide-react';
 
-import { getStatusPages } from '@/lib/api';
+import { getStatusPageSubscribers, getStatusPages } from '@/lib/api';
 import type { IncidentDetail, StatusPage } from '@/lib/types';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import { sameIdSet } from '@/lib/incident-view';
+import { publishNotice, subscriptionAvailability } from '@/lib/status-page-subscribers';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
@@ -75,6 +76,28 @@ export default function IncidentPublicationEditor({
   const existingPublication = incident.publications.find(
     (publication) => publication.status_page_id === selectedStatusPageId
   );
+
+  // Confirmed email subscribers of the selected page, when it mails any:
+  // publishing there emails each of them.
+  const [confirmedSubscribers, setConfirmedSubscribers] = useState<number | null>(null);
+  useEffect(() => {
+    setConfirmedSubscribers(null);
+    if (!selectedStatusPage || !subscriptionAvailability(selectedStatusPage.settings, selectedStatusPage.visibility).active) {
+      return;
+    }
+    let cancelled = false;
+    getStatusPageSubscribers(selectedStatusPage.id, { page_size: 1 })
+      .then((response) => {
+        if (!cancelled) setConfirmedSubscribers(response.mail_ready ? response.counts.confirmed : null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStatusPage]);
+  const subscriberNotice = existingPublication
+    ? null
+    : publishNotice(selectedStatusPage?.settings, selectedStatusPage?.visibility, confirmedSubscribers);
 
   useEffect(() => {
     const publication = incident.publications.find((p) => p.status_page_id === selectedStatusPageId);
@@ -232,6 +255,7 @@ export default function IncidentPublicationEditor({
               {existingPublication && (
                 <span className="text-xs text-emerald-300">Published here</span>
               )}
+              {subscriberNotice && <span className="text-xs text-slate-500">{subscriberNotice}</span>}
             </div>
           </>
         )}

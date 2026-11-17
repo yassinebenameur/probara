@@ -180,6 +180,9 @@ type pendingDelivery struct {
 	MonitorID   uuid.UUID
 	MonitorName string
 	Kind        string
+	// IncidentID is set (and MonitorID zero) for an incident event from the
+	// notification outbox; MonitorName then holds the incident's title.
+	IncidentID uuid.UUID
 }
 
 // ClaimDeliveries takes ownership of up to limit pending notifications.
@@ -220,11 +223,22 @@ func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter t
 		JOIN status_pages sp ON sp.id = dd.status_page_id
 		WHERE d.id = c.id
 		RETURNING d.id, d.status_page_id, sp.slug, sp.title, d.monitor_id, d.monitor_name, d.kind,
-		          ` + pushVisiblePages + `
+		          ` + pushVisiblePages + `, ` + pushDeliveryIncidentColumn + `
 	`
-	rows, err := s.db.QueryContext(ctx, query, limit, staleAfter.Seconds())
-	if err != nil && pgerr.IsMissingSchema(err) {
-		rows, err = s.db.QueryContext(ctx, withoutVisibility(query), limit, staleAfter.Seconds())
+	// Each fallback serves a database a migration behind this binary
+	// (000123 adds incident_id, 000114 visibility), so a rolling upgrade
+	// keeps sending.
+	var rows *sql.Rows
+	var err error
+	for _, q := range []string{
+		query,
+		withoutIncidents(query),
+		withoutVisibility(withoutIncidents(query)),
+	} {
+		rows, err = s.db.QueryContext(ctx, q, limit, staleAfter.Seconds())
+		if err == nil || !pgerr.IsMissingSchema(err) {
+			break
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("claim push deliveries: %w", err)
@@ -235,9 +249,11 @@ func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter t
 	for rows.Next() {
 		var d pendingDelivery
 		var deliverable bool
-		if err := rows.Scan(&d.ID, &d.PageID, &d.Slug, &d.PageTitle, &d.MonitorID, &d.MonitorName, &d.Kind, &deliverable); err != nil {
+		var monitorID, incidentID uuid.NullUUID
+		if err := rows.Scan(&d.ID, &d.PageID, &d.Slug, &d.PageTitle, &monitorID, &d.MonitorName, &d.Kind, &deliverable, &incidentID); err != nil {
 			return nil, fmt.Errorf("scan claimed push delivery: %w", err)
 		}
+		d.MonitorID, d.IncidentID = monitorID.UUID, incidentID.UUID
 		if deliverable {
 			out = append(out, d)
 		}
@@ -293,4 +309,13 @@ const pushVisiblePages = "sp.visibility IN ('public', 'unlisted')"
 // has not run migration 000114 yet, where no page can be gated.
 func withoutVisibility(query string) string {
 	return strings.ReplaceAll(query, pushVisiblePages, "TRUE")
+}
+
+// pushDeliveryIncidentColumn is the incident of an outbox-driven delivery
+// (migration 000123); withoutIncidents reads it as NULL on an older
+// database, where every delivery is a monitor transition.
+const pushDeliveryIncidentColumn = "d.incident_id"
+
+func withoutIncidents(query string) string {
+	return strings.ReplaceAll(query, pushDeliveryIncidentColumn, "NULL::uuid")
 }

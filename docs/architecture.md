@@ -15,7 +15,7 @@ website (`website/`) are separate applications.
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
 | `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, domain expiry, mesh, and offline-location alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
-| `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery; enforce page visibility (password and kiosk-token hashes are written by the API, read here) | PostgreSQL reads and subscription/delivery writes; NATS |
+| `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery; enforce page visibility (password and kiosk-token hashes are written by the API, read here); forward email subscription requests to the API, which stores subscribers | PostgreSQL reads and subscription/delivery writes; NATS; the API's public subscriber routes |
 | `ai-service/` | Local CPU inference (Python, FastAPI) for incident analysis, automatic alert triage and dependency suggestions: authenticated `/v1/decisions` returning probabilities over the closed choices in `shared/ai/catalogue.json`; bundled fine-tuned Laya head, offline | None: no PostgreSQL, NATS or egress. Called only by the API and the database-connected worker |
 | `cmd/discovery-collector` | Namespaced read-only Kubernetes inventory collection; complete snapshot uploads | Kubernetes API reads; HTTPS to Probara only |
 | `web/` | Authenticated operator UI and `/api` proxy, including cookies and SSE streams; the MCP OAuth consent screen and the root `/.well-known/` discovery proxy | Go API |
@@ -280,6 +280,31 @@ backoff). Missed closes are caught up (the last three, oldest first). Recipients
 signed `shared/actionlink` token on the public `/api/v1/report-unsubscribe`
 route. The SLA service re-plans a schedule's next send when the SLA's period
 or timezone changes.
+
+Status-page email subscribers are stored and mailed by the **API** too
+(`api/internal/services/pagesubscribers`); the status-page service stays
+read-only and only forwards a visitor's subscribe form and subscription
+links (`/public/status/{slug}/subscribe`, `/subscription…`, behind its
+visibility gate) to the public API routes `/api/v1/public/status-pages/{slug}/subscribe`
+and `/api/v1/public/status-page-subscriptions/{confirm,unsubscribe}`, with
+nothing that identifies the visitor (it throttles per client itself). What
+subscribers hear about comes only from the notification outbox
+(`status_page_notification_outbox`, written by `api/internal/services/pagenotify`
+in the same transaction as each trigger: an incident published on a page, a
+public update, a resolution, a maintenance window scheduled). Every API
+replica runs the subscriber runner (15-second loop, woken by a subscribe):
+it sends owed confirmation mails, plans each pending outbox row once (`FOR
+UPDATE SKIP LOCKED`; content rendered and one
+`status_page_notification_deliveries` row per confirmed subscriber, in one
+transaction) and sends deliveries round-robin across rows with the report
+runner's `claimed` → `sending` → `sent`/`uncertain` states. The same runner
+publishes outages to pages that opted into automatic publishing (through
+`shared/autoincident`, the alerter's automatic-incident lookup and lock),
+resolves them on recovery, and announces the start of announced one-off
+maintenance; those run without mail configured. The status-page push sender
+also reads the outbox's incident rows into its delivery ledger, so incident
+events reach browser subscribers through the same reconcile-and-claim loop
+as state transitions.
 
 ## Shared code and security boundaries
 

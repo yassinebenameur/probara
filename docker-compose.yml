@@ -162,6 +162,10 @@ services:
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       # Shared with the status-page service; see its definition below.
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
+      # The status pages' public origin, as the status-page service has it:
+      # subscriber mail links back to pages there (subscriptions also need
+      # SMTP_* and APP_BASE_URL, which this file does not set).
+      STATUS_PAGE_BASE_URL: "http://localhost:8082"
       # OIDC SSO (off by default; `docker compose --profile sso up` starts a
       # dex test IdP matching these values — see infra/dex/config.yaml).
       OIDC_ENABLED: "${OIDC_ENABLED:-false}"
@@ -359,6 +363,10 @@ services:
       NATS_URL: "nats://nats:4222"
       STATUS_PAGE_BASE_URL: "http://localhost:8082"
       STATUS_PAGE_API_BASE_URL: "http://api:8080"
+      # Where visitors' email subscription requests are forwarded (the API
+      # stores subscribers; this service stays read-only). Defaults to
+      # STATUS_PAGE_API_BASE_URL.
+      STATUS_PAGE_INTERNAL_API_URL: "http://api:8080"
       # Shared with the api service; gates draft-template previews with a
       # token minted by the API. Leave unset to allow open previews (dev).
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"

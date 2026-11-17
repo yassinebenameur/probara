@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
+	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 )
@@ -201,6 +202,11 @@ func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.Cr
 			return nil, err
 		}
 	}
+	// Announce it to the subscribers of the pages it covers (none when it
+	// starts now, as a snooze does).
+	if err := pagenotify.MaintenanceScheduledTx(ctx, tx, tenantID, windowID); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
@@ -376,6 +382,13 @@ func (s *Service) Update(ctx context.Context, tenantID, windowID uuid.UUID, req 
 			return nil, err
 		}
 		if err := maintenance.Retarget(ctx, tx, windowID, monitorIDs, now); err != nil {
+			return nil, err
+		}
+	}
+	// A changed schedule or target set is announced again; a title or
+	// description edit is not.
+	if !next.SameAs(old) || req.MonitorIDs != nil {
+		if err := pagenotify.MaintenanceScheduledTx(ctx, tx, tenantID, windowID); err != nil {
 			return nil, err
 		}
 	}

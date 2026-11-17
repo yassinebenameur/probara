@@ -12,30 +12,15 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/statuspagesql"
 )
 
 // pagePublicNameSQL is the name the page shows for the monitor aliased by
-// monAlias on the page pageExpr: its section display name, else its legacy
-// flat-layout display name, else the monitor's own name, trimmed the way
-// scanMonitorStatuses trims it. Incident and maintenance "affected" lists
-// use it so they never print an internal name the component list hides.
-// Both arguments are trusted SQL (an alias and a placeholder).
+// monAlias on the page pageExpr (shared/statuspagesql, which the API's
+// subscriber mail reads too). Incident and maintenance "affected" lists use
+// it so they never print an internal name the component list hides.
 func pagePublicNameSQL(pageExpr, monAlias string) string {
-	return `COALESCE((
-		SELECT NULLIF(btrim(dn.display_name), '')
-		FROM (
-			SELECT spsm.display_name, 0 AS priority
-			FROM status_page_section_monitors spsm
-			JOIN status_page_sections sps ON sps.id = spsm.section_id
-			WHERE sps.status_page_id = ` + pageExpr + ` AND spsm.monitor_id = ` + monAlias + `.id
-			UNION ALL
-			SELECT spm.display_name, 1 AS priority
-			FROM status_page_monitors spm
-			WHERE spm.status_page_id = ` + pageExpr + ` AND spm.monitor_id = ` + monAlias + `.id
-		) dn
-		ORDER BY dn.priority
-		LIMIT 1
-	), btrim(` + monAlias + `.name))`
+	return statuspagesql.PublicNameSQL(pageExpr, monAlias)
 }
 
 // loadMaintenanceWindows returns the maintenance windows with an occurrence

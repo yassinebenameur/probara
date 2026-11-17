@@ -242,6 +242,12 @@ var routeTable = []struct {
 	{"/preview/draft", classPreviewToken, http.MethodGet},
 	{"/push/subscribe", classGated, http.MethodPost},
 	{"/push/unsubscribe", classGated, http.MethodPost},
+	// Email subscriptions (subscribe.go): forwarded to the API after the
+	// gate; gated pages answer "not available" behind it.
+	{"/subscribe", classGated, http.MethodPost},
+	{"/subscription", classGated, http.MethodGet},
+	{"/subscription/confirm", classGated, http.MethodPost},
+	{"/subscription/unsubscribe", classGated, http.MethodPost},
 	{"/unlock", classUnlock, http.MethodPost},
 	// Page add-ons (addons.go pageAddonRoutes): gated like the page, and
 	// private on a gated page (gatedPageRequest).

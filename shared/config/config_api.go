@@ -78,6 +78,11 @@ type APIConfig struct {
 	// minute (excess gets 429 + Retry-After, which the collector retries).
 	OTLPMaxSeriesPerMonitor int
 	OTLPMonitorRatePerMin   int
+	// StatusPageBaseURL is STATUS_PAGE_BASE_URL, the public origin of status
+	// pages (the variable the status-page service reads too). Subscriber
+	// mail links back to pages there; empty means pages cannot take email
+	// subscriptions.
+	StatusPageBaseURL string
 	// Client IP resolution, security headers, CORS and the general rate
 	// limit (config_edge.go).
 	EdgeConfig
@@ -227,6 +232,8 @@ func LoadAPIConfig() (*APIConfig, error) {
 	// PUBLIC_BASE_URL: externally-reachable URL of the API, used for
 	// agent install scripts and push webhook URLs. Trailing slash is stripped.
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/")
+
+	cfg.StatusPageBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("STATUS_PAGE_BASE_URL")), "/")
 
 	// PUBLIC_NATS_URL: externally-reachable NATS address baked into
 	// private-location worker deploy snippets.

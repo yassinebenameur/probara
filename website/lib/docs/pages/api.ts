@@ -104,6 +104,11 @@ export const API_PAGE: DocPage = {
                 "Used only on `/api/v1/report-unsubscribe`, in the `X-Action-Token` header or, for a mail client's one-click unsubscribe POST, the `token` query parameter. It comes from an [emailed SLA report](/docs/slas/#schedules) and authorizes removing that one recipient from that one schedule for a year.",
             },
             {
+              term: "Subscription token",
+              description:
+                "Used only on `/api/v1/public/status-page-subscriptions/confirm` and `…/unsubscribe`, in the `X-Action-Token` header, a JSON body `{\"token\"}` or, for a mail client's one-click unsubscribe POST, the `token` query parameter. It comes from a [status-page subscriber email](/docs/status-pages/#email-subscribers): a confirmation token confirms that one address for 48 hours, an unsubscribe token removes it for a year.",
+            },
+            {
               term: "MCP access token",
               description:
                 "`Bearer pbm_at_…`, issued to an AI agent by the [MCP sign-in](/docs/mcp/#authentication). Valid only on `/api/v1/mcp`: every tool call there runs as one of the routes below with the same checks. A direct REST call with it returns 401.",
@@ -921,12 +926,40 @@ export const API_PAGE: DocPage = {
               "`POST /api/v1/status-pages/{id}/access-tokens/{accessTokenId}/revoke`",
               "Revoke a kiosk token (idempotent)",
             ],
+            [
+              "`GET /api/v1/status-pages/{id}/subscribers`",
+              "The page's [email subscribers](/docs/status-pages/#email-subscribers), newest first (`page`, `page_size`): `email`, `state` (`pending` or `confirmed`) and dates, with `counts`, the per-page `limit`, `mail_ready` and `mail_problems`",
+            ],
+            [
+              "`GET /api/v1/status-pages/{id}/subscribers/export`",
+              "Every subscriber as CSV (`email,state,subscribed_at,confirmed_at`). Audited as `status-page.subscribers-export`",
+            ],
+            [
+              "`POST /api/v1/status-pages/{id}/subscribers/{subscriberId}/remove`",
+              "Write; delete one subscriber and what was still waiting to be mailed to them. Audited as `status-page.remove`",
+            ],
+            [
+              "`POST /api/v1/public/status-pages/{slug}/subscribe`",
+              "Public; what the status-page service forwards a visitor's form to (`{\"email\"}`). `202` `{\"state\": \"check_inbox\"}` for every address the page accepts, whatever its state; `400` for an address that is not a plain one, `404` for a page that takes no subscriptions (password and private pages included), `429` past a page limit",
+            ],
+            [
+              "`POST /api/v1/public/status-page-subscriptions/confirm`",
+              "Public; subscription token. `confirmed` (200, also when already), `expired` (410), `invalid` (404), with `page_title` and `page_slug` when valid. Audited as `status-page.subscriber-confirm`",
+            ],
+            [
+              "`GET /api/v1/public/status-page-subscriptions/unsubscribe`",
+              "Public; a browser opening the one-click URL is redirected (303) to the page's unsubscribe confirmation, token in the fragment. Never unsubscribes",
+            ],
+            [
+              "`POST /api/v1/public/status-page-subscriptions/unsubscribe`",
+              "Public; subscription token (RFC 8058 one-click, any body). Deletes the address: `unsubscribed` (200, also when already), `expired` (410), `invalid` (404). Audited as `status-page.subscriber-unsubscribe` with a hash of the address",
+            ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Create and update take `visibility` (`public`, `unlisted`, `password`, `private`) and a write-only `password`; reads return `visibility` and `has_password`. See [visibility and kiosk tokens](/docs/status-pages/#visibility).",
+            "Create and update take `visibility` (`public`, `unlisted`, `password`, `private`) and a write-only `password`; reads return `visibility` and `has_password`. See [visibility and kiosk tokens](/docs/status-pages/#visibility). Turning `settings.enable_email_subscriptions` on is refused with `400` while subscriber mail is not configured on the API.",
         },
         {
           type: "table",
@@ -955,7 +988,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, the [feed, `summary.json` and badges](/docs/status-pages/#feed-summary-badges), plus [draft preview](/docs/status-pages/#preview-security). Do not use those public routes to mutate configuration.",
+            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, the [feed, `summary.json` and badges](/docs/status-pages/#feed-summary-badges), plus [draft preview](/docs/status-pages/#preview-security), and forwards the [subscribe form and subscription links](/docs/status-pages/#email-subscribers) to the public API routes above. Do not use those public routes to mutate configuration.",
         },
       ],
     },

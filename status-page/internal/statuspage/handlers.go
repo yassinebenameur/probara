@@ -45,6 +45,10 @@ type Handlers struct {
 	clientIPs *clientip.Resolver
 	// access is the visibility gate every page route passes (access.go).
 	access *accessGate
+	// subscribes throttles the email subscription routes per client and
+	// page; subscribeClient forwards them to the API (subscribe.go).
+	subscribes      *subscribeThrottle
+	subscribeClient *http.Client
 }
 
 // NewHandlers creates a new status page handlers
@@ -74,6 +78,12 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		pushLimiter: newPushRateLimiter(),
 		clientIPs:   newClientIPResolver(cfg),
 		access:      newAccessGate(store, secret, cookieSecure),
+		subscribes:  newSubscribeThrottle(),
+		// No redirects: the API's answer is the status and body it sent.
+		subscribeClient: &http.Client{
+			Timeout:       subscribeForwardTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 }
 
@@ -122,7 +132,9 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	// route below is read-only, so the GET guard sits here rather than above
 	// the sub-routing.
 	isPushRoute := rest == "/push/subscribe" || rest == "/push/unsubscribe"
-	if !isPushRoute && r.Method != http.MethodGet {
+	// The email subscription routes (subscribe.go) check their own methods.
+	isSubscriptionRoute := rest == subscribeSuffix || rest == subscriptionSuffix || rest == confirmSuffix || rest == unsubscribeSuffix
+	if !isPushRoute && !isSubscriptionRoute && r.Method != http.MethodGet {
 		http.Error(aw, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -146,6 +158,10 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		h.HandlePushUnsubscribe(aw, r, slug)
 		return
 	default:
+		// Email subscriptions (subscribe.go): forwarded to the API.
+		if h.handleSubscription(aw, r, slug, rest, acc) {
+			return
+		}
 		// Page add-ons (addons.go): summary.json, badges and the Atom feed.
 		// They read the slug-keyed render and feed caches, so they are
 		// served only from here, after authorize; on a gated page r carries
@@ -240,6 +256,7 @@ func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage
 		}
 		data.Visibility = visibility
 		data.CanonicalURL = h.canonicalURL(slug)
+		data.SubscribeFormEnabled = h.subscriptionsOffered(visibility, data.EmailSubscriptionsEnabled)
 		view := buildStatusPageRenderView(data, h.apiProxyEnabled())
 		html, customErr, err := renderStatusPageView(data, view)
 		if customErr != nil {
@@ -358,6 +375,7 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 	}
 	data.CanonicalURL = h.canonicalURL(slug)
 	data.Visibility = pageVisibility(r.Context())
+	data.SubscribeFormEnabled = h.subscriptionsOffered(data.Visibility, data.EmailSubscriptionsEnabled)
 
 	var html string
 	if hasDraft {

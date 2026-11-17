@@ -97,3 +97,14 @@ func TestParseStatusPageSettings_SEOFromAPIShape(t *testing.T) {
 		t.Fatal("pages stored before the setting must stay indexable")
 	}
 }
+
+// The read mirror of enable_email_subscriptions (the API's write path has the
+// matching round-trip test): off by default and for older settings.
+func TestParseStatusPageSettings_EmailSubscriptions(t *testing.T) {
+	if defaultStatusPageSettings().EnableEmailSubscriptions || parseStatusPageSettings([]byte(`{"show_footer":false}`)).EnableEmailSubscriptions {
+		t.Fatal("email subscriptions on by default")
+	}
+	if !parseStatusPageSettings([]byte(`{"enable_email_subscriptions":true,"auto_publish_incidents":true}`)).EnableEmailSubscriptions {
+		t.Fatal("enable_email_subscriptions not read")
+	}
+}

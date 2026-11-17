@@ -65,6 +65,12 @@ spec:
         - name: STATUS_PAGE_BASE_URL
           value: "{{ .Values.statusPage.baseUrl }}"
         {{- end }}
+        # Visitors' email subscription requests are forwarded to the API
+        # in-cluster (the API stores subscribers; this service stays
+        # read-only). Not STATUS_PAGE_API_BASE_URL, which would also open
+        # the /_sp_api customizer proxy.
+        - name: STATUS_PAGE_INTERNAL_API_URL
+          value: {{ printf "http://%s-api:%v" (include "monitoring-platform.fullname" .) .Values.api.httpPort | quote }}
         {{- if .Values.statusPage.vapid.publicKey }}
         # Rendered as a literal on purpose. The VAPID public key is published
         # inside every status page as the applicationServerKey, so it is not a

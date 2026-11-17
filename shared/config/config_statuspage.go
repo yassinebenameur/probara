@@ -58,6 +58,11 @@ type StatusPageConfig struct {
 	// CookieSecure is STATUS_PAGE_COOKIE_SECURE: nil when unset. See
 	// SessionCookieSecure.
 	CookieSecure *bool
+	// InternalAPIURL is where the service forwards visitors' email
+	// subscription requests (the API stores subscribers; this service stays
+	// read-only): STATUS_PAGE_INTERNAL_API_URL, else STATUS_PAGE_API_BASE_URL.
+	// Empty means no page shows a subscribe form.
+	InternalAPIURL string
 }
 
 // SessionCookieSecure decides the visitor session cookie's Secure flag, like
@@ -125,6 +130,14 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 			return nil, fmt.Errorf("invalid STATUS_PAGE_COOKIE_SECURE: %w", err)
 		}
 		cfg.CookieSecure = &secure
+	}
+
+	// A separate variable from STATUS_PAGE_API_BASE_URL, which also turns
+	// on the /_sp_api customizer proxy: an install can forward subscriptions
+	// to the API without exposing that proxy.
+	cfg.InternalAPIURL = strings.TrimRight(strings.TrimSpace(os.Getenv("STATUS_PAGE_INTERNAL_API_URL")), "/")
+	if cfg.InternalAPIURL == "" {
+		cfg.InternalAPIURL = strings.TrimRight(strings.TrimSpace(cfg.APIBaseURL), "/")
 	}
 
 	cfg.SessionSecret = strings.TrimSpace(os.Getenv("STATUS_PAGE_SESSION_SECRET"))

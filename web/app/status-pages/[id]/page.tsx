@@ -7,6 +7,7 @@ import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import KioskTokensPanel from '@/components/status-pages/KioskTokensPanel';
+import SubscribersPanel from '@/components/status-pages/SubscribersPanel';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
@@ -114,6 +115,8 @@ export default function EditStatusPagePage() {
         onSubmit={handleSubmit}
         loading={saving}
       />
+
+      <SubscribersPanel statusPage={statusPage} />
 
       <KioskTokensPanel statusPage={statusPage} />
     </Page>

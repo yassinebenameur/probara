@@ -48,6 +48,17 @@ export interface StatusPageSettings {
   seo_description?: string;
   /** Let search engines index the page. On by default; off sends noindex. */
   allow_search_indexing?: boolean;
+  /**
+   * Show a subscribe form on the public page (double opt-in email updates).
+   * Off by default. Turning it on needs subscriber mail configured on the
+   * API; it has no effect on password and private pages.
+   */
+  enable_email_subscriptions?: boolean;
+  /**
+   * Publish a monitor's outage to the page once it has lasted 5 minutes,
+   * and resolve it when the monitor recovers. Off by default.
+   */
+  auto_publish_incidents?: boolean;
 }
 
 export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';

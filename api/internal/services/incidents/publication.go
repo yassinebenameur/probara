@@ -5,6 +5,7 @@ package incidents
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -61,33 +63,8 @@ func (s *Service) PublishIncidentToStatusPage(ctx context.Context, tenantID, inc
 		return s.GetIncident(ctx, tenantID, incidentID)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO incident_status_page_publications (
-			incident_id, status_page_id, tenant_id, published_at, unpublished_at, created_at, updated_at
-		) VALUES ($1, $2, $3, NOW(), NULL, NOW(), NOW())
-		ON CONFLICT (incident_id, status_page_id) DO UPDATE
-		SET tenant_id = EXCLUDED.tenant_id,
-			published_at = NOW(),
-			unpublished_at = NULL,
-			updated_at = NOW()
-	`, incidentID, statusPageID, tenantID); err != nil {
-		return nil, fmt.Errorf("upsert incident publication: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM incident_status_page_monitors
-		WHERE incident_id = $1 AND status_page_id = $2
-	`, incidentID, statusPageID); err != nil {
-		return nil, fmt.Errorf("replace incident publication monitors: %w", err)
-	}
-
-	for _, monitorID := range monitorIDs {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO incident_status_page_monitors (incident_id, status_page_id, monitor_id, created_at)
-			VALUES ($1, $2, $3, NOW())
-		`, incidentID, statusPageID, monitorID); err != nil {
-			return nil, fmt.Errorf("insert incident publication monitor: %w", err)
-		}
+	if _, err := PublishTx(ctx, tx, tenantID, incidentID, statusPageID, monitorIDs, false); err != nil {
+		return nil, err
 	}
 
 	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Incident published to status page", map[string]interface{}{
@@ -104,6 +81,66 @@ func (s *Service) PublishIncidentToStatusPage(ctx context.Context, tenantID, inc
 	s.publishStatusPageRefresh(tenantID, statusPageID)
 
 	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
+// PublishTx puts the incident on the page with exactly monitorIDs as its
+// affected components, in the caller's transaction, and reports whether the
+// page newly shows it (it was not published there, or was taken down). Only
+// then does it write the page's notification outbox row
+// (pagenotify.IncidentPublishedTx): changing the components of a live
+// publication announces nothing. auto marks a publication made by automatic
+// outage publishing (pagesubscribers); an operator publishing the same
+// incident again makes it theirs. The caller has checked the incident, the
+// page and the monitors belong to the tenant.
+func PublishTx(ctx context.Context, tx *sql.Tx, tenantID, incidentID, statusPageID uuid.UUID, monitorIDs []uuid.UUID, auto bool) (bool, error) {
+	var wasLive bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT unpublished_at IS NULL
+		FROM incident_status_page_publications
+		WHERE incident_id = $1 AND status_page_id = $2
+		FOR UPDATE
+	`, incidentID, statusPageID).Scan(&wasLive)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("load incident publication: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO incident_status_page_publications (
+			incident_id, status_page_id, tenant_id, published_at, unpublished_at, created_at, updated_at, auto_published
+		) VALUES ($1, $2, $3, NOW(), NULL, NOW(), NOW(), $4)
+		ON CONFLICT (incident_id, status_page_id) DO UPDATE
+		SET tenant_id = EXCLUDED.tenant_id,
+			published_at = NOW(),
+			unpublished_at = NULL,
+			updated_at = NOW(),
+			auto_published = EXCLUDED.auto_published
+	`, incidentID, statusPageID, tenantID, auto); err != nil {
+		return false, fmt.Errorf("upsert incident publication: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM incident_status_page_monitors
+		WHERE incident_id = $1 AND status_page_id = $2
+	`, incidentID, statusPageID); err != nil {
+		return false, fmt.Errorf("replace incident publication monitors: %w", err)
+	}
+
+	for _, monitorID := range monitorIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO incident_status_page_monitors (incident_id, status_page_id, monitor_id, created_at)
+			VALUES ($1, $2, $3, NOW())
+		`, incidentID, statusPageID, monitorID); err != nil {
+			return false, fmt.Errorf("insert incident publication monitor: %w", err)
+		}
+	}
+
+	if wasLive {
+		return false, nil
+	}
+	if err := pagenotify.IncidentPublishedTx(ctx, tx, tenantID, incidentID, statusPageID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // UnpublishIncidentFromStatusPage removes an incident publication from a status page.

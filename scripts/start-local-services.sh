@@ -214,7 +214,8 @@ start_service api ./api/cmd/api 8080 9090 \
   ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-your-secret-key-change-in-production}" \
   ADMIN_ACCESS_TTL_MINUTES="${ADMIN_ACCESS_TTL_MINUTES:-15}" \
   ADMIN_REFRESH_TTL_DAYS="${ADMIN_REFRESH_TTL_DAYS:-30}" \
-  ADMIN_COOKIE_SECURE="${ADMIN_COOKIE_SECURE:-false}"
+  ADMIN_COOKIE_SECURE="${ADMIN_COOKIE_SECURE:-false}" \
+  STATUS_PAGE_BASE_URL="${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
 
 start_service scheduler ./scheduler/cmd/scheduler 8081 9091 \
   CHECK_JOB_STREAM="${CHECK_JOB_STREAM:-CHECK_JOBS}" \

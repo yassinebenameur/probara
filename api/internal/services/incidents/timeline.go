@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/incidentrecovery"
 )
@@ -36,6 +37,13 @@ func (s *Service) CreateIncidentTimelineEntry(ctx context.Context, tenantID, inc
 
 	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, req.EntryType, strings.TrimSpace(req.Message), req.Metadata); err != nil {
 		return nil, err
+	}
+	// A public update reaches the subscribers of every page the incident is
+	// on (the notification outbox, written with the entry).
+	if req.EntryType == models.IncidentTimelineEntryTypePublicUpdate {
+		if err := pagenotify.IncidentUpdatedTx(ctx, tx, tenantID, incidentID); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

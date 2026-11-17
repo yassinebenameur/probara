@@ -47,9 +47,12 @@ func TestPushStore_BeforeMigrationFallsBackWithoutVisibility(t *testing.T) {
 		t.Fatalf("reconcile = %d %v", n, err)
 	}
 
+	// The claim also reads the incident column of migration 000123, so a
+	// database before 000114 refuses two variants before the oldest one.
 	mock.ExpectQuery("with").WillReturnError(undefinedColumn)
-	mock.ExpectQuery("without").WillReturnRows(sqlmock.NewRows([]string{"id", "page", "slug", "title", "monitor", "name", "kind", "deliverable"}).
-		AddRow(uuid.New(), pageID, "acme", "Acme", uuid.New(), "API", "down", true))
+	mock.ExpectQuery("with").WillReturnError(undefinedColumn)
+	mock.ExpectQuery("without").WillReturnRows(sqlmock.NewRows([]string{"id", "page", "slug", "title", "monitor", "name", "kind", "deliverable", "incident"}).
+		AddRow(uuid.New(), pageID, "acme", "Acme", uuid.New(), "API", "down", true, nil))
 	claimed, err := store.ClaimDeliveries(ctx, 10, time.Minute)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim = %v %v", claimed, err)
