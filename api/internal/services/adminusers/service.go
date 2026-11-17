@@ -27,6 +27,9 @@ var (
 	ErrCannotDeleteLastUser  = errors.New("cannot delete the last active superadmin")
 	ErrCannotDemoteLastAdmin = errors.New("cannot demote the last active superadmin")
 	ErrBootstrapClosed       = errors.New("admin bootstrap is disabled because an admin already exists")
+	// ErrWorkspaceNotFound: a membership names a workspace that does not
+	// exist or was deleted.
+	ErrWorkspaceNotFound = errors.New("workspace not found")
 )
 
 const (
@@ -494,11 +497,21 @@ func (r *sqlRepository) UpdateUser(ctx context.Context, userID uuid.UUID, userna
 
 func insertMembershipsTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID, memberships []models.MembershipInput, now time.Time) error {
 	for _, m := range memberships {
-		if _, err := tx.ExecContext(ctx, `
+		// Only a live workspace: a deleted one's tenant row still satisfies
+		// the foreign key until the purge removes it, and the membership
+		// would be invisible and refused anyway.
+		res, err := tx.ExecContext(ctx, `
 			INSERT INTO tenant_memberships (id, admin_user_id, tenant_id, role, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $5)
-		`, uuid.New(), userID, m.TenantID, m.Role, now); err != nil {
+			SELECT $1, $2, $3::uuid, $4, $5, $5
+			WHERE `+tenancy.LiveTenantSQL("$3::uuid")+`
+		`, uuid.New(), userID, m.TenantID, m.Role, now)
+		if err != nil {
 			return fmt.Errorf("failed to insert membership for tenant %s: %w", m.TenantID, err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("%w: %s", ErrWorkspaceNotFound, m.TenantID)
 		}
 	}
 	return nil

@@ -305,3 +305,88 @@ func TestDeletedWorkspaceCredentialsAreRefused(t *testing.T) {
 	require.Zero(t, memberships, "memberships go with the delete")
 	require.Zero(t, grants, "MCP connections are revoked with the delete")
 }
+
+// A tenant ID that does not name a workspace the caller can open gets one
+// answer, 404 workspace_not_found, whether the workspace was deleted, is
+// already purged, never existed, or (for a member) is not theirs: a member
+// learns nothing about other workspaces, and a browser holding a stale ID
+// always gets the code that makes it re-select. The workspace list itself
+// must be fetched without the header (the web client never sends it there).
+func TestWorkspaceNotFoundForEveryUnopenableTenant(t *testing.T) {
+	f := newMCPFixture(t)
+	f.createUser("root", auth.PlatformRoleSuperadmin, nil)
+	f.createUser("member", auth.PlatformRoleMember, []models.MembershipInput{{TenantID: f.tenantA, Role: auth.RoleViewer}})
+	root, member := f.login("root"), f.login("member")
+	doomed := f.tenantB
+
+	// Not a member of a live workspace: the same answer as for one that
+	// does not exist.
+	for _, id := range []uuid.UUID{doomed, uuid.New()} {
+		status, body := f.call(member, "", http.MethodGet, "/api/v1/monitors", id, nil)
+		require.Equal(t, http.StatusNotFound, status, body)
+		require.Contains(t, body, `"workspace_not_found"`)
+	}
+	status, body := f.call(root, "", http.MethodGet, "/api/v1/monitors", uuid.New(), nil)
+	require.Equal(t, http.StatusNotFound, status, "superadmin, unknown workspace: %s", body)
+	require.Contains(t, body, `"workspace_not_found"`)
+
+	status, body = f.call(root, "", http.MethodDelete, "/api/v1/tenants/"+doomed.String(), uuid.Nil, map[string]string{"confirm_name": "Tenant B"})
+	require.Equal(t, http.StatusOK, status, body)
+
+	// The list route with the deleted workspace still selected answers like
+	// any other route scoped to it; without the header it lists the rest.
+	status, body = f.call(root, "", http.MethodGet, "/api/v1/tenants", doomed, nil)
+	require.Equal(t, http.StatusNotFound, status, body)
+	require.Contains(t, body, `"workspace_not_found"`)
+	status, body = f.call(root, "", http.MethodGet, "/api/v1/tenants", uuid.Nil, nil)
+	require.Equal(t, http.StatusOK, status, body)
+	require.NotContains(t, body, doomed.String())
+
+	// Once purged (the row is gone), the answer is the same.
+	_, err := f.db.ExecContext(f.ctx, `DELETE FROM tenants WHERE id = $1`, doomed)
+	require.NoError(t, err)
+	status, body = f.call(root, "", http.MethodGet, "/api/v1/monitors", doomed, nil)
+	require.Equal(t, http.StatusNotFound, status, "superadmin, purged workspace: %s", body)
+	require.Contains(t, body, `"workspace_not_found"`)
+}
+
+// Memberships and SSO group mappings only name live workspaces: a deleted
+// one (row still there until the purge) and an unknown one are both refused
+// with "workspace not found", never stored or turned into a 500.
+func TestMembershipsAndSSOMappingsRefuseDeadWorkspaces(t *testing.T) {
+	f := newMCPFixture(t)
+	f.createUser("root", auth.PlatformRoleSuperadmin, nil)
+	f.createUser("member", auth.PlatformRoleMember, nil)
+	root := f.login("root")
+	var memberID uuid.UUID
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT id FROM admin_users WHERE username = 'member'`).Scan(&memberID))
+	status, body := f.call(root, "", http.MethodDelete, "/api/v1/tenants/"+f.tenantB.String(), uuid.Nil, map[string]string{"confirm_name": "Tenant B"})
+	require.Equal(t, http.StatusOK, status, body)
+
+	for _, dead := range []uuid.UUID{f.tenantB, uuid.New()} {
+		memberships := []models.MembershipInput{{TenantID: f.tenantA, Role: auth.RoleViewer}, {TenantID: dead, Role: auth.RoleViewer}}
+		status, body = f.call(root, "", http.MethodPatch, "/api/v1/users/"+memberID.String(), uuid.Nil,
+			models.UpdateAdminUserRequest{Memberships: &memberships})
+		require.Equal(t, http.StatusUnprocessableEntity, status, "membership edit: %s", body)
+		require.Contains(t, body, "workspace not found")
+
+		password := "correct-horse-battery"
+		status, body = f.call(root, "", http.MethodPost, "/api/v1/users", uuid.Nil, models.CreateAdminUserRequest{
+			Username: "new-" + dead.String()[:8], Password: &password, PlatformRole: auth.PlatformRoleMember, Memberships: memberships,
+		})
+		require.Equal(t, http.StatusUnprocessableEntity, status, "user create: %s", body)
+
+		tenant := dead.String()
+		status, body = f.call(root, "", http.MethodPost, "/api/v1/oidc-group-mappings", uuid.Nil, models.CreateOIDCGroupMappingRequest{
+			GroupName: "ops-" + tenant[:8], TenantID: &tenant, Role: auth.RoleViewer,
+		})
+		require.Equal(t, http.StatusUnprocessableEntity, status, "SSO mapping: %s", body)
+		require.Contains(t, body, "workspace not found")
+	}
+	var memberships, mappings int
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `
+		SELECT (SELECT COUNT(*) FROM tenant_memberships WHERE admin_user_id = $1),
+		       (SELECT COUNT(*) FROM oidc_group_mappings)`, memberID).Scan(&memberships, &mappings))
+	require.Zero(t, memberships, "a refused edit changes nothing (the transaction rolls back)")
+	require.Zero(t, mappings)
+}

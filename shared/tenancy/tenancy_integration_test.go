@@ -40,11 +40,4 @@ func TestLiveAndDeletedTenantSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect("deleted", tenantID, false, true)
-
-	// A binary ahead of migration 000116 (no deleted_at column): nothing is
-	// deleted, and neither predicate may error.
-	if _, err := dbClient.ExecContext(ctx, `ALTER TABLE tenants DROP COLUMN deleted_at CASCADE`); err != nil {
-		t.Fatal(err)
-	}
-	expect("pre-migration", tenantID, true, false)
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // Workspace purge: removes soft-deleted workspaces (tenants.deleted_at, see
@@ -172,6 +175,52 @@ var workspacePurgePlan = []purgeStep{
 	byTenant("ai_settings"),
 }
 
+// workspaceScrubPlan blanks the secret-bearing columns of a deleted
+// workspace before the purge deletes anything, so its credentials do not wait
+// at rest behind the history tables (the rows themselves go late, in plan
+// order): channel configs (provider tokens, webhook URLs, passwords), monitor
+// config secrets (every field secrets.MonitorSecretFields and
+// MonitorSecretMapFields know, of any type) and push tokens, private-location
+// worker credentials, and the legacy AI provider key. Each step updates only
+// rows still holding a secret, in bounded batches, so it is a no-op once done.
+// Visitor push keys (status_page_push_subscriptions) and the token, key and
+// code hashes are whole rows deleted in the plan's first steps.
+func workspaceScrubPlan() []purgeStep {
+	return []purgeStep{
+		{table: "alert_channels (secrets)", sql: `UPDATE alert_channels SET config = '{}'::jsonb
+			WHERE ctid = ANY(ARRAY(SELECT ctid FROM alert_channels
+				WHERE tenant_id = $1 AND config <> '{}'::jsonb LIMIT $2))`},
+		{table: "monitors (secrets)", sql: `UPDATE monitors SET config = config - ` + monitorSecretKeysSQL + `, push_token = NULL
+			WHERE ctid = ANY(ARRAY(SELECT ctid FROM monitors
+				WHERE tenant_id = $1 AND (config ?| ` + monitorSecretKeysSQL + ` OR push_token IS NOT NULL) LIMIT $2))`},
+		{table: "locations (secrets)", sql: `UPDATE locations SET worker_credential = NULL
+			WHERE ctid = ANY(ARRAY(SELECT ctid FROM locations
+				WHERE tenant_id = $1 AND worker_credential IS NOT NULL LIMIT $2))`},
+		{table: "ai_settings (secrets)", sql: `UPDATE ai_settings SET api_key_encrypted = ''
+			WHERE ctid = ANY(ARRAY(SELECT ctid FROM ai_settings
+				WHERE tenant_id = $1 AND api_key_encrypted <> '' LIMIT $2))`},
+	}
+}
+
+// monitorSecretKeysSQL is every top-level monitor config key the secret
+// registries name, of any type, as a SQL text[] literal.
+var monitorSecretKeysSQL = func() string {
+	seen := map[string]bool{}
+	var quoted []string
+	for _, registry := range []map[string][]string{secrets.MonitorSecretFields, secrets.MonitorSecretMapFields} {
+		for _, fields := range registry {
+			for _, f := range fields {
+				if !seen[f] {
+					seen[f] = true
+					quoted = append(quoted, pq.QuoteLiteral(f))
+				}
+			}
+		}
+	}
+	sort.Strings(quoted)
+	return "ARRAY[" + strings.Join(quoted, ", ") + "]::text[]"
+}()
+
 // workspacePurgeExempt lists the tenant-scoped tables the purge deliberately
 // keeps, with the reason. TestWorkspacePurgePlanCoversEveryTenantTable fails
 // on any tenant-scoped table that is in neither list.
@@ -325,7 +374,9 @@ func (p *workspacePurger) purgeWorkspace(ctx context.Context, conn *sql.Conn, te
 
 	for {
 		passDeleted := 0
-		for _, step := range workspacePurgePlan {
+		// The scrub comes first in every pass, so secrets a racing writer
+		// stored meanwhile go before anything else too.
+		for _, step := range append(workspaceScrubPlan(), workspacePurgePlan...) {
 			n, drained, err := p.runStep(ctx, conn, step, tenantID, budget-spent)
 			spent += n
 			passDeleted += n
@@ -333,7 +384,7 @@ func (p *workspacePurger) purgeWorkspace(ctx context.Context, conn *sql.Conn, te
 				perTable[step.table] += n
 			}
 			if err != nil {
-				return false, spent, fmt.Errorf("delete %s: %w", step.table, err)
+				return false, spent, fmt.Errorf("purge %s: %w", step.table, err)
 			}
 			if !drained {
 				return false, spent, nil

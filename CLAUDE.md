@@ -132,15 +132,24 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `DELETE FROM tenants`. Every query that resolves a credential or tenant, or
   iterates tenant data in a background loop, adds
   `shared/tenancy.LiveTenantSQL` (or `DeletedTenantSQL` where an unknown ID
-  must stay distinct, as in the auth `identityQuery`), filtered before any
-  `LIMIT`; the alerter's notification claim and the check-result insert
-  (`monitorstate.insertResult`) are the last gates. The scheduler's workspace
-  purge (`scheduler/internal/scheduler/purger_tenants.go`, own advisory lock)
-  removes the data: a new table holding tenant data (a `tenant_id` column or
-  a foreign key into such a table) goes into `workspacePurgePlan` or
-  `workspacePurgeExempt`, and gets a row in the test's `workspaceFixtureSQL`
+  must stay distinct), filtered before any `LIMIT`; the alerter's
+  notification claim and the check-result insert (`monitorstate.insertResult`)
+  are the last gates. The fragments name `tenants.deleted_at` so the planner
+  has statistics: migration 000116 must run before the binaries serve
+  (upgrade notes in `website/lib/docs/pages/deployment.ts`). The one tolerant
+  read is the auth `identityQuery` (`to_jsonb`), because its missing-schema
+  fallback treats every admin as a superadmin; never add another. It answers
+  `404 workspace_not_found` for any workspace the caller cannot open
+  (deleted, purged, unknown, or a member's non-membership). The scheduler's
+  workspace purge (`scheduler/internal/scheduler/purger_tenants.go`, own
+  advisory lock) removes the data, blanking secret columns first
+  (`workspaceScrubPlan`): a new table holding tenant data (a `tenant_id`
+  column or a foreign key into such a table) goes into `workspacePurgePlan`
+  (before the tables it references) or `workspacePurgeExempt`, gets a row in
+  the test's `workspaceFixtureSQL`, and any secret column gets a scrub step
   (`TestWorkspacePurgePlanCoversEveryTenantTable`,
-  `TestWorkspacePurge_RemovesEveryRowAndSparesOtherWorkspaces`).
+  `TestWorkspacePurge_RemovesEveryRowAndSparesOtherWorkspaces`,
+  `TestWorkspacePurge_ScrubsSecretsFirst`).
 - API routes are registered by the `mount*Routes` functions in
   `api/internal/api/routes_*.go`; `NewServer` (`server.go`) builds the
   services and handlers and calls them in order.

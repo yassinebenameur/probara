@@ -117,7 +117,7 @@ func (h *Handlers) writeServiceError(w http.ResponseWriter, err error, op string
 	case errors.Is(err, oidcmappingssvc.ErrInvalidMapping):
 		apierrors.WriteValidationError(w, err.Error())
 	case errors.Is(err, oidcmappingssvc.ErrTenantNotFound):
-		apierrors.WriteValidationError(w, "tenant not found")
+		apierrors.WriteError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 	case errors.Is(err, oidcmappingssvc.ErrDuplicate):
 		apierrors.WriteError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, oidcmappingssvc.ErrNotFound):

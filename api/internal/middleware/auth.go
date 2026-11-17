@@ -18,7 +18,6 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
-	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // GetTenantID extracts the tenant ID from the request context
@@ -41,11 +40,21 @@ func GetAdminID(ctx context.Context) (string, error) {
 
 // identityQuery resolves the admin's platform role plus their membership role
 // for the requested tenant in one round trip. $2 is uuid.Nil when no tenant
-// was requested (m.role comes back NULL). The last column reports a
-// soft-deleted workspace (tenancy.DeletedTenantSQL), which every caller is
-// refused, superadmins included; an unknown ID keeps its own handling.
-var identityQuery = `
-	SELECT u.platform_role, u.disabled_at, m.role, ` + tenancy.DeletedTenantSQL("$2::uuid") + `
+// was requested (m.role comes back NULL). The last column is true when a
+// tenant was requested and no live workspace has that ID: deleted (soft, or
+// already purged) or never created. Every caller is then refused,
+// superadmins included.
+//
+// Unlike tenancy.LiveTenantSQL, it reads deleted_at through to_jsonb, the one
+// lookup kept tolerant of a schema without the column: a missing column here
+// would land in the missing-schema fallback below, which treats every admin
+// as a superadmin. It is a single primary-key probe, so the expression costs
+// the planner nothing.
+const identityQuery = `
+	SELECT u.platform_role, u.disabled_at, m.role,
+		$2::uuid <> '00000000-0000-0000-0000-000000000000'::uuid AND NOT EXISTS (
+			SELECT 1 FROM tenants requested
+			WHERE requested.id = $2 AND to_jsonb(requested) ->> 'deleted_at' IS NULL)
 	FROM admin_users u
 	LEFT JOIN tenant_memberships m ON m.admin_user_id = u.id AND m.tenant_id = $2
 	WHERE u.id = $1
@@ -124,10 +133,10 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	var platformRole string
 	var disabledAt *time.Time
 	var membershipRole sql.NullString
-	var tenantDeleted bool
+	var tenantGone bool
 
 	err := dbClient.QueryRowContext(r.Context(), identityQuery, adminID, tenantUUID).
-		Scan(&platformRole, &disabledAt, &membershipRole, &tenantDeleted)
+		Scan(&platformRole, &disabledAt, &membershipRole, &tenantGone)
 	switch {
 	case pgerr.IsMissingSchema(err):
 		// Deploy-ordering tolerance: migrations run as a post-upgrade job, so
@@ -148,10 +157,10 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 		writeAuthError(w, "account disabled")
 		return
 	}
-	if tenantDeleted {
-		// A deleted workspace is gone for everyone, at once: its routes
-		// answer as if it never existed. The web client recognises the code
-		// and re-selects a workspace.
+	if tenantGone {
+		// A deleted workspace is gone for everyone, at once, and stays gone
+		// once purged: its routes answer as for an ID that never existed. The
+		// web client recognises the code and re-selects a workspace.
 		writeWorkspaceNotFound(w)
 		return
 	}
@@ -175,7 +184,9 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	// with identity only; tenant-dependent handlers fail via GetTenantID.
 	if tenantUUID != uuid.Nil {
 		if !membershipRole.Valid {
-			writeForbiddenError(w, "no access to this tenant")
+			// The same answer as for a deleted or unknown workspace, so a
+			// member learns nothing about workspaces they cannot open.
+			writeWorkspaceNotFound(w)
 			return
 		}
 		ctx = ctxpkg.WithTenantID(ctx, tenantUUID.String())
@@ -258,14 +269,15 @@ func writeForbiddenError(w http.ResponseWriter, message string) {
 	w.Write([]byte(`{"error":"forbidden","message":"` + message + `"}`))
 }
 
-// WorkspaceNotFoundCode is the error code of a request scoped to a deleted
-// workspace.
+// WorkspaceNotFoundCode is the error code of a request scoped to a workspace
+// the caller cannot open: deleted, never created, or (for a member) one they
+// do not belong to.
 const WorkspaceNotFoundCode = "workspace_not_found"
 
 func writeWorkspaceNotFound(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)
-	w.Write([]byte(`{"error":"` + WorkspaceNotFoundCode + `","message":"this workspace has been deleted"}`))
+	w.Write([]byte(`{"error":"` + WorkspaceNotFoundCode + `","message":"workspace not found"}`))
 }
 
 func writeBadRequestError(w http.ResponseWriter, message string) {

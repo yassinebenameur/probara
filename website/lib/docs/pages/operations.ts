@@ -470,7 +470,7 @@ make db-restore`,
             {
               term: 'Workspace purge',
               description:
-                'A deleted [workspace](/docs/administration/#workspaces) is erased by the scheduler in bounded batches, table by table, and its row goes last. It shares the `MONITOR_PURGE_*` settings (cadence, batch size, per-run cap) but holds its own lock, so one replica runs it at a time and a run that stops (budget, restart, lost lock) simply resumes on the next tick. Each run logs `workspace purge progress` with the rows deleted per table, and `deleted workspace fully purged` when the row is gone. Audit log entries are kept.',
+                'A deleted [workspace](/docs/administration/#workspaces) is erased by the scheduler in bounded batches, table by table, and its row goes last; every pass first blanks its stored secrets (channel and monitor credentials, push tokens, worker credentials). It shares the `MONITOR_PURGE_*` settings (cadence, batch size, per-run cap) but holds its own lock, so one replica runs it at a time and a run that stops (budget, restart, lost lock) simply resumes on the next tick. Each run logs `workspace purge progress` with the rows deleted per table, and `deleted workspace fully purged` when the row is gone. Audit log entries are kept.',
             },
             {
               term: 'Rollups',

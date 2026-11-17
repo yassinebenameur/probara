@@ -67,8 +67,12 @@ func TestWorkspacePurgePlanCoversEveryTenantTable(t *testing.T) {
 			missing = append(missing, table)
 		}
 	}
-	require.Emptyf(t, missing, "tables holding workspace data that the purge neither deletes nor exempts: %s "+
-		"(add a step to workspacePurgePlan in purger_tenants.go, or list the table in workspacePurgeExempt with the reason)",
+	require.Emptyf(t, missing, "tables holding workspace data (a tenant_id column, or a foreign key into such a table) "+
+		"that the workspace purge neither deletes nor exempts: %s. For each, either add a step to workspacePurgePlan "+
+		"(scheduler/internal/scheduler/purger_tenants.go) before the step of every table it references, using byTenant "+
+		"when it has an indexed tenant_id and viaParent through an indexed key otherwise, give it a row in "+
+		"workspaceFixtureSQL, and blank any secret column in workspaceScrubPlan; or, if it is not workspace data "+
+		"(a platform table) or must outlive the workspace, add it to workspacePurgeExempt with the reason",
 		strings.Join(missing, ", "))
 
 	known := map[string]bool{}
@@ -170,6 +174,41 @@ func TestWorkspacePurge_BoundedAndResumable(t *testing.T) {
 	var left int
 	require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM tenants WHERE id = $1`, victim).Scan(&left))
 	require.Zero(t, left)
+}
+
+// Secrets are blanked before anything is deleted: a run whose budget only
+// covers the scrub leaves every row in place and no secret behind.
+func TestWorkspacePurge_ScrubsSecretsFirst(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+	shared := seedPlatform(ctx, t, dbClient)
+	testutil.InsertTenant(ctx, t, dbClient, "")
+	victim := testutil.InsertTenant(ctx, t, dbClient, "")
+	seedWorkspaceEverywhere(ctx, t, dbClient, victim, shared)
+	markDeleted(ctx, t, dbClient, victim)
+	secretsLeft := func() int {
+		var n int
+		require.NoError(t, dbClient.QueryRowContext(ctx, `
+			SELECT (SELECT COUNT(*) FROM alert_channels WHERE tenant_id = $1 AND config <> '{}'::jsonb)
+			     + (SELECT COUNT(*) FROM monitors WHERE tenant_id = $1 AND (config ? 'secret_headers' OR push_token IS NOT NULL))
+			     + (SELECT COUNT(*) FROM locations WHERE tenant_id = $1 AND worker_credential IS NOT NULL)
+			     + (SELECT COUNT(*) FROM ai_settings WHERE tenant_id = $1 AND api_key_encrypted <> '')`, victim).Scan(&n))
+		return n
+	}
+	scrubRows := secretsLeft()
+	require.Equal(t, 5, scrubRows, "fixture: one channel, two monitors, one location, one AI key")
+	before := purgeTableCounts(ctx, t, dbClient)
+
+	p := newWorkspacePurger(dbClient, testLogger(t), nil, purgerOptions{BatchSize: 10, MaxRowsPerRun: scrubRows})
+	p.pause = 0
+	_, err := p.runOnce(ctx)
+	require.NoError(t, err)
+	require.Zero(t, secretsLeft())
+	require.Equal(t, before, purgeTableCounts(ctx, t, dbClient), "nothing is deleted before the secrets are gone")
+	var url string
+	require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT config->>'url' FROM monitors WHERE tenant_id = $1 AND name LIKE 'm1-%'`, victim).Scan(&url))
+	require.Equal(t, "https://example.com", url, "only the secret keys of a monitor config go")
 }
 
 // A second replica skips while one holds the lock, and replicas racing run
@@ -303,11 +342,12 @@ INSERT INTO mcp_oauth_codes (code_hash, client_id, admin_user_id, tenant_id, sco
 INSERT INTO tenant_memberships (admin_user_id, tenant_id, role) VALUES ('{ADMIN}', '{T}', 'viewer');
 INSERT INTO oidc_group_mappings (group_name, role, tenant_id) VALUES ('group-{X}', 'viewer', '{T}');
 
-INSERT INTO locations (id, tenant_id, name, slug) VALUES ('{L1}', '{T}', 'loc-a-{X}', 'loc-a-{X}'), ('{L2}', '{T}', 'loc-b-{X}', 'loc-b-{X}');
+INSERT INTO locations (id, tenant_id, name, slug, worker_credential) VALUES ('{L1}', '{T}', 'loc-a-{X}', 'loc-a-{X}', 'enc:worker'), ('{L2}', '{T}', 'loc-b-{X}', 'loc-b-{X}', NULL);
 INSERT INTO monitors (id, tenant_id, name, type, config, interval_seconds, timeout_seconds)
-	VALUES ('{M1}', '{T}', 'm1-{X}', 'http', '{}'::jsonb, 60, 30),
-	       ('{M2}', '{T}', 'm2-{X}', 'http', '{}'::jsonb, 60, 30),
+	VALUES ('{M1}', '{T}', 'm1-{X}', 'http', '{"url":"https://example.com","secret_headers":{"Authorization":"enc:bearer"}}'::jsonb, 60, 30),
+	       ('{M2}', '{T}', 'm2-{X}', 'http', '{"url":"https://example.com"}'::jsonb, 60, 30),
 	       ('{G}', '{T}', 'g-{X}', 'group', '{}'::jsonb, 60, 30);
+UPDATE monitors SET push_token = 'push-{X}' WHERE id = '{M2}';
 INSERT INTO monitor_groups (monitor_id, group_id) VALUES ('{M1}', '{G}');
 INSERT INTO monitor_dependencies (monitor_id, depends_on_id) VALUES ('{M1}', '{M2}');
 INSERT INTO monitor_locations (monitor_id, location_id) VALUES ('{M1}', '{L1}');
@@ -316,7 +356,7 @@ INSERT INTO location_mesh_state (tenant_id, source_location_id, target_location_
 INSERT INTO mesh_probe_results (id, tenant_id, source_location_id, target_location_id, job_id, status)
 	VALUES (gen_random_uuid(), '{T}', '{L1}', '{L2}', gen_random_uuid(), 'success');
 
-INSERT INTO alert_channels (id, tenant_id, name, type, config) VALUES ('{CH}', '{T}', 'chan-{X}', 'webhook', '{}'::jsonb);
+INSERT INTO alert_channels (id, tenant_id, name, type, config) VALUES ('{CH}', '{T}', 'chan-{X}', 'webhook', '{"url":"enc:hook"}'::jsonb);
 INSERT INTO tenant_default_channels (tenant_id, channel_id) VALUES ('{T}', '{CH}');
 INSERT INTO monitor_channels (monitor_id, channel_id) VALUES ('{M1}', '{CH}');
 INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds) VALUES ('{AP}', '{T}', 'policy', 1, 60);
@@ -349,7 +389,7 @@ INSERT INTO alert_triage (id, tenant_id, alert_id, status) VALUES ('{TR}', '{T}'
 INSERT INTO ai_labels (tenant_id, subject_type, subject_id, subject_key, verdict, answers, request, catalogue_version)
 	VALUES ('{T}', 'alert_triage', '{TR}', '{TR}', 'confirmed', '{}'::jsonb, '{}'::jsonb, 'v1');
 INSERT INTO ai_label_salts (tenant_id, salt) VALUES ('{T}', decode(repeat('ab', 32), 'hex'));
-INSERT INTO ai_settings (tenant_id) VALUES ('{T}');
+INSERT INTO ai_settings (tenant_id, api_key_encrypted) VALUES ('{T}', 'enc:provider-key');
 
 INSERT INTO incidents (id, tenant_id, title) VALUES ('{I}', '{T}', 'incident');
 INSERT INTO incident_alerts (incident_id, alert_id) VALUES ('{I}', '{A}');

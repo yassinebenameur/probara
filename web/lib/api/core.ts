@@ -59,7 +59,7 @@ function handleUnauthorized(hasApiKey: boolean): never {
   throw new Error('Unauthorized');
 }
 
-async function handleResponse<T>(response: Response, hasApiKey: boolean): Promise<T> {
+async function handleResponse<T>(response: Response, hasApiKey: boolean, sentTenantId: string | null): Promise<T> {
   if (response.status === 401) {
     handleUnauthorized(hasApiKey);
   }
@@ -76,8 +76,8 @@ async function handleResponse<T>(response: Response, hasApiKey: boolean): Promis
 
   if (!response.ok) {
     const error = apiErrorFromBody(data);
-    if (response.status === 404 && error.error === WORKSPACE_NOT_FOUND) {
-      workspaceGone();
+    if (response.status === 404 && error.error === WORKSPACE_NOT_FOUND && sentTenantId) {
+      workspaceGone(sentTenantId);
     }
     throw error;
   }
@@ -85,12 +85,18 @@ async function handleResponse<T>(response: Response, hasApiKey: boolean): Promis
   return data;
 }
 
-// The selected workspace was deleted (by someone else, or in another tab):
-// validate the selection again before the next request, and have the
-// switcher reload its list, which settles on a workspace that still exists
-// and remounts the page on it.
-function workspaceGone(): void {
+// The selected workspace is gone (deleted by someone else or in another tab,
+// or the member lost access): drop the selection, so no later request sends
+// it again, and have the switcher reload its list, which settles once on a
+// workspace that still exists and remounts the page on it. Idempotent: only
+// the selection the failing request carried is dropped, so the other
+// in-flight requests that fail the same way (even one answered after the
+// switcher has settled on another workspace) change and announce nothing,
+// and one deletion reloads the list once.
+function workspaceGone(failedTenantId: string): void {
+  if (getSelectedTenantId() !== failedTenantId) return;
   tenantSelectionValidated = false;
+  clearSelectedTenantId();
   emitTenantsChanged();
 }
 
@@ -107,6 +113,9 @@ function noWorkspaceError(): ApiRequestError {
 
 const AUTH_PATH_PREFIX = '/v1/auth';
 
+// Workspace list and management routes are platform-scoped: they never carry
+// X-Tenant-ID, so a stale selection cannot make the very request that
+// recovers from it fail with workspace_not_found.
 const TENANTS_PATH = '/v1/tenants';
 
 let tenantSelectionValidated = false;
@@ -185,7 +194,9 @@ export async function apiRequest<T>(
   }
 
   const tenantId = getSelectedTenantId();
-  if (tenantId) {
+  // The workspace this request is scoped to, if any (API keys are pinned).
+  const sentTenantId = tenantId && !isTenantsPath && !apiKey ? tenantId : null;
+  if (tenantId && !isTenantsPath) {
     headers['X-Tenant-ID'] = tenantId;
   }
 
@@ -206,10 +217,10 @@ export async function apiRequest<T>(
       const refreshed = await refreshSession();
       if (refreshed) {
         const retryResponse = await fetch(getApiUrl(path), options);
-        return await handleResponse<T>(retryResponse, Boolean(apiKey));
+        return await handleResponse<T>(retryResponse, Boolean(apiKey), sentTenantId);
       }
     }
-    return await handleResponse<T>(response, Boolean(apiKey));
+    return await handleResponse<T>(response, Boolean(apiKey), sentTenantId);
   } catch (error) {
     if (error instanceof Error) {
       throw error;

@@ -261,8 +261,13 @@ resolved or paged. The scheduler's workspace purge
 (`scheduler/internal/scheduler/purger_tenants.go`, its own session advisory
 lock, separate from the monitor purge and rollups) then deletes the data in
 bounded batches, table by table in `workspacePurgePlan` order, and deletes the
-tenant row last, only after a full pass found every table empty. The API
-never deletes a tenant row. Audit log entries are kept.
+tenant row last, only after a full pass found every table empty. Each pass
+starts by blanking the secret-bearing columns (`workspaceScrubPlan`: channel
+configs, monitor config secrets and push tokens, location worker
+credentials, the legacy AI key), so credentials do not wait at rest behind
+the history tables. The predicate names `tenants.deleted_at`, so migration
+000116 must run before the binaries that use it. The API never deletes a
+tenant row. Audit log entries are kept.
 
 Analytics choose raw, rollup, or interval-based calculations according to
 window coverage and the existing state semantics. Raw analytics stream
