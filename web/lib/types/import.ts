@@ -6,7 +6,12 @@ export interface ImportRow {
   fields: Record<string, unknown>;
   /** Per-monitor translation caveats, set by format adapters (e.g. Uptime Kuma). */
   warnings?: string[];
+  /** Set when an adapter added the row rather than translating a source record (IMPORT_ROW_DERIVED_*). */
+  derived?: string;
 }
+
+/** A domain monitor built from a source monitor's domain-expiration check. */
+export const IMPORT_ROW_DERIVED_DOMAIN_EXPIRY = 'domain_expiry';
 
 export interface FieldMapping {
   name?: string;

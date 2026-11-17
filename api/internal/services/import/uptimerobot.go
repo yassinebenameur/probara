@@ -74,14 +74,16 @@ func (h *uptimeRobotHeaders) UnmarshalJSON(data []byte) error {
 }
 
 type uptimeRobotMonitor struct {
-	ID                 foreignID          `json:"id"`
-	FriendlyName       string             `json:"friendly_name"`
-	URL                string             `json:"url"`
-	Type               kumaInt            `json:"type"`
-	SubType            foreignID          `json:"sub_type"`
-	Port               foreignID          `json:"port"`
-	KeywordType        kumaInt            `json:"keyword_type"`
-	KeywordCaseType    kumaInt            `json:"keyword_case_type"`
+	ID           foreignID `json:"id"`
+	FriendlyName string    `json:"friendly_name"`
+	URL          string    `json:"url"`
+	Type         kumaInt   `json:"type"`
+	SubType      foreignID `json:"sub_type"`
+	Port         foreignID `json:"port"`
+	KeywordType  kumaInt   `json:"keyword_type"`
+	// KeywordCaseType is nil when absent or null; its direction is from the
+	// API documentation only, so anything but 0 or 1 is not guessed.
+	KeywordCaseType    *kumaInt           `json:"keyword_case_type"`
 	KeywordValue       string             `json:"keyword_value"`
 	HTTPUsername       string             `json:"http_username"`
 	HTTPPassword       string             `json:"http_password"`
@@ -116,12 +118,19 @@ func (s *Service) parseUptimeRobotExport(data []byte) (*parsedSource, bool, erro
 		Stat     string                       `json:"stat"`
 		Error    json.RawMessage              `json:"error"`
 		Monitors []map[string]json.RawMessage `json:"monitors"`
+		Data     []map[string]json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(trimmed, &probe); err != nil {
 		return nil, false, nil
 	}
 	if probe.Stat == "fail" && jsonPresent(probe.Error) && len(probe.Monitors) == 0 {
 		return nil, true, fmt.Errorf("the file is an UptimeRobot API error response, not a monitor list - check the API key and call getMonitors again")
+	}
+	// The newer API answers {"data": [{"friendlyName", ...}]}, a shape this
+	// adapter has not been verified against; field mapping would turn its
+	// keyword and port monitors into plain HTTP checks, so it is refused.
+	if len(probe.Monitors) == 0 && len(probe.Data) > 0 && allHaveKey(probe.Data, "friendlyName") {
+		return nil, true, fmt.Errorf("the file looks like an UptimeRobot API v3 response, which the importer does not read - export with API v2 getMonitors instead")
 	}
 	if !isUptimeRobotMonitorList(probe.Monitors) {
 		return nil, false, nil
@@ -146,6 +155,15 @@ func isUptimeRobotMonitorList(monitors []map[string]json.RawMessage) bool {
 		}
 		raw := strings.Trim(string(bytes.TrimSpace(monitor["type"])), `"`)
 		if _, err := strconv.Atoi(raw); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func allHaveKey(items []map[string]json.RawMessage, key string) bool {
+	for _, item := range items {
+		if _, ok := item[key]; !ok {
 			return false
 		}
 	}
@@ -207,7 +225,10 @@ func translateUptimeRobotMonitor(t *foreignTranslation, monitor uptimeRobotMonit
 		enabled:  int(monitor.Status) != 0,
 		interval: uptimeRobotDefaultInterval,
 	}
-	m.setInterval(int(monitor.Interval))
+	if kind != 5 {
+		// A heartbeat's period is set with its grace (setPushPeriod).
+		m.setInterval(int(monitor.Interval))
+	}
 	m.timeout = int(monitor.Timeout)
 
 	var reason string
@@ -224,10 +245,11 @@ func translateUptimeRobotMonitor(t *foreignTranslation, monitor uptimeRobotMonit
 	case 5:
 		m.target = models.MonitorTypePush
 		m.timeout = 0
-		m.config = map[string]interface{}{
-			"expected_interval_seconds": m.interval,
-			"grace_period_seconds":      0,
+		period := int(monitor.Interval)
+		if period <= 0 {
+			period = uptimeRobotDefaultInterval
 		}
+		m.setPushPeriod(period, 0)
 		m.warn("Probara issues its own push token, so this heartbeat's URL is different from the UptimeRobot one - repoint whatever sends the heartbeat")
 	default:
 		reason = fmt.Sprintf("unrecognized UptimeRobot monitor type %d", kind)
@@ -326,9 +348,19 @@ func uptimeRobotHTTPConfig(m *foreignMonitor, monitor uptimeRobotMonitor, keywor
 			return nil, "the keyword monitor does not say whether the keyword must be present or absent"
 		}
 		assertion := map[string]interface{}{"op": op, "value": value}
-		// keyword_case_type 0 is UptimeRobot's case-insensitive default.
-		if int(monitor.KeywordCaseType) == 0 {
+		switch {
+		case monitor.KeywordCaseType != nil && int(*monitor.KeywordCaseType) == 0:
+			// 0 is UptimeRobot's case-insensitive default.
 			assertion["case_insensitive"] = true
+		case monitor.KeywordCaseType != nil && int(*monitor.KeywordCaseType) == 1:
+		default:
+			// Unknown: take the stricter reading for this direction.
+			if op == "not_contains" {
+				assertion["case_insensitive"] = true
+				m.warn("the export does not say whether the keyword is case-sensitive, so it must be absent in any letter case")
+			} else {
+				m.warn("the export does not say whether the keyword is case-sensitive, so it must match its letter case")
+			}
 		}
 		config["body_assertions"] = []map[string]interface{}{assertion}
 	}

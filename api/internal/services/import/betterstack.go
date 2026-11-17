@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -15,8 +16,9 @@ import (
 // Better Stack has no export button; its Uptime API v2 answers in JSON:API
 // form, `{"data": [{"id", "type", "attributes"}], "pagination": {...}}`.
 // This adapter accepts one response (GET /api/v2/monitors, /heartbeats,
-// /monitor-groups, /heartbeat-groups), the same with the resource kinds
-// merged into one `data` array, or a JSON array of such responses. Monitor
+// /monitor-groups, /heartbeat-groups, or a single resource such as
+// /monitors/{id}, whose `data` is one object), the same with the resource
+// kinds merged into one `data` array, or a JSON array of such responses. Monitor
 // and heartbeat groups resolve their members' group ids to names, so a file
 // that carries them keeps the grouping.
 
@@ -55,15 +57,40 @@ const (
 	betterStackRegionsNote       = "Better Stack regions were not migrated: Probara checks run from your own workers - assign locations after import"
 	betterStackNotificationsNote = "Better Stack notification settings, escalation policies and on-call routing were not migrated - attach Probara alert channels after import"
 	betterStackMaintenanceNote   = "Better Stack maintenance windows were not migrated - recreate them as Probara maintenance windows"
-	betterStackPaginationNote    = "the Better Stack response links to a next page that is not in this file - fetch every page so no monitor is left out"
 )
 
 type betterStackDocument struct {
-	Data       []betterStackResource `json:"data"`
-	Included   []betterStackResource `json:"included"`
-	Pagination *struct {
-		Next *string `json:"next"`
-	} `json:"pagination"`
+	Data       betterStackResources   `json:"data"`
+	Included   betterStackResources   `json:"included"`
+	Pagination *betterStackPagination `json:"pagination"`
+}
+
+type betterStackPagination struct {
+	First *string `json:"first"`
+	Prev  *string `json:"prev"`
+	Next  *string `json:"next"`
+}
+
+// betterStackResources accepts `data` as a list (collection endpoints) or a
+// single object (GET /monitors/{id}).
+type betterStackResources []betterStackResource
+
+func (r *betterStackResources) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		var one betterStackResource
+		if err := json.Unmarshal(trimmed, &one); err != nil {
+			return err
+		}
+		*r = betterStackResources{one}
+		return nil
+	}
+	var many []betterStackResource
+	if err := json.Unmarshal(trimmed, &many); err != nil {
+		return err
+	}
+	*r = many
+	return nil
 }
 
 type betterStackResource struct {
@@ -127,13 +154,15 @@ func (a betterStackAlerting) configured() bool {
 
 type betterStackMonitor struct {
 	betterStackAlerting
-	URL                 string             `json:"url"`
-	PronounceableName   string             `json:"pronounceable_name"`
-	MonitorType         string             `json:"monitor_type"`
-	MonitorGroupID      foreignID          `json:"monitor_group_id"`
-	CheckFrequency      kumaInt            `json:"check_frequency"`
-	RequestTimeout      kumaInt            `json:"request_timeout"`
-	ConfirmationPeriod  kumaInt            `json:"confirmation_period"`
+	URL               string    `json:"url"`
+	PronounceableName string    `json:"pronounceable_name"`
+	MonitorType       string    `json:"monitor_type"`
+	MonitorGroupID    foreignID `json:"monitor_group_id"`
+	CheckFrequency    kumaInt   `json:"check_frequency"`
+	RequestTimeout    kumaInt   `json:"request_timeout"`
+	// ConfirmationPeriod is nil when the export leaves it out: Better
+	// Stack's default is not documented, so it is not guessed.
+	ConfirmationPeriod  *kumaInt           `json:"confirmation_period"`
 	RecoveryPeriod      kumaInt            `json:"recovery_period"`
 	RequiredKeyword     string             `json:"required_keyword"`
 	ExpectedStatusCodes []kumaInt          `json:"expected_status_codes"`
@@ -218,14 +247,29 @@ func probeBetterStack(data []byte) ([]json.RawMessage, bool) {
 	resources := 0
 	for _, page := range pages {
 		var probe struct {
-			Data     []map[string]json.RawMessage `json:"data"`
+			Data     json.RawMessage              `json:"data"`
 			Included []map[string]json.RawMessage `json:"included"`
 		}
 		page = bytes.TrimSpace(page)
-		if len(page) == 0 || page[0] != '{' || json.Unmarshal(page, &probe) != nil || probe.Data == nil {
+		if len(page) == 0 || page[0] != '{' || json.Unmarshal(page, &probe) != nil {
 			return nil, false
 		}
-		for _, resource := range append(probe.Data, probe.Included...) {
+		var data []map[string]json.RawMessage
+		switch raw := bytes.TrimSpace(probe.Data); {
+		case len(raw) > 0 && raw[0] == '{':
+			var one map[string]json.RawMessage
+			if json.Unmarshal(raw, &one) != nil {
+				return nil, false
+			}
+			data = []map[string]json.RawMessage{one}
+		case len(raw) > 0 && raw[0] == '[':
+			if json.Unmarshal(raw, &data) != nil {
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+		for _, resource := range append(data, probe.Included...) {
 			var kind string
 			if json.Unmarshal(resource["type"], &kind) != nil || !betterStackKinds[kind] {
 				return nil, false
@@ -247,10 +291,8 @@ func translateBetterStack(docs []betterStackDocument) *parsedSource {
 	for _, doc := range docs {
 		resources = append(resources, doc.Data...)
 		resources = append(resources, doc.Included...)
-		if len(docs) == 1 && doc.Pagination != nil && doc.Pagination.Next != nil && strings.TrimSpace(*doc.Pagination.Next) != "" {
-			t.note(betterStackPaginationNote)
-		}
 	}
+	betterStackMissingPages(t, docs)
 
 	// Groups first, so members can name the group they belong to.
 	monitorGroups := make(map[string]string)
@@ -307,12 +349,66 @@ func translateBetterStack(docs []betterStackDocument) *parsedSource {
 	return t.finish()
 }
 
+// betterStackMissingPages notes every response in the file that links to a
+// next page the file does not hold, so a paginated export never imports its
+// first page alone without saying so. A page's own number is read from its
+// links (prev + 1, else 1), since responses carry no self link.
+func betterStackMissingPages(t *foreignTranslation, docs []betterStackDocument) {
+	type pageKey struct {
+		path string
+		page int
+	}
+	held := make(map[pageKey]bool, len(docs))
+	for _, doc := range docs {
+		if p := doc.Pagination; p != nil {
+			if path, page, ok := betterStackPageLink(p.Prev); ok {
+				held[pageKey{path, page + 1}] = true
+			} else if path, page, ok := betterStackPageLink(p.Next); ok {
+				held[pageKey{path, page - 1}] = true
+			}
+		}
+	}
+	for _, doc := range docs {
+		if doc.Pagination == nil || doc.Pagination.Next == nil || strings.TrimSpace(*doc.Pagination.Next) == "" {
+			continue
+		}
+		path, page, ok := betterStackPageLink(doc.Pagination.Next)
+		if ok && held[pageKey{path, page}] {
+			continue
+		}
+		resource := "a Better Stack"
+		if segment := path[strings.LastIndex(path, "/")+1:]; ok && segment != "" {
+			resource = "the Better Stack " + segment
+		}
+		t.note(fmt.Sprintf("%s response links to a next page that is not in this file, so its remaining records are missing - export every page (follow pagination.next) and add them to the file", resource))
+	}
+}
+
+// betterStackPageLink reads the path and page number of a pagination link.
+func betterStackPageLink(link *string) (string, int, bool) {
+	if link == nil || strings.TrimSpace(*link) == "" {
+		return "", 0, false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(*link))
+	if err != nil {
+		return "", 0, false
+	}
+	page, err := strconv.Atoi(parsed.Query().Get("page"))
+	if err != nil || page < 1 {
+		return parsed.Path, 0, false
+	}
+	return parsed.Path, page, true
+}
+
 func betterStackMonitorName(id string, monitor betterStackMonitor) string {
 	if name := strings.TrimSpace(monitor.PronounceableName); name != "" {
 		return name
 	}
-	if url := strings.TrimSpace(monitor.URL); url != "" && !strings.Contains(url, "@") {
-		return url
+	if name := foreignURLName(monitor.URL); name != "" {
+		return name
+	}
+	if host := foreignHost(monitor.URL); host != "" && !strings.ContainsAny(host, "@?") {
+		return host
 	}
 	return "Better Stack monitor " + id
 }
@@ -364,19 +460,30 @@ func translateBetterStackMonitor(t *foreignTranslation, id string, monitor bette
 		return
 	}
 	if m.target != models.MonitorTypeHTTP {
-		// Better Stack states server timeouts in milliseconds.
-		if ms := int(monitor.RequestTimeout); ms > 0 {
-			m.timeout = (ms + 999) / 1000
+		// Better Stack documents milliseconds for these server timeouts, but
+		// that is not verified against a live export: a value that would
+		// make a timeout under 2 s is more likely seconds, so neither
+		// reading is trusted and the default stays.
+		if raw := int(monitor.RequestTimeout); raw > 0 {
+			if seconds := (raw + 999) / 1000; raw >= 2000 {
+				m.timeout = seconds
+			} else {
+				m.warn("the request timeout of %d could not be read with confidence (seconds or milliseconds), so Probara's default timeout was kept", raw)
+			}
 		}
 	}
 
 	// Better Stack opens an incident once a failure has lasted the
 	// confirmation period and resolves it after the recovery period; here
 	// both are counted in checks at the monitor's interval.
-	confirmation := int(monitor.ConfirmationPeriod)
-	m.setFailureThreshold(periodToChecks(confirmation, m.interval))
-	if confirmation > 0 {
-		m.warn("%s", betterStackPeriodNote("confirmation", confirmation, m.interval, m.failureThreshold, "failing"))
+	if monitor.ConfirmationPeriod == nil {
+		m.warn("the export carries no confirmation period, so Probara's default of 2 consecutive failing checks applies")
+	} else {
+		confirmation := int(*monitor.ConfirmationPeriod)
+		m.setFailureThreshold(periodToChecks(confirmation, m.interval))
+		if confirmation > 0 {
+			m.warn("%s", betterStackPeriodNote("confirmation", confirmation, m.interval, m.failureThreshold, "failing"))
+		}
 	}
 	if recovery := int(monitor.RecoveryPeriod); recovery > 0 {
 		m.setRecoveryThreshold(periodToChecks(recovery, m.interval))
@@ -507,11 +614,17 @@ func betterStackHTTPConfig(m *foreignMonitor, monitor betterStackMonitor, kind s
 			m.warn("the keyword check had no keyword set and was imported as a plain HTTP check")
 			break
 		}
-		op := "contains"
+		// Better Stack's keyword case rule is not documented, so each
+		// direction takes the stricter reading: a required keyword must match
+		// its case, an absent one must be absent in any case.
+		assertion := map[string]interface{}{"op": "contains", "value": keyword}
 		if kind == "keyword_absence" {
-			op = "not_contains"
+			assertion = map[string]interface{}{"op": "not_contains", "value": keyword, "case_insensitive": true}
+			m.warn("the keyword must be absent in any letter case; Better Stack's case rule is not documented, so the stricter reading was kept")
+		} else {
+			m.warn("the keyword must match its letter case; Better Stack's case rule is not documented, so the stricter reading was kept")
 		}
-		config["body_assertions"] = []map[string]interface{}{{"op": op, "value": keyword}}
+		config["body_assertions"] = []map[string]interface{}{assertion}
 	}
 
 	return config, ""
@@ -573,17 +686,8 @@ func translateBetterStackHeartbeat(t *foreignTranslation, id string, heartbeat b
 		name:       name,
 		target:     models.MonitorTypePush,
 		enabled:    !bool(heartbeat.Paused),
-		interval:   betterStackDefaultFrequency,
 	}
-	m.setInterval(period)
-	grace := int(heartbeat.Grace)
-	if grace < 0 {
-		grace = 0
-	}
-	m.config = map[string]interface{}{
-		"expected_interval_seconds": m.interval,
-		"grace_period_seconds":      grace,
-	}
+	m.setPushPeriod(period, int(heartbeat.Grace))
 	m.warn("Probara issues its own push token, so this heartbeat's URL is different from the Better Stack one - repoint whatever sends the heartbeat")
 
 	if groupID := string(heartbeat.HeartbeatGroupID); groupID != "" {

@@ -163,7 +163,7 @@ func TestGatus_Conditions(t *testing.T) {
 		{"https://a.example", "[STATUS] < 100", "", "", "exclude every status code"},
 		{"https://a.example", "[RESPONSE_TIME] <= 500", "max_latency_ms", `500`, ""},
 		{"https://a.example", "[RESPONSE_TIME] > 5", "max_latency_ms", "", ""},
-		{"https://a.example", "[BODY] == OK", "body_assertions", `[{"op":"regex","value":"(?s)^OK$"}]`, ""},
+		{"https://a.example", "[BODY] == OK", "body_assertions", `[{"op":"regex","value":"(?s)^\\s*OK\\s*$"}]`, ""},
 		{"https://a.example", "[BODY] != pat(*error*)", "body_assertions", `[{"op":"not_contains","value":"error"}]`, ""},
 		{"https://a.example", "[BODY].ready == true", "json_assertions", `[{"op":"bool_is","path":"ready","value":"true"}]`, ""},
 		{"https://a.example", "[BODY][0].name != bob", "json_assertions", `[{"op":"not_equals","path":"0.name","value":"bob"}]`, ""},
@@ -203,6 +203,9 @@ func TestGatus_Conditions(t *testing.T) {
 				t.Fatalf("%s = %s, want %s", tc.field, configJSON(t, got), tc.want)
 			case tc.want != "" && dropped:
 				t.Fatalf("a translated condition was also reported dropped: %v", row.Warnings)
+			}
+			if strings.Contains(tc.condition, "${") && row.Fields["enabled"] != false {
+				t.Fatalf("a condition dropped for a placeholder must leave the monitor disabled: %v", row.Fields["enabled"])
 			}
 			raw := []string{"[RESPONSE_TIME] > 5", "[BODY].items[*].id == 1", "[CERTIFICATE_EXPIRATION] > 48h", "[BODY].token == ${TOKEN}"}
 			for _, expectDrop := range raw {

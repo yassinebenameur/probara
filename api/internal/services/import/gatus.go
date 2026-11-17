@@ -279,9 +279,10 @@ func ceilSeconds(d time.Duration) int {
 	return int(math.Ceil(d.Seconds()))
 }
 
-// gatusPlaceholders lists the environment variables a value refers to.
+// gatusPlaceholders lists the environment variables a value refers to. "$$"
+// is Gatus's escape for a literal "$" and never starts one.
 func gatusPlaceholders(value string) []string {
-	matches := gatusEnvPlaceholder.FindAllStringSubmatch(value, -1)
+	matches := gatusEnvPlaceholder.FindAllStringSubmatch(strings.ReplaceAll(value, "$$", ""), -1)
 	names := make([]string, 0, len(matches))
 	for _, match := range matches {
 		name := match[1]
@@ -291,6 +292,12 @@ func gatusPlaceholders(value string) []string {
 		names = append(names, "$"+name)
 	}
 	return names
+}
+
+// gatusUnescape turns Gatus's "$$" escape back into the literal "$" Gatus
+// sends (a GraphQL body's query($$id: ID!) is query($id: ID!)).
+func gatusUnescape(value string) string {
+	return strings.ReplaceAll(value, "$$", "$")
 }
 
 func gatusEndpointName(index int, endpoint gatusEndpoint) string {
@@ -357,11 +364,27 @@ func translateGatusEndpoint(t *foreignTranslation, index int, endpoint gatusEndp
 		collect("DNS query", endpoint.DNS.QueryName)
 	}
 	if len(placeholders["URL"]) > 0 {
-		masked := gatusEnvPlaceholder.ReplaceAllString(endpoint.URL, "gatusplaceholder")
+		masked := gatusEnvPlaceholder.ReplaceAllString(strings.ReplaceAll(endpoint.URL, "$$", "_"), "gatusplaceholder")
 		if host := urlHostname(masked); host == "" || strings.Contains(host, "gatusplaceholder") || (scheme == "dns" && strings.Contains(masked, "gatusplaceholder")) {
 			t.skip(name, scheme, fmt.Sprintf("the target host comes from the environment (%s), which only Gatus resolves", strings.Join(placeholders["URL"], ", ")))
 			return
 		}
+	}
+
+	// Placeholders are found; from here every value is what Gatus sends.
+	endpoint.URL = gatusUnescape(endpoint.URL)
+	endpoint.Body = gatusUnescape(endpoint.Body)
+	if len(endpoint.Headers) > 0 {
+		headers := make(map[string]string, len(endpoint.Headers))
+		for name, value := range endpoint.Headers {
+			headers[name] = gatusUnescape(value)
+		}
+		endpoint.Headers = headers
+	}
+	if endpoint.DNS != nil {
+		dns := *endpoint.DNS
+		dns.QueryName = gatusUnescape(dns.QueryName)
+		endpoint.DNS = &dns
 	}
 
 	check := &gatusCheck{monitor: m}
@@ -415,14 +438,20 @@ func translateGatusEndpoint(t *foreignTranslation, index int, endpoint gatusEndp
 			return
 		}
 	}
-	if skip := check.apply(); skip != "" {
+	if skip := check.apply(endpoint.Client != nil && endpoint.Client.Insecure); skip != "" {
 		t.skip(name, scheme, skip)
 		return
 	}
 
+	// A condition dropped for a placeholder would otherwise leave the
+	// monitor enabled and weaker ([STATUS] == ${EXPECTED} accepting every
+	// status), so it disables the monitor like any other placeholder.
+	if len(check.placeholders) > 0 {
+		placeholders["conditions"] = check.placeholders
+	}
 	if len(placeholders) > 0 {
 		parts := make([]string, 0, len(placeholders))
-		for _, where := range []string{"URL", "body", "DNS query"} {
+		for _, where := range []string{"URL", "body", "DNS query", "conditions"} {
 			if names := placeholders[where]; len(names) > 0 {
 				parts = append(parts, fmt.Sprintf("%s in the %s", strings.Join(names, ", "), where))
 			}
@@ -446,7 +475,7 @@ func translateGatusEndpoint(t *foreignTranslation, index int, endpoint gatusEndp
 
 	t.add(m)
 
-	if check.domainDays > 0 {
+	if check.domainSet {
 		host := urlHostname(endpoint.URL)
 		if check.kind == gatusKindDNS {
 			host, _ = m.config["host"].(string)
@@ -602,6 +631,7 @@ func gatusGRPCConfig(m *foreignMonitor, raw string, useTLS bool) string {
 		return "the endpoint's URL names no host"
 	}
 	m.target = models.MonitorTypeGRPC
+	m.warn("imported as a grpc.health.v1 health probe; the Gatus gRPC check was mapped from its documentation only - confirm the endpoint serves the health service")
 	config := map[string]interface{}{"host": parsed.Hostname()}
 	if port, err := strconv.Atoi(parsed.Port()); err == nil && port > 0 {
 		config["port"] = port
@@ -668,11 +698,7 @@ func translateGatusExternal(t *foreignTranslation, index int, external gatusExte
 		enabled:    external.Enabled == nil || *external.Enabled,
 		interval:   gatusDefaultInterval,
 	}
-	m.setInterval(ceilSeconds(d))
-	m.config = map[string]interface{}{
-		"expected_interval_seconds": m.interval,
-		"grace_period_seconds":      0,
-	}
+	m.setPushPeriod(ceilSeconds(d), 0)
 	m.warn("Probara issues its own push token, so results must be sent to this monitor's push URL instead of Gatus's external endpoint API")
 	if len(external.Alerts) > 0 {
 		t.note(gatusAlertingNote)

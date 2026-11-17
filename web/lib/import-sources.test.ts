@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { IMPORT_SOURCES, importSourceFor } from './import-sources';
+import { IMPORT_SOURCES, derivedRows, importSourceFor, rowsToImport } from './import-sources';
 import {
+  IMPORT_ROW_DERIVED_DOMAIN_EXPIRY,
   IMPORT_SCHEMA_BETTER_STACK,
   IMPORT_SCHEMA_GATUS,
   IMPORT_SCHEMA_PORTABLE,
@@ -28,4 +29,15 @@ test('importSourceFor ignores the portable bundle and generic files', () => {
   assert.equal(importSourceFor(IMPORT_SCHEMA_PORTABLE), undefined);
   assert.equal(importSourceFor(undefined), undefined);
   assert.equal(importSourceFor(''), undefined);
+});
+
+test('added domain expiry rows can be left out of the import', () => {
+  const rows = [
+    { index: 0, fields: { name: 'site' } },
+    { index: 1, fields: { name: 'example.com domain expiry' }, derived: IMPORT_ROW_DERIVED_DOMAIN_EXPIRY },
+    { index: 2, fields: { name: 'group' } },
+  ];
+  assert.deepEqual(derivedRows(rows).map((row) => row.index), [1]);
+  assert.equal(rowsToImport(rows, true).length, 3);
+  assert.deepEqual(rowsToImport(rows, false).map((row) => row.index), [0, 2]);
 });

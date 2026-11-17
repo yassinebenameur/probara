@@ -396,7 +396,9 @@ Adding a foreign source format means one adapter returning a `parsedSource`
 (`betterstack.go`, `uptimerobot.go`, `gatus.go`) build on `foreign.go`, whose
 `finish` registry-validates every translated row (rejects become
 `SkippedRows`) and assembles names and groups; each has a fixture and golden in
-`testdata/` and a row in the detection matrix (`foreign_test.go`).
+`testdata/` and a row in the detection matrix (`foreign_test.go`). A row an
+adapter adds rather than translates (a domain monitor from a domain-expiry
+check) sets `ImportRow.Derived`, so the review step can leave it out.
 Build `ImportRow.Fields` **directly** — going through
 `flattenMap` dot-flattens the nested `config` and silently drops you onto the
 simple path. Records you refuse to translate go in `SkippedRows`, never as

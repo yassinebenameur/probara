@@ -52,7 +52,8 @@
       },
       "warnings": [
         "created from the domain expiration check of \"Marketing site\"; Probara raises a domain expiry alert inside the window while the check keeps passing, as Better Stack notifies"
-      ]
+      ],
+      "derived": "domain_expiry"
     },
     {
       "index": 2,
@@ -106,7 +107,8 @@
       },
       "warnings": [
         "the disabled SSL verification was dropped because the monitor targets a plain http:// URL",
-        "the SSL expiration alert was dropped because the monitor targets a plain http:// URL"
+        "the SSL expiration alert was dropped because the monitor targets a plain http:// URL",
+        "the keyword must match its letter case; Better Stack's case rule is not documented, so the stricter reading was kept"
       ]
     },
     {
@@ -115,6 +117,7 @@
         "config": {
           "body_assertions": [
             {
+              "case_insensitive": true,
               "op": "not_contains",
               "value": "Scheduled maintenance"
             }
@@ -130,6 +133,7 @@
         "type": "http"
       },
       "warnings": [
+        "the keyword must be absent in any letter case; Better Stack's case rule is not documented, so the stricter reading was kept",
         "its domain expiration check is covered by the \"example.com domain expiry\" domain monitor"
       ]
     },
@@ -299,7 +303,7 @@
       "fields": {
         "config": {
           "expected_interval_seconds": 86400,
-          "grace_period_seconds": 0
+          "grace_period_seconds": 518400
         },
         "enabled": true,
         "interval_seconds": 86400,
@@ -307,7 +311,7 @@
         "type": "push"
       },
       "warnings": [
-        "the check interval of 604800s is outside Probara's range and was changed to 86400s",
+        "the 604800s period is longer than Probara's 86400s maximum interval; the extra 518400s went into the grace period, so the check-in deadline is unchanged",
         "Probara issues its own push token, so this heartbeat's URL is different from the Better Stack one - repoint whatever sends the heartbeat"
       ]
     },

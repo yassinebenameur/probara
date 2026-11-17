@@ -397,7 +397,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Five source schemas are recognized and translated automatically, so the field-mapping step is already complete when preview reports them: the portable bundle (`portable_monitor_export`), an Uptime Kuma export (`uptime_kuma_export`), a Better Stack export (`better_stack_export`), an UptimeRobot export (`uptimerobot_export`), and a Gatus configuration (`gatus_config`). Everything else goes through field mapping. For the four foreign tools, preview lists every monitor that will be created with its translation notes, every record that will not be, with the reason, and the settings ignored for the whole file.",
+            "Five source schemas are recognized and translated automatically, so the field-mapping step is already complete when preview reports them: the portable bundle (`portable_monitor_export`), an Uptime Kuma export (`uptime_kuma_export`), a Better Stack export (`better_stack_export`), an UptimeRobot export (`uptimerobot_export`), and a Gatus configuration (`gatus_config`). Everything else goes through field mapping. For the four foreign tools, preview lists every monitor that will be created with its translation notes, every record that will not be, with the reason, and the settings ignored for the whole file. A domain monitor an importer adds from a source's domain-expiration check is labeled in the review table, and the review step can leave all of them out. A URL whose query carries a credential (`api_key=`, `token=`, ...) keeps it, stored as written and masked on reads, with a note naming the parameter: move it to a secret header where the endpoint allows. A monitor with no name of its own is named after its URL's host and path, never its query.",
         },
         {
           type: "list",
@@ -471,7 +471,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Better Stack has no export button, so fetch your configuration from its Uptime API with an API token and upload the JSON. A single `GET /api/v2/monitors` response imports on its own; to keep heartbeats and groups, fetch those endpoints too and combine the responses into one file. Each response is one page: fetch every page by following `pagination.next` (preview warns when a single uploaded response links to a next page).",
+            "Better Stack has no export button, so fetch your configuration from its Uptime API with an API token and upload the JSON. A single `GET /api/v2/monitors` response (or a single resource such as `GET /api/v2/monitors/{id}`) imports on its own; to keep heartbeats and groups, fetch those endpoints too and combine the responses into one file. Each response is one page: fetch every page by following `pagination.next` — preview warns about every response in the file whose next page the file does not hold.",
         },
         {
           type: "code",
@@ -485,10 +485,10 @@ export const ADMINISTRATION_PAGE: DocPage = {
           rows: [
             ["`status`", "HTTP monitor accepting any 2xx"],
             ["`expected_status_code`", "HTTP monitor with `expected_statuses`"],
-            ["`keyword`, `keyword_absence`", "HTTP monitor with a body `contains` or `not_contains` assertion"],
+            ["`keyword`, `keyword_absence`", "HTTP monitor with a body `contains` (case-sensitive) or `not_contains` (any case) assertion"],
             ["`ping`, `tcp`", "Ping and TCP monitors"],
             ["`dns`", "DNS A-record lookup of the domain in `request_body` on the server in `url`; `required_keyword` becomes an expected answer"],
-            ["Heartbeat", "Push monitor: `period` is the expected interval and `grace` the grace period, with a new push URL"],
+            ["Heartbeat", "Push monitor: `period` is the expected interval and `grace` the grace period, with a new push URL. A period over a day keeps its deadline: the interval is a day and the rest is added to the grace period"],
             ["Monitor and heartbeat groups", "Groups with their members; a paused group is created disabled"],
             ["`domain_expiration`", "One domain monitor per registrable domain (daily, down after two failing lookups, the widest warning window)"],
             ["`udp`, `smtp`, `pop`, `imap`, `playwright`", "Not imported, with the reason"],
@@ -497,14 +497,21 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "`check_frequency` becomes the interval and `request_timeout` the timeout (seconds for HTTP monitors, milliseconds for the others). The confirmation and recovery periods are time-based in Better Stack and counted in checks here: one more than the period divided by the interval, rounded up, capped at 10 — a zero confirmation period means the first failure marks the monitor down. Paused monitors are created disabled. Request headers carry over, credential-named ones into the encrypted `secret_headers`; `auth_username` and `auth_password` become basic auth. Disabled SSL verification, `follow_redirects: false`, and `ssl_expiration` (as `tls_min_days_valid`) carry over on HTTPS monitors.",
+            "`check_frequency` becomes the interval and `request_timeout` the timeout: seconds for HTTP monitors, milliseconds for the others — a non-HTTP value under 2000 could be either, so the default timeout is kept with a note. The confirmation and recovery periods are time-based in Better Stack and counted in checks here: one more than the period divided by the interval, rounded up, capped at 10 — a zero confirmation period means the first failure marks the monitor down, and an export without one keeps the default of two failing checks. Paused monitors are created disabled. Request headers carry over, credential-named ones into the encrypted `secret_headers`; `auth_username` and `auth_password` become basic auth. Disabled SSL verification, `follow_redirects: false`, and `ssl_expiration` (as `tls_min_days_valid`) carry over on HTTPS monitors.",
         },
         {
           type: "callout",
           tone: "warning",
           title: "Not migrated",
           text:
-            "Regions, notification settings (call, SMS, email, push, critical alerts), escalation policies, team wait, and maintenance windows are ignored, each with one note for the whole file — assign locations and alert channels after import. The IPv4/IPv6-only setting is dropped with a note. A monitor whose basic-auth username arrives without its password is created disabled with a note to re-enter it.",
+            "Regions, notification settings (call, SMS, email, push, critical alerts), escalation policies, team wait, and maintenance windows are ignored, each with one note for the whole file — assign locations and alert channels after import. The IPv4/IPv6-only setting is dropped with a note. A monitor whose basic-auth username arrives without its password (or with one redacted to asterisks) is created disabled with a note to re-enter it.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Verified against documentation only",
+          text:
+            "This importer was built from Better Stack's API documentation, not live exports. After importing, check: keyword monitors (the case rule is not documented, so a required keyword must match its case and a forbidden one is refused in any case); DNS monitors (imported as an A lookup of `request_body` on the server in `url`, with `required_keyword` as an expected answer); non-HTTP timeouts; confirmation periods where the export had none; and basic auth, in case the export did not carry `auth_password`.",
         },
       ],
     },
@@ -515,7 +522,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "UptimeRobot's dashboard has no full monitor export. Call API v2 `getMonitors` with a read-only API key, asking for the optional details, and upload the JSON response. A response holds at most 50 monitors: fetch further pages with `offset` and import each file (preview warns when the response's total is larger than what the file holds).",
+            "UptimeRobot's dashboard has no full monitor export. Call API v2 `getMonitors` with a read-only API key, asking for the optional details, and upload the JSON response. A response from the newer API (`{\"data\": [{\"friendlyName\": ...}]}`) is refused rather than guessed at. A response holds at most 50 monitors: fetch further pages with `offset` and import each file (preview warns when the response's total is larger than what the file holds).",
         },
         {
           type: "code",
@@ -528,10 +535,10 @@ export const ADMINISTRATION_PAGE: DocPage = {
           columns: ["UptimeRobot type", "Imported as"],
           rows: [
             ["1 (HTTP)", "HTTP monitor"],
-            ["2 (Keyword)", "HTTP monitor with a body assertion: \"alert when exists\" becomes `not_contains`, \"alert when not exists\" becomes `contains`, case-insensitive unless the monitor was case-sensitive"],
+            ["2 (Keyword)", "HTTP monitor with a body assertion: \"alert when exists\" becomes `not_contains`, \"alert when not exists\" becomes `contains`, case-insensitive unless the monitor was case-sensitive (without `keyword_case_type`, the stricter reading: a required keyword matches its case, a forbidden one any case)"],
             ["3 (Ping)", "Ping monitor"],
             ["4 (Port)", "TCP monitor on the predefined port (HTTP, HTTPS, FTP, SMTP, POP3, IMAP) or the custom one"],
-            ["5 (Heartbeat)", "Push monitor expecting a check-in every interval, with a new push URL"],
+            ["5 (Heartbeat)", "Push monitor expecting a check-in every interval, with a new push URL (an interval over a day moves its excess into the grace period, keeping the deadline)"],
             ["Any other type", "Not imported, with the reason"],
           ],
         },
@@ -545,7 +552,14 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "warning",
           title: "Not migrated",
           text:
-            "Alert contacts and maintenance windows are ignored, each with one note for the whole file. UptimeRobot exposes no failure confirmation setting, so monitors get the default of two consecutive failing checks. Domain expiry reminders are not translated: add domain monitors by hand. A monitor whose basic-auth username arrives without its password is created disabled with a note to re-enter it.",
+            "Alert contacts and maintenance windows are ignored, each with one note for the whole file. UptimeRobot exposes no failure confirmation setting, so monitors get the default of two consecutive failing checks. Domain expiry reminders are not translated: add domain monitors by hand. A monitor whose basic-auth username arrives without its password (or with one redacted to asterisks) is created disabled with a note to re-enter it.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Verified against documentation only",
+          text:
+            "This importer was built from UptimeRobot's API v2 documentation, not live exports. After importing, check keyword monitors (which `keyword_type` value means \"alert when present\", and the direction of `keyword_case_type`), that basic-auth passwords arrived in plain text rather than redacted, and the SSL settings, which come from the `ssl` object `getMonitors` returns with `ssl=1`.",
         },
       ],
     },
@@ -566,9 +580,9 @@ export const ADMINISTRATION_PAGE: DocPage = {
             ["`icmp://`", "Ping monitor"],
             ["`tcp://`, `tls://`", "TCP monitor, with a TLS handshake for `tls://`"],
             ["`ws://`, `wss://`", "WebSocket monitor sending the body as its message"],
-            ["`grpc://`, `grpcs://`", "gRPC health probe"],
+            ["`grpc://`, `grpcs://`", "gRPC health probe (`grpc.health.v1`), with a note to confirm the endpoint serves it"],
             ["Endpoint with a `dns` block", "DNS monitor querying the server in `url` (A, AAAA, CNAME, TXT, MX, NS)"],
-            ["External endpoint with `heartbeat.interval`", "Push monitor with a new push URL; without a heartbeat it is not imported"],
+            ["External endpoint with `heartbeat.interval`", "Push monitor with a new push URL (an interval over a day moves its excess into the grace period, keeping the deadline); without a heartbeat it is not imported"],
             ["`udp://`, `sctp://`, `starttls://`, `ssh://`", "Not imported, with the reason"],
           ],
         },
@@ -578,11 +592,11 @@ export const ADMINISTRATION_PAGE: DocPage = {
           rows: [
             ["`[STATUS] == 200`, `== any(200, 201)`, `== pat(2*)`, `!=`, `<`, `>=`, ...", "Expected status codes and ranges, the intersection of every status condition. An HTTP endpoint without one accepts every status, as in Gatus"],
             ["`[RESPONSE_TIME] < 300`", "`max_latency_ms` on HTTP and WebSocket, `max_rtt_ms` (average of the echoes) on ping"],
-            ["`[BODY] == value`, `pat(...)`, `any(...)`, `!=`", "A body assertion (HTTP), the expected substring of the first message (WebSocket), or an expected answer (DNS)"],
+            ["`[BODY] == value`, `pat(...)`, `any(...)`, `!=`", "A body assertion (HTTP, ignoring surrounding whitespace for a plain value), the expected substring of the first message (WebSocket), or an expected answer (DNS). `pat()` is translated with `*` wildcards only; any other pattern syntax is dropped with a note"],
             ["`[BODY].path` compared with `==`, `!=`, `<`, `<=`, `>`, `>=`", "A JSON assertion on the same path (`[0]` becomes `.0`; `true`/`false` a boolean check; `pat` and `any` a regex)"],
             ["`len([BODY].items)`, `has([BODY].id) == true`", "The array length (`items.#`) and an `exists` assertion"],
-            ["`[CERTIFICATE_EXPIRATION] > 48h`", "`tls_min_days_valid`, in days rounded up, on HTTPS and `tls://` monitors"],
-            ["`[DOMAIN_EXPIRATION] > 720h`", "A separate domain monitor for the registrable domain"],
+            ["`[CERTIFICATE_EXPIRATION] > 48h`", "`tls_min_days_valid`, in days rounded up with a note (so `> 12h` is one day; `> 0` is zero, an alert once expired), on HTTPS and `tls://` monitors"],
+            ["`[DOMAIN_EXPIRATION] > 720h`", "A separate domain monitor for the registrable domain, rounded up the same way"],
             ["`[CONNECTED] == true`, `[DNS_RCODE] == NOERROR`, gRPC `[BODY].status == SERVING`", "Already what the check requires"],
             ["`[CONNECTED] == false`, any other `[DNS_RCODE]`, status conditions no code satisfies", "The endpoint is not imported: it expects failure, and importing it would alert backwards"],
             ["Anything else (`[IP]`, `has(...) == false`, a response time on TCP, ...)", "Dropped, with a note on the monitor naming the condition"],
@@ -598,7 +612,14 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "warning",
           title: "Behavior changes and what is not migrated",
           text:
-            "Gatus fails an endpoint once a certificate or domain is inside its expiration bound; here those raise TLS-expiry and domain-expiry alerts while the check keeps passing. Environment variables (`$VAR`, `${VAR}`) are never resolved: an endpoint whose host is one is not imported, and one using them elsewhere keeps them verbatim and is created disabled with a note naming them. Alerting providers and maintenance windows are ignored with one note for the file. OAuth2, Identity-Aware Proxy, and client-certificate authentication have no equivalent, so those monitors are created disabled; a custom DNS resolver, network, and proxy are dropped with a note.",
+            "Gatus fails an endpoint once a certificate or domain is inside its expiration bound; here those raise TLS-expiry and domain-expiry alerts while the check keeps passing. With `client.insecure`, an expired certificate no longer fails the check at all — only the TLS-expiry alert reports it — and the monitor carries a warning saying so. Environment variables (`$VAR`, `${VAR}`) are never resolved: an endpoint whose host is one is not imported, and one using them elsewhere — URL, headers, body, DNS query, or a condition (which is dropped) — keeps them verbatim and is created disabled with a note naming them. `$$`, Gatus's escape for a literal `$`, becomes `$`. Alerting providers and maintenance windows are ignored with one note for the file. OAuth2, Identity-Aware Proxy, and client-certificate authentication have no equivalent, so those monitors are created disabled; a custom DNS resolver, network, and proxy are dropped with a note.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Verified against documentation only",
+          text:
+            "This importer was built from Gatus's documentation, not a running instance. After importing, check: `pat()` conditions (translated as `*` wildcards), whole-body `[BODY] ==` conditions (surrounding whitespace is ignored), `grpc://` endpoints (imported as health probes), and DNS endpoints with a `[BODY]` condition (the answer must be among the records returned).",
         },
       ],
     },

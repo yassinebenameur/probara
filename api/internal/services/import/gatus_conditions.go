@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Gatus condition translation. A Gatus endpoint passes when every condition
@@ -60,9 +61,14 @@ type gatusCheck struct {
 	bodyAssertions []map[string]interface{}
 	jsonAssertions []map[string]interface{}
 	certDays       int
+	certSet        bool
 	domainDays     int
-	dnsAnswers     []string
-	wsExpect       string
+	domainSet      bool
+	// placeholders are the environment variables of dropped conditions;
+	// they disable the monitor (translateGatusEndpoint).
+	placeholders []string
+	dnsAnswers   []string
+	wsExpect     string
 }
 
 // translate folds one condition into the check. It returns a skip reason
@@ -74,10 +80,11 @@ func (c *gatusCheck) translate(raw string) string {
 		return ""
 	}
 
-	if len(gatusPlaceholders(condition)) > 0 {
+	if names := gatusPlaceholders(condition); len(names) > 0 {
+		c.placeholders = append(c.placeholders, names...)
 		return drop("it uses an environment variable that only Gatus resolves")
 	}
-	op, left, right, ok := splitGatusCondition(condition)
+	op, left, right, ok := splitGatusCondition(gatusUnescape(condition))
 	if !ok {
 		return drop("it is not a comparison the importer can read")
 	}
@@ -101,13 +108,14 @@ func (c *gatusCheck) translate(raw string) string {
 	case upper == "[CERTIFICATE_EXPIRATION]":
 		return c.certificateCondition(op, right, drop)
 	case upper == "[DOMAIN_EXPIRATION]":
-		days, ok := gatusLowerBoundDays(op, right)
+		days, ok := c.lowerBoundDays(op, right, "domain expiration")
 		if !ok {
 			return drop("only a lower bound on the time left (> or >=) can be expressed")
 		}
-		if days > c.domainDays {
+		if !c.domainSet || days > c.domainDays {
 			c.domainDays = days
 		}
+		c.domainSet = true
 		return ""
 	case upper == "[DNS_RCODE]":
 		if c.kind != gatusKindDNS {
@@ -191,6 +199,9 @@ func (c *gatusCheck) statusCondition(op, right string, drop func(string) string)
 		if op != "==" && op != "!=" {
 			return drop("a pattern can only be compared with == or !=")
 		}
+		if !gatusPatternSupported(args[0]) {
+			return drop("only '*' wildcards in pat() are translated")
+		}
 		re := regexp.MustCompile(globToRegex(args[0]))
 		for code := 100; code <= 599; code++ {
 			matched.set(code, re.MatchString(strconv.Itoa(code)))
@@ -266,8 +277,10 @@ func (c *gatusCheck) latencyCondition(op, right string, drop func(string) string
 	return ""
 }
 
-// gatusLowerBoundDays reads "> 720h" or ">= 30d" as whole days, rounding up.
-func gatusLowerBoundDays(op, right string) (int, bool) {
+// lowerBoundDays reads "> 720h" or ">= 30d" as whole days. A bound that is
+// not a whole number of days is rounded up (so "> 12h" is one day, never
+// zero) with a note; "> 0" stays zero, meaning "not expired".
+func (c *gatusCheck) lowerBoundDays(op, right, what string) (int, bool) {
 	if op != ">" && op != ">=" {
 		return 0, false
 	}
@@ -275,26 +288,34 @@ func gatusLowerBoundDays(op, right string) (int, bool) {
 	if !ok {
 		return 0, false
 	}
-	return int(math.Ceil(d.Hours() / 24)), true
+	days := int(math.Ceil(d.Hours() / 24))
+	if d%(24*time.Hour) != 0 {
+		c.monitor.warn("the %s bound of %s was rounded up to %d day(s)", what, right, days)
+	}
+	return days, true
+}
+
+// gatusPatternSupported: pat() is mapped as '*' wildcards only; any other
+// glob syntax is not verified against Gatus, so it is not guessed.
+func gatusPatternSupported(pattern string) bool {
+	return !strings.ContainsAny(pattern, "?[]\\")
 }
 
 func (c *gatusCheck) certificateCondition(op, right string, drop func(string) string) string {
-	days, ok := gatusLowerBoundDays(op, right)
+	if c.kind != gatusKindHTTP && c.kind != gatusKindTLS {
+		return drop("Probara's " + c.kind.label() + " monitor does not check certificate expiry")
+	}
+	if c.kind == gatusKindHTTP && !isHTTPS(c.monitor.config["url"].(string)) {
+		return drop("the endpoint is a plain http:// URL")
+	}
+	days, ok := c.lowerBoundDays(op, right, "certificate expiration")
 	if !ok {
 		return drop("only a lower bound on the time left (> or >=) can be expressed")
 	}
-	switch c.kind {
-	case gatusKindHTTP:
-		if !isHTTPS(c.monitor.config["url"].(string)) {
-			return drop("the endpoint is a plain http:// URL")
-		}
-	case gatusKindTLS:
-	default:
-		return drop("Probara's " + c.kind.label() + " monitor does not check certificate expiry")
-	}
-	if days > c.certDays {
+	if !c.certSet || days > c.certDays {
 		c.certDays = days
 	}
+	c.certSet = true
 	return ""
 }
 
@@ -306,6 +327,8 @@ func (c *gatusCheck) bodyCondition(op, right string, drop func(string) string) s
 		switch {
 		case op != "==" && op != "!=":
 			return drop("the whole body can only be compared with == or !=")
+		case fn == "pat" && !gatusPatternSupported(args[0]):
+			return drop("only '*' wildcards in pat() are translated")
 		case fn == "pat":
 			if inner, ok := globSubstring(args[0]); ok {
 				assertion = map[string]interface{}{"op": "contains", "value": inner}
@@ -315,7 +338,10 @@ func (c *gatusCheck) bodyCondition(op, right string, drop func(string) string) s
 		case fn == "any":
 			assertion = map[string]interface{}{"op": "regex", "value": anyToRegex(args)}
 		default:
-			assertion = map[string]interface{}{"op": "regex", "value": "(?s)^" + regexp.QuoteMeta(args[0]) + "$"}
+			// Whether Gatus trims the body before comparing is not verified,
+			// so surrounding whitespace is tolerated and said so.
+			assertion = map[string]interface{}{"op": "regex", "value": `(?s)^\s*` + regexp.QuoteMeta(args[0]) + `\s*$`}
+			c.monitor.warn("the body must equal %q, ignoring surrounding whitespace", args[0])
 		}
 		if op == "!=" {
 			assertion["op"] = "not_" + assertion["op"].(string)
@@ -324,7 +350,7 @@ func (c *gatusCheck) bodyCondition(op, right string, drop func(string) string) s
 		return ""
 
 	case gatusKindWebSocket:
-		if op != "==" || fn == "any" {
+		if op != "==" || fn == "any" || (fn == "pat" && !gatusPatternSupported(args[0])) {
 			return drop("a WebSocket monitor can only require that the first message contains a value")
 		}
 		if fn == "pat" {
@@ -398,6 +424,8 @@ func (c *gatusCheck) jsonCondition(left, op, right string, drop func(string) str
 	fn, args := gatusValue(right)
 	assertion := map[string]interface{}{"path": path}
 	switch {
+	case fn == "pat" && !gatusPatternSupported(args[0]):
+		return drop("only '*' wildcards in pat() are translated")
 	case fn == "pat" && op == "==":
 		assertion["op"], assertion["value"] = "regex", globToRegex(args[0])
 	case fn == "any" && op == "==":
@@ -482,7 +510,8 @@ func (c *gatusCheck) hasCondition(inner, op, right string, drop func(string) str
 }
 
 // apply writes the translated conditions onto the monitor's config.
-func (c *gatusCheck) apply() string {
+// insecure is the endpoint's client.insecure.
+func (c *gatusCheck) apply(insecure bool) string {
 	config := c.monitor.config
 	switch c.kind {
 	case gatusKindHTTP:
@@ -502,7 +531,7 @@ func (c *gatusCheck) apply() string {
 		if len(c.jsonAssertions) > 0 {
 			config["json_assertions"] = c.jsonAssertions
 		}
-		if c.certDays > 0 {
+		if c.certSet {
 			config["tls_min_days_valid"] = c.certDays
 		}
 	case gatusKindPing:
@@ -517,7 +546,7 @@ func (c *gatusCheck) apply() string {
 			config["expected_substring"] = c.wsExpect
 		}
 	case gatusKindTLS:
-		if c.certDays > 0 {
+		if c.certSet {
 			config["tls_min_days_valid"] = c.certDays
 		}
 	case gatusKindDNS:
@@ -526,8 +555,13 @@ func (c *gatusCheck) apply() string {
 			c.monitor.warn("the expected DNS answer must be among the records returned; Gatus compared it with the whole answer")
 		}
 	}
-	if c.certDays > 0 {
+	if c.certSet {
 		c.monitor.warn("Gatus failed the check once the certificate had less time left than the condition allowed; Probara raises a TLS expiry alert at %d days while the check keeps passing", c.certDays)
+		if insecure {
+			// Skip-verify plus a notify-only threshold would let an expired
+			// certificate pass the check where Gatus failed it.
+			c.monitor.warn("WARNING: certificate verification is skipped (client.insecure), so an expired certificate no longer fails this check as it did in Gatus - only the TLS expiry alert reports it; remove tls_skip_verify if the certificate is publicly trusted")
+		}
 	}
 	return ""
 }

@@ -1,4 +1,6 @@
+import type { ImportRow } from './types/import';
 import {
+  IMPORT_ROW_DERIVED_DOMAIN_EXPIRY,
   IMPORT_SCHEMA_BETTER_STACK,
   IMPORT_SCHEMA_GATUS,
   IMPORT_SCHEMA_UPTIME_KUMA,
@@ -64,4 +66,14 @@ export const IMPORT_SOURCES: ImportSource[] = [
 
 export function importSourceFor(schema?: string): ImportSource | undefined {
   return schema ? IMPORT_SOURCES.find((source) => source.schema === schema) : undefined;
+}
+
+/** Rows an adapter added (domain expiry monitors), which the review step lets the operator leave out. */
+export function derivedRows(rows: ImportRow[]): ImportRow[] {
+  return rows.filter((row) => row.derived === IMPORT_ROW_DERIVED_DOMAIN_EXPIRY);
+}
+
+/** The rows to preview and import: every row, or every row but the added ones. */
+export function rowsToImport(rows: ImportRow[], includeDerived: boolean): ImportRow[] {
+  return includeDerived ? rows : rows.filter((row) => row.derived !== IMPORT_ROW_DERIVED_DOMAIN_EXPIRY);
 }

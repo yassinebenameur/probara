@@ -67,6 +67,9 @@ type foreignMonitor struct {
 	// disabledByImport marks a monitor the source had enabled but the import
 	// creates disabled (a credential or placeholder must be completed first).
 	disabledByImport bool
+	// derived names why the adapter added this monitor rather than
+	// translating a source record one to one (models.ImportRow.Derived).
+	derived string
 }
 
 func (m *foreignMonitor) warn(format string, args ...interface{}) {
@@ -93,6 +96,33 @@ func (m *foreignMonitor) setInterval(sourceSeconds int) {
 		m.warn("the check interval of %ds is outside Probara's range and was changed to %ds", sourceSeconds, clamped)
 	}
 	m.interval = clamped
+}
+
+// setPushPeriod sets a push monitor's expected check-in period and grace.
+// A push monitor is late after interval + grace (monitorstate's
+// EvidenceWindowSeconds), and the interval tops out at a day, so a longer
+// source period moves its excess into the grace period: the deadline stays
+// exactly the source's instead of expecting a weekly job every day.
+func (m *foreignMonitor) setPushPeriod(period, grace int) {
+	if grace < 0 {
+		grace = 0
+	}
+	interval := period
+	switch {
+	case period > maxImportInterval:
+		interval = maxImportInterval
+		grace += period - maxImportInterval
+		m.warn("the %ds period is longer than Probara's %ds maximum interval; the extra %ds went into the grace period, so the check-in deadline is unchanged",
+			period, maxImportInterval, period-maxImportInterval)
+	case period < minImportInterval:
+		interval = minImportInterval
+		m.warn("the %ds period is shorter than Probara's %ds minimum and was raised to it", period, minImportInterval)
+	}
+	m.interval = interval
+	m.config = map[string]interface{}{
+		"expected_interval_seconds": interval,
+		"grace_period_seconds":      grace,
+	}
 }
 
 // setFailureThreshold sets how many consecutive failures mark the monitor
@@ -212,6 +242,7 @@ func (t *foreignTranslation) addDomainExpiry(origin *foreignMonitor, host string
 		interval:         foreignDomainInterval,
 		enabled:          enabled,
 		failureThreshold: sharedmodels.DomainMinConsecutiveFailures,
+		derived:          models.ImportRowDerivedDomainExpiry,
 	}
 	monitor.warn("created from the domain expiration check of %q; %s", origin.name, semantics)
 	origin.warn("its domain expiration check became the separate %q domain monitor", monitor.name)
@@ -224,6 +255,7 @@ func (t *foreignTranslation) finish() *parsedSource {
 	valid := make([]*foreignMonitor, 0, len(t.monitors))
 	for _, m := range t.monitors {
 		t.resolveTimeout(m)
+		warnURLQueryCredentials(m)
 		if reason := foreignValidationError(m); reason != "" {
 			t.skip(m.name, m.sourceType, reason)
 			continue
@@ -425,7 +457,7 @@ func (m *foreignMonitor) row(index int) models.ImportRow {
 	if m.recoveryThreshold > 0 {
 		fields["recovery_threshold"] = m.recoveryThreshold
 	}
-	return models.ImportRow{Index: index, Fields: fields, Warnings: m.warnings}
+	return models.ImportRow{Index: index, Fields: fields, Warnings: m.warnings, Derived: m.derived}
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +551,10 @@ func setForeignBasicAuth(m *foreignMonitor, config map[string]interface{}, user,
 		return
 	}
 	config["basic_auth_username"] = user
+	// An export that redacts the password with asterisks has not carried it.
+	if strings.Trim(password, "*") == "" {
+		password = ""
+	}
 	if password != "" {
 		config["basic_auth_password"] = password
 	} else {
@@ -556,6 +592,55 @@ func parseForeignHTTPURL(raw string) (clean string, user string, password string
 		parsed.User = nil
 	}
 	return parsed.String(), user, password, ""
+}
+
+// warnURLQueryCredentials notes a URL whose query carries a credential
+// (secrets.MaskURLCredentials, the rule that masks URL fields on every
+// read), naming only the parameter. The value stays where the source put it:
+// a URL has no secret counterpart, so the operator should move it to a secret
+// header when the endpoint accepts one.
+func warnURLQueryCredentials(m *foreignMonitor) {
+	raw, ok := m.config["url"].(string)
+	if !ok {
+		return
+	}
+	if keys := urlQueryCredentialKeys(raw); len(keys) > 0 {
+		m.warn("the URL carries a credential in its query (%s), which is stored with the URL as written and masked when read - move it to a secret header if the endpoint accepts one",
+			strings.Join(keys, ", "))
+	}
+}
+
+// urlQueryCredentialKeys lists the query parameters secrets.MaskURLCredentials
+// would mask in raw, without their values.
+func urlQueryCredentialKeys(raw string) []string {
+	masked, changed := secrets.MaskURLCredentials(raw)
+	if !changed {
+		return nil
+	}
+	_, query, _ := strings.Cut(raw, "?")
+	_, maskedQuery, _ := strings.Cut(masked, "?")
+	query, _, _ = strings.Cut(query, "#")
+	maskedQuery, _, _ = strings.Cut(maskedQuery, "#")
+	before, after := strings.Split(query, "&"), strings.Split(maskedQuery, "&")
+	var keys []string
+	for i := range before {
+		if i < len(after) && before[i] != after[i] {
+			name, _, _ := strings.Cut(before[i], "=")
+			keys = append(keys, name)
+		}
+	}
+	return keys
+}
+
+// foreignURLName is a monitor name for a source record that has none: the
+// URL's host and path, never its userinfo or query, which can carry a
+// credential.
+func foreignURLName(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	return parsed.Hostname() + strings.TrimSuffix(parsed.EscapedPath(), "/")
 }
 
 // isHTTPS reports whether a (validated) URL uses https.
