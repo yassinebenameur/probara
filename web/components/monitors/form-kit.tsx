@@ -1,6 +1,6 @@
 'use client';
 
-import { Dispatch, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes, RefObject, SetStateAction, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, Dispatch, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes, RefObject, SetStateAction, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
 import Button from '@/components/ui/Button';
@@ -362,6 +362,42 @@ export function FormActionBar({
  * The closing "Labels & display" panel: tags, plus whatever display options a
  * type has (HTTP's list display values).
  */
+/**
+ * The monitor's config-as-code key. MonitorForm owns it for every type (it
+ * adds the key to whatever request a type form submits), and LabelsSection,
+ * which every type form renders, draws the field from this context.
+ */
+export interface MonitorKeyField {
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+  /** The key the monitor has now (edit), to warn that changing it matters. */
+  original?: string;
+}
+
+export const MonitorKeyContext = createContext<MonitorKeyField | null>(null);
+
+function MonitorKeyInput({ field }: { field: MonitorKeyField }) {
+  const changed = Boolean(field.original) && field.value.trim() !== field.original;
+  return (
+    <FormInput
+      label="Key"
+      value={field.value}
+      onChange={field.onChange}
+      placeholder="api-health"
+      error={field.error}
+      className="input font-mono"
+      autoComplete="off"
+      spellCheck={false}
+      hint={
+        changed
+          ? 'A monitors file names this monitor by its key: update the file too, or the next apply creates the old key again (and prune deletes this one).'
+          : 'Optional. Names this monitor in a monitors file applied with POST /monitors/apply (config as code). Lowercase letters, digits, ".", "_" or "-".'
+      }
+    />
+  );
+}
+
 export function LabelsSection({
   tags,
   onTagsChange,
@@ -373,8 +409,10 @@ export function LabelsSection({
   placeholder?: string;
   children?: ReactNode;
 }) {
+  const keyField = useContext(MonitorKeyContext);
   return (
     <FormPanel title="Labels & display">
+      {keyField && <MonitorKeyInput field={keyField} />}
       <FormField label="Tags">
         {(p) => (
           <>

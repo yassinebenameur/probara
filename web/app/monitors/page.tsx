@@ -14,6 +14,8 @@ import PageHeader from '@/components/ui/PageHeader';
 import SharedEmptyState from '@/components/ui/EmptyState';
 import TableSkeleton from '@/components/ui/TableSkeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Dialog from '@/components/ui/Dialog';
+import Radio from '@/components/ui/Radio';
 import { useToast } from '@/components/ui/ToastProvider';
 import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import { getTagColor } from '@/components/monitors/TagPill';
@@ -71,10 +73,16 @@ export default function MonitorsPage() {
     setSelectedMonitorId((current) => (current === id ? null : id));
   };
 
+  // Export asks what to export: every monitor (a copy for another
+  // workspace), or only those with a key, the file config as code applies.
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportKeyedOnly, setExportKeyedOnly] = useState(false);
+  const keyedCount = useMemo(() => monitors.filter((monitor) => monitor.key).length, [monitors]);
+
   const handleExport = async () => {
     try {
       setExporting(true);
-      const { blob, filename } = await exportMonitors();
+      const { blob, filename } = await exportMonitors({ keyed: exportKeyedOnly });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -84,6 +92,7 @@ export default function MonitorsPage() {
       link.remove();
       window.URL.revokeObjectURL(url);
       showToast('Monitor export downloaded', 'success');
+      setExportDialogOpen(false);
     } catch (err) {
       showToast(errorMessage(err, 'Failed to export monitors'), 'error');
     } finally {
@@ -184,7 +193,7 @@ export default function MonitorsPage() {
 
   const statusOf = (monitor: Monitor) => getEffectiveMonitorStatus(monitor, checkResultsMap[monitor.id] || []);
 
-  // Search covers what the row shows: name, target (URL or host) and tags.
+  // Search covers what the row shows (name, target, tags) and the config-as-code key.
   const query = searchTerm.trim().toLowerCase();
   const listFilters: MonitorListFilters = {
     query,
@@ -343,11 +352,9 @@ export default function MonitorsPage() {
               size="sm"
               className="hidden sm:inline-flex"
               icon={<Download strokeWidth={1.75} />}
-              onClick={handleExport}
-              disabled={exporting}
-              loading={exporting}
+              onClick={() => setExportDialogOpen(true)}
             >
-              {exporting ? 'Exporting…' : 'Export'}
+              Export
             </Button>
             {canWrite && (
               <Button variant="ghost" size="sm" className="hidden sm:inline-flex" icon={<Upload strokeWidth={1.75} />} asChild>
@@ -362,8 +369,8 @@ export default function MonitorsPage() {
             {/* Phones: one primary button; export and import behind ⋮. */}
             <div className="sm:hidden">
               <RowMenu label="More actions">
-                <RowMenuItem onSelect={handleExport} icon={<Download strokeWidth={1.75} />}>
-                  {exporting ? 'Exporting…' : 'Export'}
+                <RowMenuItem onSelect={() => setExportDialogOpen(true)} icon={<Download strokeWidth={1.75} />}>
+                  Export
                 </RowMenuItem>
                 {canWrite && (
                   <RowMenuItem href="/monitors/import" icon={<Upload strokeWidth={1.75} />}>Import</RowMenuItem>
@@ -571,6 +578,43 @@ export default function MonitorsPage() {
           onCancel={() => setShowBulkAlerting(false)}
         />
       )}
+
+      <Dialog
+        open={exportDialogOpen}
+        onClose={() => setExportDialogOpen(false)}
+        busy={exporting}
+        size="sm"
+        title="Export monitors"
+        description="A YAML file with secrets masked."
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setExportDialogOpen(false)} disabled={exporting}>
+              Cancel
+            </Button>
+            <Button variant="accent" size="sm" icon={<Download strokeWidth={1.75} />} onClick={() => void handleExport()} loading={exporting}>
+              {exporting ? 'Exporting…' : 'Export'}
+            </Button>
+          </>
+        }
+      >
+        <div role="radiogroup" aria-label="Monitors to export" className="space-y-3">
+          <Radio
+            name="export-scope"
+            checked={!exportKeyedOnly}
+            onChange={(checked) => checked && setExportKeyedOnly(false)}
+            label="All monitors"
+            description="To import into another workspace."
+          />
+          <Radio
+            name="export-scope"
+            checked={exportKeyedOnly}
+            onChange={(checked) => checked && setExportKeyedOnly(true)}
+            disabled={keyedCount === 0}
+            label={`Monitors with a key (${keyedCount})`}
+            description="The monitors file config as code applies (POST /monitors/apply). Give a monitor a key in its settings to manage it this way."
+          />
+        </div>
+      </Dialog>
 
       <ConfirmDialog
         open={pendingDelete !== null}

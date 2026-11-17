@@ -174,8 +174,9 @@ export async function bulkUpdateAlerting(data: {
   return apiRequest<{ updated: number }>('POST', '/v1/monitors/bulk/alerting', data);
 }
 
-export async function exportMonitors(): Promise<{ blob: Blob; filename: string }> {
-  return apiDownload('/v1/monitors/export', 'monitors-export.yaml');
+/** Portable export (version 2); `keyed` keeps only monitors with a key, the document apply manages. */
+export async function exportMonitors(options: { keyed?: boolean } = {}): Promise<{ blob: Blob; filename: string }> {
+  return apiDownload(options.keyed ? '/v1/monitors/export?keyed=true' : '/v1/monitors/export', 'monitors-export.yaml');
 }
 
 // The screenshot a synthetic browser check stored. The tenant rides in the

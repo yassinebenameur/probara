@@ -152,7 +152,7 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   capability (superadmin, tenant role admin/editor, or write-scope key).
   A small allowlist exempts compute-only POSTs (`/monitors/test`,
   `import/preview`, `dependency-suggestions`, `/mesh/probe`,
-  `/ai-settings/test`). **Add new test/preview endpoints to that list** or
+  `/ai-settings/test`, `/monitors/apply/plan`). **Add new test/preview endpoints to that list** or
   viewers will get 403s.
 - Credential-bearing reads have explicit write-capability checks:
   `/locations/{id}/deploy` and `/monitors/{id}/push/info` require a

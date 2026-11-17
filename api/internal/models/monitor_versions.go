@@ -21,8 +21,15 @@ import (
 // A top-level setting added to UpdateMonitorRequest belongs here too, plus
 // one entry in snapshotColumns (api/internal/services/monitors/
 // versions_fields.go), which reads and restores it.
+//
+// Key is the exception: it is recorded, so a key change shows in the
+// history, but never restored (loadSnapshots reads it by hand): it is the
+// monitor's identity for config-as-code, and restoring a version from before
+// a key was set would silently unmanage the monitor. Empty keys are omitted,
+// so snapshots of unmanaged monitors encode as they always did.
 type MonitorConfigSnapshot struct {
 	Name                         string                   `json:"name"`
+	Key                          string                   `json:"key,omitempty"`
 	Type                         MonitorType              `json:"type"`
 	Config                       json.RawMessage          `json:"config"`
 	IntervalSeconds              int                      `json:"interval_seconds"`
@@ -50,7 +57,7 @@ type MonitorSnapshotChannel struct {
 type MonitorVersionSummary struct {
 	Version int `json:"version"`
 	// Source is the surface the save came through: ui, api, mcp, import,
-	// discovery or restore; baseline for the configuration a monitor had
+	// discovery, restore or apply (config-as-code); baseline for the configuration a monitor had
 	// before its first recorded save; system for a change made outside a
 	// save (a deleted location, channel or member monitor).
 	Source string `json:"source"`
