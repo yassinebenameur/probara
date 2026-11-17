@@ -205,10 +205,11 @@ Checked against each project's public repository, docs and pricing pages on
 
 **Coming from Uptime Kuma?** Import its backup file directly, or pull
 monitors from a live Kuma 2.x with
-[`scripts/kuma-export`](scripts/kuma-export/README.md). Monitors that cannot
-be translated are listed, not silently dropped. You can also import JSON,
-YAML or CSV, and export everything as a portable YAML bundle (secrets are
-masked and must be re-entered).
+[`scripts/kuma-export`](scripts/kuma-export/README.md). Better Stack and
+UptimeRobot API exports and Gatus configuration files import the same way.
+Monitors that cannot be translated are listed, not silently dropped. You can
+also import JSON, YAML or CSV, and export everything as a portable YAML
+bundle (secrets are masked and must be re-entered).
 
 <details>
 <summary>Sources (checked 2026-10-21)</summary>
