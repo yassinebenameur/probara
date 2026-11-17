@@ -126,6 +126,30 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- **Deleted workspaces are refused at the shared lookup.** Workspace delete
+  is a soft delete (`tenants.deleted_at`, superadmins only,
+  `api/internal/services/tenants/workspaces.go`); the API never runs
+  `DELETE FROM tenants`. Every query that resolves a credential or tenant, or
+  iterates tenant data in a background loop, adds
+  `shared/tenancy.LiveTenantSQL` (or `DeletedTenantSQL` where an unknown ID
+  must stay distinct), filtered before any `LIMIT`; the alerter's
+  notification claim and the check-result insert (`monitorstate.insertResult`)
+  are the last gates. The fragments name `tenants.deleted_at` so the planner
+  has statistics: migration 000116 must run before the binaries serve
+  (upgrade notes in `website/lib/docs/pages/deployment.ts`). The one tolerant
+  read is the auth `identityQuery` (`to_jsonb`), because its missing-schema
+  fallback treats every admin as a superadmin; never add another. It answers
+  `404 workspace_not_found` for any workspace the caller cannot open
+  (deleted, purged, unknown, or a member's non-membership). The scheduler's
+  workspace purge (`scheduler/internal/scheduler/purger_tenants.go`, own
+  advisory lock) removes the data, blanking secret columns first
+  (`workspaceScrubPlan`): a new table holding tenant data (a `tenant_id`
+  column or a foreign key into such a table) goes into `workspacePurgePlan`
+  (before the tables it references) or `workspacePurgeExempt`, gets a row in
+  the test's `workspaceFixtureSQL`, and any secret column gets a scrub step
+  (`TestWorkspacePurgePlanCoversEveryTenantTable`,
+  `TestWorkspacePurge_RemovesEveryRowAndSparesOtherWorkspaces`,
+  `TestWorkspacePurge_ScrubsSecretsFirst`).
 - API routes are registered by the `mount*Routes` functions in
   `api/internal/api/routes_*.go`; `NewServer` (`server.go`) builds the
   services and handlers and calls them in order.
@@ -387,13 +411,20 @@ schema + warnings + skipped rows; `parse.go`), then `ExecuteImport`
 - **Raw path** (`useRawConfig`): rows carry an already-typed nested `config`
   object. Supports every registry type, resolves group members by name in a
   second pass, and validates through `validation.DefaultRegistry` before
-  create. Both recognized schemas take this path.
+  create. Every recognized schema takes this path.
 - **Simple path**: generic CSV/JSON/YAML field mapping. Only http, ping, dns,
   grpc and group; everything else is skipped.
 
 Adding a foreign source format means one adapter returning a `parsedSource`
 (see `parsePortableExport` and `parseKumaExport`), hooked into `parseJSON` or
-`parseYAML`. Build `ImportRow.Fields` **directly** — going through
+`parseYAML` before the generic wrappers. Better Stack, UptimeRobot and Gatus
+(`betterstack.go`, `uptimerobot.go`, `gatus.go`) build on `foreign.go`, whose
+`finish` registry-validates every translated row (rejects become
+`SkippedRows`) and assembles names and groups; each has a fixture and golden in
+`testdata/` and a row in the detection matrix (`foreign_test.go`). A row an
+adapter adds rather than translates (a domain monitor from a domain-expiry
+check) sets `ImportRow.Derived`, so the review step can leave it out.
+Build `ImportRow.Fields` **directly** — going through
 `flattenMap` dot-flattens the nested `config` and silently drops you onto the
 simple path. Records you refuse to translate go in `SkippedRows`, never as
 rows: `detectAndSuggestTypes` defaults unknown types to `http` and the UI
@@ -597,7 +628,7 @@ or imported groups come back empty. Any other path that creates groups through
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
   `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
-  `status_page_preview_secret`, `bootstrap_setup_code`) are the contract external secret managers
+  `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
   in the Secret. `ADMIN_COOKIE_SECURE` comes from the
@@ -697,6 +728,22 @@ or imported groups come back empty. Any other path that creates groups through
   `RawPath`, as chi routes), so new routes need no list. Never echo `Origin` in a handler. The env rides
   Compose and the chart's `trustedProxyCIDRs` + `security:` block
   (`monitoring-platform.edgeEnv`) together.
+- **Session identity**: one `admin_session_families` row per sign-in
+  (password or SSO); refresh tokens rotate inside it and the access JWT's
+  `sid` claim names it. The family's `revoked_at` is the only authority:
+  `AuthMiddleware` checks it per cookie request (`middleware/session.go`,
+  one PK lookup, no cache) and `/auth/me` too, so never add a path that
+  trusts a session JWT without it. Revocation lives in
+  `api/internal/services/adminauth/sessions.go` (`RevokeSession`,
+  `RevokeUserSessions`); a rotated refresh token reused past 60 s revokes
+  its family. Password sign-in lockout (10 failures → 15 min, on
+  `admin_users`) is `adminauth/lockout.go`: every refusal answers alike,
+  and a second sign-in factor counts through `RecordFailedAttempt`. What
+  revokes what: `docs/auth-and-rbac.md`. Long-lived responses (the alert
+  SSE stream) re-check their credential with `middleware.StillAuthorized`
+  each heartbeat and end at `CredentialExpiry`; a new stream must too. The
+  `admin_sessions_default_family` trigger (000118) is rolling-deploy
+  compatibility only: drop it in a later release's migration.
 
 ## MCP server
 
@@ -973,6 +1020,42 @@ or imported groups come back empty. Any other path that creates groups through
   literal `{{cspNonce}}`. Every inline `<script>` in `default.gohtml` needs
   `nonce="{{cspNonce}}"` (`TestCSPNonceContract`), and a 304 never carries a
   CSP.
+- **Visibility gate before everything** (`statuspage/access.go`, contract
+  `shared/pageaccess`): `authorize` runs first in `HandleStatusPage`, before
+  the method guard, every sub-route and the slug-keyed render cache; deny by
+  default, exempt only `/unlock` and a valid preview token on
+  `/preview/draft`. A new route or suffix (feeds, summaries, badges) needs a
+  row in `routeTable` (`TestRouteAccess_EveryRouteIsClassified` scans the
+  package). Private-without-credential answers via `writeNotFound`, identical
+  to a missing slug, from the same single `PageAccess` query. The API alone
+  writes visibility, password hashes and token hashes; sessions are stateless
+  HMAC cookies (`session.go`, `STATUS_PAGE_SESSION_SECRET`, path-scoped;
+  Helm derives it from a chart-managed `adminJwtSecret`). No
+  push on password/private pages; a surface that enumerates pages lists only
+  `pageaccess.Listed` ones. A route behind the gate writes through the
+  returned `accessWriter` (`gated()`; `markGatedResponse` forces no-store, no
+  ETag, no CORS, same-origin CORP) and gets `crossPageRequest` (another page
+  on the origin may not fetch or frame a gated page) for free. Wrong passwords
+  and kiosk tokens share `failureThrottle` (`unlock_throttle.go`: failures
+  only, `clientip` `BucketKey`, LRU-capped). Every SSE stream re-checks access
+  on its heartbeat. Migration 000114's down refuses while a page is not public.
+- **Page add-ons** (`feed.atom`, `summary.json`, badges; `addons.go`) are
+  sub-routes dispatched from `HandleStatusPage` (`parsePageAddon`, every
+  shape in `pageAddonRoutes`), never mux routes, so a check there covers
+  them. `summary.json` and the badges come from the page's own render
+  (`cachedPage`, keyed by slug alone, so access checks run before it) and
+  show only rendered components; hidden uptime stays `null` and uptime
+  badges 404 (`summary.go`); `/data` applies the same rule
+  (`publicPageData`). The feed is cached under `feedCacheKey` and dropped
+  with the page. A gated page's add-ons go through `gatedPageRequest` (one
+  call: private, no CORS). Affected lists use the page's display names
+  (`pagePublicNameSQL`). The summary is a versioned contract pinned by
+  `testdata/summary_v1.golden.json`: add fields, never repurpose them. Head
+  metadata and the indexing decision live in `seo.go` (`pageIndexable`:
+  only public pages are indexable, whatever `allow_search_indexing` says).
+  The gate passes its visibility on the request (`withPageVisibility`) and
+  `cachedPage` rebuilds an entry built under another one; an access change
+  invalidates the page, summary and feed together.
 
 ## Web UI conventions
 
@@ -984,7 +1067,10 @@ or imported groups come back empty. Any other path that creates groups through
   listeners — only components *outside* that subtree (Sidebar,
   `useFleetHealth`, CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
   redirect to their list page on a switch (`/users/[id]` excepted: users are
-  platform-scoped).
+  platform-scoped). A change to the workspace list (create, rename, delete,
+  or a `workspace_not_found` answer, handled in `lib/api/core.ts`) emits
+  `TENANTS_CHANGED_EVENT`, which only `TenantSwitcher` listens to: it reloads
+  the list and settles the selection again.
 - **Folded routes stay as redirects**: Mesh is a tab of Locations and
   the alert channel list is a tab of Settings (`?tab=`, via
   `components/ui/Tabs.tsx` `useUrlTab`). `/mesh` and `/alert-channels` are

@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Host-metric alerting over the generic metric store: each agent monitor's
@@ -216,6 +217,7 @@ func (a *Alerter) loadHostMetricConfigs(ctx context.Context) ([]hostMetricConfig
 		FROM monitors m
 		WHERE m.type = 'agent'
 		  AND m.enabled = TRUE AND m.deleted_at IS NULL
+		  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 		  AND m.config ? 'metric_rules'
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`)
@@ -370,6 +372,7 @@ func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid
 		JOIN monitors m ON m.id = al.monitor_id
 		WHERE al.kind = 'host_metric'
 		  AND al.status IN ('active', 'acknowledged')
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND NOT (al.monitor_id = ANY($1))
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`, pq.Array(keep))

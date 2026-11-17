@@ -434,3 +434,17 @@ in podSecurityContext.sysctls wins.
 {{- end -}}
 {{- toYaml $psc -}}
 {{- end -}}
+
+{{/*
+STATUS_PAGE_SESSION_SECRET for the chart-managed Secret: secrets.statusPageSessionSecret,
+else derived from a chart-managed adminJwtSecret (stable across renders; never
+randAlphaNum or lookup), else empty when the chart cannot derive it (the JWT
+secret comes from an existing Secret), which leaves gated pages closed.
+*/}}
+{{- define "monitoring-platform.statusPageSessionSecret" -}}
+{{- if .Values.secrets.statusPageSessionSecret -}}
+{{- .Values.secrets.statusPageSessionSecret -}}
+{{- else if and .Values.secrets.adminJwtSecret (not .Values.secrets.adminJwtSecretExistingSecret) -}}
+{{- sha256sum (printf "probara/status-page-session/v1:%s" .Values.secrets.adminJwtSecret) -}}
+{{- end -}}
+{{- end }}

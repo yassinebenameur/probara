@@ -21,7 +21,8 @@ import { useToast } from '@/components/ui/ToastProvider';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { deleteUser, getUsers } from '@/lib/api';
-import { pluralize } from '@/lib/format';
+import { formatDateTime, pluralize } from '@/lib/format';
+import { isLocked } from '@/lib/account';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import type { AdminUser } from '@/lib/types';
 import { errorMessage } from '@/lib/errors';
@@ -251,7 +252,16 @@ export default function UsersPage() {
               <tbody>
                 {visible.map((user) => (
                   <tr key={user.id}>
-                    <td className="font-medium text-white">{user.username}</td>
+                    <td className="font-medium text-white">
+                      <span className="inline-flex items-center gap-2">
+                        {user.username}
+                        {isLocked(user) && (
+                          <span title={`Password sign-in locked until ${formatDateTime(user.locked_until)}`}>
+                            <Pill tone="warning" size="xs">Locked</Pill>
+                          </span>
+                        )}
+                      </span>
+                    </td>
                     <td className="text-ui text-slate-400">{user.email || '—'}</td>
                     <td>
                       {user.platform_role === 'superadmin' ? (

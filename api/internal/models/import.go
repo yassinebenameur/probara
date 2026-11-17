@@ -10,6 +10,9 @@ const (
 
 	ImportSchemaPortableMonitorExport = "portable_monitor_export"
 	ImportSchemaUptimeKumaExport      = "uptime_kuma_export"
+	ImportSchemaBetterStackExport     = "better_stack_export"
+	ImportSchemaUptimeRobotExport     = "uptimerobot_export"
+	ImportSchemaGatusConfig           = "gatus_config"
 )
 
 // ImportRow represents a single row from the imported file.
@@ -21,7 +24,15 @@ type ImportRow struct {
 	Index    int                    `json:"index"`
 	Fields   map[string]interface{} `json:"fields"`
 	Warnings []string               `json:"warnings,omitempty"`
+	// Derived marks a row a format adapter added rather than translated one
+	// to one (ImportRowDerivedDomainExpiry), so the preview can label it and
+	// the operator can leave it out. ExecuteImport treats it like any row.
+	Derived string `json:"derived,omitempty"`
 }
+
+// ImportRowDerivedDomainExpiry marks a domain monitor built from a source
+// monitor's domain-expiration check.
+const ImportRowDerivedDomainExpiry = "domain_expiry"
 
 // ImportSkippedRow describes a source record that a format adapter refused to
 // translate. Skipped records never become ImportRows — the preview must show

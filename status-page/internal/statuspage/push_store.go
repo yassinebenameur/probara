@@ -4,9 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // pushStore is the status-page service's ONLY write path to Postgres.
@@ -107,16 +111,27 @@ func (s *pushStore) DeleteSubscription(ctx context.Context, id uuid.UUID) error 
 
 // PageIDForSlug resolves a public slug to its page id, and reports whether the
 // page has opted into browser notifications. Both come from one query so the
-// subscribe handler cannot act on a stale or half-read page.
+// subscribe handler cannot act on a stale or half-read page. Password and
+// private pages never take subscriptions: a subscription outlives the visitor
+// session that made it, so it would keep telling a signed-out or revoked
+// browser about the page.
 func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, bool, error) {
-	const query = `
-		SELECT id, COALESCE(settings->>'enable_push_notifications', 'false') = 'true'
-		FROM status_pages
-		WHERE slug = $1
+	// A deleted workspace's page is not found here, as on every other route.
+	// withoutVisibility (the retry below) replaces only pushVisiblePages, so
+	// the live-workspace condition holds on both paths.
+	query := `
+		SELECT sp.id, COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
+		       AND ` + pushVisiblePages + `
+		FROM status_pages sp
+		WHERE sp.slug = $1 AND ` + tenancy.LiveTenantSQL("sp.tenant_id") + `
 	`
 	var id uuid.UUID
 	var enabled bool
-	switch err := s.db.QueryRowContext(ctx, query, slug).Scan(&id, &enabled); {
+	err := s.db.QueryRowContext(ctx, query, slug).Scan(&id, &enabled)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		err = s.db.QueryRowContext(ctx, withoutVisibility(query), slug).Scan(&id, &enabled)
+	}
+	switch {
 	case err == sql.ErrNoRows:
 		return uuid.UUID{}, false, nil
 	case err != nil:
@@ -184,25 +199,41 @@ type pendingDelivery struct {
 // notification is the better failure than dropping every notification a
 // crashed replica held.
 func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter time.Duration) ([]pendingDelivery, error) {
-	const query = `
+	// A deleted workspace's queued pushes are never sent; they are filtered
+	// before the LIMIT so they cannot hold the head of the queue.
+	query := `
 		WITH claimed AS (
 			SELECT d.id
 			FROM status_page_push_deliveries d
-			WHERE d.status = 'pending'
-			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2))
+			JOIN status_pages csp ON csp.id = d.status_page_id
+			WHERE (d.status = 'pending'
+			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2)))
+			  AND ` + tenancy.LiveTenantSQL("csp.tenant_id") + `
 			ORDER BY d.created_at
 			LIMIT $1
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF d SKIP LOCKED
 		)
 		UPDATE status_page_push_deliveries d
-		SET status = 'sending', claimed_at = NOW()
+		-- A notification still pending when its page turned password or
+		-- private is closed unsent (sent with no recipients), never kept for
+		-- later: it would name the page and the monitor to subscribers who
+		-- may no longer see it, and arrive stale if the page reopened.
+		SET status = CASE WHEN ` + pushVisiblePages + ` THEN 'sending' ELSE 'sent' END,
+		    claimed_at = NOW(),
+		    sent_at = CASE WHEN ` + pushVisiblePages + ` THEN d.sent_at ELSE NOW() END,
+		    sent_count = CASE WHEN ` + pushVisiblePages + ` THEN d.sent_count ELSE 0 END,
+		    failed_count = CASE WHEN ` + pushVisiblePages + ` THEN d.failed_count ELSE 0 END
 		FROM claimed c
 		JOIN status_page_push_deliveries dd ON dd.id = c.id
 		JOIN status_pages sp ON sp.id = dd.status_page_id
 		WHERE d.id = c.id
-		RETURNING d.id, d.status_page_id, sp.slug, sp.title, d.monitor_id, d.monitor_name, d.kind
+		RETURNING d.id, d.status_page_id, sp.slug, sp.title, d.monitor_id, d.monitor_name, d.kind,
+		          ` + pushVisiblePages + `
 	`
 	rows, err := s.db.QueryContext(ctx, query, limit, staleAfter.Seconds())
+	if err != nil && pgerr.IsMissingSchema(err) {
+		rows, err = s.db.QueryContext(ctx, withoutVisibility(query), limit, staleAfter.Seconds())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("claim push deliveries: %w", err)
 	}
@@ -211,10 +242,13 @@ func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter t
 	var out []pendingDelivery
 	for rows.Next() {
 		var d pendingDelivery
-		if err := rows.Scan(&d.ID, &d.PageID, &d.Slug, &d.PageTitle, &d.MonitorID, &d.MonitorName, &d.Kind); err != nil {
+		var deliverable bool
+		if err := rows.Scan(&d.ID, &d.PageID, &d.Slug, &d.PageTitle, &d.MonitorID, &d.MonitorName, &d.Kind, &deliverable); err != nil {
 			return nil, fmt.Errorf("scan claimed push delivery: %w", err)
 		}
-		out = append(out, d)
+		if deliverable {
+			out = append(out, d)
+		}
 	}
 	return out, rows.Err()
 }
@@ -257,4 +291,14 @@ func (s *pushStore) CompleteDelivery(ctx context.Context, id uuid.UUID, sent, fa
 		return fmt.Errorf("complete push delivery: %w", err)
 	}
 	return nil
+}
+
+// pushVisiblePages is the SQL predicate (on status_pages sp) for pages whose
+// visitors may get push notifications: public and unlisted.
+const pushVisiblePages = "sp.visibility IN ('public', 'unlisted')"
+
+// withoutVisibility drops pushVisiblePages from a query for a database that
+// has not run migration 000114 yet, where no page can be gated.
+func withoutVisibility(query string) string {
+	return strings.ReplaceAll(query, pushVisiblePages, "TRUE")
 }

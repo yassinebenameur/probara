@@ -154,6 +154,7 @@ services:
       NATS_URL: "nats://probara-platform:${NATS_PLATFORM_PASSWORD:?NATS_PLATFORM_PASSWORD is required}@nats:4222"
       STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:?STATUS_PAGE_PREVIEW_SECRET is required}"
+      STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:?STATUS_PAGE_SESSION_SECRET is required (scripts/install.sh generates .env)}"
     ports: !override
       - "${PROBARA_STATUS_PAGE_PORT:-8082}:8082"
 

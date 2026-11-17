@@ -114,7 +114,7 @@ openssl rand -base64 32    # PROBARA_SECRETS_KEY`,
           tone: 'warning',
           title: 'Compose ships an insecure hardcoded secret',
           text:
-            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `LOCAL_AI_*`) are optional, and `LOCAL_AI_TOKEN` falls back to a public development token. Populate `.env` anyway so the platform runs on real values instead of placeholders. The [release override](#release-compose) has none of these defaults: it requires every platform credential.',
+            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `STATUS_PAGE_SESSION_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`, `PROBARA_SECRETS_KEY`, `LOCAL_AI_*`) are optional, and `LOCAL_AI_TOKEN` falls back to a public development token. Populate `.env` anyway so the platform runs on real values instead of placeholders. The [release override](#release-compose) has none of these defaults: it requires every platform credential.',
         },
       ],
     },
@@ -280,7 +280,7 @@ cd /opt/probara && docker compose ps     # .env names both Compose files`,
         {
           type: 'list',
           items: [
-            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, `BOOTSTRAP_SETUP_CODE`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). Every form Compose accepts counts as set, including `export KEY=v`, `KEY = v`, `KEY: v`, quoted values and inline comments. `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
+            'The script is idempotent and never overwrites a value already in `.env`; it generates only missing or empty secrets: `ADMIN_JWT_SECRET`, `PROBARA_SECRETS_KEY`, `POSTGRES_PASSWORD`, `NATS_PLATFORM_PASSWORD`, `LOCAL_AI_TOKEN`, `STATUS_PAGE_PREVIEW_SECRET`, `STATUS_PAGE_SESSION_SECRET`, `BOOTSTRAP_SETUP_CODE`, and the auth-callout issuer pair `NATS_LOCATION_AUTH_ISSUER_SEED` / `_PUBLIC_KEY` (made with `nk` in the pinned `natsio/nats-box` image). Every form Compose accepts counts as set, including `export KEY=v`, `KEY = v`, `KEY: v`, quoted values and inline comments. `--version` is the one value it replaces. Options: `--dir`, `--version`, `--source <checkout>` (copy the Compose files instead of downloading), `--no-start`.',
             'Back up `.env`. `PROBARA_SECRETS_KEY` decrypts every stored credential, and `POSTGRES_PASSWORD` is fixed when the database volume is first created.',
             'First administrator: the UI is published, so the first-administrator form asks for a one-time setup code (`BOOTSTRAP_SETUP_CODE`, five groups of four characters). The script generates it once, prints it with the UI address when it finishes, and keeps it in `.env`; anyone who reaches the UI without it cannot claim the install. It has no effect once the first administrator exists.',
             'Generated values are hex or base64 because Compose embeds the database and NATS passwords in connection URLs; if you write your own, keep them URL-safe and free of `$`.',
@@ -493,6 +493,16 @@ kubectl -n probara get jobs`,
               'Shared key for status page draft-preview tokens (`STATUS_PAGE_PREVIEW_SECRET`), rendered into both the API and the status service. Empty leaves preview-token enforcement off.',
             ],
             [
+              '`secrets.statusPageSessionSecret`',
+              'Empty',
+              'Signs visitor sessions on [password and private status pages](/docs/status-pages/#visibility) (`STATUS_PAGE_SESSION_SECRET`, status service only, at least 32 characters). Empty with a chart-managed `adminJwtSecret`: derived from it (a domain-separated SHA-256), stable across upgrades and GitOps renders; rotating the JWT secret rotates it and signs visitors out, and with the shipped placeholder JWT secret it is a well-known value like that secret. When `adminJwtSecret` comes from an existing Secret the chart cannot derive it: set this value or `secrets.statusPageSessionSecretExistingSecret` (key `status_page_session_secret`, which must exist), or those pages stay closed and the install notes say so. With the chart-wide `secrets.existingSecret`, add `status_page_session_secret` to that Secret (optional there).',
+            ],
+            [
+              '`statusPage.cookieSecure`',
+              'Empty (derived)',
+              'Secure attribute of the visitor session cookie (`STATUS_PAGE_COOKIE_SECURE`). Empty: on when `statusPage.baseUrl` is `https://`, else per request over HTTPS, which behind the ingress needs `trustedProxyCIDRs`. Set `"true"` behind TLS without a base URL.',
+            ],
+            [
               '`api.cookieSecure`',
               'Empty (derived)',
               'Secure attribute of the session cookies. Empty derives it: on when `api.publicBaseURL` is an `https://` origin. Set `"true"` behind TLS termination without a public base URL, or `"false"` to force it off.',
@@ -592,7 +602,7 @@ kubectl -n probara get jobs`,
             [
               '`statusPage.baseUrl`',
               'Empty',
-              'Passed as `STATUS_PAGE_BASE_URL`, which currently has no runtime use.',
+              'Passed as `STATUS_PAGE_BASE_URL`: the public origin used for status pages\' canonical links, `og:url`, feed and summary links, and push deep links. Empty omits the canonical link and `og:url` and keeps the other links root-relative.',
             ],
             [
               '`statusPage.service.*`',
@@ -995,6 +1005,13 @@ api:
         },
         {
           type: 'callout',
+          tone: 'warning',
+          title: 'Rolling back below status page visibility publishes gated pages',
+          text:
+            'A status-page image older than the release that added [page visibility](/docs/status-pages/#visibility) ignores it and serves every unlisted, password and private page publicly, even while the schema still holds the setting. Do not roll the status service back below that release while such pages exist. The schema migration (`000114`) refuses to roll back while any page is not public; to roll it back, set those pages to public first, deliberately. A refused rollback leaves the migration version marked dirty: run `migrate force 114` and retry after making the pages public.',
+        },
+        {
+          type: 'callout',
           tone: 'info',
           title: 'Upgrading to a release with the NATS websocket listener and pinned worker snippets',
           text:
@@ -1006,6 +1023,13 @@ api:
           title: 'Upgrading to recurring maintenance windows: migrate first, avoid mixed versions',
           text:
             'Maintenance coverage moves to materialized occurrences (migrations 000109 and 000110). Until they have run, new alerter, API and status-page pods fail every query that checks maintenance (alert evaluation, monitor lists, status pages); API pods of the previous release still running after they have run create windows without an occurrence, which cover nothing. Run the migrations first (the `migrate` command or Job against the database, before upgrading the chart, whose own migration Job is a post-upgrade hook), then roll every service, and keep the old and new API from serving side by side. A window created by an old API pod during the rollout can be repaired once: `INSERT INTO maintenance_window_occurrences (window_id, tenant_id, starts_at, ends_at) SELECT id, tenant_id, starts_at, ends_at FROM maintenance_windows w WHERE recurrence_weekdays IS NULL AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM maintenance_window_occurrences o WHERE o.window_id = w.id);`',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to workspace management: migrate first',
+          text:
+            'Workspace delete (migration 000116 adds `tenants.deleted_at`) is checked by API-key validation, workspace lists and every scheduler, alerter, worker and status-page loop, which read that column directly so the database can plan them well. Until the migration has run, new pods fail those queries (API keys are refused, checks stop being dispatched). Run the migrations first (the `migrate` command or Job, before upgrading the chart, whose own migration Job is a post-upgrade hook), then roll every service, as for the maintenance migrations above. Session sign-in tolerates the old schema and never grants more access because of it.',
         },
         {
           type: 'callout',

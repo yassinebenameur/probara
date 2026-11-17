@@ -39,7 +39,8 @@ func (h *Hub) Unregister(slug string, ch chan SSEEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if _, ok := h.clients[slug]; !ok {
+	// The channel may already be closed and dropped by CloseSlug.
+	if _, ok := h.clients[slug][ch]; !ok {
 		return
 	}
 	delete(h.clients[slug], ch)
@@ -47,6 +48,19 @@ func (h *Hub) Unregister(slug string, ch chan SSEEvent) {
 	if len(h.clients[slug]) == 0 {
 		delete(h.clients, slug)
 	}
+}
+
+// CloseSlug ends every stream open for a slug. Used when a page's access
+// changes: each browser reconnects through the access gate, which keeps a
+// stream opened under the old rules from outliving them.
+func (h *Hub) CloseSlug(slug string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for ch := range h.clients[slug] {
+		close(ch)
+	}
+	delete(h.clients, slug)
 }
 
 // Broadcast sends an event to clients subscribed to a specific slug.

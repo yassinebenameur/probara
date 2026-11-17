@@ -1,0 +1,204 @@
+alerting:
+  slack:
+    webhook-url: "https://hooks.slack.com/services/T000/B000/gatus-slack-webhook"
+    default-alert:
+      failure-threshold: 4
+      success-threshold: 3
+  pagerduty:
+    integration-key: "${PAGERDUTY_INTEGRATION_KEY}"
+
+maintenance:
+  start: "23:00"
+  duration: 1h
+  every: [Sunday]
+
+storage:
+  type: sqlite
+  path: /data/data.db
+
+endpoints:
+  - name: frontend
+    group: core
+    url: "https://example.org/health"
+    interval: 30s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 300"
+      - "[CERTIFICATE_EXPIRATION] > 48h"
+      - "[DOMAIN_EXPIRATION] > 720h"
+    alerts:
+      - type: slack
+
+  - name: api-status
+    group: core
+    url: "https://api.example.org/v1/status"
+    method: POST
+    body: '{"probe": true}'
+    headers:
+      Content-Type: application/json
+      Authorization: "Bearer gatus-static-token"
+    client:
+      timeout: 5s
+    conditions:
+      - "[STATUS] == any(200, 201)"
+      - "[BODY].status == UP"
+      - "[BODY].data.items[0].id > 0"
+      - "len([BODY].data.items) >= 1"
+      - "has([BODY].errors) == false"
+      - "[BODY].version == pat(2.*)"
+      - "[IP] == 203.0.113.5"
+    alerts:
+      - type: pagerduty
+        failure-threshold: 2
+        success-threshold: 1
+      - type: slack
+        enabled: false
+
+  - name: frontend
+    group: staging
+    url: "https://staging.example.org/health"
+    interval: 5m
+    conditions:
+      - "[STATUS] < 400"
+      - "[BODY] == pat(*<title>Example</title>*)"
+
+  - name: graphql
+    url: "https://graphql.example.org/graphql"
+    graphql: true
+    body: |
+      { users { id } }
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].data.users[0].id == 1"
+
+  - name: icmp-gateway
+    group: network
+    url: "icmp://192.0.2.1"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+      - "[RESPONSE_TIME] < 50"
+
+  - name: postgres-port
+    group: network
+    url: "tcp://db.example.org:5432"
+    interval: 1m
+    conditions:
+      - "[CONNECTED] == true"
+      - "[RESPONSE_TIME] < 100"
+
+  - name: smtps
+    group: network
+    url: "tls://mail.example.org:465"
+    client:
+      insecure: true
+    conditions:
+      - "[CONNECTED] == true"
+      - "[CERTIFICATE_EXPIRATION] > 168h"
+
+  - name: dns-example
+    group: network
+    url: "8.8.8.8"
+    dns:
+      query-name: "example.org"
+      query-type: "A"
+    conditions:
+      - "[BODY] == 192.0.2.80"
+      - "[DNS_RCODE] == NOERROR"
+
+  - name: websocket-echo
+    url: "wss://echo.example.org/socket"
+    body: "ping"
+    conditions:
+      - "[CONNECTED] == true"
+      - "[BODY] == pat(*pong*)"
+      - "[RESPONSE_TIME] < 1000"
+
+  - name: grpc-health
+    url: "grpcs://grpc.example.org:443"
+    conditions:
+      - "[CONNECTED] == true"
+      - "[BODY].status == SERVING"
+
+  - name: closed-telnet
+    url: "tcp://legacy.example.org:23"
+    conditions:
+      - "[CONNECTED] == false"
+
+  - name: decommissioned-host
+    url: "1.1.1.1"
+    dns:
+      query-name: "gone.example.org"
+      query-type: "A"
+    conditions:
+      - "[DNS_RCODE] == NXDOMAIN"
+
+  - name: syslog
+    url: "udp://syslog.example.org:514"
+    body: "<13>probe"
+    conditions:
+      - "[CONNECTED] == true"
+
+  - name: bastion
+    url: "ssh://bastion.example.org:22"
+    ssh:
+      username: ops
+      password: "gatus-ssh-pass"
+    conditions:
+      - "[CONNECTED] == true"
+      - "[STATUS] == 0"
+
+  - name: env-host
+    url: "https://${API_HOST}/health"
+    conditions:
+      - "[STATUS] == 200"
+
+  - name: partner-api
+    url: "https://partner.example.org/health?key=${PARTNER_KEY}"
+    headers:
+      X-Api-Key: "${PARTNER_TOKEN}"
+    conditions:
+      - "[STATUS] == 200"
+
+  - name: intranet
+    url: "https://monitor:gatus-url-pass@intranet.example.org/"
+    conditions:
+      - "[STATUS] == 200"
+
+  - name: sip-srv
+    url: "8.8.8.8"
+    dns:
+      query-name: "_sip._tcp.example.org"
+      query-type: "SRV"
+    conditions:
+      - "[DNS_RCODE] == NOERROR"
+
+  - name: old-site
+    enabled: false
+    url: "https://old.example.org"
+    conditions:
+      - "[STATUS] == 200"
+
+  - name: oauth-api
+    url: "https://secure.example.org/api"
+    client:
+      oauth2:
+        token-url: "https://auth.example.org/token"
+        client-id: probe
+        client-secret: "gatus-oauth-secret"
+        scopes: ["read"]
+    conditions:
+      - "[STATUS] == 200"
+
+external-endpoints:
+  - name: nightly-backup
+    group: jobs
+    token: "gatus-external-token"
+    heartbeat:
+      interval: 24h
+    alerts:
+      - type: slack
+
+  - name: ci-results
+    group: jobs
+    token: "gatus-ci-token"

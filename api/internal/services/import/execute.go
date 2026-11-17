@@ -13,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 )
 
 // ExecuteImport executes the import with the given rows and mapping
@@ -351,6 +352,18 @@ func (s *Service) buildMonitorRequestFromConfig(row models.ImportRow, mapping mo
 	if err := validation.DefaultRegistry.ValidateSchedule(models.MonitorType(monitorType), config, intervalSeconds, timeoutSeconds); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
+	failureThreshold := s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold)
+	// The domain type's rules outside its config (failure threshold floor,
+	// one location) hold on import as on create; imports assign no locations.
+	if models.MonitorType(monitorType) == models.MonitorTypeDomain {
+		threshold := 2 // the create default (services/monitors)
+		if failureThreshold != nil {
+			threshold = *failureThreshold
+		}
+		if err := sharedmodels.ValidateDomainMonitorRules(threshold, 0); err != nil {
+			return nil, fmt.Errorf("config validation failed: %w", err)
+		}
+	}
 
 	return &models.CreateMonitorRequest{
 		Name:                         name,
@@ -360,7 +373,7 @@ func (s *Service) buildMonitorRequestFromConfig(row models.ImportRow, mapping mo
 		TimeoutSeconds:               timeoutSeconds,
 		Enabled:                      &enabled,
 		Tags:                         tags,
-		ConsecutiveFailuresThreshold: s.extractFailureThreshold(row.Fields, mapping.ConsecutiveFailuresThreshold),
+		ConsecutiveFailuresThreshold: failureThreshold,
 		RecoveryThreshold:            s.extractRecoveryThreshold(row.Fields, mapping.RecoveryThreshold),
 	}, nil
 }

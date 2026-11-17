@@ -13,6 +13,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
@@ -90,6 +91,7 @@ func (a *Alerter) loadTLSExpiryConfigs(ctx context.Context) ([]tlsExpiryConfig, 
 		SELECT m.id, m.tenant_id, m.name, m.config
 		FROM monitors m
 		WHERE m.enabled = TRUE AND m.deleted_at IS NULL
+		  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 		  AND m.config ? 'tls_min_days_valid'
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`)
@@ -313,6 +315,7 @@ func (a *Alerter) resolveOrphanTLSExpiryAlerts(ctx context.Context, keep []uuid.
 		JOIN monitors m ON m.id = al.monitor_id
 		WHERE al.kind = 'tls_expiry'
 		  AND al.status IN ('active', 'acknowledged')
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND NOT (al.monitor_id = ANY($1))
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`, pq.Array(keep))

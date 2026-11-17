@@ -41,3 +41,44 @@ type UpdateTenantSettingsRequest struct {
 	DataRetentionDays  *int      `json:"data_retention_days,omitempty"`
 	DashboardGroupTags *[]string `json:"dashboard_group_tags,omitempty"`
 }
+
+// CreateWorkspaceRequest creates a workspace (superadmins only).
+type CreateWorkspaceRequest struct {
+	Name string `json:"name"`
+}
+
+// RenameWorkspaceRequest renames a workspace (superadmins only).
+type RenameWorkspaceRequest struct {
+	Name string `json:"name"`
+}
+
+// DeleteWorkspaceRequest confirms a workspace delete by repeating its name.
+type DeleteWorkspaceRequest struct {
+	ConfirmName string `json:"confirm_name"`
+}
+
+// DeleteWorkspaceResponse reports a deleted workspace. It is gone at once;
+// its data is purged in the background.
+type DeleteWorkspaceResponse struct {
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	DeletedAt time.Time `json:"deleted_at"`
+}
+
+// WorkspaceOverview is one live workspace on the superadmin Workspaces page.
+type WorkspaceOverview struct {
+	ID           uuid.UUID `json:"id"`
+	Name         string    `json:"name"`
+	MemberCount  int       `json:"member_count"`
+	MonitorCount int       `json:"monitor_count"`
+	// Protected workspaces (the default one, the SSO provisioning one)
+	// cannot be deleted.
+	Protected bool      `json:"protected"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// WorkspaceOverviewResponse lists the live workspaces with their counts.
+type WorkspaceOverviewResponse struct {
+	Items []WorkspaceOverview `json:"items"`
+}

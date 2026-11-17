@@ -42,6 +42,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // DB is the slice of *sql.DB / *sql.Tx / *sql.Conn the writers need.
@@ -369,10 +371,12 @@ func Retire(ctx context.Context, q DB, tenantID, windowID uuid.UUID, now time.Ti
 
 // liveRepeatingSQL selects the windows the roller extends, over alias mw.
 // The until bound is a coarse pre-filter (two days of slack for any zone);
-// Expand applies the exact one.
-const liveRepeatingSQL = `mw.recurrence_weekdays IS NOT NULL
+// Expand applies the exact one. A deleted workspace's windows are not
+// extended: the workspace purge is removing them.
+var liveRepeatingSQL = `mw.recurrence_weekdays IS NOT NULL
 		  AND mw.deleted_at IS NULL
-		  AND (mw.recurrence_until IS NULL OR mw.recurrence_until >= ($1::timestamptz - INTERVAL '2 days')::date)`
+		  AND (mw.recurrence_until IS NULL OR mw.recurrence_until >= ($1::timestamptz - INTERVAL '2 days')::date)
+		  AND ` + tenancy.LiveTenantSQL("mw.tenant_id")
 
 // RollForward extends every live repeating window's occurrences to now +
 // Horizon and returns how many it added. The scheduler runs it under a

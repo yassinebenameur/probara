@@ -499,7 +499,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`MONITOR_PURGE_ENABLED`',
               '`true`; boolean',
-              'Not exposed by Compose or Helm.',
+              'Not exposed by Compose or Helm. Also governs the purge of deleted workspaces: with it off, their data stays in the database (they remain refused everywhere).',
             ],
             [
               '`MONITOR_PURGE_INTERVAL_SECONDS`',
@@ -792,7 +792,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_BASE_URL`',
               'Empty',
-              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications); when empty, the notification opens the page via the service worker scope rather than a guessed host.',
+              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications) and each page\'s canonical link, `og:url` and absolute [feed and summary links](/docs/status-pages/#feed-summary-badges); when empty, the notification opens the page via the service worker scope, the head carries no canonical link or `og:url`, and the feed links by path, rather than a guessed host.',
             ],
             [
               '`STATUS_PAGE_API_BASE_URL`',
@@ -818,6 +818,16 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`STATUS_PAGE_PREVIEW_SECRET`',
               'Empty',
               'HMAC secret shared with API for one-hour [preview tokens](/docs/status-pages/#preview-security). With no secret, preview verification is not enforced. Helm: `secrets.statusPagePreviewSecret` (or its `ExistingSecret` reference, canonical key `status_page_preview_secret`) renders it into both the API and the status service.',
+            ],
+            [
+              '`STATUS_PAGE_SESSION_SECRET`',
+              'Empty; at least 32 characters when set, or the service refuses to start',
+              'Status service only. Signs visitor sessions on [password and private pages](/docs/status-pages/#visibility). Unset: those pages cannot be opened (password pages answer `503`, private pages `404`) and a warning is logged, while public and unlisted pages serve as usual. Changing it signs every visitor out. Generate with `openssl rand -hex 32`; the release installer and `scripts/start-local-services.sh` generate one. Helm derives one from a chart-managed `adminJwtSecret` unless `secrets.statusPageSessionSecret` (or `statusPageSessionSecretExistingSecret`, canonical key `status_page_session_secret`) is set; see [Helm values](/docs/deployment/).',
+            ],
+            [
+              '`STATUS_PAGE_COOKIE_SECURE`',
+              'Empty (derived); `true`/`false`, anything else refuses to start',
+              'Secure attribute of the visitor session cookie. Empty: on when `STATUS_PAGE_BASE_URL` is `https://`, else set per request when it arrived over HTTPS (TLS terminated here, or `X-Forwarded-Proto: https` from a `TRUSTED_PROXY_CIDRS` peer). Set `true` behind a TLS-terminating proxy when the base URL is unset; `false` forces it off. Helm: `statusPage.cookieSecure`.',
             ],
             [
               '`STATUSPAGE_UPDATES_SUBJECT`',

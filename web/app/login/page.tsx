@@ -143,7 +143,9 @@ function LoginPageInner() {
       });
 
       if (response.status === 401) {
-        return "Invalid username or password";
+        // The API answers every refusal alike (unknown user, wrong password,
+        // locked account), so the lockout rule is stated for all of them.
+        return "Invalid username or password. Ten failed attempts in a row lock the account for 15 minutes; an administrator can unlock it sooner.";
       }
 
       if (!response.ok) {
