@@ -252,7 +252,7 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 		t.Fatalf("failed to unmarshal bundle: %v", err)
 	}
 
-	if bundle.Kind != "monitor_export" || bundle.Version != 2 {
+	if bundle.Kind != "monitor_export" || bundle.Version != 1 {
 		t.Fatalf("unexpected bundle header: %+v", bundle)
 	}
 	if len(bundle.Monitors) != 3 {

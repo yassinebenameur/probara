@@ -296,6 +296,9 @@ func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
+	// URL credentials an export masked are left out, as masked secret
+	// fields are (the preview warns about them).
+	req.Config = stripMaskedURLCredentials(monitorType, req.Config)
 	return s.monitorService.CreateMonitor(ctx, tenantID, req)
 }
 

@@ -119,6 +119,11 @@ func (s *Service) storedConfigs(ctx context.Context, tenantID uuid.UUID, writes 
 }
 
 func (s *Service) planConfigWrite(monitorType models.MonitorType, incoming, existing json.RawMessage, compareSecrets bool) (ConfigWritePlan, error) {
+	typ := string(monitorType)
+	reenter := map[string]struct{}{}
+	if resolved, err := resolveDocumentConfig(typ, incoming, existing, reenter); err == nil {
+		incoming = resolved
+	}
 	plan := ConfigWritePlan{Config: incoming, SecretChanges: []string{}, UnverifiedSecrets: []string{}, MissingSecrets: []string{}}
 	merged, err := mergeConfigForWrite(monitorType, incoming, existing)
 	if err != nil {
@@ -135,11 +140,14 @@ func (s *Service) planConfigWrite(monitorType models.MonitorType, incoming, exis
 		return plan, fmt.Errorf("canonicalize planned config: %w", err)
 	}
 
-	typ := string(monitorType)
 	in := decodeConfigMap(incoming)
 	next := decodeConfigMap(merged)
 	prev := decodeConfigMap(existing)
 	plan.MissingSecrets = missingSecrets(typ, in, next)
+	for where := range reenter {
+		plan.MissingSecrets = append(plan.MissingSecrets, where)
+	}
+	sort.Strings(plan.MissingSecrets)
 
 	// Secrets field by field: a value carried over from the stored config is
 	// byte-identical to it (the merge keeps the stored envelope), anything
@@ -175,11 +183,11 @@ func (s *Service) planConfigWrite(monitorType models.MonitorType, incoming, exis
 		// The save gets the document's config with every secret value equal
 		// to the stored one sent as "***", so the merge keeps the stored
 		// envelope instead of encrypting the same value again as a change.
-		// (A credential the document writes in a plain header is moved by
-		// the save and re-encrypted; it only shows as a changed secret on a
-		// version some other change records.)
+		// A credential the document writes in a plain header, metadata key or
+		// variable, which the save would move, is sent masked in its secret
+		// map instead.
 		for path := range keep {
-			maskSecretEntry(typ, in, path)
+			maskSecretEntry(typ, in, prev, path)
 		}
 		if plan.Config, err = json.Marshal(in); err != nil {
 			return plan, err
@@ -209,8 +217,11 @@ func secretEntries(monitorType string, cfg map[string]any) map[string]string {
 }
 
 // maskSecretEntry replaces a secret value the document spells out with the
-// mask, when the document has it at that path.
-func maskSecretEntry(monitorType string, cfg map[string]any, path string) {
+// mask: at its path, or, for a credential written in the plain twin of a
+// secret map (headers, metadata, variables) that the save would move there,
+// by moving it into the secret map masked. A secret map the document left
+// out is written with every stored key masked, so nothing stored is dropped.
+func maskSecretEntry(monitorType string, cfg, stored map[string]any, path string) {
 	for _, field := range secrets.MonitorSecretFields[monitorType] {
 		if path == field {
 			if _, ok := cfg[field].(string); ok {
@@ -227,9 +238,179 @@ func maskSecretEntry(monitorType string, cfg map[string]any, path string) {
 		if values, ok := cfg[field].(map[string]any); ok {
 			if _, present := values[key].(string); present {
 				values[key] = secrets.MaskedSecret
+				return
 			}
 		}
+		for plainField, secretField := range plainSecretTwin {
+			if secretField != field {
+				continue
+			}
+			plain, _ := cfg[plainField].(map[string]any)
+			name, found := "", false
+			for candidate := range plain {
+				if strings.EqualFold(candidate, key) {
+					name, found = candidate, true
+				}
+			}
+			if !found {
+				return
+			}
+			delete(plain, name)
+			if len(plain) == 0 {
+				delete(cfg, plainField)
+			}
+			values, ok := cfg[field].(map[string]any)
+			if !ok {
+				values = map[string]any{}
+				storedValues, _ := stored[field].(map[string]any)
+				for storedKey := range storedValues {
+					values[storedKey] = secrets.MaskedSecret
+				}
+				cfg[field] = values
+			}
+			values[key] = secrets.MaskedSecret
+		}
 		return
+	}
+}
+
+// resolveDocumentConfig prepares a config-as-code document's config against
+// the stored one, so the same document always plans and saves the same way:
+//
+//   - a URL whose credentials the document masks (an export masks them as a
+//     version snapshot does) takes the stored URL when that masks to the same
+//     value, and otherwise loses the masked parts, listed in reenter;
+//   - a synthetic API step header written as a literal credential, which a
+//     save moves into a generated secret variable, reuses the variable the
+//     stored step's header already references (its value is then compared
+//     like any secret), instead of a new "_2", "_3" name on every apply; and
+//     generated variables no step references any more are dropped.
+func resolveDocumentConfig(monitorType string, incoming, existing json.RawMessage, reenter map[string]struct{}) (json.RawMessage, error) {
+	if len(incoming) == 0 {
+		return incoming, nil
+	}
+	value, err := decodeJSONValue(incoming)
+	if err != nil {
+		return nil, err
+	}
+	cfg, ok := value.(map[string]any)
+	if !ok {
+		return incoming, nil
+	}
+	stored := decodeConfigMap(existing)
+	restoreURLs(monitorType, cfg, stored, reenter)
+	if monitorType == "synthetic_api" {
+		reuseStepSecretVariables(cfg, stored)
+	}
+	return json.Marshal(cfg)
+}
+
+func reuseStepSecretVariables(cfg, stored map[string]any) {
+	storedSecrets, _ := stored["secret_variables"].(map[string]any)
+	if len(storedSecrets) == 0 {
+		return
+	}
+	// The document's secret variables, made explicit from the stored keys
+	// (masked: kept) once it needs editing.
+	explicit := func() map[string]any {
+		values, ok := cfg["secret_variables"].(map[string]any)
+		if !ok {
+			values = map[string]any{}
+			for name := range storedSecrets {
+				values[name] = secrets.MaskedSecret
+			}
+			cfg["secret_variables"] = values
+		}
+		return values
+	}
+	stepHeaders := func(step any) map[string]any {
+		m, _ := step.(map[string]any)
+		request, _ := m["request"].(map[string]any)
+		headers, _ := request["headers"].(map[string]any)
+		return headers
+	}
+	storedSteps, _ := stored["steps"].([]any)
+	storedByID := map[string]any{}
+	for _, step := range storedSteps {
+		if m, ok := step.(map[string]any); ok {
+			if id, _ := m["id"].(string); id != "" {
+				storedByID[id] = step
+			}
+		}
+	}
+	steps, _ := cfg["steps"].([]any)
+	generated := map[string]bool{}
+	note := func(stepID string, idx int, header string) {
+		generated[secrets.SyntheticStepSecretVariable(stepID, idx, header)] = true
+	}
+	for idx, step := range storedSteps {
+		m, _ := step.(map[string]any)
+		id, _ := m["id"].(string)
+		for name := range stepHeaders(step) {
+			if secrets.IsSensitiveHeaderName(name) {
+				note(id, idx, name)
+			}
+		}
+	}
+	for idx, step := range steps {
+		m, _ := step.(map[string]any)
+		id, _ := m["id"].(string)
+		var old any
+		if id != "" {
+			old = storedByID[id]
+		} else if idx < len(storedSteps) {
+			old = storedSteps[idx]
+		}
+		oldHeaders := stepHeaders(old)
+		for name, value := range stepHeaders(step) {
+			text, _ := value.(string)
+			if !secrets.IsSensitiveHeaderName(name) {
+				continue
+			}
+			note(id, idx, name)
+			if text == "" || text == secrets.MaskedSecret || len(secrets.TemplateReferences(text)) > 0 {
+				continue
+			}
+			oldValue, _ := lookupKeyFold(oldHeaders, name)
+			oldText, _ := oldValue.(string)
+			variable, ok := secrets.TemplateReferenceName(oldText)
+			if !ok {
+				continue
+			}
+			if _, held := storedSecrets[variable]; !held {
+				continue
+			}
+			stepHeaders(step)[name] = "{{" + variable + "}}"
+			explicit()[variable] = text
+		}
+	}
+
+	// Drop generated variables nothing references any more.
+	referenced := map[string]bool{}
+	for key, value := range cfg {
+		if key == "secret_variables" {
+			continue
+		}
+		encoded, _ := json.Marshal(value)
+		for _, name := range secrets.TemplateReferences(string(encoded)) {
+			referenced[name] = true
+		}
+	}
+	isGenerated := func(name string) bool {
+		for base := range generated {
+			if name == base {
+				return true
+			}
+			if suffix, ok := strings.CutPrefix(name, base+"_"); ok && suffix != "" && strings.Trim(suffix, "0123456789") == "" {
+				return true
+			}
+		}
+		return false
+	}
+	for name := range storedSecrets {
+		if !referenced[name] && isGenerated(name) {
+			delete(explicit(), name)
+		}
 	}
 }
 

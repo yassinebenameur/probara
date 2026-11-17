@@ -356,8 +356,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   before its first write, ascending id, one pass (`LockMonitorsTx`: FOR
   UPDATE for monitors changed or versioned, edge sources included; FOR KEY
   SHARE for edge targets); deletes lock the monitors they rewrite the same
-  way. The FOR UPDATE row lock also serializes version numbering; the only
-  advisory lock is apply's per-workspace one, taken first (below). Snapshots are
+  way. The FOR UPDATE row lock also serializes version numbering, with no
+  advisory lock; apply's per-workspace advisory lock is taken before any row
+  lock (below). Snapshots are
   masked with `secrets.MaskStoredMonitorConfig`; restore never writes a
   secret from a version (`restoreConfig`) and refuses another type. A new
   top-level setting accepted by `UpdateMonitorRequest` is one
@@ -405,12 +406,15 @@ row builders (`portableRow`, `build*RequestFromConfig`) and the monitors,
 groups and dependencies services (versions source `apply`). One request is
 one `InTx` transaction that first takes `pg_advisory_xact_lock` per
 workspace on that transaction (released by commit or rollback; never a
-session lock on a pooled connection), re-plans, then locks rows in lock
-order before the first write. Prune deletes keyed monitors (`monitors.key`)
-only. Secrets are compared only inside the monitors service
-(`PlanConfigWrites`), and a plan compares a literal with the stored value
-only for callers with write access. A field added to the portable export is
-applied only once the plan's `diff` handles it.
+session lock on a pooled connection), re-plans, locks rows in lock order
+before the first write, and re-checks the locked monitors against the plan
+(`checkLockedUnchanged`). Prune deletes keyed monitors (`monitors.key`)
+only, within `prune_scope` when given. Secrets are compared only inside the
+monitors service (`PlanConfigWrites`, which also resolves a document's
+masked URL credentials and synthetic step credentials against the stored
+config so the same file converges), and a plan compares a literal with the
+stored value only for callers with write access. A field added to the
+portable export is applied only once the plan's `diff` handles it.
 
 **Group membership is the junction table**, not `config.monitor_ids`.
 `Monitor.MemberIDs`, group alert roll-up, and the dashboards all read

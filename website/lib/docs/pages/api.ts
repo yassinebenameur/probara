@@ -394,15 +394,15 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/monitors/export`",
-              "Export a versioned YAML configuration bundle (version 2, with each monitor's key); `keyed=true` exports only the monitors with a key, the file [config as code](/docs/monitors/#config-as-code) applies",
+              "Export a versioned YAML configuration bundle, secrets and URL credentials masked: version 2 with each monitor's key when any has one, else version 1; `keyed=true` exports only the monitors with a key, the file [config as code](/docs/monitors/#config-as-code) applies",
             ],
             [
               "`POST /api/v1/monitors/apply/plan`",
-              "Read; what applying a monitors file (`{document, prune, force, fingerprint}`) would create, update, leave unchanged or delete, with validation errors and a fingerprint; writes nothing",
+              "Read; what applying a monitors file (`{document, prune, prune_scope, force, fingerprint}`) would create, update, leave unchanged or delete, with validation errors, probable key renames, the monitors a prune would change, and a fingerprint; writes nothing",
             ],
             [
               "`POST /api/v1/monitors/apply`",
-              "Write; apply a monitors file to the workspace's keyed monitors, all or nothing: 422 `invalid_document`, 409 `plan_changed` or `prune_refused`, each with the plan and nothing written",
+              "Write; apply a monitors file to the workspace's keyed monitors, all or nothing: 422 `invalid_document`, 409 `plan_changed`, `prune_refused`, `probable_rename` or `apply_conflict` (saved meanwhile; retry), each with the plan and nothing written",
             ],
             [
               "`POST /api/v1/monitors/import/preview`",

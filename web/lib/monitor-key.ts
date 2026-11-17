@@ -24,3 +24,6 @@ export function monitorKeyPatch(original: string | undefined, value: string, isE
   if (!isEdit) return key ? { key } : {};
   return key === (original ?? '') ? {} : { key };
 }
+
+/** The API's answer for a key another monitor of the workspace already has. */
+export const MONITOR_KEY_TAKEN = 'key_taken';

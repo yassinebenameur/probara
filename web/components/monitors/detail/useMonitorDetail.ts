@@ -9,7 +9,8 @@ import useDocumentTitle from '@/lib/useDocumentTitle';
 import { shortFailureReason } from '@/lib/monitor-utils';
 import { checkResultLabel } from '@/lib/status-tones';
 import { strictestTarget, type Sla } from '@/lib/sla';
-import { errorMessage } from '@/lib/errors';
+import { errorCode, errorMessage } from '@/lib/errors';
+import { MONITOR_KEY_TAKEN } from '@/lib/monitor-key';
 
 export const MONITOR_DETAIL_TABS = ['overview', 'history', 'settings', 'changes', 'json'] as const;
 export type MonitorDetailTab = (typeof MONITOR_DETAIL_TABS)[number];
@@ -338,6 +339,8 @@ export function useMonitorDetail(id: string, activeTab: MonitorDetailTab, overvi
       showToast('Monitor updated successfully', 'success');
       loadResults();
     } catch (err) {
+      // A taken key is shown next to the key field (MonitorForm).
+      if (errorCode(err) === MONITOR_KEY_TAKEN) throw err;
       showToast(errorMessage(err, 'Failed to update monitor'), 'error');
     } finally {
       setSaving(false);

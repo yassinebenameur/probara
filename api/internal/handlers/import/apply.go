@@ -60,8 +60,9 @@ func (h *Handlers) PlanApply(w http.ResponseWriter, r *http.Request) {
 
 // Apply handles POST /api/v1/monitors/apply. All or nothing: on 200 every
 // change of the plan it returns was made; any refusal writes nothing and
-// answers with the plan and the reason (422 invalid document, 409 changed
-// since the fingerprinted plan or prune refused without force).
+// answers with the plan and the reason (422 invalid document; 409 changed
+// since the fingerprinted plan, prune or a probable key rename refused
+// without force, or a monitor saved meanwhile, which a retry resolves).
 func (h *Handlers) Apply(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := httpx.TenantID(w, r)
 	if !ok {
@@ -106,6 +107,10 @@ func (h *Handlers) writeApplyError(w http.ResponseWriter, r *http.Request, err e
 		refusal(http.StatusConflict, "plan_changed")
 	case errors.Is(err, importservice.ErrApplyPruneRefused):
 		refusal(http.StatusConflict, "prune_refused")
+	case errors.Is(err, importservice.ErrApplyRenameRefused):
+		refusal(http.StatusConflict, "probable_rename")
+	case errors.Is(err, importservice.ErrApplyStateChanged):
+		refusal(http.StatusConflict, "apply_conflict")
 	case errors.Is(err, monitorservice.ErrCallMonitorForbidden):
 		apierrors.WriteForbiddenError(w, err.Error())
 	case errors.Is(err, monitorservice.ErrMonitorKeyTaken):
@@ -145,6 +150,13 @@ func (h *Handlers) auditApply(r *http.Request, action string, plan *models.Monit
 			}
 		}
 		details["pruned"] = result.Pruned
+		if result.Pruned && len(plan.Prune.Affected) > 0 {
+			affected := make([]string, 0, len(plan.Prune.Affected))
+			for _, m := range plan.Prune.Affected {
+				affected = append(affected, m.MonitorID.String())
+			}
+			details["prune_affected_ids"] = affected
+		}
 		details["created_keys"] = keys[models.ApplyActionCreate]
 		details["updated_keys"] = keys[models.ApplyActionUpdate]
 		details["deleted_keys"] = keys[models.ApplyActionDelete]

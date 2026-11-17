@@ -13,6 +13,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // ExportOptions narrows an export.
@@ -32,9 +33,13 @@ var serverOwnedConfigFields = map[models.MonitorType][]string{
 	models.MonitorTypeAgent: {"agent_id"},
 }
 
-// ExportMonitors exports the tenant's monitors as a portable YAML document,
-// version 2: each monitor's key, and its keyed group members and
-// dependencies by key, beside what version 1 carried. Secrets are masked.
+// ExportMonitors exports the tenant's monitors as a portable YAML document.
+// Version 2 adds each monitor's key, and its keyed group members and
+// dependencies by key, to what version 1 carried; an export of all monitors
+// in which none has a key is version 1. A keyed export (the file apply
+// reads) names group members by key only: apply refuses a group_members
+// list that disagrees with member_keys, and the importer resolves
+// member_keys itself. Secrets are masked.
 func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID, opts ExportOptions) ([]byte, error) {
 	monitors, err := s.loadAllMonitors(ctx, tenantID)
 	if err != nil {
@@ -67,7 +72,15 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID, opts E
 		if !included(&monitor) {
 			continue
 		}
-		configValue, err := decodeRawJSON(monitor.Config)
+		// Masked as a version snapshot is (secrets.MaskStoredMonitorConfig):
+		// registry secrets, credentials in plain headers or variables, and
+		// the credentials of URLs (a user:password@ part, a credential-named
+		// query parameter), since the file is meant to be committed.
+		config := monitor.Config
+		if masked, err := secrets.MaskStoredMonitorConfig(string(monitor.Type), config); err == nil {
+			config = masked
+		}
+		configValue, err := decodeRawJSON(config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode config for monitor %s: %w", monitor.ID, err)
 		}
@@ -86,7 +99,9 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID, opts E
 			if !ok || !included(member) {
 				continue
 			}
-			groupMembers = append(groupMembers, member.Name)
+			if !opts.KeyedOnly {
+				groupMembers = append(groupMembers, member.Name)
+			}
 			if member.Key != nil {
 				memberKeys = append(memberKeys, *member.Key)
 			}
@@ -120,9 +135,20 @@ func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID, opts E
 		exported = append(exported, entry)
 	}
 
+	// A plain copy with no key in it stays version 1, which older releases
+	// import; version 2 only when it carries keys (or was asked for them).
+	version := models.PortableExportVersion1
+	for _, entry := range exported {
+		if entry.Key != "" {
+			version = models.PortableExportVersion2
+		}
+	}
+	if opts.KeyedOnly {
+		version = models.PortableExportVersion2
+	}
 	return yaml.Marshal(models.PortableMonitorExport{
 		Kind:     models.PortableMonitorExportKind,
-		Version:  models.PortableExportVersion2,
+		Version:  version,
 		Monitors: exported,
 	})
 }

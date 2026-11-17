@@ -47,7 +47,8 @@ import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
 import { FormInput, FormPanel, LabelsSection, MonitorKeyContext, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar, WIDE_STACK_OFFSET, useWideForm } from './form-kit';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
-import { monitorKeyError, monitorKeyPatch } from '@/lib/monitor-key';
+import { MONITOR_KEY_TAKEN, monitorKeyError, monitorKeyPatch } from '@/lib/monitor-key';
+import { errorCode, errorMessage } from '@/lib/errors';
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -192,7 +193,15 @@ export default function MonitorForm({
       revealFirstError(shellRef.current);
       return;
     }
-    await onSubmit({ ...data, ...monitorKeyPatch(monitor?.key, keyValue, isEditMode) });
+    try {
+      await onSubmit({ ...data, ...monitorKeyPatch(monitor?.key, keyValue, isEditMode) });
+    } catch (err) {
+      // The pages report every other failure themselves and pass a taken
+      // key on, so it shows next to the field.
+      if (errorCode(err) !== MONITOR_KEY_TAKEN) throw err;
+      setKeyError(errorMessage(err, 'Another monitor already has this key.'));
+      revealFirstError(shellRef.current);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

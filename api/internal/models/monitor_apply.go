@@ -27,8 +27,14 @@ type MonitorApplyRequest struct {
 	// Prune deletes the keyed monitors the document does not list. Apply
 	// only; never touches a monitor without a key.
 	Prune bool `json:"prune,omitempty"`
+	// PruneScope limits prune to the keyed monitors whose key starts with
+	// it (a team's prefix, "payments."): only they can be deleted, the guard
+	// counts only them, and every key of the document must start with it.
+	// Empty: prune covers every keyed monitor of the workspace.
+	PruneScope string `json:"prune_scope,omitempty"`
 	// Force lets a prune through the guard (an empty document, or more than
-	// half of the workspace's keyed monitors deleted).
+	// half of the keyed monitors in scope deleted) and lets a probable key
+	// rename (a create and a delete with the same name and type) proceed.
 	Force bool `json:"force,omitempty"`
 	// Fingerprint is a plan's fingerprint: apply refuses (409) when the
 	// document or the workspace's keyed monitors changed since that plan.
@@ -48,6 +54,20 @@ type MonitorApplyPlan struct {
 	Monitors []MonitorApplyItem    `json:"monitors"`
 	Errors   []MonitorApplyError   `json:"errors"`
 	Prune    MonitorApplyPruneInfo `json:"prune"`
+	// ProbableRenames pairs a create and a delete with the same name and
+	// type: most likely a changed key, which replaces the monitor (its
+	// history, SLA intervals and links do not follow). Apply needs force to
+	// go ahead while any is listed.
+	ProbableRenames []MonitorApplyRename `json:"probable_renames"`
+}
+
+// MonitorApplyRename is a create and a delete that look like one monitor
+// whose key changed.
+type MonitorApplyRename struct {
+	FromKey string      `json:"from_key"`
+	ToKey   string      `json:"to_key"`
+	Name    string      `json:"name"`
+	Type    MonitorType `json:"type"`
 }
 
 // MonitorApplySummary counts the monitors per action. Delete counts the
@@ -72,6 +92,9 @@ type MonitorApplyItem struct {
 	// depends_on, by key.
 	Changes []MonitorVersionChange `json:"changes,omitempty"`
 	Notes   []string               `json:"notes,omitempty"`
+	// ProbableRename is the other key of a probable rename pair (see
+	// MonitorApplyPlan.ProbableRenames).
+	ProbableRename string `json:"probable_rename,omitempty"`
 }
 
 // MonitorApplyError is a reason the document cannot be applied. Index is
@@ -86,11 +109,30 @@ type MonitorApplyError struct {
 // MonitorApplyPruneInfo describes the deletions a prune would make and
 // whether its guard lets them through without force.
 type MonitorApplyPruneInfo struct {
-	Deletes       int  `json:"deletes"`
+	// Scope is the request's prune_scope; empty means the whole workspace.
+	Scope   string `json:"scope,omitempty"`
+	Deletes int    `json:"deletes"`
+	// KeyedMonitors counts the keyed monitors in scope: the guard's base.
 	KeyedMonitors int  `json:"keyed_monitors"`
 	NeedsForce    bool `json:"needs_force"`
 	// Reason says why force is needed.
 	Reason string `json:"reason,omitempty"`
+	// Affected are the monitors the document does not manage whose settings
+	// a prune changes: a group losing a deleted member, a monitor losing a
+	// deleted upstream. Each gets a system version when the prune runs.
+	Affected []MonitorApplyAffected `json:"affected"`
+}
+
+// MonitorApplyAffected is a monitor outside the document that a prune
+// changes, and why.
+type MonitorApplyAffected struct {
+	MonitorID uuid.UUID   `json:"monitor_id"`
+	Key       string      `json:"key,omitempty"`
+	Name      string      `json:"name"`
+	Type      MonitorType `json:"type"`
+	// Loses names the deleted monitors it loses, as "member:<key>" or
+	// "dependency:<key>".
+	Loses []string `json:"loses"`
 }
 
 // MonitorApplyResult is POST /monitors/apply's answer: the plan it carried

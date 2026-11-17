@@ -431,6 +431,7 @@ monitors:
 
 	// Masked but not held: created disabled, never enabled by a re-apply.
 	masked := strings.Replace(doc(`, basic_auth_password: "***"`), "key: api", "key: api-copy", 1)
+	masked = strings.Replace(masked, "name: API", "name: API copy", 1)
 	result := h.apply(applyRequest(masked))
 	if len(result.Monitors) == 0 || result.Monitors[0].Action != "create" || h.monitorByKey("api-copy").Enabled {
 		t.Fatalf("masked create = %+v", result)

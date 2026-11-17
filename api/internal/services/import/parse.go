@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // ParseFile auto-detects the file format and parses its contents
@@ -226,12 +227,71 @@ func (s *Service) parsePortableExport(data []byte) ([]models.ImportRow, bool, er
 		return nil, false, nil
 	}
 
+	// A keyed export names group members by key only; the importer
+	// resolves members by name, so it reads them from member_keys.
+	nameByKey := map[string]string{}
+	for _, monitor := range bundle.Monitors {
+		if monitor.Key != "" {
+			nameByKey[monitor.Key] = monitor.Name
+		}
+	}
 	rows := make([]models.ImportRow, 0, len(bundle.Monitors))
 	for i, monitor := range bundle.Monitors {
-		rows = append(rows, portableRow(i, monitor))
+		if len(monitor.GroupMembers) == 0 && len(monitor.MemberKeys) > 0 {
+			for _, key := range monitor.MemberKeys {
+				if name, ok := nameByKey[key]; ok {
+					monitor.GroupMembers = append(monitor.GroupMembers, name)
+				}
+			}
+		}
+		row := portableRow(i, monitor)
+		if where := maskedURLCredentials(string(monitor.Type), monitor.Config); len(where) > 0 {
+			row.Warnings = append(row.Warnings, fmt.Sprintf("credentials in %s were masked by the export and are not imported: re-enter them", strings.Join(where, ", ")))
+		}
+		rows = append(rows, row)
 	}
 
 	return rows, true, nil
+}
+
+// maskedURLCredentials names the URL fields of a config whose credentials an
+// export masked (secrets.StripMaskedURLCredentials).
+func maskedURLCredentials(monitorType string, config interface{}) []string {
+	cfg, ok := config.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	var where []string
+	secrets.WalkURLFields(monitorType, cfg, func(path string, parent map[string]any, key string) {
+		if _, masked := secrets.StripMaskedURLCredentials(parent[key].(string)); masked {
+			where = append(where, path)
+		}
+	})
+	return where
+}
+
+// stripMaskedURLCredentials removes the credentials an export masked from a
+// config's URLs, so an import never stores "***" as a password.
+func stripMaskedURLCredentials(monitorType string, config json.RawMessage) json.RawMessage {
+	var cfg map[string]interface{}
+	if json.Unmarshal(config, &cfg) != nil || cfg == nil {
+		return config
+	}
+	changed := false
+	secrets.WalkURLFields(monitorType, cfg, func(_ string, parent map[string]any, key string) {
+		if stripped, masked := secrets.StripMaskedURLCredentials(parent[key].(string)); masked {
+			parent[key] = stripped
+			changed = true
+		}
+	})
+	if !changed {
+		return config
+	}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return config
+	}
+	return out
 }
 
 // portableRow is one portable export monitor as an import row, the shape

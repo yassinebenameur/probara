@@ -7,6 +7,9 @@ package importservice
 import (
 	"bytes"
 	"context"
+	"crypto/hkdf"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +17,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -23,6 +27,7 @@ import (
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // MaxApplyMonitors bounds the monitors one document may hold. An apply is
@@ -43,6 +48,13 @@ var (
 	// ErrApplyPruneRefused: prune would delete what its guard refuses
 	// without force (409).
 	ErrApplyPruneRefused = errors.New("prune refused without force; nothing was written")
+	// ErrApplyRenameRefused: the plan pairs a create and a delete with the
+	// same name and type, a probable key change that replaces a monitor;
+	// force goes ahead (409).
+	ErrApplyRenameRefused = errors.New("probable key rename: the plan creates a monitor and deletes one with the same name and type, which replaces it and loses its history; set the key on the existing monitor instead, or send force to replace it; nothing was written")
+	// ErrApplyStateChanged: a monitor the apply changes was saved between
+	// its plan and its row locks (409, retryable).
+	ErrApplyStateChanged = errors.New("a monitor this apply changes was saved meanwhile; nothing was written, apply again")
 	// ErrApplyUnavailable: the service runs without the Postgres-backed
 	// monitor service apply needs.
 	ErrApplyUnavailable = errors.New("monitor apply is not available")
@@ -269,7 +281,10 @@ func (s *Service) PlanApply(ctx context.Context, tenantID uuid.UUID, req *models
 	if err != nil {
 		return nil, err
 	}
-	plan, err := s.computeApplyPlan(ctx, svc, tenantID, doc, ctxpkg.CanWrite(ctx))
+	if err := validatePruneScope(req.PruneScope); err != nil {
+		return nil, err
+	}
+	plan, err := s.computeApplyPlan(ctx, svc, tenantID, doc, req.PruneScope, ctxpkg.CanWrite(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -282,13 +297,16 @@ func (s *Service) PlanApply(ctx context.Context, tenantID uuid.UUID, req *models
 // secret conflicts) plus what only a document can get wrong: missing,
 // malformed or duplicate keys, references to keys the document lacks,
 // type changes, and dependency or group cycles.
-func (s *Service) computeApplyPlan(ctx context.Context, svc applyMonitorService, tenantID uuid.UUID, doc *models.PortableMonitorExport, compareSecrets bool) (*applyPlan, error) {
+func (s *Service) computeApplyPlan(ctx context.Context, svc applyMonitorService, tenantID uuid.UUID, doc *models.PortableMonitorExport, pruneScope string, compareSecrets bool) (*applyPlan, error) {
 	state, err := s.loadApplyState(ctx, svc, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	plan := &applyPlan{
-		out:   models.MonitorApplyPlan{Monitors: []models.MonitorApplyItem{}, Errors: []models.MonitorApplyError{}},
+		out: models.MonitorApplyPlan{
+			Monitors: []models.MonitorApplyItem{}, Errors: []models.MonitorApplyError{},
+			ProbableRenames: []models.MonitorApplyRename{},
+		},
 		byKey: map[string]*applyEntry{},
 		state: state,
 	}
@@ -310,6 +328,9 @@ func (s *Service) computeApplyPlan(ctx context.Context, svc applyMonitorService,
 			continue
 		}
 		plan.byKey[m.Key] = entry
+		if pruneScope != "" && !strings.HasPrefix(m.Key, pruneScope) {
+			plan.fail(entry, "key %q is outside prune_scope %q: a scoped document only holds keys that start with the scope", m.Key, pruneScope)
+		}
 		if strings.TrimSpace(m.Name) == "" {
 			plan.fail(entry, "name is required")
 		}
@@ -353,6 +374,7 @@ func (s *Service) computeApplyPlan(ctx context.Context, svc applyMonitorService,
 			}
 		}
 	}
+	plan.checkGroupMembersByName()
 	plan.checkCycles()
 
 	// Each monitor built and validated as a save would be.
@@ -400,8 +422,13 @@ func (s *Service) computeApplyPlan(ctx context.Context, svc applyMonitorService,
 		}
 	}
 
-	// Keyed monitors the document leaves out.
+	// Keyed monitors in scope the document leaves out.
+	inScope := 0
 	for _, m := range state.keyed {
+		if !strings.HasPrefix(m.key, pruneScope) {
+			continue
+		}
+		inScope++
 		if plan.byKey[m.key] != nil {
 			continue
 		}
@@ -412,19 +439,138 @@ func (s *Service) computeApplyPlan(ctx context.Context, svc applyMonitorService,
 		})
 		plan.out.Summary.Delete++
 	}
-	plan.out.Prune = pruneInfo(len(doc.Monitors), len(plan.deletes), len(state.keyed))
+	plan.out.Prune = pruneInfo(len(doc.Monitors), len(plan.deletes), inScope)
+	plan.out.Prune.Scope = pruneScope
+	plan.out.Prune.Affected = plan.affectedByPrune()
+	plan.markProbableRenames()
 
 	plan.out.Valid = len(plan.out.Errors) == 0
-	plan.out.Fingerprint, err = applyFingerprint(doc, state)
+	plan.out.Fingerprint, err = applyFingerprint(doc, pruneScope, state)
 	if err != nil {
 		return nil, err
 	}
 	return plan, nil
 }
 
+// validatePruneScope refuses a prune_scope that no key could start with.
+func validatePruneScope(scope string) error {
+	if scope == "" {
+		return nil
+	}
+	if len(scope) > validation.MaxMonitorKeyLength || validation.ValidateMonitorKey(scope) != nil {
+		return fmt.Errorf("%w: prune_scope %q must be the start of a key: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit", ErrApplyDocument, scope)
+	}
+	return nil
+}
+
+// checkGroupMembersByName refuses a group whose group_members (by name, the
+// importer's field) disagrees with its member_keys, which is what apply
+// reads: otherwise an edit of the names would plan as unchanged, and a group
+// written with names only would lose its keyed members.
+func (p *applyPlan) checkGroupMembersByName() {
+	for _, entry := range p.entries {
+		if entry.failed || len(entry.doc.GroupMembers) == 0 {
+			continue
+		}
+		var byKey []string
+		for _, key := range entry.memberKeys {
+			if member := p.byKey[key]; member != nil {
+				byKey = append(byKey, strings.TrimSpace(member.doc.Name))
+			}
+		}
+		byName := make([]string, 0, len(entry.doc.GroupMembers))
+		for _, name := range entry.doc.GroupMembers {
+			byName = append(byName, strings.TrimSpace(name))
+		}
+		sort.Strings(byKey)
+		sort.Strings(byName)
+		if !equalStrings(byKey, byName) {
+			p.fail(entry, "group_members (by name) does not match member_keys: apply reads member_keys; list the members there and remove group_members (or make it name the same monitors)")
+		}
+	}
+}
+
+// affectedByPrune lists the live monitors the document does not hold that
+// reference a monitor the prune would delete: a group losing a member, a
+// monitor losing an upstream.
+func (p *applyPlan) affectedByPrune() []models.MonitorApplyAffected {
+	out := []models.MonitorApplyAffected{}
+	if len(p.deletes) == 0 {
+		return out
+	}
+	deleted := map[uuid.UUID]*applyMonitor{}
+	for _, m := range p.deletes {
+		deleted[m.id] = m
+	}
+	loses := map[uuid.UUID][]string{}
+	for groupID, members := range p.state.members {
+		for _, member := range members {
+			if m := deleted[member]; m != nil {
+				loses[groupID] = append(loses[groupID], "member:"+m.key)
+			}
+		}
+	}
+	for monitorID, upstreams := range p.state.deps {
+		for _, upstream := range upstreams {
+			if m := deleted[upstream]; m != nil {
+				loses[monitorID] = append(loses[monitorID], "dependency:"+m.key)
+			}
+		}
+	}
+	for id, what := range loses {
+		m := p.state.monitors[id]
+		if m == nil || deleted[id] != nil || (m.key != "" && p.byKey[m.key] != nil) {
+			continue
+		}
+		sort.Strings(what)
+		out = append(out, models.MonitorApplyAffected{MonitorID: id, Key: m.key, Name: m.name, Type: m.typ, Loses: what})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].MonitorID.String() < out[j].MonitorID.String()
+	})
+	return out
+}
+
+// markProbableRenames pairs each planned create with a planned delete of the
+// same name and type: most likely a changed key. A key is the monitor's
+// identity, so that pair replaces the monitor and its history, SLA
+// intervals, locations, routing, status-page sections and maintenance
+// targets stay with the deleted one. Apply refuses it without force.
+func (p *applyPlan) markProbableRenames() {
+	sameMonitor := func(name string, typ models.MonitorType) string {
+		return string(typ) + "\x00" + strings.ToLower(strings.TrimSpace(name))
+	}
+	deletes := map[string][]int{}
+	for i, item := range p.out.Monitors {
+		if item.Action == models.ApplyActionDelete {
+			id := sameMonitor(item.Name, item.Type)
+			deletes[id] = append(deletes[id], i)
+		}
+	}
+	for i := range p.out.Monitors {
+		create := &p.out.Monitors[i]
+		if create.Action != models.ApplyActionCreate {
+			continue
+		}
+		id := sameMonitor(create.Name, create.Type)
+		if len(deletes[id]) == 0 {
+			continue
+		}
+		del := &p.out.Monitors[deletes[id][0]]
+		deletes[id] = deletes[id][1:]
+		create.ProbableRename, del.ProbableRename = del.Key, create.Key
+		create.Notes = append(create.Notes, fmt.Sprintf("probable key rename from %q: this creates a new monitor; the old one's history, SLA intervals, locations, routing, status-page sections and maintenance targets do not follow. To keep them, set the key on the existing monitor instead (PATCH /monitors/{id} with \"key\"); apply needs force to replace it", del.Key))
+		del.Notes = append(del.Notes, fmt.Sprintf("probable key rename to %q: this monitor is replaced, not renamed", create.Key))
+		p.out.ProbableRenames = append(p.out.ProbableRenames, models.MonitorApplyRename{FromKey: del.Key, ToKey: create.Key, Name: create.Name, Type: create.Type})
+	}
+}
+
 // pruneInfo is the prune guard: deleting keyed monitors needs force when the
-// document is empty, or when it would delete more than half of the
-// workspace's keyed monitors. Both usually mean the wrong file or workspace.
+// document is empty, or when it would delete more than half of the keyed
+// monitors in scope. Both usually mean the wrong file or workspace.
 func pruneInfo(documentMonitors, deletes, keyed int) models.MonitorApplyPruneInfo {
 	info := models.MonitorApplyPruneInfo{Deletes: deletes, KeyedMonitors: keyed}
 	switch {
@@ -434,7 +580,7 @@ func pruneInfo(documentMonitors, deletes, keyed int) models.MonitorApplyPruneInf
 		info.Reason = "the document lists no monitors, so prune would delete every keyed monitor"
 	case deletes*2 > keyed:
 		info.NeedsForce = true
-		info.Reason = fmt.Sprintf("prune would delete %d of the workspace's %d keyed monitors, more than half", deletes, keyed)
+		info.Reason = fmt.Sprintf("prune would delete %d of the %d keyed monitors in scope, more than half", deletes, keyed)
 	}
 	return info
 }
@@ -755,11 +901,13 @@ func findCycle(graph map[string][]string) []string {
 	return nil
 }
 
-// applyFingerprint identifies the document and the state of the
-// workspace's keyed monitors (each one's id, pause state, masked
-// configuration and newest version number, which every save, secret
-// changes included, advances). It holds no secret the caller did not send.
-func applyFingerprint(doc *models.PortableMonitorExport, state *applyState) (string, error) {
+// applyFingerprint identifies the document (its secrets masked), the prune
+// scope and the state of the workspace's keyed monitors (each one's id,
+// pause state, masked configuration and newest version number, which every
+// save, secret changes included, advances). It is an HMAC under a server key
+// (fingerprintKey), so the value a CI log shows reveals nothing about the
+// document; two plans of the same inputs in one deployment match.
+func applyFingerprint(doc *models.PortableMonitorExport, pruneScope string, state *applyState) (string, error) {
 	type keyedState struct {
 		Key      string                        `json:"key"`
 		ID       uuid.UUID                     `json:"id"`
@@ -771,15 +919,85 @@ func applyFingerprint(doc *models.PortableMonitorExport, state *applyState) (str
 	for _, m := range state.keyed {
 		keyed = append(keyed, keyedState{Key: m.key, ID: m.id, Enabled: m.enabled, Version: state.versions[m.id], Snapshot: state.snapshots[m.id]})
 	}
+	masked, err := maskedDocument(doc)
+	if err != nil {
+		return "", err
+	}
 	encoded, err := json.Marshal(struct {
-		Document *models.PortableMonitorExport `json:"document"`
-		Keyed    []keyedState                  `json:"keyed"`
-	}{doc, keyed})
+		Document   *models.PortableMonitorExport `json:"document"`
+		PruneScope string                        `json:"prune_scope"`
+		Keyed      []keyedState                  `json:"keyed"`
+	}{masked, pruneScope, keyed})
 	if err != nil {
 		return "", fmt.Errorf("fingerprint plan: %w", err)
 	}
-	sum := sha256.Sum256(encoded)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	key, err := fingerprintKey()
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write(encoded)
+	return "hmac-sha256:" + hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+// maskedDocument is the document with every secret masked as a version
+// snapshot masks it (registry fields, credential-named entries, URL
+// credentials).
+func maskedDocument(doc *models.PortableMonitorExport) (*models.PortableMonitorExport, error) {
+	out := *doc
+	out.Monitors = make([]models.PortableExportMonitor, len(doc.Monitors))
+	for i, m := range doc.Monitors {
+		raw, err := json.Marshal(m.Config)
+		if err != nil {
+			return nil, fmt.Errorf("fingerprint plan: %w", err)
+		}
+		if masked, err := secrets.MaskStoredMonitorConfig(string(m.Type), raw); err == nil {
+			raw = masked
+		}
+		var config any
+		if err := json.Unmarshal(raw, &config); err != nil {
+			config = nil
+		}
+		m.Config = config
+		out.Monitors[i] = m
+	}
+	return &out, nil
+}
+
+// fingerprintInfo separates the fingerprint key from every other use of
+// PROBARA_SECRETS_KEY.
+const fingerprintInfo = "probara/monitor-apply-fingerprint/v1"
+
+var (
+	fingerprintKeyOnce  sync.Once
+	fingerprintKeyValue []byte
+	fingerprintKeyErr   error
+)
+
+// fingerprintKey derives the fingerprint HMAC key from the current
+// PROBARA_SECRETS_KEY (HKDF, fingerprintInfo). Without one it is a random
+// key of this process, so fingerprints do not survive a restart (plan again).
+// A key rotation changes it too.
+func fingerprintKey() ([]byte, error) {
+	fingerprintKeyOnce.Do(func() {
+		kp, err := secrets.NewEnvKeyProvider()
+		if errors.Is(err, secrets.ErrKeyNotConfigured) {
+			fingerprintKeyValue = make([]byte, sha256.Size)
+			_, fingerprintKeyErr = rand.Read(fingerprintKeyValue)
+			return
+		}
+		if err != nil {
+			fingerprintKeyErr = err
+			return
+		}
+		secret, _, err := kp.CurrentKey()
+		if err != nil {
+			fingerprintKeyErr = err
+			return
+		}
+		fingerprintKeyValue, fingerprintKeyErr = hkdf.Key(sha256.New, secret, nil, fingerprintInfo, sha256.Size)
+	})
+	return fingerprintKeyValue, fingerprintKeyErr
 }
 
 // withServerOwnedFields sets the fields the server owns in a document config

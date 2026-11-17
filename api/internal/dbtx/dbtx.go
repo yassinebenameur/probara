@@ -17,11 +17,11 @@
 // cycle (api/internal/services/monitors LockMonitorsTx; location and channel
 // delete lock their monitors the same way).
 //
-// The one other lock is a config-as-code apply's per-workspace advisory
-// lock (api/internal/services/import apply_execute.go), taken on the apply's
-// transaction before any row lock, so it never waits while holding one.
+// A config-as-code apply also takes a per-workspace advisory lock
+// (api/internal/services/import apply_execute.go) on its transaction before
+// any row lock, so it never waits for it while holding one.
 //
-// Otherwise there are no other locks to order: a monitor's row, held FOR UPDATE by
+// Version numbering needs no other lock: a monitor's row, held FOR UPDATE by
 // every path that records its configuration version, is also what
 // serializes version numbering (monitors versions_record.go), so a change
 // touching thousands of monitors takes no lock per monitor beyond its row.

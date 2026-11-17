@@ -11,7 +11,8 @@ var applyFieldDocs = map[string]string{
 		"kind monitor_export, version 2, every monitor with a key. Secrets read \"***\" keep the stored value; " +
 		"a literal value replaces it, \"\" clears it.",
 	"prune":       "Also delete the workspace's keyed monitors the document leaves out (never a monitor without a key).",
-	"force":       "Let prune through its guard: an empty document, or more than half of the keyed monitors deleted.",
+	"prune_scope": "Key prefix (\"payments.\"): prune only deletes keyed monitors whose key starts with it, and every key of the document must. Use one per team sharing a workspace.",
+	"force":       "Let prune through its guard (an empty document, or more than half of the keyed monitors in scope deleted), and let a probable key rename (a create and a delete with the same name and type) replace the monitor.",
 	"fingerprint": "fingerprint from plan_monitor_apply: refused if the document or the keyed monitors changed since.",
 }
 

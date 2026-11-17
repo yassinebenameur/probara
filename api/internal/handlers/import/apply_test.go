@@ -45,6 +45,8 @@ func TestApply_StatusMapping(t *testing.T) {
 		"invalid":     {importservice.ErrApplyInvalid, http.StatusUnprocessableEntity, "invalid_document"},
 		"changed":     {importservice.ErrApplyPlanChanged, http.StatusConflict, "plan_changed"},
 		"prune":       {fmt.Errorf("%w: reason", importservice.ErrApplyPruneRefused), http.StatusConflict, "prune_refused"},
+		"rename":      {importservice.ErrApplyRenameRefused, http.StatusConflict, "probable_rename"},
+		"meanwhile":   {importservice.ErrApplyStateChanged, http.StatusConflict, "apply_conflict"},
 		"bad doc":     {fmt.Errorf("%w: yaml", importservice.ErrApplyDocument), http.StatusBadRequest, "validation_error"},
 		"unavailable": {errors.New("boom"), http.StatusInternalServerError, "internal_error"},
 	} {

@@ -471,7 +471,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The monitor export endpoint produces a versioned YAML bundle (version 2) with monitor configuration, tags, retry thresholds, and group membership names, plus each monitor's config-as-code key and, by key, its keyed members and dependencies; `keyed=true` (the Export dialog's \"Monitors with a key\") exports only keyed monitors, the file [apply](/docs/monitors/#config-as-code) manages. Import reads versions 1 and 2 and does not set keys. Exports no longer write `alert_policy_names`; a bundle from an older release that still carries the field imports normally and the field is ignored. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
+            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration (secrets and URL credentials masked), tags, retry thresholds, and group membership names; when any monitor has a config-as-code key it is version 2, which adds each key and, by key, the keyed members and dependencies (otherwise version 1, which older releases import). `keyed=true` (the Export dialog's \"Monitors with a key\") exports only keyed monitors, the file [apply](/docs/monitors/#config-as-code) manages. Import reads versions 1 and 2, does not set keys, and leaves masked URL credentials out with a preview warning. Exports no longer write `alert_policy_names`; a bundle from an older release that still carries the field imports normally and the field is ignored. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
         },
         {
           type: "callout",

@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -50,6 +51,9 @@ func (s *Service) Apply(ctx context.Context, tenantID uuid.UUID, req *models.Mon
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePruneScope(req.PruneScope); err != nil {
+		return nil, err
+	}
 	ctx = monitorservice.WithVersionSource(ctx, monitorservice.VersionSourceApply)
 
 	var result *models.MonitorApplyResult
@@ -63,7 +67,7 @@ func (s *Service) Apply(ctx context.Context, tenantID uuid.UUID, req *models.Mon
 			return fmt.Errorf("lock workspace for apply: %w", err)
 		}
 		// Apply always compares secrets: it needs write access.
-		plan, err := s.computeApplyPlan(ctx, svc, tenantID, doc, true)
+		plan, err := s.computeApplyPlan(ctx, svc, tenantID, doc, req.PruneScope, true)
 		if err != nil {
 			return err
 		}
@@ -75,6 +79,12 @@ func (s *Service) Apply(ctx context.Context, tenantID uuid.UUID, req *models.Mon
 			return ErrApplyPlanChanged
 		case req.Prune && plan.out.Prune.NeedsForce && !req.Force:
 			return fmt.Errorf("%w: %s", ErrApplyPruneRefused, plan.out.Prune.Reason)
+		case len(plan.out.ProbableRenames) > 0 && !req.Force:
+			first := plan.out.ProbableRenames[0]
+			return fmt.Errorf("%w: %q -> %q (%s %q)", ErrApplyRenameRefused, first.FromKey, first.ToKey, first.Type, first.Name)
+		}
+		if applyTestHookAfterPlan != nil {
+			applyTestHookAfterPlan()
 		}
 		pruned, err := s.executeApplyPlan(ctx, svc, tenantID, plan, req.Prune)
 		if err != nil {
@@ -95,7 +105,66 @@ func (s *Service) Apply(ctx context.Context, tenantID uuid.UUID, req *models.Mon
 
 // isApplyRefusal reports an error that answers with the plan.
 func isApplyRefusal(err error) bool {
-	return errors.Is(err, ErrApplyInvalid) || errors.Is(err, ErrApplyPlanChanged) || errors.Is(err, ErrApplyPruneRefused)
+	return errors.Is(err, ErrApplyInvalid) || errors.Is(err, ErrApplyPlanChanged) || errors.Is(err, ErrApplyPruneRefused) ||
+		errors.Is(err, ErrApplyRenameRefused) || errors.Is(err, ErrApplyStateChanged)
+}
+
+// applyTestHookAfterPlan runs between the plan and the row locks (tests
+// only: a concurrent save landing in that window).
+var applyTestHookAfterPlan func()
+
+// checkLockedUnchanged makes sure the monitors this apply changes or
+// deletes are still as planned now that their rows are locked: a save that
+// committed between the plan and the locks would otherwise be overwritten
+// from a stale plan (a member added through the UI dropped from a group's
+// monitor_ids, say). Any difference is ErrApplyStateChanged.
+func checkLockedUnchanged(ctx context.Context, s *Service, svc applyMonitorService, tenantID uuid.UUID, plan *applyPlan, locked []uuid.UUID) error {
+	var keyed []uuid.UUID
+	for _, id := range locked {
+		if m := plan.state.monitors[id]; m != nil && m.key != "" {
+			keyed = append(keyed, id)
+		}
+	}
+	if len(keyed) == 0 {
+		return nil
+	}
+	store := svc.Versions()
+	snapshots, err := store.CurrentSnapshots(ctx, tenantID, keyed)
+	if err != nil {
+		return err
+	}
+	versions, err := store.LatestVersionNumbers(ctx, tenantID, keyed)
+	if err != nil {
+		return err
+	}
+	enabled := map[uuid.UUID]bool{}
+	rows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, `SELECT id, enabled FROM monitors WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL`, tenantID, pq.Array(keyed))
+	if err != nil {
+		return fmt.Errorf("recheck monitors: %w", err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		var on bool
+		if err := rows.Scan(&id, &on); err != nil {
+			rows.Close()
+			return err
+		}
+		enabled[id] = on
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range keyed {
+		m := plan.state.monitors[id]
+		before, after := plan.state.snapshots[id], snapshots[id]
+		beforeJSON, _ := json.Marshal(before)
+		afterJSON, _ := json.Marshal(after)
+		if after == nil || string(beforeJSON) != string(afterJSON) || versions[id] != plan.state.versions[id] || enabled[id] != m.enabled {
+			return fmt.Errorf("%w (%q)", ErrApplyStateChanged, m.key)
+		}
+	}
+	return nil
 }
 
 // executeApplyPlan writes a valid plan inside the apply's transaction. It
@@ -140,6 +209,9 @@ func (s *Service) executeApplyPlan(ctx context.Context, svc applyMonitorService,
 	if err := svc.LockMonitors(ctx, tenantID, write, read); err != nil {
 		return false, err
 	}
+	if err := checkLockedUnchanged(ctx, s, svc, tenantID, plan, write); err != nil {
+		return false, err
+	}
 	svc.CaptureBaselines(ctx, tenantID, write...)
 
 	saveCtx, versions := monitorservice.DeferVersions(ctx)
@@ -147,6 +219,9 @@ func (s *Service) executeApplyPlan(ctx context.Context, svc applyMonitorService,
 		req := *entry.req
 		enabled := entry.enabled
 		req.Enabled = &enabled
+		// The config as planned: masked URL credentials resolved, secrets
+		// the document repeats sent masked.
+		req.Config = entry.config.Config
 		if entry.doc.Type == models.MonitorTypeGroup {
 			members, err := resolveKeys(ids, entry.memberKeys)
 			if err != nil {
