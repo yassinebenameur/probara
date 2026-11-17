@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -379,9 +378,5 @@ func (p *pushSender) payloadFor(d pendingDelivery) pushPayload {
 // which case the service worker falls back to its own registration scope,
 // which is the page URL by construction -- never a guessed host.
 func (p *pushSender) pageURL(slug string) string {
-	base := strings.TrimRight(strings.TrimSpace(p.cfg.StatusPageBaseURL), "/")
-	if base == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/public/status/%s", base, slug)
+	return publicPageURL(p.cfg.StatusPageBaseURL, slug)
 }

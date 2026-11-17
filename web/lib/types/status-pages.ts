@@ -42,6 +42,12 @@ export interface StatusPageSettings {
    * nonce="{{cspNonce}}".
    */
   csp_mode?: StatusPageCSPMode;
+  /** Overrides the public page's <title> and og:title (up to 120 characters). '' clears it. */
+  seo_title?: string;
+  /** Overrides the search and link-preview description (up to 300 characters). '' clears it. */
+  seo_description?: string;
+  /** Let search engines index the page. On by default; off sends noindex. */
+  allow_search_indexing?: boolean;
 }
 
 export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';

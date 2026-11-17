@@ -1,3 +1,5 @@
+//go:build !unit
+
 package reportschedules
 
 // Emailed SLA report schedules against Postgres: due selection, the claim
@@ -29,18 +31,6 @@ import (
 	"github.com/yassinebenameur/probara/shared/mail"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
-
-type testKeys struct{}
-
-var testKey = bytes.Repeat([]byte{7}, 32)
-
-func (testKeys) CurrentKey() ([]byte, int, error) { return testKey, 1, nil }
-func (testKeys) KeyForVersion(v int) ([]byte, error) {
-	if v != 1 {
-		return nil, errors.New("no such key")
-	}
-	return testKey, nil
-}
 
 // fakeMailer records every accepted message; fail decides per recipient.
 type fakeMailer struct {
