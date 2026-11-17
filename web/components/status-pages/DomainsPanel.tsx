@@ -253,6 +253,7 @@ function DomainRow({ domain, canWrite, verifying, onVerify, onRemove }: DomainRo
             </span>
             {domain.verified_at && <span>Verified {formatDateTime(domain.verified_at)}</span>}
             {domain.failing_since && <span>Failing since {formatDateTime(domain.failing_since)}</span>}
+            {domain.expires_at && <span>Removed if unverified on {formatDateTime(domain.expires_at)}</span>}
           </p>
         </div>
         {canWrite && (
@@ -271,7 +272,7 @@ function DomainRow({ domain, canWrite, verifying, onVerify, onRemove }: DomainRo
       </div>
 
       {domain.last_error && (
-        <Callout tone={state === 'pending' ? 'info' : 'warning'} title="Last check">
+        <Callout tone={state === 'pending' || state === 'superseded' ? 'info' : 'warning'} title="Last check">
           {domain.last_error}
         </Callout>
       )}

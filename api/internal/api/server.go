@@ -215,7 +215,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	reportScheduleHandlers, reportRunner := newReportSchedules(cfg, dbClient, auditRecorder, log)
 
 	// Status page custom domains and their re-verification runner (routes_statuspage_domains.go).
-	domainHandlers, domainRunner := newStatusPageDomains(cfg, dbClient, statusPublisher, log)
+	domainHandlers, domainRunner := newStatusPageDomains(cfg, dbClient, statusPublisher, auditRecorder, log)
 
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).

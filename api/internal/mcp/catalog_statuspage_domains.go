@@ -13,9 +13,10 @@ func statusPageDomainTools() []spec {
 		{
 			Name:  "list_status_page_domains",
 			Title: "List custom domains",
-			Description: "Custom domains of the workspace's status pages: hostname, status (pending, verified, failed; " +
-				"only verified domains are served), the DNS records to create with what the last check found, " +
-				"the last error, and the installation's CNAME target (enabled is false when custom domains are off).",
+			Description: "Custom domains of the workspace's status pages: hostname, status (pending, verified, failed, " +
+				"superseded; only verified domains are served), the DNS records to create with what the last check found, " +
+				"the last error, when an unverified claim expires, and the installation's CNAME target (enabled is false " +
+				"when custom domains are off).",
 			Method: http.MethodGet, Route: "/status-page-domains",
 			Query: []param{{Name: "status_page_id", Description: "Only this status page's domains."}},
 		},
@@ -24,8 +25,10 @@ func statusPageDomainTools() []spec {
 			Title: "Add custom domain",
 			Description: "Serve a status page on its own hostname, e.g. status.example.com. The domain stays pending " +
 				"until both DNS records in the response exist: a CNAME from the hostname to the CNAME target and a " +
-				"TXT record holding the verification value. Hostnames are unique across the installation; at most " +
-				"10 per page; no wildcards or IP addresses.",
+				"TXT record holding the verification value. Refused when the hostname is already verified for another " +
+				"page; other unverified claims may exist, and the first to verify takes the hostname and supersedes " +
+				"the rest. A claim that never verifies is removed after 14 days. At most 10 per page and 50 per " +
+				"workspace; no wildcards or IP addresses.",
 			Method: http.MethodPost, Route: "/status-page-domains",
 			Body: typeOf[models.CreateStatusPageDomainRequest](), Required: []string{"status_page_id", "hostname"},
 			FieldDocs: map[string]string{

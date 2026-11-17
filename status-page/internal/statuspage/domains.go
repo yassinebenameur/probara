@@ -18,10 +18,13 @@ import (
 // Custom domains, read side (shared/pagedomains is the contract; the API
 // writes and verifies them).
 //
-// The host table maps every verified custom domain to its page. It is loaded
-// whole, in one read query, so a request's Host never reaches the database:
-// a forged or random Host costs a map lookup and can neither pick another
-// page nor fill a cache. It is reloaded after hostTableTTL, and at once
+// The host table holds every hostname any page has claimed, whatever its
+// status, mapped to its page when verified. It is loaded whole, in one read
+// query, so a request's Host never reaches the database: a forged or random
+// Host costs a map lookup and can neither pick another page nor fill a
+// cache. Unverified hostnames are known so they can be refused (CustomHosts
+// answers them not found, never the platform routes), and until the table
+// has loaded once no public hostname but the platform's is served at all. It is reloaded after hostTableTTL, and at once
 // (lazily, on the next request) when the API publishes a change to a page
 // (Subscriber.handleEvent), so a removed or failed domain, a renamed slug or
 // a deleted page stops being served immediately; the TTL only covers a lost
@@ -36,10 +39,12 @@ const hostTableTTL = 30 * time.Second
 // previous table keeps serving.
 const hostTableRetry = 5 * time.Second
 
-// customHostRoute is the page a verified custom domain serves.
+// customHostRoute is the page a custom domain serves; Verified false for a
+// hostname claimed but not (or no longer) verified, which serves nothing.
 type customHostRoute struct {
-	PageID uuid.UUID
-	Slug   string
+	PageID   uuid.UUID
+	Slug     string
+	Verified bool
 }
 
 // hostTable is the in-memory table of verified custom domains.
@@ -54,30 +59,36 @@ type hostTable struct {
 	routes   map[string]customHostRoute
 	validTil time.Time
 	gen      uint64
+	// loaded is false until a load has succeeded once.
+	loaded bool
 }
 
 func newHostTable(load func(context.Context) (map[string]customHostRoute, error)) *hostTable {
 	return &hostTable{load: load, ttl: hostTableTTL, now: time.Now}
 }
 
-// Lookup returns the page served on host (normalized, pagedomains.HostFromHeader).
-func (t *hostTable) Lookup(ctx context.Context, host string) (customHostRoute, bool) {
+// Lookup returns what host (normalized, pagedomains.HostFromHeader) is:
+// known reports that some page claimed it (serve it only when
+// route.Verified), loaded that the table has loaded at least once. Before
+// that nothing is known, and the caller must refuse rather than guess.
+func (t *hostTable) Lookup(ctx context.Context, host string) (route customHostRoute, known, loaded bool) {
 	if t == nil || host == "" {
-		return customHostRoute{}, false
+		return customHostRoute{}, false, false
 	}
-	routes := t.current(ctx)
-	route, ok := routes[host]
-	return route, ok
+	routes, loaded := t.current(ctx)
+	route, known = routes[host]
+	return route, known, loaded
 }
 
-// current returns the table, reloading it first when it expired or was
-// invalidated. Concurrent reloads collapse into one query.
-func (t *hostTable) current(ctx context.Context) map[string]customHostRoute {
+// current returns the table and whether it ever loaded, reloading it first
+// when it expired or was invalidated. Concurrent reloads collapse into one
+// query.
+func (t *hostTable) current(ctx context.Context) (map[string]customHostRoute, bool) {
 	t.mu.Lock()
-	if t.routes != nil && t.now().Before(t.validTil) {
+	if t.loaded && t.now().Before(t.validTil) {
 		routes := t.routes
 		t.mu.Unlock()
-		return routes
+		return routes, true
 	}
 	gen := t.gen
 	t.mu.Unlock()
@@ -95,6 +106,7 @@ func (t *hostTable) current(ctx context.Context) map[string]customHostRoute {
 			return t.routes, nil
 		}
 		t.routes = routes
+		t.loaded = true
 		if t.gen == gen {
 			t.validTil = t.now().Add(t.ttl)
 		} else {
@@ -104,7 +116,10 @@ func (t *hostTable) current(ctx context.Context) map[string]customHostRoute {
 		return routes, nil
 	})
 	routes, _ := v.(map[string]customHostRoute)
-	return routes
+	t.mu.Lock()
+	loaded := t.loaded
+	t.mu.Unlock()
+	return routes, loaded
 }
 
 // Invalidate makes the next lookup reload the table.
@@ -120,15 +135,18 @@ func (t *hostTable) Invalidate() {
 }
 
 // customHostRoutesQuery joins through status_pages, so a domain is served
-// only while its page exists and every page-level check composes with it.
+// only while its page exists and every page-level condition (a live
+// workspace, say) composes with it: add such conditions to this join. A
+// verified row sorts last, so it wins over other pages' unverified claims
+// on the same hostname.
 const customHostRoutesQuery = `
-	SELECT d.hostname, sp.id, sp.slug
+	SELECT d.hostname, sp.id, sp.slug, d.status = 'verified'
 	FROM status_page_domains d
 	JOIN status_pages sp ON sp.id = d.status_page_id
-	WHERE d.status = 'verified'`
+	ORDER BY d.hostname, d.status = 'verified'`
 
-// CustomHostRoutes loads every verified custom domain. Empty before
-// migration 000120.
+// CustomHostRoutes loads every claimed hostname. Empty before migration
+// 000120.
 func (s *Service) CustomHostRoutes(ctx context.Context) (map[string]customHostRoute, error) {
 	rows, err := s.db.QueryContext(ctx, customHostRoutesQuery)
 	if err != nil {
@@ -142,8 +160,11 @@ func (s *Service) CustomHostRoutes(ctx context.Context) (map[string]customHostRo
 	for rows.Next() {
 		var host string
 		var route customHostRoute
-		if err := rows.Scan(&host, &route.PageID, &route.Slug); err != nil {
+		if err := rows.Scan(&host, &route.PageID, &route.Slug, &route.Verified); err != nil {
 			return nil, fmt.Errorf("scan custom domain: %w", err)
+		}
+		if !route.Verified {
+			route = customHostRoute{}
 		}
 		out[host] = route
 	}

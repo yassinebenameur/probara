@@ -234,9 +234,7 @@ var routeTable = []struct {
 	{"/_sp_api/", classProxyGated, ""},
 	{"/public/status/sw.js", classNoPageData, ""},
 	{"/public/status/", classDispatcher, ""},
-	// custom_host.go: on a custom domain the worker is /sw.js; every other
-	// path there is one of the sub-routes below (customHostRouteTable).
-	{"/sw.js", classNoPageData, ""},
+
 	// HandleStatusPage sub-routes (after /public/status/{slug}).
 	{"", classGated, http.MethodGet},
 	{"/", classGated, http.MethodGet},
@@ -253,6 +251,10 @@ var routeTable = []struct {
 	{"/badge.svg", classGated, http.MethodGet},
 	{"/monitors/" + addonRouteTestID + "/badge.svg", classGated, http.MethodGet},
 	{"/monitors/" + addonRouteTestID + "/uptime.svg", classGated, http.MethodGet},
+	// A page's push worker on its custom domain (custom_host.go): gated,
+	// and not found on a gated page. Every custom-domain path is one of these
+	// sub-routes (customHostRouteTable).
+	{"/sw.js", classGated, http.MethodGet},
 	// Not routed: proves an unknown sub-route is gated too.
 	{"/some-future-route.json", classGated, http.MethodGet},
 }

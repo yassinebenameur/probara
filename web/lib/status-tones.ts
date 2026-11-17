@@ -541,6 +541,7 @@ export function statusPageDomainTone(state: string | null | undefined): StatusTo
       return 'danger';
     case 'pending':
       return 'info';
+    case 'superseded':
     default:
       return 'neutral';
   }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/apperr"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -27,9 +28,13 @@ import (
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
-// MaxDomainsPerPage bounds a page's domains (and the DNS work each one
-// costs the runner).
-const MaxDomainsPerPage = 10
+// MaxDomainsPerPage and MaxDomainsPerWorkspace bound the domains a page and
+// a workspace hold, whatever their status, and so the DNS work one workspace
+// can put on the runner.
+const (
+	MaxDomainsPerPage      = 10
+	MaxDomainsPerWorkspace = 50
+)
 
 // manualCheckInterval is the shortest wait between two checks of one domain
 // that an operator may ask for. It reads last_checked_at, so it holds across
@@ -42,10 +47,19 @@ var (
 	ErrStatusPageNotFound = apperr.ErrStatusPageNotFound
 	ErrNotFound           = errors.New("custom domain not found")
 	ErrDisabled           = errors.New("custom domains are off on this installation: STATUS_PAGE_CNAME_TARGET is not set on the API")
-	ErrHostnameTaken      = errors.New("that hostname is already used by a status page")
+	ErrHostnameTaken      = errors.New("that hostname is already verified for another status page")
+	ErrAlreadyOnPage      = errors.New("this status page already has that hostname")
 	ErrHostnameReserved   = errors.New("that hostname is one of this installation's own hosts")
 	ErrTooManyDomains     = fmt.Errorf("a status page can have at most %d custom domains", MaxDomainsPerPage)
+	// ErrTooManyWorkspaceDomains counts every domain of the workspace's pages.
+	ErrTooManyWorkspaceDomains = fmt.Errorf("a workspace can have at most %d custom domains", MaxDomainsPerWorkspace)
 )
+
+// AuditRecorder records what happens to a domain outside a request that
+// names it (superseded, expired). *audit.Recorder implements it.
+type AuditRecorder interface {
+	Record(event audit.Event)
+}
 
 // CheckedRecentlyError refuses a manual check asked for too soon after the
 // last one.
@@ -74,6 +88,7 @@ type Config struct {
 	ReservedHosts []string
 	Resolver      Resolver
 	Publisher     Publisher
+	Audit         AuditRecorder
 	Log           *logger.Logger
 }
 
@@ -164,6 +179,10 @@ func (s *Service) toAPI(r *row) models.StatusPageDomain {
 	out.LastCheckedAt = nullTime(r.LastCheckedAt)
 	out.VerifiedAt = nullTime(r.VerifiedAt)
 	out.FailingSince = nullTime(r.FailingSince)
+	if r.Status == pagedomains.Pending || r.Status == pagedomains.Superseded {
+		expires := r.CreatedAt.Add(pagedomains.ClaimTTL)
+		out.ExpiresAt = &expires
+	}
 	return out
 }
 
@@ -235,6 +254,10 @@ func (s *Service) ensurePage(ctx context.Context, tenantID, pageID uuid.UUID) er
 
 // Create adds a custom domain to a page, pending until its records verify.
 // hostname must already be normalized (pagedomains.NormalizeHostname).
+//
+// Unverified claims on one hostname may coexist across pages and
+// workspaces, so the answer never reveals whether another workspace has
+// claimed it: only a hostname already verified for another page is refused.
 func (s *Service) Create(ctx context.Context, tenantID, pageID uuid.UUID, hostname string) (*models.StatusPageDomain, error) {
 	if !s.Enabled() {
 		return nil, ErrDisabled
@@ -254,23 +277,34 @@ func (s *Service) Create(ctx context.Context, tenantID, pageID uuid.UUID, hostna
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
-	// The page row lock serializes concurrent adds, so two cannot both pass
-	// the cap.
-	var locked uuid.UUID
-	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM status_pages WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, pageID, tenantID).Scan(&locked); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrStatusPageNotFound
-		}
-		return nil, fmt.Errorf("lock status page: %w", err)
+	// One add at a time per workspace, so concurrent adds cannot both pass
+	// the page or workspace cap.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('status_page_domains:' || $1::text, 0))`, tenantID); err != nil {
+		return nil, fmt.Errorf("lock workspace domains: %w", err)
 	}
-	var count int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM status_page_domains WHERE status_page_id = $1`, pageID).Scan(&count); err != nil {
-		return nil, fmt.Errorf("count custom domains: %w", err)
+	var pageCount, workspaceCount int
+	var onPage, verifiedElsewhere, pageFound bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT
+			EXISTS (SELECT 1 FROM status_pages WHERE id = $1 AND tenant_id = $2),
+			(SELECT COUNT(*) FROM status_page_domains WHERE status_page_id = $1),
+			(SELECT COUNT(*) FROM status_page_domains d JOIN status_pages sp ON sp.id = d.status_page_id WHERE sp.tenant_id = $2),
+			EXISTS (SELECT 1 FROM status_page_domains WHERE status_page_id = $1 AND hostname = $3),
+			EXISTS (SELECT 1 FROM status_page_domains WHERE hostname = $3 AND status = 'verified' AND status_page_id <> $1)`,
+		pageID, tenantID, hostname).Scan(&pageFound, &pageCount, &workspaceCount, &onPage, &verifiedElsewhere); err != nil {
+		return nil, fmt.Errorf("check custom domain: %w", err)
 	}
-	if count >= MaxDomainsPerPage {
+	switch {
+	case !pageFound:
+		return nil, ErrStatusPageNotFound
+	case onPage:
+		return nil, ErrAlreadyOnPage
+	case verifiedElsewhere:
+		return nil, ErrHostnameTaken
+	case pageCount >= MaxDomainsPerPage:
 		return nil, ErrTooManyDomains
+	case workspaceCount >= MaxDomainsPerWorkspace:
+		return nil, ErrTooManyWorkspaceDomains
 	}
 	var id uuid.UUID
 	if err := tx.QueryRowContext(ctx, `
@@ -278,7 +312,7 @@ func (s *Service) Create(ctx context.Context, tenantID, pageID uuid.UUID, hostna
 		VALUES ($1, $2, $3)
 		RETURNING id`, pageID, hostname, token).Scan(&id); err != nil {
 		if pgerr.IsUniqueViolation(err) {
-			return nil, ErrHostnameTaken
+			return nil, ErrAlreadyOnPage
 		}
 		return nil, fmt.Errorf("add custom domain: %w", err)
 	}
@@ -312,7 +346,9 @@ func (s *Service) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 }
 
 // Verify checks one domain now, for the operator's "verify now". It is
-// refused within manualCheckInterval of the domain's last check.
+// refused within manualCheckInterval of the domain's last check. The lookups
+// run detached from the request, under their own timeouts, so an operator
+// navigating away never records a cancelled check as a failed one.
 func (s *Service) Verify(ctx context.Context, tenantID, id uuid.UUID) (*models.StatusPageDomain, error) {
 	if !s.Enabled() {
 		return nil, ErrDisabled
@@ -344,16 +380,25 @@ func (s *Service) Verify(ctx context.Context, tenantID, id uuid.UUID) (*models.S
 	if err != nil {
 		return nil, fmt.Errorf("claim custom domain: %w", err)
 	}
-	res := checkDomain(ctx, s.cfg.Resolver, claimed.Hostname, claimed.Token, s.cfg.CNAMETarget)
-	if err := s.record(context.WithoutCancel(ctx), claimed, res); err != nil {
+	detached := context.WithoutCancel(ctx)
+	res := s.check(detached, claimed)
+	if err := s.record(detached, claimed, res); err != nil {
 		return nil, err
 	}
-	r, err := s.get(ctx, tenantID, id)
+	r, err := s.get(detached, tenantID, id)
 	if err != nil {
 		return nil, err
 	}
 	out := s.toAPI(r)
 	return &out, nil
+}
+
+// check runs one domain's lookups, bounded by maxCheckDuration whatever the
+// caller's context allows.
+func (s *Service) check(ctx context.Context, c claim) checkResult {
+	ctx, cancel := context.WithTimeout(ctx, maxCheckDuration)
+	defer cancel()
+	return checkDomain(ctx, s.cfg.Resolver, c.Hostname, c.Token, s.cfg.CNAMETarget)
 }
 
 // claim is a domain taken for one check.
@@ -366,9 +411,23 @@ type claim struct {
 	PageID    uuid.UUID
 }
 
+// displaced is another page's claim a verification superseded.
+type displaced struct {
+	ID       uuid.UUID
+	PageID   uuid.UUID
+	TenantID uuid.UUID
+}
+
+const supersededMessage = "Another status page verified this hostname first. Remove it here, or ask its owner to remove it there."
+
 // record stores a check's outcome. The row is locked for the read and the
 // write only (never across the DNS lookups), so a manual check and the
 // runner checking the same domain each count once, in turn.
+//
+// A claim that passes takes the hostname only if no other page holds it
+// verified (the partial unique index decides, race-free); otherwise it is
+// superseded. One that takes it supersedes every other page's unverified or
+// failed claim on the hostname, each audited in its own workspace.
 func (s *Service) record(ctx context.Context, c claim, res checkResult) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -393,22 +452,80 @@ func (s *Service) record(ctx context.Context, c claim, res checkResult) error {
 
 	now := s.now()
 	next, servedChanged := advance(cur, c.CreatedAt, res, now)
-	var lastError interface{}
-	if res.Problem != "" {
-		lastError = truncate(res.Problem, 500)
+	lastError := res.Problem
+	write := func(state domainState, problem string) error {
+		var stored interface{}
+		if problem != "" {
+			stored = truncate(problem, 500)
+		}
+		_, err := tx.ExecContext(ctx, `
+			UPDATE status_page_domains
+			SET status = $2, verified_at = $3, failing_since = $4, consecutive_failures = $5,
+			    next_check_at = $6, txt_ok = $7, cname_ok = $8, last_error = $9,
+			    last_checked_at = $10, updated_at = NOW()
+			WHERE id = $1`,
+			c.ID, state.Status, state.VerifiedAt, state.FailingSince, state.ConsecutiveFailures,
+			state.NextCheckAt, res.TXTFound, res.CNAMEFound, stored, now)
+		return err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE status_page_domains
-		SET status = $2, verified_at = $3, failing_since = $4, consecutive_failures = $5,
-		    next_check_at = $6, txt_ok = $7, cname_ok = $8, last_error = $9,
-		    last_checked_at = $10, updated_at = NOW()
-		WHERE id = $1`,
-		c.ID, next.Status, next.VerifiedAt, next.FailingSince, next.ConsecutiveFailures,
-		next.NextCheckAt, res.TXTFound, res.CNAMEFound, lastError, now); err != nil {
+
+	taking := next.Status == pagedomains.Verified && cur.Status != pagedomains.Verified
+	if taking {
+		if _, err := tx.ExecContext(ctx, `SAVEPOINT take_hostname`); err != nil {
+			return fmt.Errorf("record custom domain check: %w", err)
+		}
+	}
+	err = write(next, lastError)
+	if taking && pgerr.IsUniqueViolation(err) {
+		// Another page holds the hostname verified: this claim is superseded.
+		if _, rerr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT take_hostname`); rerr != nil {
+			return fmt.Errorf("record custom domain check: %w", rerr)
+		}
+		next = domainState{
+			Status:              pagedomains.Superseded,
+			ConsecutiveFailures: cur.ConsecutiveFailures,
+			NextCheckAt:         now.Add(pagedomains.ClaimTTL),
+		}
+		taking, servedChanged = false, false
+		err = write(next, supersededMessage)
+	}
+	if err != nil {
 		return fmt.Errorf("record custom domain check: %w", err)
+	}
+
+	var lost []displaced
+	if taking {
+		rows, err := tx.QueryContext(ctx, `
+			UPDATE status_page_domains d
+			SET status = 'superseded', last_error = $3, next_check_at = $4, updated_at = NOW()
+			FROM status_pages sp
+			WHERE d.hostname = $1 AND d.id <> $2 AND d.status IN ('pending', 'failed', 'superseded')
+			  AND sp.id = d.status_page_id
+			RETURNING d.id, d.status_page_id, sp.tenant_id`,
+			c.Hostname, c.ID, supersededMessage, now.Add(pagedomains.ClaimTTL))
+		if err != nil {
+			return fmt.Errorf("supersede other claims: %w", err)
+		}
+		for rows.Next() {
+			var d displaced
+			if err := rows.Scan(&d.ID, &d.PageID, &d.TenantID); err != nil {
+				rows.Close()
+				return fmt.Errorf("supersede other claims: %w", err)
+			}
+			lost = append(lost, d)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("supersede other claims: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	for _, d := range lost {
+		s.audit(d.TenantID, "status-page-domain.supersede", d.ID, map[string]any{
+			"hostname": c.Hostname, "status_page_id": d.PageID.String(),
+			"reason": "another status page verified the hostname first",
+		})
 	}
 	if servedChanged {
 		if s.cfg.Log != nil {
@@ -421,6 +538,24 @@ func (s *Service) record(ctx context.Context, c claim, res checkResult) error {
 		s.notify(c.TenantID, c.PageID)
 	}
 	return nil
+}
+
+// audit records what the runner or a verification did to a domain the
+// request (if any) did not name.
+func (s *Service) audit(tenantID uuid.UUID, action string, domainID uuid.UUID, details map[string]any) {
+	if s.cfg.Audit == nil {
+		return
+	}
+	s.cfg.Audit.Record(audit.Event{
+		TenantID:     &tenantID,
+		ActorType:    audit.ActorAnonymous,
+		ActorLabel:   "custom domain verification",
+		Action:       action,
+		ResourceType: "status-page-domain",
+		ResourceID:   domainID.String(),
+		Outcome:      audit.OutcomeSuccess,
+		Details:      details,
+	})
 }
 
 func (s *Service) notify(tenantID, pageID uuid.UUID) {

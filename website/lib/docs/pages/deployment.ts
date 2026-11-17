@@ -311,7 +311,7 @@ status.example.com, status.customer.example {
         {
           type: 'paragraph',
           text:
-            'Add each custom domain to the site list once it is added in the UI; Caddy\'s certificate request succeeds only after the domain\'s CNAME resolves to this host. With TLS terminated there, set `STATUS_PAGE_COOKIE_SECURE=true` (or `TRUSTED_PROXY_CIDRS` with `X-Forwarded-Proto`) so visitor session cookies on custom domains are `Secure`.',
+            'Set `STATUS_PAGE_BASE_URL` to the platform\'s public status URL: with it, the status service serves its pages only on that host (and `STATUS_PAGE_PLATFORM_HOSTS`), so adding a custom domain to the site list before it is verified is harmless — it answers not found until then, and again if the domain fails or is removed in the UI. With the `localhost` default, the service cannot tell its own hosts from others and serves every page on any host but a verified domain: never route a custom domain to it like that. Caddy\'s certificate request for a domain succeeds only once its CNAME resolves to this host. Session cookies on custom domains are always `Secure`.',
         },
       ],
     },
@@ -631,12 +631,17 @@ kubectl -n probara get jobs`,
             [
               '`statusPage.customDomains`',
               '`[]`',
-              'One `{host, tlsSecretName}` per custom domain. With `ingress.enabled` the chart renders an Ingress per domain (`<release>-sp-<host>`) routing `/` to the status-page service, with the domain\'s TLS Secret and `ingress.className`/`ingress.annotations`. The render fails for an entry without `host` or `tlsSecretName`, a host also in `ingress.hosts`, or a host listed twice. Each host must also be added and verified on its page in the UI; until then its Ingress answers only not-found.',
+              'One `{host, tlsSecretName}` per custom domain. With `ingress.enabled` the chart renders an Ingress per domain (`<release>-sp-<host>`) routing `/` to the status-page service, with the domain\'s TLS Secret and `ingress.className`/`ingress.annotations`. The render fails for an entry without `host` or `tlsSecretName`, a host also in `ingress.hosts`, a host listed twice, or custom domains without any platform host (`baseUrl`, `ingress.hosts` or `platformHosts`). Each host must also be added and verified on its page in the UI; until then, and after it fails or is removed there, its Ingress answers only not-found.',
             ],
             [
               '`statusPage.customDomainsClusterIssuer`',
               'Empty',
-              'cert-manager ClusterIssuer set as `cert-manager.io/cluster-issuer` on the custom-domain Ingresses, so cert-manager issues each domain\'s certificate into its `tlsSecretName`. Empty: no annotation (provide the Secrets yourself, or put the issuer in `ingress.annotations`).',
+              'cert-manager ClusterIssuer set as `cert-manager.io/cluster-issuer` on the custom-domain Ingresses, so cert-manager issues each domain\'s certificate into its `tlsSecretName`; it replaces an issuer named in `ingress.annotations` there. Empty: no annotation of its own (provide the Secrets yourself, or put the issuer in `ingress.annotations`).',
+            ],
+            [
+              '`statusPage.platformHosts`',
+              '`[]`',
+              'Hosts that serve every page under `/public/status/`, besides `statusPage.baseUrl`\'s host and `ingress.hosts` (all three rendered as `STATUS_PAGE_PLATFORM_HOSTS`). Any other public hostname routed to the status service gets a verified custom domain\'s page or not found. Add the name of any proxy of your own that serves status pages.',
             ],
             [
               '`statusPage.trustForwardedHost`',
@@ -1069,6 +1074,13 @@ api:
           title: 'Upgrading to a release with chain expiry, multi-echo ping and failure capture',
           text:
             'Three check changes apply to existing monitors without a save. Certificate expiry now counts the whole presented chain: every HTTPS, SIP-over-TLS and TLS-wrapped TCP monitor with `tls_min_days_valid` alerts on the earliest expiry among the leaf and the intermediates the server sends (never a trust-store root), so a monitor whose leaf is fine may open a `tls_expiry` alert for an expiring intermediate on its first check; the alert names that certificate and its date. Every ping monitor now sends three echoes 250 ms apart and still fails only when all are lost, so one dropped packet no longer fails it; a monitor with a short timeout gets its echoes squeezed to fit rather than failing, and ping targets now go through the worker\'s network policy, so with `HTTP_BLOCK_PRIVATE_IPS=true` a ping of a private address outside `HTTP_ALLOWED_CIDRS` turns into an `error`. Capacity: a healthy ping holds a worker slot for about half a second and a lost echo for about 1.5 seconds (the gaps plus a 1-second wait for the last reply, never the monitor\'s timeout), where a single echo used to return at once; a fleet running many ping monitors may need more `WORKER_CONCURRENCY` or replicas. Workers need the [ping sysctl](#ping-sockets): the chart sets it, Docker 20.10+ has it, rootless hosts must allow it on the host. Failed HTTP checks now store their redacted response with the result, which grows those rows by up to 16 KiB for the 30 days raw results are kept; list and history reads leave it out.',
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: 'Upgrading to status page custom domains: migrate first, and new Ingress objects',
+          text:
+            'Migration 000120 adds `status_page_domains`, which the new API reads in every status page response (`public_url`) and the new status service reads at start. Run it before the services roll (the `migrate` command or Job against the database, before upgrading the chart, whose own migration Job is a post-upgrade hook); until it has run, new API pods fail status page reads. The chart\'s Ingress template now emits each `ingress.hosts` entry as its own YAML document: earlier charts ran the hosts together, so only the **last** host\'s Ingress existed. An upgrade therefore creates `<release fullname>-<host with dots as dashes>` for every other host — with the default values `<release fullname>-probara-example-com` — which an admission webhook rejects if you created an Ingress for that host by hand, and which makes cert-manager request a certificate if `ingress.annotations` names an issuer. Delete hand-made duplicates first, or remove those hosts from `ingress.hosts`. The status service now also serves its pages only on its platform hosts (`statusPage.baseUrl`, `ingress.hosts`, `statusPage.platformHosts`): add any other hostname you route to it to `statusPage.platformHosts` (`STATUS_PAGE_PLATFORM_HOSTS`).',
         },
         {
           type: 'callout',

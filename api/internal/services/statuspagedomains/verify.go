@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/publicsuffix"
+
 	"github.com/yassinebenameur/probara/shared/pagedomains"
 )
 
@@ -63,6 +65,12 @@ func checkDomain(ctx context.Context, r Resolver, hostname, token, target string
 	var res checkResult
 	var problems []string
 
+	// What the operator is told is fixed wording plus names they gave or
+	// were given: a TXT record that is missing reads the same as one holding
+	// other values, and the CNAME's actual target is named only when it is
+	// under the hostname's own registrable domain or is the expected target.
+	// A resolver that sees private zones must not let a tenant read internal
+	// names through this message.
 	txtName := pagedomains.VerificationRecordName(hostname)
 	values, err := lookupTXT(ctx, r, txtName)
 	switch {
@@ -70,26 +78,30 @@ func checkDomain(ctx context.Context, r Resolver, hostname, token, target string
 		problems = append(problems, lookupProblem(err, "TXT record "+txtName))
 	case containsToken(values, token):
 		res.TXTFound = true
-	case len(values) == 0:
-		problems = append(problems, "TXT record "+txtName+" not found")
 	default:
-		problems = append(problems, "TXT record "+txtName+" does not hold this domain's verification value")
+		problems = append(problems, "TXT record "+txtName+" with this domain's verification value not found")
 	}
 
+	notPointing := hostname + " does not point at " + target + " (add a CNAME record)"
 	canonical, err := lookupCanonical(ctx, r, hostname)
 	switch {
+	case err != nil && isNotFound(err):
+		problems = append(problems, notPointing)
 	case err != nil:
 		problems = append(problems, lookupProblem(err, "CNAME record for "+hostname))
 	case canonical == target:
 		res.CNAMEFound = true
 	case canonical == hostname:
-		problems = append(problems, hostname+" has no CNAME record; point it at "+target)
+		problems = append(problems, notPointing)
 	default:
 		targetCanonical, terr := lookupCanonical(ctx, r, target)
-		if terr == nil && targetCanonical == canonical {
+		switch {
+		case terr == nil && targetCanonical == canonical:
 			res.CNAMEFound = true
-		} else {
-			problems = append(problems, hostname+" does not resolve through "+target+" (its CNAME leads to "+canonical+")")
+		case sameRegistrableDomain(canonical, hostname):
+			problems = append(problems, hostname+" does not point at "+target+" (its CNAME leads to "+canonical+")")
+		default:
+			problems = append(problems, notPointing)
 		}
 	}
 
@@ -147,6 +159,15 @@ func absolute(name string) string {
 func isNotFound(err error) bool {
 	var dnsErr *net.DNSError
 	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
+}
+
+// sameRegistrableDomain reports whether a and b sit under one registrable
+// domain (eTLD+1), so naming a to the owner of b discloses nothing outside
+// their own zone.
+func sameRegistrableDomain(a, b string) bool {
+	da, errA := publicsuffix.EffectiveTLDPlusOne(a)
+	db, errB := publicsuffix.EffectiveTLDPlusOne(b)
+	return errA == nil && errB == nil && da == db
 }
 
 // lookupProblem words a failed lookup without the resolver's own message.

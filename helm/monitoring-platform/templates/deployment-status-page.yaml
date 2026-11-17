@@ -94,6 +94,10 @@ spec:
         - name: STATUS_PAGE_COOKIE_SECURE
           value: {{ toString .Values.statusPage.cookieSecure | quote }}
         {{- end }}
+        {{- with (include "monitoring-platform.statusPagePlatformHosts" .) }}
+        - name: STATUS_PAGE_PLATFORM_HOSTS
+          value: {{ . | quote }}
+        {{- end }}
         {{- if .Values.statusPage.trustForwardedHost }}
         - name: STATUS_PAGE_TRUST_FORWARDED_HOST
           value: "true"

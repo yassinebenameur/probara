@@ -52,6 +52,8 @@ func TestErrorMapping(t *testing.T) {
 		{svc.ErrStatusPageNotFound, http.StatusNotFound},
 		{svc.ErrHostnameTaken, http.StatusConflict},
 		{svc.ErrHostnameReserved, http.StatusConflict},
+		{svc.ErrAlreadyOnPage, http.StatusConflict},
+		{svc.ErrTooManyWorkspaceDomains, http.StatusBadRequest},
 		{svc.ErrDisabled, http.StatusBadRequest},
 		{svc.ErrTooManyDomains, http.StatusBadRequest},
 		{&svc.CheckedRecentlyError{RetryAfter: 12500 * time.Millisecond}, http.StatusTooManyRequests},

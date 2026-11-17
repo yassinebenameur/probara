@@ -50,9 +50,9 @@ func (h *Handlers) fail(w http.ResponseWriter, err error, action string) {
 	switch {
 	case errors.Is(err, svc.ErrNotFound), errors.Is(err, svc.ErrStatusPageNotFound):
 		apierrors.WriteNotFoundError(w, err.Error())
-	case errors.Is(err, svc.ErrHostnameTaken), errors.Is(err, svc.ErrHostnameReserved):
+	case errors.Is(err, svc.ErrHostnameTaken), errors.Is(err, svc.ErrHostnameReserved), errors.Is(err, svc.ErrAlreadyOnPage):
 		apierrors.WriteError(w, http.StatusConflict, "conflict", err.Error())
-	case errors.Is(err, svc.ErrDisabled), errors.Is(err, svc.ErrTooManyDomains):
+	case errors.Is(err, svc.ErrDisabled), errors.Is(err, svc.ErrTooManyDomains), errors.Is(err, svc.ErrTooManyWorkspaceDomains):
 		apierrors.WriteValidationError(w, err.Error())
 	case errors.As(err, &recent):
 		w.Header().Set("Retry-After", strconv.Itoa(int(recent.RetryAfter.Seconds()+0.999)))

@@ -68,25 +68,21 @@ func TestLoadStatusPageConfig_CookieSecure(t *testing.T) {
 	}
 }
 
-// On a custom domain the Secure flag follows STATUS_PAGE_COOKIE_SECURE when
-// set and the request otherwise: an https STATUS_PAGE_BASE_URL describes the
-// platform host only.
-func TestStatusPageConfig_CustomHostCookieSecure(t *testing.T) {
-	on, off := true, false
-	cases := []struct {
-		flag           *bool
-		baseURL        string
-		secure, detect bool
-	}{
-		{nil, "", false, true},
-		{nil, "https://status.example.com", false, true},
-		{&on, "", true, false},
-		{&off, "https://status.example.com", false, false},
+// STATUS_PAGE_PLATFORM_HOSTS lists extra platform hosts, normalized.
+func TestLoadStatusPageConfig_PlatformHosts(t *testing.T) {
+	setRequiredStatusPageEnv(t)
+	t.Setenv("STATUS_PAGE_PLATFORM_HOSTS", " Probara.Example.com , status.example.com:443,")
+	cfg, err := LoadStatusPageConfig()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cases {
-		cfg := &StatusPageConfig{StatusPageBaseURL: c.baseURL, CookieSecure: c.flag}
-		if secure, detect := cfg.CustomHostCookieSecure(); secure != c.secure || detect != c.detect {
-			t.Errorf("%v/%q: secure=%v detect=%v, want %v %v", c.flag, c.baseURL, secure, detect, c.secure, c.detect)
+	if strings.Join(cfg.PlatformHosts, ",") != "probara.example.com,status.example.com" {
+		t.Fatalf("platform hosts = %v", cfg.PlatformHosts)
+	}
+	for _, bad := range []string{"https://x.example.com/", "a b", "user@x.example.com"} {
+		t.Setenv("STATUS_PAGE_PLATFORM_HOSTS", bad)
+		if _, err := LoadStatusPageConfig(); err == nil || !strings.Contains(err.Error(), "STATUS_PAGE_PLATFORM_HOSTS") {
+			t.Errorf("%q: err = %v", bad, err)
 		}
 	}
 }

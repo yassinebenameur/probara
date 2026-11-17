@@ -16,9 +16,12 @@ CREATE TABLE status_page_domains (
         CONSTRAINT status_page_domains_hostname_check
         CHECK (hostname = lower(hostname) AND char_length(hostname) BETWEEN 3 AND 253 AND hostname NOT LIKE '%.'),
     verification_token   TEXT NOT NULL,
+    -- pending: not verified yet; verified: served; failed: was verified,
+    -- then failed every check for the tolerance; superseded: another page
+    -- verified the hostname first.
     status               TEXT NOT NULL DEFAULT 'pending'
         CONSTRAINT status_page_domains_status_check
-        CHECK (status IN ('pending', 'verified', 'failed')),
+        CHECK (status IN ('pending', 'verified', 'failed', 'superseded')),
     -- Outcome of the last check, per record (NULL until checked), and why it
     -- failed, so the UI can say which record is missing.
     txt_ok               BOOLEAN,
@@ -38,8 +41,16 @@ CREATE TABLE status_page_domains (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- One hostname per installation, whatever its status or workspace.
-CREATE UNIQUE INDEX idx_status_page_domains_hostname ON status_page_domains (hostname);
+-- A hostname is served by one page at most: unique among verified rows
+-- only. Unverified claims may coexist (one per page), so adding a hostname
+-- never tells a workspace that another one has claimed it, and a claim
+-- nobody can verify never blocks the hostname's real owner: the first claim
+-- whose own token and CNAME check out gets it and supersedes the rest.
+CREATE UNIQUE INDEX idx_status_page_domains_verified_hostname
+    ON status_page_domains (hostname) WHERE status = 'verified';
+CREATE UNIQUE INDEX idx_status_page_domains_page_hostname
+    ON status_page_domains (status_page_id, hostname);
+CREATE INDEX idx_status_page_domains_hostname ON status_page_domains (hostname);
 -- A page's domains, oldest first (shared/pagedomains.PrimaryHostSQL).
 CREATE INDEX idx_status_page_domains_page ON status_page_domains (status_page_id, created_at);
 CREATE INDEX idx_status_page_domains_due ON status_page_domains (next_check_at);

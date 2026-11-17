@@ -153,6 +153,17 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	case "/push/unsubscribe":
 		h.HandlePushUnsubscribe(aw, r, slug)
 		return
+	case workerSuffix:
+		// The push service worker of a page on its custom domain, where it
+		// is /sw.js (custom_host.go). Behind the gate like the page, and not
+		// found on a gated page, where push is off; on the platform host the
+		// worker is /public/status/sw.js, not a page route.
+		if _, onCustomHost := customHostFrom(r); !onCustomHost || gated {
+			writeNotFound(w)
+			return
+		}
+		h.HandlePushServiceWorker(aw, r)
+		return
 	default:
 		// Page add-ons (addons.go): summary.json, badges and the Atom feed.
 		// They read the slug-keyed render and feed caches, so they are

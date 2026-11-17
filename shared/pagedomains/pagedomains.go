@@ -6,6 +6,11 @@
 // DNS records the operator creates: a TXT record at VerificationRecordName
 // holding the domain's token (ownership), and a CNAME from the domain to the
 // installation's STATUS_PAGE_CNAME_TARGET (routing).
+//
+// A hostname is unique only among verified domains: several pages, in any
+// workspaces, may hold an unverified claim on it, each with its own token.
+// The first claim that verifies gets the hostname and supersedes the others;
+// a claim that never verifies expires after ClaimTTL.
 package pagedomains
 
 import (
@@ -13,6 +18,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"time"
 
 	"golang.org/x/net/idna"
 	"golang.org/x/net/publicsuffix"
@@ -29,7 +35,14 @@ const (
 	// Failed: was verified, then failed every check for the tolerance. Not
 	// served until a check passes again.
 	Failed = "failed"
+	// Superseded: another page verified the hostname first. Not served, not
+	// rechecked except on demand; expires like a pending claim.
+	Superseded = "superseded"
 )
+
+// ClaimTTL is how long a claim that never verified (pending or superseded)
+// is kept before the API's runner removes it.
+const ClaimTTL = 14 * 24 * time.Hour
 
 // EventDomainsChanged is the statusupdates event type the API publishes
 // (with StatusPageID) when a page's served domains change: one added,
@@ -49,7 +62,51 @@ func VerificationRecordName(hostname string) string {
 // root of its own origin. Always https: custom domains are served behind TLS
 // (Helm's Ingress with cert-manager, or the operator's own proxy).
 func PageURL(hostname string) string {
-	return "https://" + hostname + "/"
+	return PublicURL(PublicBaseURL(hostname, "", ""), "")
+}
+
+// PublicBaseURL is the absolute URL a page's visitor routes hang off, with
+// no trailing slash: "https://<primaryHost>" on its canonical custom domain,
+// else "<platformBaseURL>/public/status/<slug>", else "" when neither is
+// known. Every link to a page or one of its routes (canonical link, feeds,
+// summary, badges, push deep links, forms and mail links) is built from it
+// with PublicURL, in the API and the status-page service alike.
+func PublicBaseURL(primaryHost, platformBaseURL, slug string) string {
+	if primaryHost != "" {
+		return "https://" + primaryHost
+	}
+	base := strings.TrimRight(strings.TrimSpace(platformBaseURL), "/")
+	if base == "" || slug == "" {
+		return ""
+	}
+	return base + "/public/status/" + slug
+}
+
+// PublicURL joins a sub-route ("/feed.atom"; "" for the page itself) onto a
+// PublicBaseURL. The page itself on a custom domain is its root, "/". ""
+// when base is.
+func PublicURL(base, suffix string) string {
+	if base == "" {
+		return ""
+	}
+	if suffix == "" && !strings.Contains(strings.TrimPrefix(base, "https://"), "/") {
+		return base + "/"
+	}
+	return base + suffix
+}
+
+// CanBeCustomDomain reports whether host (as HostFromHeader returns it)
+// could ever be accepted as a custom domain. IP addresses, single labels
+// (localhost, a Service name) and names under a TLD outside the public
+// suffix list (".local", ".internal", "cluster.local") never can: the
+// status-page service treats requests for them as internal (probes,
+// in-cluster calls) and never looks them up.
+func CanBeCustomDomain(host string) bool {
+	if host == "" {
+		return false
+	}
+	normalized, err := NormalizeHostname(host)
+	return err == nil && normalized == host
 }
 
 // PrimaryHostSQL is a scalar subquery selecting the canonical domain of the

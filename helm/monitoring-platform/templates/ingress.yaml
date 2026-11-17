@@ -88,6 +88,13 @@ domain's own TLS Secret. A host that is also an app host above would hand
 that host to a status page, so the render fails instead.
 */}}
 {{- if and .Values.statusPage.enabled .Values.statusPage.customDomains }}
+{{- if not (or .Values.statusPage.baseUrl (include "monitoring-platform.statusPagePlatformHosts" .)) }}
+{{- fail "statusPage.customDomains needs statusPage.baseUrl, ingress.hosts or statusPage.platformHosts: without a platform host the status-page service cannot refuse unverified hostnames" }}
+{{- end }}
+{{- $annotations := deepCopy ($.Values.ingress.annotations | default dict) }}
+{{- with $.Values.statusPage.customDomainsClusterIssuer }}
+{{- $_ := set $annotations "cert-manager.io/cluster-issuer" . }}
+{{- end }}
 {{- $appHosts := dict }}
 {{- range .Values.ingress.hosts }}
 {{- $_ := set $appHosts (lower .host) true }}
@@ -115,14 +122,9 @@ metadata:
   labels:
     {{- include "monitoring-platform.labels" $ | nindent 4 }}
     app.kubernetes.io/component: status-page
-  {{- if or $.Values.ingress.annotations $.Values.statusPage.customDomainsClusterIssuer }}
+  {{- with $annotations }}
   annotations:
-    {{- with $.Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-    {{- end }}
-    {{- with $.Values.statusPage.customDomainsClusterIssuer }}
-    cert-manager.io/cluster-issuer: {{ . | quote }}
-    {{- end }}
   {{- end }}
 spec:
   {{- if $.Values.ingress.className }}

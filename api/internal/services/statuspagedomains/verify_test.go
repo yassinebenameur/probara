@@ -106,15 +106,16 @@ func TestCheckDomain(t *testing.T) {
 			name:            "TXT missing",
 			setup:           []setup{cnameDirect},
 			cname:           true,
-			problemContains: []string{"TXT record _probara-verify." + testHost + " not found"},
+			problemContains: []string{"TXT record _probara-verify." + testHost + " with this domain's verification value not found"},
 		},
 		{
 			name: "TXT with the wrong value",
 			setup: []setup{cnameDirect, func(f *fakeResolver) {
 				f.txt["_probara-verify."+testHost+"."] = []string{"probara-verify=someone-else"}
 			}},
-			cname:           true,
-			problemContains: []string{"does not hold this domain's verification value"},
+			cname: true,
+			// Reads exactly like a missing record.
+			problemContains: []string{"TXT record _probara-verify." + testHost + " with this domain's verification value not found"},
 		},
 		{
 			name: "TXT empty answer",
@@ -122,19 +123,19 @@ func TestCheckDomain(t *testing.T) {
 				f.txt["_probara-verify."+testHost+"."] = []string{}
 			}},
 			cname:           true,
-			problemContains: []string{"not found"},
+			problemContains: []string{"TXT record _probara-verify." + testHost + " with this domain's verification value not found"},
 		},
 		{
 			name:            "CNAME missing, host does not exist",
 			setup:           []setup{txtOK},
 			txt:             true,
-			problemContains: []string{"CNAME record for " + testHost + " not found"},
+			problemContains: []string{testHost + " does not point at " + testTarget + " (add a CNAME record)"},
 		},
 		{
 			name:            "CNAME missing, host has an A record",
 			setup:           []setup{txtOK, func(f *fakeResolver) { f.exists[testHost+"."] = true }},
 			txt:             true,
-			problemContains: []string{testHost + " has no CNAME record; point it at " + testTarget},
+			problemContains: []string{testHost + " does not point at " + testTarget + " (add a CNAME record)"},
 		},
 		{
 			name: "CNAME elsewhere",
@@ -142,8 +143,29 @@ func TestCheckDomain(t *testing.T) {
 				f.cnames[testHost+"."] = "old-provider.example."
 				f.exists[testTarget+"."] = true
 			}},
+			txt: true,
+			// A name outside the hostname's own domain is never shown: a
+			// resolver seeing private zones must not reveal them.
+			problemContains:   []string{testHost + " does not point at " + testTarget + " (add a CNAME record)"},
+			problemNotContain: []string{"old-provider.example"},
+		},
+		{
+			name: "CNAME to an internal name",
+			setup: []setup{txtOK, func(f *fakeResolver) {
+				f.cnames[testHost+"."] = "db-primary.corp.internal."
+				f.exists[testTarget+"."] = true
+			}},
+			txt:               true,
+			problemNotContain: []string{"corp.internal", "db-primary"},
+		},
+		{
+			name: "CNAME within the customer's own domain is named",
+			setup: []setup{txtOK, func(f *fakeResolver) {
+				f.cnames[testHost+"."] = "old.customer.example."
+				f.exists[testTarget+"."] = true
+			}},
 			txt:             true,
-			problemContains: []string{"does not resolve through " + testTarget, "old-provider.example"},
+			problemContains: []string{"its CNAME leads to old.customer.example"},
 		},
 		{
 			name: "chain through the customer's own name",

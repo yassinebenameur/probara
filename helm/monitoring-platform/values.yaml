@@ -632,13 +632,23 @@ statusPage:
   # are off.
   cnameTarget: ""
   # One entry per custom domain: {host: status.example.org, tlsSecretName:
-  # status-example-org-tls}. Each host must also be verified in the UI; an
-  # Ingress for an unverified host serves nothing but not-found answers.
+  # status-example-org-tls}. Each host must also be verified in the UI. The
+  # status-page service serves the platform routes only on its platform hosts
+  # (the host of baseUrl, ingress.hosts and platformHosts below), so until a
+  # listed host is verified (or after it fails or is removed in the UI) its
+  # Ingress gets only not-found answers; the render fails without any
+  # platform host.
   customDomains: []
+  # Extra hosts that serve the platform routes (every page under
+  # /public/status/), besides baseUrl's host and ingress.hosts:
+  # STATUS_PAGE_PLATFORM_HOSTS. For a proxy of your own in front of the
+  # service under another name.
+  platformHosts: []
   # cert-manager ClusterIssuer that issues the custom domains' certificates
-  # (the cert-manager.io/cluster-issuer annotation on their Ingresses).
-  # Empty: no annotation; create the TLS Secrets yourself, or set the issuer
-  # in ingress.annotations, which these Ingresses carry too.
+  # (the cert-manager.io/cluster-issuer annotation on their Ingresses, which
+  # carry ingress.annotations too; this value wins over an issuer set there).
+  # Empty: no annotation of its own; create the TLS Secrets yourself, or set
+  # the issuer in ingress.annotations.
   customDomainsClusterIssuer: ""
   # Match custom domains on X-Forwarded-Host instead of Host
   # (STATUS_PAGE_TRUST_FORWARDED_HOST), believed only from trustedProxyCIDRs

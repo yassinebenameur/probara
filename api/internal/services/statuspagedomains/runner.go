@@ -6,9 +6,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 )
 
 const (
@@ -21,12 +23,20 @@ const (
 	// other replicas pass it over while this one checks it; a replica that
 	// dies mid-check leaves it due again once the lease lapses.
 	claimLease = 2 * time.Minute
-	// claimBatch domains are claimed at a time and checked checkConcurrency
-	// at once; maxChecksPerTick bounds one tick (the rest wait for the next
-	// tick or another replica).
-	claimBatch       = 50
+	// maxCheckDuration bounds one domain's check: at most three lookups
+	// (verify.go), each under lookupTimeout.
+	maxCheckDuration = 3 * lookupTimeout
+	// checkConcurrency domains are checked at once. claimBatch is what that
+	// many workers finish, every check timing out, within half the lease, so
+	// no claimed row's lease can lapse while it is still being checked (a
+	// lapse would let another replica claim and count it again).
+	// maxChecksPerTick bounds one tick; the rest wait for the next tick or
+	// another replica.
 	checkConcurrency = 8
+	claimBatch       = checkConcurrency * int((claimLease/2)/maxCheckDuration)
 	maxChecksPerTick = 500
+	// expireBatch bounds the claims one tick removes.
+	expireBatch = 500
 )
 
 // RunOnce checks every due domain, a batch at a time. It stops early,
@@ -34,6 +44,12 @@ const (
 func (s *Service) RunOnce(ctx context.Context) error {
 	if !s.Enabled() {
 		return nil
+	}
+	if err := s.expireClaims(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
 	}
 	for checked := 0; checked < maxChecksPerTick && ctx.Err() == nil; {
 		batch, err := s.claimDue(ctx, claimBatch)
@@ -52,7 +68,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		var firstErr error
 		for _, c := range batch {
 			group.Go(func() error {
-				res := checkDomain(gctx, s.cfg.Resolver, c.Hostname, c.Token, s.cfg.CNAMETarget)
+				res := s.check(gctx, c)
 				if gctx.Err() != nil {
 					// Stopped mid-check: the lease brings it back.
 					return nil
@@ -88,7 +104,7 @@ func (s *Service) claimDue(ctx context.Context, limit int) ([]claim, error) {
 		SET next_check_at = $2
 		FROM (
 			SELECT id FROM status_page_domains
-			WHERE next_check_at <= $1
+			WHERE next_check_at <= $1 AND status <> 'superseded'
 			ORDER BY next_check_at
 			LIMIT $3
 			FOR UPDATE SKIP LOCKED
@@ -109,6 +125,49 @@ func (s *Service) claimDue(ctx context.Context, limit int) ([]claim, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// expireClaims removes claims that never verified (pending or superseded)
+// ClaimTTL after they were added, auditing each in its workspace. Replicas
+// running it at once delete each row once.
+func (s *Service) expireClaims(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		DELETE FROM status_page_domains d
+		USING status_pages sp
+		WHERE d.id IN (
+			SELECT id FROM status_page_domains
+			WHERE status IN ('pending', 'superseded') AND created_at < $1
+			ORDER BY created_at
+			LIMIT $2
+		) AND sp.id = d.status_page_id
+		RETURNING d.id, d.status_page_id, sp.tenant_id, d.hostname, d.status`,
+		s.now().Add(-pagedomains.ClaimTTL), expireBatch)
+	if err != nil {
+		return fmt.Errorf("expire custom domain claims: %w", err)
+	}
+	type expired struct {
+		id, pageID, tenantID uuid.UUID
+		hostname, status     string
+	}
+	var gone []expired
+	for rows.Next() {
+		var e expired
+		if err := rows.Scan(&e.id, &e.pageID, &e.tenantID, &e.hostname, &e.status); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan expired custom domain: %w", err)
+		}
+		gone = append(gone, e)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("expire custom domain claims: %w", err)
+	}
+	for _, e := range gone {
+		s.audit(e.tenantID, "status-page-domain.expire", e.id, map[string]any{
+			"hostname": e.hostname, "status_page_id": e.pageID.String(), "status": e.status,
+			"reason": "never verified within 14 days",
+		})
+	}
+	return nil
 }
 
 // Runner re-verifies custom domains in the background. Every API replica

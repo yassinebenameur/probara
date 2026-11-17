@@ -461,3 +461,22 @@ on), else empty, which turns custom domains off.
 {{- (urlParse .Values.statusPage.baseUrl).hostname -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+STATUS_PAGE_PLATFORM_HOSTS for the status-page: the ingress.hosts (when the
+chart's Ingress is on) and statusPage.platformHosts, comma-separated. Those
+hosts serve every page under /public/status/; any other public hostname is
+served only as a verified custom domain, else answered not found.
+*/}}
+{{- define "monitoring-platform.statusPagePlatformHosts" -}}
+{{- $hosts := list -}}
+{{- if .Values.ingress.enabled -}}
+{{- range .Values.ingress.hosts -}}
+{{- $hosts = append $hosts (lower .host) -}}
+{{- end -}}
+{{- end -}}
+{{- range .Values.statusPage.platformHosts -}}
+{{- $hosts = append $hosts (lower .) -}}
+{{- end -}}
+{{- $hosts | uniq | join "," -}}
+{{- end }}

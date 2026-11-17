@@ -391,7 +391,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A visitor who enters the right password, or opens a kiosk URL, gets a session cookie: signed with `STATUS_PAGE_SESSION_SECRET`, `HttpOnly`, `SameSite=Lax`, scoped to the page's path (host-only at `/` on a [custom domain](#custom-domains)), and `Secure` per `STATUS_PAGE_COOKIE_SECURE` — by default on when `STATUS_PAGE_BASE_URL` is `https://`, else only for requests that arrived over HTTPS (behind a TLS-terminating proxy that needs `TRUSTED_PROXY_CIDRS`, so set the base URL or the flag). On a custom domain the base URL does not count: the flag, else the request. Nothing about the session is stored. A password session lasts 30 days and ends early when the password is set, changed or removed; a kiosk session lasts 400 days (the browser maximum) and ends at once when its token is revoked or the page stops accepting tokens. Every open live stream re-checks the page and the session every 15 seconds, so a stream opened while the page was public ends once it is not, and a visibility or password change also closes the page's streams at once so they reconnect through the check.",
+            "A visitor who enters the right password, or opens a kiosk URL, gets a session cookie: signed with `STATUS_PAGE_SESSION_SECRET`, `HttpOnly`, `SameSite=Lax`, scoped to the page's path, and `Secure` per `STATUS_PAGE_COOKIE_SECURE` — by default on when `STATUS_PAGE_BASE_URL` is `https://`, else only for requests that arrived over HTTPS (behind a TLS-terminating proxy that needs `TRUSTED_PROXY_CIDRS`, so set the base URL or the flag). On a [custom domain](#custom-domains) it is host-only at `/` and always `Secure`. Nothing about the session is stored. A password session lasts 30 days and ends early when the password is set, changed or removed; a kiosk session lasts 400 days (the browser maximum) and ends at once when its token is revoked or the page stops accepting tokens. Every open live stream re-checks the page and the session every 15 seconds, so a stream opened while the page was public ends once it is not, and a visibility or password change also closes the page's streams at once so they reconnect through the check.",
         },
         {
           type: "paragraph",
@@ -477,7 +477,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The API checks both records with DNS lookups only — it never connects to what the names point at. A new domain is checked every 15 minutes for three days, then every 6 hours; **Verify now** checks at once (at most every 30 seconds per domain). The CNAME may go through your own names or to a target that is itself a CNAME to a load balancer: it counts when the hostname's chain ends where the target's does. Once both records are found the domain is **verified** and served. Until then it is **pending** and the panel says which record is missing; an unverified hostname answers exactly like one the service does not know.",
+            "The API checks both records with DNS lookups only — it never connects to what the names point at. A new domain is checked every 15 minutes for three days, then every 6 hours; **Verify now** checks at once (at most every 30 seconds per domain). The CNAME may go through your own names or to a target that is itself a CNAME to a load balancer: it counts when the hostname's chain ends where the target's does. Once both records are found the domain is **verified** and served. Until then it is **pending** and the panel says which record is missing, in fixed wording: it names the CNAME's actual target only when that is under the hostname's own domain, so a check never reveals names from DNS zones the platform's resolver can see. An unverified hostname answers exactly like one the service does not know.",
         },
         {
           type: "table",
@@ -487,6 +487,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ["Verified", "Yes", "Every 6 hours"],
             ["Verified, failing checks", "Yes, for up to a day", "Every 30 minutes; one passing check clears it"],
             ["Failed", "No", "Hourly; a passing check verifies it again"],
+            ["Superseded", "No", "Only on **Verify now**, which takes the hostname once the page holding it lets go"],
           ],
         },
         {
@@ -498,7 +499,8 @@ export const STATUS_PAGES_PAGE: DocPage = {
           type: "list",
           items: [
             "Hostnames are lower-cased; an internationalized name is stored and shown as punycode (`status.xn--bcher-kva.de`). IP addresses, wildcards, ports, paths, bare public suffixes and names under an unknown top-level domain are refused, and so are the installation's own hosts (operator UI, API, status-page base URL, NATS websocket and the CNAME target).",
-            "A hostname belongs to one page across the whole installation, pending or not. A page can have up to 10.",
+            "A hostname is served by one page at most. Several pages, in any workspaces, may claim it unverified, each with its own verification value; adding one never tells you whether someone else has claimed it, only whether it is already verified for another page. The first claim whose own TXT value and CNAME check out takes the hostname, and every other page's pending or failed claim on it turns **superseded** (recorded in each workspace's audit log). A claim that never verifies, pending or superseded, is removed 14 days after it was added (audited as well).",
+            "A page can have up to 10 domains and a workspace up to 50, whatever their status.",
             "Custom domains are off until `STATUS_PAGE_CNAME_TARGET` is set on the API ([configuration](/docs/configuration/)); the panel says so.",
             "Apex domains (`example.com` itself) cannot hold a CNAME at most DNS providers; use a subdomain, or a provider-side ALIAS record that you keep pointed at the target yourself.",
           ],
@@ -510,6 +512,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
         },
         {
           type: "paragraph",
+          text:
+            "The status service serves its platform routes — every page under `/public/status/`, the in-page API proxy, health and metrics — only on its **platform hosts**: the host of `STATUS_PAGE_BASE_URL`, `STATUS_PAGE_PLATFORM_HOSTS` (Helm adds `ingress.hosts` and `statusPage.platformHosts`), and internal names such as a pod IP, `localhost` or a cluster Service name, which probes and scrapers use. Any other hostname gets a verified custom domain's page, or the not-found answer on every path: a domain still pending, failed, superseded or removed in the UI, an unknown host, and every public host until the status service has read its domain table once after starting. A proxy or Ingress may therefore route a hostname to the service before it is verified. Without a public platform host (no `STATUS_PAGE_BASE_URL`, or a `localhost` one, and no `STATUS_PAGE_PLATFORM_HOSTS` — development), the service cannot tell its own hosts apart and serves the platform routes on every host but a verified domain; Helm refuses to render custom domains without one.",
+        },
+        {
+          type: "paragraph",
           text: "What changes on a custom domain:",
         },
         {
@@ -517,10 +524,10 @@ export const STATUS_PAGES_PAGE: DocPage = {
           items: [
             "**Only that page.** Other pages' slugs, `/public/status/…` paths, the in-page API proxy (`/_sp_api/`), `/metrics` and the health routes are unknown paths of the page there, answered by its access check (not found; `401` on a password page).",
             "**Canonical URL.** The page's oldest verified domain is its canonical address, used for the canonical link, `og:url`, the feed's links, `summary.json`'s `url`, and the operator UI's links and Share panel. The page stays reachable at `/public/status/{slug}` on the platform host and on every other verified domain, all naming the same canonical URL, so search engines index one address.",
-            "**Sessions.** A password or kiosk session on a custom domain is a host-only cookie at `/`. A session opened on the platform host does not carry over (they are different origins), so a visitor or kiosk display unlocks or opens its kiosk URL on the domain it uses.",
+            "**Sessions.** A password or kiosk session on a custom domain is a host-only cookie at `/`, always `Secure` (custom domains are https only, so a display following a stray `http://` link never sends it in clear; `STATUS_PAGE_COOKIE_SECURE` does not apply there). A session opened on the platform host does not carry over (they are different origins), so a visitor or kiosk display unlocks or opens its kiosk URL on the domain it uses.",
             "**Isolation.** The page is the only one on its origin, so the cross-page limit described under [visibility](#visibility) does not apply. Its Content-Security-Policy is the same: `connect-src 'self'` is the custom origin, and `frame-ancestors` still admits the operator UI, which previews pages through the platform host.",
-            "**Notifications.** The service worker is `/sw.js` with the root as its scope. Subscriptions are per origin: see [visitor notifications](#browser-notifications).",
-            "**Host header.** Pages are matched on the request's `Host`. Behind a proxy that rewrites it, set `STATUS_PAGE_TRUST_FORWARDED_HOST=true` to match on `X-Forwarded-Host` instead, believed only from `TRUSTED_PROXY_CIDRS` peers. A forged `Host` can only ever select a verified domain's own page.",
+            "**Notifications.** The service worker is `/sw.js` with the root as its scope, behind the page's access check like every other route: on a password or private page's domain, where push is off, it is not found. Subscriptions are per origin: see [visitor notifications](#browser-notifications).",
+            "**Host header.** Pages are matched on the request's `Host`. Behind a proxy that rewrites it, set `STATUS_PAGE_TRUST_FORWARDED_HOST=true` to match on `X-Forwarded-Host` instead, believed only from `TRUSTED_PROXY_CIDRS` peers. A forged `Host` can only ever select a verified domain's own page or a platform host's routes, which that host serves anyway.",
           ],
         },
         {

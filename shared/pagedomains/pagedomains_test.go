@@ -106,3 +106,39 @@ func TestRecordNamesAndURL(t *testing.T) {
 		t.Errorf("PrimaryHostSQL = %q", sql)
 	}
 }
+
+func TestPublicURLs(t *testing.T) {
+	cases := []struct {
+		primary, platform, slug, suffix, want string
+	}{
+		{"status.acme.example", "https://status.platform.example", "acme", "", "https://status.acme.example/"},
+		{"status.acme.example", "https://status.platform.example", "acme", "/feed.atom", "https://status.acme.example/feed.atom"},
+		{"", "https://status.platform.example/", "acme", "", "https://status.platform.example/public/status/acme"},
+		{"", "https://status.platform.example", "acme", "/unlock", "https://status.platform.example/public/status/acme/unlock"},
+		{"", "", "acme", "/feed.atom", ""},
+		{"", "https://status.platform.example", "", "", ""},
+	}
+	for _, c := range cases {
+		if got := PublicURL(PublicBaseURL(c.primary, c.platform, c.slug), c.suffix); got != c.want {
+			t.Errorf("PublicURL(%q, %q, %q, %q) = %q, want %q", c.primary, c.platform, c.slug, c.suffix, got, c.want)
+		}
+	}
+}
+
+func TestCanBeCustomDomain(t *testing.T) {
+	for host, want := range map[string]bool{
+		"status.example.com":      true,
+		"status.xn--bcher-kva.de": true,
+		"":                        false,
+		"localhost":               false,
+		"status-page":             false,
+		"10.1.2.3":                false,
+		"probara-status-page.ns.svc.cluster.local": false,
+		"status.internal":                          false,
+		"Status.Example.com":                       false, // not normalized
+	} {
+		if got := CanBeCustomDomain(host); got != want {
+			t.Errorf("CanBeCustomDomain(%q) = %v, want %v", host, got, want)
+		}
+	}
+}

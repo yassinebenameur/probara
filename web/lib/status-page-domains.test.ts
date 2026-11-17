@@ -16,7 +16,7 @@ test('a verified domain with a failing streak shows as failing', () => {
 });
 
 test('every domain state has a label, a hint and a tone', () => {
-  for (const state of ['pending', 'verified', 'failing', 'failed'] as const) {
+  for (const state of ['pending', 'verified', 'failing', 'failed', 'superseded'] as const) {
     assert.ok(STATUS_PAGE_DOMAIN_LABEL[state]);
     assert.ok(statusPageDomainHint(state));
   }
@@ -24,6 +24,8 @@ test('every domain state has a label, a hint and a tone', () => {
   assert.equal(statusPageDomainTone('failing'), 'warning');
   assert.equal(statusPageDomainTone('failed'), 'danger');
   assert.equal(statusPageDomainTone('pending'), 'info');
+  assert.equal(statusPageDomainTone('superseded'), 'neutral');
+  assert.equal(statusPageDomainState({ status: 'superseded' }), 'superseded');
 });
 
 test('a pasted URL keeps only its host; the rest is left for the API', () => {

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/pageaccess"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 )
 
 // maxMetaDescriptionRunes caps a description derived from the page's own
@@ -93,11 +94,7 @@ func resolvePageSEO(data *StatusPageData) pageSEO {
 // (STATUS_PAGE_BASE_URL), or "" when that origin is not configured: the head
 // then carries no canonical link or og:url rather than a guessed host.
 func publicPageURL(baseURL, slug string) string {
-	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if base == "" || slug == "" {
-		return ""
-	}
-	return base + "/public/status/" + slug
+	return pagedomains.PublicURL(pagedomains.PublicBaseURL("", baseURL, slug), "")
 }
 
 // truncateRunes shortens s to at most max runes, ending in an ellipsis when

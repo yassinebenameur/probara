@@ -15,12 +15,17 @@ import (
 
 // Custom-domain hosts of the access fixture's pages (newAccessFixture).
 const (
-	openHost     = "status.open.example"
-	hiddenHost   = "status.hidden.example"
-	lockedHost   = "status.locked.example"
-	internalHost = "status.internal.example"
-	unknownHost  = "status.unknown.example"
-	platformHost = "status.platform.example"
+	openHost     = "status.open.example.com"
+	hiddenHost   = "status.hidden.example.com"
+	lockedHost   = "status.locked.example.com"
+	internalHost = "status.internal.example.com"
+	unknownHost  = "status.unknown.example.com"
+	platformHost = "status.platform.example.com"
+	// Claimed but not verified: pending, failed or superseded.
+	pendingHost = "status.pending.example.com"
+	failedHost  = "status.failed.example.com"
+	// An extra platform host (STATUS_PAGE_PLATFORM_HOSTS).
+	appHost = "probara.example.com"
 )
 
 type customHostFixture struct {
@@ -36,13 +41,15 @@ func newCustomHostFixture(t *testing.T) *customHostFixture {
 	t.Helper()
 	f := newAccessFixture(t, testSessionSecret)
 	routes := map[string]customHostRoute{
-		openHost:     {PageID: f.store.pages["open"].ID, Slug: "open"},
-		hiddenHost:   {PageID: f.store.pages["hidden"].ID, Slug: "hidden"},
-		lockedHost:   {PageID: f.store.pages["locked"].ID, Slug: "locked"},
-		internalHost: {PageID: f.store.pages["internal"].ID, Slug: "internal"},
+		openHost:     {PageID: f.store.pages["open"].ID, Slug: "open", Verified: true},
+		hiddenHost:   {PageID: f.store.pages["hidden"].ID, Slug: "hidden", Verified: true},
+		lockedHost:   {PageID: f.store.pages["locked"].ID, Slug: "locked", Verified: true},
+		internalHost: {PageID: f.store.pages["internal"].ID, Slug: "internal", Verified: true},
+		pendingHost:  {},
+		failedHost:   {},
 		// The platform host never serves as a custom domain, even if a row
 		// named it.
-		platformHost: {PageID: f.store.pages["open"].ID, Slug: "open"},
+		platformHost: {PageID: f.store.pages["open"].ID, Slug: "open", Verified: true},
 	}
 	loads := &atomic.Int32{}
 	f.h.hosts = newHostTable(func(context.Context) (map[string]customHostRoute, error) {
@@ -50,6 +57,7 @@ func newCustomHostFixture(t *testing.T) *customHostFixture {
 		return routes, nil
 	})
 	f.h.config.StatusPageBaseURL = "https://" + platformHost
+	f.h.config.PlatformHosts = []string{appHost}
 	// The operator proxy is configured: it must still be unreachable on a
 	// custom domain.
 	f.h.config.APIBaseURL = "http://127.0.0.1:1"
@@ -94,7 +102,7 @@ var customHostRouteTable = []struct {
 	{"/monitors/" + addonRouteTestID + "/badge.svg", "/monitors/" + addonRouteTestID + "/badge.svg", classGated, http.MethodGet},
 	{"/monitors/" + addonRouteTestID + "/uptime.svg", "/monitors/" + addonRouteTestID + "/uptime.svg", classGated, http.MethodGet},
 	{"/some-future-route.json", "/some-future-route.json", classGated, http.MethodGet},
-	{"/sw.js", "", classNoPageData, http.MethodGet},
+	{"/sw.js", "/sw.js", classGated, http.MethodGet},
 }
 
 // Paths that are something else on the platform host and nothing on a
@@ -110,6 +118,7 @@ var customHostNotFound = []string{
 	"/public/status/open",
 	"/public/status/open/data",
 	"/public/status/sw.js",
+	"/public/status/",
 	"/x/../data",
 	"/./data",
 	"//data",
@@ -182,6 +191,24 @@ func TestCustomHost_RoutesMatchSlugRoutes(t *testing.T) {
 	if sw.Code != http.StatusOK || sw.Header().Get("Service-Worker-Allowed") != "/" {
 		t.Fatalf("worker on a custom domain: %d, Service-Worker-Allowed %q", sw.Code, sw.Header().Get("Service-Worker-Allowed"))
 	}
+	// Push is off on gated pages, so their domains have no worker: a
+	// private page's answers like a host that serves nothing, and a password
+	// page's is not found even with a session.
+	notFound := httptest.NewRecorder()
+	writeNotFound(notFound)
+	private := f.serve(on(http.MethodGet, internalHost, "/sw.js"))
+	if private.Code != http.StatusNotFound || private.Body.String() != notFound.Body.String() || !equalHeaders(private.Header(), f.serve(on(http.MethodGet, unknownHost, "/sw.js")).Header()) {
+		t.Fatalf("worker on a private page's domain = %d %v", private.Code, private.Header())
+	}
+	req := on(http.MethodGet, lockedHost, "/sw.js")
+	req.AddCookie(f.passwordSession(2))
+	if rec := f.serve(req); rec.Code != http.StatusNotFound {
+		t.Fatalf("worker on a password page's domain with a session = %d", rec.Code)
+	}
+	// The slug form of the worker path is not a route on the platform host.
+	if rec := f.serve(on(http.MethodGet, platformHost, "/public/status/open/sw.js")); rec.Code != http.StatusNotFound {
+		t.Fatalf("/public/status/open/sw.js on the platform host = %d", rec.Code)
+	}
 	if got := f.serve(on(http.MethodGet, platformHost, "/public/status/sw.js")).Header().Get("Service-Worker-Allowed"); got != "/public/status/" {
 		t.Fatalf("worker on the platform host: Service-Worker-Allowed %q", got)
 	}
@@ -228,6 +255,72 @@ func TestCustomHost_NothingElseIsReachable(t *testing.T) {
 	}
 }
 
+// The platform routes exist only on platform hosts. A hostname pointed at
+// the service but not verified (pending, failed, superseded, removed in the
+// UI but still routed), an unknown one, and every public hostname before the
+// table has loaded once get the not-found answer on every path, never a page
+// under /public/status/, the operator proxy or metrics.
+func TestCustomHost_UnverifiedHostsGetNothing(t *testing.T) {
+	paths := append([]string{"/", "/public/status/open", "/public/status/hidden", "/public/status/hidden/summary.json", "/data"}, customHostNotFound...)
+	check := func(t *testing.T, f *customHostFixture, hosts []string) {
+		t.Helper()
+		want := httptest.NewRecorder()
+		writeNotFound(want)
+		for _, host := range hosts {
+			for _, p := range paths {
+				for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPatch} {
+					rec := f.serve(on(method, host, p))
+					label := method + " " + host + p
+					if rec.Code != http.StatusNotFound || rec.Body.String() != want.Body.String() || !equalHeaders(rec.Header(), want.Header()) {
+						t.Errorf("%s = %d %q %v, want the not-found answer", label, rec.Code, rec.Body.String(), rec.Header())
+					}
+				}
+			}
+		}
+	}
+
+	t.Run("claimed, removed and unknown hosts", func(t *testing.T) {
+		f := newCustomHostFixture(t)
+		delete(f.routes, hiddenHost) // removed in the UI, still routed here
+		f.h.hosts.Invalidate()
+		check(t, f, []string{pendingHost, failedHost, hiddenHost, unknownHost})
+	})
+
+	t.Run("before the table has loaded once", func(t *testing.T) {
+		f := newCustomHostFixture(t)
+		f.h.hosts = newHostTable(func(context.Context) (map[string]customHostRoute, error) {
+			return nil, context.DeadlineExceeded
+		})
+		check(t, f, []string{openHost, internalHost, pendingHost, unknownHost})
+		// Platform and internal hosts are unaffected.
+		if rec := f.serve(on(http.MethodGet, platformHost, "/public/status/open")); rec.Code != http.StatusOK {
+			t.Fatalf("platform host during a failed load = %d", rec.Code)
+		}
+		if rec := f.serve(on(http.MethodGet, "10.1.2.3:8080", "/healthz")); rec.Code != http.StatusOK {
+			t.Fatalf("probe during a failed load = %d", rec.Code)
+		}
+	})
+
+	t.Run("extra platform hosts get the platform routes", func(t *testing.T) {
+		f := newCustomHostFixture(t)
+		if rec := f.serve(on(http.MethodGet, appHost, "/public/status/hidden")); rec.Code != http.StatusOK {
+			t.Fatalf("STATUS_PAGE_PLATFORM_HOSTS host = %d", rec.Code)
+		}
+	})
+
+	t.Run("without a public platform host (development) other hosts fall through", func(t *testing.T) {
+		f := newCustomHostFixture(t)
+		f.h.config.StatusPageBaseURL = "http://localhost:8082"
+		f.h.config.PlatformHosts = nil
+		if rec := f.serve(on(http.MethodGet, pendingHost, "/public/status/open")); rec.Code != http.StatusOK {
+			t.Fatalf("pending host in development = %d", rec.Code)
+		}
+		if rec := f.serve(on(http.MethodGet, openHost, "/")); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), pageSentinel) {
+			t.Fatalf("verified domain in development = %d", rec.Code)
+		}
+	})
+}
+
 // A private page's custom domain, without a credential, answers on every
 // route exactly like a host that serves no page: status, headers and body.
 func TestCustomHost_PrivateIsIndistinguishableFromUnknownHost(t *testing.T) {
@@ -239,6 +332,10 @@ func TestCustomHost_PrivateIsIndistinguishableFromUnknownHost(t *testing.T) {
 		for _, method := range []string{row.method, http.MethodGet, http.MethodPost} {
 			private := f.serve(on(method, internalHost, row.path))
 			unknown := f.serve(on(method, unknownHost, row.path))
+			pending := f.serve(on(method, pendingHost, row.path))
+			if pending.Code != unknown.Code || pending.Body.String() != unknown.Body.String() || !equalHeaders(pending.Header(), unknown.Header()) {
+				t.Errorf("%s %s: pending host differs from an unknown one", method, row.path)
+			}
 			label := method + " " + row.path
 			if private.Code != http.StatusNotFound || private.Code != unknown.Code || private.Body.String() != unknown.Body.String() {
 				t.Errorf("%s: private %d %q vs unknown host %d %q", label, private.Code, private.Body.String(), unknown.Code, unknown.Body.String())
@@ -274,10 +371,10 @@ func TestCustomHost_HostHeaderTrust(t *testing.T) {
 	}{
 		{name: "custom domain", host: openHost, wantServed: true},
 		{name: "with port", host: openHost + ":443", wantServed: true},
-		{name: "upper case and trailing dot", host: "STATUS.Open.Example.", wantServed: true},
+		{name: "upper case and trailing dot", host: "STATUS.Open.Example.COM.", wantServed: true},
 		{name: "unknown host", host: unknownHost},
 		{name: "platform host in the table", host: platformHost},
-		{name: "garbage host", host: "evil.example/../x"},
+		{name: "garbage host", host: "evil.example.com/../x"},
 		{name: "X-Forwarded-Host without the setting", host: platformHost, forwarded: openHost, remote: "10.1.2.3:5555"},
 		{name: "X-Forwarded-Host from an untrusted peer", host: platformHost, forwarded: openHost, remote: "192.0.2.7:5555", trustFwd: true},
 		{name: "X-Forwarded-Host from a trusted proxy", host: platformHost, forwarded: openHost, remote: "10.1.2.3:5555", trustFwd: true, wantServed: true},
@@ -318,7 +415,7 @@ func TestCustomHost_HostHeaderTrust(t *testing.T) {
 func TestCustomHost_ForgedHostsDoNotReload(t *testing.T) {
 	f := newCustomHostFixture(t)
 	for i := 0; i < 200; i++ {
-		f.serve(on(http.MethodGet, uuid.NewString()+".example", "/"))
+		f.serve(on(http.MethodGet, uuid.NewString()+".example.com", "/"))
 	}
 	if n := f.loads.Load(); n != 1 {
 		t.Fatalf("table loaded %d times, want 1", n)
@@ -429,9 +526,10 @@ func TestCustomHost_PasswordUnlock(t *testing.T) {
 	}
 }
 
-// The Secure flag on a custom domain follows STATUS_PAGE_COOKIE_SECURE, else
-// the request's scheme (X-Forwarded-Proto only from a trusted proxy); the
-// platform's https base URL does not decide for another origin.
+// The session cookie is always Secure on a custom domain, whatever
+// STATUS_PAGE_COOKIE_SECURE, the base URL or the request's scheme say:
+// custom domains are https only, and a kiosk following a stray http:// link
+// must not send its cookie in clear.
 func TestCustomHost_SessionCookieSecure(t *testing.T) {
 	on, off := true, false
 	cases := []struct {
@@ -439,18 +537,18 @@ func TestCustomHost_SessionCookieSecure(t *testing.T) {
 		flag   *bool
 		remote string
 		proto  string
-		want   bool
 	}{
-		{name: "plain http", want: false},
-		{name: "https from a trusted proxy", remote: "10.1.2.3:4444", proto: "https", want: true},
-		{name: "https claimed by an untrusted peer", remote: "192.0.2.9:4444", proto: "https", want: false},
-		{name: "forced on", flag: &on, want: true},
-		{name: "forced off", flag: &off, remote: "10.1.2.3:4444", proto: "https", want: false},
+		{name: "plain http, nothing configured"},
+		{name: "https from a trusted proxy", remote: "10.1.2.3:4444", proto: "https"},
+		{name: "https claimed by an untrusted peer", remote: "192.0.2.9:4444", proto: "https"},
+		{name: "forced on", flag: &on},
+		{name: "forced off", flag: &off, remote: "10.1.2.3:4444", proto: "http"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newCustomHostFixture(t)
 			f.h.config.CookieSecure = c.flag
+			f.h.config.StatusPageBaseURL = "http://" + platformHost
 			req := httptest.NewRequest(http.MethodPost, "http://"+lockedHost+"/unlock", strings.NewReader("password="+url.QueryEscape(f.password)))
 			req.Host = lockedHost
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -464,8 +562,8 @@ func TestCustomHost_SessionCookieSecure(t *testing.T) {
 			if rec.Code != http.StatusSeeOther {
 				t.Fatalf("unlock = %d", rec.Code)
 			}
-			if got := sessionCookieFrom(t, rec).Secure; got != c.want {
-				t.Fatalf("Secure = %v, want %v", got, c.want)
+			if !sessionCookieFrom(t, rec).Secure {
+				t.Fatal("session cookie on a custom domain is not Secure")
 			}
 		})
 	}
@@ -540,17 +638,24 @@ func TestHostTable_ReloadAndFailure(t *testing.T) {
 		if fail.Load() {
 			return nil, context.DeadlineExceeded
 		}
-		return map[string]customHostRoute{openHost: {Slug: "open"}}, nil
+		return map[string]customHostRoute{openHost: {Slug: "open", Verified: true}}, nil
 	})
 	now := time.Now()
 	table.now = func() time.Time { return now }
-	if _, ok := table.Lookup(context.Background(), openHost); !ok {
+	// Never loaded: nothing is known, and the caller is told so.
+	fail.Store(true)
+	if _, known, loaded := table.Lookup(context.Background(), openHost); known || loaded {
+		t.Fatal("a failed first load reported a table")
+	}
+	now = now.Add(hostTableRetry + time.Second)
+	fail.Store(false)
+	if route, known, loaded := table.Lookup(context.Background(), openHost); !known || !loaded || !route.Verified {
 		t.Fatal("miss on a known host")
 	}
 	// Expired, and the reload fails: the previous table keeps serving.
 	now = now.Add(hostTableTTL + time.Second)
 	fail.Store(true)
-	if _, ok := table.Lookup(context.Background(), openHost); !ok {
+	if _, known, loaded := table.Lookup(context.Background(), openHost); !known || !loaded {
 		t.Fatal("a failed reload dropped the table")
 	}
 	// The failure is retried after hostTableRetry, not on every request.

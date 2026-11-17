@@ -837,7 +837,12 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_COOKIE_SECURE`',
               'Empty (derived); `true`/`false`, anything else refuses to start',
-              'Secure attribute of the visitor session cookie. Empty: on when `STATUS_PAGE_BASE_URL` is `https://`, else set per request when it arrived over HTTPS (TLS terminated here, or `X-Forwarded-Proto: https` from a `TRUSTED_PROXY_CIDRS` peer). Set `true` behind a TLS-terminating proxy when the base URL is unset; `false` forces it off. On a [custom domain](/docs/status-pages/#custom-domains) the base URL does not count: empty means per request. Helm: `statusPage.cookieSecure`.',
+              'Secure attribute of the visitor session cookie. Empty: on when `STATUS_PAGE_BASE_URL` is `https://`, else set per request when it arrived over HTTPS (TLS terminated here, or `X-Forwarded-Proto: https` from a `TRUSTED_PROXY_CIDRS` peer). Set `true` behind a TLS-terminating proxy when the base URL is unset; `false` forces it off. On a [custom domain](/docs/status-pages/#custom-domains) the cookie is always `Secure` and this variable does not apply. Helm: `statusPage.cookieSecure`.',
+            ],
+            [
+              '`STATUS_PAGE_PLATFORM_HOSTS`',
+              'Empty; comma-separated host names, anything else refuses to start',
+              'Hosts besides `STATUS_PAGE_BASE_URL`\'s that serve the platform routes: every page under `/public/status/`, the API proxy, health and metrics. Once one of these or the base URL is a public name, any other public hostname is served only as a verified [custom domain](/docs/status-pages/#custom-domains) and otherwise answers not found; internal names (IP addresses, `localhost`, cluster Service names) always get the platform routes. With neither (development), every host does. Helm: `ingress.hosts` plus `statusPage.platformHosts`.',
             ],
             [
               '`STATUS_PAGE_TRUST_FORWARDED_HOST`',

@@ -10,31 +10,48 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/pagedomains"
-	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
 
-// Serving a page on its custom domain.
+// Serving a page on its custom domain, and nothing else on any other host.
 //
-// CustomHosts runs in front of every route. A request whose host is a
-// verified custom domain (hostTable) is rewritten onto the page's slug
-// paths, so the visibility gate, the route table, the caches and every
-// handler apply unchanged:
+// CustomHosts runs in front of every route and sorts each request by its
+// host (requestHost):
 //
-//	/                     → /public/status/{slug}/
-//	/{rest}               → /public/status/{slug}/{rest}   (data, stream, push, unlock, add-ons, …)
-//	/sw.js                → /public/status/sw.js
+//   - internal: an IP address, a single label or a name no custom domain can
+//     have (pagedomains.CanBeCustomDomain): kubelet probes, metrics scrapes
+//     and in-cluster calls. The platform routes, without a table lookup, so
+//     a database stall can never fail a liveness probe.
+//   - a platform host: STATUS_PAGE_BASE_URL's host and
+//     STATUS_PAGE_PLATFORM_HOSTS. The platform routes: every page under
+//     /public/status/, the API proxy, health and metrics.
+//   - a verified custom domain (hostTable): rewritten onto its page's slug
+//     paths, so the visibility gate, the route table, the caches and every
+//     handler apply unchanged:
 //
-// Everything on a custom host is therefore a sub-route of that one page and
-// passes its gate: other slugs, the /_sp_api operator proxy, /metrics and
-// the health routes answer not found there. On any other host nothing
-// changes. The rewritten request carries the custom host (customHostFrom),
-// which is what makes the session cookie host-only at path /, the unlock
-// form post to /unlock, redirects go to the visitor's own URL, the service
-// worker scope the root, and push subscriptions remember their origin.
+//     /         → /public/status/{slug}/
+//     /{rest}   → /public/status/{slug}/{rest}   (data, stream, push, sw.js, unlock, add-ons, …)
 //
-// A custom host is its own origin and holds a single page, so the
-// cross-page refusal that protects gated pages sharing the platform origin
-// (crossPageRequest) has nothing to guard against there.
+//   - anything else (a pending, failed, superseded or removed domain still
+//     pointed at the service, an unknown host, or any host before the table
+//     has loaded once): the not-found answer, never the platform routes. A
+//     custom-domain Ingress sends all of a host to this service under that
+//     host's certificate, so falling through would publish every page.
+//
+// With no public platform host configured (no STATUS_PAGE_BASE_URL host that
+// could be a public name, and no STATUS_PAGE_PLATFORM_HOSTS), the service
+// cannot tell its own hosts from others: every host but a verified domain
+// gets the platform routes, as before custom domains. That is the
+// development setup; Helm always configures platform hosts.
+//
+// Everything on a custom domain is a sub-route of that one page and passes
+// its gate: other slugs, the /_sp_api operator proxy, /metrics and the
+// health routes are unknown sub-routes there. The rewritten request carries
+// the custom host (customHostFrom), which makes the session cookie host-only
+// at path / and always Secure, the unlock form post to /unlock, redirects go
+// to the visitor's own URL, the service worker scope the root, and push
+// subscriptions remember their origin. A custom domain is its own origin and
+// holds a single page, so the cross-page refusal that protects gated pages
+// sharing the platform origin (crossPageRequest) has nothing to guard there.
 
 // customHost is the custom domain a request arrived on.
 type customHost struct {
@@ -52,17 +69,21 @@ func customHostFrom(r *http.Request) (customHost, bool) {
 	return ch, ok
 }
 
-// CustomHosts wraps next with the custom-domain rewrite.
+// CustomHosts wraps next (the platform routes) with the host sorting above.
 func (h *Handlers) CustomHosts(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := h.requestHost(r)
-		if !mayBeCustomHost(host) || host == h.platformHost() {
+		if !pagedomains.CanBeCustomDomain(host) || h.isPlatformHost(host) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		route, ok := h.hosts.Lookup(r.Context(), host)
-		if !ok {
-			next.ServeHTTP(w, r)
+		route, _, _ := h.hosts.Lookup(r.Context(), host)
+		if !route.Verified {
+			if !h.platformHostsConfigured() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeNotFound(w)
 			return
 		}
 		visitorPath := r.URL.Path
@@ -73,31 +94,14 @@ func (h *Handlers) CustomHosts(next http.Handler) http.Handler {
 			writeNotFound(w)
 			return
 		}
-		target := "/public/status/" + route.Slug + visitorPath
-		if visitorPath == "/sw.js" {
-			target = "/public/status/sw.js"
-		}
 		ctx := context.WithValue(r.Context(), customHostKey{}, customHost{Host: host, PageID: route.PageID, Slug: route.Slug, Path: visitorPath})
 		rewritten := r.WithContext(ctx)
 		u := *r.URL
-		u.Path = target
+		u.Path = "/public/status/" + route.Slug + visitorPath
 		u.RawPath = ""
 		rewritten.URL = &u
 		next.ServeHTTP(w, rewritten)
 	})
-}
-
-// mayBeCustomHost reports whether host could be a custom domain at all. An
-// IP address or a single label (localhost, a Service name) never is
-// (pagedomains.NormalizeHostname refuses them), so such requests skip the
-// table: kubelet probes and metrics scrapes, which arrive by pod IP, never
-// wait on a table reload, whatever the database is doing.
-func mayBeCustomHost(host string) bool {
-	if host == "" || !strings.Contains(host, ".") {
-		return false
-	}
-	_, err := netip.ParseAddr(host)
-	return err != nil
 }
 
 // cleanRequestPath refuses dot segments and empty segments: rewritten under
@@ -134,13 +138,39 @@ func (h *Handlers) peerTrusted(r *http.Request) bool {
 	return h.clientIPs.Trusts(peer.Addr().Unmap())
 }
 
-// platformHost is STATUS_PAGE_BASE_URL's host: never a custom domain, even
-// if a row named it (the API refuses that).
-func (h *Handlers) platformHost() string {
+// platformHosts are the hosts that serve the platform routes:
+// STATUS_PAGE_BASE_URL's host and STATUS_PAGE_PLATFORM_HOSTS. Never a custom
+// domain, even if a row named one (the API refuses that).
+func (h *Handlers) platformHosts() []string {
 	if h.config == nil {
-		return ""
+		return nil
 	}
-	return pagedomains.HostOfURL(h.config.StatusPageBaseURL)
+	hosts := append([]string(nil), h.config.PlatformHosts...)
+	if base := pagedomains.HostOfURL(h.config.StatusPageBaseURL); base != "" {
+		hosts = append(hosts, base)
+	}
+	return hosts
+}
+
+func (h *Handlers) isPlatformHost(host string) bool {
+	for _, p := range h.platformHosts() {
+		if p == host {
+			return true
+		}
+	}
+	return false
+}
+
+// platformHostsConfigured reports whether at least one platform host is a
+// public name, so other public names can be refused. A localhost base URL
+// (development) does not count.
+func (h *Handlers) platformHostsConfigured() bool {
+	for _, p := range h.platformHosts() {
+		if pagedomains.CanBeCustomDomain(p) {
+			return true
+		}
+	}
+	return false
 }
 
 // pagePath is the page's own URL path as the visitor sees it: / on its
@@ -190,12 +220,11 @@ func customHostPageMismatch(r *http.Request, pageID uuid.UUID) bool {
 }
 
 // customHostCookieSecure is the session cookie's Secure flag on a custom
-// domain: STATUS_PAGE_COOKIE_SECURE when set, else the request's own scheme
-// (X-Forwarded-Proto counts only from a trusted proxy). An https
-// STATUS_PAGE_BASE_URL describes the platform host only.
-func (h *Handlers) customHostCookieSecure(r *http.Request) bool {
-	if secure, detect := h.config.CustomHostCookieSecure(); !detect {
-		return secure
-	}
-	return securityheaders.IsHTTPS(r, h.clientIPs)
+// domain: always on. Custom domains are served over https only (the chart
+// requires a TLS Secret for each, and every URL the platform builds for one
+// is https), so a kiosk display following a stray http:// link must not send
+// its long-lived cookie in clear. Neither STATUS_PAGE_COOKIE_SECURE nor
+// request detection, which describe the platform host, decide here.
+func (h *Handlers) customHostCookieSecure(*http.Request) bool {
+	return true
 }

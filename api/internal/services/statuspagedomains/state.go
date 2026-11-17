@@ -70,6 +70,10 @@ func advance(cur domainState, createdAt time.Time, res checkResult, now time.Tim
 		next.NextCheckAt = now.Add(failingRecheck)
 	case pagedomains.Failed:
 		next.NextCheckAt = now.Add(failedRecheck)
+	case pagedomains.Superseded:
+		// Not rechecked on a schedule (another page holds the hostname);
+		// an operator's verify-now can still take it once that page lets go.
+		next.NextCheckAt = now.Add(pagedomains.ClaimTTL)
 	default:
 		next.Status = pagedomains.Pending
 		if now.Sub(createdAt) < pendingFastFor {

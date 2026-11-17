@@ -16,8 +16,9 @@ import (
 )
 
 // Migration 000120 (status page custom domains) walks up, down and up
-// again: hostnames are unique across workspaces, stored lower-case, limited
-// to the three statuses, and leave with their page.
+// again: a hostname is verified for one page at most while unverified claims
+// coexist, hostnames are stored lower-case, statuses are limited, and domains
+// leave with their page.
 func TestStatusPageDomainsMigrationUpDownUp(t *testing.T) {
 	ctx := context.Background()
 	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -82,9 +83,18 @@ func TestStatusPageDomainsMigrationUpDownUp(t *testing.T) {
 	if !exists(`SELECT status = 'pending' AND next_check_at <= NOW() FROM status_page_domains WHERE hostname = 'status.example.com'`) {
 		t.Fatal("a new domain is not pending and due")
 	}
-	if !fails(`INSERT INTO status_page_domains (status_page_id, hostname, verification_token) VALUES ($1, 'status.example.com', 't2')`, pageB) {
-		t.Fatal("another workspace took a hostname already in use")
+	// Unverified claims on one hostname coexist across workspaces; only one
+	// may be verified, and a page holds a hostname once.
+	exec(`INSERT INTO status_page_domains (status_page_id, hostname, verification_token) VALUES ($1, 'status.example.com', 't2')`, pageB)
+	exec(`UPDATE status_page_domains SET status = 'verified' WHERE verification_token = 't1'`)
+	if !fails(`UPDATE status_page_domains SET status = 'verified' WHERE verification_token = 't2'`) {
+		t.Fatal("two pages verified the same hostname")
 	}
+	exec(`UPDATE status_page_domains SET status = 'superseded' WHERE verification_token = 't2'`)
+	if !fails(`INSERT INTO status_page_domains (status_page_id, hostname, verification_token) VALUES ($1, 'status.example.com', 't2b')`, pageB) {
+		t.Fatal("a page claimed the same hostname twice")
+	}
+	exec(`DELETE FROM status_page_domains WHERE verification_token = 't2'`)
 	if !fails(`INSERT INTO status_page_domains (status_page_id, hostname, verification_token) VALUES ($1, 'Status.Example.org', 't3')`, pageB) {
 		t.Fatal("an upper-case hostname was stored")
 	}

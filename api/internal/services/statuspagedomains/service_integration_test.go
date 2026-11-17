@@ -5,6 +5,7 @@ package statuspagedomains
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 
+	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
@@ -42,20 +44,46 @@ func (p *spyPublisher) count(pageID uuid.UUID) int {
 	return n
 }
 
+type spyAudit struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (a *spyAudit) Record(e audit.Event) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, e)
+}
+
+func (a *spyAudit) actions(tenantID uuid.UUID) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []string
+	for _, e := range a.events {
+		if e.TenantID != nil && *e.TenantID == tenantID {
+			out = append(out, e.Action)
+		}
+	}
+	return out
+}
+
 func newTestService(dbClient *db.Client, r Resolver, pub Publisher) *Service {
 	return NewService(dbClient, Config{
 		CNAMETarget:   testTarget,
 		ReservedHosts: ReservedHosts("https://probara.platform.example", "https://api.platform.example/api", "wss://nats.platform.example/ws", "https://"+testTarget, testTarget),
 		Resolver:      r,
 		Publisher:     pub,
+		Audit:         &spyAudit{},
 	})
 }
 
-// publishDNS makes hostname verifiable with the token stored for it.
+func auditOf(s *Service) *spyAudit { return s.cfg.Audit.(*spyAudit) }
+
+// publishDNS makes hostname verifiable with the token of its oldest claim.
 func publishDNS(t *testing.T, ctx context.Context, dbClient *db.Client, f *fakeResolver, hostname string) {
 	t.Helper()
 	var token string
-	if err := dbClient.QueryRowContext(ctx, `SELECT verification_token FROM status_page_domains WHERE hostname = $1`, hostname).Scan(&token); err != nil {
+	if err := dbClient.QueryRowContext(ctx, `SELECT verification_token FROM status_page_domains WHERE hostname = $1 ORDER BY created_at LIMIT 1`, hostname).Scan(&token); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -94,13 +122,18 @@ func TestService_CustomDomains(t *testing.T) {
 		t.Fatalf("TXT record %+v", created.Records[1])
 	}
 
-	// Hostnames are unique across the installation: another workspace, or
-	// another page of the same one, cannot take one in use, pending or not.
-	if _, err := svc.Create(ctx, tenantB, pageB, "status.customer.example"); !errors.Is(err, ErrHostnameTaken) {
-		t.Fatalf("another workspace: err = %v", err)
+	// An unverified claim reveals nothing: another workspace, or another
+	// page, may claim the same hostname. A page holds it once.
+	claimB, err := svc.Create(ctx, tenantB, pageB, "status.customer.example")
+	if err != nil {
+		t.Fatalf("another workspace's claim: err = %v", err)
 	}
-	if _, err := svc.Create(ctx, tenantA, pageA2, "status.customer.example"); !errors.Is(err, ErrHostnameTaken) {
-		t.Fatalf("another page: err = %v", err)
+	claimA2, err := svc.Create(ctx, tenantA, pageA2, "status.customer.example")
+	if err != nil {
+		t.Fatalf("another page's claim: err = %v", err)
+	}
+	if _, err := svc.Create(ctx, tenantA, pageA, "status.customer.example"); !errors.Is(err, ErrAlreadyOnPage) {
+		t.Fatalf("same page twice: err = %v", err)
 	}
 	// A workspace cannot add a domain to another workspace's page.
 	if _, err := svc.Create(ctx, tenantB, pageA, "b.customer.example"); !errors.Is(err, ErrStatusPageNotFound) {
@@ -113,7 +146,7 @@ func TestService_CustomDomains(t *testing.T) {
 	}
 
 	// Tenant isolation on reads, deletes and checks.
-	if list, err := svc.List(ctx, tenantB, nil); err != nil || len(list.Items) != 0 {
+	if list, err := svc.List(ctx, tenantB, nil); err != nil || len(list.Items) != 1 || list.Items[0].ID != claimB.ID {
 		t.Fatalf("tenant B sees %v (err %v)", list, err)
 	}
 	if _, err := svc.List(ctx, tenantB, &pageA); !errors.Is(err, ErrStatusPageNotFound) {
@@ -157,6 +190,36 @@ func TestService_CustomDomains(t *testing.T) {
 		t.Fatalf("verification published %d domain events, want 1", pub.count(pageA))
 	}
 
+	// The first claim to verify got the hostname: the other claims are
+	// superseded, each audited in its own workspace, and it is refused to
+	// new claims elsewhere.
+	for _, id := range []struct {
+		tenant, domain uuid.UUID
+	}{{tenantB, claimB.ID}, {tenantA, claimA2.ID}} {
+		d, err := svc.get(ctx, id.tenant, id.domain)
+		if err != nil || d.Status != pagedomains.Superseded || !d.LastError.Valid {
+			t.Fatalf("other claim after verification: %+v err=%v", d, err)
+		}
+	}
+	if got := auditOf(svc).actions(tenantB); len(got) != 1 || got[0] != "status-page-domain.supersede" {
+		t.Fatalf("tenant B audit = %v", got)
+	}
+	if _, err := svc.Create(ctx, tenantB, testutil.InsertStatusPage(ctx, t, dbClient, tenantB, "domains-b2", "B2"), "status.customer.example"); !errors.Is(err, ErrHostnameTaken) {
+		t.Fatalf("claim of a verified hostname: err = %v", err)
+	}
+	// B publishing its own token does not take a hostname A holds.
+	publishDNS(t, ctx, dbClient, f, "status.customer.example")
+	f.mu.Lock()
+	var tokenB string
+	if err := dbClient.QueryRowContext(ctx, `SELECT verification_token FROM status_page_domains WHERE id = $1`, claimB.ID).Scan(&tokenB); err != nil {
+		t.Fatal(err)
+	}
+	f.txt["_probara-verify.status.customer.example."] = append(f.txt["_probara-verify.status.customer.example."], tokenB)
+	f.mu.Unlock()
+	if got, err := svc.Verify(ctx, tenantB, claimB.ID); err != nil || got.Status != pagedomains.Superseded {
+		t.Fatalf("superseded claim re-verified while held: %+v err=%v", got, err)
+	}
+
 	// The page's public_url names its primary domain: the oldest verified.
 	second, err := svc.Create(ctx, tenantA, pageA, "www.status.customer.example")
 	if err != nil {
@@ -192,6 +255,11 @@ func TestService_CustomDomains(t *testing.T) {
 	}
 	if err := svc.Delete(ctx, tenantA, created.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: err = %v", err)
+	}
+	// Once A lets go, B's superseded claim takes the hostname on demand.
+	svc.now = func() time.Time { return time.Now().Add(4 * (manualCheckInterval + time.Second)) }
+	if got, err := svc.Verify(ctx, tenantB, claimB.ID); err != nil || got.Status != pagedomains.Verified {
+		t.Fatalf("superseded claim after release: %+v err=%v", got, err)
 	}
 
 	// Without a CNAME target the feature is off.
@@ -304,5 +372,107 @@ func TestRunner_TwoReplicasCheckEachDomainOnce(t *testing.T) {
 	}
 	if f.lookups != before {
 		t.Fatal("a second run checked domains that were not due")
+	}
+}
+
+// Claims that never verify expire after ClaimTTL, audited in their
+// workspace; verified and failed domains stay. A workspace holds at most
+// MaxDomainsPerWorkspace domains.
+func TestService_ClaimExpiryAndWorkspaceCap(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenant := testutil.InsertTenant(ctx, t, dbClient, "domains-expiry")
+	f := newFakeResolver()
+	svc := newTestService(dbClient, f, &spyPublisher{})
+	page := testutil.InsertStatusPage(ctx, t, dbClient, tenant, "expiry", "E")
+	statuses := []string{"pending", "superseded", "verified", "failed"}
+	for i, status := range statuses {
+		host := status + ".expiry.example"
+		if _, err := svc.Create(ctx, tenant, page, host); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := dbClient.ExecContext(ctx, `UPDATE status_page_domains SET status = $2, created_at = NOW() - INTERVAL '15 days', next_check_at = NOW() + INTERVAL '1 day' WHERE hostname = $1`, host, status); err != nil {
+			t.Fatal(err)
+		}
+		_ = i
+	}
+	if _, err := svc.Create(ctx, tenant, page, "young.expiry.example"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE status_page_domains SET next_check_at = NOW() + INTERVAL '1 day' WHERE hostname = 'young.expiry.example'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	rows, err := dbClient.QueryContext(ctx, `SELECT hostname FROM status_page_domains ORDER BY hostname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var h string
+		_ = rows.Scan(&h)
+		left = append(left, h)
+	}
+	rows.Close()
+	if strings.Join(left, ",") != "failed.expiry.example,verified.expiry.example,young.expiry.example" {
+		t.Fatalf("left after expiry: %v", left)
+	}
+	if got := auditOf(svc).actions(tenant); len(got) != 2 || got[0] != "status-page-domain.expire" {
+		t.Fatalf("expiry audit = %v", got)
+	}
+
+	// The workspace cap counts every page.
+	for i := 0; len(left)+i < MaxDomainsPerWorkspace; i++ {
+		p := page
+		if i%MaxDomainsPerPage == 0 || i > 0 {
+			p = testutil.InsertStatusPage(ctx, t, dbClient, tenant, "cap-"+uuid.NewString()[:8], "C")
+		}
+		if _, err := svc.Create(ctx, tenant, p, uuid.NewString()[:8]+".cap.example"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := testutil.InsertStatusPage(ctx, t, dbClient, tenant, "cap-last", "L")
+	if _, err := svc.Create(ctx, tenant, other, "one-too-many.cap.example"); !errors.Is(err, ErrTooManyWorkspaceDomains) {
+		t.Fatalf("over the workspace cap: err = %v", err)
+	}
+}
+
+// cancellingResolver cancels the operator's request mid-lookup.
+type cancellingResolver struct {
+	*fakeResolver
+	cancel context.CancelFunc
+}
+
+func (c *cancellingResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	c.cancel()
+	return c.fakeResolver.LookupTXT(ctx, name)
+}
+
+// An operator navigating away mid-check never records a cancelled lookup as
+// a failure: the check completes on its own timeouts.
+func TestService_VerifyOutlivesTheRequest(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenant := testutil.InsertTenant(ctx, t, dbClient, "domains-cancel")
+	page := testutil.InsertStatusPage(ctx, t, dbClient, tenant, "cancel", "C")
+	f := newFakeResolver()
+	reqCtx, cancel := context.WithCancel(ctx)
+	svc := newTestService(dbClient, &cancellingResolver{fakeResolver: f, cancel: cancel}, &spyPublisher{})
+	d, err := svc.Create(ctx, tenant, page, "status.cancel.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishDNS(t, ctx, dbClient, f, "status.cancel.example")
+	got, err := svc.Verify(reqCtx, tenant, d.ID)
+	if err != nil || got.Status != pagedomains.Verified || got.LastError != nil {
+		t.Fatalf("verify with the request cancelled mid-check: %+v err=%v", got, err)
 	}
 }

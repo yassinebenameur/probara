@@ -39,6 +39,9 @@ import (
 // unlockSuffix is the password form's target, the one exempt sub-route.
 const unlockSuffix = "/unlock"
 
+// workerSuffix is the push service worker of a page on its custom domain.
+const workerSuffix = "/sw.js"
+
 // previewSuffix is the draft preview. On a gated page it opens with a valid
 // preview token (minted by the API for the template editor) as well as with
 // a visitor session.

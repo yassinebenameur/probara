@@ -14,8 +14,8 @@ type StatusPageDomain struct {
 	// Hostname in the lower-case ASCII form it is matched in (punycode for an
 	// internationalized name).
 	Hostname string `json:"hostname"`
-	// Status is pending, verified or failed. Only a verified domain is
-	// served.
+	// Status is pending, verified, failed or superseded (another page
+	// verified the hostname first). Only a verified domain is served.
 	Status string `json:"status"`
 	// URL is the page's address on this domain.
 	URL string `json:"url"`
@@ -33,6 +33,9 @@ type StatusPageDomain struct {
 	FailingSince *time.Time `json:"failing_since,omitempty"`
 	NextCheckAt  time.Time  `json:"next_check_at"`
 	CreatedAt    time.Time  `json:"created_at"`
+	// ExpiresAt is when an unverified claim (pending or superseded) is
+	// removed; absent for verified and failed domains.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // StatusPageDomainRecord is one DNS record a domain needs.

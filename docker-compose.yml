@@ -363,7 +363,8 @@ services:
       LOG_LEVEL: "info"
       POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
-      STATUS_PAGE_BASE_URL: "http://localhost:8082"
+      # Same value as on api, which refuses its host as a custom domain.
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
       STATUS_PAGE_API_BASE_URL: "http://api:8080"
       # Shared with the api service; gates draft-template previews with a
       # token minted by the API. Leave unset to allow open previews (dev).
@@ -403,6 +404,11 @@ services:
       # instead, believed only from TRUSTED_PROXY_CIDRS peers (for a proxy
       # that rewrites Host).
       STATUS_PAGE_TRUST_FORWARDED_HOST: "${STATUS_PAGE_TRUST_FORWARDED_HOST:-false}"
+      # Hosts besides STATUS_PAGE_BASE_URL's that serve every page under
+      # /public/status/ (comma-separated). Once a public platform host is
+      # configured, any other public hostname is served only as a verified
+      # custom domain; with the localhost default, every host still is.
+      STATUS_PAGE_PLATFORM_HOSTS: "${STATUS_PAGE_PLATFORM_HOSTS:-}"
     ports:
       - "8082:8082"
       - "9093:9093"

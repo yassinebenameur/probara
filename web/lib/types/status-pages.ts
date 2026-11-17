@@ -170,8 +170,11 @@ export interface StatusPageAccessTokenListResponse {
   items: StatusPageAccessToken[];
 }
 
-/** A custom domain's verification state; only verified domains are served. */
-export type StatusPageDomainStatus = 'pending' | 'verified' | 'failed';
+/**
+ * A custom domain's verification state; only verified domains are served.
+ * superseded: another status page verified the hostname first.
+ */
+export type StatusPageDomainStatus = 'pending' | 'verified' | 'failed' | 'superseded';
 
 /** A DNS record a custom domain needs, with what the last check found. */
 export interface StatusPageDomainRecord {
@@ -201,6 +204,8 @@ export interface StatusPageDomain {
   failing_since?: string;
   next_check_at: string;
   created_at: string;
+  /** When an unverified claim (pending or superseded) is removed. */
+  expires_at?: string;
 }
 
 export interface StatusPageDomainListResponse {
