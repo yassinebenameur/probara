@@ -109,6 +109,19 @@ func New(database *db.Client) *Service {
 // MaxNamespaces bounds an integration's active plus pending namespaces.
 const MaxNamespaces = 20
 
+// CollectorTokenResponse answers a collector token rotation; the token is
+// shown only here.
+type CollectorTokenResponse struct {
+	Token string `json:"token"`
+}
+
+// ApproveResponse answers a suggestion approval: the monitor it created, or
+// the existing one it matched (Created false).
+type ApproveResponse struct {
+	MonitorID uuid.UUID `json:"monitor_id"`
+	Created   bool      `json:"created"`
+}
+
 // Integration is one connected cluster. Namespaces are the active ones (in
 // stored order, HomeNamespace among them); PendingNamespaces were added but
 // not scanned successfully yet, and PendingStatus holds the last reason each

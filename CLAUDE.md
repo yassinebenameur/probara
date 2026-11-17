@@ -769,6 +769,9 @@ or imported groups come back empty. Any other path that creates groups through
   session only, outside the write gate, with their own audit events.
 - `tools/list` filtering by capability is UX; enforcement is the inner
   dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
+- A handler that refuses API keys without a router role gate marks its entry
+  `SessionOnly` (the tenant list); the gate walk cannot see it, and both the
+  tool list and the OpenAPI security read the flag.
 
 ## Kubernetes discovery
 
@@ -1384,6 +1387,18 @@ or imported groups come back empty. Any other path that creates groups through
 - Python (`ai-service/`, `scripts/*.py`, CI helper scripts): CI runs
   `ruff check` with the pyflakes rules in `ruff.toml`; run it before pushing
   Python changes (`pip install ruff==0.8.4`).
+- OpenAPI: `api/openapi.json` is generated from the MCP tool catalog bound
+  to the router (`api/internal/mcp/openapi*.go`) and served at
+  `/api/v1/openapi.json`. Regenerate it with `make openapi` whenever a route
+  or catalog entry changes; `TestOpenAPIGolden` fails when it is stale, and
+  `make openapi` lists the operations still without a typed response. Typed
+  success responses come from `successResponses` (`openapi_responses.go`):
+  add an entry only after reading the handler, never guess one, and name the
+  type the handler writes (no map literals, no copies); an error answer
+  richer than the envelope goes in `operationErrors`, same rule. A
+  generation failure at runtime only makes the endpoint answer 503. A route
+  an agent must not call but the REST API documents goes in `openAPIRoutes`
+  (and `notExposed`).
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).
   After touching local AI values, templates, Compose, the Makefile or the

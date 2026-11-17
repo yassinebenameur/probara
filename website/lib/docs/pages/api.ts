@@ -14,6 +14,7 @@ export const API_PAGE: DocPage = {
     "endpoints",
     "SSE",
     "pagination",
+    "OpenAPI",
   ],
   sections: [
     {
@@ -1281,6 +1282,44 @@ export const API_PAGE: DocPage = {
           title: "Use auth-context for diagnostics",
           text:
             "When a request is unexpectedly forbidden, `GET /api/v1/auth-context` shows the effective credential type, tenant, tenant role, and key scope without requiring a guess about middleware precedence.",
+        },
+      ],
+    },
+    {
+      id: "openapi",
+      title: "OpenAPI document",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "`GET /api/v1/openapi.json` returns an OpenAPI 3.1 description of the REST API. It needs a credential like any other route (an API key of either scope or a signed-in session) and is not workspace-scoped; anonymous requests get 401. There is no interactive documentation UI. Send `Accept-Encoding: gzip` for a compressed copy; the answer carries an `ETag` and `Cache-Control: private, max-age=300`, so `If-None-Match` revalidates with a 304. If the document could not be generated at startup the API still runs and this route answers 503 `openapi_unavailable`.",
+        },
+        {
+          type: "code",
+          language: "bash",
+          title: "Download the document",
+          code:
+            "curl \\\n  -H 'Authorization: Bearer pk_<secret>' \\\n  -o probara-openapi.json \\\n  \"$PROBARA_API_ORIGIN/api/v1/openapi.json\"",
+        },
+        {
+          type: "definitions",
+          items: [
+            {
+              term: "Generated, not written",
+              description:
+                "The document is built from the same catalog as the [MCP tools](/docs/mcp/#tools) and checked against the router when the API starts: every routed `/api/v1` operation is described, or listed with the reason under `x-probara-not-described` (browser sign-in, OAuth and MCP protocol routes, acknowledge and unsubscribe links, the discovery collector, retired routes). An operation's `operationId` is its MCP tool name. A copy is committed in the repository as `api/openapi.json`.",
+            },
+            {
+              term: "What it covers",
+              description:
+                "Path, query and body parameters with JSON schemas; the `tenant_id` parameter on workspace-scoped operations; which operations need write access or a tenant admin, superadmin or signed-in session (those list only the session scheme); success responses reflected from the handlers' response types; and the shared 400, 401, 403 and 429 answers. Monitor `config` lists each type's secret fields under `x-probara-secret-fields`. Push heartbeats, OTLP export and the alert stream are described too.",
+            },
+            {
+              term: "What it does not promise",
+              description:
+                "Response objects are open: new fields can appear in any release. Request schemas do not mark every required field; the API's validation message is authoritative. Error answers other than the shared ones are described generically, and a few low-level paths answer plain text. `info.version` is the API's build version.",
+            },
+          ],
         },
       ],
     },

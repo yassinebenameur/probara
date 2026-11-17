@@ -177,7 +177,7 @@ func (h *Handlers) DeleteLocation(w http.ResponseWriter, r *http.Request) {
 		"monitors_detached": affected,
 	}).Info("Location deleted")
 
-	httpx.WriteJSON(w, http.StatusOK, map[string]int{"monitors_detached": affected})
+	httpx.WriteJSON(w, http.StatusOK, models.DeleteLocationResponse{MonitorsDetached: affected})
 }
 
 // GetDeployInfo handles GET /api/v1/locations/{id}/deploy.
