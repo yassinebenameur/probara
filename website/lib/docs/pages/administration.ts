@@ -182,7 +182,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Public tenant create/update/delete management is not exposed through the normal product API.",
+            "API keys ignore arbitrary tenant selection and remain pinned to their creation tenant. The tenant-list endpoint is for administrator sessions and returns only allowed tenant context. Superadministrators create, rename and delete workspaces; see [Workspaces](#workspaces).",
         },
         {
           type: "callout",
@@ -190,6 +190,60 @@ export const ADMINISTRATION_PAGE: DocPage = {
           title: "Never reuse a cross-tenant cache key",
           text:
             "External integrations should include tenant identity in caches, queues, and idempotency keys even when resource UUIDs appear globally unique.",
+        },
+      ],
+    },
+    {
+      id: "workspaces",
+      title: "Workspaces",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Only superadministrators manage workspaces: the **Workspaces** page (listed with each workspace's member and monitor counts), the **New workspace** entry at the end of the workspace switcher, `POST /api/v1/tenants`, `PATCH /api/v1/tenants/{id}`, `DELETE /api/v1/tenants/{id}` and `GET /api/v1/tenants/overview`, or the matching [MCP](/docs/mcp/) tools. Members and API keys are refused. Each change is audited as `tenant.create`, `tenant.rename` or `tenant.delete` with the name, as a platform event that stays visible after the workspace is gone.",
+        },
+        {
+          type: "list",
+          items: [
+            "**Names** are 1–100 characters with no control characters, trimmed, and unique among live workspaces (exact match, so `Ops` and `ops` can coexist). A deleted workspace's name is free again at once.",
+            "**A new workspace starts empty**: no monitors or channels, the shared worker fleet, default notification settings, workspace AI on, and no members. Superadministrators act in every workspace without a membership; add members on the [user](#bootstrap-users) pages. Creating one from the switcher or the Workspaces page switches to it.",
+            "**Rename** changes only the name; IDs, keys and links keep working.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "**Delete** is permanent and has no undo window. The confirmation must repeat the workspace's name (`confirm_name` in the API). The default workspace cannot be deleted, nor, while SSO just-in-time provisioning is on, the workspace new SSO users join (`OIDC_JIT_DEFAULT_TENANT_ID`), nor the last remaining workspace.",
+        },
+        {
+          type: "table",
+          columns: ["When", "What happens"],
+          rows: [
+            [
+              "At once",
+              "The workspace disappears from every list and switcher, and its memberships, SSO group mappings and MCP connections are removed. Every credential scoped to it is refused: sessions and MCP tokens get `404 workspace_not_found` on its routes (superadministrators too, and still after the purge: the same answer as for an ID that never existed), its API keys (OTLP ingest included) get `401`, push URLs and discovery collector tokens `404`, its private-location workers are refused by the broker on their next connection and their results and heartbeats are dropped, and acknowledge and report-unsubscribe links read as invalid.",
+            ],
+            [
+              "Within seconds",
+              "Its monitors are no longer dispatched, results still in flight are discarded, and the absence watchdog, mesh probes and maintenance windows skip it. Its status pages stop being served once the status-page cache expires (`STATUS_PAGE_CACHE_TTL`, 10 seconds by default) and visitor push stops. The alerter neither evaluates nor notifies for it: open alerts are left as they are and are not resolved (so its channels hear nothing), and notifications still queued are dropped. Scheduled SLA reports and AI analyses stop.",
+            ],
+            [
+              "In the background",
+              "Within the first purge run (seconds after the delete, every `MONITOR_PURGE_INTERVAL_SECONDS`) the scheduler blanks its stored secrets: channel credentials, monitor credentials and push tokens, private-location worker credentials. It then erases the data in bounded batches, table by table (API keys, tokens and status pages first, then history, then configuration), and deletes the workspace row last. Every run handles at most `MONITOR_PURGE_MAX_ROWS_PER_RUN` rows in `MONITOR_PURGE_BATCH_SIZE` batches, so a large workspace takes several runs; progress shows in the scheduler log and the `workspace_purge_*` metrics ([Operations](/docs/operations/#retention)).",
+            ],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "What is kept",
+          text:
+            "Audit log entries about the workspace are kept and age out under `AUDIT_RETENTION_DAYS`. Status page slugs are unique across the installation, so a deleted workspace's slugs become free once the purge has removed its pages, usually within the first run. Users are platform accounts and are never deleted with a workspace.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A browser whose selected workspace is deleted switches to another one the user can open on its next request. A member whose only workspace was deleted keeps the account and can still sign in, but sees “You are not a member of any workspace” until a superadministrator adds a membership. Memberships and SSO group mappings can only name a live workspace: a deleted one is refused as “workspace not found”.",
         },
       ],
     },
@@ -408,12 +462,12 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Monitor imports support JSON, YAML, and CSV with format autodetection. JSON/YAML can contain an array, a single object, common wrappers such as `items`, `monitors`, or `data`, a versioned portable YAML bundle, and an Uptime Kuma backup export. YAML also recognizes common source wrappers such as `services`, `endpoints`, and `checks`.",
+            "Monitor imports support JSON, YAML, and CSV with format autodetection. JSON/YAML can contain an array, a single object, common wrappers such as `items`, `monitors`, or `data`, a versioned portable YAML bundle, an Uptime Kuma backup export, a Better Stack or UptimeRobot API response, and a Gatus configuration file. YAML also recognizes common source wrappers such as `services`, `endpoints`, and `checks`.",
         },
         {
           type: "paragraph",
           text:
-            "Two source schemas are recognized and translated automatically, so the field-mapping step is already complete when preview reports them: the portable bundle (`portable_monitor_export`) and an Uptime Kuma export (`uptime_kuma_export`). Everything else goes through field mapping.",
+            "Five source schemas are recognized and translated automatically, so the field-mapping step is already complete when preview reports them: the portable bundle (`portable_monitor_export`), an Uptime Kuma export (`uptime_kuma_export`), a Better Stack export (`better_stack_export`), an UptimeRobot export (`uptimerobot_export`), and a Gatus configuration (`gatus_config`). Everything else goes through field mapping. For the four foreign tools, preview lists every monitor that will be created with its translation notes, every record that will not be, with the reason, and the settings ignored for the whole file. A domain monitor an importer adds from a source's domain-expiration check is labeled in the review table, and the review step can leave all of them out. A URL whose query carries a credential (`api_key=`, `token=`, ...) keeps it, stored as written and masked on reads, with a note naming the parameter: move it to a secret header where the endpoint allows. A monitor with no name of its own is named after its URL's host and path, never its query.",
         },
         {
           type: "list",
@@ -477,6 +531,165 @@ export const ADMINISTRATION_PAGE: DocPage = {
           title: "Notifications and credentials are never migrated",
           text:
             "Uptime Kuma notifier configuration holds credentials, so `notificationIDList` is ignored and each affected monitor carries a note naming the notifiers it referenced — attach alert channels after import. HTTP basic auth is carried into the monitor's `basic_auth_username` and encrypted `basic_auth_password` (an `Authorization` header Uptime Kuma replaced with it is dropped, as Kuma did), and credential-bearing request headers into the encrypted `secret_headers`; OAuth2, NTLM, and client-certificate auth are dropped and reported. Monitor descriptions, retry intervals, resend intervals, and custom ICMP packet sizes have no equivalent and are reported as dropped.",
+        },
+      ],
+    },
+    {
+      id: "import-better-stack",
+      title: "Migrating from Better Stack",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Better Stack has no export button, so fetch your configuration from its Uptime API with an API token and upload the JSON. A single `GET /api/v2/monitors` response (or a single resource such as `GET /api/v2/monitors/{id}`) imports on its own; to keep heartbeats and groups, fetch those endpoints too and combine the responses into one file. Each response is one page: fetch every page by following `pagination.next` — preview warns about every response in the file whose next page the file does not hold.",
+        },
+        {
+          type: "code",
+          language: "bash",
+          title: "Export from Better Stack",
+          code: 'for path in monitors heartbeats monitor-groups heartbeat-groups; do\n  curl -s -H "Authorization: Bearer $BETTER_STACK_API_TOKEN" \\\n    "https://uptime.betterstack.com/api/v2/$path" > "$path.json"\ndone\njq -s . monitors.json heartbeats.json monitor-groups.json heartbeat-groups.json > better-stack.json',
+        },
+        {
+          type: "table",
+          columns: ["Better Stack", "Imported as"],
+          rows: [
+            ["`status`", "HTTP monitor accepting any 2xx"],
+            ["`expected_status_code`", "HTTP monitor with `expected_statuses`"],
+            ["`keyword`, `keyword_absence`", "HTTP monitor with a body `contains` (case-sensitive) or `not_contains` (any case) assertion"],
+            ["`ping`, `tcp`", "Ping and TCP monitors"],
+            ["`dns`", "DNS A-record lookup of the domain in `request_body` on the server in `url`; `required_keyword` becomes an expected answer"],
+            ["Heartbeat", "Push monitor: `period` is the expected interval and `grace` the grace period, with a new push URL. A period over a day keeps its deadline: the interval is a day and the rest is added to the grace period"],
+            ["Monitor and heartbeat groups", "Groups with their members; a paused group is created disabled"],
+            ["`domain_expiration`", "One domain monitor per registrable domain (daily, down after two failing lookups, the widest warning window)"],
+            ["`udp`, `smtp`, `pop`, `imap`, `playwright`", "Not imported, with the reason"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "`check_frequency` becomes the interval and `request_timeout` the timeout: seconds for HTTP monitors, milliseconds for the others — a non-HTTP value under 2000 could be either, so the default timeout is kept with a note. The confirmation and recovery periods are time-based in Better Stack and counted in checks here: one more than the period divided by the interval, rounded up, capped at 10 — a zero confirmation period means the first failure marks the monitor down, and an export without one keeps the default of two failing checks. Paused monitors are created disabled. Request headers carry over, credential-named ones into the encrypted `secret_headers`; `auth_username` and `auth_password` become basic auth. Disabled SSL verification, `follow_redirects: false`, and `ssl_expiration` (as `tls_min_days_valid`) carry over on HTTPS monitors.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Not migrated",
+          text:
+            "Regions, notification settings (call, SMS, email, push, critical alerts), escalation policies, team wait, and maintenance windows are ignored, each with one note for the whole file — assign locations and alert channels after import. The IPv4/IPv6-only setting is dropped with a note. A monitor whose basic-auth username arrives without its password (or with one redacted to asterisks) is created disabled with a note to re-enter it.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Verified against documentation only",
+          text:
+            "This importer was built from Better Stack's API documentation, not live exports. After importing, check: keyword monitors (the case rule is not documented, so a required keyword must match its case and a forbidden one is refused in any case); DNS monitors (imported as an A lookup of `request_body` on the server in `url`, with `required_keyword` as an expected answer); non-HTTP timeouts; confirmation periods where the export had none; and basic auth, in case the export did not carry `auth_password`.",
+        },
+      ],
+    },
+    {
+      id: "import-uptimerobot",
+      title: "Migrating from UptimeRobot",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "UptimeRobot's dashboard has no full monitor export. Call API v2 `getMonitors` with a read-only API key, asking for the optional details, and upload the JSON response. A response from the newer API (`{\"data\": [{\"friendlyName\": ...}]}`) is refused rather than guessed at. A response holds at most 50 monitors: fetch further pages with `offset` and import each file (preview warns when the response's total is larger than what the file holds).",
+        },
+        {
+          type: "code",
+          language: "bash",
+          title: "Export from UptimeRobot",
+          code: 'curl -s -X POST https://api.uptimerobot.com/v2/getMonitors \\\n  -d "api_key=$UPTIMEROBOT_API_KEY" -d format=json -d ssl=1 \\\n  -d custom_http_headers=1 -d custom_http_statuses=1 -d http_request_details=true \\\n  -d alert_contacts=1 -d mwindows=1 > uptimerobot.json',
+        },
+        {
+          type: "table",
+          columns: ["UptimeRobot type", "Imported as"],
+          rows: [
+            ["1 (HTTP)", "HTTP monitor"],
+            ["2 (Keyword)", "HTTP monitor with a body assertion: \"alert when exists\" becomes `not_contains`, \"alert when not exists\" becomes `contains`, case-insensitive unless the monitor was case-sensitive (without `keyword_case_type`, the stricter reading: a required keyword matches its case, a forbidden one any case)"],
+            ["3 (Ping)", "Ping monitor"],
+            ["4 (Port)", "TCP monitor on the predefined port (HTTP, HTTPS, FTP, SMTP, POP3, IMAP) or the custom one"],
+            ["5 (Heartbeat)", "Push monitor expecting a check-in every interval, with a new push URL (an interval over a day moves its excess into the grace period, keeping the deadline)"],
+            ["Any other type", "Not imported, with the reason"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The interval and timeout carry over and paused monitors (status 0) are created disabled. The HTTP method, POST body (raw text as is, key-value data as a JSON object) and custom headers carry over, credential-named headers into the encrypted `secret_headers`; HTTP basic auth becomes `basic_auth_username` and the encrypted `basic_auth_password`, while a monitor using digest authentication is not imported. Custom HTTP statuses apply on top of UptimeRobot's default, where 2xx and 3xx are up. Ignored SSL errors become `tls_skip_verify`, and SSL expiry reminders become `tls_min_days_valid` of 30 days, a TLS-expiry alert while the check keeps passing.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Not migrated",
+          text:
+            "Alert contacts and maintenance windows are ignored, each with one note for the whole file. UptimeRobot exposes no failure confirmation setting, so monitors get the default of two consecutive failing checks. Domain expiry reminders are not translated: add domain monitors by hand. A monitor whose basic-auth username arrives without its password (or with one redacted to asterisks) is created disabled with a note to re-enter it.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Verified against documentation only",
+          text:
+            "This importer was built from UptimeRobot's API v2 documentation, not live exports. After importing, check keyword monitors (which `keyword_type` value means \"alert when present\", and the direction of `keyword_case_type`), that basic-auth passwords arrived in plain text rather than redacted, and the SSL settings, which come from the `ssl` object `getMonitors` returns with `ssl=1`.",
+        },
+      ],
+    },
+    {
+      id: "import-gatus",
+      title: "Migrating from Gatus",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Upload Gatus's `config.yaml`. When Gatus reads a configuration directory, merge the files' `endpoints` and `external-endpoints` lists into one file first. Each endpoint becomes a monitor by its URL scheme, each `group` becomes a group (two endpoints with one name in different groups become `group / name`), and `enabled: false` creates the monitor disabled.",
+        },
+        {
+          type: "table",
+          columns: ["Gatus endpoint", "Imported as"],
+          rows: [
+            ["`http://`, `https://`", "HTTP monitor; `graphql: true` posts the body as `{\"query\": ...}`"],
+            ["`icmp://`", "Ping monitor"],
+            ["`tcp://`, `tls://`", "TCP monitor, with a TLS handshake for `tls://`"],
+            ["`ws://`, `wss://`", "WebSocket monitor sending the body as its message"],
+            ["`grpc://`, `grpcs://`", "gRPC health probe (`grpc.health.v1`), with a note to confirm the endpoint serves it"],
+            ["Endpoint with a `dns` block", "DNS monitor querying the server in `url` (A, AAAA, CNAME, TXT, MX, NS)"],
+            ["External endpoint with `heartbeat.interval`", "Push monitor with a new push URL (an interval over a day moves its excess into the grace period, keeping the deadline); without a heartbeat it is not imported"],
+            ["`udp://`, `sctp://`, `starttls://`, `ssh://`", "Not imported, with the reason"],
+          ],
+        },
+        {
+          type: "table",
+          columns: ["Condition", "Translation"],
+          rows: [
+            ["`[STATUS] == 200`, `== any(200, 201)`, `== pat(2*)`, `!=`, `<`, `>=`, ...", "Expected status codes and ranges, the intersection of every status condition. An HTTP endpoint without one accepts every status, as in Gatus"],
+            ["`[RESPONSE_TIME] < 300`", "`max_latency_ms` on HTTP and WebSocket, `max_rtt_ms` (average of the echoes) on ping"],
+            ["`[BODY] == value`, `pat(...)`, `any(...)`, `!=`", "A body assertion (HTTP, ignoring surrounding whitespace for a plain value), the expected substring of the first message (WebSocket), or an expected answer (DNS). `pat()` is translated with `*` wildcards only; any other pattern syntax is dropped with a note"],
+            ["`[BODY].path` compared with `==`, `!=`, `<`, `<=`, `>`, `>=`", "A JSON assertion on the same path (`[0]` becomes `.0`; `true`/`false` a boolean check; `pat` and `any` a regex)"],
+            ["`len([BODY].items)`, `has([BODY].id) == true`", "The array length (`items.#`) and an `exists` assertion"],
+            ["`[CERTIFICATE_EXPIRATION] > 48h`", "`tls_min_days_valid`, in days rounded up with a note (so `> 12h` is one day; `> 0` is zero, an alert once expired), on HTTPS and `tls://` monitors"],
+            ["`[DOMAIN_EXPIRATION] > 720h`", "A separate domain monitor for the registrable domain, rounded up the same way"],
+            ["`[CONNECTED] == true`, `[DNS_RCODE] == NOERROR`, gRPC `[BODY].status == SERVING`", "Already what the check requires"],
+            ["`[CONNECTED] == false`, any other `[DNS_RCODE]`, status conditions no code satisfies", "The endpoint is not imported: it expects failure, and importing it would alert backwards"],
+            ["Anything else (`[IP]`, `has(...) == false`, a response time on TCP, ...)", "Dropped, with a note on the monitor naming the condition"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "`interval` and `client.timeout` (Gatus's default 10 s) carry over. Headers carry over, credential-named ones into the encrypted `secret_headers`, and `user:password@` in a URL becomes basic auth. `client.insecure` becomes `tls_skip_verify` and `client.ignore-redirect` stops following redirects. An endpoint's alert `failure-threshold` and `success-threshold` (else the provider's `default-alert`, else Gatus's 3 and 2) become its consecutive-failure and recovery thresholds, taking the lowest across its enabled alerts.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Behavior changes and what is not migrated",
+          text:
+            "Gatus fails an endpoint once a certificate or domain is inside its expiration bound; here those raise TLS-expiry and domain-expiry alerts while the check keeps passing. With `client.insecure`, an expired certificate no longer fails the check at all — only the TLS-expiry alert reports it — and the monitor carries a warning saying so. Environment variables (`$VAR`, `${VAR}`) are never resolved: an endpoint whose host is one is not imported, and one using them elsewhere — URL, headers, body, DNS query, or a condition (which is dropped) — keeps them verbatim and is created disabled with a note naming them. `$$`, Gatus's escape for a literal `$`, becomes `$`. Alerting providers and maintenance windows are ignored with one note for the file. OAuth2, Identity-Aware Proxy, and client-certificate authentication have no equivalent, so those monitors are created disabled; a custom DNS resolver, network, and proxy are dropped with a note.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Verified against documentation only",
+          text:
+            "This importer was built from Gatus's documentation, not a running instance. After importing, check: `pat()` conditions (translated as `*` wildcards), whole-body `[BODY] ==` conditions (surrounding whitespace is ignored), `grpc://` endpoints (imported as health probes), and DNS endpoints with a `[BODY]` condition (the answer must be among the records returned).",
         },
       ],
     },

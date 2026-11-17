@@ -1,0 +1,355 @@
+[
+  {
+    "data": [
+      {
+        "id": "2001",
+        "type": "monitor",
+        "attributes": {
+          "url": "https://www.example.com/",
+          "pronounceable_name": "Marketing site",
+          "auth_username": "",
+          "auth_password": "",
+          "monitor_type": "status",
+          "monitor_group_id": 101,
+          "last_checked_at": "2026-11-10T08:15:02.000Z",
+          "status": "up",
+          "policy_id": null,
+          "expiration_policy_id": "9001",
+          "team_name": "Platform",
+          "required_keyword": null,
+          "verify_ssl": true,
+          "check_frequency": 60,
+          "call": false,
+          "sms": false,
+          "email": true,
+          "push": true,
+          "critical_alert": false,
+          "team_wait": null,
+          "http_method": "get",
+          "request_timeout": 15,
+          "recovery_period": 180,
+          "request_headers": [
+            {"id": "71", "name": "X-Env", "value": "prod"},
+            {"id": "72", "name": "Authorization", "value": "Bearer bs-secret-token"}
+          ],
+          "request_body": "",
+          "follow_redirects": true,
+          "remember_cookies": true,
+          "created_at": "2025-03-02T10:00:00.000Z",
+          "updated_at": "2026-10-01T09:30:00.000Z",
+          "ssl_expiration": 14,
+          "domain_expiration": 30,
+          "regions": ["us", "eu", "as", "au"],
+          "expected_status_codes": [],
+          "port": null,
+          "confirmation_period": 120,
+          "paused_at": null,
+          "paused": false,
+          "maintenance_from": null,
+          "maintenance_to": null,
+          "maintenance_timezone": "UTC",
+          "maintenance_days": [],
+          "playwright_script": null,
+          "scenario_name": null,
+          "ip_version": null,
+          "checks_version": "v2"
+        },
+        "relationships": {"policy": {"data": null}}
+      },
+      {
+        "id": "2002",
+        "type": "monitor",
+        "attributes": {
+          "url": "https://api.example.com/v1/orders",
+          "pronounceable_name": "Checkout API",
+          "auth_username": "probe",
+          "auth_password": "bs-basic-pass",
+          "monitor_type": "expected_status_code",
+          "monitor_group_id": 101,
+          "policy_id": "9002",
+          "verify_ssl": true,
+          "check_frequency": 30,
+          "call": true,
+          "sms": true,
+          "email": true,
+          "push": true,
+          "critical_alert": true,
+          "team_wait": 180,
+          "http_method": "post",
+          "request_timeout": 10,
+          "recovery_period": 0,
+          "request_headers": [{"id": "80", "name": "Content-Type", "value": "application/json"}],
+          "request_body": "{\"dry_run\": true}",
+          "follow_redirects": false,
+          "remember_cookies": false,
+          "ssl_expiration": null,
+          "domain_expiration": 14,
+          "regions": ["us", "eu"],
+          "expected_status_codes": [200, 204],
+          "port": null,
+          "confirmation_period": 0,
+          "paused": false,
+          "maintenance_from": "02:00:00",
+          "maintenance_to": "03:00:00",
+          "maintenance_timezone": "Europe/Paris",
+          "maintenance_days": ["sun"],
+          "ip_version": "ipv4"
+        }
+      },
+      {
+        "id": "2003",
+        "type": "monitor",
+        "attributes": {
+          "url": "http://docs.example.com/",
+          "pronounceable_name": "Docs keyword",
+          "monitor_type": "keyword",
+          "required_keyword": "Documentation",
+          "verify_ssl": false,
+          "check_frequency": 180,
+          "http_method": "get",
+          "request_timeout": 30,
+          "ssl_expiration": 7,
+          "regions": ["eu"],
+          "confirmation_period": 0,
+          "paused": false
+        }
+      },
+      {
+        "id": "2004",
+        "type": "monitor",
+        "attributes": {
+          "url": "https://www.example.com/status",
+          "pronounceable_name": "Maintenance banner absent",
+          "monitor_type": "keyword_absence",
+          "required_keyword": "Scheduled maintenance",
+          "check_frequency": 300,
+          "http_method": "get",
+          "request_timeout": 30,
+          "regions": ["eu"],
+          "domain_expiration": 60,
+          "confirmation_period": 0,
+          "paused": false
+        }
+      },
+      {
+        "id": "2005",
+        "type": "monitor",
+        "attributes": {
+          "url": "203.0.113.10",
+          "pronounceable_name": "Gateway ping",
+          "monitor_type": "ping",
+          "check_frequency": 30,
+          "request_timeout": 2000,
+          "regions": ["eu"],
+          "confirmation_period": 60,
+          "paused": false
+        }
+      },
+      {
+        "id": "2006",
+        "type": "monitor",
+        "attributes": {
+          "url": "db.example.com",
+          "pronounceable_name": "Postgres port",
+          "monitor_type": "tcp",
+          "port": "5432",
+          "check_frequency": 60,
+          "request_timeout": 5000,
+          "monitor_group_id": 102,
+          "confirmation_period": 0,
+          "paused": false
+        }
+      },
+      {
+        "id": "2007",
+        "type": "monitor",
+        "attributes": {
+          "url": "1.1.1.1",
+          "pronounceable_name": "Resolver",
+          "monitor_type": "dns",
+          "request_body": "example.com",
+          "required_keyword": "192.0.2.10",
+          "check_frequency": 120,
+          "request_timeout": 3000,
+          "monitor_group_id": 102,
+          "confirmation_period": 0,
+          "paused": false
+        }
+      },
+      {
+        "id": "2008",
+        "type": "monitor",
+        "attributes": {
+          "url": "mail.example.com",
+          "pronounceable_name": "Mail relay",
+          "monitor_type": "smtp",
+          "port": "25,587",
+          "check_frequency": 180,
+          "paused": false
+        }
+      },
+      {
+        "id": "2009",
+        "type": "monitor",
+        "attributes": {
+          "url": "https://app.example.com/signup",
+          "pronounceable_name": "Signup journey",
+          "monitor_type": "playwright",
+          "scenario_name": "Signup",
+          "playwright_script": "test('signup', async ({ page }) => { await page.goto('https://app.example.com/signup'); });",
+          "check_frequency": 600,
+          "paused": false
+        }
+      },
+      {
+        "id": "2010",
+        "type": "monitor",
+        "attributes": {
+          "url": "metrics.example.com",
+          "pronounceable_name": "StatsD UDP",
+          "monitor_type": "udp",
+          "port": "8125",
+          "required_keyword": "ok",
+          "check_frequency": 180,
+          "paused": false
+        }
+      },
+      {
+        "id": "2011",
+        "type": "monitor",
+        "attributes": {
+          "url": "https://admin.example.com/",
+          "pronounceable_name": "Paused admin",
+          "monitor_type": "status",
+          "auth_username": "admin",
+          "auth_password": "",
+          "check_frequency": 180,
+          "request_timeout": 30,
+          "confirmation_period": 0,
+          "paused": true,
+          "paused_at": "2026-09-01T00:00:00.000Z"
+        }
+      },
+      {
+        "id": "2012",
+        "type": "monitor",
+        "attributes": {
+          "url": "https://status.example.com/",
+          "pronounceable_name": "Status page",
+          "monitor_type": "status",
+          "monitor_group_id": 999,
+          "check_frequency": 180,
+          "request_timeout": 30,
+          "confirmation_period": 0,
+          "paused": false
+        }
+      },
+      {
+        "id": "2013",
+        "type": "monitor",
+        "attributes": {
+          "url": "https://www.example.com/health",
+          "pronounceable_name": "Health",
+          "monitor_type": "status",
+          "monitor_group_id": 101,
+          "check_frequency": 60,
+          "request_timeout": 15,
+          "confirmation_period": 0,
+          "paused": false
+        }
+      },
+      {
+        "id": "2014",
+        "type": "monitor",
+        "attributes": {
+          "url": "https://internal.example.com/health",
+          "pronounceable_name": "Health",
+          "monitor_type": "status",
+          "monitor_group_id": 102,
+          "check_frequency": 60,
+          "request_timeout": 120,
+          "confirmation_period": 1800,
+          "recovery_period": 900,
+          "paused": false
+        }
+      }
+    ],
+    "pagination": {
+      "first": "https://uptime.betterstack.com/api/v2/monitors?page=1",
+      "last": "https://uptime.betterstack.com/api/v2/monitors?page=1",
+      "prev": null,
+      "next": null
+    }
+  },
+  {
+    "data": [
+      {
+        "id": "3001",
+        "type": "heartbeat",
+        "attributes": {
+          "url": "https://uptime.betterstack.com/api/v1/heartbeat/hb-token-nightly",
+          "name": "Nightly backup",
+          "period": 86400,
+          "grace": 3600,
+          "call": false,
+          "sms": false,
+          "email": true,
+          "push": false,
+          "critical_alert": false,
+          "team_wait": null,
+          "heartbeat_group_id": 201,
+          "sort_index": null,
+          "paused_at": null,
+          "created_at": "2025-05-01T00:00:00.000Z",
+          "updated_at": "2026-05-01T00:00:00.000Z",
+          "status": "up",
+          "paused": false,
+          "maintenance_days": [],
+          "maintenance_from": null,
+          "maintenance_to": null,
+          "maintenance_timezone": "UTC",
+          "policy_id": null
+        }
+      },
+      {
+        "id": "3002",
+        "type": "heartbeat",
+        "attributes": {
+          "url": "https://uptime.betterstack.com/api/v1/heartbeat/hb-token-queue",
+          "name": "Queue drain",
+          "period": 300,
+          "grace": 60,
+          "heartbeat_group_id": 201,
+          "paused": true
+        }
+      },
+      {
+        "id": "3003",
+        "type": "heartbeat",
+        "attributes": {
+          "url": "https://uptime.betterstack.com/api/v1/heartbeat/hb-token-weekly",
+          "name": "Weekly report",
+          "period": 604800,
+          "grace": 0,
+          "heartbeat_group_id": null,
+          "paused": false
+        }
+      }
+    ],
+    "pagination": {"first": null, "last": null, "prev": null, "next": null}
+  },
+  {
+    "data": [
+      {"id": "101", "type": "monitor_group", "attributes": {"name": "Public web", "sort_index": 0, "paused": false, "team_name": "Platform"}},
+      {"id": "102", "type": "monitor_group", "attributes": {"name": "Internal", "sort_index": 1, "paused": false, "team_name": "Platform"}},
+      {"id": "103", "type": "monitor_group", "attributes": {"name": "Retired", "sort_index": 2, "paused": true, "team_name": "Platform"}}
+    ],
+    "pagination": {"first": null, "last": null, "prev": null, "next": null}
+  },
+  {
+    "data": [
+      {"id": "201", "type": "heartbeat_group", "attributes": {"name": "Batch jobs", "sort_index": 0, "paused": false, "team_name": "Platform"}}
+    ],
+    "pagination": {"first": null, "last": null, "prev": null, "next": null}
+  }
+]

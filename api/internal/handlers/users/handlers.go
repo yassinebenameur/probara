@@ -167,6 +167,10 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
+		if errors.Is(err, adminusers.ErrWorkspaceNotFound) {
+			apierrors.WriteError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
+			return
+		}
 		h.logger.WithError(err).Error("Failed to create admin user")
 		apierrors.WriteInternalError(w, "failed to create user")
 		return
@@ -272,6 +276,9 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, adminusers.ErrEmailTaken),
 			errors.Is(err, adminusers.ErrCannotDemoteLastAdmin):
 			apierrors.WriteValidationError(w, err.Error())
+			return
+		case errors.Is(err, adminusers.ErrWorkspaceNotFound):
+			apierrors.WriteError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 			return
 		default:
 			h.logger.WithFields(map[string]interface{}{

@@ -111,6 +111,11 @@ export const SECURITY_PAGE: DocPage = {
             'Use separate [API keys](/docs/administration/#api-keys) per integration, give them an expiry, select `read` unless mutation is necessary, and revoke them when ownership changes.',
           ],
         },
+        {
+          type: 'paragraph',
+          text:
+            'A [deleted workspace](/docs/administration/#workspaces) is refused where its tenant is resolved, not only hidden from lists: the session and MCP-token identity lookup (superadmins included), API-key, push-token, collector-token and private-location credential lookups, acknowledge and report-unsubscribe links, the status-page read path, and every background loop of the scheduler, alerter and worker check that the workspace is live in the same query. A credential minted by a request racing the delete is therefore refused too. The scheduler’s first purge run blanks its stored secrets (channel and monitor credentials, push tokens, private-location worker credentials), then erases the data in bounded batches, keys, tokens and status pages first; once its row is gone nothing of it remains in the database except audit log entries, which follow `AUDIT_RETENTION_DAYS`. Deleting a workspace does not rotate platform credentials (`PROBARA_SECRETS_KEY`, NATS, database) and cannot recall data already sent to providers or captured in backups.',
+        },
       ],
     },
     {
@@ -343,6 +348,11 @@ export const SECURITY_PAGE: DocPage = {
               '`STATUS_PAGE_PREVIEW_SECRET`',
               'API and status-page service',
               'Changing invalidates outstanding one-hour preview tokens.',
+            ],
+            [
+              '`STATUS_PAGE_SESSION_SECRET`',
+              'Status-page service only',
+              'Signs visitor sessions on password and private status pages. Changing it signs every visitor out, kiosk displays included (they open their kiosk URL again). Unset closes those pages.',
             ],
             [
               '`BOOTSTRAP_SETUP_CODE`',
@@ -681,7 +691,9 @@ go run ./cmd/admin/migrate_sensitive_headers`,
         {
           type: 'list',
           items: [
-            'Published [status pages](/docs/status-pages/#page-model) are intentionally public. Do not include private monitor URLs, internal hostnames, customer names, or operational notes unless disclosure is intended.',
+            'Published [status pages](/docs/status-pages/#page-model) are public unless their [visibility](/docs/status-pages/#visibility) says otherwise. Do not include private monitor URLs, internal hostnames, customer names, or operational notes on a public or unlisted page unless disclosure is intended. Unlisted is a hidden link, not access control.',
+            'Password and private pages are checked before the render cache and on every sub-route; refusals and gated content are `private, no-store`, and a private page without a credential answers exactly like a missing one. Visitor passwords are bcrypt-hashed and kiosk tokens SHA-256-hashed by the API; the status service only reads them and never writes a session, a token use or an attempt. Kiosk tokens leave the URL on first use (redirect to the clean URL, `Referrer-Policy: no-referrer` on that response) and the status service never logs them, but the redirect source stays in that browser\'s history and any proxy or ingress that logs query strings records the full kiosk URL: disable query logging for `/public/status/` there. Wrong passwords and tokens share a failure budget per client address (IPv6 per /64) and per page; set `TRUSTED_PROXY_CIDRS` so visitors behind your proxy are told apart. Set `STATUS_PAGE_SESSION_SECRET` on the status service for these pages to open at all, and `STATUS_PAGE_BASE_URL` (https) or `STATUS_PAGE_COOKIE_SECURE` so the session cookie is `Secure` behind TLS termination.',
+            'Pages on one origin share it. A gated page refuses requests and frames initiated by another status page, but custom template or head/footer script on any page can still open another page in a window and read it: template editors are trusted with every gated page on the installation until each page has its own hostname (custom domains).',
             'Set one strong shared `STATUS_PAGE_PREVIEW_SECRET` on API and status service (Helm: `secrets.statusPagePreviewSecret`, rendered into both). Without it, preview-token enforcement is disabled.',
             'Preview tokens are HMAC-SHA256 values with a one-hour expiry. Treat preview URLs as temporary bearer links.',
             'The status service’s optional API proxy is intentionally restricted, but should still be exposed only through the expected status editing/preview flow.',

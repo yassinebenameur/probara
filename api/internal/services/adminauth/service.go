@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // ErrUserNotFound is returned by user-targeted actions for an unknown id.
@@ -96,6 +97,7 @@ func (s *Service) GetMembershipsForAdmin(ctx context.Context, adminID uuid.UUID)
 		FROM tenant_memberships m
 		JOIN tenants t ON t.id = m.tenant_id
 		WHERE m.admin_user_id = $1
+		  AND ` + tenancy.LiveTenantSQL("m.tenant_id") + `
 		ORDER BY t.name ASC
 	`
 

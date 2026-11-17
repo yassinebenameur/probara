@@ -368,6 +368,11 @@ func (s *Subscriber) handleEvent(event statusupdates.Event) {
 		seen[slug] = struct{}{}
 		affected = append(affected, slug)
 		s.invalidateCache(slug)
+		if event.Type == statusupdates.EventStatusPageAccessChanged {
+			// Visibility, password or a kiosk token changed: streams opened
+			// under the old rules reconnect through the access gate.
+			s.hub.CloseSlug(slug)
+		}
 	}
 
 	if !s.hub.HasAnyClients() {

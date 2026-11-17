@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // runLifecycle is the transition-driven alert lifecycle (spec §6):
@@ -87,9 +88,11 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 // advisory follow-up is muted exactly when a reminder would be. The
 // acknowledge/snooze mute is not part of it: it holds pages and reminders
 // only, and dispatchOpenAlerts applies it per channel in openAlertEventDue.
+// A deleted workspace's alerts never dispatch (shared/tenancy).
 func openAlertDispatchablePredicate() string {
 	return `al.status IN ('active', 'acknowledged')
 		  AND m.deleted_at IS NULL
+		  AND ` + tenancy.LiveTenantSQL("al.tenant_id") + `
 		  AND (
 			-- 'degraded' keeps an open alert's reminders flowing: the outage
 			-- shrank below quorum but has not fully recovered.
@@ -138,6 +141,7 @@ func (a *Alerter) refreshAlertFailingLocations(ctx context.Context) error {
 			FROM alerts al2
 			WHERE al2.status IN ('active', 'acknowledged')
 			  AND al2.kind = 'availability'
+			  AND `+tenancy.LiveTenantSQL("al2.tenant_id")+`
 		) x
 		WHERE al.id = x.alert_id
 		  AND al.failing_locations IS DISTINCT FROM x.fl
@@ -235,6 +239,7 @@ func (a *Alerter) annotateOpenAlertRootCauses(ctx context.Context) error {
 			FROM alerts al2`+rootCauseLateral("al2.monitor_id")+`
 			WHERE al2.status IN ('active', 'acknowledged')
 			  AND al2.kind = 'availability'
+			  AND `+tenancy.LiveTenantSQL("al2.tenant_id")+`
 		) x
 		WHERE al.id = x.alert_id
 		  AND (al.root_cause_monitor_id IS DISTINCT FROM x.rc_id
@@ -262,6 +267,7 @@ func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 				AND child.tenant_id = g.tenant_id
 				AND child.deleted_at IS NULL AND child.enabled
 			WHERE g.type = 'group' AND g.deleted_at IS NULL AND g.enabled
+			  AND `+tenancy.LiveTenantSQL("g.tenant_id")+`
 			UNION
 			SELECT d.group_id, d.tenant_id, child.id
 			FROM descendants d
@@ -281,6 +287,7 @@ func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 			FROM monitors g
 			LEFT JOIN member_states ms ON ms.group_id = g.id
 			WHERE g.type = 'group' AND g.deleted_at IS NULL
+			  AND `+tenancy.LiveTenantSQL("g.tenant_id")+`
 		)
 		UPDATE monitors m
 		SET current_state = gs.state,
@@ -311,6 +318,7 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 			`+failingLocationsSubquery("m.id")+` AS failing_locations
 		FROM monitors m`+rootCauseLateral("m.id")+`
 		WHERE m.current_state = 'down' AND m.enabled = TRUE AND m.deleted_at IS NULL
+		  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  -- Already passing again: an alert opened before stays open, but no
 		  -- new one is announced for an outage the target is leaving (S-T7).
@@ -495,6 +503,9 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 		LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
 		WHERE al.status IN ('active', 'acknowledged')
 		  AND al.kind = 'availability'
+		  -- A deleted workspace's open alerts are left as they are until the
+		  -- purge removes them: resolving them would notify its channels.
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND (m.current_state = 'up' OR m.deleted_at IS NOT NULL OR m.enabled = FALSE
 		       OR (m.type = 'group' AND m.current_state = 'unknown'))
 	`)
@@ -718,6 +729,7 @@ func (a *Alerter) dispatchAcknowledgements(ctx context.Context) error {
 		JOIN alert_channels ac ON ac.id = ans.channel_id
 		LEFT JOIN monitors m ON m.id = al.monitor_id
 		WHERE al.status = 'acknowledged'
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND ans.acknowledged_sent_at IS NULL
 		  AND ans.last_event_type <> 'resolved'
 		  AND ac.is_active

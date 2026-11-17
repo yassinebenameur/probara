@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // TriageLookback bounds which open alerts the triage relay claims
@@ -32,16 +34,17 @@ func TriageSettingsEnabledSQL(settingsAlias string) string {
 // the relay's claim (worker/internal/airca relayClaimSQL) and the API's SLA
 // "Triage pending" bucket (triageview.ClaimableExpr): the alert (alias
 // alertAlias) is open (acknowledged counts), triggered at or after
-// lookbackExpr (now - TriageLookback), and its monitor, if any, is not
-// deleted. Mesh alerts (no monitor) are eligible; the consumer skips them as
-// not modeled. Delays that only postpone a claim (the settle wait, the hourly
+// lookbackExpr (now - TriageLookback), its monitor, if any, is not deleted,
+// and its workspace is not deleted. Mesh alerts (no monitor) are eligible;
+// the consumer skips them as not modeled. Delays that only postpone a claim (the settle wait, the hourly
 // cap, the backlog bound) are not part of eligibility and stay in the relay.
 func TriageClaimableAlertSQL(alertAlias, lookbackExpr string) string {
 	a := alertAlias
 	return a + `.status IN ('active','acknowledged') AND ` + a + `.resolved_at IS NULL
       AND ` + a + `.triggered_at >= ` + lookbackExpr + `
       AND (` + a + `.monitor_id IS NULL OR EXISTS (SELECT 1 FROM monitors tcm WHERE tcm.id = ` + a + `.monitor_id
-            AND tcm.tenant_id = ` + a + `.tenant_id AND tcm.deleted_at IS NULL))`
+            AND tcm.tenant_id = ` + a + `.tenant_id AND tcm.deleted_at IS NULL))
+      AND ` + tenancy.LiveTenantSQL(a+".tenant_id")
 }
 
 type SettingsQuerier interface {
@@ -49,15 +52,18 @@ type SettingsQuerier interface {
 }
 
 // EffectiveEnabled is shared by API and worker. Installation disabling wins;
-// an explicit workspace row wins next, including a legacy disabled row.
+// a deleted workspace is off (its queued analyses are dropped); an explicit
+// workspace row wins next, including a legacy disabled row.
 func EffectiveEnabled(ctx context.Context, q SettingsQuerier, tenantID uuid.UUID, disabled bool) (bool, error) {
 	if disabled {
 		return false, nil
 	}
-	var enabled bool
-	err := q.QueryRowContext(ctx, `SELECT enabled FROM ai_settings WHERE tenant_id = $1`, tenantID).Scan(&enabled)
-	if err == sql.ErrNoRows {
-		return true, nil
+	var live bool
+	var enabled sql.NullBool
+	err := q.QueryRowContext(ctx, `SELECT `+tenancy.LiveTenantSQL("$1::uuid")+`,
+		(SELECT enabled FROM ai_settings WHERE tenant_id = $1)`, tenantID).Scan(&live, &enabled)
+	if err != nil || !live {
+		return false, err
 	}
-	return enabled, err
+	return !enabled.Valid || enabled.Bool, nil
 }

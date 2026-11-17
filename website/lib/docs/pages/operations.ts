@@ -35,7 +35,7 @@ export const OPERATIONS_PAGE: DocPage = {
             [
               'Scheduler',
               'PostgreSQL and NATS',
-              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors, enforces retention, and schedules mesh probes.',
+              'No useful degraded mode. It schedules checks, ingests results, builds rollups, purges deleted monitors and deleted workspaces, enforces retention, and schedules mesh probes.',
             ],
             [
               'Worker',
@@ -239,6 +239,11 @@ make healthcheck`,
               'Monitor purge',
               '`monitor_purge_runs_total`, `monitor_purge_rows_total`, `monitor_purge_monitors_total`, `monitor_purge_errors_total`, `monitor_purge_run_duration_seconds`',
               'Growing errors or deleted monitors never becoming fully purged.',
+            ],
+            [
+              'Workspace purge',
+              '`workspace_purge_rows_total`, `workspace_purge_workspaces_total`, `workspace_purge_errors_total`, `workspace_purge_pending`, `workspace_purge_run_duration_seconds`',
+              'Growing errors, or `workspace_purge_pending` staying above zero while `workspace_purge_rows_total` no longer grows.',
             ],
             [
               'Worker execution',
@@ -470,6 +475,11 @@ make db-restore`,
                 'Soft-deleted monitors are later purged with dependent rows in bounded batches.',
             },
             {
+              term: 'Workspace purge',
+              description:
+                'A deleted [workspace](/docs/administration/#workspaces) is erased by the scheduler in bounded batches, table by table, and its row goes last; every pass first blanks its stored secrets (channel and monitor credentials, push tokens, worker credentials). It shares the `MONITOR_PURGE_*` settings (cadence, batch size, per-run cap) but holds its own lock, so one replica runs it at a time and a run that stops (budget, restart, lost lock) simply resumes on the next tick. Each run logs `workspace purge progress` with the rows deleted per table, and `deleted workspace fully purged` when the row is gone. Audit log entries are kept.',
+            },
+            {
               term: 'Rollups',
               description:
                 'Result ingestion marks each affected hour in a dirty-bucket ledger within the same transaction, and scheduler maintenance rebuilds marked buckets wholesale from raw results — late or redelivered rows can never be permanently skipped. A failed batch leaves its marks for the next run.',
@@ -493,9 +503,9 @@ make db-restore`,
             ['`METRIC_RAW_RETENTION_DAYS`', '`30`', 'Raw OTLP metric samples (daily partitions); a tenant\'s `data_retention_days` can tighten it. Hourly metric rollups are kept 400 days.'],
             ['`OTLP_MAX_SERIES_PER_MONITOR`', '`2000`', 'Metric-series cardinality cap per agent monitor; overflow points are rejected via OTLP `partial_success`.'],
             ['`OTLP_MONITOR_RATE_PER_MIN`', '`60`', 'OTLP ingest requests per minute per monitor; excess returns `429` with `Retry-After`.'],
-            ['`MONITOR_PURGE_INTERVAL_SECONDS`', '`30`', 'Soft-delete purge cadence.'],
-            ['`MONITOR_PURGE_BATCH_SIZE`', '`5000`', 'Child-row purge batch size.'],
-            ['`MONITOR_PURGE_MAX_ROWS_PER_RUN`', '`200000`', 'Purge safety cap.'],
+            ['`MONITOR_PURGE_INTERVAL_SECONDS`', '`30`', 'Soft-delete purge cadence (deleted monitors and deleted workspaces).'],
+            ['`MONITOR_PURGE_BATCH_SIZE`', '`5000`', 'Purge batch size (rows per statement).'],
+            ['`MONITOR_PURGE_MAX_ROWS_PER_RUN`', '`200000`', 'Purge safety cap, per run of each purge.'],
           ],
         },
         {

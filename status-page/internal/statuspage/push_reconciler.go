@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Push notification timing. These are the knobs that decide what a visitor
@@ -113,6 +115,11 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 		JOIN page_monitor pm ON pm.monitor_id = n.monitor_id
 		JOIN status_pages sp ON sp.id = pm.status_page_id
 		WHERE COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
+		  -- A deleted workspace's pages notify no visitor.
+		  AND ` + tenancy.LiveTenantSQL("sp.tenant_id") + `
+		  -- Password and private pages notify nobody (see PageIDForSlug),
+		  -- including browsers that subscribed while the page was public.
+		  AND ` + pushVisiblePages + `
 		  -- No subscribers, no work. This also bounds the blast radius when
 		  -- an operator first enables the setting on a busy page.
 		  AND EXISTS (
@@ -127,6 +134,12 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 		pushNotificationHorizon.Seconds(),
 		pushFlapDebounce.Seconds(),
 	)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		res, err = s.db.ExecContext(ctx, withoutVisibility(query),
+			pushNotificationHorizon.Seconds(),
+			pushFlapDebounce.Seconds(),
+		)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("reconcile push notifications: %w", err)
 	}

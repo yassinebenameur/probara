@@ -85,3 +85,15 @@ func TestParseStatusPageSettings_CSPMode(t *testing.T) {
 		}
 	}
 }
+
+// The document the API's write mirror stores for the SEO settings (its
+// TestStatusPageSettings_SEORoundTrip asserts the same keys and types).
+func TestParseStatusPageSettings_SEOFromAPIShape(t *testing.T) {
+	settings := parseStatusPageSettings([]byte(`{"show_footer":true,"seo_title":"Acme Cloud status","seo_description":"Uptime of Acme Cloud.","allow_search_indexing":false}`))
+	if settings.SEOTitle != "Acme Cloud status" || settings.SEODescription != "Uptime of Acme Cloud." || settings.AllowSearchIndexing {
+		t.Fatalf("parsed %+v", settings)
+	}
+	if !parseStatusPageSettings(nil).AllowSearchIndexing || !parseStatusPageSettings([]byte(`{"show_footer":false}`)).AllowSearchIndexing {
+		t.Fatal("pages stored before the setting must stay indexable")
+	}
+}

@@ -14,6 +14,13 @@ const (
 	subjectEnvVar  = "STATUSPAGE_UPDATES_SUBJECT"
 )
 
+// EventStatusPageAccessChanged is published (with StatusPageID) when a page's
+// visibility or visitor password changes or one of its kiosk tokens is
+// revoked. Besides refreshing the render cache like any page event, it makes
+// the status-page service close the page's open live streams so each
+// reconnects through the access gate.
+const EventStatusPageAccessChanged = "status_page_access_changed"
+
 // Event represents a status page update signal.
 type Event struct {
 	Type         string    `json:"type"`

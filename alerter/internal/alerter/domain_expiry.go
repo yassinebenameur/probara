@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Domain-expiry evaluation bounds.
@@ -166,6 +167,7 @@ func (a *Alerter) loadDomainExpiryMonitors(ctx context.Context) ([]domainExpiryM
 		SELECT m.id, m.tenant_id, m.name, m.config
 		FROM monitors m
 		WHERE m.type = $1 AND m.enabled = TRUE AND m.deleted_at IS NULL
+		  AND `+tenancy.LiveTenantSQL("m.tenant_id")+`
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`, string(sharedmodels.MonitorTypeDomain))
 	if err != nil {
@@ -403,6 +405,7 @@ func (a *Alerter) resolveOrphanDomainExpiryAlerts(ctx context.Context, keep []uu
 		JOIN monitors m ON m.id = al.monitor_id
 		WHERE al.kind = 'domain_expiry'
 		  AND al.status IN ('active', 'acknowledged')
+		  AND `+tenancy.LiveTenantSQL("al.tenant_id")+`
 		  AND NOT (al.monitor_id = ANY($1))
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`, pq.Array(nonNilIDs(keep)))

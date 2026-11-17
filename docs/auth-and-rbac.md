@@ -15,8 +15,10 @@ Three credential types, resolved by `api/internal/middleware/auth.go`:
     user management, tenant list. All pre-rework admins were backfilled to
     superadmin.
   - `member` — access only through `tenant_memberships` rows. A
-    tenant-scoped request requires a membership in that tenant (403
-    otherwise); `GET /v1/tenants` returns only the member's tenants.
+    tenant-scoped request requires a membership in that tenant (otherwise
+    `404 workspace_not_found`, the same answer as for a deleted or unknown
+    workspace, so a member learns nothing about workspaces they cannot
+    open); `GET /v1/tenants` returns only the member's tenants.
 - **API keys** (`api_keys`) — machines. Pinned to one tenant, carry a
   `scope` (`read` | `write`, legacy keys backfilled to `write`) and an
   optional `expires_at`. Expired keys fail validation in SQL.
@@ -171,7 +173,56 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   inherits it, and `/monitors/{id}/run` and `/monitors/test` in their
   handlers (`monitorservice.RequireCallPermission`). Editors and API keys of
   any scope get 403.
-- `RequireSuperadmin`: `/users/*`.
+- `RequireSuperadmin`: `/users/*`, and workspace management (`POST
+  /tenants`, `PATCH`/`DELETE /tenants/{id}`, `GET /tenants/overview`).
+
+## Workspaces
+
+Superadmins create, rename and delete workspaces
+(`api/internal/services/tenants/workspaces.go`). Names are trimmed, 1–100
+characters without control characters, and unique among live workspaces
+(partial unique index `tenants_name_live_key`). A new workspace gets no
+membership: superadmins act everywhere. Delete needs `confirm_name` equal to
+the name and refuses the default workspace (`tenancy.DefaultTenantID`), the
+OIDC JIT tenant while JIT provisioning is on, and the last live workspace
+(a transaction advisory lock serializes deletes). Each change is audited
+explicitly (`tenant.create`/`.rename`/`.delete`, platform-level, with the
+name).
+
+Delete is a soft delete. One transaction stamps `tenants.deleted_at` and
+`deleted_by`, removes the workspace's memberships and SSO group mappings and
+revokes its MCP grants. From that commit:
+
+- `identityQuery` reports whether a live workspace has the requested ID, and
+  `AuthMiddleware` answers `404 workspace_not_found` to any session or
+  MCP-token request scoped to a deleted, purged or never-created one,
+  superadmins included (and to a member's request for a workspace they do
+  not belong to). It is the one query that reads `deleted_at` tolerantly
+  (`to_jsonb`): on a schema without the column it must not fall into the
+  missing-schema fallback, which treats every admin as a superadmin.
+- `auth.ValidateAPIKey`, `mcpoauth.LookupAccessToken`, the push-token lookup,
+  the discovery collector lookups, `locations.AuthenticateWorker` (NATS
+  callout) and the ingest location credential lookup add
+  `tenancy.LiveTenantSQL` to their query, so a credential written by a
+  request racing the delete is refused too.
+- Tenant lists (`GET /tenants`, memberships on users and `/auth/me`, MCP
+  connections) omit it; acknowledge links and report-unsubscribe links of it
+  read as invalid.
+
+Memberships (user create and update) and SSO group mappings name live
+workspaces only: a deleted or unknown one is refused with `422` "workspace
+not found".
+
+The web client treats `workspace_not_found` as "the selected workspace is
+gone": it drops that selection (only if it is still the one the failing
+request carried, so concurrent failures change nothing more) and the
+switcher reloads its list once (`lib/api/core.ts`, `TENANTS_CHANGED_EVENT`).
+It never sends `X-Tenant-ID` on `/v1/tenants*`, which are platform routes,
+so the reload cannot fail the same way. A member left with no
+workspace keeps the account; the client answers their tenant-scoped requests
+with a "not a member of any workspace" error instead of sending them.
+
+The scheduler purges the data afterwards; see `docs/architecture.md`.
 
 Audit runs *outside* the write gate so denied attempts are recorded with
 `outcome=denied`.
@@ -327,7 +378,12 @@ exercise mappings.
 The helm migrations job is post-upgrade, so new binaries briefly run on
 the old schema. All auth queries feature-detect (SQLSTATE 42P01/42703 →
 legacy behavior: everyone superadmin, keys full-access) and the audit
-writer drops rows — the API never crash-loops pre-migration. For
+writer drops rows — the API never crash-loops pre-migration. The exception
+is workspace soft delete (000116): API-key validation, tenant lists and
+every background loop name `tenants.deleted_at`, so that migration must run
+before the new binaries serve (the release's upgrade notes say so);
+`identityQuery` alone reads it tolerantly, so a missing column can never
+elevate a member. For
 zero-surprise rollouts run the migration job manually first (see
 `docs/correctness-notes.md` "Deploy ordering").
 
