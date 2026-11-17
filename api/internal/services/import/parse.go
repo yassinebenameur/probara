@@ -124,6 +124,18 @@ func (s *Service) parseJSON(data []byte) (*parsedSource, error) {
 	} else if ok {
 		return src, nil
 	}
+	// Better Stack's JSON:API `data` and UptimeRobot's `monitors` would
+	// otherwise land in the generic wrappers below.
+	if src, ok, err := s.parseBetterStackExport(data); err != nil {
+		return nil, err
+	} else if ok {
+		return src, nil
+	}
+	if src, ok, err := s.parseUptimeRobotExport(data); err != nil {
+		return nil, err
+	} else if ok {
+		return src, nil
+	}
 
 	// Try to parse as array first
 	var arrayData []map[string]interface{}
@@ -164,6 +176,13 @@ func (s *Service) parseYAML(data []byte) (*parsedSource, error) {
 		return nil, err
 	} else if ok {
 		return &parsedSource{Rows: rows, Schema: models.ImportSchemaPortableMonitorExport}, nil
+	}
+	// A Gatus file's `endpoints` would otherwise land in the generic
+	// wrapper loop below.
+	if src, ok, err := s.parseGatusConfig(data); err != nil {
+		return nil, err
+	} else if ok {
+		return src, nil
 	}
 
 	// First, try to parse as a generic interface to see what we have
