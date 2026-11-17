@@ -138,13 +138,13 @@ export const SECURITY_PAGE: DocPage = {
             ],
             [
               'Access token',
-              'JWT signed by `ADMIN_JWT_SECRET`, default 15-minute TTL',
-              'A JWT secret change invalidates active access tokens across all replicas.',
+              'JWT signed by `ADMIN_JWT_SECRET`, default 15-minute TTL; carries the id of its session (`sid`), which the API checks on every request',
+              'A JWT secret change invalidates active access tokens across all replicas. Revoking a session refuses its access tokens on their next request, before they expire (see [sessions](#sign-in-lockout-sessions)).',
             ],
             [
               'Refresh token',
-              'SHA-256 hash stored in `admin_sessions`; rotated on use, with a 60-second reuse window so concurrent refreshes (parallel requests, multiple tabs) do not invalidate the session',
-              'Default lifetime is 30 days. The reuse window also means a stolen refresh token can be replayed for up to 60 seconds after rotation. Protect database backups because they contain session metadata and hashes.',
+              'SHA-256 hash stored in `admin_sessions`, inside its session (`admin_session_families`, one per sign-in); rotated on use, with a 60-second reuse window so concurrent refreshes (parallel requests, multiple tabs) do not invalidate the session',
+              'Default lifetime is 30 days, sliding with each refresh. Within the 60-second window a rotated token earns only a new access token (15 minutes), never another refresh token, so a session never splits in two; presented again after the window, it signs its whole session out (it was copied), for the thief and the user alike. Rows of expired tokens and of sessions revoked or expired more than the refresh lifetime plus one day ago (31 days by default) are pruned hourly. Protect database backups because they contain session metadata and hashes.',
             ],
             [
               'MCP OAuth tokens',
@@ -167,6 +167,51 @@ export const SECURITY_PAGE: DocPage = {
           type: 'paragraph',
           text:
             'Cross-origin browser access is an allowlist: only origins in `API_ALLOWED_ORIGINS` get `Access-Control-Allow-Origin` (with credentials) and preflight answers; every other `Origin` gets no CORS headers, so the browser withholds the response. Unset, the one allowed origin is that of `APP_BASE_URL` (the operator UI), and without that the API serves same-origin callers only, which is all the bundled UI needs because it calls the API through its own `/api` path. `*` is refused. The public OAuth/MCP discovery and token routes keep a wildcard policy without credentials.',
+        },
+      ],
+    },
+    {
+      id: 'sign-in-lockout-sessions',
+      title: 'Sign-in lockout and sessions',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Ten failed password sign-ins in a row lock the account’s password sign-in for 15 minutes. The count and the lock are stored on the user and timed by the database clock, so every API replica enforces the same lock and a restart does not reset it. A successful sign-in resets the count, a failure more than 24 hours after the previous one starts a new count (occasional typos never add up to a lock), the lock lifts on its own, and a superadministrator can lift it sooner ([unlock](/docs/administration/#sign-in-lockout-sessions)). Attempts made during a lock are refused without being counted, and do not extend it. The numbers are fixed. SSO (OIDC) sign-ins, API keys, MCP connections and the first-administrator form are not affected, and `go run ./cmd/admin` clears a lock when it resets a password.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Sign-in answers an unknown username, a wrong password and a locked account the same way, including a locked account’s correct password: the same `401`, the same message, and one bcrypt comparison each. The lock therefore never confirms that an account exists. The sign-in page states the rule with every refusal, so a locked user learns why their password stopped working without the page telling anyone which accounts exist. Operators see the lock instead: a **Locked** badge and the lock’s end in Users, and the audit events `auth.lockout` (the failure that locked), `auth.login` failures with `reason: locked` (attempts during the lock) and `user.unlock`.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Anyone who can reach the sign-in page can lock a password account by guessing for it. What bounds that: a lock lasts 15 minutes and attempts during it do not extend it; it never ends existing sessions, so a user who is signed in stays signed in, and SSO sign-in, API keys and MCP connections keep working; a superadministrator can unlock at once; every lock is audited, so a spray across many accounts is visible; and the API [rate limit](#edge-controls) charges each failed sign-in to the client address’s failure budget, which bounds how many accounts one address can keep locked — where the address identifies a client. Behind an untrusted proxy (a default Helm install) only a limit at the ingress bounds it.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'A session is one sign-in, by password or SSO. It lasts across refresh-token rotations until the refresh lifetime runs out (sliding, `ADMIN_REFRESH_TTL_DAYS`), the user signs out, or it is revoked. The access token carries the session id and the API checks the session on every request it authenticates with a session cookie — one indexed lookup, no cache — so a revoked session is refused on its next request on every replica rather than when its access token expires. The live alert stream re-checks its credential every 15 seconds (session, account, workspace membership, API key) and closes as soon as it no longer admits the stream, and it ends when the access token it was opened with expires, so the browser reopens it with its refreshed session. Access tokens issued before this check existed carry no session id and are honoured until they expire (15 minutes). **Account → Sessions** lists your sessions (browser, client address, sign-in time, last activity) and signs out one or all others; a superadministrator does the same for any user on their Users page, or with the `list_user_sessions`, `revoke_user_session` and `revoke_user_sessions` MCP tools. Last activity moves at each token refresh, about once per access-token lifetime while the session is in use, not on every request. Signing out an SSO session ends it in Probara only; it does not sign the user out of the identity provider, so they may sign in again without a password.',
+        },
+        {
+          type: 'table',
+          columns: ['Event', 'Sessions it ends'],
+          rows: [
+            ['Sign out', 'That session'],
+            ['A user signs out one session, or everywhere else (Account → Sessions)', 'That one, or all but the session in use'],
+            ['A superadministrator signs out one session or all of a user’s', 'That one, or all (on their own account: all but the session in use)'],
+            ['A superadministrator sets a user’s password', 'All of the user’s sessions; setting your own keeps the session in use'],
+            ['`go run ./cmd/admin` resets a password', 'All of that account’s sessions'],
+            ['The user is deleted', 'All'],
+            ['A rotated refresh token is presented again after the 60-second window', 'That session'],
+            ['Lockout, unlock, a role or membership change (removing the last membership included)', 'None: roles and memberships are checked on every request anyway, and a lock must not let a guesser sign people out'],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'API keys and MCP connections are not sessions: revoke keys under Settings → Access and MCP connections under Settings → MCP. A disabled account is refused on every request whatever its sessions.',
         },
       ],
     },
@@ -211,7 +256,7 @@ export const SECURITY_PAGE: DocPage = {
             'Over the limit the API answers `429 Too Many Requests` with `Retry-After` in seconds. `0` disables the limiter.',
             'Not limited here, because machines call them at a steady rate from shared addresses and they have their own bounds: health and metrics probes, `/static` downloads, valid push heartbeats (`/api/v1/push/{token}`, one per monitor interval) and discovery-collector calls (integration token), and — for credentials that validate — OTLP export (limited per monitor by `OTLP_MONITOR_RATE_PER_MIN`) and the alert stream. Their failures are charged as above; while their address’s failure bucket is empty, a token that verified in the last 10 minutes keeps working and any other is refused with the rest. The MCP endpoint is not charged itself; each tool call it dispatches is charged to the caller’s credential.',
             'Buckets live in memory on each API replica, so the effective cluster-wide ceiling is the limit times the replica count, and a restart resets them. When the map of buckets is full, buckets that have refilled are dropped first and then the least recently used, so filling it never resets a bucket in use.',
-            'The limiter bounds request volume; it is not an account lockout for password guessing. On a default Helm install (no `trustedProxyCIDRs`) and in the development Compose stack, every request reaches the API from a private peer, so sign-in attempts are not rate-limited per address at all: only the ingress or proxy in front can limit them.',
+            'The limiter bounds request volume. Password guessing against one account is stopped by the [sign-in lockout](#sign-in-lockout-sessions), whatever the address. On a default Helm install (no `trustedProxyCIDRs`) and in the development Compose stack, every request reaches the API from a private peer, so sign-in attempts are not rate-limited per address: each account still allows only ten guesses per 15 minutes, but guessing across many accounts can only be limited by the ingress or proxy in front.',
           ],
         },
         {
@@ -224,7 +269,7 @@ export const SECURITY_PAGE: DocPage = {
             ],
             [
               'Compose (`docker-compose.yml`) and `make start-all-local`',
-              'Browsers reach the API through the UI’s `/api` proxy or from the Docker gateway, both private peers, so only credential limits apply: each session, refresh token and API key has its own bucket. Sign-in, anonymous calls and failed credentials are not limited per address.',
+              'Browsers reach the API through the UI’s `/api` proxy or from the Docker gateway, both private peers, so only credential limits apply: each session, refresh token and API key has its own bucket. Sign-in, anonymous calls and failed credentials are not limited per address; the per-account [sign-in lockout](#sign-in-lockout-sessions) still applies.',
             ],
             [
               'Release Compose with its edge proxy',
@@ -232,7 +277,7 @@ export const SECURITY_PAGE: DocPage = {
             ],
             [
               'Helm, `trustedProxyCIDRs` empty (the default)',
-              'Requests arrive from the ingress controller pod, a private peer: credential limits only, and sign-in attempts are not limited per address. The install notes warn about this.',
+              'Requests arrive from the ingress controller pod, a private peer: credential limits only, and sign-in attempts are not limited per address (the per-account sign-in lockout still applies). The install notes warn about this.',
             ],
             [
               'Helm with `trustedProxyCIDRs` set to the ingress pod CIDR',
@@ -773,7 +818,7 @@ go run ./cmd/admin/migrate_sensitive_headers`,
             ],
             [
               'Administrator password/session',
-              'Reset password, revoke sessions, inspect audit activity, and consider JWT rotation if token-signing material was exposed.',
+              'Reset the password (which signs the user out everywhere) or sign their sessions out from Users, inspect audit activity, and consider JWT rotation if token-signing material was exposed.',
             ],
             [
               'JWT secret',

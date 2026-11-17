@@ -711,6 +711,22 @@ or imported groups come back empty. Any other path that creates groups through
   `RawPath`, as chi routes), so new routes need no list. Never echo `Origin` in a handler. The env rides
   Compose and the chart's `trustedProxyCIDRs` + `security:` block
   (`monitoring-platform.edgeEnv`) together.
+- **Session identity**: one `admin_session_families` row per sign-in
+  (password or SSO); refresh tokens rotate inside it and the access JWT's
+  `sid` claim names it. The family's `revoked_at` is the only authority:
+  `AuthMiddleware` checks it per cookie request (`middleware/session.go`,
+  one PK lookup, no cache) and `/auth/me` too, so never add a path that
+  trusts a session JWT without it. Revocation lives in
+  `api/internal/services/adminauth/sessions.go` (`RevokeSession`,
+  `RevokeUserSessions`); a rotated refresh token reused past 60 s revokes
+  its family. Password sign-in lockout (10 failures → 15 min, on
+  `admin_users`) is `adminauth/lockout.go`: every refusal answers alike,
+  and a second sign-in factor counts through `RecordFailedAttempt`. What
+  revokes what: `docs/auth-and-rbac.md`. Long-lived responses (the alert
+  SSE stream) re-check their credential with `middleware.StillAuthorized`
+  each heartbeat and end at `CredentialExpiry`; a new stream must too. The
+  `admin_sessions_default_family` trigger (000118) is rolling-deploy
+  compatibility only: drop it in a later release's migration.
 
 ## MCP server
 

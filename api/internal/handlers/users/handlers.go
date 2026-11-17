@@ -41,6 +41,8 @@ type Handlers struct {
 	// setupCode is BOOTSTRAP_SETUP_CODE, normalized; empty leaves first-admin
 	// creation open until an admin exists.
 	setupCode string
+	// security serves unlock and the user's sessions (security.go).
+	security accountSecurity
 }
 
 type userService interface {

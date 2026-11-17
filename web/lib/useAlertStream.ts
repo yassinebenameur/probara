@@ -149,6 +149,10 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
   const maxReconnectAttempts = 10;
   const baseReconnectDelay = 1000;
   const connectRef = useRef<(() => Promise<void>) | undefined>(undefined);
+  // The server ends the stream when the access token it was opened with
+  // expires (a `reauth` event first); reconnecting at once picks up the
+  // refreshed session without reporting the stream as down.
+  const reauthRef = useRef(false);
 
   const scheduleReconnect = useCallback(() => {
     if (reconnectAttempts.current >= maxReconnectAttempts) {
@@ -175,6 +179,11 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
       }
 
       if (eventType === 'heartbeat') {
+        return;
+      }
+
+      if (eventType === 'reauth') {
+        reauthRef.current = true;
         return;
       }
 
@@ -210,6 +219,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
     isConnectedRef.current = false;
     connectingRef.current = true;
     stalledRef.current = false;
+    reauthRef.current = false;
 
     try {
       let requestConfig = await buildStreamRequestConfig();
@@ -250,6 +260,11 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
 
         if (done) {
           isConnectedRef.current = false;
+          if (reauthRef.current) {
+            reauthRef.current = false;
+            void connectRef.current?.();
+            break;
+          }
           // The connection is gone even though nothing threw: say so, or
           // the UI keeps claiming "live" while it waits to reconnect.
           callbacksRef.current.onDisconnected?.('closed');

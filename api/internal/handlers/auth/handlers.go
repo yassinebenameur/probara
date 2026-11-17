@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -61,7 +62,10 @@ func (h *Handlers) recordAuthEvent(r *http.Request, action, outcome, label strin
 	h.audit.Record(event)
 }
 
-// Login handles POST /api/v1/auth/login
+// Login handles POST /api/v1/auth/login. Every refusal -- unknown user,
+// wrong password, locked account -- gets the same 401 and body, so neither
+// the answer nor the lock reveals whether an account exists (see
+// adminauth.LockoutThreshold); the audit log tells them apart.
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	var req models.AdminLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -77,7 +81,14 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.service.Authenticate(r.Context(), req.Username, req.Password)
 	if err != nil {
-		h.recordAuthEvent(r, "auth.login", audit.OutcomeFailure, req.Username, nil)
+		var failure *adminauth.LoginFailure
+		if !errors.As(err, &failure) {
+			// Still the generic 401, as before: an error tied to one
+			// account (an unreadable stored hash) must not set it apart.
+			h.logger.WithError(err).Error("Failed to check admin credentials")
+			failure = &adminauth.LoginFailure{}
+		}
+		h.recordLoginFailure(r, req.Username, failure)
 		apierrors.WriteUnauthorizedError(w, "invalid username or password")
 		return
 	}
@@ -87,7 +98,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		h.logger.WithError(err).Warn("Failed to update admin last login")
 	}
 
-	if err := h.issueSession(w, r, user.ID); err != nil {
+	if err := h.issueSession(w, r, user.ID, adminauth.AuthMethodPassword); err != nil {
 		h.logger.WithError(err).Error("Failed to issue admin session")
 		apierrors.WriteInternalError(w, "failed to create session")
 		return
@@ -96,18 +107,51 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, models.AdminAuthResponse{User: *user})
 }
 
-// Refresh handles POST /api/v1/auth/refresh
+// recordLoginFailure audits a refused sign-in, and the lock when this
+// failure caused one (auth.lockout). The actor label is the submitted
+// username, as before; the user id is set only when it names an account.
+func (h *Handlers) recordLoginFailure(r *http.Request, username string, failure *adminauth.LoginFailure) {
+	if h.audit == nil {
+		return
+	}
+	event := audit.FromRequest(r)
+	event.Action = "auth.login"
+	event.Outcome = audit.OutcomeFailure
+	event.ActorLabel = username
+	if failure.UserID != nil {
+		event.ActorType = audit.ActorAdminUser
+		event.ActorID = failure.UserID
+	}
+	if failure.Locked {
+		event.MergeDetails(map[string]any{"reason": "locked", "locked_until": failure.LockedUntil.UTC()})
+	}
+	h.audit.Record(event)
+
+	if failure.LockedNow && failure.UserID != nil {
+		lock := audit.FromRequest(r)
+		lock.Action = "auth.lockout"
+		lock.Outcome = audit.OutcomeSuccess
+		lock.ActorLabel = username
+		lock.ActorType = audit.ActorAdminUser
+		lock.ActorID = failure.UserID
+		lock.ResourceType = "user"
+		lock.ResourceID = failure.UserID.String()
+		lock.MergeDetails(map[string]any{
+			"failed_attempts": adminauth.LockoutThreshold,
+			"locked_until":    failure.LockedUntil.UTC(),
+		})
+		h.audit.Record(lock)
+	}
+}
+
+// Refresh handles POST /api/v1/auth/refresh: rotates the refresh token
+// inside its session and issues an access token carrying the session id. A
+// token a concurrent refresh just rotated earns the access token only; the
+// browser already stores the winner's refresh cookie.
 func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	refreshToken, err := h.readRefreshToken(r)
 	if err != nil {
 		apierrors.WriteUnauthorizedError(w, "missing refresh token")
-		return
-	}
-
-	oldHash := hashToken(refreshToken)
-	adminID, err := h.service.GetSessionByTokenHash(r.Context(), oldHash)
-	if err != nil {
-		apierrors.WriteUnauthorizedError(w, "invalid refresh token")
 		return
 	}
 
@@ -119,19 +163,33 @@ func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
-	if err := h.service.RotateSession(r.Context(), oldHash, newHash, adminID, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent()); err != nil {
-		h.logger.WithError(err).Error("Failed to rotate refresh token")
-		apierrors.WriteInternalError(w, "failed to refresh session")
+	refreshed, err := h.service.RefreshSession(r.Context(), hashToken(refreshToken), newHash, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent())
+	if err != nil {
+		var reuse *adminauth.RefreshReuse
+		switch {
+		case errors.As(err, &reuse):
+			h.recordSessionEvent(r, "auth.session_reuse", audit.OutcomeDenied, reuse.AdminID, reuse.FamilyID, nil)
+			h.clearCookies(w)
+			apierrors.WriteUnauthorizedError(w, "invalid refresh token")
+		case errors.Is(err, adminauth.ErrInvalidRefreshToken):
+			apierrors.WriteUnauthorizedError(w, "invalid refresh token")
+		default:
+			h.logger.WithError(err).Error("Failed to rotate refresh token")
+			apierrors.WriteInternalError(w, "failed to refresh session")
+		}
 		return
 	}
+	adminID := refreshed.AdminID
 
-	if err := h.setAccessCookie(w, adminID); err != nil {
+	if err := h.setAccessCookie(w, adminID, refreshed.FamilyID); err != nil {
 		h.logger.WithError(err).Error("Failed to issue access token")
 		apierrors.WriteInternalError(w, "failed to refresh session")
 		return
 	}
 
-	h.setRefreshCookie(w, newToken, refreshTTL)
+	if refreshed.Rotated {
+		h.setRefreshCookie(w, newToken, refreshTTL)
+	}
 
 	user, err := h.service.GetAdminByID(r.Context(), adminID)
 	if err != nil {
@@ -146,14 +204,21 @@ func (h *Handlers) Refresh(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Logout handles POST /api/v1/auth/logout
+// Logout handles POST /api/v1/auth/logout: ends the session (its refresh
+// chain and every access token issued for it).
 func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	refreshToken, err := h.readRefreshToken(r)
 	if err == nil && refreshToken != "" {
-		_ = h.service.RevokeSession(r.Context(), hashToken(refreshToken))
+		_ = h.service.RevokeByRefreshToken(r.Context(), hashToken(refreshToken))
 	}
 
-	if adminID, err := h.readAdminIDFromAccessCookie(r); err == nil {
+	if claims, err := h.readAccessClaims(r); err == nil {
+		adminID, _ := uuid.Parse(claims.AdminID)
+		if sid, err := uuid.Parse(claims.SessionID); err == nil {
+			// Without a refresh cookie (already cleared, or a different
+			// path) the access token still names its session.
+			_ = h.service.RevokeSession(r.Context(), adminID, sid, adminauth.RevokeReasonLogout)
+		}
 		h.recordAuthEvent(r, "auth.logout", audit.OutcomeSuccess, "", &adminID)
 	}
 
@@ -161,12 +226,35 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Me handles GET /api/v1/auth/me
+// Me handles GET /api/v1/auth/me. It sits outside the auth middleware, so it
+// checks the session itself: a revoked session is signed out here too.
 func (h *Handlers) Me(w http.ResponseWriter, r *http.Request) {
-	adminID, err := h.readAdminIDFromAccessCookie(r)
+	claims, err := h.readAccessClaims(r)
 	if err != nil {
 		apierrors.WriteUnauthorizedError(w, "invalid session")
 		return
+	}
+	adminID, err := uuid.Parse(claims.AdminID)
+	if err != nil {
+		apierrors.WriteUnauthorizedError(w, "invalid session")
+		return
+	}
+	if claims.SessionID != "" {
+		sid, err := uuid.Parse(claims.SessionID)
+		if err != nil {
+			apierrors.WriteUnauthorizedError(w, "invalid session")
+			return
+		}
+		active, err := h.service.SessionActive(r.Context(), adminID, sid)
+		if err != nil {
+			h.logger.WithError(err).Error("Failed to check admin session")
+			apierrors.WriteUnauthorizedError(w, "invalid session")
+			return
+		}
+		if !active {
+			apierrors.WriteUnauthorizedError(w, "session revoked")
+			return
+		}
 	}
 
 	user, err := h.service.GetAdminByID(r.Context(), adminID)
@@ -217,18 +305,22 @@ func (h *Handlers) AuthContext(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID) error {
+// issueSession starts a session (a new session family) for a completed
+// sign-in and sets its cookies. authMethod is adminauth.AuthMethodPassword
+// or AuthMethodOIDC.
+func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID, authMethod string) error {
 	refreshToken, refreshHash, err := generateRefreshToken()
 	if err != nil {
 		return err
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
-	if err := h.service.CreateSession(r.Context(), adminID, refreshHash, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent()); err != nil {
+	familyID, err := h.service.CreateSession(r.Context(), adminID, refreshHash, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent(), authMethod)
+	if err != nil {
 		return err
 	}
 
-	if err := h.setAccessCookie(w, adminID); err != nil {
+	if err := h.setAccessCookie(w, adminID, familyID); err != nil {
 		return err
 	}
 
@@ -236,9 +328,15 @@ func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID 
 	return nil
 }
 
-func (h *Handlers) setAccessCookie(w http.ResponseWriter, adminID uuid.UUID) error {
+// setAccessCookie issues the access JWT for a session; familyID becomes its
+// sid (uuid.Nil, before session families exist, issues none).
+func (h *Handlers) setAccessCookie(w http.ResponseWriter, adminID, familyID uuid.UUID) error {
+	sid := ""
+	if familyID != uuid.Nil {
+		sid = familyID.String()
+	}
 	accessTTL := time.Duration(h.cfg.AdminAccessTTLMinutes) * time.Minute
-	token, err := auth.CreateAdminToken(adminID.String(), h.cfg.AdminJWTSecret, accessTTL)
+	token, err := auth.CreateAdminToken(adminID.String(), sid, h.cfg.AdminJWTSecret, accessTTL)
 	if err != nil {
 		return err
 	}
@@ -303,16 +401,33 @@ func (h *Handlers) readRefreshToken(r *http.Request) (string, error) {
 	return cookie.Value, nil
 }
 
-func (h *Handlers) readAdminIDFromAccessCookie(r *http.Request) (uuid.UUID, error) {
+// readAccessClaims parses the access cookie (signature and expiry checked).
+func (h *Handlers) readAccessClaims(r *http.Request) (*auth.AdminClaims, error) {
 	cookie, err := r.Cookie(accessCookieName)
 	if err != nil {
-		return uuid.UUID{}, err
+		return nil, err
 	}
 	claims, err := auth.ParseAdminToken(cookie.Value, h.cfg.AdminJWTSecret)
 	if err != nil || claims.AdminID == "" {
-		return uuid.UUID{}, fmt.Errorf("invalid token")
+		return nil, fmt.Errorf("invalid token")
 	}
-	return uuid.Parse(claims.AdminID)
+	return claims, nil
+}
+
+// recordSessionEvent audits a session lifecycle event of userID's session.
+func (h *Handlers) recordSessionEvent(r *http.Request, action, outcome string, userID, sessionID uuid.UUID, details map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	event := audit.FromRequest(r)
+	event.Action = action
+	event.Outcome = outcome
+	event.ActorType = audit.ActorAdminUser
+	event.ActorID = &userID
+	event.ResourceType = "session"
+	event.ResourceID = sessionID.String()
+	event.MergeDetails(details)
+	h.audit.Record(event)
 }
 
 func generateRefreshToken() (string, string, error) {

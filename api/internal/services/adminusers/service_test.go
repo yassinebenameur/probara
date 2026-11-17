@@ -63,7 +63,7 @@ func (m *mockRepository) UpdateUser(ctx context.Context, userID uuid.UUID, usern
 	return nil, nil
 }
 
-func (m *mockRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error {
+func (m *mockRepository) RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error {
 	if m.revokeSessionsByAdminIDFn != nil {
 		return m.revokeSessionsByAdminIDFn(ctx, adminID)
 	}
@@ -86,6 +86,10 @@ func (m *mockRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error
 }
 
 func (m *mockRepository) AttachMemberships(ctx context.Context, users []models.AdminUser) error {
+	return nil
+}
+
+func (m *mockRepository) AttachLockState(ctx context.Context, users []models.AdminUser) error {
 	return nil
 }
 

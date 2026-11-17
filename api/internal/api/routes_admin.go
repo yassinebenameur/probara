@@ -99,6 +99,10 @@ func mountUserRoutes(r chi.Router, adminUsersHandlers *userhandlers.Handlers) {
 		r.Get("/{id}", adminUsersHandlers.GetUser)
 		r.Patch("/{id}", adminUsersHandlers.UpdateUser)
 		r.Delete("/{id}", adminUsersHandlers.DeleteUser)
+		r.Post("/{id}/unlock", adminUsersHandlers.UnlockUser)
+		r.Get("/{id}/sessions", adminUsersHandlers.ListUserSessions)
+		r.Delete("/{id}/sessions", adminUsersHandlers.RevokeUserSessions)
+		r.Delete("/{id}/sessions/{sessionId}", adminUsersHandlers.RevokeUserSession)
 	})
 }
 

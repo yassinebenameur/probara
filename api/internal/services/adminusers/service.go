@@ -13,7 +13,9 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
+	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	"github.com/yassinebenameur/probara/shared/auth"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/tenancy"
@@ -43,7 +45,8 @@ type repository interface {
 	CreateUser(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error)
 	CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error)
 	UpdateUser(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error)
-	RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error
+	RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error
+	AttachLockState(ctx context.Context, users []models.AdminUser) error
 	BootstrapClosed(ctx context.Context, untilSuperadmin bool) (bool, error)
 	DeleteUser(ctx context.Context, userID uuid.UUID) error
 	AttachMemberships(ctx context.Context, users []models.AdminUser) error
@@ -94,6 +97,9 @@ func (s *Service) ListUsers(ctx context.Context, page, pageSize int) (*models.Ad
 	if err := s.repo.AttachMemberships(ctx, items); err != nil {
 		return nil, fmt.Errorf("failed to load memberships: %w", err)
 	}
+	if err := s.repo.AttachLockState(ctx, items); err != nil {
+		return nil, fmt.Errorf("failed to load lock state: %w", err)
+	}
 
 	return &models.AdminUserListResponse{
 		Items:    items,
@@ -116,6 +122,9 @@ func (s *Service) GetUser(ctx context.Context, userID uuid.UUID) (*models.AdminU
 	users := []models.AdminUser{*user}
 	if err := s.repo.AttachMemberships(ctx, users); err != nil {
 		return nil, fmt.Errorf("failed to load memberships: %w", err)
+	}
+	if err := s.repo.AttachLockState(ctx, users); err != nil {
+		return nil, fmt.Errorf("failed to load lock state: %w", err)
 	}
 	return &users[0], nil
 }
@@ -250,7 +259,16 @@ func (s *Service) UpdateUser(ctx context.Context, userID uuid.UUID, req *models.
 	}
 
 	if passwordHash != nil {
-		if err := s.repo.RevokeSessionsByAdminID(ctx, userID); err != nil {
+		// A new password ends the user's sessions, except the one making
+		// the change when users set their own password: signing yourself
+		// out of the device you are using is never the intent.
+		keep := uuid.Nil
+		if actor, ok := ctxpkg.GetAdminID(ctx); ok && actor == userID.String() {
+			if sid, ok := adminauth.SessionIDFromContext(ctx); ok {
+				keep = sid
+			}
+		}
+		if err := s.repo.RevokeSessionsByAdminID(ctx, userID, keep); err != nil {
 			return nil, fmt.Errorf("failed to revoke admin sessions: %w", err)
 		}
 	}
@@ -517,13 +535,56 @@ func insertMembershipsTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID, memb
 	return nil
 }
 
-func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE admin_sessions
-		SET revoked_at = NOW(), last_used_at = NOW()
-		WHERE admin_user_id = $1 AND revoked_at IS NULL
-	`, adminID)
+func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error {
+	_, err := adminauth.RevokeUserSessions(ctx, r.db, adminID, keep, adminauth.RevokeReasonPasswordReset)
 	return err
+}
+
+// AttachLockState fills the sign-in lockout fields (migration 000117): the
+// live failure streak, and the lock's end while it is in force (database
+// clock, as the lockout itself). Before the
+// migration nothing is locked.
+func (r *sqlRepository) AttachLockState(ctx context.Context, users []models.AdminUser) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(users))
+	index := make(map[uuid.UUID]int, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+		index[u.ID] = i
+	}
+	// A streak whose last failure is older than the lockout's memory is
+	// already forgotten (the next failure starts at 1), so it shows as 0.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id,
+		       CASE WHEN last_failed_login_at > NOW() - make_interval(secs => $2) THEN failed_login_count ELSE 0 END,
+		       CASE WHEN locked_until > NOW() THEN locked_until END
+		FROM admin_users
+		WHERE id = ANY($1)
+		  AND ((failed_login_count <> 0 AND last_failed_login_at > NOW() - make_interval(secs => $2))
+		       OR locked_until > NOW())
+	`, pq.Array(ids), adminauth.LockoutStreakMemory.Seconds())
+	if pgerr.IsMissingSchema(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var count int
+		var lockedUntil *time.Time
+		if err := rows.Scan(&id, &count, &lockedUntil); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			users[i].FailedLoginCount = count
+			users[i].LockedUntil = lockedUntil
+		}
+	}
+	return rows.Err()
 }
 
 func (r *sqlRepository) BootstrapClosed(ctx context.Context, untilSuperadmin bool) (bool, error) {

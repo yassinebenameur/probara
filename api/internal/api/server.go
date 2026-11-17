@@ -97,6 +97,7 @@ type Server struct {
 	statusPublisher    *statusupdates.Publisher
 	auditRecorder      *auditservice.Recorder
 	auditPruner        *auditservice.Pruner
+	sessionPruner      *adminauthservice.SessionPruner
 	reportRunner       *reportscheduleservice.Runner
 	locationAuthorizer *locationnatsauthservice.Service
 	locationAuth       *callout.AuthorizationService
@@ -204,6 +205,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Audit trail: async recorder + retention pruner (lifecycle on Server).
 	auditRecorder := auditservice.NewRecorder(dbClient, log)
 	auditPruner := auditservice.NewPruner(dbClient, log, cfg.AuditRetentionDays)
+	sessionPruner := adminauthservice.NewSessionPruner(dbClient, log, time.Duration(cfg.AdminRefreshTTLDays)*24*time.Hour)
 	auditSvc := auditservice.NewService(dbClient)
 
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
@@ -246,6 +248,12 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		oidcService.ConfigureSetupCode(cfg.BootstrapSetupCode != "")
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
 		mountAuthRoutes(r, authHandlers, adminUsersHandlers)
+		// Sign-in lockout and sessions: superadmin unlock and user sessions
+		// (handlers/users/security.go), the signed-in user's own sessions
+		// (routes_account.go).
+		adminUsersHandlers.WithAccountSecurity(authService)
+		mountAccountRoutes(r, authMiddleware, authService, log, auditRecorder)
+
 		mountAlertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_alertactions.go)
 		mountReportUnsubscribeRoutes(r, reportScheduleHandlers)           // signed unsubscribe links of report emails
 
@@ -439,6 +447,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		statusPublisher:    statusPublisher,
 		auditRecorder:      auditRecorder,
 		auditPruner:        auditPruner,
+		sessionPruner:      sessionPruner,
 		reportRunner:       reportRunner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
@@ -486,6 +495,9 @@ func (s *Server) Start() error {
 	if s.auditPruner != nil {
 		s.auditPruner.Start()
 	}
+	if s.sessionPruner != nil {
+		s.sessionPruner.Start()
+	}
 	if s.reportRunner != nil {
 		s.reportRunner.Start()
 	}
@@ -517,6 +529,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.auditPruner != nil {
 		s.auditPruner.Stop()
+	}
+	if s.sessionPruner != nil {
+		s.sessionPruner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()
