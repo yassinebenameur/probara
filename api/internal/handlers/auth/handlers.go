@@ -299,6 +299,9 @@ func (h *Handlers) AuthContext(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	resp := models.AuthContextResponse{CanWrite: ctxpkg.CanWrite(ctx)}
+	if h.cfg != nil {
+		resp.StatusPageBaseURL = h.cfg.StatusPagePublicBaseURL
+	}
 	if actorType, ok := ctxpkg.GetActorType(ctx); ok {
 		resp.ActorType = actorType
 	}

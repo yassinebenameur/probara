@@ -41,7 +41,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             {
               term: 'Helm wiring',
               description:
-                'A chart value rendered into a workload environment. The chart has no general `extraEnv` escape hatch in the current dev state.',
+                'A chart value rendered into a workload environment. Any other variable reaches a workload through `extraEnv` (every workload, including the migrations Job but not the local AI pod) or `<service>.extraEnv` (one workload).',
             },
             {
               term: 'Local-process wiring',
@@ -131,7 +131,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`ADMIN_JWT_SECRET`',
               'Required; validation only rejects an empty value. Use at least 32 random characters.',
-              'Compose ships an insecure hardcoded default and the Helm values ship a placeholder default; override both for production.',
+              'The base Compose file ships an insecure hardcoded default and the Helm values ship a placeholder default; override both for production. The release Compose override requires it (the installer generates it).',
             ],
             [
               '`ADMIN_ACCESS_TTL_MINUTES`',
@@ -146,7 +146,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`ADMIN_COOKIE_SECURE`',
               '`false`; boolean',
-              'Local-process script and Compose set `false`. Helm renders `true` when `api.publicBaseURL` is an `https://` origin; set `api.cookieSecure` to force it either way. A Secure cookie is never sent over plain HTTP, so `true` on an HTTP-only deployment makes login impossible.',
+              'Local-process script and the base Compose file set `false`; the release Compose override reads it from `.env` (default `false`). Helm renders `true` when `api.publicBaseURL` is an `https://` origin; set `api.cookieSecure` to force it either way. A Secure cookie is never sent over plain HTTP, so `true` on an HTTP-only deployment makes login impossible.',
             ],
             [
               '`BOOTSTRAP_SETUP_CODE`',
@@ -208,7 +208,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PUBLIC_BASE_URL`',
               'Empty; surrounding whitespace and trailing slash removed',
-              'Externally reachable API origin used in agent installers, push webhooks, the default OIDC callback, and the [MCP](/docs/mcp/#authentication) OAuth issuer and discovery metadata (derived from the request when empty). Compose and Helm require it for normal deployment.',
+              'Externally reachable API origin used in agent installers, push webhooks, the default OIDC callback, and the [MCP](/docs/mcp/#authentication) OAuth issuer and discovery metadata (derived from the request when empty). Set it for any deployment behind a proxy: neither requires it, the base Compose file does not set it, the release override reads `PUBLIC_BASE_URL` from `.env` (empty by default), and Helm renders `api.publicBaseURL` when set.',
             ],
             [
               '`PUBLIC_NATS_URL`',
@@ -345,7 +345,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'Every data-handling service needs the same keyring',
           text:
-            'API, scheduler, worker, and alerter can all read [encrypted configuration](/docs/security/#encryption-at-rest). Missing keys may allow new plaintext operation in some direct runtimes, but they cannot decrypt existing ciphertext. The current Helm chart omits the key from the scheduler deployment.',
+            'API, scheduler, worker, and alerter can all read [encrypted configuration](/docs/security/#encryption-at-rest). Missing keys may allow new plaintext operation in some direct runtimes, but they cannot decrypt existing ciphertext. Compose and Helm pass `PROBARA_SECRETS_KEY` to all four; rotation keys (`PROBARA_SECRETS_KEY_V2` and up) go through Helm\'s top-level `extraEnv` or an explicit Compose entry.',
         },
         {
           type: 'code',
@@ -807,7 +807,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_BASE_URL`',
               'Empty',
-              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications) and each page\'s canonical link, `og:url` and absolute [feed and summary links](/docs/status-pages/#feed-summary-badges); when empty, the notification opens the page via the service worker scope, the head carries no canonical link or `og:url`, and the feed links by path, rather than a guessed host. A page with a verified [custom domain](/docs/status-pages/#custom-domains) uses that domain for all of these instead, and a subscription made there links to it. Its host is never served as a custom domain.',
+              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications) and each page\'s canonical link, `og:url` and absolute [feed and summary links](/docs/status-pages/#feed-summary-badges); when empty, the notification opens the page via the service worker scope, the head carries no canonical link or `og:url`, and the feed links by path, rather than a guessed host. A page with a verified [custom domain](/docs/status-pages/#custom-domains) uses that domain for all of these instead, and a subscription made there links to it. Its host is never served as a custom domain. The API reads it too: to refuse its host as a custom domain (custom domains stay off until it, or `STATUS_PAGE_PLATFORM_HOSTS`, names a public host) and to hand it to the operator UI (`status_page_base_url` in `GET /api/v1/auth-context`) for its status-page links and template preview, and the UI server reads it for that preview\'s CSP `frame-src`; unset there, the UI links to `:8082` on a localhost UI and to its own origin elsewhere. The base Compose file sets `http://localhost:8082` on the status service only; the release override reads it from `.env` (empty by default, never `localhost`) for the status service, API and frontend; Helm renders `statusPage.baseUrl` into the status service, the API and the frontend.',
             ],
             [
               '`STATUS_PAGE_API_BASE_URL`',
@@ -832,7 +832,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_PREVIEW_SECRET`',
               'Empty',
-              'HMAC secret shared with API for one-hour [preview tokens](/docs/status-pages/#preview-security). With no secret, preview verification is not enforced. Helm: `secrets.statusPagePreviewSecret` (or its `ExistingSecret` reference, canonical key `status_page_preview_secret`) renders it into both the API and the status service.',
+              'HMAC secret shared with API for one-hour [preview tokens](/docs/status-pages/#preview-security). With no secret, preview verification is not enforced. The base Compose file passes it through from the shell to both (empty by default); the release override requires it and the installer generates it. Helm: `secrets.statusPagePreviewSecret` (or its `ExistingSecret` reference, canonical key `status_page_preview_secret`) renders it into both the API and the status service; a per-field existing Secret must carry the key, while in the chart-wide `secrets.existingSecret` it is optional.',
             ],
             [
               '`STATUS_PAGE_SESSION_SECRET`',
@@ -899,7 +899,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The restricted proxy permits GET under `/api/v1/monitors` and PATCH under `/api/v1/status-pages/…`; it is not a general API proxy. Helm currently wires only basic status values and the status base URL, not the API proxy, cache, preview, timeout, or update-subject variables.',
+            'The restricted proxy permits GET under `/api/v1/monitors` and PATCH under `/api/v1/status-pages/…`; it is not a general API proxy. Helm wires the basic status values, the status base URL, the preview and session secrets, the cookie flag, the VAPID keys and the edge settings, not the API proxy, cache, timeout, or update-subject variables (use `statusPage.extraEnv`).',
         },
       ],
     },
@@ -922,14 +922,19 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Browser API base. Compiled into the Next.js client bundle.',
             ],
             [
+              '`STATUS_PAGE_BASE_URL`',
+              'Empty',
+              'Runtime, server-side: the status-page origin admitted by the UI\'s CSP `frame-src` for the template editor\'s preview (any `https:` host already is; this adds a plain-`http:` one). The links themselves come from the same variable on the API. Release Compose and Helm set it.',
+            ],
+            [
               '`NEXT_PUBLIC_STATUS_PAGE_URL`',
               'Empty',
-              'Status-page link origin; falls back to the current/relative origin or localhost during local use. Compiled into the client bundle.',
+              'Development fallback for the status-page link origin, used when the API reports no `STATUS_PAGE_BASE_URL`; then the UI falls back to `:8082` on a localhost UI, else its own origin. Compiled into the client bundle, so the published image carries none.',
             ],
             [
               '`API_PROXY_TRUST_FORWARDED_FOR`',
               '`false`',
-              'The `/api` proxy drops a client-sent `X-Forwarded-For` / `X-Real-IP` unless this is `true`; set it only when a proxy you run in front of the UI sets that header, and then list the frontend in the API’s `TRUSTED_PROXY_CIDRS` ([trusted proxies](/docs/security/#audit-proxy-trust)). Runtime; not wired by Compose or Helm (use `frontend.extraEnv`).',
+              'The `/api` proxy drops a client-sent `X-Forwarded-For` / `X-Real-IP` unless this is `true`; set it only when a proxy you run in front of the UI sets that header, and then list the frontend in the API’s `TRUSTED_PROXY_CIDRS` ([trusted proxies](/docs/security/#audit-proxy-trust)). Runtime. The release Compose override sets it to `true` (its `edge` proxy rewrites the header, and the API trusts only the frontend\'s fixed address); Helm does not set it (use `frontend.extraEnv`).',
             ],
             [
               '`NEXT_PUBLIC_DEBUG_INGEST_URL`',
@@ -950,7 +955,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'NEXT_PUBLIC variables are build-time inputs',
           text:
-            'The Helm chart sets public variables as pod runtime environment, which generally cannot change an already-built browser bundle. Build the frontend image with the intended values or keep `/api` and relative status-page routing stable. Alert SSE is currently hardcoded to `/api`; there is no active `NEXT_PUBLIC_SSE_URL` setting.',
+            'Pod runtime environment cannot change an already-built browser bundle, so the chart sets no `NEXT_PUBLIC_*` value except `NEXT_PUBLIC_API_URL` (which only a matching build honours). Build the frontend image with the intended values or keep `/api` routing stable. The status-page origin is the exception that needs no rebuild: the UI reads it from the API at runtime. Alert SSE is currently hardcoded to `/api`; there is no active `NEXT_PUBLIC_SSE_URL` setting.',
         },
       ],
     },
@@ -1083,25 +1088,30 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             [
               'Admin JWT and public API URL',
-              'Required interpolation',
-              'Required chart validation',
+              'Base file: development JWT default, no public URL. Release override: JWT required (`${ADMIN_JWT_SECRET:?}`), `PUBLIC_BASE_URL` optional from `.env`',
+              '`secrets.adminJwtSecret` (placeholder default; override it) and optional `api.publicBaseURL`',
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
-            ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
+            ['Encryption keyring', 'Base key passed through from the shell to API, scheduler, worker and alerter (required by the release override); rotation keys need explicit entries', 'Base key wired to API, scheduler, worker and alerter; rotation keys through top-level `extraEnv`'],
             ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker, `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` also to the alerter, `AI_TRIAGE_ENABLED` also to the API; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only (the alerter gets only `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED`; `AI_TRIAGE_ENABLED` also reaches the API)'],
             [
               'SMTP',
-              'Not wired',
+              'Base file: not wired. Release override: `SMTP_*` and `APP_BASE_URL` from `.env` to API, worker and alerter',
               '`smtp` values block wired to API, worker, and alerter',
+            ],
+            [
+              'Public status-page origin',
+              'Base file: `http://localhost:8082` on the status service. Release override: `STATUS_PAGE_BASE_URL` from `.env` (empty by default) to status service, API and frontend',
+              '`statusPage.baseUrl` to the status service, the API and the frontend',
             ],
             ['Notification dispatch mode', 'Not wired', 'Not wired'],
             ['Scheduler result ingest', 'Code defaults only', 'Code defaults only'],
             ['Scheduler purge and mesh', 'Code defaults only', 'Code defaults only'],
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],
-            ['Status cache, proxy, preview, timeout, update subject', 'Preview only; most defaults', 'Not wired'],
-            ['Trusted proxies, HSTS, API rate limit and CORS allowlist', 'Passed through from the shell to API and status-page (`APP_BASE_URL` to status-page too)', 'Top-level `trustedProxyCIDRs` and `security` block rendered into API and status-page; `appBaseURL` into status-page as well'],
+            ['Status cache, proxy, preview, timeout, update subject', 'API proxy and preview secret (required by the release override); the rest code defaults', 'Preview secret only; the rest through `statusPage.extraEnv`'],
+            ['Trusted proxies, HSTS, API rate limit and CORS allowlist', 'Passed through from the shell to API and status-page (`APP_BASE_URL` to status-page too); the release override pins the API\'s `TRUSTED_PROXY_CIDRS` to the frontend\'s fixed address', 'Top-level `trustedProxyCIDRs` and `security` block rendered into API and status-page; `appBaseURL` into status-page as well'],
             ['Browser artifact sharing', 'Shared volume', 'No shared volume'],
-            ['Arbitrary extra environment', 'Requires editing Compose', 'No `extraEnv`; requires chart template change'],
+            ['Arbitrary extra environment', 'Requires editing Compose', 'Top-level `extraEnv` (every workload, including the migrations Job; not the local AI pod) and `<service>.extraEnv`'],
           ],
         },
         {

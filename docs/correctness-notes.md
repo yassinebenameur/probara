@@ -157,14 +157,17 @@ deliberate trade for collapsing request bursts into one computation.
 
 ## Deploy ordering
 
-Migrations run in two places: the API applies them at startup, before it
-serves (`api/cmd/api/main.go`), and the helm migrations job runs them as a
-**post-install/post-upgrade hook**
-(`helm/monitoring-platform/templates/job-migrations.yaml`). Neither gates the
-other workloads: on upgrade the scheduler, worker and alerter pods can start
-before the new API pod or the hook Job has migrated. New code must therefore
-tolerate running against the **old schema** for the rollout window.
-Concretely:
+Migrations run before the code that needs them: the helm migrations job is a
+**post-install/pre-upgrade hook**
+(`helm/monitoring-platform/templates/job-migrations.yaml`), so an upgrade
+starts no new pod until it has migrated, and every Compose service that
+reads the database waits for the `migrations` service. The API also applies
+them at startup, before it serves (`api/cmd/api/main.go`), as a safety net.
+The window that remains is the other way round: pods of the previous release
+run against the **new schema** until the rollout replaces them, so
+migrations stay additive. A deployment that skips the hook (`helm template |
+kubectl apply`, `migrations.enabled=false`) can still start new pods on the
+old schema; what each path does then:
 
 - **Scheduler rollup job**: schema-lag errors (Postgres SQLSTATE class 42,
   e.g. `42703` undefined_column, `42P01` undefined_table) are classified as

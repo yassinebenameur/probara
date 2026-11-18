@@ -20,7 +20,7 @@ import EmptyState from '@/components/ui/EmptyState';
 import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
-import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { useCanWrite, useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { errorMessage } from '@/lib/errors';
 import { useAsyncData } from '@/lib/useAsyncData';
 
@@ -54,6 +54,7 @@ async function fetchStatusPages(): Promise<StatusPage[]> {
 export default function StatusPagesPage() {
   const { showToast } = useToast();
   const canWrite = useCanWrite();
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const { data: statusPages, setData: setStatusPages, loading, error, reload: loadStatusPages } = useAsyncData<
     StatusPage[]
   >(fetchStatusPages, [], 'Failed to load status pages');
@@ -178,7 +179,7 @@ export default function StatusPagesPage() {
         <div className={`grid gap-4 ${GRID}`}>
           {sorted.map((page) => {
             const monitorCount = page.monitor_ids?.length || 0;
-            const publicUrl = resolveStatusPagePublicUrl(page);
+            const publicUrl = resolveStatusPagePublicUrl(page, statusPageBaseUrl);
             const visibility = visibilityLabel(page.visibility);
             return (
               // The title link stretches over the card; the footer controls sit

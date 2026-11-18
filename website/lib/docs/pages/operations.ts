@@ -227,8 +227,8 @@ make healthcheck`,
             ],
             [
               'Result ingest',
-              '`results_ingested_total`, `result_ingest_errors_total`, `result_ingest_duplicates_total`, `mesh_results_ingested_total`',
-              'Publish success without ingest growth, ingest errors, or unexpectedly high duplicates.',
+              '`results_ingested_total`, `result_ingest_errors_total`, `result_ingest_duplicates_total`, `mesh_results_ingested_total`, `result_ingest_abandoned_total{reason}`',
+              'Publish success without ingest growth, ingest errors, or unexpectedly high duplicates. Any `result_ingest_abandoned_total`: results the scheduler gave up on and dropped, after about 15 minutes of database or schema errors (`platform`) or three deliveries whose location credential the configured `PROBARA_SECRETS_KEY` cannot decrypt (`credential`); the scheduler logs each one.',
             ],
             [
               'Retention and rollups',
@@ -343,7 +343,7 @@ go run ./cmd/migrate`,
         {
           type: 'paragraph',
           text:
-            'The migration CLI requires `POSTGRES_URL`, defaults `MIGRATIONS_PATH` to `./migrations`, and retries the initial database connection up to 30 times at one-second intervals. API startup also runs the shared migration set. The [Helm migration Job](/docs/deployment/#migrations-upgrades) is a post-install/post-upgrade hook.',
+            'The migration CLI requires `POSTGRES_URL`, defaults `MIGRATIONS_PATH` to `./migrations`, and retries the initial database connection up to 30 times at one-second intervals. API startup also runs the shared migration set under the same database lock, as a safety net. Migrations run before the services that need them: the [Helm migration Job](/docs/deployment/#migrations-upgrades) is a `pre-upgrade` hook (`post-install` on a first install), and in Compose every database service waits for the `migrations` service to complete. During a rolling upgrade, pods of the previous release therefore run briefly against the new schema; the notes below say what each release tolerates there.',
         },
         {
           type: 'callout',
@@ -695,8 +695,8 @@ helm lint ./helm/monitoring-platform \\
             ],
             [
               'Frontend links point to old origin',
-              '`NEXT_PUBLIC_*` changed only at runtime',
-              'Rebuild the frontend client bundle with the desired public values or use stable relative routing.',
+              '`NEXT_PUBLIC_*` changed only at runtime, or status-page links on the UI\'s own origin',
+              'Status-page links and the template preview take `STATUS_PAGE_BASE_URL` from the API at runtime: set it on the API (Helm `statusPage.baseUrl`; release Compose `.env`). Other public values are build-time: rebuild the frontend client bundle with them or use stable relative routing.',
             ],
             [
               'Settings → AI says “not configured correctly”',

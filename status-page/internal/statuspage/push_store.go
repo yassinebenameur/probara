@@ -128,8 +128,6 @@ func (s *pushStore) DeleteSubscription(ctx context.Context, id uuid.UUID) error 
 // browser about the page.
 func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, bool, error) {
 	// A deleted workspace's page is not found here, as on every other route.
-	// withoutVisibility (the retry below) replaces only pushVisiblePages, so
-	// the live-workspace condition holds on both paths.
 	query := `
 		SELECT sp.id, COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
 		       AND ` + pushVisiblePages + `
@@ -139,9 +137,6 @@ func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, 
 	var id uuid.UUID
 	var enabled bool
 	err := s.db.QueryRowContext(ctx, query, slug).Scan(&id, &enabled)
-	if err != nil && pgerr.IsMissingSchema(err) {
-		err = s.db.QueryRowContext(ctx, withoutVisibility(query), slug).Scan(&id, &enabled)
-	}
 	switch {
 	case err == sql.ErrNoRows:
 		return uuid.UUID{}, false, nil
@@ -242,9 +237,6 @@ func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter t
 		          ` + pushVisiblePages + `
 	`
 	rows, err := s.db.QueryContext(ctx, query, limit, staleAfter.Seconds())
-	if err != nil && pgerr.IsMissingSchema(err) {
-		rows, err = s.db.QueryContext(ctx, withoutVisibility(query), limit, staleAfter.Seconds())
-	}
 	if err != nil {
 		return nil, fmt.Errorf("claim push deliveries: %w", err)
 	}
@@ -318,9 +310,3 @@ func (s *pushStore) CompleteDelivery(ctx context.Context, id uuid.UUID, sent, fa
 // pushVisiblePages is the SQL predicate (on status_pages sp) for pages whose
 // visitors may get push notifications: public and unlisted.
 const pushVisiblePages = "sp.visibility IN ('public', 'unlisted')"
-
-// withoutVisibility drops pushVisiblePages from a query for a database that
-// has not run migration 000114 yet, where no page can be gated.
-func withoutVisibility(query string) string {
-	return strings.ReplaceAll(query, pushVisiblePages, "TRUE")
-}

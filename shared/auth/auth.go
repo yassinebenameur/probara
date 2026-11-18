@@ -122,8 +122,10 @@ func ValidateAPIKey(ctx context.Context, dbClient *db.Client, key string) (*APIK
 	err := dbClient.QueryRowContext(ctx, query, keyPrefix).
 		Scan(&identity.KeyID, &identity.TenantID, &identity.Name, &storedHash, &identity.Scope, &identity.ExpiresAt)
 	if pgerr.IsUndefinedColumn(err) {
-		// Deploy-ordering tolerance: this binary may run before the scope
-		// migration (post-upgrade job). Legacy keys behave as full-access.
+		// Deploy-ordering tolerance: the chart and Compose migrate before
+		// new pods start, but a deployment that skips that step can run this
+		// binary before the scope migration. Legacy keys behave as
+		// full-access.
 		legacy := `
 			SELECT id, tenant_id, name, key_hash
 			FROM api_keys

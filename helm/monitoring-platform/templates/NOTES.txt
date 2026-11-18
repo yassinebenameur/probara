@@ -7,9 +7,17 @@ Congratulations! The monitoring platform has been deployed successfully.
 {{- if .Values.migrations.enabled }}
 
 DATABASE MIGRATIONS:
-  A migrations job has been created and will run automatically.
-  Check the status with:
+{{- if .Release.IsInstall }}
+  The migrations job ran after this install created the database.
+{{- else }}
+  The migrations job ran before this upgrade changed any workload, so the new
+  pods start on the migrated schema. Pods of the previous release ran against
+  it until the rollout replaced them. `helm rollback` does not reverse it.
+{{- end }}
+  A succeeded job is deleted; a failed one fails the release and is kept for
+  its logs:
     kubectl -n {{ .Release.Namespace }} get jobs -l app.kubernetes.io/component=migrations
+    kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=migrations
 {{- end }}
 
 ACCESSING THE APPLICATION:
