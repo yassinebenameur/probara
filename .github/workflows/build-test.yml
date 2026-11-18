@@ -72,6 +72,11 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - run: go mod download
+      # The ping checker's live test opens an unprivileged ICMP socket; the
+      # runner's default ping_group_range excludes every group, and a skipped
+      # test fails the report as a missing dependency.
+      - name: Allow unprivileged ICMP sockets
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
       - name: Run fast suite with race detection
         shell: bash
         run: go test -json -tags=unit -race -count=1 -timeout=10m ./... 2>&1 | tee "$RUNNER_TEMP/go-unit.jsonl"
@@ -119,6 +124,11 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - run: go mod download
+      # The ping checker's live test opens an unprivileged ICMP socket; the
+      # runner's default ping_group_range excludes every group, and a skipped
+      # test fails the report as a missing dependency.
+      - name: Allow unprivileged ICMP sockets
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
       - name: Verify browser dependency
         if: matrix.shard == 'alerting-worker'
         run: command -v google-chrome || command -v chromium || command -v chromium-browser
