@@ -81,11 +81,10 @@ export function pageAccessPayload(draft: PageAccessDraft): { visibility: StatusP
 /**
  * The URL a kiosk display opens once: the page's public URL with the token.
  * The status page swaps the token for a session cookie and reloads without
- * it. Any operator-only query (the customizer's edit=1) is dropped.
+ * it.
  */
 export function kioskUrl(publicUrl: string, token: string, origin: string): string {
   const url = new URL(publicUrl, origin);
-  url.searchParams.delete('edit');
   url.searchParams.set('token', token);
   return url.toString();
 }

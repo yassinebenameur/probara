@@ -1,5 +1,3 @@
-import { hasApiKey } from './auth';
-
 type StatusPageUrlInput = {
   slug: string;
   public_url?: string;
@@ -26,7 +24,7 @@ export function resolveStatusPagePublicUrl(input: StatusPageUrlInput, runtimeBas
       if (origin) {
         resolved = new URL(input.public_url, origin);
       } else {
-        return appendEditQuery(input.public_url);
+        return input.public_url;
       }
     }
   } else {
@@ -34,14 +32,10 @@ export function resolveStatusPagePublicUrl(input: StatusPageUrlInput, runtimeBas
     const relativePath = `/public/status/${input.slug}`;
 
     if (!origin) {
-      return appendEditQuery(relativePath);
+      return relativePath;
     }
 
     resolved = new URL(relativePath, origin);
-  }
-
-  if (!hasApiKey()) {
-    resolved.searchParams.set('edit', '1');
   }
 
   return resolved.toString();
@@ -63,15 +57,6 @@ export function resolveStatusPageDraftPreviewUrl(
     return path;
   }
   return new URL(path, origin).toString();
-}
-
-function appendEditQuery(url: string): string {
-  if (hasApiKey()) {
-    return url;
-  }
-
-  const separator = url.includes('?') ? '&' : '?';
-  return `${url}${separator}edit=1`;
 }
 
 /**

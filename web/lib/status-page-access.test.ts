@@ -57,9 +57,9 @@ test('the payload keeps, clears or replaces the password', () => {
   });
 });
 
-test('kiosk URL carries the token and drops edit mode', () => {
+test('kiosk URL carries the token', () => {
   assert.equal(
-    kioskUrl('https://status.example.com/public/status/acme?edit=1', 'spk_abc', 'https://app.example.com'),
+    kioskUrl('https://status.example.com/public/status/acme', 'spk_abc', 'https://app.example.com'),
     'https://status.example.com/public/status/acme?token=spk_abc',
   );
   assert.equal(

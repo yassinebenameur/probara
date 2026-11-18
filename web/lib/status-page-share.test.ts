@@ -12,9 +12,9 @@ const PAGE = 'https://status.example.com/public/status/acme';
 const MONITOR = '0b6f0a7e-1111-4c2d-8e9f-000000000001';
 
 test('share links hang off the page URL without its query', () => {
-  assert.equal(statusPageBase(`${PAGE}/?edit=1#top`), PAGE);
-  assert.equal(statusPageBase('/public/status/acme?edit=1'), '/public/status/acme');
-  assert.deepEqual(statusPageShareLinks(`${PAGE}?edit=1`), {
+  assert.equal(statusPageBase(`${PAGE}/?ref=1#top`), PAGE);
+  assert.equal(statusPageBase('/public/status/acme?ref=1'), '/public/status/acme');
+  assert.deepEqual(statusPageShareLinks(`${PAGE}?ref=1`), {
     page: PAGE,
     feed: `${PAGE}/feed.atom`,
     summary: `${PAGE}/summary.json`,
