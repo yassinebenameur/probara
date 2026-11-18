@@ -47,6 +47,7 @@ export interface Monitor {
   id: string;
   tenant_id: string;
   name: string;
+  key?: string; // Config-as-code key (POST /monitors/apply); absent = unmanaged
   type: MonitorType;
   config?: MonitorConfig; // Optional for backward compatibility
   interval_seconds: number;
@@ -107,6 +108,7 @@ export interface AlertRouting {
 
 export interface CreateMonitorRequest {
   name: string;
+  key?: string;
   type: MonitorType;
   config: MonitorConfig;
   interval_seconds: number;
@@ -126,6 +128,7 @@ export interface CreateMonitorRequest {
 
 export interface UpdateMonitorRequest {
   name?: string;
+  key?: string; // '' removes the key
   type?: MonitorType;
   config?: MonitorConfig;
   interval_seconds?: number;

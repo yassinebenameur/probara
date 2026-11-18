@@ -26,6 +26,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // MaxDomainsPerPage and MaxDomainsPerWorkspace bound the domains a page and
@@ -290,7 +291,9 @@ func (s *Service) Create(ctx context.Context, tenantID, pageID uuid.UUID, hostna
 			(SELECT COUNT(*) FROM status_page_domains WHERE status_page_id = $1),
 			(SELECT COUNT(*) FROM status_page_domains d JOIN status_pages sp ON sp.id = d.status_page_id WHERE sp.tenant_id = $2),
 			EXISTS (SELECT 1 FROM status_page_domains WHERE status_page_id = $1 AND hostname = $3),
-			EXISTS (SELECT 1 FROM status_page_domains WHERE hostname = $3 AND status = 'verified' AND status_page_id <> $1)`,
+			EXISTS (SELECT 1 FROM status_page_domains vd JOIN status_pages vp ON vp.id = vd.status_page_id
+				WHERE vd.hostname = $3 AND vd.status = 'verified' AND vd.status_page_id <> $1
+				  AND `+tenancy.LiveTenantSQL("vp.tenant_id")+`)`,
 		pageID, tenantID, hostname).Scan(&pageFound, &pageCount, &workspaceCount, &onPage, &verifiedElsewhere); err != nil {
 		return nil, fmt.Errorf("check custom domain: %w", err)
 	}
@@ -471,6 +474,18 @@ func (s *Service) record(ctx context.Context, c claim, res checkResult) error {
 
 	taking := next.Status == pagedomains.Verified && cur.Status != pagedomains.Verified
 	if taking {
+		// A deleted workspace's verified row holds the hostname until the
+		// workspace purge removes it; it is served nowhere, so it must not
+		// block the hostname's next owner.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE status_page_domains d
+			SET status = 'superseded', last_error = NULL, next_check_at = $3, updated_at = NOW()
+			FROM status_pages sp
+			WHERE d.hostname = $1 AND d.id <> $2 AND d.status = 'verified'
+			  AND sp.id = d.status_page_id AND NOT `+tenancy.LiveTenantSQL("sp.tenant_id"),
+			c.Hostname, c.ID, now.Add(pagedomains.ClaimTTL)); err != nil {
+			return fmt.Errorf("release deleted workspace's hostname: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `SAVEPOINT take_hostname`); err != nil {
 			return fmt.Errorf("record custom domain check: %w", err)
 		}
@@ -500,7 +515,7 @@ func (s *Service) record(ctx context.Context, c claim, res checkResult) error {
 			SET status = 'superseded', last_error = $3, next_check_at = $4, updated_at = NOW()
 			FROM status_pages sp
 			WHERE d.hostname = $1 AND d.id <> $2 AND d.status IN ('pending', 'failed', 'superseded')
-			  AND sp.id = d.status_page_id
+			  AND sp.id = d.status_page_id AND `+tenancy.LiveTenantSQL("sp.tenant_id")+`
 			RETURNING d.id, d.status_page_id, sp.tenant_id`,
 			c.Hostname, c.ID, supersededMessage, now.Add(pagedomains.ClaimTTL))
 		if err != nil {

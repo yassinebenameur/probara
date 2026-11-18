@@ -203,6 +203,10 @@ services:
       # domains terminates at your own reverse proxy in front of status-page.
       STATUS_PAGE_CNAME_TARGET: "${STATUS_PAGE_CNAME_TARGET:-}"
       STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
+      # Same as on status-page. Custom domains stay off until this or
+      # STATUS_PAGE_BASE_URL names a public status host, since only then
+      # does status-page refuse hostnames that are not verified.
+      STATUS_PAGE_PLATFORM_HOSTS: "${STATUS_PAGE_PLATFORM_HOSTS:-}"
     ports:
       - "8080:8080"
       - "9090:9090"

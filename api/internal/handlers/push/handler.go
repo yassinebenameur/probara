@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
+	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/push"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -97,9 +99,7 @@ func (h *Handler) HandlePushGet(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
-	})
+	json.NewEncoder(w).Encode(models.PushAcceptedResponse{Status: "ok"})
 }
 
 // HandlePushPost handles POST /api/v1/push/{token}
@@ -197,9 +197,7 @@ func (h *Handler) HandlePushPost(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
-	})
+	json.NewEncoder(w).Encode(models.PushAcceptedResponse{Status: "ok"})
 }
 
 // HandleGetPushInfo handles GET /api/v1/monitors/{id}/push/info
@@ -207,7 +205,7 @@ func (h *Handler) HandlePushPost(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleGetPushInfo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !ctxpkg.CanWrite(ctx) {
-		http.Error(w, "push credentials require write permission", http.StatusForbidden)
+		apierrors.WriteForbiddenError(w, "push credentials require write permission")
 		return
 	}
 
@@ -215,14 +213,14 @@ func (h *Handler) HandleGetPushInfo(w http.ResponseWriter, r *http.Request) {
 	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return
 	}
 
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 
@@ -230,7 +228,7 @@ func (h *Handler) HandleGetPushInfo(w http.ResponseWriter, r *http.Request) {
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
@@ -241,10 +239,10 @@ func (h *Handler) HandleGetPushInfo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.log.WithError(err).Error("failed to get push info")
 		if strings.Contains(err.Error(), "not found") {
-			http.Error(w, "push monitor not found", http.StatusNotFound)
+			apierrors.WriteNotFoundError(w, "push monitor not found")
 			return
 		}
-		http.Error(w, "failed to get push info", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "failed to get push info")
 		return
 	}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
+	"github.com/yassinebenameur/probara/api/internal/models"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 )
 
@@ -44,7 +45,7 @@ func (h *Handlers) listDependencyRelation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var items interface{}
+	var items []models.DependencyMonitor
 	if relation == "dependencies" {
 		items, err = h.dependencyService.GetDependencies(r.Context(), tenantUUID, monitorID)
 	} else {
@@ -60,7 +61,7 @@ func (h *Handlers) listDependencyRelation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, map[string]interface{}{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, models.DependencyMonitorList{Items: items})
 }
 
 // GetDependencyGraph handles GET /api/v1/monitors/dependency-graph — the

@@ -51,7 +51,7 @@ func bearer(path, ip, token string) *http.Request {
 
 func withSession(t *testing.T, req *http.Request, user string, ttl time.Duration) *http.Request {
 	t.Helper()
-	token, err := auth.CreateAdminToken(user, testSessionSecret, ttl)
+	token, err := auth.CreateAdminToken(user, "", testSessionSecret, ttl)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -710,7 +710,7 @@ func TestClassifySessionToken(t *testing.T) {
 	now := time.Now()
 	token := func(user string, ttl time.Duration) string {
 		t.Helper()
-		v, err := auth.CreateAdminToken(user, "secret", ttl)
+		v, err := auth.CreateAdminToken(user, "", "secret", ttl)
 		if err != nil {
 			t.Fatal(err)
 		}

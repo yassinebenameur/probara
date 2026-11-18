@@ -12,6 +12,10 @@ export interface AdminUser {
   updated_at: string;
   last_login_at?: string;
   disabled_at?: string;
+  /** Set while password sign-in is locked after repeated failures (/users reads only). */
+  locked_until?: string;
+  /** Current run of failed sign-ins (/users reads only). */
+  failed_login_count?: number;
 }
 
 export interface AdminUserListResponse {

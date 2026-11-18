@@ -9,7 +9,8 @@ import MonitorForm from '@/components/monitors/MonitorForm';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import { useToast } from '@/components/ui/ToastProvider';
-import { errorMessage } from '@/lib/errors';
+import { errorCode, errorMessage } from '@/lib/errors';
+import { MONITOR_KEY_TAKEN } from '@/lib/monitor-key';
 
 export default function NewMonitorPage() {
   const router = useRouter();
@@ -66,6 +67,11 @@ export default function NewMonitorPage() {
       // the detail page replaces this one.
       router.push(`/monitors/${created.id}`);
     } catch (err) {
+      // A taken key is shown next to the key field (MonitorForm).
+      if (errorCode(err) === MONITOR_KEY_TAKEN) {
+        setLoading(false);
+        throw err;
+      }
       showToast(errorMessage(err, 'Failed to create monitor'), 'error');
       setLoading(false);
     }

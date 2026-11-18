@@ -37,6 +37,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/present"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // TokenHeader carries the action token. The confirm page reads the token
@@ -78,8 +79,8 @@ type Alerts interface {
 }
 
 // Channels names the channel a token was delivered on. ok is false when the
-// channel no longer exists in the tenant: deleting a channel revokes every
-// link it delivered.
+// channel no longer exists in the tenant: deleting a channel, or its
+// workspace, revokes every link it delivered.
 type Channels interface {
 	ChannelName(ctx context.Context, tenantID, channelID uuid.UUID) (name string, ok bool, err error)
 }
@@ -92,7 +93,7 @@ type dbChannels struct{ q db.Querier }
 func (c dbChannels) ChannelName(ctx context.Context, tenantID, channelID uuid.UUID) (string, bool, error) {
 	var name string
 	err := c.q.QueryRowContext(ctx,
-		`SELECT name FROM alert_channels WHERE id = $1 AND tenant_id = $2`,
+		`SELECT name FROM alert_channels WHERE id = $1 AND tenant_id = $2 AND `+tenancy.LiveTenantSQL("alert_channels.tenant_id"),
 		channelID, tenantID).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil

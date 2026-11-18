@@ -21,6 +21,7 @@ import {
   X,
   PanelLeftClose,
   PanelLeftOpen,
+  Building2,
 } from 'lucide-react';
 import { getIncidents, logout } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
@@ -39,6 +40,7 @@ import {
   sidebarShortcutLabel,
 } from '@/lib/sidebar-shortcut';
 import TenantSwitcher from './TenantSwitcher';
+import AccountLink from './AccountLink';
 import FleetHealth, { CountBadge } from './FleetHealth';
 import { RAIL_ROW_MOTION, railGutter, railLabel, railRowPadding } from './rail';
 import { useSidebarCollapsed } from './useSidebarCollapsed';
@@ -81,6 +83,7 @@ const navGroups: { key: string; items: NavItem[] }[] = [
     key: 'admin',
     items: [
       { name: 'Users', href: '/users', icon: Users },
+      { name: 'Workspaces', href: '/workspaces', icon: Building2 },
       { name: 'Audit log', href: '/audit', icon: ScrollText },
       { name: 'Settings', href: '/settings', icon: Settings, also: ['/alert-channels'] },
     ],
@@ -307,6 +310,7 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
       ...group,
       items: group.items.filter((item) => {
         if (item.href === '/users') return canSeeUsers;
+        if (item.href === '/workspaces') return canSeeUsers;
         if (item.href === '/audit') return canSeeAudit;
         return true;
       }),
@@ -468,6 +472,7 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
             <TenantSwitcher rail={footerRail} />
             <div className={`flex ${footerRail ? 'flex-col items-start gap-0.5' : 'items-center gap-1'}`}>
               <SignOutButton rail={footerRail} onClick={handleLogout} />
+              {!apiKeyMode && <AccountLink rail={footerRail} onNavigate={onClose} />}
               <ThemeToggle tooltip={footerRail} className={footerRail ? '!h-10 !w-10' : ''} />
             </div>
           </div>

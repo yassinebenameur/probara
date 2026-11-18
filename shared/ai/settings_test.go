@@ -1,6 +1,10 @@
 package ai
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/yassinebenameur/probara/shared/tenancy"
+)
 
 // The relay's claim and the API's SLA "Triage pending" bucket both build
 // triage eligibility from these fragments; pin their text so a change is a
@@ -12,7 +16,8 @@ func TestTriageEligibilityFragments(t *testing.T) {
 	want := `a.status IN ('active','acknowledged') AND a.resolved_at IS NULL
       AND a.triggered_at >= $5
       AND (a.monitor_id IS NULL OR EXISTS (SELECT 1 FROM monitors tcm WHERE tcm.id = a.monitor_id
-            AND tcm.tenant_id = a.tenant_id AND tcm.deleted_at IS NULL))`
+            AND tcm.tenant_id = a.tenant_id AND tcm.deleted_at IS NULL))
+      AND ` + tenancy.LiveTenantSQL("a.tenant_id")
 	if got := TriageClaimableAlertSQL("a", "$5"); got != want {
 		t.Fatalf("TriageClaimableAlertSQL =\n%s\nwant\n%s", got, want)
 	}

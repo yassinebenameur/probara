@@ -21,6 +21,26 @@ type StatusPageDomainsConfig struct {
 	// service's public origin. The API reads it only to refuse that host as a
 	// custom domain.
 	StatusPagePublicBaseURL string
+	// StatusPagePlatformHosts is STATUS_PAGE_PLATFORM_HOSTS, the status-page
+	// service's other platform hosts: refused as custom domains too.
+	StatusPagePlatformHosts []string
+}
+
+// StatusPageFailsClosed reports whether the status-page service, configured
+// with the same STATUS_PAGE_BASE_URL and STATUS_PAGE_PLATFORM_HOSTS, refuses
+// public hostnames that are not verified custom domains: it does only once
+// one of its platform hosts is a public name. Without that it serves every
+// page on any host, so custom domains must stay off.
+func (c StatusPageDomainsConfig) StatusPageFailsClosed() bool {
+	if pagedomains.CanBeCustomDomain(pagedomains.HostOfURL(c.StatusPagePublicBaseURL)) {
+		return true
+	}
+	for _, h := range c.StatusPagePlatformHosts {
+		if pagedomains.CanBeCustomDomain(h) {
+			return true
+		}
+	}
+	return false
 }
 
 func loadStatusPageDomainsConfig() (StatusPageDomainsConfig, error) {
@@ -32,5 +52,16 @@ func loadStatusPageDomainsConfig() (StatusPageDomainsConfig, error) {
 		}
 	}
 	cfg.StatusPagePublicBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("STATUS_PAGE_BASE_URL")), "/")
+	for _, raw := range strings.Split(os.Getenv("STATUS_PAGE_PLATFORM_HOSTS"), ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		host := pagedomains.HostFromHeader(raw)
+		if host == "" || strings.ContainsAny(raw, "/@") {
+			return cfg, fmt.Errorf("invalid STATUS_PAGE_PLATFORM_HOSTS entry %q: want a host name", raw)
+		}
+		cfg.StatusPagePlatformHosts = append(cfg.StatusPagePlatformHosts, host)
+	}
 	return cfg, nil
 }

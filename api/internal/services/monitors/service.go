@@ -19,6 +19,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/logger"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/secrets"
@@ -87,6 +88,22 @@ func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming
 	if !secrets.HasMonitorSecrets(string(monitorType)) {
 		return incoming, nil
 	}
+	merged, err := mergeConfigForWrite(monitorType, incoming, existing)
+	if err != nil {
+		return nil, err
+	}
+	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt config secrets: %w", err)
+	}
+	return encrypted, nil
+}
+
+// mergeConfigForWrite is the part of prepareConfigForWrite before
+// encryption: the write-only merge, the move of credential-named entries and
+// the conflict check. Planning an apply (apply_config.go) runs the same steps,
+// so what it reports is what a save would store.
+func mergeConfigForWrite(monitorType models.MonitorType, incoming, existing json.RawMessage) (json.RawMessage, error) {
 	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), incoming, existing)
 	if err != nil {
 		return nil, fmt.Errorf("merge config secrets: %w", err)
@@ -103,11 +120,7 @@ func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming
 		}
 		return nil, fmt.Errorf("%w: %v (a stored secret was kept because the request omitted it; send \"\" to clear it, or leave it out of a submitted secret map)", ErrSecretConflict, err)
 	}
-	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
-	if err != nil {
-		return nil, fmt.Errorf("encrypt config secrets: %w", err)
-	}
-	return encrypted, nil
+	return merged, nil
 }
 
 // maskSecrets replaces secret config fields with the "***" placeholder before
@@ -129,6 +142,32 @@ var ErrMonitorTypeMismatch = errors.New("test type must match the saved monitor 
 // kept Authorization secret header, a plain header beside a kept secret one).
 // Handlers map it to 400.
 var ErrSecretConflict = errors.New("config conflicts with stored secrets")
+
+// ErrMonitorKeyTaken reports a key another live monitor of the workspace
+// already has (idx_monitors_tenant_key). Handlers map it to 409.
+var ErrMonitorKeyTaken = errors.New("another monitor in this workspace already has this key")
+
+// monitorKeyIndex is the unique index that keeps keys unique per workspace.
+const monitorKeyIndex = "idx_monitors_tenant_key"
+
+// keyTakenOr turns a violation of the key's unique index into
+// ErrMonitorKeyTaken and returns any other error as is.
+func keyTakenOr(err error) error {
+	if pgerr.IsUniqueViolationOf(err, monitorKeyIndex) {
+		return ErrMonitorKeyTaken
+	}
+	return err
+}
+
+// normalizedKey is the key column value of a request's key: nil (no key)
+// for nil or "", which is how a PATCH removes a key.
+func normalizedKey(key *string) *string {
+	if key == nil || *key == "" {
+		return nil
+	}
+	value := *key
+	return &value
+}
 
 // ErrCallMonitorForbidden refuses a SIP test-call (INVITE) monitor to anyone
 // but a tenant admin's session. Each check of such a monitor places a real,
@@ -275,6 +314,7 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		ID:                           monitorID,
 		TenantID:                     tenantID,
 		Name:                         req.Name,
+		Key:                          normalizedKey(req.Key),
 		Type:                         req.Type,
 		Config:                       config,
 		IntervalSeconds:              req.IntervalSeconds,
@@ -295,7 +335,7 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
-		return nil, err
+		return nil, keyTakenOr(err)
 	}
 
 	if len(locationIDs) > 0 {
@@ -492,6 +532,12 @@ func (s *Service) updateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	if req.Key != nil {
+		setParts = append(setParts, fmt.Sprintf("key = $%d", argIndex))
+		args = append(args, normalizedKey(req.Key))
+		argIndex++
+	}
+
 	if req.Type != nil {
 		setParts = append(setParts, fmt.Sprintf("type = $%d", argIndex))
 		args = append(args, *req.Type)
@@ -652,7 +698,7 @@ func (s *Service) updateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 
 	if len(setParts) > 0 {
 		if err := s.repo.Update(ctx, monitor, setParts, args); err != nil {
-			return nil, err
+			return nil, keyTakenOr(err)
 		}
 	} else {
 		// No DB column updates but we still need to handle monitor_channels below.

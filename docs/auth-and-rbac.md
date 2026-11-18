@@ -8,13 +8,17 @@ How identity and authorization work as of the enterprise-auth rework
 Three credential types, resolved by `api/internal/middleware/auth.go`:
 
 - **Admin users** (`admin_users`) — humans. JWT access cookie (15 min) +
-  rotating opaque refresh session. Two platform roles:
+  rotating opaque refresh token, grouped into a session (see
+  [Sign-in lockout and sessions](#sign-in-lockout-and-sessions)). Two
+  platform roles:
   - `superadmin` — full platform access: any tenant (via `X-Tenant-ID`),
     user management, tenant list. All pre-rework admins were backfilled to
     superadmin.
   - `member` — access only through `tenant_memberships` rows. A
-    tenant-scoped request requires a membership in that tenant (403
-    otherwise); `GET /v1/tenants` returns only the member's tenants.
+    tenant-scoped request requires a membership in that tenant (otherwise
+    `404 workspace_not_found`, the same answer as for a deleted or unknown
+    workspace, so a member learns nothing about workspaces they cannot
+    open); `GET /v1/tenants` returns only the member's tenants.
 - **API keys** (`api_keys`) — machines. Pinned to one tenant, carry a
   `scope` (`read` | `write`, legacy keys backfilled to `write`) and an
   optional `expires_at`. Expired keys fail validation in SQL.
@@ -51,6 +55,91 @@ Roles are resolved from the DB on every request — never stored in JWT
 claims — so downgrades and disables apply immediately (disabled users are
 rejected even with a live access token).
 
+## Sign-in lockout and sessions
+
+Migrations 000117 (lockout) and 000118 (session families).
+
+**Lockout** (`api/internal/services/adminauth/lockout.go`, password sign-in
+only): 10 consecutive failures lock the account for 15 minutes, fixed; a
+failure more than 24 h after the previous one (`last_failed_login_at`)
+starts a new streak. The streak (`failed_login_count`) and the lock
+(`locked_until`) live on `admin_users` and are timed by the database clock
+(`NOW()`; tests move it through `Service.clockOffset` only), so replicas
+agree and restarts keep them. `Authenticate`
+reserves the attempt before comparing the password (one atomic `UPDATE`
+that only matches an unlocked password account), so parallel guesses cannot
+overshoot: exactly 10 are compared, the 10th locks and restarts the streak.
+A correct password clears it; a locked row matches nothing, so attempts
+during a lock neither count nor extend it, and a locked account's correct
+password is refused. Unknown, SSO-only and disabled usernames are refused
+without any write. Every refusal gets the same `401` and body and costs one
+bcrypt comparison (a dummy hash when there is none to compare), so the lock
+never confirms an account exists; the audit log tells them apart
+(`auth.login` failure with `reason: locked`, `auth.lockout`).
+`RecordFailedAttempt` is the seam for a second factor: its failures count
+toward the same lock (and a second step must move the streak reset after
+it). Superadmin unlock: `POST /users/{id}/unlock` (`user.unlock`, MCP
+`unlock_user`); `cmd/admin` also clears a lock. What bounds "lock every
+account": the lock is time-boxed and never extended, it ends no sessions,
+superadmins can unlock, locks are audited, and the API rate limiter charges
+failed sign-ins to the address's failure budget (attributable addresses
+only).
+
+**Sessions** (`adminauth/sessions.go`): one `admin_session_families` row
+per sign-in (password or OIDC); every refresh token (`admin_sessions`, one
+row per rotation) carries its `family_id`, and the access JWT carries the
+family id as `sid`. The family's `revoked_at` is the single authority:
+
+- `AuthMiddleware` checks it for every cookie-authenticated request
+  (`middleware/session.go` → `adminauth.SessionActive`, one primary-key
+  lookup, no cache, so a revocation is immediate on every replica);
+  `/auth/me` checks it too. Tokens without a `sid` (minted before 000118)
+  are honoured until they expire.
+- `RefreshSession` rotates inside the family under the family row lock. A
+  token rotated less than 60 s ago (concurrent tabs) earns an access token
+  only -- no new refresh token, so the family never forks into two chains;
+  presented later it is reuse: the family is revoked (`refresh_reuse`, audit
+  `auth.session_reuse`).
+- Long-lived responses re-check: the auth middleware leaves
+  `middleware.StillAuthorized` / `CredentialExpiry` in the context
+  (`credential_recheck.go`: session, user enabled, tenant membership, MCP
+  token, API key); the alert SSE stream calls it every heartbeat and ends at
+  the access token's expiry with a `reauth` event the web client reconnects
+  on.
+- `SessionPruner` (API process, hourly, batches of 1000) deletes refresh
+  tokens expired longer than the refresh lifetime + 1 day ago and families
+  revoked or expired that long ago; reuse detection only needs rotated
+  tokens until they expire.
+- Last use, address (`shared/clientip`) and user agent move on sign-in and
+  refresh only, never per request.
+- The rate limiter's verified-credential cache never authenticates: it only
+  lifts the address pre-check, and the refresh handler / middleware still
+  check the family, so a revoked session's cookie is refused on first use
+  and then forgotten by that replica.
+
+Routes: `/account/sessions` (list, `DELETE /{id}`, `POST /revoke-others`) —
+cookie session only (a `sid` is required; API keys and MCP tokens get 403),
+outside the write gate, audited as `auth.session_revoke` /
+`auth.sessions_revoke_others`; `/users/{id}/sessions` (superadmin, MCP
+tools `list_user_sessions`, `revoke_user_session`, `revoke_user_sessions`,
+audited `user.session_revoke` / `user.sessions_revoke`).
+
+What ends sessions: sign-out (that one); a user's own revoke (one / all
+others); superadmin revoke (one / all; on your own account all others);
+superadmin password set (all; your own password: all others —
+`adminusers.UpdateUser` keeps the caller's `sid`); `cmd/admin` (all); user
+deletion (cascade); refresh reuse (that one). Not: lockout or unlock (a
+guesser must not be able to sign people out), role and membership changes
+(roles are re-read per request anyway). Revoking an SSO session does not
+sign out of the IdP.
+
+Migration 000118 turns every live refresh token into its own family (id =
+token row id), so signed-in users stay signed in; rotated/expired rows keep
+`family_id NULL` and are never accepted. A trigger gives a family to rows an
+older binary inserts during a rolling deploy. An old binary also honours a
+revoked family's token, so revocations made mid-rollout may not hold:
+finish the rollout first. Drop the trigger in a later release.
+
 ## Enforcement layers
 
 Middleware chain on the authenticated subrouter (`server.go`):
@@ -63,7 +152,7 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   capability (superadmin, tenant role admin/editor, or write-scope key).
   A small allowlist exempts compute-only POSTs (`/monitors/test`,
   `import/preview`, `dependency-suggestions`, `/mesh/probe`,
-  `/ai-settings/test`). **Add new test/preview endpoints to that list** or
+  `/ai-settings/test`, `/monitors/apply/plan`). **Add new test/preview endpoints to that list** or
   viewers will get 403s.
 - Credential-bearing reads have explicit write-capability checks:
   `/locations/{id}/deploy` and `/monitors/{id}/push/info` require a
@@ -84,7 +173,56 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   inherits it, and `/monitors/{id}/run` and `/monitors/test` in their
   handlers (`monitorservice.RequireCallPermission`). Editors and API keys of
   any scope get 403.
-- `RequireSuperadmin`: `/users/*`.
+- `RequireSuperadmin`: `/users/*`, and workspace management (`POST
+  /tenants`, `PATCH`/`DELETE /tenants/{id}`, `GET /tenants/overview`).
+
+## Workspaces
+
+Superadmins create, rename and delete workspaces
+(`api/internal/services/tenants/workspaces.go`). Names are trimmed, 1–100
+characters without control characters, and unique among live workspaces
+(partial unique index `tenants_name_live_key`). A new workspace gets no
+membership: superadmins act everywhere. Delete needs `confirm_name` equal to
+the name and refuses the default workspace (`tenancy.DefaultTenantID`), the
+OIDC JIT tenant while JIT provisioning is on, and the last live workspace
+(a transaction advisory lock serializes deletes). Each change is audited
+explicitly (`tenant.create`/`.rename`/`.delete`, platform-level, with the
+name).
+
+Delete is a soft delete. One transaction stamps `tenants.deleted_at` and
+`deleted_by`, removes the workspace's memberships and SSO group mappings and
+revokes its MCP grants. From that commit:
+
+- `identityQuery` reports whether a live workspace has the requested ID, and
+  `AuthMiddleware` answers `404 workspace_not_found` to any session or
+  MCP-token request scoped to a deleted, purged or never-created one,
+  superadmins included (and to a member's request for a workspace they do
+  not belong to). It is the one query that reads `deleted_at` tolerantly
+  (`to_jsonb`): on a schema without the column it must not fall into the
+  missing-schema fallback, which treats every admin as a superadmin.
+- `auth.ValidateAPIKey`, `mcpoauth.LookupAccessToken`, the push-token lookup,
+  the discovery collector lookups, `locations.AuthenticateWorker` (NATS
+  callout) and the ingest location credential lookup add
+  `tenancy.LiveTenantSQL` to their query, so a credential written by a
+  request racing the delete is refused too.
+- Tenant lists (`GET /tenants`, memberships on users and `/auth/me`, MCP
+  connections) omit it; acknowledge links and report-unsubscribe links of it
+  read as invalid.
+
+Memberships (user create and update) and SSO group mappings name live
+workspaces only: a deleted or unknown one is refused with `422` "workspace
+not found".
+
+The web client treats `workspace_not_found` as "the selected workspace is
+gone": it drops that selection (only if it is still the one the failing
+request carried, so concurrent failures change nothing more) and the
+switcher reloads its list once (`lib/api/core.ts`, `TENANTS_CHANGED_EVENT`).
+It never sends `X-Tenant-ID` on `/v1/tenants*`, which are platform routes,
+so the reload cannot fail the same way. A member left with no
+workspace keeps the account; the client answers their tenant-scoped requests
+with a "not a member of any workspace" error instead of sending them.
+
+The scheduler purges the data afterwards; see `docs/architecture.md`.
 
 Audit runs *outside* the write gate so denied attempts are recorded with
 `outcome=denied`.
@@ -118,7 +256,9 @@ the MCP package decides access. Rules that keep it so:
 `audit_log` table; captured two ways: the `AuditMutations` middleware
 derives `resource.verb` actions for every mutation, and explicit events
 cover auth lifecycle (`auth.login`/`auth.logout`/`auth.oidc_login` incl.
-failures) and user/key management (those subtrees are skipped by the
+failures, `auth.lockout`, `auth.session_reuse`, `auth.session_revoke`,
+`auth.sessions_revoke_others`) and user/key management (incl.
+`user.unlock`, `user.session_revoke`, `user.sessions_revoke`) (those subtrees are skipped by the
 generic layer). Writes go through an async batching recorder — never
 blocks or fails a request; drops rows quietly during the pre-migration
 deploy window.
@@ -238,7 +378,12 @@ exercise mappings.
 The helm migrations job is post-upgrade, so new binaries briefly run on
 the old schema. All auth queries feature-detect (SQLSTATE 42P01/42703 →
 legacy behavior: everyone superadmin, keys full-access) and the audit
-writer drops rows — the API never crash-loops pre-migration. For
+writer drops rows — the API never crash-loops pre-migration. The exception
+is workspace soft delete (000116): API-key validation, tenant lists and
+every background loop name `tenants.deleted_at`, so that migration must run
+before the new binaries serve (the release's upgrade notes say so);
+`identityQuery` alone reads it tolerantly, so a missing column can never
+elevate a member. For
 zero-surprise rollouts run the migration job manually first (see
 `docs/correctness-notes.md` "Deploy ordering").
 

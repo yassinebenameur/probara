@@ -11,6 +11,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/pagedomains"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -103,9 +104,13 @@ func (s *Service) claimDue(ctx context.Context, limit int) ([]claim, error) {
 		UPDATE status_page_domains d
 		SET next_check_at = $2
 		FROM (
-			SELECT id FROM status_page_domains
-			WHERE next_check_at <= $1 AND status <> 'superseded'
-			ORDER BY next_check_at
+			-- A deleted workspace's domains are never checked; the
+			-- workspace purge removes them.
+			SELECT dd.id FROM status_page_domains dd
+			JOIN status_pages dp ON dp.id = dd.status_page_id
+			WHERE dd.next_check_at <= $1 AND dd.status <> 'superseded'
+			  AND `+tenancy.LiveTenantSQL("dp.tenant_id")+`
+			ORDER BY dd.next_check_at
 			LIMIT $3
 			FOR UPDATE SKIP LOCKED
 		) due, status_pages sp
@@ -139,7 +144,7 @@ func (s *Service) expireClaims(ctx context.Context) error {
 			WHERE status IN ('pending', 'superseded') AND created_at < $1
 			ORDER BY created_at
 			LIMIT $2
-		) AND sp.id = d.status_page_id
+		) AND sp.id = d.status_page_id AND `+tenancy.LiveTenantSQL("sp.tenant_id")+`
 		RETURNING d.id, d.status_page_id, sp.tenant_id, d.hostname, d.status`,
 		s.now().Add(-pagedomains.ClaimTTL), expireBatch)
 	if err != nil {

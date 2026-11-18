@@ -10,11 +10,18 @@ import (
 // AdminClaims represents JWT claims for admin sessions.
 type AdminClaims struct {
 	AdminID string `json:"admin_id"`
+	// SessionID is the sign-in (session family) the token was issued for.
+	// The auth middleware refuses the token once that session is revoked,
+	// so revocation ends access at once rather than at the token's expiry.
+	// Empty only on tokens minted before session families existed.
+	SessionID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
-// CreateAdminToken creates a signed JWT for an admin user.
-func CreateAdminToken(adminID, secret string, ttl time.Duration) (string, error) {
+// CreateAdminToken creates a signed JWT for an admin user's session
+// (sessionID, the session family; empty only while the database predates
+// session families).
+func CreateAdminToken(adminID, sessionID, secret string, ttl time.Duration) (string, error) {
 	if adminID == "" {
 		return "", fmt.Errorf("admin ID cannot be empty")
 	}
@@ -24,7 +31,8 @@ func CreateAdminToken(adminID, secret string, ttl time.Duration) (string, error)
 
 	now := time.Now()
 	claims := AdminClaims{
-		AdminID: adminID,
+		AdminID:   adminID,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   adminID,
 			IssuedAt:  jwt.NewNumericDate(now),

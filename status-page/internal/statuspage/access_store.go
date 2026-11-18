@@ -10,6 +10,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/pageaccess"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // pageAccess is the gate's view of a page: everything authorize and the
@@ -46,7 +47,11 @@ type accessQuery interface {
 
 var _ accessQuery = (*Service)(nil)
 
-const pageAccessQuery = `
+// A deleted workspace's page is not found by any of these lookups, so every
+// sub-route, the unlock form, open streams (stillAuthorized) and the API
+// proxy answer it exactly like a missing slug, and its visitor sessions and
+// kiosk tokens stop working the moment the workspace is deleted.
+var pageAccessQuery = `
 	SELECT sp.id, sp.title, COALESCE(sp.logo_url, ''), COALESCE(sp.primary_color, ''),
 	       sp.visibility, COALESCE(sp.password_hash, ''), sp.password_version,
 	       (SELECT t.id FROM status_page_access_tokens t
@@ -54,14 +59,14 @@ const pageAccessQuery = `
 	       EXISTS (SELECT 1 FROM status_page_access_tokens t
 	         WHERE t.id = $3 AND t.status_page_id = sp.id AND t.revoked_at IS NULL)
 	FROM status_pages sp
-	WHERE sp.slug = $1`
+	WHERE sp.slug = $1 AND ` + tenancy.LiveTenantSQL("sp.tenant_id")
 
 // legacyPageAccessQuery serves while migration 000114 has not run yet: with
 // no visibility column no page can be gated, so every page is public.
-const legacyPageAccessQuery = `
+var legacyPageAccessQuery = `
 	SELECT id, title, COALESCE(logo_url, ''), COALESCE(primary_color, '')
 	FROM status_pages
-	WHERE slug = $1`
+	WHERE slug = $1 AND ` + livePage
 
 // PageAccess implements accessQuery. The presented token is looked up by
 // hash, so the token itself never reaches the database or a log.
@@ -96,10 +101,10 @@ func (s *Service) PageAccess(ctx context.Context, slug, presentedTokenHash strin
 // PageVisibilityByID implements accessQuery.
 func (s *Service) PageVisibilityByID(ctx context.Context, id uuid.UUID) (string, error) {
 	var visibility string
-	err := s.db.QueryRowContext(ctx, `SELECT visibility FROM status_pages WHERE id = $1`, id).Scan(&visibility)
+	err := s.db.QueryRowContext(ctx, `SELECT visibility FROM status_pages WHERE id = $1 AND `+livePage, id).Scan(&visibility)
 	if err != nil && pgerr.IsMissingSchema(err) {
 		visibility = pageaccess.Public
-		err = s.db.QueryRowContext(ctx, `SELECT 'public' FROM status_pages WHERE id = $1`, id).Scan(&visibility)
+		err = s.db.QueryRowContext(ctx, `SELECT 'public' FROM status_pages WHERE id = $1 AND `+livePage, id).Scan(&visibility)
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

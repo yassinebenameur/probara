@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
 
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -54,13 +55,13 @@ func (h *Handler) HandleExportMetrics(w http.ResponseWriter, r *http.Request) {
 
 	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return
 	}
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 
@@ -121,7 +122,7 @@ func (h *Handler) HandleExportMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.log.WithError(err).Error("otlp response encode failed")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -161,6 +162,13 @@ func baseContentType(v string) string {
 	return strings.TrimSpace(strings.ToLower(v))
 }
 
+// Status is the OTLP error body: google.rpc.Status with the HTTP status as
+// its code.
+type Status struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 // writeStatus emits a google.rpc.Status-shaped JSON error body (the OTLP
 // spec's error payload; encoding it as protobuf would add a genproto
 // dependency for no collector-side benefit — exporters act on the HTTP
@@ -168,8 +176,5 @@ func baseContentType(v string) string {
 func writeStatus(w http.ResponseWriter, httpCode int, message string) {
 	w.Header().Set("Content-Type", contentTypeJSON)
 	w.WriteHeader(httpCode)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"code":    httpCode,
-		"message": message,
-	})
+	_ = json.NewEncoder(w).Encode(Status{Code: httpCode, Message: message})
 }

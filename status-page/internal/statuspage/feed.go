@@ -60,7 +60,7 @@ func (s *Service) GetStatusPageFeed(ctx context.Context, slug, platformURL strin
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, title, description, logo_url, settings, updated_at
 		FROM status_pages
-		WHERE slug = $1
+		WHERE slug = $1 AND `+livePage+`
 	`, slug).Scan(&pageID, &tenantID, &title, &description, &logoURL, &settingsJSON, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {

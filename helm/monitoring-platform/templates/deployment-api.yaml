@@ -121,6 +121,13 @@ spec:
         - name: STATUS_PAGE_BASE_URL
           value: {{ . | quote }}
         {{- end }}
+        # The status-page's other platform hosts: refused as custom domains,
+        # and with the base URL what tells the API the status-page refuses
+        # unverified hostnames (custom domains stay off otherwise).
+        {{- with (include "monitoring-platform.statusPagePlatformHosts" .) }}
+        - name: STATUS_PAGE_PLATFORM_HOSTS
+          value: {{ . | quote }}
+        {{- end }}
         # Deploy snippets for private locations reference the worker this
         # release ships, never a floating tag (see api.locationWorkerImage).
         - name: LOCATION_WORKER_IMAGE

@@ -164,6 +164,13 @@ export default function MonitorFactsCard({
         <DetailRow label="Created">
           <span title={formatDateTimeFull(monitor.created_at)}>{formatDate(monitor.created_at)}</span>
         </DetailRow>
+        {monitor.key && (
+          <DetailRow label="Key">
+            <span className="font-mono" title="Config-as-code key: a monitors file applied with POST /monitors/apply manages this monitor">
+              {monitor.key}
+            </span>
+          </DetailRow>
+        )}
         {tags.length > 0 && (
           <div className="flex justify-between gap-3">
             <dt className="shrink-0 pt-0.5 text-slate-400">Tags</dt>

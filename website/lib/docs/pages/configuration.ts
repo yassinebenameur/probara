@@ -228,7 +228,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_CNAME_TARGET`',
               'Empty; a bare host name (no scheme, port or path), or the API refuses to start',
-              'API. Host every status page [custom domain](/docs/status-pages/#custom-domains) must CNAME to, shown in the DNS instructions and checked by verification; usually the host status pages are published on. Empty turns custom domains off: none can be added, and none is re-verified (verified ones keep serving). Helm: `statusPage.cnameTarget`, else the host of `statusPage.baseUrl`.',
+              'API. Host every status page [custom domain](/docs/status-pages/#custom-domains) must CNAME to, shown in the DNS instructions and checked by verification; usually the host status pages are published on. Empty turns custom domains off: none can be added, and none is re-verified (verified ones keep serving). They are also off (with a warning at startup) while neither `STATUS_PAGE_BASE_URL` nor `STATUS_PAGE_PLATFORM_HOSTS` on the API names a public status host, because the status service fails closed on unverified hostnames only then. Helm: `statusPage.cnameTarget`, else the host of `statusPage.baseUrl`.',
             ],
             [
               '`STATUS_PAGE_BASE_URL` (API)',
@@ -509,7 +509,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`MONITOR_PURGE_ENABLED`',
               '`true`; boolean',
-              'Not exposed by Compose or Helm.',
+              'Not exposed by Compose or Helm. Also governs the purge of deleted workspaces: with it off, their data stays in the database (they remain refused everywhere).',
             ],
             [
               '`MONITOR_PURGE_INTERVAL_SECONDS`',
@@ -842,7 +842,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_PLATFORM_HOSTS`',
               'Empty; comma-separated host names, anything else refuses to start',
-              'Hosts besides `STATUS_PAGE_BASE_URL`\'s that serve the platform routes: every page under `/public/status/`, the API proxy, health and metrics. Once one of these or the base URL is a public name, any other public hostname is served only as a verified [custom domain](/docs/status-pages/#custom-domains) and otherwise answers not found; internal names (IP addresses, `localhost`, cluster Service names) always get the platform routes. With neither (development), every host does. Helm: `ingress.hosts` plus `statusPage.platformHosts`.',
+              'Hosts besides `STATUS_PAGE_BASE_URL`\'s that serve the platform routes: every page under `/public/status/`, the API proxy, health and metrics. Once one of these or the base URL is a public name, any other public hostname is served only as a verified [custom domain](/docs/status-pages/#custom-domains) and otherwise answers not found; internal names (IP addresses, `localhost`, cluster Service names) always get the platform routes. With neither (development), every host does. Helm: `ingress.hosts` plus `statusPage.platformHosts`. The API reads it too, refuses these hosts as custom domains, and keeps custom domains off while neither it nor `STATUS_PAGE_BASE_URL` is a public name.',
             ],
             [
               '`STATUS_PAGE_TRUST_FORWARDED_HOST`',

@@ -476,3 +476,71 @@ func TestService_VerifyOutlivesTheRequest(t *testing.T) {
 		t.Fatalf("verify with the request cancelled mid-check: %+v err=%v", got, err)
 	}
 }
+
+// A deleted workspace's domains are served nowhere and hold nothing: they
+// block no claim, a verification elsewhere takes their hostname (without
+// auditing into the deleted workspace), and the runner never checks them.
+func TestService_DeletedWorkspaceDomains(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	gone := testutil.InsertTenant(ctx, t, dbClient, "domains-gone")
+	live := testutil.InsertTenant(ctx, t, dbClient, "domains-live")
+	gonePage := testutil.InsertStatusPage(ctx, t, dbClient, gone, "gone", "G")
+	livePage := testutil.InsertStatusPage(ctx, t, dbClient, live, "live", "L")
+	f := newFakeResolver()
+	svc := newTestService(dbClient, f, &spyPublisher{})
+
+	held, err := svc.Create(ctx, gone, gonePage, "status.shared.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := svc.Create(ctx, gone, gonePage, "pending.shared.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE status_page_domains SET status = 'verified' WHERE id = $1`, held.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE tenants SET deleted_at = NOW() WHERE id = $1`, gone); err != nil {
+		t.Fatal(err)
+	}
+
+	// Its verified hostname does not block a claim, and a verification takes it.
+	claim, err := svc.Create(ctx, live, livePage, "status.shared.example")
+	if err != nil {
+		t.Fatalf("claim of a deleted workspace's hostname: err = %v", err)
+	}
+	publishDNS(t, ctx, dbClient, f, "status.shared.example")
+	f.mu.Lock()
+	var token string
+	if err := dbClient.QueryRowContext(ctx, `SELECT verification_token FROM status_page_domains WHERE id = $1`, claim.ID).Scan(&token); err != nil {
+		t.Fatal(err)
+	}
+	f.txt["_probara-verify.status.shared.example."] = []string{token}
+	f.mu.Unlock()
+	got, err := svc.Verify(ctx, live, claim.ID)
+	if err != nil || got.Status != pagedomains.Verified {
+		t.Fatalf("verification against a deleted workspace's hostname: %+v err=%v", got, err)
+	}
+	if actions := auditOf(svc).actions(gone); len(actions) != 0 {
+		t.Fatalf("audited into the deleted workspace: %v", actions)
+	}
+
+	// The runner never checks the deleted workspace's domains.
+	if _, err := dbClient.ExecContext(ctx, `UPDATE status_page_domains SET next_check_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, pending.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	for _, name := range f.asked {
+		if strings.Contains(name, "pending.shared.example") {
+			t.Errorf("checked a deleted workspace's domain: %s", name)
+		}
+	}
+	f.mu.Unlock()
+}

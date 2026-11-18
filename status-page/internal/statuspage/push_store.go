@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // pushStore is the status-page service's ONLY write path to Postgres.
@@ -126,11 +127,14 @@ func (s *pushStore) DeleteSubscription(ctx context.Context, id uuid.UUID) error 
 // session that made it, so it would keep telling a signed-out or revoked
 // browser about the page.
 func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, bool, error) {
-	const query = `
+	// A deleted workspace's page is not found here, as on every other route.
+	// withoutVisibility (the retry below) replaces only pushVisiblePages, so
+	// the live-workspace condition holds on both paths.
+	query := `
 		SELECT sp.id, COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
 		       AND ` + pushVisiblePages + `
 		FROM status_pages sp
-		WHERE sp.slug = $1
+		WHERE sp.slug = $1 AND ` + tenancy.LiveTenantSQL("sp.tenant_id") + `
 	`
 	var id uuid.UUID
 	var enabled bool
@@ -206,15 +210,19 @@ type pendingDelivery struct {
 // notification is the better failure than dropping every notification a
 // crashed replica held.
 func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter time.Duration) ([]pendingDelivery, error) {
-	const query = `
+	// A deleted workspace's queued pushes are never sent; they are filtered
+	// before the LIMIT so they cannot hold the head of the queue.
+	query := `
 		WITH claimed AS (
 			SELECT d.id
 			FROM status_page_push_deliveries d
-			WHERE d.status = 'pending'
-			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2))
+			JOIN status_pages csp ON csp.id = d.status_page_id
+			WHERE (d.status = 'pending'
+			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2)))
+			  AND ` + tenancy.LiveTenantSQL("csp.tenant_id") + `
 			ORDER BY d.created_at
 			LIMIT $1
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF d SKIP LOCKED
 		)
 		UPDATE status_page_push_deliveries d
 		-- A notification still pending when its page turned password or

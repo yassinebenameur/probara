@@ -16,14 +16,23 @@ import (
 // the runner that re-verifies them and expires claims that never verified
 // (audited as status-page-domain.supersede and .expire). The API runs it because it is the only
 // writer of the table; every replica runs one (SKIP LOCKED claims keep them
-// apart). The installation's own hosts are refused as custom domains.
+// apart). The installation's own hosts are refused as custom domains, and
+// the feature stays off unless the status-page service fails closed on
+// unverified hostnames (config.StatusPageFailsClosed).
 func newStatusPageDomains(cfg *config.APIConfig, dbClient *db.Client, publisher *statusupdates.Publisher, recorder *auditservice.Recorder, log *logger.Logger) (*statuspagedomainhandlers.Handlers, *statuspagedomainservice.Runner) {
+	target := cfg.StatusPageCNAMETarget
+	if target != "" && !cfg.StatusPageFailsClosed() {
+		// The status-page service, with the same settings, would serve
+		// every page on any hostname routed to it, verified or not.
+		log.Warn("Status page custom domains are off: STATUS_PAGE_CNAME_TARGET is set but neither STATUS_PAGE_BASE_URL nor STATUS_PAGE_PLATFORM_HOSTS names a public status host")
+		target = ""
+	}
 	svcCfg := statuspagedomainservice.Config{
-		CNAMETarget: cfg.StatusPageCNAMETarget,
-		ReservedHosts: statuspagedomainservice.ReservedHosts(
+		CNAMETarget: target,
+		ReservedHosts: append(statuspagedomainservice.ReservedHosts(
 			cfg.AppBaseURL, cfg.PublicBaseURL, cfg.PublicNATSURL,
 			cfg.StatusPagePublicBaseURL, cfg.StatusPageCNAMETarget,
-		),
+		), cfg.StatusPagePlatformHosts...),
 		Log: log,
 	}
 	if publisher != nil {

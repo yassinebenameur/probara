@@ -13,6 +13,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/pagedomains"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Custom domains, read side (shared/pagedomains is the contract; the API
@@ -136,13 +137,17 @@ func (t *hostTable) Invalidate() {
 
 // customHostRoutesQuery joins through status_pages, so a domain is served
 // only while its page exists and every page-level condition (a live
-// workspace, say) composes with it: add such conditions to this join. A
+// workspace) composes with it: add such conditions to this join. A
 // verified row sorts last, so it wins over other pages' unverified claims
 // on the same hostname.
-const customHostRoutesQuery = `
+//
+// A deleted workspace's hostnames are left out, so they answer like a
+// hostname nobody claimed.
+var customHostRoutesQuery = `
 	SELECT d.hostname, sp.id, sp.slug, d.status = 'verified'
 	FROM status_page_domains d
 	JOIN status_pages sp ON sp.id = d.status_page_id
+	WHERE ` + tenancy.LiveTenantSQL("sp.tenant_id") + `
 	ORDER BY d.hostname, d.status = 'verified'`
 
 // CustomHostRoutes loads every claimed hostname. Empty before migration

@@ -33,3 +33,32 @@ func TestLoadAPIConfig_StatusPageDomains(t *testing.T) {
 		}
 	}
 }
+
+// Custom domains need the status-page service to refuse unverified hosts,
+// which it does only with a public platform host.
+func TestStatusPageFailsClosed(t *testing.T) {
+	cases := []struct {
+		base     string
+		platform []string
+		want     bool
+	}{
+		{"", nil, false},
+		{"http://localhost:8082", nil, false},
+		{"http://10.0.0.5:8082", nil, false},
+		{"https://status.example.com", nil, true},
+		{"http://localhost:8082", []string{"probara.example.com"}, true},
+		{"", []string{"status-page"}, false},
+	}
+	for _, c := range cases {
+		cfg := StatusPageDomainsConfig{StatusPagePublicBaseURL: c.base, StatusPagePlatformHosts: c.platform}
+		if got := cfg.StatusPageFailsClosed(); got != c.want {
+			t.Errorf("%q %v: %v, want %v", c.base, c.platform, got, c.want)
+		}
+	}
+	setRequiredAPIEnv(t)
+	t.Setenv("STATUS_PAGE_PLATFORM_HOSTS", "Probara.Example.com, status.example.com")
+	loaded, err := LoadAPIConfig()
+	if err != nil || strings.Join(loaded.StatusPagePlatformHosts, ",") != "probara.example.com,status.example.com" {
+		t.Fatalf("platform hosts %v err %v", loaded.StatusPagePlatformHosts, err)
+	}
+}

@@ -45,6 +45,13 @@ type mcpFixture struct {
 
 func newMCPFixture(t *testing.T) *mcpFixture {
 	t.Helper()
+	return newMCPFixtureWith(t, nil)
+}
+
+// newMCPFixtureWith lets a test adjust the API config (a reachable NATS URL,
+// say) before the server is built.
+func newMCPFixtureWith(t *testing.T, configure func(*config.APIConfig)) *mcpFixture {
+	t.Helper()
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	t.Cleanup(cleanup)
@@ -56,6 +63,9 @@ func newMCPFixture(t *testing.T) *mcpFixture {
 	cfg.AdminAccessTTLMinutes = 15
 	cfg.AdminRefreshTTLDays = 30
 	cfg.AdminBcryptCost = 4
+	if configure != nil {
+		configure(cfg)
+	}
 	s := NewServer(cfg, logger.New("api-test", "error"), metrics.NewRegistry("api-test"), dbClient)
 	if s.mcpErr != nil {
 		t.Fatal(s.mcpErr)

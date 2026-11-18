@@ -14,6 +14,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 const (
@@ -157,9 +158,13 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 // consistent with the in-progress purge session.
 func (p *purger) claimNextTombstonedMonitor(ctx context.Context, conn *sql.Conn) (*uuid.UUID, error) {
 	var id uuid.UUID
+	// A deleted workspace's monitors are the workspace purge's
+	// (purger_tenants.go), which holds its own lock: two purges deleting the
+	// same rows would only contend.
 	err := conn.QueryRowContext(ctx, `
 		SELECT id FROM monitors
 		WHERE deleted_at IS NOT NULL
+		  AND NOT `+tenancy.DeletedTenantSQL("monitors.tenant_id")+`
 		ORDER BY deleted_at ASC
 		LIMIT 1
 	`).Scan(&id)

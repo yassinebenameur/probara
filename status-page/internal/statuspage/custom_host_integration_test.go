@@ -236,3 +236,64 @@ func TestCustomDomains(t *testing.T) {
 		}
 	})
 }
+
+// A deleted workspace's verified custom domain stops being served at once:
+// every route on it answers exactly like a hostname nobody claimed, both
+// before and after the host table reloads.
+func TestCustomDomains_DeletedWorkspace(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenant := testutil.InsertTenant(ctx, t, dbClient, "custom-domains-deleted")
+	page := testutil.InsertStatusPage(ctx, t, dbClient, tenant, "gone", "Gone Status")
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO status_page_domains (status_page_id, hostname, verification_token, status)
+		VALUES ($1, 'status.gone.example.com', 't', 'verified')`, page); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient))
+	cfg := &config.StatusPageConfig{StatusPageBaseURL: "https://status.platform.example.com"}
+	h := NewHandlers(svc, cfg, logger.New("status-page", "error"), NewHub(), newRenderCache(time.Minute), nil)
+	handler := h.CustomHosts(h.routes(http.NotFoundHandler()))
+	serve := func(method, host, path string) *httptest.ResponseRecorder {
+		req := notFoundRequest(method, "http://"+host+path)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := serve(http.MethodGet, "status.gone.example.com", "/"); rec.Code != http.StatusOK {
+		t.Fatalf("before the workspace is deleted = %d", rec.Code)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE tenants SET deleted_at = NOW() WHERE id = $1`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	paths := append([]string{}, customHostNotFound...)
+	for _, row := range customHostRouteTable {
+		paths = append(paths, row.path)
+	}
+	compare := func(stage string) {
+		t.Helper()
+		for _, p := range paths {
+			for _, method := range []string{http.MethodGet, http.MethodPost} {
+				gone := serve(method, "status.gone.example.com", p)
+				unknown := serve(method, "status.nobody.example.com", p)
+				if gone.Code != http.StatusNotFound || gone.Code != unknown.Code || gone.Body.String() != unknown.Body.String() || !equalHeaders(gone.Header(), unknown.Header()) {
+					t.Errorf("%s: %s %s = %d %q %v, unknown host %d %q %v", stage, method, p,
+						gone.Code, gone.Body.String(), gone.Header(), unknown.Code, unknown.Body.String(), unknown.Header())
+				}
+			}
+		}
+	}
+	// The table still lists the host: the page access check refuses it.
+	compare("before the table reloads")
+	h.hosts.Invalidate()
+	if _, known, _ := h.hosts.Lookup(ctx, "status.gone.example.com"); known {
+		t.Fatal("a deleted workspace's hostname is still in the table")
+	}
+	compare("after the table reloads")
+}
