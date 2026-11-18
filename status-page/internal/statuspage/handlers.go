@@ -111,6 +111,12 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		h.HandleUnlock(w, r, slug)
 		return
 	}
+	// A subscriber mail's links work whatever the page's visibility became;
+	// they never read the page (subscribe.go).
+	if isSubscriptionLinkRoute(rest) {
+		h.handleSubscriptionLink(w, r, slug, rest)
+		return
+	}
 
 	// The visibility gate runs before the method guard, every sub-route and
 	// the render cache (access.go). From here on, routes write through aw,
@@ -132,9 +138,8 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	// route below is read-only, so the GET guard sits here rather than above
 	// the sub-routing.
 	isPushRoute := rest == "/push/subscribe" || rest == "/push/unsubscribe"
-	// The email subscription routes (subscribe.go) check their own methods.
-	isSubscriptionRoute := rest == subscribeSuffix || rest == subscriptionSuffix || rest == confirmSuffix || rest == unsubscribeSuffix
-	if !isPushRoute && !isSubscriptionRoute && r.Method != http.MethodGet {
+	// The subscribe form's target (subscribe.go) checks its own method.
+	if !isPushRoute && rest != subscribeSuffix && r.Method != http.MethodGet {
 		http.Error(aw, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}

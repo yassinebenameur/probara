@@ -34,7 +34,11 @@ type Sender interface {
 // recipient (a List-Unsubscribe link carrying that subscriber's token) is
 // sent as one Message per recipient.
 type Message struct {
-	To          []string
+	To []string
+	// FromName, when set, is the From header's display name for this
+	// message (a status page's name on its subscriber mail); the address is
+	// always the mailer's configured sender. Empty: the configured name.
+	FromName    string
 	Subject     string
 	Text        string
 	HTML        string
@@ -73,6 +77,7 @@ const (
 	maxHeaderValueLen = 900
 	maxFilenameLen    = 255
 	maxContentTypeLen = 255
+	maxFromNameLen    = 200
 )
 
 // RecipientFailure is one recipient a SendMessage could not reach.
@@ -138,6 +143,12 @@ func (m Message) Validate() error {
 	}
 	if hasControl(m.Subject) {
 		return invalid("subject contains a control character")
+	}
+	if hasControl(m.FromName) {
+		return invalid("sender name contains a control character")
+	}
+	if len(m.FromName) > maxFromNameLen {
+		return invalid("sender name is longer than %d bytes", maxFromNameLen)
 	}
 	if strings.TrimSpace(m.Text) == "" {
 		return invalid("a plain-text body is required")

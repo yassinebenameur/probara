@@ -240,6 +240,17 @@ secrets:
   statusPageSessionSecret: ""
   statusPageSessionSecretExistingSecret: ""
   statusPageSessionSecretExistingSecretKey: status_page_session_secret
+  # Shared by the api and status-page services
+  # (STATUS_PAGE_INTERNAL_TOKEN, canonical key status_page_internal_token):
+  # the status page presents it when it forwards a visitor's email
+  # subscription, and the API's subscribe and confirm routes answer nothing
+  # else. At least 32 characters. Left empty with a chart-managed
+  # adminJwtSecret it is derived like statusPageSessionSecret above; with an
+  # external JWT secret set it (or a Secret below), or no page can take
+  # email subscribers. Rotating it only fails requests in flight.
+  statusPageInternalToken: ""
+  statusPageInternalTokenExistingSecret: ""
+  statusPageInternalTokenExistingSecretKey: status_page_internal_token
   # One-time code the first-admin form asks for (BOOTSTRAP_SETUP_CODE,
   # canonical key bootstrap_setup_code, api only). Set it when the UI is
   # reachable before you create the first administrator, so nobody else can

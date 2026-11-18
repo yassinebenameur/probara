@@ -18,12 +18,13 @@ CREATE TABLE status_page_notification_outbox (
     status_page_id        UUID NOT NULL REFERENCES status_pages(id) ON DELETE CASCADE,
     event_kind            TEXT NOT NULL CHECK (event_kind IN (
                               'incident_published', 'incident_updated', 'incident_resolved',
-                              'maintenance_scheduled', 'maintenance_started')),
+                              'maintenance_scheduled', 'maintenance_started', 'maintenance_cancelled')),
     incident_id           UUID REFERENCES incidents(id) ON DELETE CASCADE,
     -- The public update an incident_updated row announces.
     timeline_entry_id     UUID REFERENCES incident_timeline_entries(id) ON DELETE CASCADE,
     maintenance_window_id UUID REFERENCES maintenance_windows(id) ON DELETE CASCADE,
-    -- The occurrence a maintenance_started row announces.
+    -- The occurrence a maintenance_started row announces, or the one a
+    -- maintenance_cancelled row withdraws.
     occurrence_starts_at  TIMESTAMPTZ,
     -- Identifies the event within (page, kind), so a sweep that runs on
     -- every API replica inserts each event once (ON CONFLICT DO NOTHING).
@@ -46,6 +47,8 @@ CREATE INDEX idx_sp_notification_outbox_pending
 CREATE INDEX idx_sp_notification_outbox_recent
     ON status_page_notification_outbox (created_at);
 CREATE INDEX idx_sp_notification_outbox_tenant ON status_page_notification_outbox (tenant_id);
+CREATE INDEX idx_sp_notification_outbox_page
+    ON status_page_notification_outbox (status_page_id, created_at DESC);
 CREATE INDEX idx_sp_notification_outbox_incident
     ON status_page_notification_outbox (incident_id) WHERE incident_id IS NOT NULL;
 CREATE INDEX idx_sp_notification_outbox_window

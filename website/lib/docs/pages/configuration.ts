@@ -723,7 +723,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The API also mails [scheduled SLA reports](/docs/slas/#schedules), which additionally need `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; without all three no schedule can be enabled. It also mails [status-page email subscribers](/docs/status-pages/#email-subscribers), which need those three plus `STATUS_PAGE_BASE_URL` on the API; without them no page can turn subscriptions on. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
+            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The API also mails [scheduled SLA reports](/docs/slas/#schedules), which additionally need `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; without all three no schedule can be enabled. It also mails [status-page email subscribers](/docs/status-pages/#email-subscribers), which need those three plus `STATUS_PAGE_BASE_URL` and `STATUS_PAGE_INTERNAL_TOKEN` on the API; without them no page can turn subscriptions on. Subscriber mail is sent in the status page\'s name (its title as the From display name, the address still `SMTP_FROM`). The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
         },
         {
           type: 'table',
@@ -803,6 +803,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`STATUS_PAGE_INTERNAL_API_URL`',
               '`STATUS_PAGE_API_BASE_URL` when empty',
               'Where the status service forwards visitors\' [email subscription](/docs/status-pages/#email-subscribers) requests (the API stores subscribers; the status service stays read-only). Empty, and no `STATUS_PAGE_API_BASE_URL` either: no page shows a subscribe form. Helm sets it to the in-cluster API service; Compose to `http://api:8080`.',
+            ],
+            [
+              '`STATUS_PAGE_INTERNAL_TOKEN`',
+              'Empty; at least 32 characters when set, or the service refuses to start',
+              'API and status service, the same value on both. The status service presents it when it forwards a visitor\'s [email subscription](/docs/status-pages/#email-subscribers); the API\'s subscribe and confirm routes answer nothing else. Unset: no page shows a subscribe form, and turning subscriptions on is refused. The release installer generates it; base Compose and `scripts/start-local-services.sh` use a development value; Helm derives one from a chart-managed `adminJwtSecret` unless `secrets.statusPageInternalToken` (or `statusPageInternalTokenExistingSecret`, canonical key `status_page_internal_token`) is set.',
             ],
             [
               '`STATUS_PAGE_BASE_URL` (API)',

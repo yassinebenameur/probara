@@ -284,20 +284,29 @@ or timezone changes.
 Status-page email subscribers are stored and mailed by the **API** too
 (`api/internal/services/pagesubscribers`); the status-page service stays
 read-only and only forwards a visitor's subscribe form and subscription
-links (`/public/status/{slug}/subscribe`, `/subscription…`, behind its
-visibility gate) to the public API routes `/api/v1/public/status-pages/{slug}/subscribe`
-and `/api/v1/public/status-page-subscriptions/{confirm,unsubscribe}`, with
-nothing that identifies the visitor (it throttles per client itself). What
+links (`/public/status/{slug}/subscribe` behind its visibility gate; the
+`/subscription…` link routes before it, answering from the token alone so
+unsubscribing survives a visibility change) to the public API routes
+`/api/v1/public/status-pages/{slug}/subscribe` and
+`/api/v1/public/status-page-subscriptions/{confirm,unsubscribe}`, with
+nothing that identifies the visitor (it throttles per client itself). It
+presents `STATUS_PAGE_INTERNAL_TOKEN`, and the API answers subscribe and
+confirm for no other caller; one-click unsubscribe stays public. What
 subscribers hear about comes only from the notification outbox
 (`status_page_notification_outbox`, written by `api/internal/services/pagenotify`
 in the same transaction as each trigger: an incident published on a page, a
-public update, a resolution, a maintenance window scheduled). Every API
+public update, a resolution, a maintenance window scheduled or withdrawn).
+Automatically created incidents are published with a per-page public title
+(`incident_status_page_publications.public_title`), which every public
+surface reads instead of the incident's own. Every API
 replica runs the subscriber runner (15-second loop, woken by a subscribe):
-it sends owed confirmation mails, plans each pending outbox row once (`FOR
+it plans each pending outbox row once (`FOR
 UPDATE SKIP LOCKED`; content rendered and one
 `status_page_notification_deliveries` row per confirmed subscriber, in one
 transaction) and sends deliveries round-robin across rows with the report
-runner's `claimed` → `sending` → `sent`/`uncertain` states. The same runner
+runner's `claimed` → `sending` → `sent`/`uncertain` states, then sends owed
+confirmation mails (after notices, capped per pass, per inbox and per hour
+installation-wide). The same runner
 publishes outages to pages that opted into automatic publishing (through
 `shared/autoincident`, the alerter's automatic-incident lookup and lock),
 resolves them on recovery, and announces the start of announced one-off

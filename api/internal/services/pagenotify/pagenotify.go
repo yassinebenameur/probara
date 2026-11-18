@@ -13,7 +13,9 @@
 //   - IncidentUpdatedTx: a public update posted on an incident;
 //   - IncidentResolvedTx: an incident resolved;
 //   - MaintenanceScheduledTx: a maintenance window created, or its schedule
-//     or targets changed, while it still has an occurrence ahead.
+//     or targets changed, while it still has an occurrence ahead;
+//   - MaintenanceCancelledTx: an announced window deleted, or its one-off
+//     occurrence withdrawn before it started.
 //
 // maintenance_started rows come from the API runner's sweep
 // (pagesubscribers), which reads only the announced one-off windows. The
@@ -25,6 +27,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -39,6 +42,7 @@ const (
 	KindIncidentResolved     = "incident_resolved"
 	KindMaintenanceScheduled = "maintenance_scheduled"
 	KindMaintenanceStarted   = "maintenance_started"
+	KindMaintenanceCancelled = "maintenance_cancelled"
 )
 
 // scheduledLead is how far ahead an occurrence must start to be announced
@@ -132,4 +136,40 @@ func MaintenanceScheduledTx(ctx context.Context, tx Execer, tenantID, windowID u
 		return fmt.Errorf("enqueue maintenance notice: %w", err)
 	}
 	return nil
+}
+
+// MaintenanceCancelledTx records that the window, announced as scheduled
+// on some pages, will not run the occurrence that starts at occurrence (or
+// stopped it early, when it had started): on every page it was announced
+// on. Only the subscribers who were mailed that announcement are mailed
+// this (pagesubscribers plans it so). Call it in the transaction that
+// deletes the window or withdraws the occurrence; the window row must stay
+// (maintenancewindows keeps an announced window, soft-deleted).
+func MaintenanceCancelledTx(ctx context.Context, tx Execer, tenantID, windowID uuid.UUID, occurrence time.Time) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO status_page_notification_outbox
+			(tenant_id, status_page_id, event_kind, maintenance_window_id, occurrence_starts_at, dedupe_key)
+		SELECT DISTINCT o.tenant_id, o.status_page_id, $3, o.maintenance_window_id, $4::timestamptz,
+			o.maintenance_window_id::text || '@' || to_char($4::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')
+		FROM status_page_notification_outbox o
+		WHERE o.tenant_id = $1 AND o.maintenance_window_id = $2 AND o.event_kind = $5
+		ON CONFLICT DO NOTHING
+	`, tenantID, windowID, KindMaintenanceCancelled, occurrence.UTC(), KindMaintenanceScheduled); err != nil {
+		return fmt.Errorf("enqueue maintenance cancellation notice: %w", err)
+	}
+	return nil
+}
+
+// Announced reports whether the window was ever announced on a page, so a
+// delete keeps it (soft-deleted) for its cancellation notice.
+func Announced(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, tenantID, windowID uuid.UUID) (bool, error) {
+	var ok bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM status_page_notification_outbox
+		WHERE tenant_id = $1 AND maintenance_window_id = $2 AND event_kind = $3)`, tenantID, windowID, KindMaintenanceScheduled).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("check maintenance announcement: %w", err)
+	}
+	return ok, nil
 }

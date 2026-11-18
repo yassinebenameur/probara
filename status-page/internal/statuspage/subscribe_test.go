@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/config"
+	"github.com/yassinebenameur/probara/shared/pageaccess"
 	"github.com/yassinebenameur/probara/shared/securityheaders"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
@@ -51,8 +53,11 @@ func subscribeFixture(t *testing.T, status int, body string) (*accessFixture, *f
 	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
 	f.h.config.InternalAPIURL = srv.URL
+	f.h.config.InternalToken = testInternalToken
 	return f, api
 }
+
+const testInternalToken = "internal-token-0123456789abcdef0123456789"
 
 func formPost(path string, form url.Values) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
@@ -79,6 +84,9 @@ func TestSubscribe_ForwardsTheAddressOnly(t *testing.T) {
 	got := api.requests[0]
 	if got.path != "/api/v1/public/status-pages/open/subscribe" || got.body["email"] != "Ops@Example.com" || len(got.body) != 1 {
 		t.Fatalf("forwarded %+v", got)
+	}
+	if got.headers.Get(pageaccess.ForwardTokenHeader) != testInternalToken {
+		t.Fatal("the forward does not carry the internal token")
 	}
 	for _, h := range []string{"Cookie", "X-Forwarded-For", "X-Real-Ip", "Forwarded"} {
 		if got.headers.Get(h) != "" {
@@ -170,6 +178,11 @@ func TestSubscribe_MethodsOriginAndNoAPI(t *testing.T) {
 	if len(api.requests) != 0 {
 		t.Fatalf("forwarded %d", len(api.requests))
 	}
+	f.h.config.InternalToken = ""
+	if rec := f.do(formPost("/public/status/open/subscribe", url.Values{"email": {"a@example.com"}})); rec.Code != http.StatusNotFound {
+		t.Fatalf("no internal token = %d", rec.Code)
+	}
+	f.h.config.InternalToken = testInternalToken
 	f.h.config.InternalAPIURL = ""
 	if rec := f.do(formPost("/public/status/open/subscribe", url.Values{"email": {"a@example.com"}})); rec.Code != http.StatusNotFound {
 		t.Fatalf("no API configured = %d", rec.Code)
@@ -223,7 +236,7 @@ func TestSubscriptionLanding(t *testing.T) {
 	f, api := subscribeFixture(t, http.StatusOK, `{}`)
 	rec := f.get("/public/status/open/subscription?action=unsubscribe")
 	body := rec.Body.String()
-	if rec.Code != http.StatusOK || !strings.Contains(body, `action="/public/status/open/subscription/unsubscribe"`) {
+	if rec.Code != http.StatusOK || !strings.Contains(body, `action="subscription/unsubscribe"`) || strings.Contains(body, "/public/status/open") {
 		t.Fatalf("= %d %s", rec.Code, body)
 	}
 	csp := rec.Header().Get(securityheaders.HeaderCSP)
@@ -239,7 +252,7 @@ func TestSubscriptionLanding(t *testing.T) {
 	if len(api.requests) != 0 {
 		t.Fatal("a GET forwarded something")
 	}
-	if rec := f.get("/public/status/open/subscription?action=confirm"); !strings.Contains(rec.Body.String(), "/subscription/confirm") {
+	if rec := f.get("/public/status/open/subscription?action=confirm"); !strings.Contains(rec.Body.String(), `action="subscription/confirm"`) {
 		t.Fatal("confirm landing has no confirm form")
 	}
 }
@@ -250,6 +263,10 @@ func TestSubscriptionsOffered(t *testing.T) {
 	h := &Handlers{config: nil}
 	if h.subscriptionsOffered("public", true) {
 		t.Fatal("offered without an API to forward to")
+	}
+	h = &Handlers{config: &config.StatusPageConfig{InternalAPIURL: "http://api:8080"}}
+	if h.subscriptionsOffered("public", true) {
+		t.Fatal("offered without the internal token")
 	}
 	f, _ := subscribeFixture(t, http.StatusOK, `{}`)
 	for _, c := range []struct {
@@ -281,5 +298,45 @@ func TestDefaultTemplate_SubscribeForm(t *testing.T) {
 	}
 	if strings.Contains(html, "subscribeSection") {
 		t.Fatal("subscribe form rendered while off")
+	}
+}
+
+// The links in an old mail keep working on a page that turned password or
+// private, and show nothing of it but the title the API returns for a
+// valid token; for an invalid one a private page and a missing slug answer
+// alike.
+func TestSubscriptionLinks_WorkOnGatedPages(t *testing.T) {
+	f, api := subscribeFixture(t, http.StatusOK, `{"state":"unsubscribed","page_title":"Internal"}`)
+	for _, slug := range []string{"locked", "internal"} {
+		if rec := f.get("/public/status/" + slug + "/subscription?action=unsubscribe"); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "Locked") {
+			t.Fatalf("%s landing = %d", slug, rec.Code)
+		}
+		rec := f.do(formPost("/public/status/"+slug+"/subscription/unsubscribe", url.Values{"token": {"tok"}}))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "You are unsubscribed") {
+			t.Fatalf("%s unsubscribe = %d %s", slug, rec.Code, rec.Body.String())
+		}
+	}
+	if len(api.requests) != 2 {
+		t.Fatalf("forwarded %d", len(api.requests))
+	}
+	api.status, api.body = http.StatusNotFound, `{"state":"invalid"}`
+	a := f.do(formPost("/public/status/internal/subscription/unsubscribe", url.Values{"token": {"bad"}}))
+	b := f.do(formPost("/public/status/no-such-page/subscription/unsubscribe", url.Values{"token": {"bad"}}))
+	if a.Code != b.Code || withoutNonce(a.Body.String()) != withoutNonce(b.Body.String()) {
+		t.Fatalf("private %d vs missing %d", a.Code, b.Code)
+	}
+}
+
+// The link routes are charged to the client alone: one client spending the
+// page's budget (or every visitor behind an untrusted proxy sharing it)
+// cannot block another's unsubscribe.
+func TestSubscriptionLinks_NotChargedToThePage(t *testing.T) {
+	f, _ := subscribeFixture(t, http.StatusOK, `{"state":"unsubscribed"}`)
+	for i := 0; i < subscribePerPageBurst+5; i++ {
+		req := formPost("/public/status/open/subscription/unsubscribe", url.Values{"token": {"tok"}})
+		req.RemoteAddr = "10.1.2.3:1234" // an untrusted private peer: no client bucket
+		if rec := f.do(req); rec.Code != http.StatusOK {
+			t.Fatalf("request %d = %d", i, rec.Code)
+		}
 	}
 }

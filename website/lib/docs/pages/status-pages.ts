@@ -242,7 +242,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every route under `/public/status/{slug}/` — those above and any added later — passes the page's [visibility](#visibility) check before it does anything else, including serving the cached render. The only exceptions are `/unlock`, which is how a visitor gets through the check, and `sw.js`, which serves no page data.",
+            "Every route under `/public/status/{slug}/` — those above and any added later — passes the page's [visibility](#visibility) check before it does anything else, including serving the cached render. The only exceptions are `/unlock`, which is how a visitor gets through the check, `sw.js`, which serves no page data, and the subscription link routes (`/subscription`, `…/confirm`, `…/unsubscribe`), so unsubscribing works whatever the page's visibility became: they never read the page, answer a private page and a missing slug alike, and show nothing but what the API returns for a valid token.",
         },
         {
           type: "paragraph",
@@ -553,19 +553,21 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ["An announced one-off maintenance window starts", "Sent once, at the start"],
             ["Each occurrence of a recurring window", "Not sent: the window was announced once, with its rule"],
             ["A window that starts immediately (a snooze)", "Not sent"],
+            ["An announced window is deleted, or its one-off occurrence is withdrawn before it starts", "Sent, only to the subscribers who were emailed the announcement: \"Maintenance cancelled\" (or \"ended early\" when it had started)"],
             ["A monitor outage published by [automatic publishing](#auto-publish)", "Sent, like an operator's publication, and its resolution"],
           ],
         },
         {
           type: "list",
           items: [
-            "Every email goes to one subscriber, in the page's name and accent colour, as HTML and plain text, links back to the page, and carries the subscriber's own unsubscribe link in the body and as a one-click `List-Unsubscribe` header (RFC 8058). Unsubscribing deletes the address.",
+            "Every email goes to one subscriber, sent in the page's name (its title as the sender name; the address stays the installation's `SMTP_FROM`) with its accent colour, as HTML and plain text, links back to the page, and carries the subscriber's own unsubscribe link in the body and as a one-click `List-Unsubscribe` header (RFC 8058). Unsubscribing deletes the address. It works from any email, whatever the page's visibility has become since.",
             "The subscribe form answers the same way for any address, new, waiting for confirmation, already subscribed or unsubscribed before: the page never tells whether an address is subscribed. Confirmation emails are sent in the background, so the answer's timing does not tell either.",
-            "An address gets at most 3 confirmation emails a day per page, however often it is submitted. A page takes at most 100 new addresses an hour and 10,000 subscribers in total; past either limit the form says the page is not accepting subscriptions, for every address. The status-page service also allows each visitor 5 subscription requests a minute.",
+            "Limits: an address gets at most 3 confirmation emails a day per page, and one inbox (its `+tag` aliases counted together) at most 5 a day across every page. A page takes at most 100 new addresses an hour (counted whatever became of them: confirming addresses as they arrive frees no room), at most 500 waiting for confirmation and 10,000 subscribers in total; past a page limit the form says the page is not accepting subscriptions, for every address. The installation sends at most 500 confirmation emails an hour; incident and maintenance emails always go first and are never held back by confirmations. The status-page service allows each visitor 5 subscription requests a minute, and each page 60 subscribe requests a minute (the confirmation and unsubscribe buttons count per visitor only).",
+            "The API accepts a subscription or a confirmation only from the status-page service, which presents `STATUS_PAGE_INTERNAL_TOKEN`: calling the API directly cannot skip the page's visibility check or the per-visitor limit.",
             "Only plain addresses are accepted (letters, digits and the usual symbols in dot-separated words, with a domain), so nothing a visitor types can reach an email header.",
             "Unconfirmed addresses are deleted 7 days after their last request.",
-            "Delivery is at most once per subscriber and event, retried with backoff on a temporary failure; a message whose sending was interrupted after the relay may have received it is not sent again. Events that could not be emailed within 6 hours (mail not configured, the API down) are dropped rather than sent late.",
-            "The settings page lists subscribers with their state, removes one, and exports them all as CSV; exports are recorded in the audit log, as are confirmations and unsubscribes (by a hash of the address, never the address).",
+            "Delivery is at most once per subscriber and event. A temporary failure is retried 1, 5, 30 minutes and 2 hours later; after the fifth failed attempt (about 2 hours 40 minutes after the first, the length of an SMTP outage it survives) the email is given up. A relay that refuses an address outright fails it at once, and a message whose sending was interrupted after the relay may have received it is not sent again. An event that could not be prepared for email within 6 hours (mail not configured, the API down) is not sent late. Each of these is logged as a warning and shown under Recent notices in the page's Subscribers panel (`GET …/subscribers/summary`).",
+            "Members with write access see the subscriber addresses: the list, removal one by one or in bulk (every subscriber, or those at one domain, confirmed by typing the page's slug) and the CSV export; viewers see the counts and recent notices only. Exports are recorded in the audit log, as are confirmations and unsubscribes (by a hash of the address, never the address).",
           ],
         },
         {
@@ -578,7 +580,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Email subscriptions need the API to send mail: `SMTP_HOST` and `SMTP_FROM`, `APP_BASE_URL` (one-click unsubscribe goes through the API there), `STATUS_PAGE_BASE_URL` (every link in a subscriber email points to the page there) and `PROBARA_SECRETS_KEY` (links are signed with it). Without them the setting cannot be turned on, and the settings page says what is missing. The status-page service forwards the form to the API (`STATUS_PAGE_INTERNAL_API_URL`; see [configuration](/docs/configuration/)) and stores nothing itself.",
+            "Email subscriptions need the API to send mail: `SMTP_HOST` and `SMTP_FROM`, `APP_BASE_URL` (one-click unsubscribe goes through the API there), `STATUS_PAGE_BASE_URL` (every link in a subscriber email points to the page there), `PROBARA_SECRETS_KEY` (links are signed with it) and `STATUS_PAGE_INTERNAL_TOKEN` on both the API and the status-page service. Without them the setting cannot be turned on, and the settings page says what is missing. The status-page service forwards the form to the API (`STATUS_PAGE_INTERNAL_API_URL`; see [configuration](/docs/configuration/)) and stores nothing itself.",
         },
         {
           type: "paragraph",
@@ -600,16 +602,17 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "With `auto_publish_incidents` on, a monitor the page shows that has been down for 5 minutes gets an incident published on the page, and the incident is resolved once the monitor recovers. Subscribers are emailed (and pushed to) as for an incident an operator publishes. The delay is fixed.",
+            "With `auto_publish_incidents` on, a monitor the page shows that has been down for 5 minutes gets an incident published on the page, and the incident is resolved once the monitor has stayed recovered for 10 minutes. Subscribers are emailed (and pushed to) as for an incident an operator publishes. Both delays are fixed.",
         },
         {
           type: "list",
           items: [
             "An outage is the monitor's open availability alert. The 5 minutes count from when it opened, or from its last reopening as a relapse.",
             "Nothing is published for a monitor in maintenance, one that is paused, one whose outage a [dependency](/docs/dependencies/) explains, or one already passing again while its recovery is confirmed.",
-            "Resolution waits for the alert to resolve, which happens only once the recovery is confirmed (\"mark up after N passes\").",
+            "Resolution waits for the alert to resolve, which happens only once the recovery is confirmed (\"mark up after N passes\"), and then 10 more minutes: a monitor that fails again meanwhile keeps the same incident open and nobody is emailed.",
+            "A monitor that fails again within an hour of its incident being resolved automatically reopens that incident with a public update (\"The disruption has returned\"), emailed as an update, instead of publishing a new one. A monitor flapping all day stays one incident.",
             "Nothing is published while an unresolved incident about the monitor is already on the page, and an outage is published at most once per page: if an operator takes the incident down or resolves it, it is not put back while that outage lasts.",
-            "The incident is the monitor's automatic incident, the same one the workspace setting \"create an incident when an alert fires\" opens, so a monitor never gets two. One created for publishing is titled \"Service disruption\" and names no monitor; the page lists the affected component under it by the name the page uses. An incident the alerter created earlier keeps its own title.",
+            "The incident is the monitor's automatic incident, the same one the workspace setting \"create an incident when an alert fires\" opens, so a monitor never gets two. Its own title names the internal monitor, so the page never shows it: every publication of an automatically created incident has a public title, \"Service disruption\" followed by the names the page gives the affected components (per page), and a neutral summary. The page, its feed and summary, subscriber email and browser notifications all show the public title. An operator can change a publication's public title from the incident's publish form (`public_title`); an incident an operator wrote keeps showing its own title unless one is set.",
             "Only automatically published incidents are resolved automatically; an operator publishing the same incident by hand makes it theirs.",
           ],
         },

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"mime"
+	netmail "net/mail"
 	"net/textproto"
 	"sort"
 	"strings"
@@ -135,6 +136,14 @@ func (m *SMTPMailer) SendMessage(ctx context.Context, msg mail.Message) error {
 		recipients = append(recipients, recipient{given: to, header: foldEncodedWords(addr.String()), envelope: addr.Address})
 	}
 
+	// A per-message display name is quoted and RFC 2047-encoded by
+	// net/mail, like the recipients, so a name with commas or angle
+	// brackets cannot add an address to the header.
+	fromHeader := ""
+	if name := strings.TrimSpace(msg.FromName); name != "" {
+		fromHeader = foldEncodedWords((&netmail.Address{Name: name, Address: m.cfg.From}).String())
+	}
+
 	var failed []mail.RecipientFailure
 	failRest := func(from int, err error) {
 		for _, r := range recipients[from:] {
@@ -166,6 +175,7 @@ func (m *SMTPMailer) SendMessage(ctx context.Context, msg mail.Message) error {
 		message := buildEmailMessage(emailMessage{
 			From:        m.cfg.From,
 			FromName:    m.cfg.FromName,
+			FromHeader:  fromHeader,
 			To:          []string{r.header},
 			Subject:     msg.Subject,
 			Text:        msg.Text,
@@ -262,10 +272,12 @@ func combineTemplateErrors(errs ...error) error {
 type emailMessage struct {
 	From     string
 	FromName string
-	To       []string
-	Subject  string
-	Text     string
-	HTML     string
+	// FromHeader, when set, is the whole From value (already encoded).
+	FromHeader string
+	To         []string
+	Subject    string
+	Text       string
+	HTML       string
 	// Headers and Attachments come only from SendMessage, already checked by
 	// mail.Message.Validate (no CR/LF, no mailer-owned field names).
 	Headers     map[string]string
@@ -283,7 +295,7 @@ type emailMessage struct {
 // any UTF-8 content (accented monitor names, σ, →) without per-character work.
 func buildEmailMessage(msg emailMessage) string {
 	headers := []string{
-		"From: " + formatAddress(msg.From, msg.FromName),
+		"From: " + fromValue(msg),
 		"To: " + strings.Join(msg.To, ", "),
 		"Subject: " + encodeHeader(msg.Subject),
 		"Date: " + time.Now().Format(time.RFC1123Z),
@@ -367,6 +379,14 @@ func attachmentContentType(contentType string) string {
 		return formatted
 	}
 	return fallback
+}
+
+// fromValue is the message's From header value.
+func fromValue(msg emailMessage) string {
+	if msg.FromHeader != "" {
+		return msg.FromHeader
+	}
+	return formatAddress(msg.From, msg.FromName)
 }
 
 // formatAddress renders a From header, RFC 2047-encoding the display name when

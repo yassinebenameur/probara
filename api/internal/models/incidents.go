@@ -107,6 +107,12 @@ type IncidentPublication struct {
 	PublishedAt     time.Time   `json:"published_at"`
 	UnpublishedAt   *time.Time  `json:"unpublished_at,omitempty"`
 	MonitorIDs      []uuid.UUID `json:"monitor_ids"`
+	// PublicTitle is what the page shows instead of the incident's own
+	// title; absent when it shows the incident's own. An automatically
+	// created incident always has one (its own title names the monitor).
+	PublicTitle *string `json:"public_title,omitempty"`
+	// AutoPublished: put on the page by automatic outage publishing.
+	AutoPublished bool `json:"auto_published"`
 }
 
 // IncidentDetail represents an incident with its timeline.
@@ -232,4 +238,10 @@ type AttachIncidentMonitorRequest struct {
 // UpsertIncidentPublicationRequest represents a request to publish an incident to a status page.
 type UpsertIncidentPublicationRequest struct {
 	MonitorIDs []string `json:"monitor_ids"`
+	// PublicTitle sets what the page shows instead of the incident's own
+	// title (1-200 characters). Absent keeps the publication's current one;
+	// "" goes back to the default: the incident's own title, or for an
+	// automatically created incident "Service disruption" with the page's
+	// component names.
+	PublicTitle *string `json:"public_title,omitempty"`
 }

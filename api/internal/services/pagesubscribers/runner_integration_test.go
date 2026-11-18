@@ -30,9 +30,9 @@ func (f *fixture) confirmedMany(t *testing.T, n int) []string {
 	for i := 0; i < n; i++ {
 		a := fmt.Sprintf("sub%03d@example.com", i)
 		_, err := f.db.ExecContext(f.ctx, `
-			INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, state, confirmed_at)
-			VALUES ($1, $2, $3, $4, 'confirmed', NOW())
-		`, f.tenantID, f.pageID, a, AddressHash(a))
+			INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, inbox_hash, state, confirmed_at)
+			VALUES ($1, $2, $3, $4, $5, 'confirmed', NOW())
+		`, f.tenantID, f.pageID, a, AddressHash(a), InboxHash(a))
 		require.NoError(t, err)
 		out = append(out, a)
 	}

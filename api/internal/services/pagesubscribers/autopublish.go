@@ -36,19 +36,40 @@ import (
 //
 // The incident is the monitor's open automatic incident
 // (shared/autoincident, the one the alerter's "create incident on fire"
-// opens too), created with neutral public wording when there is none. It is
-// resolved automatically once every alert linked to it is resolved, while
-// an automatic publication of it is still on a page.
+// opens too), created when there is none. Its own title names the internal
+// monitor, so every publication of it carries a public title
+// (incidents.PublishTx: "Service disruption: <the page's component
+// names>"); nothing public reads the incident's own title or summary.
+//
+// It is resolved automatically once every alert linked to it, and every
+// availability alert of its monitors, has been resolved for
+// autoResolveSettle, while an automatic publication of it is still on a
+// page. A monitor that fails again within reopenWithin of that resolution
+// reopens the same incident with a public update instead of publishing a
+// new one, so a flapping monitor does not mail subscribers a new incident
+// per cycle.
 
 // AutoPublishDelay is how long an outage lasts before it is published.
 const AutoPublishDelay = 5 * time.Minute
 
-// The wording of an incident automatic publishing creates. It is public:
-// it names no monitor (the page lists the affected components under it).
 const (
-	autoIncidentTitle   = "Service disruption"
-	autoIncidentSummary = "We are seeing a disruption on the components listed below and are looking into it. This notice was published automatically."
-	maxOutagesPerTick   = 50
+	// autoResolveSettle holds the automatic resolution after the outage's
+	// alerts resolved: a monitor that fails again meanwhile keeps the same
+	// incident open, and nothing is mailed.
+	autoResolveSettle = 10 * time.Minute
+	// reopenWithin: a monitor failing again this soon after its incident was
+	// resolved automatically reopens that incident.
+	reopenWithin = time.Hour
+	// The incident automatic publishing creates is internal (the alerter
+	// names its own the same way); the pages show the publication's public
+	// title instead.
+	autoIncidentTitle   = "Monitor outage"
+	autoIncidentSummary = "Created to publish a monitor outage automatically."
+	// autoResolvedMessage marks the resolution reopenWithin may undo.
+	autoResolvedMessage = "Incident resolved automatically: its monitors recovered"
+	// reopenedUpdate is the public update a reopened incident gets.
+	reopenedUpdate    = "The disruption has returned. We are looking into it."
+	maxOutagesPerTick = 50
 )
 
 // outagePagesSQL selects (alert, tenant, monitor, page) for every outage due
@@ -157,9 +178,17 @@ func (s *Service) publishOutage(ctx context.Context, o outage) error {
 		return tx.Commit()
 	}
 
-	incidentID, created, err := autoincident.FindOrCreateTx(ctx, tx, o.tenantID, o.monitorID, autoIncidentTitle, autoIncidentSummary)
+	// A recent automatically resolved incident of this monitor comes back
+	// rather than a new one opening.
+	incidentID, reopened, err := s.reopenRecentTx(ctx, tx, o)
 	if err != nil {
 		return err
+	}
+	created := false
+	if !reopened {
+		if incidentID, created, err = autoincident.FindOrCreateTx(ctx, tx, o.tenantID, o.monitorID, autoIncidentTitle, autoIncidentSummary); err != nil {
+			return err
+		}
 	}
 	if _, err := autoincident.LinkAlertTx(ctx, tx, incidentID, o.alertID); err != nil {
 		return err
@@ -176,8 +205,12 @@ func (s *Service) publishOutage(ctx context.Context, o outage) error {
 		}
 	}
 	for _, pageID := range pages {
-		if _, err := incidents.PublishTx(ctx, tx, o.tenantID, incidentID, pageID, []uuid.UUID{o.monitorID}, true); err != nil {
+		announced, err := incidents.PublishTx(ctx, tx, o.tenantID, incidentID, pageID, []uuid.UUID{o.monitorID}, incidents.PublishOptions{Auto: true})
+		if err != nil {
 			return err
+		}
+		if !announced {
+			continue // already on the page (the reopened incident)
 		}
 		if err := incidentrecovery.InsertTimelineEntryTx(ctx, tx, o.tenantID, incidentID, incidentrecovery.SystemEntryType,
 			"Incident published to status page automatically", map[string]any{
@@ -193,8 +226,51 @@ func (s *Service) publishOutage(ctx context.Context, o outage) error {
 	return nil
 }
 
+// reopenRecentTx reopens the monitor's incident that was resolved
+// automatically within reopenWithin and is still on a page, when the
+// monitor has no open automatic incident: back to investigating, with a
+// public update (which mails the pages' subscribers as an update). Call it
+// under the monitor's automatic-incident lock.
+func (s *Service) reopenRecentTx(ctx context.Context, tx *sql.Tx, o outage) (uuid.UUID, bool, error) {
+	var id uuid.UUID
+	err := tx.QueryRowContext(ctx, `
+		SELECT i.id FROM incidents i
+		WHERE i.tenant_id = $1 AND i.is_auto_created AND i.auto_monitor_id = $2
+		  AND i.state = 'resolved' AND i.resolved_at > NOW() - make_interval(secs => $3)
+		  AND NOT EXISTS (SELECT 1 FROM incidents open
+			WHERE open.tenant_id = $1 AND open.is_auto_created AND open.auto_monitor_id = $2 AND open.state <> 'resolved')
+		  AND EXISTS (SELECT 1 FROM incident_status_page_publications isp
+			WHERE isp.incident_id = i.id AND isp.auto_published AND isp.unpublished_at IS NULL)
+		  AND EXISTS (SELECT 1 FROM incident_timeline_entries te
+			WHERE te.incident_id = i.id AND te.message = $4 AND te.created_at >= i.resolved_at)
+		ORDER BY i.resolved_at DESC
+		LIMIT 1
+		FOR UPDATE
+	`, o.tenantID, o.monitorID, reopenWithin.Seconds(), autoResolvedMessage).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("find recent automatic incident: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE incidents SET state = 'investigating', resolved_at = NULL, updated_at = NOW() WHERE id = $1`, id); err != nil {
+		return uuid.Nil, false, fmt.Errorf("reopen incident: %w", err)
+	}
+	if err := incidentrecovery.InsertTimelineEntryTx(ctx, tx, o.tenantID, id, "public_update", reopenedUpdate, map[string]any{
+		"alert_id": o.alertID.String(), "monitor_id": o.monitorID.String(), "reopened": true,
+	}); err != nil {
+		return uuid.Nil, false, err
+	}
+	if err := pagenotify.IncidentUpdatedTx(ctx, tx, o.tenantID, id); err != nil {
+		return uuid.Nil, false, err
+	}
+	return id, true, nil
+}
+
 // autoResolveCandidatesSQL selects unresolved incidents that an automatic
-// publication still shows and whose linked alerts are all resolved.
+// publication still shows, whose linked alerts all resolved at least $3
+// seconds ago, and none of whose monitors has an open availability alert
+// (a monitor failing again within the settle window keeps it open).
 const autoResolveCandidatesSQL = `
 	SELECT DISTINCT i.id, i.tenant_id
 	FROM incidents i
@@ -203,14 +279,17 @@ const autoResolveCandidatesSQL = `
 	WHERE i.state <> 'resolved'
 	  AND EXISTS (SELECT 1 FROM incident_alerts ia WHERE ia.incident_id = i.id)
 	  AND NOT EXISTS (SELECT 1 FROM incident_alerts ia JOIN alerts al ON al.id = ia.alert_id
-		WHERE ia.incident_id = i.id AND al.status IN ('active', 'acknowledged'))
+		WHERE ia.incident_id = i.id AND (al.status IN ('active', 'acknowledged')
+			OR COALESCE(al.resolved_at, al.updated_at) > NOW() - make_interval(secs => $3)))
+	  AND NOT EXISTS (SELECT 1 FROM incident_monitors im JOIN alerts al ON al.monitor_id = im.monitor_id
+		WHERE im.incident_id = i.id AND al.kind = 'availability' AND al.status IN ('active', 'acknowledged'))
 	  AND ($1::uuid IS NULL OR i.id = $1::uuid)
 	LIMIT $2`
 
 // autoResolve resolves automatically published incidents whose outage
 // ended. Alerts resolve only on a confirmed recovery, so this waits for it.
 func (s *Service) autoResolve(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, autoResolveCandidatesSQL, nil, maxOutagesPerTick)
+	rows, err := s.db.QueryContext(ctx, autoResolveCandidatesSQL, nil, maxOutagesPerTick, autoResolveSettle.Seconds())
 	if err != nil {
 		return fmt.Errorf("find recovered published outages: %w", err)
 	}
@@ -253,7 +332,7 @@ func (s *Service) resolveRecovered(ctx context.Context, incidentID, tenantID uui
 		return fmt.Errorf("lock incident: %w", err)
 	}
 	var still uuid.UUID
-	err = tx.QueryRowContext(ctx, autoResolveCandidatesSQL, incidentID, 1).Scan(&still, new(uuid.UUID))
+	err = tx.QueryRowContext(ctx, autoResolveCandidatesSQL, incidentID, 1, autoResolveSettle.Seconds()).Scan(&still, new(uuid.UUID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // an alert reopened, or an operator took the publication over
 	}
@@ -266,7 +345,7 @@ func (s *Service) resolveRecovered(ctx context.Context, incidentID, tenantID uui
 		return fmt.Errorf("resolve incident: %w", err)
 	}
 	if err := incidentrecovery.InsertTimelineEntryTx(ctx, tx, tenantID, incidentID, incidentrecovery.SystemEntryType,
-		"Incident resolved automatically: its monitors recovered", nil); err != nil {
+		autoResolvedMessage, nil); err != nil {
 		return err
 	}
 	if err := pagenotify.IncidentResolvedTx(ctx, tx, tenantID, incidentID); err != nil {

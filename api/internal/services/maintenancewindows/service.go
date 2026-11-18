@@ -377,17 +377,23 @@ func (s *Service) Update(ctx context.Context, tenantID, windowID uuid.UUID, req 
 		}
 	}
 
+	targetsChanged := false
 	if req.MonitorIDs != nil {
 		if err := validateMonitorIDsTx(ctx, tx, tenantID, monitorIDs); err != nil {
+			return nil, err
+		}
+		// The operator UI sends the whole target list on every save, so
+		// only a list that differs from the stored one is a change.
+		if targetsChanged, err = targetSetDiffersTx(ctx, tx, windowID, monitorIDs); err != nil {
 			return nil, err
 		}
 		if err := maintenance.Retarget(ctx, tx, windowID, monitorIDs, now); err != nil {
 			return nil, err
 		}
 	}
-	// A changed schedule or target set is announced again; a title or
-	// description edit is not.
-	if !next.SameAs(old) || req.MonitorIDs != nil {
+	// A changed schedule or target set is announced again to status-page
+	// subscribers; a title or description edit is not.
+	if !next.SameAs(old) || targetsChanged {
 		if err := pagenotify.MaintenanceScheduledTx(ctx, tx, tenantID, windowID); err != nil {
 			return nil, err
 		}
@@ -498,12 +504,26 @@ func (s *Service) EndOccurrence(ctx context.Context, tenantID, windowID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
+	var startsNow bool
+	if sched.Repeat == nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM maintenance_window_occurrences
+			WHERE window_id = $1 AND tenant_id = $2 AND starts_at = $3 AND NOT skipped)`, windowID, tenantID, now).Scan(&startsNow); err != nil {
+			return nil, fmt.Errorf("read maintenance occurrence: %w", err)
+		}
+	}
 	ended, err := maintenance.EndNow(ctx, tx, tenantID, windowID, now)
 	if err != nil {
 		return nil, err
 	}
 	if !ended {
 		return nil, invalid("no occurrence of this window is in progress")
+	}
+	// A one-off withdrawn the instant it was due (EndNow skips it) never
+	// ran: subscribers told it was scheduled are told it is cancelled.
+	if startsNow {
+		if err := pagenotify.MaintenanceCancelledTx(ctx, tx, tenantID, windowID, now); err != nil {
+			return nil, err
+		}
 	}
 	if sched.Repeat == nil {
 		if err := storeOneOffSpanTx(ctx, tx, windowID); err != nil {
@@ -609,7 +629,9 @@ func (s *Service) ListOccurrences(ctx context.Context, tenantID, windowID uuid.U
 // Delete removes a maintenance window. It stops covering now: the
 // occurrence in progress ends and later ones go. A window that already
 // covered time is kept, hidden, as history (SLA reports and the interval
-// engine read it back, S-M5); one that never started is removed outright.
+// engine read it back, S-M5), and so is one announced to status-page
+// subscribers (its cancellation notice names it); any other that never
+// started is removed outright.
 func (s *Service) Delete(ctx context.Context, tenantID, windowID uuid.UUID) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -623,11 +645,31 @@ func (s *Service) Delete(ctx context.Context, tenantID, windowID uuid.UUID) erro
 	if err != nil {
 		return err
 	}
+	// A window announced to status-page subscribers is withdrawn to them
+	// (its next occurrence not yet over), and kept, soft-deleted, for that
+	// notice to name it.
+	announced, err := pagenotify.Announced(ctx, tx, tenantID, windowID)
+	if err != nil {
+		return err
+	}
+	if announced {
+		var next sql.NullTime
+		if err := tx.QueryRowContext(ctx, `
+			SELECT MIN(starts_at) FROM maintenance_window_occurrences
+			WHERE window_id = $1 AND tenant_id = $2 AND NOT skipped AND ends_at > $3`, windowID, tenantID, now).Scan(&next); err != nil {
+			return fmt.Errorf("read next maintenance occurrence: %w", err)
+		}
+		if next.Valid {
+			if err := pagenotify.MaintenanceCancelledTx(ctx, tx, tenantID, windowID, next.Time); err != nil {
+				return err
+			}
+		}
+	}
 	started, err := maintenance.Retire(ctx, tx, tenantID, windowID, now)
 	if err != nil {
 		return err
 	}
-	if started {
+	if started || announced {
 		_, err = tx.ExecContext(ctx,
 			`UPDATE maintenance_windows SET deleted_at = $2, updated_at = NOW() WHERE id = $1`, windowID, now)
 	} else {
@@ -852,4 +894,38 @@ func insertMonitorLinksTx(ctx context.Context, tx *sql.Tx, windowID uuid.UUID, i
 		}
 	}
 	return nil
+}
+
+// targetSetDiffersTx reports whether ids differ, as a set, from the
+// window's current targets.
+func targetSetDiffersTx(ctx context.Context, tx *sql.Tx, windowID uuid.UUID, ids []uuid.UUID) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT monitor_id FROM maintenance_window_monitors WHERE maintenance_window_id = $1`, windowID)
+	if err != nil {
+		return false, fmt.Errorf("read maintenance targets: %w", err)
+	}
+	defer rows.Close()
+	current := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return false, fmt.Errorf("scan maintenance target: %w", err)
+		}
+		current[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	wanted := map[uuid.UUID]bool{}
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	if len(wanted) != len(current) {
+		return true, nil
+	}
+	for id := range wanted {
+		if !current[id] {
+			return true, nil
+		}
+	}
+	return false, nil
 }

@@ -927,12 +927,20 @@ export const API_PAGE: DocPage = {
               "Revoke a kiosk token (idempotent)",
             ],
             [
+              "`GET /api/v1/status-pages/{id}/subscribers/summary`",
+              "The page's [email subscribers](/docs/status-pages/#email-subscribers) without addresses: `counts`, the per-page `limit`, `mail_ready`, `mail_problems` and `recent` (the latest notices: `kind`, `status`, `skip_reason`, and how many deliveries were `sent`, `waiting`, `failed`, `uncertain` or `skipped`, with a `last_error`). Any member",
+            ],
+            [
               "`GET /api/v1/status-pages/{id}/subscribers`",
-              "The page's [email subscribers](/docs/status-pages/#email-subscribers), newest first (`page`, `page_size`): `email`, `state` (`pending` or `confirmed`) and dates, with `counts`, the per-page `limit`, `mail_ready` and `mail_problems`",
+              "Write access (403 otherwise: the addresses are personal data). The subscribers, newest first (`page`, `page_size`): `email`, `state` (`pending` or `confirmed`) and dates, with the summary's counts",
             ],
             [
               "`GET /api/v1/status-pages/{id}/subscribers/export`",
-              "Every subscriber as CSV (`email,state,subscribed_at,confirmed_at`). Audited as `status-page.subscribers-export`",
+              "Write access. Every subscriber as CSV (`email,state,subscribed_at,confirmed_at`). Audited as `status-page.subscribers-export`",
+            ],
+            [
+              "`POST /api/v1/status-pages/{id}/subscribers/remove`",
+              "Write; delete every subscriber (`{\"all\": true}`) or those at a domain (`{\"domain\": \"example.com\"}`); returns `{\"removed\"}`. Audited as `status-page.remove`",
             ],
             [
               "`POST /api/v1/status-pages/{id}/subscribers/{subscriberId}/remove`",
@@ -940,11 +948,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/public/status-pages/{slug}/subscribe`",
-              "Public; what the status-page service forwards a visitor's form to (`{\"email\"}`). `202` `{\"state\": \"check_inbox\"}` for every address the page accepts, whatever its state; `400` for an address that is not a plain one, `404` for a page that takes no subscriptions (password and private pages included), `429` past a page limit",
+              "What the status-page service forwards a visitor's form to (`{\"email\"}`); answers only a request carrying `STATUS_PAGE_INTERNAL_TOKEN` in `X-Probara-Internal-Token`, `404` to anyone else. `202` `{\"state\": \"check_inbox\"}` for every address the page accepts, whatever its state; `400` for an address that is not a plain one, `404` for a page that takes no subscriptions (password and private pages included), `429` past a page limit",
             ],
             [
               "`POST /api/v1/public/status-page-subscriptions/confirm`",
-              "Public; subscription token. `confirmed` (200, also when already), `expired` (410), `invalid` (404), with `page_title` and `page_slug` when valid. Audited as `status-page.subscriber-confirm`",
+              "Forwarded by the status-page service only (internal token as above); subscription token. `confirmed` (200, also when already), `expired` (410), `invalid` (404), with `page_title` and `page_slug` when valid. Audited as `status-page.subscriber-confirm`",
             ],
             [
               "`GET /api/v1/public/status-page-subscriptions/unsubscribe`",
@@ -952,14 +960,14 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/public/status-page-subscriptions/unsubscribe`",
-              "Public; subscription token (RFC 8058 one-click, any body). Deletes the address: `unsubscribed` (200, also when already), `expired` (410), `invalid` (404). Audited as `status-page.subscriber-unsubscribe` with a hash of the address",
+              "Public; subscription token (RFC 8058 one-click, any body). Deletes the address whatever the page's visibility: `unsubscribed` (200, also when already, with `page_title`), `expired` (410), `invalid` (404). Audited as `status-page.subscriber-unsubscribe` with a hash of the address",
             ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Create and update take `visibility` (`public`, `unlisted`, `password`, `private`) and a write-only `password`; reads return `visibility` and `has_password`. See [visibility and kiosk tokens](/docs/status-pages/#visibility). Turning `settings.enable_email_subscriptions` on is refused with `400` while subscriber mail is not configured on the API.",
+            "Create and update take `visibility` (`public`, `unlisted`, `password`, `private`) and a write-only `password`; reads return `visibility` and `has_password`. See [visibility and kiosk tokens](/docs/status-pages/#visibility). Turning `settings.enable_email_subscriptions` on is refused with `400` while subscriber mail is not configured on the API. Publishing an incident (`PUT /api/v1/incidents/{id}/status-pages/{statusPageId}`) takes an optional `public_title` (1-200 characters; empty returns to the default): what the page, its subscribers and visitor notifications see instead of the incident's own title. An automatically created incident always has one, \"Service disruption\" with the page's component names, because its own title names the monitor; publications report `public_title` and `auto_published`.",
         },
         {
           type: "table",

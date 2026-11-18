@@ -24,3 +24,35 @@ export interface StatusPageSubscriberListResponse {
   mail_ready: boolean;
   mail_problems: string[];
 }
+
+/** What a page's subscribers look like to any member (no addresses). */
+export interface StatusPageSubscriberSummary {
+  counts: { confirmed: number; pending: number };
+  limit: number;
+  mail_ready: boolean;
+  mail_problems: string[];
+  /** The page's latest notices, newest first. */
+  recent: StatusPageNotificationOutcome[];
+}
+
+/** One notice and what its deliveries came to. */
+export interface StatusPageNotificationOutcome {
+  id: string;
+  kind: string;
+  created_at: string;
+  subject?: string;
+  status: 'pending' | 'planned' | 'skipped';
+  skip_reason?: string;
+  recipients: number;
+  sent: number;
+  waiting: number;
+  failed: number;
+  uncertain: number;
+  skipped: number;
+  last_error?: string;
+}
+
+export interface RemoveStatusPageSubscribersRequest {
+  all?: boolean;
+  domain?: string;
+}

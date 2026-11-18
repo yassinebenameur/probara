@@ -160,19 +160,18 @@ func (s *pushStore) reconcileOutboxNotifications(ctx context.Context) (int64, er
 	query := `
 		INSERT INTO status_page_push_deliveries
 			(status_page_id, incident_id, interval_id, kind, monitor_name)
-		SELECT o.status_page_id, o.incident_id, o.id, o.event_kind, LEFT(btrim(i.title), 200)
+		SELECT o.status_page_id, o.incident_id, o.id, o.event_kind, LEFT(btrim(` + publicIncidentTitleSQL + `), 200)
 		FROM status_page_notification_outbox o
 		JOIN incidents i ON i.id = o.incident_id AND i.tenant_id = o.tenant_id
+		-- The page's live publication: its public title, never the
+		-- incident's own when it has one.
+		JOIN incident_status_page_publications isp
+			ON isp.incident_id = o.incident_id AND isp.status_page_id = o.status_page_id AND isp.unpublished_at IS NULL
 		JOIN status_pages sp ON sp.id = o.status_page_id
 		WHERE o.event_kind IN ('incident_published', 'incident_updated', 'incident_resolved')
 		  AND o.created_at > NOW() - make_interval(secs => $1)
 		  AND COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
 		  AND ` + pushVisiblePages + `
-		  AND EXISTS (
-			  SELECT 1 FROM incident_status_page_publications isp
-			  WHERE isp.incident_id = o.incident_id AND isp.status_page_id = o.status_page_id
-			    AND isp.unpublished_at IS NULL
-		  )
 		  AND EXISTS (
 			  SELECT 1 FROM status_page_push_subscriptions subs
 			  WHERE subs.status_page_id = o.status_page_id

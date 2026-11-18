@@ -99,7 +99,9 @@ func TestAccessIntegration(t *testing.T) {
 			for _, method := range []string{row.method, http.MethodGet, http.MethodPost} {
 				a := do(notFoundRequest(method, "/public/status/int-private"+row.route))
 				b := do(notFoundRequest(method, "/public/status/no-such-page"+row.route))
-				if a.Code != http.StatusNotFound || a.Code != b.Code || a.Body.String() != b.Body.String() || !equalHeaders(a.Header(), b.Header()) {
+				wantNotFound := row.class != classSubscriptionLink
+				if (wantNotFound && a.Code != http.StatusNotFound) || a.Code != b.Code ||
+					withoutNonce(a.Body.String()) != withoutNonce(b.Body.String()) || !equalHeaders(nonceFree(a.Header()), nonceFree(b.Header())) {
 					t.Errorf("%s %s: private %d %v %q / missing %d %v %q", method, row.route,
 						a.Code, a.Header(), a.Body.String(), b.Code, b.Header(), b.Body.String())
 				}

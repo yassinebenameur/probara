@@ -744,3 +744,36 @@ func TestEncodeHeader_ShortValuesUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// A message's own sender name replaces the configured one, quoted and
+// encoded like a recipient's, so a name with commas or angle brackets
+// cannot add an address; the sender address never changes.
+func TestSMTPMailer_SendMessageFromName(t *testing.T) {
+	f := startFakeSMTP(t, fakeSMTPOptions{})
+	mailer := newTestMailer(t, f, SMTPParams{FromName: "Probara Alerts"})
+	for _, name := range []string{"Acme Status", `Acme, Inc <evil@attacker.example>`, "Statut Société"} {
+		if err := mailer.SendMessage(context.Background(), mail.Message{
+			To: []string{"ops@example.com"}, FromName: name, Subject: "s", Text: "t",
+		}); err != nil {
+			t.Fatalf("SendMessage(%q): %v", name, err)
+		}
+	}
+	if err := mailer.SendMessage(context.Background(), mail.Message{To: []string{"ops@example.com"}, Subject: "s", Text: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	_, got := f.snapshot()
+	want := []string{"Acme Status", `Acme, Inc <evil@attacker.example>`, "Statut Société", "Probara Alerts"}
+	for i, tx := range got {
+		msg, err := netmail.ReadMessage(strings.NewReader(tx.data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		from, err := msg.Header.AddressList("From")
+		if err != nil || len(from) != 1 || from[0].Name != want[i] || from[0].Address != mailer.cfg.From {
+			t.Errorf("message %d From = %v (%v), want %q <%s>", i, from, err, want[i], mailer.cfg.From)
+		}
+	}
+	if err := mailer.SendMessage(context.Background(), mail.Message{To: []string{"ops@example.com"}, FromName: "a\r\nBcc: x@y.z", Subject: "s", Text: "t"}); err == nil {
+		t.Fatal("a sender name with a line break was accepted")
+	}
+}

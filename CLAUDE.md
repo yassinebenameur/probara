@@ -587,7 +587,7 @@ or imported groups come back empty. Any other path that creates groups through
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
   `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
-  `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`) are the contract external secret managers
+  `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`, `status_page_internal_token`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
   in the Secret. `ADMIN_COOKIE_SECURE` comes from the
@@ -1001,9 +1001,17 @@ or imported groups come back empty. Any other path that creates groups through
   invalidates the page, summary and feed together.
 - **Email subscribers are written by the API alone**
   (`api/internal/services/pagesubscribers`); the status-page service only
-  forwards the form and links (`subscribe.go`: sub-routes behind the gate,
-  per-client `subscribeThrottle`, nothing identifying the visitor forwarded,
-  `STATUS_PAGE_INTERNAL_API_URL`). Public and unlisted pages only. The
+  forwards (`subscribe.go`, `STATUS_PAGE_INTERNAL_API_URL`), presenting
+  `STATUS_PAGE_INTERNAL_TOKEN` (`pageaccess.ForwardTokenHeader`; the API's
+  subscribe/confirm answer nothing else, one-click unsubscribe stays public),
+  per-client `subscribeThrottle`, nothing identifying the visitor forwarded.
+  The subscribe form is gated; the `/subscription…` link routes run before
+  the gate and never read the page (row class `classSubscriptionLink`), so
+  unsubscribing survives a visibility change. Public and unlisted pages only;
+  addresses are readable with write access only (`…/subscribers/summary` for
+  everyone). Page limits count rows created in the hour whatever their
+  state; confirmations are capped per inbox (`InboxHash`, +tag stripped) and
+  per hour (`status_page_confirmation_sends`). The
   notification outbox (`status_page_notification_outbox`, written by
   `api/internal/services/pagenotify` in the trigger's own transaction) is the
   single trigger for subscriber mail and incident push: a new trigger is a
@@ -1014,7 +1022,15 @@ or imported groups come back empty. Any other path that creates groups through
   for every address state and never mails from the request. Automatic outage
   publishing (`autopublish.go`) finds or creates incidents only through
   `shared/autoincident`, the alerter's lock and lookup; page component names
-  come from `shared/statuspagesql`.
+  come from `shared/statuspagesql`. **No public surface shows an
+  automatically created incident's own title or summary** (they name the
+  monitor): `incidents.PublishTx` gives every publication of one a per-page
+  `public_title`/`public_summary`, and the page, `/data`, feed, summary,
+  subscriber mail and push read `COALESCE(isp.public_title, i.title)`
+  (`publicIncidentTitleSQL`). A new public reader uses the same columns.
+  Announced maintenance withdrawn (delete, one-off skipped at start) is a
+  `pagenotify.MaintenanceCancelledTx`, mailed only to who got the
+  announcement; an announced window is soft-deleted, never removed.
 
 ## Web UI conventions
 

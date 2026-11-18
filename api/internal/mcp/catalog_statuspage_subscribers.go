@@ -1,6 +1,10 @@
 package mcp
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/yassinebenameur/probara/api/internal/models"
+)
 
 // statusPageSubscriberTools read and prune a page's email subscribers.
 // Subscribing is the visitors' own act (double opt-in on the public page);
@@ -9,14 +13,22 @@ func statusPageSubscriberTools() []spec {
 	page := map[string]string{"id": "Status page ID."}
 	return []spec{
 		{
+			Name:  "get_status_page_subscriber_summary",
+			Title: "Get status page subscriber summary",
+			Description: "A status page's email subscribers by count (confirmed, awaiting confirmation), the per-page " +
+				"limit, whether this installation can mail them (mail_ready, mail_problems), and what the latest " +
+				"notices came to (sent, waiting, failed, uncertain, skipped, last error). Addresses are not included.",
+			Method: http.MethodGet, Route: "/status-pages/{id}/subscribers/summary",
+			PathDocs: page,
+		},
+		{
 			Name:  "list_status_page_subscribers",
 			Title: "List status page subscribers",
 			Description: "A status page's email subscribers, newest first: address, state (pending until the " +
-				"confirmation link is followed, then confirmed; only confirmed ones are mailed) and dates, with " +
-				"counts by state, the per-page limit, and whether this installation can mail them (mail_ready, " +
-				"mail_problems).",
+				"confirmation link is followed, then confirmed; only confirmed ones are mailed) and dates. " +
+				"Requires write access because it reveals visitors' addresses.",
 			Method: http.MethodGet, Route: "/status-pages/{id}/subscribers",
-			PathDocs: page, Query: pageParams,
+			PathDocs: page, Query: pageParams, NeedsWrite: true,
 		},
 		{
 			Name:  "remove_status_page_subscriber",
@@ -27,6 +39,20 @@ func statusPageSubscriberTools() []spec {
 			PathDocs: map[string]string{
 				"id":           "Status page ID.",
 				"subscriberId": "Subscriber ID, from list_status_page_subscribers.",
+			},
+			Destructive: true,
+		},
+		{
+			Name:  "remove_status_page_subscribers",
+			Title: "Remove status page subscribers in bulk",
+			Description: "Delete every subscriber of a status page (all: true), or every one whose address is at a " +
+				"domain, e.g. after a flood of sign-ups from one domain. Returns how many were removed.",
+			Method: http.MethodPost, Route: "/status-pages/{id}/subscribers/remove",
+			PathDocs: page,
+			Body:     typeOf[models.RemoveStatusPageSubscribersRequest](),
+			FieldDocs: map[string]string{
+				"all":    "Remove every subscriber of the page.",
+				"domain": "Remove the subscribers whose address is at this domain (e.g. example.com).",
 			},
 			Destructive: true,
 		},

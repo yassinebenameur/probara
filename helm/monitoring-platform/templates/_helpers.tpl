@@ -448,3 +448,30 @@ secret comes from an existing Secret), which leaves gated pages closed.
 {{- sha256sum (printf "probara/status-page-session/v1:%s" .Values.secrets.adminJwtSecret) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+STATUS_PAGE_INTERNAL_TOKEN for the chart-managed Secret, which the
+status-page service presents when it forwards a visitor's email
+subscription to the API: secrets.statusPageInternalToken, else derived from a
+chart-managed adminJwtSecret like the session secret (stable across renders),
+else empty when the chart cannot derive it, which leaves subscriptions off.
+*/}}
+{{- define "monitoring-platform.statusPageInternalToken" -}}
+{{- if .Values.secrets.statusPageInternalToken -}}
+{{- .Values.secrets.statusPageInternalToken -}}
+{{- else if and .Values.secrets.adminJwtSecret (not .Values.secrets.adminJwtSecretExistingSecret) -}}
+{{- sha256sum (printf "probara/status-page-internal-token/v1:%s" .Values.secrets.adminJwtSecret) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The STATUS_PAGE_INTERNAL_TOKEN env entry for the api and status-page
+containers: a per-field Secret (must hold the key), the chart-wide Secret
+(key optional, so an older Secret keeps working with subscriptions off), or
+the chart-managed Secret with a literal or derived value.
+*/}}
+{{- define "monitoring-platform.statusPageInternalTokenEnv" -}}
+{{- if or .Values.secrets.statusPageInternalTokenExistingSecret .Values.secrets.existingSecret (include "monitoring-platform.statusPageInternalToken" .) }}
+{{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_INTERNAL_TOKEN" "key" "status_page_internal_token" "secret" .Values.secrets.statusPageInternalTokenExistingSecret "secretKey" .Values.secrets.statusPageInternalTokenExistingSecretKey "optional" (and (not .Values.secrets.statusPageInternalTokenExistingSecret) .Values.secrets.existingSecret)) }}
+{{- end }}
+{{- end }}

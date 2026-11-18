@@ -166,6 +166,9 @@ services:
       # subscriber mail links back to pages there (subscriptions also need
       # SMTP_* and APP_BASE_URL, which this file does not set).
       STATUS_PAGE_BASE_URL: "http://localhost:8082"
+      # Presented by the status-page service on forwarded subscriptions; the
+      # same value on both. A development value; the release file overrides it.
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:-dev-status-page-internal-token-change-me}"
       # OIDC SSO (off by default; `docker compose --profile sso up` starts a
       # dex test IdP matching these values — see infra/dex/config.yaml).
       OIDC_ENABLED: "${OIDC_ENABLED:-false}"
@@ -367,6 +370,7 @@ services:
       # stores subscribers; this service stays read-only). Defaults to
       # STATUS_PAGE_API_BASE_URL.
       STATUS_PAGE_INTERNAL_API_URL: "http://api:8080"
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:-dev-status-page-internal-token-change-me}"
       # Shared with the api service; gates draft-template previews with a
       # token minted by the API. Leave unset to allow open previews (dev).
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"

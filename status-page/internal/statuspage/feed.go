@@ -108,10 +108,10 @@ func (s *Service) GetStatusPageFeed(ctx context.Context, slug, canonicalURL stri
 // maxFeedUpdatesPerIncident newest public updates. Unpublished incidents are
 // excluded exactly as on the page.
 func (s *Service) loadFeedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]feedIncident, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.queryPublicIncidents(ctx, `
 		SELECT id, title, summary, state, published_at, resolved_at, changed_at
 		FROM (
-			SELECT i.id, i.title, COALESCE(i.summary, '') AS summary, i.state,
+			SELECT i.id, `+publicIncidentTitleSQL+` AS title, `+publicIncidentSummarySQL+` AS summary, i.state,
 				isp.published_at, i.resolved_at,
 				GREATEST(i.updated_at, isp.published_at, COALESCE(lu.created_at, isp.published_at)) AS changed_at
 			FROM incident_status_page_publications isp

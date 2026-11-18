@@ -123,3 +123,10 @@ func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
+
+// ForwardTokenHeader carries STATUS_PAGE_INTERNAL_TOKEN on the email
+// subscription requests the status-page service forwards to the API. The
+// API's subscribe and confirm routes answer nothing else, so the status
+// page's visibility gate and per-visitor throttle cannot be bypassed by
+// calling the API directly.
+const ForwardTokenHeader = "X-Probara-Internal-Token"

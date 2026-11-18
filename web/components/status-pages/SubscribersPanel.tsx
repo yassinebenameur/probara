@@ -2,11 +2,18 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Download, Mail, Trash2 } from 'lucide-react';
-import type { StatusPage, StatusPageSubscriber, StatusPageSubscriberListResponse } from '@/lib/types';
+import type {
+  StatusPage,
+  StatusPageSubscriber,
+  StatusPageSubscriberListResponse,
+  StatusPageSubscriberSummary,
+} from '@/lib/types';
 import {
   exportStatusPageSubscribers,
+  getStatusPageSubscriberSummary,
   getStatusPageSubscribers,
   removeStatusPageSubscriber,
+  removeStatusPageSubscribers,
   updateStatusPage,
 } from '@/lib/api';
 import { formatCount, formatDateTime, pluralize } from '@/lib/format';
@@ -14,6 +21,8 @@ import { errorMessage } from '@/lib/errors';
 import {
   AUTO_PUBLISH_DELAY_MINUTES,
   SUBSCRIBER_STATE_LABELS,
+  noticeLabel,
+  noticeOutcome,
   subscriptionAvailability,
 } from '@/lib/status-page-subscribers';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
@@ -24,6 +33,7 @@ import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Input from '@/components/ui/Input';
 import Pagination from '@/components/ui/Pagination';
 import Pill from '@/components/ui/Pill';
 import Switch from '@/components/ui/Switch';
@@ -36,42 +46,50 @@ const PAGE_SIZE = 25;
 
 /**
  * Email subscribers of a status page: whether visitors may subscribe, the
- * automatic publication of outages, and the subscriber list (remove, CSV
- * export). Subscribing is the visitors' own double opt-in on the public
- * page; nobody can be added here.
+ * automatic publication of outages, what recent notices came to, and (for
+ * members with write access: addresses are personal data) the subscriber
+ * list with remove, bulk remove and CSV export. Subscribing is the
+ * visitors' own double opt-in on the public page; nobody can be added here.
  */
 export default function SubscribersPanel({ statusPage }: SubscribersPanelProps) {
   const canWrite = useCanWrite();
   const { showToast } = useToast();
-  const [data, setData] = useState<StatusPageSubscriberListResponse | null>(null);
+  const [summary, setSummary] = useState<StatusPageSubscriberSummary | null>(null);
+  const [list, setList] = useState<StatusPageSubscriberListResponse | null>(null);
   const [page, setPage] = useState(1);
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState<'' | 'subscriptions' | 'auto'>('');
   const [exporting, setExporting] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<StatusPageSubscriber | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [bulkDomain, setBulkDomain] = useState('');
+  const [bulkConfirm, setBulkConfirm] = useState('');
+  const [bulkRemoving, setBulkRemoving] = useState(false);
+  // The two settings are saved from here and kept here: handing the updated
+  // page back to the edit page would reset the main form's unsaved edits.
+  const [settings, setSettings] = useState(statusPage.settings);
+  useEffect(() => setSettings(statusPage.settings), [statusPage.settings]);
 
   const load = useCallback(async () => {
     try {
       setLoadError('');
-      setData(await getStatusPageSubscribers(statusPage.id, { page, page_size: PAGE_SIZE }));
+      setSummary(await getStatusPageSubscriberSummary(statusPage.id));
+      if (canWrite) {
+        setList(await getStatusPageSubscribers(statusPage.id, { page, page_size: PAGE_SIZE }));
+      }
     } catch (err) {
       setLoadError(errorMessage(err, 'Failed to load subscribers'));
     }
-  }, [statusPage.id, page]);
+  }, [statusPage.id, page, canWrite]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // The two settings are saved from here and kept here: handing the updated
-  // page back to the edit page would reset the main form's unsaved edits.
-  const [settings, setSettings] = useState(statusPage.settings);
-  useEffect(() => setSettings(statusPage.settings), [statusPage.settings]);
   const subscriptionsOn = Boolean(settings?.enable_email_subscriptions);
   const autoPublishOn = Boolean(settings?.auto_publish_incidents);
   const availability = subscriptionAvailability(settings, statusPage.visibility);
-  const mailReady = data?.mail_ready ?? true;
+  const mailReady = summary?.mail_ready ?? true;
 
   const saveSetting = async (key: 'subscriptions' | 'auto', value: boolean) => {
     try {
@@ -123,15 +141,36 @@ export default function SubscribersPanel({ statusPage }: SubscribersPanelProps) 
     }
   };
 
-  const counts = data?.counts;
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+  // Bulk removal is typed-confirmed: the operator types the page's slug.
+  const handleBulkRemove = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (bulkConfirm.trim() !== statusPage.slug) return;
+    try {
+      setBulkRemoving(true);
+      const domain = bulkDomain.trim();
+      const { removed } = await removeStatusPageSubscribers(statusPage.id, domain ? { domain } : { all: true });
+      setBulkConfirm('');
+      setBulkDomain('');
+      setPage(1);
+      showToast(`Removed ${pluralize(removed, 'subscriber')}`, 'success');
+      await load();
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to remove subscribers'), 'error');
+    } finally {
+      setBulkRemoving(false);
+    }
+  };
+
+  const counts = summary?.counts;
+  const total = counts ? counts.confirmed + counts.pending : 0;
+  const totalPages = list ? Math.max(1, Math.ceil(list.total / PAGE_SIZE)) : 1;
 
   return (
     <Panel
       title="Subscribers"
-      subtitle="Visitors subscribe on the public page and confirm their address by email. They are emailed when an incident is published, updated or resolved here, and when maintenance is scheduled."
+      subtitle="Visitors subscribe on the public page and confirm their address by email. They are emailed when an incident is published, updated or resolved here, and when maintenance is scheduled, starts or is cancelled."
       actions={
-        data && data.total > 0 ? (
+        canWrite && total > 0 ? (
           <Button
             variant="ghost"
             size="xs"
@@ -149,9 +188,7 @@ export default function SubscribersPanel({ statusPage }: SubscribersPanelProps) 
         <div className="glass-well divide-y divide-divider">
           <div className="flex items-start justify-between gap-4 p-4">
             <div className="min-w-0">
-              <p className="text-sm font-medium text-white">
-                Email subscriptions
-              </p>
+              <p className="text-sm font-medium text-white">Email subscriptions</p>
               <p className="mt-0.5 text-xs text-slate-500">
                 Shows a subscribe form on the public page. Public and unlisted pages only.
               </p>
@@ -168,8 +205,9 @@ export default function SubscribersPanel({ statusPage }: SubscribersPanelProps) 
               <p className="text-sm font-medium text-white">Publish outages automatically</p>
               <p className="mt-0.5 text-xs text-slate-500">
                 When a monitor shown on this page has been down for {AUTO_PUBLISH_DELAY_MINUTES} minutes, an incident
-                is published here (and resolved when it recovers). Maintenance, outages a dependency explains and
-                monitors already recovering are left out.
+                titled “Service disruption” with the page’s component names is published here, and resolved when the
+                monitor has stayed up for 10 minutes. Maintenance, outages a dependency explains and monitors already
+                recovering are left out.
               </p>
             </div>
             <Switch
@@ -181,9 +219,9 @@ export default function SubscribersPanel({ statusPage }: SubscribersPanelProps) 
           </div>
         </div>
 
-        {data && !data.mail_ready && (
+        {summary && !summary.mail_ready && (
           <Callout tone="warning" title="This installation cannot email subscribers">
-            {data.mail_problems.join(' ')}
+            {summary.mail_problems.join(' ')}
           </Callout>
         )}
         {subscriptionsOn && !availability.active && availability.reason && (
@@ -191,54 +229,117 @@ export default function SubscribersPanel({ statusPage }: SubscribersPanelProps) 
         )}
         {loadError && <Callout tone="danger">{loadError}</Callout>}
 
-        {counts && (
+        {counts && summary && (
           <p className="text-xs text-slate-500">
             {pluralize(counts.confirmed, 'confirmed subscriber')} · {counts.pending} awaiting confirmation · limit{' '}
-            {formatCount(data?.limit)}
+            {formatCount(summary.limit)}
           </p>
         )}
 
-        <div className="-mx-5 -mb-5 border-t border-divider">
-          {!data && !loadError ? (
-            <p className="px-5 py-6 text-ui text-slate-500">Loading subscribers…</p>
-          ) : data && data.items.length === 0 ? (
-            <div className="flex flex-col items-center px-5 py-8 text-center">
-              <Mail className="h-5 w-5 text-slate-500" strokeWidth={1.5} aria-hidden="true" />
-              <p className="mt-3 text-sm font-medium text-white">No subscribers yet</p>
-            </div>
-          ) : (
-            <ul className="divide-y divide-divider">
-              {data?.items.map((sub) => (
-                <li key={sub.id} className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="truncate font-mono text-ui text-white">{sub.email}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      {sub.confirmed_at
-                        ? `Confirmed ${formatDateTime(sub.confirmed_at)}`
-                        : `Asked ${formatDateTime(sub.requested_at)}`}
+        {summary && summary.recent.length > 0 && (
+          <div>
+            <h3 className="mb-2 text-ui font-medium text-slate-300">Recent notices</h3>
+            <ul className="glass-well divide-y divide-divider">
+              {summary.recent.map((o) => {
+                const outcome = noticeOutcome(o);
+                return (
+                  <li key={o.id} className="px-3.5 py-2.5">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                      <span className="min-w-0 truncate text-ui text-white">{noticeLabel(o)}</span>
+                      <span className="text-xs text-slate-500">{formatDateTime(o.created_at)}</span>
+                    </div>
+                    <p className={`mt-0.5 text-xs ${outcome.problem ? 'text-amber-300' : 'text-slate-500'}`}>
+                      {outcome.text}
+                      {o.last_error ? ` — ${o.last_error}` : ''}
                     </p>
-                  </div>
-                  <div className="flex flex-shrink-0 items-center gap-2">
-                    <Pill tone={sub.state === 'confirmed' ? 'success' : 'neutral'} size="xs" dot>
-                      {SUBSCRIBER_STATE_LABELS[sub.state]}
-                    </Pill>
-                    {canWrite && (
-                      <IconButton
-                        icon={<Trash2 strokeWidth={1.75} />}
-                        label={`Remove ${sub.email}`}
-                        onClick={() => setPendingRemove(sub)}
-                        danger
-                      />
-                    )}
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
-          )}
-          {data && data.total > PAGE_SIZE && (
-            <Pagination variant="footer" page={page} totalPages={totalPages} onPageChange={setPage} />
-          )}
-        </div>
+          </div>
+        )}
+
+        {!canWrite ? (
+          <p className="text-xs text-slate-500">Subscriber addresses are shown to members who can edit this page.</p>
+        ) : (
+          <>
+            {total > 0 && (
+              <form onSubmit={handleBulkRemove} className="glass-well space-y-3 p-4">
+                <div>
+                  <p className="text-sm font-medium text-white">Remove in bulk</p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Remove every subscriber, or only those at one domain (after a flood of sign-ups, for example).
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    label="Domain (empty: everyone)"
+                    value={bulkDomain}
+                    onChange={(event) => setBulkDomain(event.target.value)}
+                    placeholder="example.com"
+                    maxLength={253}
+                  />
+                  <Input
+                    label={`Type “${statusPage.slug}” to confirm`}
+                    value={bulkConfirm}
+                    onChange={(event) => setBulkConfirm(event.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  variant="danger"
+                  size="sm"
+                  icon={<Trash2 strokeWidth={1.75} />}
+                  loading={bulkRemoving}
+                  disabled={bulkRemoving || bulkConfirm.trim() !== statusPage.slug}
+                >
+                  {bulkDomain.trim() ? `Remove subscribers at ${bulkDomain.trim()}` : 'Remove every subscriber'}
+                </Button>
+              </form>
+            )}
+
+            <div className="-mx-5 -mb-5 border-t border-divider">
+              {!list && !loadError ? (
+                <p className="px-5 py-6 text-ui text-slate-500">Loading subscribers…</p>
+              ) : list && list.items.length === 0 ? (
+                <div className="flex flex-col items-center px-5 py-8 text-center">
+                  <Mail className="h-5 w-5 text-slate-500" strokeWidth={1.5} aria-hidden="true" />
+                  <p className="mt-3 text-sm font-medium text-white">No subscribers yet</p>
+                </div>
+              ) : (
+                <ul className="divide-y divide-divider">
+                  {list?.items.map((sub) => (
+                    <li key={sub.id} className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="truncate font-mono text-ui text-white">{sub.email}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {sub.confirmed_at
+                            ? `Confirmed ${formatDateTime(sub.confirmed_at)}`
+                            : `Asked ${formatDateTime(sub.requested_at)}`}
+                        </p>
+                      </div>
+                      <div className="flex flex-shrink-0 items-center gap-2">
+                        <Pill tone={sub.state === 'confirmed' ? 'success' : 'neutral'} size="xs" dot>
+                          {SUBSCRIBER_STATE_LABELS[sub.state]}
+                        </Pill>
+                        <IconButton
+                          icon={<Trash2 strokeWidth={1.75} />}
+                          label={`Remove ${sub.email}`}
+                          onClick={() => setPendingRemove(sub)}
+                          danger
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {list && list.total > PAGE_SIZE && (
+                <Pagination variant="footer" page={page} totalPages={totalPages} onPageChange={setPage} />
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <ConfirmDialog

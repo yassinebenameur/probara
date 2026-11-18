@@ -1,21 +1,25 @@
 // Package statuspagesubscribers serves a status page's email subscribers:
 //
-//	GET  /api/v1/status-pages/{id}/subscribers                         list, counts, mail readiness
-//	GET  /api/v1/status-pages/{id}/subscribers/export                  CSV of every subscriber
+//	GET  /api/v1/status-pages/{id}/subscribers/summary                 counts, mail readiness, recent notices (any member)
+//	GET  /api/v1/status-pages/{id}/subscribers                         the addresses (write access)
+//	GET  /api/v1/status-pages/{id}/subscribers/export                  CSV of every subscriber (write access)
 //	POST /api/v1/status-pages/{id}/subscribers/{subscriberId}/remove   delete one
-//	POST /api/v1/public/status-pages/{slug}/subscribe                  a visitor's subscribe form
-//	POST /api/v1/public/status-page-subscriptions/confirm              follow a confirmation link
+//	POST /api/v1/status-pages/{id}/subscribers/remove                  delete all, or those at a domain
+//	POST /api/v1/public/status-pages/{slug}/subscribe                  a visitor's subscribe form (status-page service only)
+//	POST /api/v1/public/status-page-subscriptions/confirm              follow a confirmation link (status-page service only)
 //	GET  /api/v1/public/status-page-subscriptions/unsubscribe          a browser on the one-click URL: redirect, never act
-//	POST /api/v1/public/status-page-subscriptions/unsubscribe          unsubscribe (link or RFC 8058 one-click)
+//	POST /api/v1/public/status-page-subscriptions/unsubscribe          unsubscribe (link or RFC 8058 one-click), anyone
 //
 // The operator routes sit in the protected group (RequireWrite, generic
-// audit for the remove; the export records its own event). The public
-// routes are what the status-page service forwards visitor requests to
-// (after its visibility gate and per-client throttle); the subscribe route
-// answers every address alike, and the token routes take the signed token
-// (shared/actionlink) as the credential: in the TokenHeader, the JSON body,
-// or (one-click, which cannot set either) the token query parameter, which
-// the request log never records.
+// audit for the removes; the export records its own event). Subscriber
+// addresses are personal data, so reading them needs write access even on a
+// GET; the summary is for every member. The subscribe and confirm routes
+// answer only the status-page service (InternalTokenHeader, its
+// STATUS_PAGE_INTERNAL_TOKEN), so its visibility gate and per-client
+// throttle cannot be bypassed; anyone else gets 404. The token routes take
+// the signed token (shared/actionlink) as the credential: in the
+// TokenHeader, the JSON body, or (one-click, which cannot set either) the
+// token query parameter, which the request log never records.
 package statuspagesubscribers
 
 import (
@@ -36,12 +40,18 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	svc "github.com/yassinebenameur/probara/api/internal/services/pagesubscribers"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/pageaccess"
 )
 
 // TokenHeader carries a confirmation or unsubscribe token; the header the
 // acknowledge and report unsubscribe links use.
 const TokenHeader = "X-Action-Token"
+
+// InternalTokenHeader carries STATUS_PAGE_INTERNAL_TOKEN on the requests
+// the status-page service forwards (the shared contract).
+const InternalTokenHeader = pageaccess.ForwardTokenHeader
 
 // maxPublicBody bounds a public request body.
 const maxPublicBody = 4096
@@ -56,10 +66,12 @@ type Handlers struct {
 // Routes mounts a page's subscriber routes under /status-pages.
 func (h *Handlers) Routes(r chi.Router) {
 	r.Route("/{id}/subscribers", func(r chi.Router) {
+		r.Get("/summary", h.summary)
 		r.Get("/", h.list)
 		r.Get("/export", h.export)
 		// POST …/remove rather than DELETE, like the kiosk tokens' revoke:
 		// the generic audit then names it status-page.remove.
+		r.Post("/remove", h.removeMany)
 		r.Post("/{subscriberId}/remove", h.remove)
 	})
 }
@@ -105,7 +117,59 @@ func pageID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
+// writeAccess refuses a caller without write access: subscriber addresses
+// are personal data, not workspace configuration a viewer reads.
+func writeAccess(w http.ResponseWriter, r *http.Request) bool {
+	if !ctxpkg.CanWrite(r.Context()) {
+		apierrors.WriteForbiddenError(w, "subscriber addresses require write permission; the summary shows the counts")
+		return false
+	}
+	return true
+}
+
+func (h *Handlers) summary(w http.ResponseWriter, r *http.Request) {
+	t, ok := httpx.TenantID(w, r)
+	if !ok {
+		return
+	}
+	id, ok := pageID(w, r)
+	if !ok {
+		return
+	}
+	resp, err := h.Service.Summary(r.Context(), t, id)
+	if err != nil {
+		h.fail(w, err, "read subscriber summary")
+		return
+	}
+	noStore(w)
+	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handlers) removeMany(w http.ResponseWriter, r *http.Request) {
+	t, ok := httpx.TenantID(w, r)
+	if !ok {
+		return
+	}
+	id, ok := pageID(w, r)
+	if !ok {
+		return
+	}
+	var req models.RemoveStatusPageSubscribersRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	n, err := h.Service.RemoveMany(r.Context(), t, id, &req)
+	if err != nil {
+		h.fail(w, err, "remove subscribers")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, models.RemoveStatusPageSubscribersResponse{Removed: n})
+}
+
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
+	if !writeAccess(w, r) {
+		return
+	}
 	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
@@ -127,6 +191,9 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 // export writes the CSV and records who exported which page's addresses (a
 // read, so the generic audit would not).
 func (h *Handlers) export(w http.ResponseWriter, r *http.Request) {
+	if !writeAccess(w, r) {
+		return
+	}
 	t, ok := httpx.TenantID(w, r)
 	if !ok {
 		return
@@ -195,6 +262,10 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 // state, so the endpoint never says whether an address is subscribed.
 func (h *Handlers) subscribe(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
+	if !h.Service.ForwardedByStatusPage(r.Header.Get(InternalTokenHeader)) {
+		apierrors.WriteNotFoundError(w, "not found")
+		return
+	}
 	var req models.StatusPageSubscribeRequest
 	if !decode(w, r, &req) {
 		return
@@ -227,6 +298,10 @@ func token(w http.ResponseWriter, r *http.Request) (string, bool) {
 
 func (h *Handlers) confirm(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
+	if !h.Service.ForwardedByStatusPage(r.Header.Get(InternalTokenHeader)) {
+		apierrors.WriteNotFoundError(w, "not found")
+		return
+	}
 	t, ok := token(w, r)
 	if !ok {
 		return

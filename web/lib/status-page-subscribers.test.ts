@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { publishNotice, subscriptionAvailability } from './status-page-subscribers';
+import { noticeLabel, noticeOutcome, publishNotice, subscriptionAvailability } from './status-page-subscribers';
 
 test('subscriptions are active only when on and the page is not gated', () => {
   assert.equal(subscriptionAvailability({ enable_email_subscriptions: true }, 'public').active, true);
@@ -23,4 +23,15 @@ test('the publish form says how many subscribers are emailed', () => {
   assert.equal(publishNotice(on, 'public', null), null);
   assert.equal(publishNotice({}, 'public', 5), null);
   assert.equal(publishNotice(on, 'private', 5), null);
+});
+
+test('notice outcomes say what was lost', () => {
+  const base = { id: 'x', kind: 'incident_published', created_at: '', status: 'planned' as const, recipients: 3, sent: 1, waiting: 0, failed: 1, uncertain: 1, skipped: 0 };
+  assert.deepEqual(noticeOutcome(base), { text: '1 sent · 1 failed · 1 uncertain of 3', problem: true });
+  assert.deepEqual(noticeOutcome({ ...base, sent: 3, failed: 0, uncertain: 0 }), { text: '3 sent of 3', problem: false });
+  assert.equal(noticeOutcome({ ...base, status: 'skipped', skip_reason: 'subscriber mail is not configured on the API' }).problem, true);
+  assert.equal(noticeOutcome({ ...base, status: 'skipped', skip_reason: 'the page takes no email subscriptions (turned off)' }).problem, false);
+  assert.equal(noticeOutcome({ ...base, recipients: 0 }).text, 'No confirmed subscribers to email');
+  assert.equal(noticeLabel({ kind: 'maintenance_cancelled' }), 'Maintenance cancelled');
+  assert.equal(noticeLabel({ kind: 'incident_published', subject: 'Incident: Outage' }), 'Incident: Outage');
 });

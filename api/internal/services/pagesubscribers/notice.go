@@ -57,34 +57,36 @@ var incidentStates = map[string]string{
 // non-empty skip says why the row is not mailed (the event is no longer on
 // the page).
 func (s *Service) buildNotice(ctx context.Context, q queryer, o outboxRow) (*notice, string, error) {
-	n := &notice{Kind: o.kind, PageTitle: o.title, PageURL: s.pageURL(o.slug), Accent: accent(o.primary)}
+	n := &notice{Kind: o.kind, PageTitle: o.title, PageURL: s.publicPageURL(pageRef{id: o.pageID, tenantID: o.tenantID, slug: o.slug}), Accent: accent(o.primary)}
 	switch o.kind {
 	case pagenotify.KindIncidentPublished, pagenotify.KindIncidentUpdated, pagenotify.KindIncidentResolved:
 		return s.incidentNotice(ctx, q, o, n)
 	case pagenotify.KindMaintenanceScheduled, pagenotify.KindMaintenanceStarted:
 		return s.maintenanceNotice(ctx, q, o, n)
+	case pagenotify.KindMaintenanceCancelled:
+		return s.cancellationNotice(ctx, q, o, n)
 	}
 	return nil, "unknown event kind " + o.kind, nil
 }
 
 func (s *Service) incidentNotice(ctx context.Context, q queryer, o outboxRow, n *notice) (*notice, string, error) {
+	// What the page shows: the publication's public title and summary when
+	// it has them (always, for an automatically created incident, whose own
+	// title names the internal monitor), else the incident's own.
 	var title, summary, state string
 	var resolvedAt sql.NullTime
-	var live bool
 	err := q.QueryRowContext(ctx, `
-		SELECT i.title, COALESCE(i.summary, ''), i.state::text, i.resolved_at,
-			EXISTS (SELECT 1 FROM incident_status_page_publications isp
-				WHERE isp.incident_id = i.id AND isp.status_page_id = $2 AND isp.unpublished_at IS NULL)
-		FROM incidents i WHERE i.id = $1 AND i.tenant_id = $3
-	`, o.incidentID.UUID, o.pageID, o.tenantID).Scan(&title, &summary, &state, &resolvedAt, &live)
+		SELECT COALESCE(isp.public_title, i.title), COALESCE(isp.public_summary, i.summary, ''), i.state::text, i.resolved_at
+		FROM incidents i
+		JOIN incident_status_page_publications isp
+			ON isp.incident_id = i.id AND isp.status_page_id = $2 AND isp.unpublished_at IS NULL
+		WHERE i.id = $1 AND i.tenant_id = $3
+	`, o.incidentID.UUID, o.pageID, o.tenantID).Scan(&title, &summary, &state, &resolvedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, "the incident was deleted", nil
+		return nil, "the incident is no longer on the page", nil
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("load incident: %w", err)
-	}
-	if !live {
-		return nil, "the incident is no longer on the page", nil
 	}
 	affected, err := names(ctx, q, `
 		SELECT DISTINCT `+statuspagesql.PublicNameSQL("$2", "m")+`
@@ -213,6 +215,34 @@ func (s *Service) maintenanceNotice(ctx context.Context, q queryer, o outboxRow,
 	}
 	if len(affected) > 0 {
 		n.Facts = append(n.Facts, fact{"Affected", strings.Join(affected, ", ")})
+	}
+	return n, "", nil
+}
+
+// cancellationNotice withdraws an announced window: its title, and the
+// occurrence that will not run (or was stopped early). Nothing about its
+// coverage is read: a deleted window covers nothing any more.
+func (s *Service) cancellationNotice(ctx context.Context, q queryer, o outboxRow, n *notice) (*notice, string, error) {
+	var title string
+	err := q.QueryRowContext(ctx, `SELECT title FROM maintenance_windows WHERE id = $1 AND tenant_id = $2`,
+		o.windowID.UUID, o.tenantID).Scan(&title)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "the maintenance window is gone", nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("load maintenance window: %w", err)
+	}
+	n.Headline = oneLine(title)
+	if o.occurrence.Valid && o.occurrence.Time.Before(o.createdAt) {
+		n.Label = "Maintenance ended early"
+		n.Body = "This maintenance was stopped before its scheduled end."
+		n.Facts = append(n.Facts, fact{"Started", timeText(o.occurrence.Time)})
+	} else {
+		n.Label = "Maintenance cancelled"
+		n.Body = "This maintenance will not take place."
+		if o.occurrence.Valid {
+			n.Facts = append(n.Facts, fact{"Was scheduled for", timeText(o.occurrence.Time)})
+		}
 	}
 	return n, "", nil
 }

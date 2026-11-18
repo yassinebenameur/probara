@@ -1,4 +1,9 @@
-import type { StatusPageSettings, StatusPageSubscriberState, StatusPageVisibility } from './types';
+import type {
+  StatusPageNotificationOutcome,
+  StatusPageSettings,
+  StatusPageSubscriberState,
+  StatusPageVisibility,
+} from './types';
 import { pluralize } from './format';
 import { isGatedVisibility } from './status-page-access';
 
@@ -50,4 +55,36 @@ export function publishNotice(
     return 'No email subscribers yet: nobody is emailed.';
   }
   return `${pluralize(confirmed, 'email subscriber')} will be notified when you publish.`;
+}
+
+const NOTICE_KIND_LABELS: Record<string, string> = {
+  incident_published: 'Incident published',
+  incident_updated: 'Incident update',
+  incident_resolved: 'Incident resolved',
+  maintenance_scheduled: 'Maintenance scheduled',
+  maintenance_started: 'Maintenance started',
+  maintenance_cancelled: 'Maintenance cancelled',
+};
+
+/** A notice's name in the outcomes list: its subject, else its kind. */
+export function noticeLabel(o: Pick<StatusPageNotificationOutcome, 'kind' | 'subject'>): string {
+  return o.subject?.trim() || NOTICE_KIND_LABELS[o.kind] || o.kind;
+}
+
+/**
+ * What a notice came to, in one line: why nobody was mailed, or how its
+ * deliveries ended. `problem` flags mail that was lost or may have been.
+ */
+export function noticeOutcome(o: StatusPageNotificationOutcome): { text: string; problem: boolean } {
+  if (o.status === 'pending') return { text: 'Waiting to be sent', problem: false };
+  if (o.status === 'skipped') {
+    return { text: `Not emailed: ${o.skip_reason || 'skipped'}`, problem: !/takes no email subscriptions/.test(o.skip_reason ?? '') };
+  }
+  if (o.recipients === 0) return { text: 'No confirmed subscribers to email', problem: false };
+  const parts = [`${o.sent} sent`];
+  if (o.waiting) parts.push(`${o.waiting} waiting`);
+  if (o.failed) parts.push(`${o.failed} failed`);
+  if (o.uncertain) parts.push(`${o.uncertain} uncertain`);
+  if (o.skipped) parts.push(`${o.skipped} skipped`);
+  return { text: `${parts.join(' · ')} of ${o.recipients}`, problem: o.failed > 0 || o.uncertain > 0 };
 }

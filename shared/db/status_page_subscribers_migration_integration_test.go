@@ -89,10 +89,15 @@ func TestStatusPageSubscribersMigrationsUpDownUp(t *testing.T) {
 	for round := 0; round < 2; round++ {
 		migrateTo(123)
 		subscriber, incident, outbox := uuid.New(), uuid.New(), uuid.New()
-		exec(`INSERT INTO status_page_subscribers (id, tenant_id, status_page_id, email, email_hash, state) VALUES ($1, $2, $3, 'a@example.com', 'h', 'confirmed')`,
+		exec(`INSERT INTO status_page_subscribers (id, tenant_id, status_page_id, email, email_hash, inbox_hash, state) VALUES ($1, $2, $3, 'a@example.com', 'h', 'h', 'confirmed')`,
 			subscriber, tenant, page)
 		exec(`INSERT INTO incidents (id, tenant_id, title, summary, state) VALUES ($1, $2, 't', 's', 'investigating')`, incident, tenant)
-		exec(`INSERT INTO incident_status_page_publications (incident_id, status_page_id, tenant_id, auto_published) VALUES ($1, $2, $3, TRUE)`, incident, page, tenant)
+		exec(`INSERT INTO incident_status_page_publications (incident_id, status_page_id, tenant_id, auto_published, public_title) VALUES ($1, $2, $3, TRUE, 'Service disruption')`, incident, page, tenant)
+		exec(`INSERT INTO status_page_confirmation_sends (inbox_hash) VALUES ('h')`)
+		exec(`WITH mw AS (
+				INSERT INTO maintenance_windows (tenant_id, title, starts_at, ends_at) VALUES ($1, 'w', NOW(), NOW() + INTERVAL '1 hour') RETURNING id)
+			INSERT INTO status_page_notification_outbox (tenant_id, status_page_id, event_kind, maintenance_window_id, dedupe_key)
+			SELECT $1, $2, 'maintenance_cancelled', mw.id, 'c' FROM mw`, tenant, page)
 		exec(`INSERT INTO status_page_notification_outbox (id, tenant_id, status_page_id, event_kind, incident_id, dedupe_key) VALUES ($1, $2, $3, 'incident_published', $4, 'k')`,
 			outbox, tenant, page, incident)
 		exec(`INSERT INTO status_page_notification_deliveries (outbox_id, subscriber_id, tenant_id) VALUES ($1, $2, $3)`, outbox, subscriber, tenant)
@@ -108,10 +113,10 @@ func TestStatusPageSubscribersMigrationsUpDownUp(t *testing.T) {
 		}
 
 		migrateTo(before)
-		if exists("status_page_subscribers") || exists("status_page_notification_outbox") || exists("status_page_notification_deliveries") {
+		if exists("status_page_subscribers") || exists("status_page_notification_outbox") || exists("status_page_notification_deliveries") || exists("status_page_confirmation_sends") {
 			t.Fatal("subscriber tables still present after rolling back")
 		}
-		if column("incident_status_page_publications", "auto_published") || column("status_page_push_deliveries", "incident_id") {
+		if column("incident_status_page_publications", "auto_published") || column("incident_status_page_publications", "public_title") || column("status_page_push_deliveries", "incident_id") {
 			t.Fatal("000123 columns still present after rolling back")
 		}
 		var monitorRows int

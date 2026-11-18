@@ -49,6 +49,53 @@ type StatusPageSubscriberListResponse struct {
 	MailProblems []string `json:"mail_problems"`
 }
 
+// StatusPageSubscriberSummary is what any workspace member may read about a
+// page's subscribers: counts, mail readiness and what recent notices came
+// to. The addresses themselves need write access
+// (StatusPageSubscriberListResponse).
+type StatusPageSubscriberSummary struct {
+	Counts       StatusPageSubscriberCounts `json:"counts"`
+	Limit        int                        `json:"limit"`
+	MailReady    bool                       `json:"mail_ready"`
+	MailProblems []string                   `json:"mail_problems"`
+	// Recent is the page's latest notices, newest first.
+	Recent []StatusPageNotificationOutcome `json:"recent"`
+}
+
+// StatusPageNotificationOutcome is one notice (an outbox row) and what its
+// deliveries came to.
+type StatusPageNotificationOutcome struct {
+	ID        uuid.UUID `json:"id"`
+	Kind      string    `json:"kind"`
+	CreatedAt time.Time `json:"created_at"`
+	// Subject is the notice's headline once planned.
+	Subject string `json:"subject,omitempty"`
+	// Status is pending (not planned yet), planned or skipped; SkipReason
+	// says why a skipped one mailed nobody.
+	Status     string `json:"status"`
+	SkipReason string `json:"skip_reason,omitempty"`
+	Recipients int    `json:"recipients"`
+	Sent       int    `json:"sent"`
+	Waiting    int    `json:"waiting"`
+	Failed     int    `json:"failed"`
+	Uncertain  int    `json:"uncertain"`
+	Skipped    int    `json:"skipped"`
+	// LastError is one failed or uncertain delivery's error.
+	LastError string `json:"last_error,omitempty"`
+}
+
+// RemoveStatusPageSubscribersRequest removes many subscribers at once:
+// every one (All), or those whose address is at Domain.
+type RemoveStatusPageSubscribersRequest struct {
+	All    bool   `json:"all,omitempty"`
+	Domain string `json:"domain,omitempty"`
+}
+
+// RemoveStatusPageSubscribersResponse says how many were removed.
+type RemoveStatusPageSubscribersResponse struct {
+	Removed int `json:"removed"`
+}
+
 // StatusPageSubscribeRequest is a visitor's subscribe form, forwarded by the
 // status-page service.
 type StatusPageSubscribeRequest struct {
@@ -77,8 +124,8 @@ type StatusPageSubscriptionTokenRequest struct {
 type StatusPageSubscriptionResponse struct {
 	// State is confirmed, unsubscribed, expired or invalid.
 	State string `json:"state"`
-	// PageTitle and PageSlug name the page for a confirmed or unsubscribed
-	// link (never for an invalid one).
+	// PageTitle names the page for a confirmed or unsubscribed link (never
+	// for an invalid one); PageSlug only for a confirmed one.
 	PageTitle string `json:"page_title,omitempty"`
 	PageSlug  string `json:"page_slug,omitempty"`
 }

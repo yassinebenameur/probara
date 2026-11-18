@@ -63,6 +63,25 @@ type StatusPageConfig struct {
 	// read-only): STATUS_PAGE_INTERNAL_API_URL, else STATUS_PAGE_API_BASE_URL.
 	// Empty means no page shows a subscribe form.
 	InternalAPIURL string
+	// InternalToken is STATUS_PAGE_INTERNAL_TOKEN: the service presents it
+	// on every forwarded subscription request, and the API refuses the
+	// subscribe and confirm routes without it. Empty: no page shows a
+	// subscribe form.
+	InternalToken string
+}
+
+// MinStatusPageInternalTokenLength is the shortest STATUS_PAGE_INTERNAL_TOKEN
+// accepted.
+const MinStatusPageInternalTokenLength = 32
+
+// loadStatusPageInternalToken reads STATUS_PAGE_INTERNAL_TOKEN, shared by the
+// api and status-page services, refusing one too short to be a secret.
+func loadStatusPageInternalToken() (string, error) {
+	token := strings.TrimSpace(os.Getenv("STATUS_PAGE_INTERNAL_TOKEN"))
+	if token != "" && len(token) < MinStatusPageInternalTokenLength {
+		return "", fmt.Errorf("STATUS_PAGE_INTERNAL_TOKEN must be at least %d characters", MinStatusPageInternalTokenLength)
+	}
+	return token, nil
 }
 
 // SessionCookieSecure decides the visitor session cookie's Secure flag, like
@@ -138,6 +157,10 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 	cfg.InternalAPIURL = strings.TrimRight(strings.TrimSpace(os.Getenv("STATUS_PAGE_INTERNAL_API_URL")), "/")
 	if cfg.InternalAPIURL == "" {
 		cfg.InternalAPIURL = strings.TrimRight(strings.TrimSpace(cfg.APIBaseURL), "/")
+	}
+
+	if cfg.InternalToken, err = loadStatusPageInternalToken(); err != nil {
+		return nil, err
 	}
 
 	cfg.SessionSecret = strings.TrimSpace(os.Getenv("STATUS_PAGE_SESSION_SECRET"))

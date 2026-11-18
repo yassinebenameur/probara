@@ -4,7 +4,21 @@
 -- A publication made by the API runner rather than an operator. Such an
 -- incident is resolved automatically once its monitors recover.
 ALTER TABLE incident_status_page_publications
-    ADD COLUMN auto_published BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN auto_published BOOLEAN NOT NULL DEFAULT FALSE,
+    -- What the page (and its feed, summary, subscriber mail and push) shows
+    -- instead of the incident's own title and summary. Always set for an
+    -- automatically created incident, whose own title names the internal
+    -- monitor: "Service disruption: <the page's component names>". An
+    -- operator may set one on any publication. NULL: the incident's own.
+    ADD COLUMN public_title TEXT CHECK (char_length(public_title) <= 200),
+    ADD COLUMN public_summary TEXT CHECK (char_length(public_summary) <= 2000);
+
+-- Publications of automatic incidents made before this migration showed the
+-- internal title; from now on they show the neutral one.
+UPDATE incident_status_page_publications isp
+SET public_title = 'Service disruption', public_summary = ''
+FROM incidents i
+WHERE i.id = isp.incident_id AND i.is_auto_created AND isp.public_title IS NULL;
 
 -- Visitor push for incident publications, public updates and resolutions,
 -- driven by the notification outbox (000122). Such a delivery names the

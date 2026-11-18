@@ -14,6 +14,7 @@ import (
 	"github.com/lib/pq"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
 	"github.com/yassinebenameur/probara/shared/actionlink"
 	"github.com/yassinebenameur/probara/shared/mail"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
@@ -28,8 +29,10 @@ const (
 	// Per-pass bounds. Deliveries are claimed round-robin across outbox rows
 	// (maxOutboxPerBatch rows, deliveriesPerOutbox each), so a page with
 	// thousands of subscribers never holds back another page's notice.
+	// Confirmations go after notices in every pass and are bounded per
+	// pass, so a flood of subscribe requests never holds back incident mail.
 	maxPlansPerTick         = 50
-	maxConfirmationsPerTick = 100
+	maxConfirmationsPerTick = 50
 	confirmationBatch       = 25
 	maxDeliveriesPerTick    = 1000
 	maxOutboxPerBatch       = 20
@@ -64,7 +67,7 @@ const interruptedError = "the API stopped while sending; the message may or may 
 
 // RunOnce does one pass: hands back stale claims, publishes due outages and
 // resolves recovered ones, announces starting maintenance, plans pending
-// outbox rows, sends owed confirmations and due deliveries, and prunes. It
+// outbox rows, sends due notices and then owed confirmations, and prunes. It
 // stops early, without an error, once ctx is done.
 func (s *Service) RunOnce(ctx context.Context) error {
 	if err := s.reclaimStale(ctx); err != nil {
@@ -90,8 +93,8 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		}
 	}
 	if s.Ready() {
-		for sent := 0; sent < maxConfirmationsPerTick && ctx.Err() == nil; {
-			n, err := s.sendConfirmations(ctx)
+		for sent := 0; sent < maxDeliveriesPerTick && ctx.Err() == nil; {
+			n, err := s.deliverBatch(ctx)
 			if err != nil {
 				return quietCancel(ctx, err)
 			}
@@ -100,8 +103,8 @@ func (s *Service) RunOnce(ctx context.Context) error {
 			}
 			sent += n
 		}
-		for sent := 0; sent < maxDeliveriesPerTick && ctx.Err() == nil; {
-			n, err := s.deliverBatch(ctx)
+		for sent := 0; sent < maxConfirmationsPerTick && ctx.Err() == nil; {
+			n, err := s.sendConfirmations(ctx, maxConfirmationsPerTick-sent)
 			if err != nil {
 				return quietCancel(ctx, err)
 			}
@@ -173,11 +176,22 @@ type claimedConfirmation struct {
 }
 
 // sendConfirmations reserves up to confirmationBatch owed confirmation mails
-// and sends them. A confirmation is reserved (claim set, still due), then
-// cleared of its due time, committed, right before its send: a crash after
-// that never sends it twice, and the visitor can ask again.
-func (s *Service) sendConfirmations(ctx context.Context) (int, error) {
+// (fewer when the pass or the installation's hourly budget,
+// MaxConfirmationsPerHour, has less left) and sends them. A confirmation is
+// reserved (claim set, still due), then cleared of its due time and logged
+// in status_page_confirmation_sends, committed, right before its send: a
+// crash after that never sends it twice, and the visitor can ask again.
+func (s *Service) sendConfirmations(ctx context.Context, passLeft int) (int, error) {
 	now := s.now()
+	var sentLastHour int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM status_page_confirmation_sends WHERE sent_at > $1`,
+		now.Add(-time.Hour)).Scan(&sentLastHour); err != nil {
+		return 0, fmt.Errorf("count confirmation mail: %w", err)
+	}
+	limit := min(confirmationBatch, passLeft, MaxConfirmationsPerHour-sentLastHour)
+	if limit <= 0 {
+		return 0, nil
+	}
 	claimID := uuid.New()
 	rows, err := s.db.QueryContext(ctx, `
 		UPDATE status_page_subscribers sub
@@ -191,7 +205,7 @@ func (s *Service) sendConfirmations(ctx context.Context) (int, error) {
 		) c
 		WHERE sub.id = c.id
 		RETURNING sub.id, sub.tenant_id, sub.status_page_id, sub.email, sub.confirm_attempts
-	`, now, confirmationBatch, claimID)
+	`, now, limit, claimID)
 	if err != nil {
 		return 0, fmt.Errorf("claim confirmations: %w", err)
 	}
@@ -220,11 +234,12 @@ func (s *Service) sendConfirmations(ctx context.Context) (int, error) {
 }
 
 func (s *Service) sendConfirmation(ctx context.Context, c claimedConfirmation) {
-	var slug, title, primary string
+	ref := pageRef{id: c.pageID, tenantID: c.tenantID}
+	var title, primary string
 	var open bool
 	err := s.db.QueryRowContext(ctx, `SELECT sp.slug, sp.title, COALESCE(sp.primary_color, ''),
 			(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true')
-		FROM status_pages sp WHERE sp.id = $1 AND sp.tenant_id = $2`, c.pageID, c.tenantID).Scan(&slug, &title, &primary, &open)
+		FROM status_pages sp WHERE sp.id = $1 AND sp.tenant_id = $2`, c.pageID, c.tenantID).Scan(&ref.slug, &title, &primary, &open)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return // handed back
 	}
@@ -239,19 +254,25 @@ func (s *Service) sendConfirmation(ctx context.Context, c claimedConfirmation) {
 		return // handed back; MailProblems says why
 	}
 	msg, err := confirmMessage(confirmView{
-		PageTitle: title, PageURL: s.pageURL(slug), Accent: primary, Recipient: c.email,
-		Confirm: s.pageURL(slug) + SubscriptionPath + "?action=confirm#" + token,
+		PageTitle: title, PageURL: s.publicPageURL(ref), Accent: primary, Recipient: c.email,
+		Confirm: s.confirmURL(ref, token),
 	})
 	if err != nil {
 		s.detached(ctx, `UPDATE status_page_subscribers SET confirm_due_at = NULL, confirm_claim_id = NULL, last_confirm_error = $3
 			WHERE id = $1 AND confirm_claim_id = $2`, c.id, c.claimID, clip(err.Error()))
 		return
 	}
-	// Sending: the due time is cleared under the claim, committed, now.
+	// Sending: the due time is cleared under the claim and the send logged
+	// for the caps, committed, now.
 	err = s.db.QueryRowContext(ctx, `
-		UPDATE status_page_subscribers SET confirm_due_at = NULL, confirm_attempts = confirm_attempts + 1, confirm_claimed_at = $3
-		WHERE id = $1 AND confirm_claim_id = $2 AND confirm_due_at IS NOT NULL AND state = 'pending'
-		RETURNING confirm_attempts
+		WITH sending AS (
+			UPDATE status_page_subscribers SET confirm_due_at = NULL, confirm_attempts = confirm_attempts + 1, confirm_claimed_at = $3
+			WHERE id = $1 AND confirm_claim_id = $2 AND confirm_due_at IS NOT NULL AND state = 'pending'
+			RETURNING confirm_attempts, inbox_hash
+		), logged AS (
+			INSERT INTO status_page_confirmation_sends (inbox_hash, sent_at) SELECT inbox_hash, $3 FROM sending
+		)
+		SELECT confirm_attempts FROM sending
 	`, c.id, c.claimID, s.now()).Scan(&c.attempts)
 	if err != nil {
 		return // confirmed or reclaimed meanwhile
@@ -348,19 +369,36 @@ func (s *Service) planOne(ctx context.Context) (bool, error) {
 			o.id, skip, s.now()); err != nil {
 			return false, fmt.Errorf("skip outbox row: %w", err)
 		}
+		// A notice that confirmed subscribers will not get is worth a
+		// warning when it is lost to the installation (mail off, too late),
+		// not when the page turned its subscriptions off.
+		if o.open && s.log != nil {
+			if n, err := confirmedSubscribers(ctx, tx, o.pageID); err == nil && n > 0 {
+				s.log.WithFields(map[string]interface{}{
+					"status_page_id": o.pageID.String(), "event": o.kind, "subscribers": n, "reason": skip,
+				}).Warn("A status page notice was not mailed to its subscribers")
+			}
+		}
 		return true, tx.Commit()
 	}
 	content, err := jsonOf(n)
 	if err != nil {
 		return false, err
 	}
+	// A cancellation goes only to the subscribers who were mailed the
+	// window's announcement on this page.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO status_page_notification_deliveries (outbox_id, subscriber_id, tenant_id, next_attempt_at)
 		SELECT $1, sub.id, sub.tenant_id, $4
 		FROM status_page_subscribers sub
 		WHERE sub.status_page_id = $2 AND sub.tenant_id = $3 AND sub.state = 'confirmed'
+		  AND ($5 <> $6 OR EXISTS (
+			SELECT 1 FROM status_page_notification_deliveries told
+			JOIN status_page_notification_outbox ann ON ann.id = told.outbox_id
+			WHERE told.subscriber_id = sub.id AND told.status IN ('sent', 'uncertain')
+			  AND ann.status_page_id = $2 AND ann.maintenance_window_id = $7 AND ann.event_kind = $8))
 		ON CONFLICT DO NOTHING
-	`, o.id, o.pageID, o.tenantID, s.now())
+	`, o.id, o.pageID, o.tenantID, s.now(), o.kind, pagenotify.KindMaintenanceCancelled, o.windowID, pagenotify.KindMaintenanceScheduled)
 	if err != nil {
 		return false, fmt.Errorf("add deliveries: %w", err)
 	}
@@ -461,15 +499,15 @@ func (s *Service) deliverBatch(ctx context.Context) (int, error) {
 // Errors end up on the rows, never returned.
 func (s *Service) sendGroup(ctx context.Context, outboxID uuid.UUID, group []claimedDelivery) {
 	var raw []byte
-	var pageID, tenantID uuid.UUID
+	var ref pageRef
 	var open bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT o.content, o.status_page_id, o.tenant_id,
+		SELECT o.content, o.status_page_id, o.tenant_id, sp.slug,
 			(sp.visibility IN ('public', 'unlisted') AND COALESCE(sp.settings->>'enable_email_subscriptions', 'false') = 'true')
 		FROM status_page_notification_outbox o
 		JOIN status_pages sp ON sp.id = o.status_page_id
 		WHERE o.id = $1
-	`, outboxID).Scan(&raw, &pageID, &tenantID, &open)
+	`, outboxID).Scan(&raw, &ref.id, &ref.tenantID, &ref.slug, &open)
 	if err != nil {
 		return // deleted meanwhile (cascade), or handed back
 	}
@@ -496,21 +534,22 @@ func (s *Service) sendGroup(ctx context.Context, outboxID uuid.UUID, group []cla
 			continue // unsubscribed meanwhile; the row went with them
 		}
 		g.Go(func() error {
-			s.sendOne(ctx, n, pageID, tenantID, d)
+			s.sendOne(ctx, n, ref, d)
 			return nil
 		})
 	}
 	_ = g.Wait()
 }
 
-func (s *Service) sendOne(ctx context.Context, n notice, pageID, tenantID uuid.UUID, d claimedDelivery) {
-	token, err := s.token(actionlink.ActionUnsubscribePage, tenantID, pageID, d.subscriberID)
+func (s *Service) sendOne(ctx context.Context, n notice, ref pageRef, d claimedDelivery) {
+	token, err := s.token(actionlink.ActionUnsubscribePage, ref.tenantID, ref.id, d.subscriberID)
 	if err != nil {
 		return // handed back; MailProblems says why
 	}
-	unsubscribePage := n.PageURL + SubscriptionPath + "?action=unsubscribe#" + token
-	oneClick := s.appBaseURL + OneClickUnsubscribePath + "?token=" + token
-	msg, err := noticeMessage(n, d.email, unsubscribePage, oneClick)
+	// Links are built now, not when planned: a page whose address changed
+	// since links to where it is.
+	n.PageURL = s.publicPageURL(ref)
+	msg, err := noticeMessage(n, d.email, s.unsubscribeLandingURL(ref, token), s.oneClickURL(token))
 	if err != nil {
 		s.update(ctx, d, "claimed", `status = 'failed', claim_id = NULL, last_error = $4`, clip(err.Error()))
 		return
@@ -531,17 +570,31 @@ func (s *Service) sendOne(ctx context.Context, n notice, pageID, tenantID uuid.U
 	case sendErr == nil:
 		s.update(ctx, d, "sending", `status = 'sent', claim_id = NULL, sent_at = $4, last_error = NULL`, now)
 	case errors.Is(sendErr, mail.ErrMaybeDelivered):
+		s.warnLost(ref, d, "uncertain", sendErr)
 		s.update(ctx, d, "sending", `status = 'uncertain', claim_id = NULL, last_error = $4`,
 			clip("the connection was lost after the message was sent; it may have arrived, so it is not sent again: "+sendErr.Error()))
 	case ctx.Err() != nil:
 		// Stopped before the message was through: back, uncounted.
 		s.update(ctx, d, "sending", `status = 'pending', claim_id = NULL, claimed_at = NULL, attempts = attempts - 1`)
 	case permanent(sendErr) || d.attempts >= maxAttempts:
+		s.warnLost(ref, d, "failed", sendErr)
 		s.update(ctx, d, "sending", `status = 'failed', claim_id = NULL, last_error = $4`, clip(sendErr.Error()))
 	default:
 		wait := retryBackoff[min(d.attempts, len(retryBackoff))-1]
 		s.update(ctx, d, "sending", `status = 'pending', claim_id = NULL, next_attempt_at = $4, last_error = $5`, now.Add(wait), clip(sendErr.Error()))
 	}
+}
+
+// warnLost logs a notice a subscriber will not get (or may not have got).
+// The subscriber is named by ID, never by address.
+func (s *Service) warnLost(ref pageRef, d claimedDelivery, outcome string, err error) {
+	if s.log == nil {
+		return
+	}
+	s.log.WithFields(map[string]interface{}{
+		"status_page_id": ref.id.String(), "outbox_id": d.outboxID.String(), "subscriber_id": d.subscriberID.String(),
+		"outcome": outcome, "attempts": d.attempts, "error": clip(err.Error()),
+	}).Warn("A status page notice could not be delivered to a subscriber")
 }
 
 // permanent reports failures a retry cannot fix: a message that can never
@@ -600,6 +653,9 @@ func (s *Service) prune(ctx context.Context, now time.Time) error {
 			WHERE d.outbox_id = o.id AND d.status IN ('pending', 'claimed', 'sending'))
 	`, now.Add(-outboxRetention)); err != nil {
 		return fmt.Errorf("prune notification outbox: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM status_page_confirmation_sends WHERE sent_at < $1`, now.Add(-48*time.Hour)); err != nil {
+		return fmt.Errorf("prune confirmation log: %w", err)
 	}
 	return nil
 }

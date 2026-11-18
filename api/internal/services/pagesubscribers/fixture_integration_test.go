@@ -91,6 +91,8 @@ func (r *recorder) Record(e audit.Event) {
 	r.events = append(r.events, e)
 }
 
+const testInternalToken = "internal-token-0123456789abcdef0123456789"
+
 type fixture struct {
 	ctx       context.Context
 	db        *shareddb.Client
@@ -125,7 +127,7 @@ func (f *fixture) setting(t *testing.T, key string, on bool) {
 func (f *fixture) service(mailer mail.Sender, at *time.Time) *Service {
 	s := NewService(f.db, Config{
 		Mailer: mailer, Links: actionlink.New(testKeys{}), AppBaseURL: "https://app.example.com/",
-		StatusPageBaseURL: "https://status.example.com", Audit: &recorder{},
+		StatusPageBaseURL: "https://status.example.com", InternalToken: testInternalToken, Audit: &recorder{},
 	})
 	if at != nil {
 		s.now = func() time.Time { return *at }

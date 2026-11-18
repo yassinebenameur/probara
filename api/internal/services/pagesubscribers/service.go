@@ -2,22 +2,26 @@
 //
 // Visitors subscribe on the public page. The status-page service, read-only
 // except for push, only forwards the form here (after its visibility gate
-// and per-client throttle); the API alone writes subscribers. Subscribing is
-// double opt-in: the address gets a confirmation mail with a signed link
-// (shared/actionlink, ActionConfirmSubscription, 48 hours), and nothing else
-// until it is followed. Every subscribe request answers the same whatever
-// the address's state, and confirmation mail goes out from the Runner, never
-// the request, so neither the answer nor its timing tells whether an
-// address is subscribed.
+// and per-client throttle), presenting STATUS_PAGE_INTERNAL_TOKEN; the
+// subscribe and confirm routes refuse any other caller, so the gate and the
+// throttle cannot be bypassed by calling the API directly. The API alone
+// writes subscribers. Subscribing is double opt-in: the address gets a
+// confirmation mail with a signed link (shared/actionlink,
+// ActionConfirmSubscription, 48 hours), and nothing else until it is
+// followed. Every subscribe request answers the same whatever the address's
+// state, and confirmation mail goes out from the Runner, never the request,
+// so neither the answer nor its timing tells whether an address is
+// subscribed.
 //
 // Subscriber mail is driven only by the notification outbox (pagenotify):
 // the Runner plans each pending row once (one delivery per confirmed
 // subscriber, committed before anyone is mailed) and sends with the
 // delivery states of SLA report emails (claimed, then sending committed
 // right before the send; uncertain only after a send started). Every message
-// goes to one subscriber and carries their signed unsubscribe link
-// (ActionUnsubscribePage) in the body and as List-Unsubscribe with RFC 8058
-// one-click POST. Unsubscribing deletes the address.
+// goes to one subscriber, in the page's name, and carries their signed
+// unsubscribe link (ActionUnsubscribePage) in the body and as
+// List-Unsubscribe with RFC 8058 one-click POST. Unsubscribing deletes the
+// address, whatever the page's visibility has become.
 //
 // Subscriptions exist on public and unlisted pages only: a mail would carry
 // a gated page's incident text to an address that once had access, past
@@ -30,6 +34,7 @@ package pagesubscribers
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/csv"
 	"encoding/hex"
@@ -37,6 +42,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,23 +56,38 @@ import (
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
-// Limits on the anonymous subscribe endpoint. The status-page service
-// throttles each client before forwarding; these hold whoever calls.
+// Limits on the subscribe endpoint. The status-page service throttles each
+// client before forwarding (and only it may call); these bound what any
+// number of clients can do together.
 const (
 	// MaxSubscribersPerPage bounds one page's subscribers, pending and
 	// confirmed: an anonymous endpoint must not become unbounded storage.
 	MaxSubscribersPerPage = 10000
-	// MaxNewPendingPerPagePerHour bounds new addresses a page takes in an
-	// hour, so a flood cannot mail thousands of strangers in one go.
-	MaxNewPendingPerPagePerHour = 100
+	// MaxNewPerPagePerHour bounds the addresses a page takes in an hour,
+	// whatever became of them since (confirmed, unsubscribed or pending), so
+	// confirming addresses as fast as they arrive cannot fill a page.
+	MaxNewPerPagePerHour = 100
+	// MaxPendingPerPage bounds the addresses waiting for confirmation.
+	MaxPendingPerPage = 500
 	// MaxConfirmationsPerDay is how many confirmation mails one address gets
 	// for one page in a day, however often it is submitted.
 	MaxConfirmationsPerDay = 3
+	// MaxConfirmationsPerInboxPerDay bounds the confirmation mails one inbox
+	// gets in a day across every page, its +tag aliases counted together.
+	MaxConfirmationsPerInboxPerDay = 5
+	// MaxConfirmationsPerHour bounds all confirmation mail of the
+	// installation in an hour; past it, confirmations wait for the next
+	// hour (notices are never held back by it).
+	MaxConfirmationsPerHour = 500
 	// PendingRetention is how long an unconfirmed address is kept after its
 	// last subscribe request.
 	PendingRetention = 7 * 24 * time.Hour
 	// maxAddressLen is the RFC 5321 path limit.
 	maxAddressLen = 254
+	// wakeEvery bounds how often a subscribe may wake the Runner early.
+	wakeEvery = 5 * time.Second
+	// maxBulkDomainLen bounds a bulk-remove domain.
+	maxBulkDomainLen = 253
 )
 
 // Errors the handlers map to statuses.
@@ -102,8 +123,9 @@ type Publisher interface {
 }
 
 // Config is what the API process provides. Mailer may be nil (no SMTP),
-// Links nil (no PROBARA_SECRETS_KEY) and the base URLs empty: subscriptions
-// then cannot be turned on, and automatic publishing still runs.
+// Links nil (no PROBARA_SECRETS_KEY) and the base URLs and token empty:
+// subscriptions then cannot be turned on, and automatic publishing still
+// runs.
 type Config struct {
 	Mailer mail.Sender
 	Links  *actionlink.Signer
@@ -112,11 +134,14 @@ type Config struct {
 	AppBaseURL string
 	// StatusPageBaseURL is the public origin of status pages
 	// (STATUS_PAGE_BASE_URL); every page link a mail carries is built from
-	// it by pageURL.
+	// it by publicPageURL (links.go).
 	StatusPageBaseURL string
-	Audit             AuditRecorder
-	Publisher         Publisher
-	Log               *logger.Logger
+	// InternalToken is STATUS_PAGE_INTERNAL_TOKEN, which the status-page
+	// service presents on the requests it forwards.
+	InternalToken string
+	Audit         AuditRecorder
+	Publisher     Publisher
+	Log           *logger.Logger
 }
 
 // Service stores subscribers and mails them.
@@ -126,12 +151,16 @@ type Service struct {
 	links             Links
 	appBaseURL        string
 	statusPageBaseURL string
+	internalToken     string
 	audit             AuditRecorder
 	publisher         Publisher
 	log               *logger.Logger
 	now               func() time.Time
-	// wake asks the Runner for an early pass (a confirmation is owed).
-	wake chan struct{}
+	// wake asks the Runner for an early pass (a confirmation is owed);
+	// lastWake rate-limits it.
+	wake     chan struct{}
+	wakeMu   sync.Mutex
+	lastWake time.Time
 	// sendConcurrency bounds simultaneous sends in one delivery batch.
 	sendConcurrency int
 	// lastPrune is when the Runner last pruned; prunes run hourly.
@@ -145,6 +174,7 @@ func NewService(dbClient *db.Client, cfg Config) *Service {
 		mailer:            cfg.Mailer,
 		appBaseURL:        strings.TrimRight(strings.TrimSpace(cfg.AppBaseURL), "/"),
 		statusPageBaseURL: strings.TrimRight(strings.TrimSpace(cfg.StatusPageBaseURL), "/"),
+		internalToken:     strings.TrimSpace(cfg.InternalToken),
 		audit:             cfg.Audit,
 		publisher:         cfg.Publisher,
 		log:               cfg.Log,
@@ -160,7 +190,7 @@ func NewService(dbClient *db.Client, cfg Config) *Service {
 }
 
 // MailProblems says why this API cannot mail status-page subscribers; empty
-// when it can. Turning email subscriptions on is refused while it is not.
+// when it can. The Runner sends only when it is empty.
 func (s *Service) MailProblems() []string {
 	problems := []string{}
 	if s.mailer == nil {
@@ -178,35 +208,46 @@ func (s *Service) MailProblems() []string {
 	return problems
 }
 
+// SubscriptionProblems is MailProblems plus what visitors need to reach the
+// subscribe route at all; turning email subscriptions on is refused while
+// it is not empty.
+func (s *Service) SubscriptionProblems() []string {
+	problems := s.MailProblems()
+	if s.internalToken == "" {
+		problems = append(problems, "STATUS_PAGE_INTERNAL_TOKEN is not set on the API: the status-page service presents it when it forwards a visitor's subscription.")
+	}
+	return problems
+}
+
 // Ready reports whether subscriber mail can be sent.
 func (s *Service) Ready() bool { return len(s.MailProblems()) == 0 }
 
-// pageURL is the one place a subscriber mail or link builds a page's public
-// URL: everything a subscriber is sent to goes through it.
-func (s *Service) pageURL(slug string) string {
-	if s.statusPageBaseURL == "" || slug == "" {
-		return ""
-	}
-	return s.statusPageBaseURL + "/public/status/" + slug
+// ForwardedByStatusPage reports whether a request carries the status-page
+// service's internal token. Without a configured token nothing does.
+func (s *Service) ForwardedByStatusPage(presented string) bool {
+	presented = strings.TrimSpace(presented)
+	return s.internalToken != "" && presented != "" &&
+		subtle.ConstantTimeCompare([]byte(presented), []byte(s.internalToken)) == 1
 }
-
-// SubscriptionPath is the status-page route that renders confirmation and
-// unsubscribe pages (status-page/internal/statuspage/subscribe.go). Tokens
-// ride in the fragment, which browsers never send to a server.
-const SubscriptionPath = "/subscription"
-
-// OneClickUnsubscribePath is the API route List-Unsubscribe names. The RFC
-// 8058 one-click POST cannot set a header, so the token is a query
-// parameter, which the request log never records (it logs the path only).
-// It is not under the page: it must keep working whatever the page's
-// visibility becomes.
-const OneClickUnsubscribePath = "/api/v1/public/status-page-subscriptions/unsubscribe"
 
 // AddressHash is the SHA-256 of a normalized address, hex: the lookup key,
 // and what audit events record instead of the address.
 func AddressHash(address string) string {
 	sum := sha256.Sum256([]byte(address))
 	return hex.EncodeToString(sum[:])
+}
+
+// InboxHash is the SHA-256 of the inbox a normalized address reaches: its
+// local part without a +tag. Confirmation mail is capped per inbox, so
+// name+1@, name+2@ … cannot flood one mailbox. Provider-specific rules
+// (dots ignored by some) are not applied: they are not universal.
+func InboxHash(address string) string {
+	at := strings.LastIndexByte(address, '@')
+	local, domain := address[:at], address[at+1:]
+	if i := strings.IndexByte(local, '+'); i > 0 {
+		local = local[:i]
+	}
+	return AddressHash(local + "@" + domain)
 }
 
 // NormalizeAddress trims and lower-cases a submitted address and accepts
@@ -229,9 +270,9 @@ func NormalizeAddress(raw string) (string, error) {
 
 // subscribablePage is a page as the public endpoints see it.
 type subscribablePage struct {
-	id, tenantID uuid.UUID
-	slug, title  string
-	open         bool // public or unlisted, with email subscriptions on
+	pageRef
+	title string
+	open  bool // public or unlisted, with email subscriptions on
 }
 
 const pageColumns = `sp.id, sp.tenant_id, sp.slug, sp.title,
@@ -248,7 +289,8 @@ func scanPage(row interface{ Scan(...any) error }) (*subscribablePage, error) {
 // Subscribe takes a visitor's address for the page at slug. Every accepted
 // request returns nil whatever the address's state (new, pending, confirmed,
 // or unsubscribed before): a new or pending address is owed a confirmation
-// mail (at most MaxConfirmationsPerDay a day), which the Runner sends; a
+// mail (at most MaxConfirmationsPerDay a day for the page and
+// MaxConfirmationsPerInboxPerDay for its inbox), which the Runner sends; a
 // confirmed one gets nothing. The page limits apply before the address is
 // looked at, so they refuse every address alike.
 func (s *Service) Subscribe(ctx context.Context, slug, rawAddress string) error {
@@ -267,47 +309,66 @@ func (s *Service) Subscribe(ctx context.Context, slug, rawAddress string) error 
 		return ErrNotFound
 	}
 	now := s.now()
+	inbox := InboxHash(addr)
+	queued := false
 	err = withTx(ctx, s.db, func(tx *sql.Tx) error {
 		// One subscribe at a time per page, so the limits below are exact.
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "page-subscribe:"+page.id.String()); err != nil {
 			return fmt.Errorf("lock page subscriptions: %w", err)
 		}
-		var total, recent int
+		var total, recent, pending int
 		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(*), COUNT(*) FILTER (WHERE state = 'pending' AND created_at > $2)
+			SELECT COUNT(*), COUNT(*) FILTER (WHERE created_at > $2), COUNT(*) FILTER (WHERE state = 'pending')
 			FROM status_page_subscribers WHERE status_page_id = $1
-		`, page.id, now.Add(-time.Hour)).Scan(&total, &recent); err != nil {
+		`, page.id, now.Add(-time.Hour)).Scan(&total, &recent, &pending); err != nil {
 			return fmt.Errorf("count subscribers: %w", err)
 		}
-		if total >= MaxSubscribersPerPage || recent >= MaxNewPendingPerPagePerHour {
+		if total >= MaxSubscribersPerPage || recent >= MaxNewPerPagePerHour || pending >= MaxPendingPerPage {
 			return ErrLimit
 		}
-		// New: pending, one confirmation owed. Pending: owed another one
-		// unless one is already waiting or the day's budget is spent.
-		// Confirmed: nothing changes.
-		if _, err := tx.ExecContext(ctx, `
+		// The inbox's budget: confirmations sent to it in the last day
+		// (any page), plus those still owed.
+		var inboxUsed int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT (SELECT COUNT(*) FROM status_page_confirmation_sends WHERE inbox_hash = $1 AND sent_at > $2)
+			     + (SELECT COUNT(*) FROM status_page_subscribers WHERE inbox_hash = $1 AND confirm_due_at IS NOT NULL)
+		`, inbox, now.Add(-24*time.Hour)).Scan(&inboxUsed); err != nil {
+			return fmt.Errorf("count inbox confirmations: %w", err)
+		}
+		mayQueue := inboxUsed < MaxConfirmationsPerInboxPerDay
+		// New: pending, one confirmation owed (inbox budget allowing).
+		// Pending: owed another one unless one is already waiting or a
+		// budget is spent. Confirmed: nothing changes (no row returned).
+		err := tx.QueryRowContext(ctx, `
 			INSERT INTO status_page_subscribers AS s
-				(tenant_id, status_page_id, email, email_hash, state, requested_at, created_at,
+				(tenant_id, status_page_id, email, email_hash, inbox_hash, state, requested_at, created_at,
 				 confirm_due_at, confirm_window_start, confirm_window_sends)
-			VALUES ($1, $2, $3, $4, 'pending', $5, $5, $5, $5, 1)
+			VALUES ($1, $2, $3, $4, $8, 'pending', $5, $5,
+				CASE WHEN $7 THEN $5::timestamptz END, $5, CASE WHEN $7 THEN 1 ELSE 0 END)
 			ON CONFLICT ON CONSTRAINT status_page_subscribers_page_email DO UPDATE SET
 				requested_at = EXCLUDED.requested_at,
 				confirm_window_start = CASE
-					WHEN s.confirm_due_at IS NULL AND (s.confirm_window_start IS NULL OR s.confirm_window_start <= $5 - INTERVAL '1 day')
+					WHEN s.confirm_due_at IS NULL AND $7 AND (s.confirm_window_start IS NULL OR s.confirm_window_start <= $5 - INTERVAL '1 day')
 					THEN $5 ELSE s.confirm_window_start END,
 				confirm_window_sends = CASE
-					WHEN s.confirm_due_at IS NOT NULL THEN s.confirm_window_sends
+					WHEN s.confirm_due_at IS NOT NULL OR NOT $7 THEN s.confirm_window_sends
 					WHEN s.confirm_window_start IS NULL OR s.confirm_window_start <= $5 - INTERVAL '1 day' THEN 1
 					WHEN s.confirm_window_sends < $6 THEN s.confirm_window_sends + 1
 					ELSE s.confirm_window_sends END,
 				confirm_due_at = CASE
 					WHEN s.confirm_due_at IS NOT NULL THEN s.confirm_due_at
+					WHEN NOT $7 THEN NULL
 					WHEN s.confirm_window_start IS NULL OR s.confirm_window_start <= $5 - INTERVAL '1 day' THEN $5
 					WHEN s.confirm_window_sends < $6 THEN $5
 					ELSE NULL END,
 				confirm_attempts = CASE WHEN s.confirm_due_at IS NULL THEN 0 ELSE s.confirm_attempts END
 			WHERE s.state = 'pending'
-		`, page.tenantID, page.id, addr, AddressHash(addr), now, MaxConfirmationsPerDay); err != nil {
+			RETURNING confirm_due_at IS NOT DISTINCT FROM $5::timestamptz
+		`, page.tenantID, page.id, addr, AddressHash(addr), now, MaxConfirmationsPerDay, mayQueue, inbox).Scan(&queued)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // confirmed already
+		}
+		if err != nil {
 			return fmt.Errorf("store subscriber: %w", err)
 		}
 		return nil
@@ -315,13 +376,24 @@ func (s *Service) Subscribe(ctx context.Context, slug, rawAddress string) error 
 	if err != nil {
 		return err
 	}
-	s.Wake()
+	if queued {
+		s.Wake()
+	}
 	return nil
 }
 
 // Wake asks the Runner for an early pass (a confirmation is owed). It never
-// blocks, and a dropped wake only waits for the next tick.
+// blocks, wakes at most once per wakeEvery, and a dropped wake only waits
+// for the next tick.
 func (s *Service) Wake() {
+	s.wakeMu.Lock()
+	now := time.Now()
+	if now.Sub(s.lastWake) < wakeEvery {
+		s.wakeMu.Unlock()
+		return
+	}
+	s.lastWake = now
+	s.wakeMu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
 	default:
@@ -329,7 +401,8 @@ func (s *Service) Wake() {
 }
 
 // resolveToken verifies a subscription token for action. Every refusal is a
-// state; only a database failure is an error.
+// state; only a database failure is an error. The page's visibility is not
+// checked: unsubscribing works whatever it became.
 func (s *Service) resolveToken(ctx context.Context, token, action string) (actionlink.Claims, *subscribablePage, string, error) {
 	token = strings.TrimSpace(token)
 	if s.links == nil || token == "" {
@@ -389,7 +462,9 @@ func (s *Service) Confirm(ctx context.Context, token string, event audit.Event) 
 
 // Unsubscribe follows an unsubscribe link (or a mail client's one-click
 // POST): the subscriber is deleted, with whatever was still waiting to be
-// sent to them. Repeating it answers unsubscribed.
+// sent to them, whatever the page's visibility. Repeating it answers
+// unsubscribed. The answer names the page only by the title the mail
+// already carried.
 func (s *Service) Unsubscribe(ctx context.Context, token string, event audit.Event) (models.StatusPageSubscriptionResponse, error) {
 	claims, page, state, err := s.resolveToken(ctx, token, actionlink.ActionUnsubscribePage)
 	if err != nil || state != "" {
@@ -406,7 +481,7 @@ func (s *Service) Unsubscribe(ctx context.Context, token string, event audit.Eve
 	default:
 		s.record(event, claims, "status-page.subscriber-unsubscribe", "unsubscribe link", hash)
 	}
-	return models.StatusPageSubscriptionResponse{State: models.StatusPageSubscriptionUnsubscribed, PageTitle: page.title, PageSlug: page.slug}, nil
+	return models.StatusPageSubscriptionResponse{State: models.StatusPageSubscriptionUnsubscribed, PageTitle: page.title}, nil
 }
 
 // UnsubscribePageURL is where a browser that opened the one-click URL itself
@@ -417,11 +492,7 @@ func (s *Service) UnsubscribePageURL(ctx context.Context, token string) (string,
 	if err != nil || page == nil || state != "" {
 		return "", err
 	}
-	base := s.pageURL(page.slug)
-	if base == "" {
-		return "", nil
-	}
-	return base + SubscriptionPath + "?action=unsubscribe#" + strings.TrimSpace(token), nil
+	return s.unsubscribeLandingURL(page.pageRef, strings.TrimSpace(token)), nil
 }
 
 // record audits a public subscriber change on the page, attributed to the
@@ -454,22 +525,34 @@ func (s *Service) ensurePage(ctx context.Context, tenantID, pageID uuid.UUID) er
 	return nil
 }
 
+// counts reads the page's subscriber counts.
+func (s *Service) counts(ctx context.Context, tenantID, pageID uuid.UUID) (models.StatusPageSubscriberCounts, error) {
+	var c models.StatusPageSubscriberCounts
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FILTER (WHERE state = 'confirmed'), COUNT(*) FILTER (WHERE state = 'pending')
+		FROM status_page_subscribers WHERE tenant_id = $1 AND status_page_id = $2
+	`, tenantID, pageID).Scan(&c.Confirmed, &c.Pending)
+	if err != nil {
+		return c, fmt.Errorf("count subscribers: %w", err)
+	}
+	return c, nil
+}
+
 // List returns a page of the page's subscribers (newest first) with its
-// counts and whether mail is configured.
+// counts and whether mail is configured. It reveals addresses: the handler
+// serves it to callers with write access only.
 func (s *Service) List(ctx context.Context, tenantID, pageID uuid.UUID, page, pageSize int) (*models.StatusPageSubscriberListResponse, error) {
 	if err := s.ensurePage(ctx, tenantID, pageID); err != nil {
 		return nil, err
 	}
 	resp := &models.StatusPageSubscriberListResponse{
 		Items: []models.StatusPageSubscriber{}, Page: page, PageSize: pageSize,
-		Limit: MaxSubscribersPerPage, MailProblems: s.MailProblems(),
+		Limit: MaxSubscribersPerPage, MailProblems: s.SubscriptionProblems(),
 	}
 	resp.MailReady = len(resp.MailProblems) == 0
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FILTER (WHERE state = 'confirmed'), COUNT(*) FILTER (WHERE state = 'pending')
-		FROM status_page_subscribers WHERE tenant_id = $1 AND status_page_id = $2
-	`, tenantID, pageID).Scan(&resp.Counts.Confirmed, &resp.Counts.Pending); err != nil {
-		return nil, fmt.Errorf("count subscribers: %w", err)
+	var err error
+	if resp.Counts, err = s.counts(ctx, tenantID, pageID); err != nil {
+		return nil, err
 	}
 	resp.Total = resp.Counts.Confirmed + resp.Counts.Pending
 	rows, err := s.db.QueryContext(ctx, `
@@ -510,6 +593,32 @@ func (s *Service) Remove(ctx context.Context, tenantID, pageID, subscriberID uui
 		return ErrNotFound
 	}
 	return nil
+}
+
+// RemoveMany deletes every subscriber of the page (req.All), or those whose
+// address is at req.Domain, and reports how many.
+func (s *Service) RemoveMany(ctx context.Context, tenantID, pageID uuid.UUID, req *models.RemoveStatusPageSubscribersRequest) (int, error) {
+	if err := s.ensurePage(ctx, tenantID, pageID); err != nil {
+		return 0, err
+	}
+	domain := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(req.Domain), "@")))
+	switch {
+	case req.All && domain != "":
+		return 0, Invalid{Message: "give either all or a domain, not both"}
+	case !req.All && domain == "":
+		return 0, Invalid{Message: "give all: true, or the domain whose addresses to remove"}
+	case domain != "" && (len(domain) > maxBulkDomainLen || !strings.Contains(domain, ".") || strings.ContainsAny(domain, "@ \t,;")):
+		return 0, Invalid{Message: "enter a domain, like example.com"}
+	}
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM status_page_subscribers
+		WHERE tenant_id = $1 AND status_page_id = $2 AND ($3 = '' OR split_part(email, '@', 2) = $3)
+	`, tenantID, pageID, domain)
+	if err != nil {
+		return 0, fmt.Errorf("remove subscribers: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // ExportCSV writes the page's subscribers as CSV (email, state,

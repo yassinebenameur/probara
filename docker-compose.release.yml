@@ -115,6 +115,7 @@ services:
       # Status-page subscriber mail links back to the pages there; the same
       # value the status-page service gets below.
       STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required (scripts/install.sh generates .env)}"
     ports: !reset []
     networks:
       probara-network: {}
@@ -158,6 +159,7 @@ services:
       STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:?STATUS_PAGE_PREVIEW_SECRET is required}"
       STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:?STATUS_PAGE_SESSION_SECRET is required (scripts/install.sh generates .env)}"
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required}"
     ports: !override
       - "${PROBARA_STATUS_PAGE_PORT:-8082}:8082"
 

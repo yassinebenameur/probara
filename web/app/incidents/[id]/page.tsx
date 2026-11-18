@@ -195,11 +195,14 @@ export default function IncidentDetailPage() {
     }
   };
 
-  const handlePublish = async (statusPageId: string, monitorIds: string[]) => {
+  const handlePublish = async (statusPageId: string, monitorIds: string[], publicTitle?: string) => {
     if (!incident) {
       return;
     }
-    const response = await publishIncidentToStatusPage(incident.id, statusPageId, { monitor_ids: monitorIds });
+    const response = await publishIncidentToStatusPage(incident.id, statusPageId, {
+      monitor_ids: monitorIds,
+      ...(publicTitle !== undefined ? { public_title: publicTitle } : {}),
+    });
     setIncident(response);
     showToast('Incident published to status page', 'success');
   };

@@ -401,7 +401,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Status pages
 			statusPageService := statuspageservice.NewService(dbClient, statusPublisher)
-			statusPageService.ConfigureSubscriberMail(subscriberHandlers.Service.MailProblems)
+			statusPageService.ConfigureSubscriberMail(subscriberHandlers.Service.SubscriptionProblems)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
 			mountStatusPageRoutes(r, statusPageHandlers, subscriberHandlers.Routes)
 

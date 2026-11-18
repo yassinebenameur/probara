@@ -19,8 +19,8 @@ import (
 // pages that opted in and announces starting maintenance. The API runs it
 // because it alone writes subscribers and has the mailer; every replica
 // runs one (SKIP LOCKED claims keep them apart). Without SMTP, APP_BASE_URL,
-// STATUS_PAGE_BASE_URL or PROBARA_SECRETS_KEY no page can turn
-// subscriptions on; automatic publishing runs regardless.
+// STATUS_PAGE_BASE_URL, PROBARA_SECRETS_KEY or STATUS_PAGE_INTERNAL_TOKEN no
+// page can turn subscriptions on; automatic publishing runs regardless.
 func newStatusPageSubscribers(cfg *config.APIConfig, dbClient *db.Client, recorder *auditservice.Recorder, publisher *statusupdates.Publisher, log *logger.Logger) (*subscriberhandlers.Handlers, *pagesubscriberservice.Runner) {
 	mailer, err := bootstrap.MailSender(cfg.SMTPConfig)
 	if err != nil {
@@ -33,7 +33,7 @@ func newStatusPageSubscribers(cfg *config.APIConfig, dbClient *db.Client, record
 	}
 	pc := pagesubscriberservice.Config{
 		Mailer: mailer, Links: links, AppBaseURL: cfg.AppBaseURL, StatusPageBaseURL: cfg.StatusPageBaseURL,
-		Log: log,
+		InternalToken: cfg.StatusPageInternalToken, Log: log,
 	}
 	if recorder != nil {
 		pc.Audit = recorder

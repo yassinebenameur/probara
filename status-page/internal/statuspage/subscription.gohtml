@@ -61,7 +61,7 @@
       })();
     </script>
     {{end}}
-    <a href="{{.PageURL}}">Back to the status page</a>
+    {{if .PageURL}}<a href="{{.PageURL}}">Back to the status page</a>{{end}}
   </main>
 </body>
 </html>

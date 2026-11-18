@@ -10,6 +10,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
 	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
 	"github.com/yassinebenameur/probara/api/internal/services/statuspages"
+	"github.com/yassinebenameur/probara/shared/actionlink"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -55,6 +58,8 @@ func TestSubscribeConfirmReceive(t *testing.T) {
 	got := mailer.to("ops@example.com", "Checkout is failing")
 	require.Len(t, got, 1)
 	require.Equal(t, "[Acme] Incident: Checkout is failing", got[0].Subject)
+	require.Equal(t, "Acme", got[0].FromName, "subscriber mail is sent in the page's name")
+	require.Equal(t, "Acme", confirmations[0].FromName)
 	require.Contains(t, got[0].Text, "Affected: Checkout", "the page's display name, never the internal monitor name")
 	require.NotContains(t, got[0].Text, "checkout-internal")
 	require.Contains(t, got[0].Headers["List-Unsubscribe"], "https://app.example.com"+OneClickUnsubscribePath+"?token=")
@@ -129,31 +134,119 @@ func TestSubscribe_RefusesHostileAndClosed(t *testing.T) {
 	require.ErrorIs(t, noMail.Subscribe(f.ctx, "acme", "b@example.com"), ErrNotFound, "no mail, no subscriptions")
 }
 
-// The page limits refuse every address alike, confirmed ones included.
+// The page limits refuse every address alike, confirmed ones included. The
+// hourly limit counts every address taken in the hour, whatever became of
+// it: confirming addresses as they arrive does not free room.
 func TestSubscribe_PageLimits(t *testing.T) {
 	f := setup(t)
 	mailer := &fakeMailer{}
 	s := f.service(mailer, nil)
 	f.confirmed(t, s, mailer, "member@example.com")
 	_, err := f.db.ExecContext(f.ctx, `
-		INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, state)
-		SELECT $1, $2, 'flood' || g || '@example.com', 'h' || g, 'pending' FROM generate_series(1, $3) g
-	`, f.tenantID, f.pageID, MaxNewPendingPerPagePerHour)
+		INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, inbox_hash, state, confirmed_at)
+		SELECT $1, $2, 'flood' || g || '@catchall.example', 'h' || g, 'i' || g, 'confirmed', NOW() FROM generate_series(1, $3) g
+	`, f.tenantID, f.pageID, MaxNewPerPagePerHour-1)
 	require.NoError(t, err)
-	require.ErrorIs(t, s.Subscribe(f.ctx, "acme", "new@example.com"), ErrLimit)
+	require.ErrorIs(t, s.Subscribe(f.ctx, "acme", "new@example.com"), ErrLimit, "confirmed within the hour still count")
 	require.ErrorIs(t, s.Subscribe(f.ctx, "acme", "member@example.com"), ErrLimit, "same answer for a confirmed address")
 
-	_, err = f.db.ExecContext(f.ctx, `UPDATE status_page_subscribers SET created_at = NOW() - INTERVAL '2 hours', state = 'confirmed' WHERE email LIKE 'flood%'`)
+	_, err = f.db.ExecContext(f.ctx, `UPDATE status_page_subscribers SET created_at = NOW() - INTERVAL '2 hours'`)
 	require.NoError(t, err)
 	require.NoError(t, s.Subscribe(f.ctx, "acme", "new@example.com"), "the hourly limit rolls over")
 
+	// Pending addresses are capped on their own.
 	_, err = f.db.ExecContext(f.ctx, `
-		INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, state, created_at)
-		SELECT $1, $2, 'cap' || g || '@example.com', 'c' || g, 'confirmed', NOW() - INTERVAL '2 hours' FROM generate_series(1, $3) g
+		INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, inbox_hash, state, created_at)
+		SELECT $1, $2, 'wait' || g || '@example.com', 'w' || g, 'wi' || g, 'pending', NOW() - INTERVAL '2 hours' FROM generate_series(1, $3) g
+	`, f.tenantID, f.pageID, MaxPendingPerPage)
+	require.NoError(t, err)
+	require.ErrorIs(t, s.Subscribe(f.ctx, "acme", "another@example.com"), ErrLimit)
+	_, err = f.db.ExecContext(f.ctx, `DELETE FROM status_page_subscribers WHERE email LIKE 'wait%'`)
+	require.NoError(t, err)
+
+	_, err = f.db.ExecContext(f.ctx, `
+		INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, inbox_hash, state, created_at)
+		SELECT $1, $2, 'cap' || g || '@example.com', 'c' || g, 'ci' || g, 'confirmed', NOW() - INTERVAL '2 hours' FROM generate_series(1, $3) g
 	`, f.tenantID, f.pageID, MaxSubscribersPerPage)
 	require.NoError(t, err)
 	require.ErrorIs(t, s.Subscribe(f.ctx, "acme", "another@example.com"), ErrLimit)
 	require.ErrorIs(t, s.Subscribe(f.ctx, "acme", "member@example.com"), ErrLimit)
+
+	// An operator clears a flood by domain, or everything.
+	n, err := s.RemoveMany(f.ctx, f.tenantID, f.pageID, &models.RemoveStatusPageSubscribersRequest{Domain: "@CatchAll.example"})
+	require.NoError(t, err)
+	require.Equal(t, MaxNewPerPagePerHour-1, n)
+	_, err = s.RemoveMany(f.ctx, f.tenantID, f.pageID, &models.RemoveStatusPageSubscribersRequest{})
+	require.True(t, errors.As(err, new(Invalid)))
+	_, err = s.RemoveMany(f.ctx, uuid.New(), f.pageID, &models.RemoveStatusPageSubscribersRequest{All: true})
+	require.ErrorIs(t, err, ErrNotFound, "another tenant's page")
+	n, err = s.RemoveMany(f.ctx, f.tenantID, f.pageID, &models.RemoveStatusPageSubscribersRequest{All: true})
+	require.NoError(t, err)
+	require.Equal(t, MaxSubscribersPerPage+2, n)
+}
+
+// One inbox gets a bounded number of confirmations a day, however many
+// +tag aliases and pages are used; the installation's confirmation mail is
+// capped per hour, and notices are never held back by it.
+func TestConfirmationCaps(t *testing.T) {
+	f := setup(t)
+	mailer := &fakeMailer{}
+	s := f.service(mailer, nil)
+	for i := 0; i < MaxConfirmationsPerInboxPerDay+3; i++ {
+		require.NoError(t, s.Subscribe(f.ctx, "acme", fmt.Sprintf("Victim+%d@example.com", i)))
+		run(t, s)
+	}
+	require.Len(t, mailer.recipients("Confirm your subscription"), MaxConfirmationsPerInboxPerDay)
+	require.Equal(t, InboxHash("victim+3@example.com"), InboxHash("victim@example.com"))
+	require.NotEqual(t, InboxHash("victim@example.com"), InboxHash("other@example.com"))
+
+	_, err := f.db.ExecContext(f.ctx, `INSERT INTO status_page_confirmation_sends (inbox_hash, sent_at)
+		SELECT 'x' || g, NOW() FROM generate_series(1, $1) g`, MaxConfirmationsPerHour)
+	require.NoError(t, err)
+	f.confirmedViaSQL(t, "ops@example.com")
+	require.NoError(t, s.Subscribe(f.ctx, "acme", "fresh@example.com"))
+	f.publish(t, "During the cap")
+	run(t, s)
+	require.Empty(t, mailer.to("fresh@example.com", "Confirm"), "confirmation sent past the hourly cap")
+	require.Len(t, mailer.to("ops@example.com", "During the cap"), 1, "a notice was held back by the confirmation cap")
+}
+
+func (f *fixture) confirmedViaSQL(t *testing.T, address string) {
+	t.Helper()
+	_, err := f.db.ExecContext(f.ctx, `
+		INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, inbox_hash, state, confirmed_at)
+		VALUES ($1, $2, $3, $4, $5, 'confirmed', NOW())`, f.tenantID, f.pageID, address, AddressHash(address), InboxHash(address))
+	require.NoError(t, err)
+}
+
+// Notices go before confirmations in every pass, and confirmations are
+// bounded per pass; a subscribe that queues nothing does not wake the
+// runner.
+func TestRunner_NoticesBeforeConfirmations(t *testing.T) {
+	f := setup(t)
+	mailer := &fakeMailer{}
+	s := f.service(mailer, nil)
+	f.confirmedViaSQL(t, "ops@example.com")
+	_, err := f.db.ExecContext(f.ctx, `
+		INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, inbox_hash, state, created_at, confirm_due_at, confirm_window_start, confirm_window_sends)
+		SELECT $1, $2, 'p' || g || '@example.com', 'ph' || g, 'pi' || g, 'pending', NOW() - INTERVAL '2 hours', NOW(), NOW(), 1 FROM generate_series(1, 120) g
+	`, f.tenantID, f.pageID)
+	require.NoError(t, err)
+	f.publish(t, "Priority")
+	run(t, s)
+	require.Equal(t, "[Acme] Incident: Priority", mailer.sent[0].Subject, "the notice went after confirmations")
+	require.Len(t, mailer.recipients("Confirm your subscription"), maxConfirmationsPerTick)
+
+	for len(s.wake) > 0 {
+		<-s.wake
+	}
+	s.lastWake = time.Time{}
+	require.NoError(t, s.Subscribe(f.ctx, "acme", "ops@example.com"))
+	require.Len(t, s.wake, 0, "a no-op subscribe woke the runner")
+	require.NoError(t, s.Subscribe(f.ctx, "acme", "fresh@example.com"))
+	require.Len(t, s.wake, 1)
+	require.NoError(t, s.Subscribe(f.ctx, "acme", "fresh2@example.com"))
+	require.Len(t, s.wake, 1, "wakes are rate-limited")
 }
 
 // Confirmation links expire after 48 hours; unconfirmed addresses are
@@ -281,7 +374,7 @@ func TestEnableRefusedWithoutMail(t *testing.T) {
 	f := setup(t)
 	f.setting(t, "enable_email_subscriptions", false)
 	pages := statuspages.NewService(f.db, nil)
-	pages.ConfigureSubscriberMail(NewService(f.db, Config{}).MailProblems)
+	pages.ConfigureSubscriberMail(NewService(f.db, Config{}).SubscriptionProblems)
 	on, footer := true, false
 	_, err := pages.UpdateStatusPage(f.ctx, f.tenantID, f.pageID, &models.UpdateStatusPageRequest{Settings: &models.StatusPageSettings{EnableEmailSubscriptions: &on}})
 	require.ErrorIs(t, err, statuspages.ErrSubscriptionsUnavailable)
@@ -295,7 +388,10 @@ func TestEnableRefusedWithoutMail(t *testing.T) {
 	require.True(t, *page.Settings.EnableEmailSubscriptions)
 
 	ready := statuspages.NewService(f.db, nil)
-	ready.ConfigureSubscriberMail(f.service(&fakeMailer{}, nil).MailProblems)
+	ready.ConfigureSubscriberMail(f.service(&fakeMailer{}, nil).SubscriptionProblems)
+	noToken := NewService(f.db, Config{Mailer: &fakeMailer{}, Links: actionlink.New(testKeys{}), AppBaseURL: "https://a.example", StatusPageBaseURL: "https://s.example"})
+	require.Empty(t, noToken.MailProblems())
+	require.NotEmpty(t, noToken.SubscriptionProblems(), "subscriptions need the internal token")
 	off := false
 	auto := true
 	page, err = ready.UpdateStatusPage(f.ctx, f.tenantID, f.pageID, &models.UpdateStatusPageRequest{Settings: &models.StatusPageSettings{EnableEmailSubscriptions: &off, AutoPublishIncidents: &auto}})
@@ -346,7 +442,7 @@ func TestOutboxWrittenWithEachTrigger(t *testing.T) {
 	other := f.newIncident(t, "Rolled back")
 	tx, err := f.db.BeginTx(f.ctx, nil)
 	require.NoError(t, err)
-	announced, err := incidents.PublishTx(f.ctx, tx, f.tenantID, other, f.pageID, nil, false)
+	announced, err := incidents.PublishTx(f.ctx, tx, f.tenantID, other, f.pageID, nil, incidents.PublishOptions{})
 	require.NoError(t, err)
 	require.True(t, announced)
 	require.NoError(t, tx.Rollback())
@@ -449,4 +545,108 @@ func TestPlanningSkips(t *testing.T) {
 	require.NoError(t, noMail.RunOnce(context.Background()))
 	run(t, s)
 	require.Empty(t, mailer.recipients("No mail"), "a row skipped for lack of mail is not sent once mail works")
+}
+
+// The operator UI sends the whole form on every save (title, description,
+// the unchanged target list, a weekly window's unchanged rule): that is not
+// a schedule change and announces nothing.
+func TestMaintenance_UISaveIsNotAnnounced(t *testing.T) {
+	f := setup(t)
+	windows := maintenancewindows.NewService(f.db)
+	start := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Minute)
+	oneOff, err := windows.Create(f.ctx, f.tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "Upgrade", StartsAt: start, EndsAt: start.Add(time.Hour), MonitorIDs: []string{f.monitorID.String()},
+	})
+	require.NoError(t, err)
+	rule := &models.MaintenanceRecurrence{Frequency: "weekly", Weekdays: []int{1, 3}, StartTime: "02:00", DurationMinutes: 60, Timezone: "Europe/Paris"}
+	weekly, err := windows.Create(f.ctx, f.tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "Backups", MonitorIDs: []string{f.monitorID.String()}, Recurrence: rule,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, f.outbox(t, pagenotify.KindMaintenanceScheduled))
+
+	title, description := "Upgrade (fixed typo)", "Now with a description"
+	ids := []string{f.monitorID.String()}
+	_, err = windows.Update(f.ctx, f.tenantID, oneOff.ID, &models.UpdateMaintenanceWindowRequest{Title: &title, Description: &description, MonitorIDs: &ids})
+	require.NoError(t, err)
+	backups := "Backups (nightly)"
+	sameRule := *rule
+	_, err = windows.Update(f.ctx, f.tenantID, weekly.ID, &models.UpdateMaintenanceWindowRequest{Title: &backups, Description: &description, MonitorIDs: &ids, Recurrence: &sameRule})
+	require.NoError(t, err)
+	require.Equal(t, 2, f.outbox(t, pagenotify.KindMaintenanceScheduled), "a save of the unchanged form was announced again")
+
+	other := testutil.InsertHTTPMonitor(f.ctx, t, f.db, f.tenantID, "other")
+	testutil.AddMonitorToStatusPage(f.ctx, t, f.db, f.pageID, other, 1)
+	ids = append(ids, other.String())
+	_, err = windows.Update(f.ctx, f.tenantID, oneOff.ID, &models.UpdateMaintenanceWindowRequest{Title: &title, MonitorIDs: &ids})
+	require.NoError(t, err)
+	require.Equal(t, 3, f.outbox(t, pagenotify.KindMaintenanceScheduled), "a real target change was not announced")
+}
+
+// Subscribers told about a window are told when it is deleted; those who
+// subscribed after the announcement are not, and a window nobody was told
+// about is deleted quietly (and outright, when it never started).
+func TestMaintenance_CancellationNotice(t *testing.T) {
+	f := setup(t)
+	mailer := &fakeMailer{}
+	s := f.service(mailer, nil)
+	f.confirmed(t, s, mailer, "early@example.com")
+	windows := maintenancewindows.NewService(f.db)
+	start := time.Now().UTC().Add(3 * time.Hour).Truncate(time.Minute)
+	w, err := windows.Create(f.ctx, f.tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "Network work", StartsAt: start, EndsAt: start.Add(time.Hour), MonitorIDs: []string{f.monitorID.String()},
+	})
+	require.NoError(t, err)
+	run(t, s)
+	require.Len(t, mailer.to("early@example.com", "Scheduled maintenance: Network work"), 1)
+	f.confirmed(t, s, mailer, "late@example.com")
+
+	require.NoError(t, windows.Delete(f.ctx, f.tenantID, w.ID))
+	run(t, s)
+	cancelled := mailer.to("early@example.com", "Maintenance cancelled: Network work")
+	require.Len(t, cancelled, 1)
+	require.Contains(t, cancelled[0].Text, "Was scheduled for: "+start.Format("Mon 2 Jan 2006 15:04 UTC"))
+	require.Empty(t, mailer.to("late@example.com", "Maintenance cancelled"), "a subscriber who was never told got the cancellation")
+	var deleted bool
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT deleted_at IS NOT NULL FROM maintenance_windows WHERE id = $1`, w.ID).Scan(&deleted))
+	require.True(t, deleted, "an announced window is kept, soft-deleted")
+
+	quiet, err := windows.Create(f.ctx, f.tenantID, &models.CreateMaintenanceWindowRequest{
+		Title: "Elsewhere", StartsAt: start, EndsAt: start.Add(time.Hour), MonitorIDs: []string{testutil.InsertHTTPMonitor(f.ctx, t, f.db, f.tenantID, "x").String()},
+	})
+	require.NoError(t, err)
+	require.NoError(t, windows.Delete(f.ctx, f.tenantID, quiet.ID))
+	require.Equal(t, 1, f.outbox(t, pagenotify.KindMaintenanceCancelled))
+	var gone bool
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT NOT EXISTS (SELECT 1 FROM maintenance_windows WHERE id = $1)`, quiet.ID).Scan(&gone))
+	require.True(t, gone)
+}
+
+// What a page's recent notices came to is readable, failures included, so
+// mail lost to a relay outage shows.
+func TestSummaryReportsOutcomes(t *testing.T) {
+	f := setup(t)
+	mailer := &fakeMailer{}
+	now := time.Now().UTC()
+	s := f.service(mailer, &now)
+	f.confirmedViaSQL(t, "ops@example.com")
+	f.confirmedViaSQL(t, "bounce@example.com")
+	mailer.setFail(func(to string) error {
+		if to == "bounce@example.com" {
+			return &textproto.Error{Code: 550, Msg: "no such user"}
+		}
+		return nil
+	})
+	f.publish(t, "Reported")
+	run(t, s)
+	sum, err := s.Summary(f.ctx, f.tenantID, f.pageID)
+	require.NoError(t, err)
+	require.Equal(t, 2, sum.Counts.Confirmed)
+	require.Len(t, sum.Recent, 1)
+	o := sum.Recent[0]
+	require.Equal(t, "planned", o.Status)
+	require.Equal(t, "Incident: Reported", o.Subject)
+	require.Equal(t, 1, o.Sent)
+	require.Equal(t, 1, o.Failed)
+	require.Contains(t, o.LastError, "no such user")
 }

@@ -77,6 +77,12 @@ func truncate(s string, n int) string {
 	return strings.TrimSpace(string(r[:n-1])) + "…"
 }
 
+// senderName is the From display name of a page's mail: the page's name,
+// one line, bounded (the address stays the configured SMTP sender).
+func senderName(pageTitle string) string {
+	return truncate(oneLine(pageTitle), 100)
+}
+
 func (n notice) subject() string {
 	return truncate(oneLine(fmt.Sprintf("[%s] %s: %s", n.PageTitle, n.Label, n.Headline)), 200)
 }
@@ -146,10 +152,11 @@ func noticeMessage(n notice, to, unsubscribePage, oneClick string) (mail.Message
 		return mail.Message{}, fmt.Errorf("%w: render: %v", mail.ErrInvalidMessage, err)
 	}
 	return mail.Message{
-		To:      []string{to},
-		Subject: n.subject(),
-		Text:    v.text(),
-		HTML:    html,
+		To:       []string{to},
+		FromName: senderName(n.PageTitle),
+		Subject:  n.subject(),
+		Text:     v.text(),
+		HTML:     html,
 		Headers: map[string]string{
 			"List-Unsubscribe":      "<" + oneClick + ">",
 			"List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -208,5 +215,5 @@ func confirmMessage(v confirmView) (mail.Message, error) {
 	}{v, htmltemplate.CSS(accent(v.Accent)), inkColor, mutedColor}); err != nil {
 		return mail.Message{}, fmt.Errorf("%w: render: %v", mail.ErrInvalidMessage, err)
 	}
-	return mail.Message{To: []string{v.Recipient}, Subject: v.subject(), Text: v.text(), HTML: b.String()}, nil
+	return mail.Message{To: []string{v.Recipient}, FromName: senderName(v.PageTitle), Subject: v.subject(), Text: v.text(), HTML: b.String()}, nil
 }

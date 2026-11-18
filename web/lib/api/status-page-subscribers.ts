@@ -1,4 +1,8 @@
-import type { StatusPageSubscriberListResponse } from '../types';
+import type {
+  RemoveStatusPageSubscribersRequest,
+  StatusPageSubscriberListResponse,
+  StatusPageSubscriberSummary,
+} from '../types';
 import { apiDownload, apiRequest, withQuery } from './core';
 
 // Status page email subscribers. Visitors subscribe on the public page;
@@ -20,4 +24,16 @@ export async function removeStatusPageSubscriber(id: string, subscriberId: strin
 
 export async function exportStatusPageSubscribers(id: string): Promise<{ blob: Blob; filename: string }> {
   return apiDownload(`/v1/status-pages/${id}/subscribers/export`, 'status-page-subscribers.csv');
+}
+
+/** Counts, mail readiness and recent notice outcomes; readable by every member. */
+export async function getStatusPageSubscriberSummary(id: string): Promise<StatusPageSubscriberSummary> {
+  return apiRequest<StatusPageSubscriberSummary>('GET', `/v1/status-pages/${id}/subscribers/summary`);
+}
+
+export async function removeStatusPageSubscribers(
+  id: string,
+  data: RemoveStatusPageSubscribersRequest
+): Promise<{ removed: number }> {
+  return apiRequest<{ removed: number }>('POST', `/v1/status-pages/${id}/subscribers/remove`, data);
 }

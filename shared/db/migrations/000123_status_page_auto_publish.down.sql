@@ -10,4 +10,7 @@ ALTER TABLE status_page_push_deliveries
     DROP COLUMN incident_id,
     ALTER COLUMN monitor_id SET NOT NULL;
 
-ALTER TABLE incident_status_page_publications DROP COLUMN auto_published;
+ALTER TABLE incident_status_page_publications
+    DROP COLUMN public_summary,
+    DROP COLUMN public_title,
+    DROP COLUMN auto_published;

@@ -37,9 +37,11 @@ func (f *fixture) outageFor(t *testing.T, ago time.Duration) uuid.UUID {
 	return alertID
 }
 
-func (f *fixture) recover(t *testing.T, alertID uuid.UUID) {
+// recover resolves the alert ago (past the settle window when ago is
+// longer).
+func (f *fixture) recover(t *testing.T, alertID uuid.UUID, ago time.Duration) {
 	t.Helper()
-	_, err := f.db.ExecContext(f.ctx, `UPDATE alerts SET status = 'resolved', resolved_at = NOW() WHERE id = $1`, alertID)
+	_, err := f.db.ExecContext(f.ctx, `UPDATE alerts SET status = 'resolved', resolved_at = NOW() - make_interval(secs => $2) WHERE id = $1`, alertID, ago.Seconds())
 	require.NoError(t, err)
 	_, err = f.db.ExecContext(f.ctx, `UPDATE monitors SET current_state = 'up' WHERE id = $1`, f.monitorID)
 	require.NoError(t, err)
@@ -96,22 +98,71 @@ func TestAutoPublish_DelayOptInAndResolve(t *testing.T) {
 	var linked bool
 	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT title, EXISTS (SELECT 1 FROM incident_alerts WHERE incident_id = $1 AND alert_id = $2)
 		FROM incidents WHERE id = $1`, pubs[0].incidentID, alertID).Scan(&title, &linked))
-	require.Equal(t, autoIncidentTitle, title, "public wording, no internal monitor name")
+	require.Equal(t, autoIncidentTitle, title)
 	require.True(t, linked)
-	notices := mailer.to("ops@example.com", "Incident: Service disruption")
+	notices := mailer.to("ops@example.com", "Incident: Service disruption: Checkout")
 	require.Len(t, notices, 1)
 	require.Contains(t, notices[0].Text, "Affected: Checkout")
 
 	// Still down: nothing more. Recovered: resolved and announced once.
 	run(t, s)
 	require.Len(t, f.publications(t), 1)
-	f.recover(t, alertID)
+	// Recovered, but within the settle window: held.
+	f.recover(t, alertID, time.Minute)
+	run(t, s)
+	require.Equal(t, "investigating", f.publications(t)[0].state, "resolved inside the settle window")
+	f.recover(t, alertID, autoResolveSettle+time.Minute)
 	run(t, s)
 	run(t, s)
 	pubs = f.publications(t)
 	require.Equal(t, "resolved", pubs[0].state)
 	require.Equal(t, 1, f.outbox(t, pagenotify.KindIncidentResolved))
-	require.Len(t, mailer.to("ops@example.com", "Resolved: Service disruption"), 1)
+	require.Len(t, mailer.to("ops@example.com", "Resolved: Service disruption: Checkout"), 1)
+}
+
+// A monitor failing again soon after its outage was resolved automatically
+// reopens the same incident with a public update instead of publishing a
+// new one; one failing again within the settle window keeps it open and
+// mails nothing.
+func TestAutoPublish_Flapping(t *testing.T) {
+	f := setup(t)
+	mailer := &fakeMailer{}
+	s := f.service(mailer, nil)
+	f.confirmed(t, s, mailer, "ops@example.com")
+	f.setting(t, "auto_publish_incidents", true)
+	first := f.outageFor(t, 10*time.Minute)
+	run(t, s)
+	require.Len(t, f.publications(t), 1)
+
+	// Back up, down again before the settle window ends: still open.
+	f.recover(t, first, 2*time.Minute)
+	second := f.outageFor(t, 6*time.Minute)
+	run(t, s)
+	run(t, s)
+	pubs := f.publications(t)
+	require.Len(t, pubs, 1)
+	require.Equal(t, "investigating", pubs[0].state)
+	require.Len(t, mailer.recipients("Service disruption"), 1, "a flap inside the settle window mailed")
+
+	// Resolved for good, then down again within the hour: reopened.
+	f.recover(t, first, autoResolveSettle+2*time.Minute)
+	f.recover(t, second, autoResolveSettle+time.Minute)
+	run(t, s)
+	require.Equal(t, "resolved", f.publications(t)[0].state)
+	// (The publication happened before this outage, as it would have.)
+	_, err := f.db.ExecContext(f.ctx, `UPDATE incident_status_page_publications SET published_at = NOW() - INTERVAL '30 minutes'`)
+	require.NoError(t, err)
+	f.outageFor(t, 6*time.Minute)
+	run(t, s)
+	run(t, s)
+	pubs = f.publications(t)
+	require.Len(t, pubs, 1, "a new incident instead of the reopened one")
+	require.Equal(t, "investigating", pubs[0].state)
+	require.Len(t, mailer.to("ops@example.com", "Update: Service disruption: Checkout"), 1)
+	require.Len(t, mailer.to("ops@example.com", "Incident: Service disruption"), 1, "the reopening was mailed as a new incident")
+	var created int
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM incidents WHERE is_auto_created`).Scan(&created))
+	require.Equal(t, 1, created)
 }
 
 // Maintenance, a dependency that explains the outage, and a monitor
@@ -221,8 +272,9 @@ func TestAutoPublish_NoDuplicates(t *testing.T) {
 // fire) is the one published: never a second incident for one monitor.
 func TestAutoPublish_ReusesTheAlertersIncident(t *testing.T) {
 	f := setup(t)
-	s := f.service(&fakeMailer{}, nil)
 	f.setting(t, "auto_publish_incidents", true)
+	mailer := &fakeMailer{}
+	s := f.service(mailer, nil)
 	alertID := f.outageFor(t, 10*time.Minute)
 	existing := uuid.New()
 	_, err := f.db.ExecContext(f.ctx, `
@@ -232,8 +284,22 @@ func TestAutoPublish_ReusesTheAlertersIncident(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.db.ExecContext(f.ctx, `INSERT INTO incident_alerts (incident_id, alert_id) VALUES ($1, $2)`, existing, alertID)
 	require.NoError(t, err)
+	f.confirmed(t, s, mailer, "ops@example.com")
 	run(t, s)
 	pubs := f.publications(t)
 	require.Len(t, pubs, 1)
 	require.Equal(t, existing, pubs[0].incidentID)
+	var publicTitle, publicSummary string
+	require.NoError(t, f.db.QueryRowContext(f.ctx, `SELECT public_title, public_summary FROM incident_status_page_publications WHERE incident_id = $1`,
+		existing).Scan(&publicTitle, &publicSummary))
+	require.Equal(t, "Service disruption: Checkout", publicTitle)
+	// Nothing public carries the internal monitor name or the alerter's
+	// narrative: the mail, nor the push ledger's label.
+	require.NotEmpty(t, mailer.sent)
+	for _, m := range mailer.sent {
+		for _, part := range []string{m.Subject, m.Text, m.HTML} {
+			require.NotContains(t, part, "checkout-internal")
+			require.NotContains(t, part, "Automatically created from a firing alert")
+		}
+	}
 }

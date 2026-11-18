@@ -14,6 +14,10 @@ CREATE TABLE status_page_subscribers (
     -- SHA-256 of the address, hex: the lookup key, and what audit events
     -- record instead of the address.
     email_hash           TEXT NOT NULL,
+    -- SHA-256 of the inbox the address reaches: lower-cased, with any
+    -- +tag removed from the local part. Confirmation mail is capped per
+    -- inbox, across every page, so aliases cannot flood one mailbox.
+    inbox_hash           TEXT NOT NULL,
     state                TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'confirmed')),
     -- The last time the visitor asked to subscribe. A pending row is pruned
     -- 7 days after it.
@@ -43,3 +47,22 @@ CREATE INDEX idx_status_page_subscribers_confirm_due
     ON status_page_subscribers (confirm_due_at) WHERE confirm_due_at IS NOT NULL;
 CREATE INDEX idx_status_page_subscribers_pending
     ON status_page_subscribers (status_page_id, created_at) WHERE state = 'pending';
+CREATE INDEX idx_status_page_subscribers_created
+    ON status_page_subscribers (status_page_id, created_at);
+-- The runner's stale-claim hand-back reads only reserved rows.
+CREATE INDEX idx_status_page_subscribers_confirm_claimed
+    ON status_page_subscribers (confirm_claimed_at) WHERE confirm_claim_id IS NOT NULL;
+
+-- Confirmation mails as sent, installation-wide: the per-inbox daily cap
+-- and the hourly cap on all confirmation mail read it. Only the inbox hash
+-- is kept, never an address; rows older than two days are pruned. It has no
+-- tenant: a cap that a tenant purge resets would not hold.
+CREATE TABLE status_page_confirmation_sends (
+    id         BIGSERIAL PRIMARY KEY,
+    inbox_hash TEXT NOT NULL,
+    sent_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_status_page_confirmation_sends_inbox
+    ON status_page_confirmation_sends (inbox_hash, sent_at);
+CREATE INDEX idx_status_page_confirmation_sends_time
+    ON status_page_confirmation_sends (sent_at);
