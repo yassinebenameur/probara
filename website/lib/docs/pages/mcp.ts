@@ -165,7 +165,7 @@ export const MCP_PAGE: DocPage = {
             ["Status pages", "pages, sections and settings, visibility and visitor password, kiosk tokens, custom template draft/publish/revert, template library"],
             ["Notifications", "alert channels, channel plugins (config schemas), notification settings, `test_alert_channel` (sends a real message), `list_channel_deliveries` (a channel's delivery history, filterable by outcome)"],
             ["Workspace", "local AI settings, `export_ai_labels`, API keys, workspace settings, audit log"],
-            ["Platform", "`list_tenants`, users, SSO group mappings, and workspace management: `list_workspace_overview`, `create_tenant`, `rename_tenant`, `delete_tenant` (destructive; `confirm_name` repeats the name); another user's sign-in: `unlock_user`, `list_user_sessions`, `revoke_user_session`, `revoke_user_sessions` (superadmins). Your own sessions (Account → Sessions) are browser-only and not tools"],
+            ["Platform", "`list_tenants`, users, SSO group mappings, and workspace management: `list_workspace_overview`, `create_tenant`, `rename_tenant`, `delete_tenant` (destructive; `confirm_name` repeats the name); another user's sign-in: `unlock_user`, `list_user_sessions`, `revoke_user_session`, `revoke_user_sessions`, `invite_user`, `create_password_reset_link`, `reset_user_two_factor` (superadmins). Your own sessions, password, email address and two-factor sign-in (Account) are browser-only and not tools, nor are the sign-in steps and the emailed-link pages"],
           ],
         },
         {

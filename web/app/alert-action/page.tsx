@@ -12,7 +12,7 @@ import {
   describeAlertActionState,
   openInProbaraHref,
   parseAlertActionResponse,
-  readActionToken,
+  takeActionToken,
   type AlertActionResponse,
 } from '@/lib/alert-action';
 import { formatDateTime, formatRelativeTime } from '@/lib/format';
@@ -28,7 +28,7 @@ export default function AlertActionPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    setToken(readActionToken(window.location.hash));
+    setToken(takeActionToken());
   }, []);
 
   const request = useCallback(

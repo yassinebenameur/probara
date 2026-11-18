@@ -271,6 +271,9 @@ var successResponses = map[string]successResponse{
 	"list_user_sessions":              ok[models.AdminSessionListResponse](),
 	"revoke_user_session":             noContent,
 	"revoke_user_sessions":            ok[models.RevokeSessionsResponse](),
+	"invite_user":                     ok[models.AccountLinkResponse](),
+	"create_password_reset_link":      ok[models.AccountLinkResponse](),
+	"reset_user_two_factor":           ok[models.ResetTwoFactorResponse](),
 	"list_status_page_access_tokens":  ok[models.StatusPageAccessTokenListResponse](),
 	"create_status_page_access_token": created[models.CreatedStatusPageAccessToken](),
 	"revoke_status_page_access_token": noContent,
@@ -295,6 +298,23 @@ var successResponses = map[string]successResponse{
 // writes more than the shared error envelope, keyed by operation ID. Like
 // successResponses, add one only after reading the handler.
 var operationErrors = map[string]map[int]routeError{
+	// handlers/users/lifecycle.go. Their success is one shape with or without
+	// email delivery: delivered=true and no link when mailed, else the link
+	// (once) and the reason.
+	"invite_user": {
+		400: {Description: "Invalid method; or single sign-on is enabled and no method was given for an account not " +
+			"linked to the identity provider yet (validation_error).", Bodies: []reflect.Type{reflect.TypeFor[apierrors.ErrorResponse]()}},
+		409: {Description: "The account is disabled, signs in with single sign-on (password invite), already has a " +
+			"password, or single sign-on is not configured (sso invite).", Bodies: []reflect.Type{reflect.TypeFor[apierrors.ErrorResponse]()}},
+		502: {Description: "Email delivery is configured but the mail could not be sent (delivery_failed); the link is " +
+			"not returned.", Bodies: []reflect.Type{reflect.TypeFor[apierrors.ErrorResponse]()}},
+	},
+	"create_password_reset_link": {
+		409: {Description: "The account is disabled, signs in with single sign-on, or has no password yet (invite it " +
+			"instead).", Bodies: []reflect.Type{reflect.TypeFor[apierrors.ErrorResponse]()}},
+		502: {Description: "Email delivery is configured but the mail could not be sent (delivery_failed); the link is " +
+			"not returned.", Bodies: []reflect.Type{reflect.TypeFor[apierrors.ErrorResponse]()}},
+	},
 	// import.writeApplyError: a refused apply answers with the plan it
 	// computed plus error and message, and wrote nothing.
 	"apply_monitors": {

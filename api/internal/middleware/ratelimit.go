@@ -38,8 +38,9 @@ import (
 //   - Token-path routes (push heartbeats, discovery collectors): a valid
 //     token is not limited here; a 401/404 answer is a failure charged as
 //     above.
-//   - Sign-in (POST /auth/login): the address (or session user) bucket like
-//     any anonymous route, and a 401 is a failure charged as above.
+//   - Sign-in (POST /auth/login, and its second step POST /auth/login/mfa):
+//     the address (or session user) bucket like any anonymous route, and a
+//     401 is a failure charged as above.
 //   - Every other route (Anonymous, router-wide): a session cookie this
 //     server signed keys the request by its user; otherwise the client
 //     address bucket.
@@ -109,7 +110,16 @@ const (
 	refreshCookieName = "admin_refresh"
 	refreshPath       = "/api/v1/auth/refresh"
 	loginPath         = "/api/v1/auth/login"
+	// loginMFAPath is a sign-in's second step: an unverified credential (a
+	// code) like a password, limited the same way.
+	loginMFAPath = "/api/v1/auth/login/mfa"
 )
+
+// signInRoute reports the sign-in steps: each submits an unverified
+// credential (a password, or a second-factor code).
+func signInRoute(r *http.Request) bool {
+	return r.Method == http.MethodPost && (r.URL.Path == loginPath || r.URL.Path == loginMFAPath)
+}
 
 // NewRateLimiter returns a limiter refilling perMinute tokens a minute with
 // room for burst. perMinute <= 0 disables it: the returned nil limiter's
@@ -255,9 +265,9 @@ func (l *RateLimiter) Anonymous(next http.Handler) http.Handler {
 				return
 			}
 		}
-		// A sign-in is a password guess whatever cookie comes with it, so a
-		// live session does not lift the failure check here.
-		login := path == loginPath && r.Method == http.MethodPost
+		// A sign-in step is a password or code guess whatever cookie comes
+		// with it, so a live session does not lift the failure check here.
+		login := signInRoute(r)
 		if login && l.refuseWhileFailing(w, r, "") {
 			return
 		}

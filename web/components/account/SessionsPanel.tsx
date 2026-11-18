@@ -10,7 +10,7 @@ import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { useToast } from '@/components/ui/ToastProvider';
-import { sessionClientLabel, sessionMethodLabel, sortSessions } from '@/lib/account';
+import { sessionClientLabel, sessionMethodLabel, sessionSecondFactorLabel, sortSessions } from '@/lib/account';
 import { formatDateTime, pluralize } from '@/lib/format';
 import { errorMessage } from '@/lib/errors';
 import { useAsyncData } from '@/lib/useAsyncData';
@@ -122,6 +122,7 @@ export default function SessionsPanel({ scope, username, load, revoke, revokeAll
                     </p>
                     <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
                       {method && <span>{method}</span>}
+                      {s.second_factor && <span>+ {sessionSecondFactorLabel(s.second_factor)}</span>}
                       {s.ip && <span className="font-mono">{s.ip}</span>}
                       <span>Signed in {formatDateTime(s.created_at)}</span>
                       <span>
