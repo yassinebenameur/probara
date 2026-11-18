@@ -261,13 +261,19 @@
 
     /* Kiosk: a wall view read from across the room. A slim top bar carries
        the overall state, the fleet counts and the clock; below, every
-       service is a tile in section groups. layoutKiosk() picks the column
-       count and tile height that fill the screen (few services: large
-       tiles; many: small) and sets --k-s, the type scale; data-density
-       sheds tile detail when even the smallest tiles cannot hold it. A tile
+       service is a small tile in section groups, packed from the top left
+       at a fixed maximum size like the default template's kiosk (a few
+       services leave the wall empty, never a poster). fitKiosk() raises
+       data-density only when the wall would scroll: each step narrows the
+       tiles and the type (--k-s); past the first it sheds detail, figures
+       first, then the type line, then the strip. A tile
        in trouble is tinted with an edge in its tone; healthy tiles stay
        plain and their green history is dimmed, so problems stand out. */
-    .kiosk { display: none; --k-cols: 4; --k-s: 1; }
+    .kiosk { display: none; --k-s: 1; --k-min: 300px; --k-max: 340px; }
+    .kiosk[data-density="2"] { --k-s: .94; --k-min: 260px; --k-max: 290px; }
+    .kiosk[data-density="3"] { --k-s: .88; --k-min: 220px; --k-max: 250px; }
+    .kiosk[data-density="4"] { --k-s: .84; --k-min: 200px; --k-max: 230px; }
+    .kiosk[data-density="5"] { --k-s: .8; --k-min: 180px; --k-max: 210px; }
     :root[data-mode="kiosk"] body { overflow: hidden; }
     :root[data-mode="kiosk"] .page, :root[data-mode="kiosk"] .tip { display: none; }
     :root[data-mode="kiosk"] .kiosk { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
@@ -304,8 +310,8 @@
     .k-sec-state { font-size: 14px; font-weight: 600; white-space: nowrap; color: var(--ink-3); }
     .k-sec-state[data-t="ok"] { font-weight: 500; }
     .k-sec-state[data-t="warn"] { color: var(--warn-ink); } .k-sec-state[data-t="down"] { color: var(--down-ink); } .k-sec-state[data-t="maint"] { color: var(--maint-ink); } .k-sec-state[data-t="unknown"] { color: var(--ink-2); }
-    .k-grid { display: grid; grid-template-columns: repeat(var(--k-cols), minmax(0, 1fr)); grid-auto-rows: var(--k-tile-h, auto); gap: 12px; }
-    .k-tile { position: relative; min-width: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: calc(5px * var(--k-s)); padding: calc(13px * var(--k-s)) calc(16px * var(--k-s)); background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; box-shadow: var(--shadow); }
+    .k-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--k-min), var(--k-max))); justify-content: start; gap: 12px; }
+    .k-tile { position: relative; min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: calc(5px * var(--k-s)); padding: calc(13px * var(--k-s)) calc(16px * var(--k-s)); background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; box-shadow: var(--shadow); }
     .k-tile[data-t="warn"] { background: linear-gradient(var(--warn-tint), var(--warn-tint)), linear-gradient(var(--warn-tint), var(--warn-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--warn), var(--shadow); }
     .k-tile[data-t="down"] { background: linear-gradient(var(--down-tint), var(--down-tint)), linear-gradient(var(--down-tint), var(--down-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--down), var(--shadow); }
     .k-tile[data-t="maint"] { background: linear-gradient(var(--maint-tint), var(--maint-tint)), linear-gradient(var(--maint-tint), var(--maint-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--maint), var(--shadow); }
@@ -319,12 +325,11 @@
     .k-metrics { display: flex; gap: calc(18px * var(--k-s)); font-size: calc(13px * var(--k-s)); line-height: 1.3; color: var(--ink-3); white-space: nowrap; overflow: hidden; }
     .k-metrics b { font-size: calc(15px * var(--k-s)); font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
     .k-tile > * { flex: none; }
-    .k-tile .bars { height: calc(22px * var(--k-s)); margin-top: calc(6px * var(--k-s)); gap: 2px; }
+    .k-tile .bars { height: calc(14px * var(--k-s)); margin-top: calc(5px * var(--k-s)); gap: 2px; }
     .k-tile .bars i[data-t="ok"] { opacity: .5; }
-    .kiosk[data-density="2"] .k-metrics { display: none; }
-    .kiosk[data-density="3"] .k-metrics, .kiosk[data-density="3"] .k-sub { display: none; }
-    .kiosk[data-density="4"] .k-metrics, .kiosk[data-density="4"] .k-sub, .kiosk[data-density="4"] .k-tile .bars { display: none; }
-    .kiosk[data-density="4"] .k-tile { justify-content: center; }
+    .kiosk[data-density="3"] .k-metrics { display: none; }
+    .kiosk[data-density="4"] .k-metrics, .kiosk[data-density="4"] .k-sub { display: none; }
+    .kiosk[data-density="5"] .k-metrics, .kiosk[data-density="5"] .k-sub, .kiosk[data-density="5"] .k-tile .bars { display: none; }
 
     @media (max-width: 640px) {
       .page { padding: 0 14px 64px; }
@@ -693,55 +698,33 @@
       if (next === 'kiosk') { updateClock(); scheduleFit(); }
     }
 
-    // Kiosk layout: choose the column count whose tiles are largest while
-    // every section fits the screen (rows are counted per section, since each
-    // starts its own row), cap a tile at a sensible shape, and scale the
-    // type with the tile. Then shed detail tier by tier while any tile
-    // overflows; past the last tier the body scrolls.
+    // Kiosk fit: tiles keep their CSS size; only when the wall would scroll
+    // does the density rise, each step narrowing the tiles and shedding
+    // detail. Past the last step the body scrolls. Strips get as many cells
+    // as the tile width holds.
     var fitScheduled = false;
-    var K_GAP = 12, K_MIN_W = 150, K_MIN_H = 44;
+    function fitKioskStrips(view) {
+      var tile = document.querySelector('#kioskBody .k-tile');
+      if (!tile) return;
+      var scale = parseFloat(window.getComputedStyle(view).getPropertyValue('--k-s')) || 1;
+      var cells = String(Math.max(12, Math.min(60, Math.floor((tile.clientWidth - 32 * scale) / (4 + 2 * scale)))));
+      all('#kioskBody .k-strip').forEach(function (el) {
+        if (el.getAttribute('data-max-cells') !== cells) {
+          el.setAttribute('data-max-cells', cells);
+          renderStrip(el, activeRange);
+        }
+      });
+    }
     function fitKiosk() {
       if (currentMode() !== 'kiosk') return;
       var view = document.getElementById('kioskView');
       var bodyEl = document.getElementById('kioskBody');
       if (!view || !bodyEl) return;
-      var sections = all('#kioskBody .k-sec');
-      var counts = sections.map(function (sec) { return sec.querySelectorAll('.k-tile').length; }).filter(function (n) { return n > 0; });
-      var total = counts.reduce(function (a, b) { return a + b; }, 0);
-      if (!total) return;
-      var style = window.getComputedStyle(bodyEl);
-      var width = bodyEl.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      var height = bodyEl.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-      var chrome = all('#kioskBody .k-sec-head').reduce(function (h, el) { return h + el.offsetHeight + 10; }, 0) + 18 * (counts.length - 1);
-      var best = null;
-      for (var cols = 1; cols <= total; cols++) {
-        var tileW = (width - K_GAP * (cols - 1)) / cols;
-        if (tileW < K_MIN_W && best) break;
-        var rows = counts.reduce(function (r, n) { return r + Math.ceil(n / cols); }, 0);
-        var tileH = (height - chrome - K_GAP * (rows - counts.length)) / rows;
-        var h = Math.min(tileH, tileW / 1.6);
-        var score = h * Math.min(tileW, h * 4.5);
-        if (!best || score > best.score) best = { cols: cols, w: tileW, h: h, score: score };
-      }
-      var tileHeight = Math.max(K_MIN_H, Math.floor(best.h));
-      // The type follows the tile, but never outgrows its width (a lone
-      // service gets large type, not a stretched layout).
-      var scale = Math.max(0.66, Math.min(4, tileHeight / 132, best.w / 270));
-      view.style.setProperty('--k-cols', String(best.cols));
-      view.style.setProperty('--k-tile-h', tileHeight + 'px');
-      view.style.setProperty('--k-s', scale.toFixed(3));
-      var cells = Math.max(12, Math.min(90, Math.floor((best.w - 32 * scale) / (4 + 3 * scale))));
-      all('#kioskBody .k-strip').forEach(function (el) {
-        if (el.getAttribute('data-max-cells') !== String(cells)) {
-          el.setAttribute('data-max-cells', String(cells));
-          renderStrip(el, activeRange);
-        }
-      });
-      var tiles = all('#kioskBody .k-tile');
-      for (var tier = 1; tier <= 4; tier++) {
+      for (var tier = 1; tier <= 5; tier++) {
         view.setAttribute('data-density', String(tier));
-        if (!tiles.some(function (t) { return t.scrollHeight > t.clientHeight + 1; })) return;
+        if (bodyEl.scrollHeight <= bodyEl.clientHeight + 1) break;
       }
+      fitKioskStrips(view);
     }
     function scheduleFit() {
       if (fitScheduled) return;

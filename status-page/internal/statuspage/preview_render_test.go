@@ -197,8 +197,8 @@ func TestWriteClassicPreviewHTML(t *testing.T) {
 	flat.Sections = nil
 	write("nosections", flat)
 
-	// Kiosk previews: 1, 4, 9, 24 and 60 services, with both built-ins.
-	for _, n := range []int{1, 4, 9, 24, 60} {
+	// Kiosk previews: 1, 2, 4, 9, 24 and 60 services, with both built-ins.
+	for _, n := range []int{1, 2, 4, 9, 24, 60} {
 		kiosk := kioskSampleData(n, now)
 		write(fmt.Sprintf("kiosk-%d", n), kiosk)
 		kiosk = kioskSampleData(n, now)
