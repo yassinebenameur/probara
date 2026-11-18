@@ -72,6 +72,7 @@ import (
 	reportscheduleservice "github.com/yassinebenameur/probara/api/internal/services/reportschedules"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
+	statuspagedomainservice "github.com/yassinebenameur/probara/api/internal/services/statuspagedomains"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
@@ -99,6 +100,7 @@ type Server struct {
 	auditPruner        *auditservice.Pruner
 	sessionPruner      *adminauthservice.SessionPruner
 	reportRunner       *reportscheduleservice.Runner
+	domainRunner       *statuspagedomainservice.Runner
 	locationAuthorizer *locationnatsauthservice.Service
 	locationAuth       *callout.AuthorizationService
 	locationAuthConn   *nats.Conn
@@ -213,6 +215,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	// Emailed SLA report schedules and their runner (routes_reportschedules.go).
 	reportScheduleHandlers, reportRunner := newReportSchedules(cfg, dbClient, auditRecorder, log)
+
+	// Status page custom domains and their re-verification runner (routes_statuspage_domains.go).
+	domainHandlers, domainRunner := newStatusPageDomains(cfg, dbClient, statusPublisher, auditRecorder, log)
 
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
@@ -410,6 +415,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			statusPageService := statuspageservice.NewService(dbClient, statusPublisher)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
 			mountStatusPageRoutes(r, statusPageHandlers)
+			mountStatusPageDomainRoutes(r, domainHandlers)
 
 			// Tenants (membership-filtered for members, all for superadmins)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
@@ -453,6 +459,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		auditPruner:        auditPruner,
 		sessionPruner:      sessionPruner,
 		reportRunner:       reportRunner,
+		domainRunner:       domainRunner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
 		mcpErr:             mcpErr,
@@ -505,6 +512,9 @@ func (s *Server) Start() error {
 	if s.reportRunner != nil {
 		s.reportRunner.Start()
 	}
+	if s.domainRunner != nil {
+		s.domainRunner.Start()
+	}
 
 	return s.http.ListenAndServe()
 }
@@ -527,6 +537,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// records its send event.
 	if s.reportRunner != nil {
 		s.reportRunner.Stop()
+	}
+	if s.domainRunner != nil {
+		s.domainRunner.Stop()
 	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Stop()

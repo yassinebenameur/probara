@@ -9556,6 +9556,9 @@
               "string"
             ]
           },
+          "public_url": {
+            "type": "string"
+          },
           "secondary_color": {
             "type": [
               "null",
@@ -9836,6 +9839,247 @@
         ],
         "type": "object"
       },
+      "StatusPageDomain": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "failing_since": {
+            "format": "date-time",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_checked_at": {
+            "format": "date-time",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "last_error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "next_check_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "primary": {
+            "type": "boolean"
+          },
+          "records": {
+            "items": {
+              "properties": {
+                "found": {
+                  "type": [
+                    "null",
+                    "boolean"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "name",
+                "value",
+                "found"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "status_page_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "verified_at": {
+            "format": "date-time",
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status_page_id",
+          "hostname",
+          "status",
+          "url",
+          "primary",
+          "records",
+          "next_check_at",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "StatusPageDomainListResponse": {
+        "properties": {
+          "cname_target": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "properties": {
+                "created_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "expires_at": {
+                  "format": "date-time",
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "failing_since": {
+                  "format": "date-time",
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "hostname": {
+                  "type": "string"
+                },
+                "id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "last_checked_at": {
+                  "format": "date-time",
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "last_error": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "next_check_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "primary": {
+                  "type": "boolean"
+                },
+                "records": {
+                  "items": {
+                    "properties": {
+                      "found": {
+                        "type": [
+                          "null",
+                          "boolean"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "name",
+                      "value",
+                      "found"
+                    ],
+                    "type": "object"
+                  },
+                  "type": [
+                    "null",
+                    "array"
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                },
+                "status_page_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "verified_at": {
+                  "format": "date-time",
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "status_page_id",
+                "hostname",
+                "status",
+                "url",
+                "primary",
+                "records",
+                "next_check_at",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "enabled"
+        ],
+        "type": "object"
+      },
       "StatusPageLibraryTemplate": {
         "properties": {
           "created_at": {
@@ -9975,6 +10219,9 @@
                     "null",
                     "string"
                   ]
+                },
+                "public_url": {
+                  "type": "string"
                 },
                 "secondary_color": {
                   "type": [
@@ -23166,6 +23413,216 @@
         ]
       }
     },
+    "/status-page-domains": {
+      "get": {
+        "description": "Custom domains of the workspace's status pages: hostname, status (pending, verified, failed, superseded; only verified domains are served), the DNS records to create with what the last check found, the last error, when an unverified claim expires, and the installation's CNAME target (enabled is false when custom domains are off).",
+        "operationId": "list_status_page_domains",
+        "parameters": [
+          {
+            "description": "Only this status page's domains.",
+            "in": "query",
+            "name": "status_page_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/tenant_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPageDomainListResponse"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "List custom domains",
+        "tags": [
+          "status-page-domains"
+        ]
+      },
+      "post": {
+        "description": "Serve a status page on its own hostname, e.g. status.example.com. The domain stays pending until both DNS records in the response exist: a CNAME from the hostname to the CNAME target and a TXT record holding the verification value. Refused when the hostname is already verified for another page; other unverified claims may exist, and the first to verify takes the hostname and supersedes the rest. A claim that never verifies is removed after 14 days. At most 10 per page and 50 per workspace; no wildcards or IP addresses.\n\nAccess: Needs write access: viewers and read-scope API keys get 403.",
+        "operationId": "add_status_page_domain",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/tenant_id"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "hostname": {
+                    "description": "Host name to serve the page on (internationalized names are stored as punycode).",
+                    "type": "string"
+                  },
+                  "status_page_id": {
+                    "description": "Status page ID.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status_page_id",
+                  "hostname"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPageDomain"
+                }
+              }
+            },
+            "description": "Created."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Add custom domain",
+        "tags": [
+          "status-page-domains"
+        ]
+      }
+    },
+    "/status-page-domains/{domainId}": {
+      "delete": {
+        "description": "Remove a custom domain. The page stops being served on it at once.\n\nAccess: Needs write access: viewers and read-scope API keys get 403.",
+        "operationId": "remove_status_page_domain",
+        "parameters": [
+          {
+            "description": "Custom domain ID, from list_status_page_domains.",
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/tenant_id"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no body."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Remove custom domain",
+        "tags": [
+          "status-page-domains"
+        ]
+      }
+    },
+    "/status-page-domains/{domainId}/verify": {
+      "post": {
+        "description": "Check a custom domain's DNS records now instead of waiting for the next scheduled check (refused within 30 seconds of the last one). Returns the domain with its new status.\n\nAccess: Needs write access: viewers and read-scope API keys get 403.",
+        "operationId": "verify_status_page_domain",
+        "parameters": [
+          {
+            "description": "Custom domain ID, from list_status_page_domains.",
+            "in": "path",
+            "name": "domainId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/tenant_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPageDomain"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Verify custom domain",
+        "tags": [
+          "status-page-domains"
+        ]
+      }
+    },
     "/status-page-templates": {
       "get": {
         "description": "The workspace's reusable status page templates (without sources).",
@@ -26163,6 +26620,9 @@
     },
     {
       "name": "slas"
+    },
+    {
+      "name": "status-page-domains"
     },
     {
       "name": "status-page-templates"

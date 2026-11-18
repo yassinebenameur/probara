@@ -187,3 +187,37 @@ func TestPushSender_PayloadFitsTheSingleRecordLimit(t *testing.T) {
 		t.Fatalf("payload is %d bytes, over the %d-byte single-record limit", len(body), webpush.MaxPayloadLength)
 	}
 }
+
+// A notification opens the page on the origin its browser subscribed from:
+// the custom domain for a subscription made there, the platform URL
+// otherwise. Each origin's body is encoded once.
+func TestPayloadsByOrigin(t *testing.T) {
+	p := testSender(t, "https://status.example.com")
+	payload := p.payloadFor(pendingDelivery{Slug: "acme", PageTitle: "Acme", MonitorName: "API", Kind: "down", MonitorID: uuid.New()})
+	subs := []pushSubscriptionRow{
+		{ID: uuid.New()},
+		{ID: uuid.New(), OriginHost: "status.acme.example"},
+		{ID: uuid.New(), OriginHost: "status.acme.example"},
+		{ID: uuid.New()},
+	}
+	bodies, err := payloadsByOrigin(payload, subs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("%d bodies, want one per origin", len(bodies))
+	}
+	url := func(origin string) string {
+		var got pushPayload
+		if err := json.Unmarshal(bodies[origin], &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.URL
+	}
+	if got := url(""); got != "https://status.example.com/public/status/acme" {
+		t.Errorf("platform subscription links to %q", got)
+	}
+	if got := url("status.acme.example"); got != "https://status.acme.example/" {
+		t.Errorf("custom-domain subscription links to %q", got)
+	}
+}

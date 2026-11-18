@@ -226,6 +226,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
+            "On a page's verified [custom domain](#custom-domains) the same routes sit at the root: the page is `/`, its sub-routes `/data`, `/stream`, `/unlock`, `/feed.atom`, `/summary.json`, `/badge.svg` and so on, and the service worker `/sw.js`. Nothing else of the service is reachable there.",
+        },
+        {
+          type: "paragraph",
+          text:
             "The status-page service caches rendered data and subscribes to `statuspage.updates` on core NATS. Monitor, incident, maintenance, or page changes invalidate relevant cache entries and notify connected SSE clients. The rendered page also performs a periodic fallback refresh, currently about every 60 seconds.",
         },
         {
@@ -244,7 +249,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The built-in head carries a `<title>`, a meta description, a robots meta tag, Open Graph tags (`og:type`, `og:site_name`, `og:title`, `og:description`, and `og:image` when the page logo is an absolute `http`/`https` URL) and a `summary` Twitter card. With `STATUS_PAGE_BASE_URL` set on the status service it also carries a canonical link and `og:url`; without it they are left out rather than guessed. Two `<link rel=\"alternate\">` tags point feed readers and tools at the page's Atom feed and `summary.json`.",
+            "The built-in head carries a `<title>`, a meta description, a robots meta tag, Open Graph tags (`og:type`, `og:site_name`, `og:title`, `og:description`, and `og:image` when the page logo is an absolute `http`/`https` URL) and a `summary` Twitter card. It also carries a canonical link and `og:url`: the page's primary [custom domain](#custom-domains) when it has a verified one, else its URL under `STATUS_PAGE_BASE_URL` on the status service; with neither they are left out rather than guessed. Two `<link rel=\"alternate\">` tags point feed readers and tools at the page's Atom feed and `summary.json`.",
         },
         {
           type: "paragraph",
@@ -254,7 +259,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Custom templates receive the same values as `.SEOTitle`, `.MetaDescription`, `.SiteName`, `.CanonicalURL` (empty without a public origin), `.OGImageURL` (empty unless the logo is absolute), `.Robots` (`index, follow` or `noindex, nofollow`), `.FeedURL` and `.SummaryURL`. A template that prints no robots tag is still covered: with indexing off every page response carries `X-Robots-Tag: noindex, nofollow`. Indexing is off for every page that is not [public](#visibility). The unlock form of a password page carries none of these tags: only the page title, its logo and `noindex, nofollow`; a private page without a credential answers `404` with no head at all.",
+            "Custom templates receive the same values as `.SEOTitle`, `.MetaDescription`, `.SiteName`, `.CanonicalURL` (the primary custom domain, else under `STATUS_PAGE_BASE_URL`, else empty), `.OGImageURL` (empty unless the logo is absolute), `.Robots` (`index, follow` or `noindex, nofollow`), `.FeedURL` and `.SummaryURL`. A template that prints no robots tag is still covered: with indexing off every page response carries `X-Robots-Tag: noindex, nofollow`. Indexing is off for every page that is not [public](#visibility). The unlock form of a password page carries none of these tags: only the page title, its logo and `noindex, nofollow`; a private page without a credential answers `404` with no head at all.",
         },
       ],
     },
@@ -310,7 +315,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ["`schema_version`", "Contract version, currently `1`"],
             [
               "`page`",
-              "`slug`, `title`, and `url` (the canonical URL; omitted without `STATUS_PAGE_BASE_URL`)",
+              "`slug`, `title`, and `url` (the canonical URL: the primary custom domain, else under `STATUS_PAGE_BASE_URL`; omitted with neither)",
             ],
             [
               "`status`",
@@ -386,7 +391,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A visitor who enters the right password, or opens a kiosk URL, gets a session cookie: signed with `STATUS_PAGE_SESSION_SECRET`, `HttpOnly`, `SameSite=Lax`, scoped to the page's path, and `Secure` per `STATUS_PAGE_COOKIE_SECURE` — by default on when `STATUS_PAGE_BASE_URL` is `https://`, else only for requests that arrived over HTTPS (behind a TLS-terminating proxy that needs `TRUSTED_PROXY_CIDRS`, so set the base URL or the flag). Nothing about the session is stored. A password session lasts 30 days and ends early when the password is set, changed or removed; a kiosk session lasts 400 days (the browser maximum) and ends at once when its token is revoked or the page stops accepting tokens. Every open live stream re-checks the page and the session every 15 seconds, so a stream opened while the page was public ends once it is not, and a visibility or password change also closes the page's streams at once so they reconnect through the check.",
+            "A visitor who enters the right password, or opens a kiosk URL, gets a session cookie: signed with `STATUS_PAGE_SESSION_SECRET`, `HttpOnly`, `SameSite=Lax`, scoped to the page's path, and `Secure` per `STATUS_PAGE_COOKIE_SECURE` — by default on when `STATUS_PAGE_BASE_URL` is `https://`, else only for requests that arrived over HTTPS (behind a TLS-terminating proxy that needs `TRUSTED_PROXY_CIDRS`, so set the base URL or the flag). On a [custom domain](#custom-domains) it is host-only at `/` and always `Secure`. Nothing about the session is stored. A password session lasts 30 days and ends early when the password is set, changed or removed; a kiosk session lasts 400 days (the browser maximum) and ends at once when its token is revoked or the page stops accepting tokens. Every open live stream re-checks the page and the session every 15 seconds, so a stream opened while the page was public ends once it is not, and a visibility or password change also closes the page's streams at once so they reconnect through the check.",
         },
         {
           type: "paragraph",
@@ -432,7 +437,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           tone: "warning",
           title: "Pages sharing an origin trust each other's authors",
           text:
-            "Custom templates and custom head/footer HTML run script on the status origin. That script cannot fetch or frame another page's gated content, but it can open another page in a window it controls and read it, and it can read anything the visitor's browser shows on this origin. Give template-editing rights only to people you would trust with every gated page on the installation. Full isolation needs a hostname per page, which custom domains will provide. Slugs are unique across the installation, so someone who can create status pages learns that a slug is taken, including a private page's.",
+            "Custom templates and custom head/footer HTML run script on the status origin. That script cannot fetch or frame another page's gated content, but it can open another page in a window it controls and read it, and it can read anything the visitor's browser shows on this origin. Give template-editing rights only to people you would trust with every gated page on the installation. Full isolation needs a hostname per page: a page on its own [custom domain](#custom-domains) is the only page on that origin. Slugs are unique across the installation, so someone who can create status pages learns that a slug is taken, including a private page's.",
         },
         {
           type: "callout",
@@ -449,6 +454,89 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Notifications already queued for a page when it turns password or private are closed without being sent.",
             "A visitor session belongs to the page's current URL: renaming the slug signs its visitors out, and a kiosk display must open the new URL with its token.",
           ],
+        },
+      ],
+    },
+    {
+      id: "custom-domains",
+      title: "Custom domains",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A page can be served on your own hostname, such as `status.example.com`, at the root of that origin. Add the hostname in the page's **Custom domains** panel (or `POST /api/v1/status-page-domains`), then create the two DNS records the panel shows, each with a copy button:",
+        },
+        {
+          type: "table",
+          columns: ["Record", "Name", "Value", "Proves"],
+          rows: [
+            ["`CNAME`", "The hostname", "The installation's `STATUS_PAGE_CNAME_TARGET`", "Traffic for the hostname reaches the platform"],
+            ["`TXT`", "`_probara-verify.<hostname>`", "The domain's own verification value (`probara-verify=…`)", "You control the hostname's DNS"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The API checks both records with DNS lookups only — it never connects to what the names point at. A new domain is checked every 15 minutes for three days, then every 6 hours; **Verify now** checks at once (at most every 30 seconds per domain). The CNAME may go through your own names or to a target that is itself a CNAME to a load balancer: it counts when the hostname's chain ends where the target's does. Once both records are found the domain is **verified** and served. Until then it is **pending** and the panel says which record is missing, in fixed wording: it names the CNAME's actual target only when that is under the hostname's own domain, so a check never reveals names from DNS zones the platform's resolver can see. An unverified hostname answers exactly like one the service does not know.",
+        },
+        {
+          type: "table",
+          columns: ["Status", "Served", "Rechecked"],
+          rows: [
+            ["Pending", "No", "Every 15 minutes for three days, then every 6 hours"],
+            ["Verified", "Yes", "Every 6 hours"],
+            ["Verified, failing checks", "Yes, for up to a day", "Every 30 minutes; one passing check clears it"],
+            ["Failed", "No", "Hourly; a passing check verifies it again"],
+            ["Superseded", "No", "Only on **Verify now**, which takes the hostname once the page holding it lets go"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "A verified domain is not dropped on one bad lookup. DNS is often part of what is broken during an outage, which is exactly when the page matters, so a verified domain whose records stop checking out keeps being served while it is rechecked, and turns **failed** only after failing every check for 24 hours. Removing a domain, or its page, stops it at once.",
+        },
+        {
+          type: "list",
+          items: [
+            "Hostnames are lower-cased; an internationalized name is stored and shown as punycode (`status.xn--bcher-kva.de`). IP addresses, wildcards, ports, paths, bare public suffixes and names under an unknown top-level domain are refused, and so are the installation's own hosts (operator UI, API, status-page base URL, NATS websocket and the CNAME target).",
+            "A hostname is served by one page at most. Several pages, in any workspaces, may claim it unverified, each with its own verification value; adding one never tells you whether someone else has claimed it, only whether it is already verified for another page. The first claim whose own TXT value and CNAME check out takes the hostname, and every other page's pending or failed claim on it turns **superseded** (recorded in each workspace's audit log). A claim that never verifies, pending or superseded, is removed 14 days after it was added (audited as well).",
+            "A page can have up to 10 domains and a workspace up to 50, whatever their status.",
+            "Custom domains are off until `STATUS_PAGE_CNAME_TARGET` is set on the API, and also while neither `STATUS_PAGE_BASE_URL` nor `STATUS_PAGE_PLATFORM_HOSTS` names a public status host (the status service would then serve every page on any hostname; see below) ([configuration](/docs/configuration/)); the panel says so.",
+            "Deleting a workspace stops its custom domains at once: they answer like a hostname nobody claimed, its claims block no one, and the workspace purge removes them first, freeing their hostnames.",
+            "Apex domains (`example.com` itself) cannot hold a CNAME at most DNS providers; use a subdomain, or a provider-side ALIAS record that you keep pointed at the target yourself.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "**TLS** is terminated in front of the status-page service, never by it. On Helm, list each domain in `statusPage.customDomains` with a TLS Secret name and the chart renders an Ingress for it, with a cert-manager issuer annotation when `statusPage.customDomainsClusterIssuer` is set; with Compose, terminate TLS in your own reverse proxy and forward the original `Host` header to the status-page port. See [deployment](/docs/deployment/). Custom-domain URLs are always `https://`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The status service serves its platform routes — every page under `/public/status/`, the in-page API proxy, health and metrics — only on its **platform hosts**: the host of `STATUS_PAGE_BASE_URL`, `STATUS_PAGE_PLATFORM_HOSTS` (Helm adds `ingress.hosts` and `statusPage.platformHosts`), and internal names such as a pod IP, `localhost` or a cluster Service name, which probes and scrapers use. Any other hostname gets a verified custom domain's page, or the not-found answer on every path: a domain still pending, failed, superseded or removed in the UI, an unknown host, and every public host until the status service has read its domain table once after starting. A proxy or Ingress may therefore route a hostname to the service before it is verified. Without a public platform host (no `STATUS_PAGE_BASE_URL`, or a `localhost` one, and no `STATUS_PAGE_PLATFORM_HOSTS` — development), the service cannot tell its own hosts apart and serves the platform routes on every host but a verified domain; Helm refuses to render custom domains without one.",
+        },
+        {
+          type: "paragraph",
+          text: "What changes on a custom domain:",
+        },
+        {
+          type: "list",
+          items: [
+            "**Only that page.** Other pages' slugs, `/public/status/…` paths, the in-page API proxy (`/_sp_api/`), `/metrics` and the health routes are unknown paths of the page there, answered by its access check (not found; `401` on a password page).",
+            "**Canonical URL.** The page's oldest verified domain is its canonical address, used for the canonical link, `og:url`, the feed's links, `summary.json`'s `url`, and the operator UI's links and Share panel. The page stays reachable at `/public/status/{slug}` on the platform host and on every other verified domain, all naming the same canonical URL, so search engines index one address.",
+            "**Sessions.** A password or kiosk session on a custom domain is a host-only cookie at `/`, always `Secure` (custom domains are https only, so a display following a stray `http://` link never sends it in clear; `STATUS_PAGE_COOKIE_SECURE` does not apply there). A session opened on the platform host does not carry over (they are different origins), so a visitor or kiosk display unlocks or opens its kiosk URL on the domain it uses.",
+            "**Isolation.** The page is the only one on its origin, so the cross-page limit described under [visibility](#visibility) does not apply. Its Content-Security-Policy is the same: `connect-src 'self'` is the custom origin, and `frame-ancestors` still admits the operator UI, which previews pages through the platform host.",
+            "**Notifications.** The service worker is `/sw.js` with the root as its scope, behind the page's access check like every other route: on a password or private page's domain, where push is off, it is not found. Subscriptions are per origin: see [visitor notifications](#browser-notifications).",
+            "**Host header.** Pages are matched on the request's `Host`. Behind a proxy that rewrites it, set `STATUS_PAGE_TRUST_FORWARDED_HOST=true` to match on `X-Forwarded-Host` instead, believed only from `TRUSTED_PROXY_CIDRS` peers. A forged `Host` can only ever select a verified domain's own page or a platform host's routes, which that host serves anyway.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Custom templates with hard-coded paths",
+          text:
+            "The built-in template derives its live-update and notification paths from the page URL. A custom template copied from an older default that builds `/public/status/{slug}/stream` itself loses live updates on a custom domain; derive the path from `window.location.pathname`, as the current default does, and use `.FeedURL` and `.SummaryURL` for links.",
         },
       ],
     },
@@ -498,7 +586,8 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Turning the setting off stops new notifications but keeps existing subscriptions, so re-enabling does not force everyone to opt in again.",
             "Rotating the VAPID keypair invalidates every stored subscription — push services bind an endpoint to the key that created it — and every visitor must opt in again.",
             "A page rendered by a custom template gets no control unless the author adds one; `.PushEnabled` and `.PushPublicKey` are available in the template context.",
-            "Subscriptions store only the opaque browser endpoint and its public keys. No visitor identity, email address, or visit history is recorded.",
+            "Subscriptions store only the opaque browser endpoint, its public keys and, for one made on a [custom domain](#custom-domains), that domain. No visitor identity, email address, or visit history is recorded.",
+            "A browser keeps one subscription per origin: subscribing on a page's custom domain and on the platform host are two subscriptions, each turned off where it was made, and each notification opens the page where its subscription was made (the platform URL once that custom domain is removed or failed).",
             "Password and private pages offer no notifications: a subscription outlives the visitor session that made it. Switching a page to password or private stops notifications to its existing subscribers; switching it back resumes them.",
           ],
         },

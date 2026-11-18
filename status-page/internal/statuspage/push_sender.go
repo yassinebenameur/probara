@@ -15,6 +15,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/webpush"
 )
 
@@ -190,7 +191,7 @@ func (p *pushSender) deliver(ctx context.Context, d pendingDelivery) {
 		return
 	}
 
-	body, err := json.Marshal(p.payloadFor(d))
+	bodies, err := payloadsByOrigin(p.payloadFor(d), subs)
 	if err != nil {
 		p.logger.WithError(err).Error("Failed to encode push payload")
 		_ = p.store.CompleteDelivery(ctx, d.ID, 0, len(subs))
@@ -204,7 +205,7 @@ func (p *pushSender) deliver(ctx context.Context, d pendingDelivery) {
 	group.SetLimit(pushSendConcurrency)
 	for _, sub := range subs {
 		group.Go(func() error {
-			ok := p.send(gctx, sub, body)
+			ok := p.send(gctx, sub, bodies[sub.OriginHost])
 			mu.Lock()
 			if ok {
 				sent++
@@ -222,6 +223,30 @@ func (p *pushSender) deliver(ctx context.Context, d pendingDelivery) {
 	if err := p.store.CompleteDelivery(ctx, d.ID, sent, failed); err != nil {
 		p.logger.WithError(err).Warn("Failed to record push delivery outcome")
 	}
+}
+
+// payloadsByOrigin encodes payload once per origin among subs. The bodies
+// differ only in the deep link, which opens the page on the origin each
+// browser subscribed from: a subscription made on a custom domain belongs to
+// that origin, so its notification opens the page there; one made on the
+// platform host keeps the platform URL.
+func payloadsByOrigin(payload pushPayload, subs []pushSubscriptionRow) (map[string][]byte, error) {
+	bodies := map[string][]byte{}
+	for _, sub := range subs {
+		if _, ok := bodies[sub.OriginHost]; ok {
+			continue
+		}
+		withURL := payload
+		if sub.OriginHost != "" {
+			withURL.URL = pagedomains.PageURL(sub.OriginHost)
+		}
+		b, err := json.Marshal(withURL)
+		if err != nil {
+			return nil, err
+		}
+		bodies[sub.OriginHost] = b
+	}
+	return bodies, nil
 }
 
 // pushOutcome is how one delivery attempt ended. Separating classification

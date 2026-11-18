@@ -34,6 +34,7 @@ func catalog() []spec {
 		slaReportScheduleTools(),
 		workspaceAdminTools(),
 		statusPageAccessTools(),
+		statusPageDomainTools(),
 		identityTools(),
 		accountActionTools(),
 		monitorApplyTools(),

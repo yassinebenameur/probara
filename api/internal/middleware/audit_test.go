@@ -24,6 +24,9 @@ func TestDeriveAction(t *testing.T) {
 		{http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", "monitor.label"},
 		{http.MethodPost, "/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/triage/label", "alert.label"},
 		{http.MethodPost, "/api/v1/ai-labels/export", "ai-label.export"},
+		{http.MethodPost, "/api/v1/status-page-domains", "status-page-domain.create"},
+		{http.MethodPost, "/api/v1/status-page-domains/3f2a6c1e-0000-0000-0000-000000000001/verify", "status-page-domain.verify"},
+		{http.MethodDelete, "/api/v1/status-page-domains/3f2a6c1e-0000-0000-0000-000000000001", "status-page-domain.delete"},
 	}
 
 	for _, tc := range cases {
