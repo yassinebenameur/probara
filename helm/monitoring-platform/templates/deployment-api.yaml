@@ -90,13 +90,6 @@ spec:
         - name: PUBLIC_BASE_URL
           value: {{ . | quote }}
         {{- end }}
-        {{- /* The status-page origin the operator UI links to and previews
-        in (GET /auth-context). The UI image is prebuilt, so its own
-        build-time setting cannot carry a per-install value. */}}
-        {{- with (.Values.frontend.statusPageUrl | default .Values.statusPage.baseUrl) }}
-        - name: STATUS_PAGE_BASE_URL
-          value: {{ . | quote }}
-        {{- end }}
         {{- with include "monitoring-platform.adminCookieSecure" . }}
         - name: ADMIN_COOKIE_SECURE
           value: {{ . | quote }}
@@ -119,6 +112,27 @@ spec:
         {{- end }}
         {{- with (include "monitoring-platform.publicNatsUrl" .) }}
         - name: PUBLIC_NATS_URL
+          value: {{ . | quote }}
+        {{- end }}
+        # Status page custom domains: the CNAME target operators point their
+        # hostnames at (empty turns the feature off), and the status-page
+        # base URL, whose host is refused as a custom domain. The API also
+        # hands the base URL to the operator UI (GET /auth-context) for its
+        # status-page links and preview: the UI image is prebuilt, so its own
+        # build-time setting cannot carry a per-install value.
+        {{- with (include "monitoring-platform.statusPageCnameTarget" .) }}
+        - name: STATUS_PAGE_CNAME_TARGET
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.statusPage.baseUrl }}
+        - name: STATUS_PAGE_BASE_URL
+          value: {{ . | quote }}
+        {{- end }}
+        # The status-page's other platform hosts: refused as custom domains,
+        # and with the base URL what tells the API the status-page refuses
+        # unverified hostnames (custom domains stay off otherwise).
+        {{- with (include "monitoring-platform.statusPagePlatformHosts" .) }}
+        - name: STATUS_PAGE_PLATFORM_HOSTS
           value: {{ . | quote }}
         {{- end }}
         # Deploy snippets for private locations reference the worker this

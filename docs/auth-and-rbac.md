@@ -76,9 +76,10 @@ without any write. Every refusal gets the same `401` and body and costs one
 bcrypt comparison (a dummy hash when there is none to compare), so the lock
 never confirms an account exists; the audit log tells them apart
 (`auth.login` failure with `reason: locked`, `auth.lockout`).
-`RecordFailedAttempt` is the seam for a second factor: its failures count
-toward the same lock (and a second step must move the streak reset after
-it). Superadmin unlock: `POST /users/{id}/unlock` (`user.unlock`, MCP
+Failed second factors count toward the same lock through
+`RecordFailedAttempt`, and on a two-factor account a correct password only
+takes back its own count; the streak clears when the second step passes
+(see [Account links and two-factor](#account-links-and-two-factor)). Superadmin unlock: `POST /users/{id}/unlock` (`user.unlock`, MCP
 `unlock_user`); `cmd/admin` also clears a lock. What bounds "lock every
 account": the lock is time-boxed and never extended, it ends no sessions,
 superadmins can unlock, locks are audited, and the API rate limiter charges
@@ -128,7 +129,12 @@ What ends sessions: sign-out (that one); a user's own revoke (one / all
 others); superadmin revoke (one / all; on your own account all others);
 superadmin password set (all; your own password: all others —
 `adminusers.UpdateUser` keeps the caller's `sid`); `cmd/admin` (all); user
-deletion (cascade); refresh reuse (that one). Not: lockout or unlock (a
+deletion (cascade); refresh reuse (that one); a completed password reset or
+invite (all); the user's own password change, turning two-factor off, or a
+recovery code used (all others). Every password set (reset, invite, own
+change, superadmin set, `cmd/admin`) also revokes the user's MCP OAuth
+grants and unexchanged codes (`adminauth.RevokeMCPAccess`); workspace API
+keys are not user credentials and stay. Not: lockout or unlock (a
 guesser must not be able to sign people out), role and membership changes
 (roles are re-read per request anyway). Revoking an SSO session does not
 sign out of the IdP.
@@ -139,6 +145,73 @@ token row id), so signed-in users stay signed in; rotated/expired rows keep
 older binary inserts during a rolling deploy. An old binary also honours a
 revoked family's token, so revocations made mid-rollout may not hold:
 finish the rollout first. Drop the trigger in a later release.
+
+## Account links and two-factor
+
+Migrations 000124 (account tokens) and 000125 (TOTP, recovery codes, the
+session's `second_factor`). Local (password, no `external_subject`)
+accounts only: SSO accounts get no reset, email change, password or second
+factor here.
+
+**Tokens** (`adminauth/tokens.go`, `admin_account_tokens`): invite (7 days),
+password reset (1 h), email change (24 h) and the second sign-in step's
+challenge (5 min) are 256 random bits stored as SHA-256, consumed by one
+conditional `UPDATE` (single use), looked up by purpose (an invite never
+resets a password). Server state rather than `shared/actionlink` signed
+tokens, because single use and revocation need it anyway, and links must
+work without `PROBARA_SECRETS_KEY`. Issuing a link revokes the user's open
+links of the same purpose (challenges are not superseded: each is one
+sign-in). `RetireAccountTokens` revokes every open link and challenge; every
+credential reset calls it: completed reset or invite, own password change,
+superadmin password set (`adminusers` `RevokeSessionsByAdminID`), `cmd/admin`
+(both modes); a superadmin two-factor reset retires the email change and
+challenges. Link pages carry the token in the URL fragment and send it in
+`X-Action-Token` (`handlers/auth/links.go`), never in a path. The session
+pruner deletes tokens expired longer than the session retention.
+
+**Flows**: forgot password always answers `202` with one body and does the
+lookup and mail in the background (bounded workers), mailing only an
+enabled local account with an address, locked included, at most
+`PasswordResetMailsPerHour` (3) self-service resets per account per hour.
+Completing a reset or invite sets the password, revokes all sessions and
+MCP grants, retires every other token, and clears the lockout unless
+two-factor is on (an ordinary lock and the second factor survive a reset; a
+held lock is lifted). An address change (confirmation or superadmin edit)
+retires open invite and reset links (`RetireMailedLinksTx`). Passwords are
+12 characters to 72 bytes (`auth.ValidatePassword`; `HashPassword` returns
+`ErrPasswordTooLong`, which handlers answer as a validation error). Email change: current password
+under the lockout, confirmation to the new address, notice to the old one,
+applied on confirmation (uniqueness checked there). Superadmin invite /
+reset link: mailed with `SMTP_*` + `APP_BASE_URL` on the API
+(`api/internal/services/accountmail`), otherwise returned once in the
+response (`link`), never logged or audited. Every account-page check of the
+current password reserves an attempt (`VerifyCurrentPassword` /
+`VerifyCurrentCredentials`); a right one only takes back its own count.
+
+**Two-factor** (`adminauth/twofactor.go`, `totp.go`): RFC 6238 on the
+standard library (SHA-1, 6 digits, 30 s, ±1 step), `totp_last_step` refuses
+replays, 10 recovery codes stored hashed and burned on use. The secret is
+sealed with the `PROBARA_SECRETS_KEY` encryptor (`ConfigureEncryption` gets
+it only when a key is configured; without one enrolment is
+`ErrTwoFactorNeedsKey`) and only an envelope is ever opened. Sign-in:
+`Authenticate` returns `*SecondFactorRequired` (a challenge, no cookie) for a
+correct password, after releasing that attempt's reservation unless it just
+locked the account (then the ordinary refusal); `CompleteSecondFactor`
+reserves an attempt through `RecordFailedAttempt` before comparing the code,
+and under the user row lock checks the code, uses the challenge and clears
+the streak. Locked, disabled or wrong code: one `401` body. A lock completed
+by a wrong code is a second-factor lockout (`recordSecondFactorLockout`,
+audit `auth.second_factor_lockout`, mail notice, shown on the user's page);
+the third within 24 h holds the account (`lockout_held`, `locked_until` far
+ahead) until a superadmin unlock, `cmd/admin`, or a completed reset. An
+internal error in the step (an unreadable secret: `ErrSecretUnreadable`,
+logged once) gives the attempt back. A recovery code signs out every other
+session. The rate limiter
+treats `POST /auth/login/mfa` as a sign-in. Disable needs password and code
+and revokes other sessions; superadmin `POST /users/{id}/reset-2fa`;
+`cmd/admin -reset-2fa <username>` (tolerates a database without 000124/125).
+Notices (enabled, disabled, reset, recovery code used) are mailed in the
+background when account mail is configured.
 
 ## Enforcement layers
 
@@ -218,9 +291,12 @@ gone": it drops that selection (only if it is still the one the failing
 request carried, so concurrent failures change nothing more) and the
 switcher reloads its list once (`lib/api/core.ts`, `TENANTS_CHANGED_EVENT`).
 It never sends `X-Tenant-ID` on `/v1/tenants*`, which are platform routes,
-so the reload cannot fail the same way. A member left with no
-workspace keeps the account; the client answers their tenant-scoped requests
-with a "not a member of any workspace" error instead of sending them.
+so the reload cannot fail the same way, nor on `/v1/account*` (the user's
+own sessions, password, email and two-factor), which need no workspace. A
+member left with no workspace keeps the account and its account page,
+password reset and two-factor; the client answers their tenant-scoped
+requests with a "not a member of any workspace" error instead of sending
+them.
 
 The scheduler purges the data afterwards; see `docs/architecture.md`.
 
@@ -257,8 +333,12 @@ the MCP package decides access. Rules that keep it so:
 derives `resource.verb` actions for every mutation, and explicit events
 cover auth lifecycle (`auth.login`/`auth.logout`/`auth.oidc_login` incl.
 failures, `auth.lockout`, `auth.session_reuse`, `auth.session_revoke`,
-`auth.sessions_revoke_others`) and user/key management (incl.
-`user.unlock`, `user.session_revoke`, `user.sessions_revoke`) (those subtrees are skipped by the
+`auth.sessions_revoke_others`, `auth.password_reset_request`,
+`auth.password_reset`, `auth.invite_accept`, `auth.email_change_request`,
+`auth.email_change`, `auth.password_change`, `auth.two_factor_enable`,
+`auth.two_factor_disable`, `auth.recovery_codes_regenerate`) and user/key
+management (incl. `user.unlock`, `user.session_revoke`, `user.sessions_revoke`,
+`user.invite`, `user.password_reset_link`, `user.two_factor_reset`) (those subtrees are skipped by the
 generic layer). Writes go through an async batching recorder — never
 blocks or fails a request; drops rows quietly during the pre-migration
 deploy window.

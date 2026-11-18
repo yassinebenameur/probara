@@ -13,7 +13,7 @@ import (
 // falls back to its own resolution.
 func TestAuthContextCarriesTheStatusPageOrigin(t *testing.T) {
 	h := testHandlers()
-	h.cfg.StatusPageBaseURL = "https://status.example.com"
+	h.cfg.StatusPagePublicBaseURL = "https://status.example.com"
 
 	rec := httptest.NewRecorder()
 	h.AuthContext(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth-context", nil))
@@ -25,7 +25,7 @@ func TestAuthContextCarriesTheStatusPageOrigin(t *testing.T) {
 		t.Fatalf("status_page_base_url = %v, want the configured origin (%s)", got, rec.Body)
 	}
 
-	h.cfg.StatusPageBaseURL = ""
+	h.cfg.StatusPagePublicBaseURL = ""
 	rec = httptest.NewRecorder()
 	h.AuthContext(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth-context", nil))
 	if strings.Contains(rec.Body.String(), "status_page_base_url") {

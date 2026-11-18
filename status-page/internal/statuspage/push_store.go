@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
@@ -38,6 +40,9 @@ type pushSubscriptionRow struct {
 	Endpoint string
 	P256dh   string
 	Auth     string
+	// OriginHost is the custom domain it was made on ("" for the platform
+	// host). Read back only while that domain still serves the page.
+	OriginHost string
 }
 
 // Subscribe stores a browser subscription, or refreshes an existing one.
@@ -52,10 +57,12 @@ type pushSubscriptionRow struct {
 // read-then-write, so two concurrent subscribes cannot both observe a count
 // below the cap and both insert.
 func (s *pushStore) Subscribe(ctx context.Context, pageID uuid.UUID, sub pushSubscriptionRow, userAgent string, cap int) (bool, error) {
+	// origin_host is written on insert only: an endpoint belongs to the
+	// origin whose service worker created it, so it never moves.
 	const query = `
 		INSERT INTO status_page_push_subscriptions
-			(status_page_id, endpoint, p256dh, auth, user_agent)
-		SELECT $1, $2, $3, $4, NULLIF($5, '')
+			(status_page_id, endpoint, p256dh, auth, user_agent, origin_host)
+		SELECT $1, $2, $3, $4, NULLIF($5, ''), NULLIF($7, '')
 		WHERE (
 			SELECT COUNT(*) FROM status_page_push_subscriptions WHERE status_page_id = $1
 		) < $6
@@ -68,7 +75,13 @@ func (s *pushStore) Subscribe(ctx context.Context, pageID uuid.UUID, sub pushSub
 		RETURNING id
 	`
 	var id uuid.UUID
-	err := s.db.QueryRowContext(ctx, query, pageID, sub.Endpoint, sub.P256dh, sub.Auth, userAgent, cap).Scan(&id)
+	err := s.db.QueryRowContext(ctx, query, pageID, sub.Endpoint, sub.P256dh, sub.Auth, userAgent, cap, sub.OriginHost).Scan(&id)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		// Before migration 000120: no origin column, and no custom domain
+		// can be served either.
+		legacy := strings.NewReplacer(", origin_host)", ")", ", NULLIF($7, '')", "").Replace(query)
+		err = s.db.QueryRowContext(ctx, legacy, pageID, sub.Endpoint, sub.P256dh, sub.Auth, userAgent, cap).Scan(&id)
+	}
 	if err == sql.ErrNoRows {
 		// The WHERE suppressed the insert: the page is at its cap. ON CONFLICT
 		// never runs for a suppressed row, so an existing subscriber
@@ -243,14 +256,25 @@ func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter t
 	return out, rows.Err()
 }
 
-// SubscriptionsForPage returns every browser subscribed to a page.
+// SubscriptionsForPage returns every browser subscribed to a page, each with
+// the custom domain it was made on while that domain still serves the page
+// (else "", and its notification links to the platform URL).
 func (s *pushStore) SubscriptionsForPage(ctx context.Context, pageID uuid.UUID) ([]pushSubscriptionRow, error) {
 	const query = `
-		SELECT id, endpoint, p256dh, auth
-		FROM status_page_push_subscriptions
-		WHERE status_page_id = $1
+		SELECT s.id, s.endpoint, s.p256dh, s.auth, COALESCE(d.hostname, '')
+		FROM status_page_push_subscriptions s
+		LEFT JOIN status_page_domains d
+		  ON d.status_page_id = s.status_page_id AND d.hostname = s.origin_host AND d.status = 'verified'
+		WHERE s.status_page_id = $1
 	`
 	rows, err := s.db.QueryContext(ctx, query, pageID)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id, endpoint, p256dh, auth, ''
+			FROM status_page_push_subscriptions
+			WHERE status_page_id = $1
+		`, pageID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load push subscriptions: %w", err)
 	}
@@ -259,7 +283,7 @@ func (s *pushStore) SubscriptionsForPage(ctx context.Context, pageID uuid.UUID) 
 	var out []pushSubscriptionRow
 	for rows.Next() {
 		var sub pushSubscriptionRow
-		if err := rows.Scan(&sub.ID, &sub.Endpoint, &sub.P256dh, &sub.Auth); err != nil {
+		if err := rows.Scan(&sub.ID, &sub.Endpoint, &sub.P256dh, &sub.Auth, &sub.OriginHost); err != nil {
 			return nil, fmt.Errorf("scan push subscription: %w", err)
 		}
 		out = append(out, sub)

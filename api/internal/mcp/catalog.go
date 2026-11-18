@@ -34,7 +34,9 @@ func catalog() []spec {
 		slaReportScheduleTools(),
 		workspaceAdminTools(),
 		statusPageAccessTools(),
+		statusPageDomainTools(),
 		identityTools(),
+		accountActionTools(),
 		monitorApplyTools(),
 	} {
 		all = append(all, group...)

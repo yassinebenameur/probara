@@ -696,7 +696,7 @@ helm lint ./helm/monitoring-platform \\
             [
               'Frontend links point to old origin',
               '`NEXT_PUBLIC_*` changed only at runtime, or status-page links on the UI\'s own origin',
-              'Status-page links and the template preview take `STATUS_PAGE_BASE_URL` from the API at runtime: set it on the API (Helm `statusPage.baseUrl` or `frontend.statusPageUrl`; release Compose `.env`). Other public values are build-time: rebuild the frontend client bundle with them or use stable relative routing.',
+              'Status-page links and the template preview take `STATUS_PAGE_BASE_URL` from the API at runtime: set it on the API (Helm `statusPage.baseUrl`; release Compose `.env`). Other public values are build-time: rebuild the frontend client bundle with them or use stable relative routing.',
             ],
             [
               'Settings → AI says “not configured correctly”',

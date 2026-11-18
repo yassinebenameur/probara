@@ -632,6 +632,41 @@ statusPage:
   # an entry here.
   extraEnv: []
 
+  # Custom domains: operators add a hostname to a status page in the UI and
+  # create the DNS records it shows (a CNAME to cnameTarget and a TXT
+  # record); the API verifies them, and only verified domains are served.
+  # TLS terminates at the Ingress: list each domain below as well, and the
+  # chart renders one Ingress per domain (needs ingress.enabled), routing it
+  # to the status-page service with its own TLS Secret.
+  #
+  # Host every custom domain must CNAME to (STATUS_PAGE_CNAME_TARGET on the
+  # api). Empty uses the host of baseUrl; with both empty, custom domains
+  # are off.
+  cnameTarget: ""
+  # One entry per custom domain: {host: status.example.org, tlsSecretName:
+  # status-example-org-tls}. Each host must also be verified in the UI. The
+  # status-page service serves the platform routes only on its platform hosts
+  # (the host of baseUrl, ingress.hosts and platformHosts below), so until a
+  # listed host is verified (or after it fails or is removed in the UI) its
+  # Ingress gets only not-found answers; the render fails without any
+  # platform host.
+  customDomains: []
+  # Extra hosts that serve the platform routes (every page under
+  # /public/status/), besides baseUrl's host and ingress.hosts:
+  # STATUS_PAGE_PLATFORM_HOSTS. For a proxy of your own in front of the
+  # service under another name.
+  platformHosts: []
+  # cert-manager ClusterIssuer that issues the custom domains' certificates
+  # (the cert-manager.io/cluster-issuer annotation on their Ingresses, which
+  # carry ingress.annotations too; this value wins over an issuer set there).
+  # Empty: no annotation of its own; create the TLS Secrets yourself, or set
+  # the issuer in ingress.annotations.
+  customDomainsClusterIssuer: ""
+  # Match custom domains on X-Forwarded-Host instead of Host
+  # (STATUS_PAGE_TRUST_FORWARDED_HOST), believed only from trustedProxyCIDRs
+  # peers. Only for a proxy in front of the Ingress that rewrites Host.
+  trustForwardedHost: false
+
 # =============================================================================
 # FRONTEND SERVICE
 # =============================================================================
@@ -640,10 +675,10 @@ frontend:
   replicas: 2
   httpPort: 3000
   apiUrl: "/api"
-  # Public base URL for status page links shown in the frontend.
-  # Defaults to statusPage.baseUrl when empty. Rendered as
-  # STATUS_PAGE_BASE_URL into the api (which hands it to the UI at runtime)
-  # and the frontend (its CSP frame-src).
+  # Deprecated and ignored: the UI's status-page links come from
+  # statusPage.baseUrl, which the api hands to it at runtime (a build-time
+  # value here never reached the published image). Kept so existing values
+  # files still render.
   statusPageUrl: ""
   # Runtime API upstream for Next.js server-side API proxy route (/api/*).
   # Leave empty to use the in-cluster API service automatically when api.enabled=true.

@@ -199,8 +199,10 @@ env_init LOCAL_AI_DISABLED "false"
 env_init ADMIN_COOKIE_SECURE "false"
 # The two public origins (APP_BASE_URL for the UI, STATUS_PAGE_BASE_URL for
 # status pages) are left empty, never guessed: links that need them are
-# omitted or stay relative until they are set.
-for key in PUBLIC_BASE_URL PUBLIC_NATS_URL PROBARA_TRUSTED_PROXIES APP_BASE_URL STATUS_PAGE_BASE_URL SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM; do
+# omitted or stay relative until they are set. Status page custom domains
+# (STATUS_PAGE_CNAME_TARGET) stay off until STATUS_PAGE_BASE_URL names the
+# public status host.
+for key in PUBLIC_BASE_URL PUBLIC_NATS_URL PROBARA_TRUSTED_PROXIES APP_BASE_URL STATUS_PAGE_BASE_URL STATUS_PAGE_CNAME_TARGET SMTP_HOST SMTP_PORT SMTP_USE_TLS SMTP_USERNAME SMTP_PASSWORD SMTP_FROM; do
   env_init "$key" ""
 done
 
