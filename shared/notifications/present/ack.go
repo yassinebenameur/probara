@@ -29,7 +29,10 @@ const AckLabel = "Acknowledge"
 type LinkSigner interface {
 	// ActionToken returns an opaque, URL-safe token authorizing action on
 	// alertID in tenantID as delivered on channelID, valid for a fixed time
-	// from issuedAt, or an error when it cannot mint one.
+	// from issuedAt, or an error when it cannot mint one. issuedAt is the
+	// event's timestamp, when the notification was built: the API also
+	// refuses an acknowledge token issued before the alert's latest relapse,
+	// so a link acts only on the episode it was sent in.
 	ActionToken(action, tenantID, alertID, channelID string, issuedAt time.Time) (string, error)
 }
 

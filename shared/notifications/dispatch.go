@@ -50,7 +50,9 @@ type DispatchEnvelope struct {
 	// Release is set on a relapse notice: the claimed row as the alerter's
 	// claim found it, which a worker that holds the notice back (the alert
 	// was acknowledged or snoozed since) restores, so the route is exactly
-	// as if the notice had never been claimed.
+	// as if the notice had never been claimed (save a 'resolved' whose
+	// recovery notice never reached the channel: see the worker's
+	// releaseMutedClaim).
 	Release *ClaimRelease `json:"release,omitempty"`
 }
 

@@ -152,10 +152,19 @@ func ClearAttempt(ctx context.Context, db DB, alertID, channelID uuid.UUID, even
 // earlier attempts committed through the pool. Before migration 000097
 // nothing can have been recorded, so a missing table reads as false.
 func Reached(ctx context.Context, q DB, alertID, channelID uuid.UUID, eventKey string) (bool, error) {
+	return ReachedAny(ctx, q, alertID, channelID, []string{eventKey})
+}
+
+// ReachedAny is Reached for whichever of eventKeys: true when any of them
+// possibly reached anyone on the pair.
+func ReachedAny(ctx context.Context, q DB, alertID, channelID uuid.UUID, eventKeys []string) (bool, error) {
+	if len(eventKeys) == 0 {
+		return false, nil
+	}
 	rows, err := q.QueryContext(ctx, `
 		SELECT 1 FROM alert_notification_recipient_deliveries
-		WHERE alert_id = $1 AND channel_id = $2 AND event_key = $3
-		LIMIT 1`, alertID, channelID, eventKey)
+		WHERE alert_id = $1 AND channel_id = $2 AND event_key = ANY($3)
+		LIMIT 1`, alertID, channelID, pq.Array(eventKeys))
 	if err != nil {
 		if pgerr.IsUndefinedTable(err) {
 			return false, nil
