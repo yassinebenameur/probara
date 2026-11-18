@@ -14,6 +14,7 @@ export const API_PAGE: DocPage = {
     "endpoints",
     "SSE",
     "pagination",
+    "OpenAPI",
   ],
   sections: [
     {
@@ -192,7 +193,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only. The [AI label routes](#ai-labels) persist operator verdicts, so they are writes: viewers and read keys get HTTP 403.",
+            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/apply/plan`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only. The [AI label routes](#ai-labels) persist operator verdicts, so they are writes: viewers and read keys get HTTP 403.",
         },
       ],
     },
@@ -401,7 +402,15 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/monitors/export`",
-              "Export a versioned YAML configuration bundle",
+              "Export a versioned YAML configuration bundle, secrets and URL credentials masked: version 2 with each monitor's key when any has one, else version 1; `keyed=true` exports only the monitors with a key, the file [config as code](/docs/monitors/#config-as-code) applies",
+            ],
+            [
+              "`POST /api/v1/monitors/apply/plan`",
+              "Read; what applying a monitors file (`{document, prune, prune_scope, force, fingerprint}`) would create, update, leave unchanged or delete, with validation errors, probable key renames, the monitors a prune would change, and a fingerprint; writes nothing",
+            ],
+            [
+              "`POST /api/v1/monitors/apply`",
+              "Write; apply a monitors file to the workspace's keyed monitors, all or nothing: 422 `invalid_document`, 409 `plan_changed`, `prune_refused`, `probable_rename` or `apply_conflict` (saved meanwhile; retry), each with the plan and nothing written",
             ],
             [
               "`POST /api/v1/monitors/import/preview`",
@@ -416,7 +425,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Dependency creation rejects self-reference and transitive cycles with HTTP 409; a `PATCH /monitors/{id}` whose `depends_on_ids` would form one is refused as a whole, with nothing in it applied. A create or update and its member and dependency changes are saved in one transaction. `POST /monitors/bulk/alerting` checks every monitor and channel first, then applies the edit in batches of 100 monitors, each one transaction; an error after earlier batches committed says how many monitors were already updated; the edit is idempotent, so retrying the request is safe. A save that loses a database lock conflict twice answers 503 `conflict` with nothing saved; retry it. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate.",
+            "Dependency creation rejects self-reference and transitive cycles with HTTP 409; a `PATCH /monitors/{id}` whose `depends_on_ids` would form one is refused as a whole, with nothing in it applied. A create or update and its member and dependency changes are saved in one transaction. `POST /monitors/bulk/alerting` checks every monitor and channel first, then applies the edit in batches of 100 monitors, each one transaction; an error after earlier batches committed says how many monitors were already updated; the edit is idempotent, so retrying the request is safe. A save that loses a database lock conflict twice answers 503 `conflict` with nothing saved; retry it. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate. `POST /monitors` and `PATCH /monitors/{id}` accept a `key` (`\"\"` removes it on `PATCH`); a key another monitor of the workspace has answers 409 `key_taken`. The [config as code](/docs/monitors/#config-as-code) section covers the apply endpoints, the file format and a `curl` workflow.",
         },
       ],
     },
@@ -1308,6 +1317,44 @@ export const API_PAGE: DocPage = {
           title: "Use auth-context for diagnostics",
           text:
             "When a request is unexpectedly forbidden, `GET /api/v1/auth-context` shows the effective credential type, tenant, tenant role, and key scope without requiring a guess about middleware precedence.",
+        },
+      ],
+    },
+    {
+      id: "openapi",
+      title: "OpenAPI document",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "`GET /api/v1/openapi.json` returns an OpenAPI 3.1 description of the REST API. It needs a credential like any other route (an API key of either scope or a signed-in session) and is not workspace-scoped; anonymous requests get 401. There is no interactive documentation UI. Send `Accept-Encoding: gzip` for a compressed copy; the answer carries an `ETag` and `Cache-Control: private, max-age=300`, so `If-None-Match` revalidates with a 304. If the document could not be generated at startup the API still runs and this route answers 503 `openapi_unavailable`.",
+        },
+        {
+          type: "code",
+          language: "bash",
+          title: "Download the document",
+          code:
+            "curl \\\n  -H 'Authorization: Bearer pk_<secret>' \\\n  -o probara-openapi.json \\\n  \"$PROBARA_API_ORIGIN/api/v1/openapi.json\"",
+        },
+        {
+          type: "definitions",
+          items: [
+            {
+              term: "Generated, not written",
+              description:
+                "The document is built from the same catalog as the [MCP tools](/docs/mcp/#tools) and checked against the router when the API starts: every routed `/api/v1` operation is described, or listed with the reason under `x-probara-not-described` (browser sign-in, OAuth and MCP protocol routes, acknowledge and unsubscribe links, the discovery collector, retired routes). An operation's `operationId` is its MCP tool name. A copy is committed in the repository as `api/openapi.json`.",
+            },
+            {
+              term: "What it covers",
+              description:
+                "Path, query and body parameters with JSON schemas; the `tenant_id` parameter on workspace-scoped operations; which operations need write access or a tenant admin, superadmin or signed-in session (those list only the session scheme); success responses reflected from the handlers' response types; and the shared 400, 401, 403 and 429 answers. Monitor `config` lists each type's secret fields under `x-probara-secret-fields`. Push heartbeats, OTLP export and the alert stream are described too.",
+            },
+            {
+              term: "What it does not promise",
+              description:
+                "Response objects are open: new fields can appear in any release. Request schemas do not mark every required field; the API's validation message is authoritative. Error answers other than the shared ones are described generically, and a few low-level paths answer plain text. `info.version` is the API's build version.",
+            },
+          ],
         },
       ],
     },

@@ -225,7 +225,7 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   capability (superadmin, tenant role admin/editor, or write-scope key).
   A small allowlist exempts compute-only POSTs (`/monitors/test`,
   `import/preview`, `dependency-suggestions`, `/mesh/probe`,
-  `/ai-settings/test`). **Add new test/preview endpoints to that list** or
+  `/ai-settings/test`, `/monitors/apply/plan`). **Add new test/preview endpoints to that list** or
   viewers will get 403s.
 - Credential-bearing reads have explicit write-capability checks:
   `/locations/{id}/deploy` and `/monitors/{id}/push/info` require a
@@ -291,9 +291,12 @@ gone": it drops that selection (only if it is still the one the failing
 request carried, so concurrent failures change nothing more) and the
 switcher reloads its list once (`lib/api/core.ts`, `TENANTS_CHANGED_EVENT`).
 It never sends `X-Tenant-ID` on `/v1/tenants*`, which are platform routes,
-so the reload cannot fail the same way. A member left with no
-workspace keeps the account; the client answers their tenant-scoped requests
-with a "not a member of any workspace" error instead of sending them.
+so the reload cannot fail the same way, nor on `/v1/account*` (the user's
+own sessions, password, email and two-factor), which need no workspace. A
+member left with no workspace keeps the account and its account page,
+password reset and two-factor; the client answers their tenant-scoped
+requests with a "not a member of any workspace" error instead of sending
+them.
 
 The scheduler purges the data afterwards; see `docs/architecture.md`.
 

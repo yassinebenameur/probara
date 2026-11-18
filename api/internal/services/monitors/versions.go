@@ -39,6 +39,8 @@ const (
 	VersionSourceImport    = "import"
 	VersionSourceDiscovery = "discovery"
 	VersionSourceRestore   = "restore"
+	// VersionSourceApply is a config-as-code apply (POST /monitors/apply).
+	VersionSourceApply = "apply"
 	// VersionSourceBaseline is the configuration a monitor had before its
 	// first recorded save (recordVersionTx).
 	VersionSourceBaseline = "baseline"

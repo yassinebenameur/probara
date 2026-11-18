@@ -16,8 +16,17 @@ type ImportService interface {
 	// ExecuteImport executes the import with the given rows and mapping
 	ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *models.ImportExecuteRequest) (*models.ImportExecuteResponse, error)
 
-	// ExportMonitors exports all tenant monitors as portable YAML
-	ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byte, error)
+	// ExportMonitors exports the tenant's monitors as portable YAML
+	// (version 2), all of them or only the keyed ones
+	ExportMonitors(ctx context.Context, tenantID uuid.UUID, opts ExportOptions) ([]byte, error)
+
+	// PlanApply computes what applying a monitors document would do,
+	// writing nothing
+	PlanApply(ctx context.Context, tenantID uuid.UUID, req *models.MonitorApplyRequest) (*models.MonitorApplyPlan, error)
+
+	// Apply brings the tenant's keyed monitors in line with a monitors
+	// document, all or nothing
+	Apply(ctx context.Context, tenantID uuid.UUID, req *models.MonitorApplyRequest) (*models.MonitorApplyResult, error)
 }
 
 // Ensure Service implements ImportService

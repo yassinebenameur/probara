@@ -261,7 +261,7 @@ func (h *Handlers) rotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.record(r, 200, "discovery-integration.rotate-token", "discovery-integration", i, nil)
-	write(w, 200, map[string]string{"token": v})
+	write(w, 200, svc.CollectorTokenResponse{Token: v})
 }
 func (h *Handlers) coverage(w http.ResponseWriter, r *http.Request) {
 	t, ok := httpx.TenantID(w, r)
@@ -324,7 +324,7 @@ func (h *Handlers) approve(w http.ResponseWriter, r *http.Request) {
 	if created {
 		h.record(r, 200, "discovery.approve", "monitor", v, map[string]any{"discovered_service_id": i.String(), "suggestion_key": req.Key})
 	}
-	write(w, 200, map[string]any{"monitor_id": v, "created": created})
+	write(w, 200, svc.ApproveResponse{MonitorID: v, Created: created})
 }
 func (h *Handlers) link(w http.ResponseWriter, r *http.Request) {
 	t, ok := httpx.TenantID(w, r)

@@ -59,6 +59,9 @@ type spec struct {
 	BodyArg *param
 	// Multipart uploads the FileArg argument's text as the form file `file`.
 	Multipart *multipart
+	// BodyOptional marks a Body the handler also accepts empty (an absent
+	// body means the defaults); the OpenAPI request body is then optional.
+	BodyOptional bool
 	// Required names body fields the agent must send (reflection cannot
 	// tell; the API's validation remains the authority).
 	Required []string
@@ -76,6 +79,10 @@ type spec struct {
 	// Platform marks routes that do not act in a tenant (users, OIDC
 	// mappings, the tenant list): no tenant_id argument.
 	Platform bool
+	// SessionOnly marks routes whose handler refuses API keys although no
+	// role gate on the router shows it (the tenant list). Hidden from API-key
+	// sessions; the OpenAPI document lists only the session scheme.
+	SessionOnly bool
 }
 
 type multipart struct {
@@ -128,6 +135,7 @@ type Handler struct {
 	tools   []*tool
 	extras  []extraTool
 	stream  http.Handler
+	openapi *openAPIDocument
 
 	// resourceMetadata returns the RFC 9728 metadata URL advertised on a
 	// 401, which is how MCP clients discover OAuth sign-in.
@@ -164,6 +172,10 @@ func (h *Handler) Bind(router chi.Router, extras []extraTool) error {
 	if err := checkCoverage(routes, tools); err != nil {
 		return err
 	}
+	// The REST API's OpenAPI document is the same catalog, bound to the same
+	// router (openapi_serve.go). A generation failure degrades only that
+	// endpoint; TestOpenAPIGolden is where it must be caught.
+	h.prepareOpenAPI(routes, tools)
 	h.router = router
 	h.tools = tools
 	h.extras = extras
@@ -386,7 +398,7 @@ func (h *Handler) visibleTools(c capability) []*tool {
 		switch {
 		case t.gate == gateSuperadmin && !c.superadmin:
 			continue
-		case t.gate == gateTenantAdmin && c.apiKey:
+		case (t.gate == gateTenantAdmin || t.spec.SessionOnly) && c.apiKey:
 			continue
 		case (!t.readOnly || t.spec.NeedsWrite) && !c.write:
 			continue

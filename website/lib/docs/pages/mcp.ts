@@ -143,7 +143,7 @@ export const MCP_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "`tools/list` is tailored to the connection: read-only connections see no write tools, API keys see no tenant-admin or superadmin tools, and only superadmins see user and SSO-mapping tools. This is a convenience; the API enforces access on every call regardless. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) derived from the route, so clients can ask before running deletes.",
+            "`tools/list` is tailored to the connection: read-only connections see no write tools, API keys see no tenant-admin, superadmin or sign-in-only tools (`list_tenants`), and only superadmins see user and SSO-mapping tools. This is a convenience; the API enforces access on every call regardless. Tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) derived from the route, so clients can ask before running deletes.",
         },
         {
           type: "table",
@@ -156,6 +156,7 @@ export const MCP_PAGE: DocPage = {
             ["Structure", "group members, `get_dependency_graph`, dependency add/remove, `suggest_dependencies` (local AI)"],
             ["Host agents", "`list_metric_series`, `query_metrics`, collector config and install/uninstall scripts, `get_push_info`"],
             ["Import / export", "`export_monitors`, `preview_monitor_import` (send the file's text), `import_monitors`"],
+            ["Config as code", "`plan_monitor_apply` (read-only), `apply_monitors` (destructive): plan and apply a monitors file from `export_monitors` with `keyed=true`; see [config as code](/docs/monitors/#config-as-code)"],
             ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `unacknowledge_alert`, `snooze_alert`, `unsnooze_alert`, their `bulk_*` forms, `label_alert_triage`, `wait_for_alert_events`, `list_alert_deliveries` (an alert's [notification attempts](/docs/alerting/#delivery-history))"],
             ["Incidents", "create, update, state transitions, timeline entries, alert/monitor links, status-page publishing, AI analysis request/read/label"],
             ["Operations", "maintenance windows, private locations and their deploy info, `get_mesh`, `get_mesh_edge_history`, `probe_mesh_edge`"],
@@ -191,6 +192,11 @@ export const MCP_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Not exposed, with the reason: browser login, refresh, logout and SSO routes (MCP has its own sign-in); first-run bootstrap; telemetry ingest (`/otlp/v1/metrics`, `/push/{token}`); the in-cluster discovery collector's config and snapshot routes (`/discovery-collectors/…`, collector-token authenticated); the retired legacy agent endpoint and alert-policy routes (410); and the OAuth protocol routes themselves.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The same catalog generates the REST API's [OpenAPI document](/docs/api/#openapi), where each operation's `operationId` is the tool name, so the tools and the documented REST surface cannot drift apart.",
         },
       ],
     },

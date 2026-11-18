@@ -273,6 +273,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Lives at /auth-context (not /auth/context) because the outer
 			// unauthenticated /auth subrouter shadows that subtree.
 			r.Get("/auth-context", authHandlers.AuthContext)
+			mountOpenAPIRoute(r, mcpHandler) // GET /openapi.json (routes_openapi.go)
 
 			// Agent service and handlers (needed by monitors route)
 			agentService := agentservice.NewService(dbClient.DB)
@@ -332,6 +333,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Import service and handlers
 			importSvc := importservice.NewService(dbClient, monitorService, groupSvc)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
+			importHdlrs.ConfigureAudit(auditRecorder)
 
 			// Private locations (remote worker deployments)
 			locationHandlers := locationhandlers.NewHandlers(locationSvc, cfg.PublicNATSURL, log)

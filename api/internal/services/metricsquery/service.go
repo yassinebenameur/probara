@@ -37,6 +37,11 @@ func NewService(db *sql.DB) *Service {
 	return &Service{db: db}
 }
 
+// SeriesListResponse is GET /monitors/{id}/metrics/series.
+type SeriesListResponse struct {
+	Items []SeriesItem `json:"items"`
+}
+
 // SeriesItem is one discovery row.
 type SeriesItem struct {
 	SeriesKey  string            `json:"series_key"`

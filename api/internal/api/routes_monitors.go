@@ -65,6 +65,10 @@ func mountMonitorRoutes(r chi.Router, monitorHandlers *monitorhandlers.Handlers,
 		r.Get("/export", importHdlrs.Export)
 		r.Post("/import/preview", importHdlrs.Preview)
 		r.Post("/import", importHdlrs.Execute)
+		// Config-as-code: plan saves nothing (read-only POST allowlist,
+		// middleware/readonly.go); apply writes.
+		r.Post("/apply/plan", importHdlrs.PlanApply)
+		r.Post("/apply", importHdlrs.Apply)
 		// Bulk operations (must be before /{id} to avoid conflicts)
 		r.Post("/bulk/alerting", monitorHandlers.BulkUpdateAlerting)
 		r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)

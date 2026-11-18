@@ -876,3 +876,62 @@ func TestSuperadminEditsRetireLinksAndMCPConnections(t *testing.T) {
 		t.Fatalf("password changed notice: %d mails", len(got))
 	}
 }
+
+// Users are platform-scoped: a member whose only workspace was deleted can
+// still reset their password and manage two-factor sign-in, and then signs
+// in to the no-workspace state (an empty workspace list).
+func TestAccountFlowsSurviveTheLastWorkspace(t *testing.T) {
+	sink := startMailSink(t)
+	f := newAccountFixture(t, sink)
+	root := f.createSuperadminBrowser()
+	f.createUser("orphan", "member", []models.MembershipInput{{TenantID: f.tenantB, Role: "editor"}})
+	if _, err := f.db.ExecContext(f.ctx, `UPDATE admin_users SET email = 'orphan@example.com' WHERE username = 'orphan'`); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := root.do(http.MethodDelete, "/api/v1/tenants/"+f.tenantB.String(), map[string]string{"confirm_name": "Tenant B"}); status != http.StatusOK {
+		t.Fatalf("delete workspace: %d %s", status, body)
+	}
+
+	anon := f.browser()
+	if status, _ := anon.do(http.MethodPost, "/api/v1/auth/password/forgot", map[string]string{"login": "orphan"}); status != http.StatusAccepted {
+		t.Fatal("forgot")
+	}
+	mails := sink.mailsTo("orphan@example.com", 1, 5*time.Second)
+	if len(mails) != 1 {
+		t.Fatalf("%d reset mails", len(mails))
+	}
+	token := tokenLink(t, mails[0], "https://app.example.com/reset-password")
+	if status, body := anon.doToken(http.MethodPost, "/api/v1/auth/password/reset", token, map[string]string{"password": "an-orphan-long-password"}); status != http.StatusNoContent {
+		t.Fatalf("reset: %d %s", status, body)
+	}
+
+	user := f.browser()
+	if status, body := user.login("orphan", "an-orphan-long-password"); status != http.StatusOK {
+		t.Fatalf("sign-in: %d %s", status, body)
+	}
+	status, body := user.do(http.MethodGet, "/api/v1/tenants", nil)
+	if list := decodeJSON[models.TenantListResponse](t, status, body, http.StatusOK); len(list.Items) != 0 {
+		t.Fatalf("workspaces after the delete: %s", body)
+	}
+	if status, body := user.do(http.MethodGet, "/api/v1/account/security", nil); status != http.StatusOK {
+		t.Fatalf("account security without a workspace: %d %s", status, body)
+	}
+	status, body = user.do(http.MethodPost, "/api/v1/account/two-factor/setup", map[string]string{"current_password": "an-orphan-long-password"})
+	setup := decodeJSON[models.TOTPSetupResponse](t, status, body, http.StatusOK)
+	code, _ := adminauth.TOTPCodeAt(setup.Secret, time.Now())
+	if status, body := user.do(http.MethodPost, "/api/v1/account/two-factor/enable", map[string]string{"code": code}); status != http.StatusOK {
+		t.Fatalf("enable without a workspace: %d %s", status, body)
+	}
+	// A stale workspace header still answers workspace_not_found, which the
+	// web client never sends on /account (lib/api/core.ts).
+	req, _ := http.NewRequest(http.MethodGet, f.http.URL+"/api/v1/account/security", nil)
+	req.Header.Set("X-Tenant-ID", f.tenantB.String())
+	res, err := user.c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("account route with a deleted workspace's header: %d", res.StatusCode)
+	}
+}

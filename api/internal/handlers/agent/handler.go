@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/services/agent"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -82,7 +83,7 @@ func (h *Handler) HandleGetInstallCommand(w http.ResponseWriter, r *http.Request
 	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return
 	}
 
@@ -90,7 +91,7 @@ func (h *Handler) HandleGetInstallCommand(w http.ResponseWriter, r *http.Request
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 
@@ -98,7 +99,7 @@ func (h *Handler) HandleGetInstallCommand(w http.ResponseWriter, r *http.Request
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
@@ -110,7 +111,7 @@ func (h *Handler) HandleGetInstallCommand(w http.ResponseWriter, r *http.Request
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate install command")
-		http.Error(w, "failed to generate install command", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "failed to generate install command")
 		return
 	}
 
@@ -127,7 +128,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return
 	}
 
@@ -135,7 +136,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 
@@ -143,7 +144,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
@@ -155,7 +156,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate install command")
-		http.Error(w, "failed to generate install command", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "failed to generate install command")
 		return
 	}
 
@@ -172,21 +173,21 @@ func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.R
 	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return
 	}
 
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
@@ -197,7 +198,7 @@ func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.R
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate install command")
-		http.Error(w, "failed to generate install command", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "failed to generate install command")
 		return
 	}
 
@@ -215,25 +216,25 @@ func (h *Handler) HandleGetCollectorConfig(w http.ResponseWriter, r *http.Reques
 	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return
 	}
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 	monitorID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
 	cfg, err := h.service.GenerateCollectorConfig(ctx, monitorID, tenantID, h.resolveBackendURL(r), r.URL.Query().Get("platform"))
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate collector config")
-		http.Error(w, "failed to generate collector config", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "failed to generate collector config")
 		return
 	}
 
@@ -249,21 +250,21 @@ func (h *Handler) HandleGetUninstallScript(w http.ResponseWriter, r *http.Reques
 	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return
 	}
 
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
@@ -274,7 +275,7 @@ func (h *Handler) HandleGetUninstallScript(w http.ResponseWriter, r *http.Reques
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate uninstall command")
-		http.Error(w, "failed to generate uninstall command", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "failed to generate uninstall command")
 		return
 	}
 
@@ -290,21 +291,21 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 	tenantIDStr, ok := ctxpkg.GetTenantID(ctx)
 	if !ok {
 		h.log.Warn("tenant_id not found in context")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		apierrors.WriteUnauthorizedError(w, "unauthorized")
 		return
 	}
 
 	tenantID, err := uuid.Parse(tenantIDStr)
 	if err != nil {
 		h.log.WithError(err).Error("invalid tenant_id in context")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "internal server error")
 		return
 	}
 
 	monitorIDStr := chi.URLParam(r, "id")
 	monitorID, err := uuid.Parse(monitorIDStr)
 	if err != nil {
-		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		apierrors.WriteValidationError(w, "invalid monitor ID")
 		return
 	}
 
@@ -315,7 +316,7 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate uninstall command")
-		http.Error(w, "failed to generate uninstall command", http.StatusInternalServerError)
+		apierrors.WriteInternalError(w, "failed to generate uninstall command")
 		return
 	}
 

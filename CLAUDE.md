@@ -380,8 +380,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   before its first write, ascending id, one pass (`LockMonitorsTx`: FOR
   UPDATE for monitors changed or versioned, edge sources included; FOR KEY
   SHARE for edge targets); deletes lock the monitors they rewrite the same
-  way. The FOR UPDATE row lock also serializes version numbering; there are
-  no advisory locks. Snapshots are
+  way. The FOR UPDATE row lock also serializes version numbering, with no
+  advisory lock; apply's per-workspace advisory lock is taken before any row
+  lock (below). Snapshots are
   masked with `secrets.MaskStoredMonitorConfig`; restore never writes a
   secret from a version (`restoreConfig`) and refuses another type. A new
   top-level setting accepted by `UpdateMonitorRequest` is one
@@ -429,6 +430,22 @@ simple path. Records you refuse to translate go in `SkippedRows`, never as
 rows: `detectAndSuggestTypes` defaults unknown types to `http` and the UI
 auto-applies that suggestion, so an emitted row for an untranslatable monitor
 becomes a silent bad import.
+
+**Config-as-code apply** (`POST /monitors/apply[/plan]`, `apply.go`/
+`apply_execute.go` here) is another monitor write path, built on the same
+row builders (`portableRow`, `build*RequestFromConfig`) and the monitors,
+groups and dependencies services (versions source `apply`). One request is
+one `InTx` transaction that first takes `pg_advisory_xact_lock` per
+workspace on that transaction (released by commit or rollback; never a
+session lock on a pooled connection), re-plans, locks rows in lock order
+before the first write, and re-checks the locked monitors against the plan
+(`checkLockedUnchanged`). Prune deletes keyed monitors (`monitors.key`)
+only, within `prune_scope` when given. Secrets are compared only inside the
+monitors service (`PlanConfigWrites`, which also resolves a document's
+masked URL credentials and synthetic step credentials against the stored
+config so the same file converges), and a plan compares a literal with the
+stored value only for callers with write access. A field added to the
+portable export is applied only once the plan's `diff` handles it.
 
 **Group membership is the junction table**, not `config.monitor_ids`.
 `Monitor.MemberIDs`, group alert roll-up, and the dashboards all read
@@ -773,6 +790,9 @@ or imported groups come back empty. Any other path that creates groups through
   session only, outside the write gate, with their own audit events.
 - `tools/list` filtering by capability is UX; enforcement is the inner
   dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
+- A handler that refuses API keys without a router role gate marks its entry
+  `SessionOnly` (the tenant list); the gate walk cannot see it, and both the
+  tool list and the OpenAPI security read the flag.
 
 ## Kubernetes discovery
 
@@ -1388,6 +1408,18 @@ or imported groups come back empty. Any other path that creates groups through
 - Python (`ai-service/`, `scripts/*.py`, CI helper scripts): CI runs
   `ruff check` with the pyflakes rules in `ruff.toml`; run it before pushing
   Python changes (`pip install ruff==0.8.4`).
+- OpenAPI: `api/openapi.json` is generated from the MCP tool catalog bound
+  to the router (`api/internal/mcp/openapi*.go`) and served at
+  `/api/v1/openapi.json`. Regenerate it with `make openapi` whenever a route
+  or catalog entry changes; `TestOpenAPIGolden` fails when it is stale, and
+  `make openapi` lists the operations still without a typed response. Typed
+  success responses come from `successResponses` (`openapi_responses.go`):
+  add an entry only after reading the handler, never guess one, and name the
+  type the handler writes (no map literals, no copies); an error answer
+  richer than the envelope goes in `operationErrors`, same rule. A
+  generation failure at runtime only makes the endpoint answer 503. A route
+  an agent must not call but the REST API documents goes in `openAPIRoutes`
+  (and `notExposed`).
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).
   After touching local AI values, templates, Compose, the Makefile or the

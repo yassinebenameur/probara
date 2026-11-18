@@ -36,6 +36,7 @@ func catalog() []spec {
 		statusPageAccessTools(),
 		identityTools(),
 		accountActionTools(),
+		monitorApplyTools(),
 	} {
 		all = append(all, group...)
 	}
