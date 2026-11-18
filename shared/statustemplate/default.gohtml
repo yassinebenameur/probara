@@ -940,71 +940,103 @@
       overflow-wrap: anywhere;
     }
     .incidents-section { margin-bottom: 48px; }
+    /* One card per update. Tone lives in --inc-tone and shows only where it
+       carries meaning: the dot, the state pill and the latest-update rule.
+       The body stays on the neutral card surface so text keeps its contrast. */
     .inc-card {
-      padding: 24px;
+      --inc-tone: var(--blue);
+      --inc-tone-a: var(--blue-a);
+      padding: 20px 24px;
       background: var(--surface-card);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
-      position: relative;
-      overflow: hidden;
       margin-bottom: 10px;
     }
-    .inc-card.i-warn { border-left: 3px solid var(--yellow); }
-    .inc-card.i-ok { border-left: 3px solid var(--green); }
-    .inc-card.i-down { border-left: 3px solid var(--red); }
-    .inc-card.i-maint { border-left: 3px solid var(--blue); }
-    .inc-card.i-unknown,
-    .inc-card.i-empty { border-left: 3px solid var(--blue); }
-    .inc-card::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      opacity: .04;
-      pointer-events: none;
-    }
-    .inc-card.i-warn::before { background: var(--yellow); }
-    .inc-card.i-ok::before { background: var(--green); }
-    .inc-card.i-down::before { background: var(--red); }
-    .inc-card.i-unknown::before,
-    .inc-card.i-empty::before,
-    .inc-card.i-maint::before { background: var(--blue); }
+    .inc-card.i-warn { --inc-tone: var(--yellow); --inc-tone-a: var(--yellow-a); }
+    .inc-card.i-ok,
+    .inc-card.i-empty { --inc-tone: var(--green); --inc-tone-a: var(--green-a); }
+    .inc-card.i-down { --inc-tone: var(--red); --inc-tone-a: var(--red-a); }
+    .inc-card.i-unknown { --inc-tone: var(--gray); --inc-tone-a: var(--gray-a); }
     .inc-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 16px;
-      margin-bottom: 10px;
     }
     .inc-title {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
       font-size: 1rem;
-      font-weight: 500;
+      font-weight: 600;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .inc-title::before {
+      content: "";
+      flex: none;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--inc-tone);
+      box-shadow: 0 0 0 4px var(--inc-tone-a);
+      transform: translateY(-1px);
     }
     .inc-meta {
-      font: 500 .7rem var(--mono);
-      background: var(--surface);
+      flex: none;
+      font: 500 .68rem var(--mono);
       padding: 3px 10px;
       border-radius: var(--radius-pill);
-      border: 1px solid var(--border);
+      border: 1px solid transparent;
+      background: var(--inc-tone-a);
+      color: var(--inc-tone);
       text-transform: uppercase;
       letter-spacing: .05em;
       white-space: nowrap;
-      color: var(--text-muted);
     }
     .inc-desc {
-      color: var(--text-muted);
+      margin-top: 8px;
+      padding-left: 18px;
+      color: var(--text);
       font-size: .92rem;
-      line-height: 1.65;
+      line-height: 1.6;
       max-width: 100%;
+      overflow-wrap: anywhere;
     }
+    /* Facts under the summary: plain lines, readable colour, no boxes. */
     .inc-update {
-      margin-top: 12px;
-      padding: 10px 14px;
-      font: .75rem var(--mono);
-      color: var(--text-dim);
-      background: var(--surface);
-      border-radius: var(--radius-sm);
-      border-left: 2px solid var(--yellow);
+      margin-top: 6px;
+      padding-left: 18px;
+      font-size: .82rem;
+      line-height: 1.55;
+      color: var(--text-muted);
+      overflow-wrap: anywhere;
     }
+    .inc-desc + .inc-update,
+    .inc-head + .inc-update {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    /* The newest word from the team is the line people came for. */
+    .inc-update.is-latest {
+      margin-top: 12px;
+      margin-left: 18px;
+      padding: 2px 0 2px 12px;
+      border-top: 0;
+      border-left: 2px solid var(--inc-tone);
+      color: var(--text);
+    }
+    .inc-update .inc-label {
+      margin-right: 6px;
+      font: 500 .66rem var(--mono);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .inc-card.i-empty { padding: 16px 24px; }
+    .inc-card.i-empty .inc-desc { margin-top: 2px; color: var(--text-muted); font-size: .85rem; }
     .empty-state {
       display: grid;
       place-items: center;
@@ -1072,7 +1104,7 @@
     body.compact .monitor-bar { height: 2px; margin: 0 14px 7px; }
     body.compact .details-content { padding-bottom: 16px; }
     body.compact .incidents-section { margin-bottom: 28px; }
-    body.compact .inc-card { padding: 16px 18px; }
+    body.compact .inc-card { padding: 14px 18px; }
     body.kiosk { overflow: hidden; }
     body.kiosk .header,
     body.kiosk main,
@@ -1804,23 +1836,20 @@
               <h3 class="inc-title">{{.Title}}</h3>
               <span class="inc-meta">{{.StateLabel}}</span>
             </div>
-            <p class="inc-desc">{{.Summary}}</p>
-            <div class="inc-update">{{.AffectedComponentsText}}</div>
+            {{if .Summary}}<p class="inc-desc">{{.Summary}}</p>{{end}}
             {{if .LatestUpdate}}
-              <div class="inc-update">Latest update: {{.LatestUpdate}}</div>
-            {{else if .ResolvedAtLabel}}
+              <div class="inc-update is-latest"><span class="inc-label">Latest update</span>{{.LatestUpdate}}</div>
+            {{end}}
+            <div class="inc-update">{{.AffectedComponentsText}}</div>
+            {{if and .ResolvedAtLabel (not .LatestUpdate)}}
               <div class="inc-update">{{.ResolvedAtLabel}}</div>
             {{end}}
           </article>
         {{end}}
       {{else}}
         <article class="inc-card i-empty">
-          <div class="inc-head">
-            <h3 class="inc-title">No active incidents</h3>
-            <span class="inc-meta">Stable</span>
-          </div>
-          <p class="inc-desc">We are not currently tracking any active public incidents.</p>
-          <div class="inc-update">No active incidents.</div>
+          <h3 class="inc-title">All clear</h3>
+          <p class="inc-desc">No active incidents. Updates appear here when something needs your attention.</p>
         </article>
       {{end}}
     </section>

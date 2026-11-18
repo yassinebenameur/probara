@@ -305,7 +305,7 @@ func TestRenderPublicStatusPage_RendersPublishedIncidentCards(t *testing.T) {
 	if !strings.Contains(html, "API outage") {
 		t.Fatalf("expected incident title in HTML")
 	}
-	if !strings.Contains(html, "Latest update: We are investigating elevated API errors.") {
+	if !strings.Contains(html, `<span class="inc-label">Latest update</span>We are investigating elevated API errors.`) {
 		t.Fatalf("expected public incident update in HTML")
 	}
 	for _, want := range []string{
