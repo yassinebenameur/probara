@@ -375,10 +375,8 @@ services:
       NATS_URL: "nats://nats:4222"
       # Same value as on api, which refuses its host as a custom domain.
       STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
-      STATUS_PAGE_API_BASE_URL: "http://api:8080"
       # Where visitors' email subscription requests are forwarded (the API
-      # stores subscribers; this service stays read-only). Defaults to
-      # STATUS_PAGE_API_BASE_URL.
+      # stores subscribers; this service stays read-only).
       STATUS_PAGE_INTERNAL_API_URL: "http://api:8080"
       STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:-dev-status-page-internal-token-change-me}"
       # Shared with the api service; gates draft-template previews with a

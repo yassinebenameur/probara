@@ -435,7 +435,6 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ["`/preview/draft`", "`401` unless it carries a valid preview token", "`404` unless it carries a valid preview token"],
             ["`/push/subscribe`", "`401`; with a session still `404` — no notifications on gated pages", "`404`"],
             ["`/unlock`", "Checks the password", "`404`, same as a missing page"],
-            ["The in-page API proxy (`/_sp_api/`)", "Refused for calls naming the page", "Refused for calls naming the page"],
           ],
         },
         {
@@ -535,7 +534,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The status service serves its platform routes — every page under `/public/status/`, the in-page API proxy, health and metrics — only on its **platform hosts**: the host of `STATUS_PAGE_BASE_URL`, `STATUS_PAGE_PLATFORM_HOSTS` (Helm adds `ingress.hosts` and `statusPage.platformHosts`), and internal names such as a pod IP, `localhost` or a cluster Service name, which probes and scrapers use. Any other hostname gets a verified custom domain's page, or the not-found answer on every path: a domain still pending, failed, superseded or removed in the UI, an unknown host, and every public host until the status service has read its domain table once after starting. A proxy or Ingress may therefore route a hostname to the service before it is verified. Without a public platform host (no `STATUS_PAGE_BASE_URL`, or a `localhost` one, and no `STATUS_PAGE_PLATFORM_HOSTS` — development), the service cannot tell its own hosts apart and serves the platform routes on every host but a verified domain; Helm refuses to render custom domains without one.",
+            "The status service serves its platform routes — every page under `/public/status/`, health and metrics — only on its **platform hosts**: the host of `STATUS_PAGE_BASE_URL`, `STATUS_PAGE_PLATFORM_HOSTS` (Helm adds `ingress.hosts` and `statusPage.platformHosts`), and internal names such as a pod IP, `localhost` or a cluster Service name, which probes and scrapers use. Any other hostname gets a verified custom domain's page, or the not-found answer on every path: a domain still pending, failed, superseded or removed in the UI, an unknown host, and every public host until the status service has read its domain table once after starting. A proxy or Ingress may therefore route a hostname to the service before it is verified. Without a public platform host (no `STATUS_PAGE_BASE_URL`, or a `localhost` one, and no `STATUS_PAGE_PLATFORM_HOSTS` — development), the service cannot tell its own hosts apart and serves the platform routes on every host but a verified domain; Helm refuses to render custom domains without one.",
         },
         {
           type: "paragraph",
@@ -544,7 +543,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "list",
           items: [
-            "**Only that page.** Other pages' slugs, `/public/status/…` paths, the in-page API proxy (`/_sp_api/`), `/metrics` and the health routes are unknown paths of the page there, answered by its access check (not found; `401` on a password page).",
+            "**Only that page.** Other pages' slugs, `/public/status/…` paths, `/metrics` and the health routes are unknown paths of the page there, answered by its access check (not found; `401` on a password page).",
             "**Canonical URL.** The page's oldest verified domain is its canonical address, used for the canonical link, `og:url`, the feed's links, `summary.json`'s `url`, and the operator UI's links and Share panel. The page stays reachable at `/public/status/{slug}` on the platform host and on every other verified domain, all naming the same canonical URL, so search engines index one address.",
             "**Sessions.** A password or kiosk session on a custom domain is a host-only cookie at `/`, always `Secure` (custom domains are https only, so a display following a stray `http://` link never sends it in clear; `STATUS_PAGE_COOKIE_SECURE` does not apply there). A session opened on the platform host does not carry over (they are different origins), so a visitor or kiosk display unlocks or opens its kiosk URL on the domain it uses.",
             "**Isolation.** The page is the only one on its origin, so the cross-page limit described under [visibility](#visibility) does not apply. Its Content-Security-Policy is the same: `connect-src 'self'` is the custom origin, and `frame-ancestors` still admits the operator UI, which previews pages through the platform host.",
@@ -850,6 +849,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Templates use Go `html/template`, which contextually escapes ordinary data values. Use the structures exposed by the default template as the compatibility reference and preview with real page data before publication.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A template cannot call the operator API: the status service forwards nothing there on a visitor's behalf, so a template's script can fetch only the page's own routes (`/data`, `/stream`, `summary.json`, `feed.atom`), and any other path answers like an unknown page path.",
         },
         {
           type: "table",

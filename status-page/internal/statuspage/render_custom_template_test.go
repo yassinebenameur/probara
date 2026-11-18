@@ -21,7 +21,7 @@ func TestRenderStatusPageHTMLUsesCustomTemplate(t *testing.T) {
 	data.CustomTemplateSource = `<html><body><h1 id="custom">{{.Title}}</h1>{{range .Monitors}}<div>{{.Name}}</div>{{end}}</body></html>`
 	data.CustomTemplateVersion = 1
 
-	html, customErr, err := renderStatusPageHTML(data, false)
+	html, customErr, err := renderStatusPageHTML(data)
 	if err != nil {
 		t.Fatalf("renderStatusPageHTML() error = %v", err)
 	}
@@ -42,7 +42,7 @@ func TestRenderStatusPageHTMLFallsBackOnBrokenCustomTemplate(t *testing.T) {
 	data.CustomTemplateSource = `<html><body>{{.Title.Nope}}</body></html>`
 	data.CustomTemplateVersion = 2
 
-	html, customErr, err := renderStatusPageHTML(data, false)
+	html, customErr, err := renderStatusPageHTML(data)
 	if err != nil {
 		t.Fatalf("renderStatusPageHTML() must not fail when falling back, got: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestRenderStatusPageHTMLInjectsTierOneBranding(t *testing.T) {
 	data.CustomHeadHTML = `<link rel="icon" href="/favicon-acme.svg">`
 	data.CustomFooterHTML = `<div id="acme-footer">Acme Corp</div>`
 
-	html, _, err := renderStatusPageHTML(data, false)
+	html, _, err := renderStatusPageHTML(data)
 	if err != nil {
 		t.Fatalf("renderStatusPageHTML() error = %v", err)
 	}
@@ -78,11 +78,11 @@ func TestRenderStatusPageHTMLInjectsTierOneBranding(t *testing.T) {
 func TestRenderStatusPageWithSourceSurfacesErrors(t *testing.T) {
 	data := customTemplateTestData()
 
-	if _, err := renderStatusPageWithSource(data, false, `{{if .Title}}unclosed`); err == nil {
+	if _, err := renderStatusPageWithSource(data, `{{if .Title}}unclosed`); err == nil {
 		t.Fatal("expected a parse error for a broken draft")
 	}
 
-	html, err := renderStatusPageWithSource(data, false, `<p>{{.Slug}} draft</p>`)
+	html, err := renderStatusPageWithSource(data, `<p>{{.Slug}} draft</p>`)
 	if err != nil {
 		t.Fatalf("renderStatusPageWithSource() error = %v", err)
 	}

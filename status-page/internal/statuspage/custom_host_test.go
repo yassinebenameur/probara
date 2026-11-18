@@ -59,9 +59,6 @@ func newCustomHostFixture(t *testing.T) *customHostFixture {
 	})
 	f.h.config.StatusPageBaseURL = "https://" + platformHost
 	f.h.config.PlatformHosts = []string{appHost}
-	// The operator proxy is configured: it must still be unreachable on a
-	// custom domain.
-	f.h.config.APIBaseURL = "http://127.0.0.1:1"
 	metrics := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("METRICS")) })
 	return &customHostFixture{accessFixture: f, handler: f.h.CustomHosts(f.h.routes(metrics)), loads: loads, routes: routes}
 }
@@ -113,11 +110,9 @@ var customHostRouteTable = []struct {
 }
 
 // Paths that are something else on the platform host and nothing on a
-// custom domain: the operator proxy, health and metrics, other slugs, the
-// slug form of the page itself, dot segments.
+// custom domain: health and metrics, other slugs, the slug form of the page
+// itself, dot segments.
 var customHostNotFound = []string{
-	"/_sp_api/api/v1/monitors",
-	"/_sp_api/api/v1/status-pages/" + addonRouteTestID,
 	"/healthz",
 	"/readyz",
 	"/metrics",
@@ -231,12 +226,11 @@ func TestCustomHost_RoutesMatchSlugRoutes(t *testing.T) {
 	}
 }
 
-// Only the page's own routes exist on its custom domain: the operator proxy,
-// health and metrics, other pages and its own slug form are unknown
-// sub-routes of the page there, answered by its gate and dispatcher exactly
-// as the same unknown sub-route of the slug form (not found, 405 for a write
-// method on a page that lets it through, a bare 401 on a password page),
-// never proxied or served. Dot segments are refused before routing.
+// Only the page's own routes exist on its custom domain: health and
+// metrics, other pages and its own slug form are unknown sub-routes of the
+// page there, answered by its gate and dispatcher exactly as the same
+// unknown sub-route of the slug form (not found, 405 for a write method on a
+// page that lets it through, a bare 401 on a password page), never served. Dot segments are refused before routing.
 func TestCustomHost_NothingElseIsReachable(t *testing.T) {
 	f := newCustomHostFixture(t)
 	notFound := httptest.NewRecorder()
@@ -276,7 +270,7 @@ func TestCustomHost_NothingElseIsReachable(t *testing.T) {
 // the service but not verified (pending, failed, superseded, removed in the
 // UI but still routed), an unknown one, and every public hostname before the
 // table has loaded once get the not-found answer on every path, never a page
-// under /public/status/, the operator proxy or metrics.
+// under /public/status/ or metrics.
 func TestCustomHost_UnverifiedHostsGetNothing(t *testing.T) {
 	paths := append([]string{"/", "/public/status/open", "/public/status/hidden", "/public/status/hidden/summary.json", "/data"}, customHostNotFound...)
 	check := func(t *testing.T, f *customHostFixture, hosts []string) {

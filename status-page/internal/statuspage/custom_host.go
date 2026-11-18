@@ -23,7 +23,7 @@ import (
 //     a database stall can never fail a liveness probe.
 //   - a platform host: STATUS_PAGE_BASE_URL's host and
 //     STATUS_PAGE_PLATFORM_HOSTS. The platform routes: every page under
-//     /public/status/, the API proxy, health and metrics.
+//     /public/status/, health and metrics.
 //   - a verified custom domain (hostTable): rewritten onto its page's slug
 //     paths, so the visibility gate, the route table, the caches and every
 //     handler apply unchanged:
@@ -44,8 +44,8 @@ import (
 // development setup; Helm always configures platform hosts.
 //
 // Everything on a custom domain is a sub-route of that one page and passes
-// its gate: other slugs, the /_sp_api operator proxy, /metrics and the
-// health routes are unknown sub-routes there. The rewritten request carries
+// its gate: other slugs, /metrics and the health routes are unknown
+// sub-routes there. The rewritten request carries
 // the custom host (customHostFrom), which makes the session cookie host-only
 // at path / and always Secure, the unlock form post to /unlock, redirects go
 // to the visitor's own URL, the service worker scope the root, and push

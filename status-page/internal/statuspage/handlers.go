@@ -6,13 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -292,7 +289,7 @@ func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage
 		// header.
 		data.CanonicalURL = h.pageCanonicalURL(ctx, data.ID, slug)
 		data.SubscribeFormEnabled = h.subscriptionsOffered(visibility, data.EmailSubscriptionsEnabled)
-		view := buildStatusPageRenderView(data, h.apiProxyEnabled())
+		view := buildStatusPageRenderView(data)
 		html, customErr, err := renderStatusPageView(data, view)
 		if customErr != nil {
 			h.logger.WithFields(map[string]interface{}{
@@ -341,10 +338,6 @@ func (h *Handlers) appBaseURL() string {
 		return ""
 	}
 	return h.config.AppBaseURL
-}
-
-func (h *Handlers) apiProxyEnabled() bool {
-	return h.config != nil && strings.TrimSpace(h.config.APIBaseURL) != ""
 }
 
 // webPushPublicKey returns the deployment's VAPID application server key, or ""
@@ -414,14 +407,14 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 
 	var html string
 	if hasDraft {
-		html, err = renderStatusPageWithSource(data, h.apiProxyEnabled(), source)
+		html, err = renderStatusPageWithSource(data, source)
 		if err != nil {
 			w.Header().Set("Cache-Control", "no-store")
 			http.Error(w, "Draft template error:\n\n"+err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
 	} else {
-		html, err = renderPublicStatusPage(data, h.apiProxyEnabled())
+		html, err = renderPublicStatusPage(data)
 		if err != nil {
 			h.writeStatusPageError(w, slug, err, "Failed to render draft preview")
 			return
@@ -580,129 +573,4 @@ func (h *Handlers) streamStatusPage(w http.ResponseWriter, r *http.Request, slug
 			return
 		}
 	}
-}
-
-// proxyStatusPageID is the page a /_sp_api call acts on, which both the
-// access gate and the injected X-Tenant-ID use. A status-pages path names its
-// page in the path, and that is the page the API reads, so the path decides;
-// the X-Status-Page-ID header only names the page for calls whose path names
-// none (the monitors list). ok is false for a status-pages path whose first
-// segment is not a page ID, for a header naming a different page than the
-// path, and for a path with dot segments, so the gate can never check one
-// page while the API acts on another.
-func proxyStatusPageID(r *http.Request, upstreamPath string) (uuid.UUID, bool) {
-	var headerID uuid.UUID
-	if spIDHeader := r.Header.Get("X-Status-Page-ID"); spIDHeader != "" {
-		if parsed, err := uuid.Parse(spIDHeader); err == nil {
-			headerID = parsed
-		}
-	}
-	for _, seg := range strings.Split(upstreamPath, "/") {
-		if seg == "." || seg == ".." {
-			return uuid.Nil, false
-		}
-	}
-	rest, named := strings.CutPrefix(upstreamPath, "/api/v1/status-pages/")
-	if !named {
-		return headerID, true
-	}
-	first, _, _ := strings.Cut(rest, "/")
-	pathID, err := uuid.Parse(first)
-	if err != nil || pathID == uuid.Nil {
-		return uuid.Nil, false
-	}
-	if headerID != uuid.Nil && headerID != pathID {
-		return uuid.Nil, false
-	}
-	return pathID, true
-}
-
-// HandleAPIProxy proxies a small subset of API calls to the API service.
-//
-// This exists so the public status page can host an in-page "customizer" UI while the API
-// runs on a different origin/port in dev (e.g. :8080 vs :8082), avoiding CORS issues.
-//
-// Route: /_sp_api/*
-func (h *Handlers) HandleAPIProxy(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil || h.config.APIBaseURL == "" {
-		http.NotFound(w, r)
-		return
-	}
-
-	// Only allow a small set of endpoints/methods.
-	if r.Method != http.MethodGet && r.Method != http.MethodPatch {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	upstreamPath := strings.TrimPrefix(r.URL.Path, "/_sp_api")
-	if upstreamPath == "" || !strings.HasPrefix(upstreamPath, "/api/v1/") {
-		http.NotFound(w, r)
-		return
-	}
-
-	allowed := false
-	if r.Method == http.MethodGet && strings.HasPrefix(upstreamPath, "/api/v1/monitors") {
-		allowed = true
-	}
-	if r.Method == http.MethodPatch && strings.HasPrefix(upstreamPath, "/api/v1/status-pages/") {
-		allowed = true
-	}
-
-	if !allowed {
-		http.NotFound(w, r)
-		return
-	}
-
-	target, err := url.Parse(h.config.APIBaseURL)
-	if err != nil {
-		h.logger.WithError(err).Error("Invalid STATUS_PAGE_API_BASE_URL")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// If the caller includes a status page id, resolve its tenant id and inject X-Tenant-ID
-	// so admin-cookie auth (which is global) can operate tenant-scoped endpoints.
-	statusPageID, ok := proxyStatusPageID(r, upstreamPath)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	// A password or private page is not reachable through the proxy.
-	if !h.authorizeProxy(w, r, statusPageID) {
-		return
-	}
-
-	tenantHeader := ""
-	if statusPageID != uuid.Nil {
-		if tenantID, err := h.service.GetTenantIDByStatusPageID(r.Context(), statusPageID); err == nil {
-			tenantHeader = tenantID.String()
-		}
-	}
-
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	defaultDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		// Rewrite path before the default director joins base/path.
-		req.URL.Path = upstreamPath
-		defaultDirector(req)
-		req.Host = target.Host
-
-		// Strip internal header and inject tenant scope if available.
-		req.Header.Del("X-Status-Page-ID")
-		if tenantHeader != "" {
-			req.Header.Set("X-Tenant-ID", tenantHeader)
-		}
-	}
-
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		h.logger.WithFields(map[string]interface{}{
-			"error":  err.Error(),
-			"path":   r.URL.Path,
-			"method": r.Method,
-		}).Error("API proxy error")
-		http.Error(w, "Bad gateway", http.StatusBadGateway)
-	}
-
-	proxy.ServeHTTP(w, r)
 }

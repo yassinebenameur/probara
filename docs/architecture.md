@@ -281,7 +281,7 @@ starts by blanking the secret-bearing columns (`workspaceScrubPlan`: channel
 configs, monitor config secrets and push tokens, location worker
 credentials, the legacy AI key), so credentials do not wait at rest behind
 the history tables. The predicate names `tenants.deleted_at`, so migration
-000116 must run before the binaries that use it. The API never deletes a
+000115 must run before the binaries that use it. The API never deletes a
 tenant row. Audit log entries are kept.
 
 Analytics choose raw, rollup, or interval-based calculations according to

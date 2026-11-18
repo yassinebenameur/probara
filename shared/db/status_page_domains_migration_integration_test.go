@@ -15,7 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
-// Migration 000120 (status page custom domains) walks up, down and up
+// Migration 000119 (status page custom domains) walks up, down and up
 // again: a hostname is verified for one page at most while unverified claims
 // coexist, hostnames are stored lower-case, statuses are limited, and domains
 // leave with their page.
@@ -72,7 +72,7 @@ func TestStatusPageDomainsMigrationUpDownUp(t *testing.T) {
 	pageB := testutil.InsertStatusPage(ctx, t, dbc, tenantB, "domains-b", "B")
 	exec(`INSERT INTO status_page_push_subscriptions (status_page_id, endpoint, p256dh, auth) VALUES ($1, 'https://push.example.com/sub/1', 'k', 'a')`, pageA)
 
-	migrateTo(120)
+	migrateTo(119)
 	if !hasSchema() {
 		t.Fatal("schema missing after up")
 	}
@@ -118,7 +118,7 @@ func TestStatusPageDomainsMigrationUpDownUp(t *testing.T) {
 		t.Fatal("origin_host survived the down migration")
 	}
 
-	migrateTo(120)
+	migrateTo(119)
 	if !hasSchema() {
 		t.Fatal("re-upgrade did not recreate the schema")
 	}

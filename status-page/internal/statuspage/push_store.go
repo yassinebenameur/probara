@@ -77,7 +77,7 @@ func (s *pushStore) Subscribe(ctx context.Context, pageID uuid.UUID, sub pushSub
 	var id uuid.UUID
 	err := s.db.QueryRowContext(ctx, query, pageID, sub.Endpoint, sub.P256dh, sub.Auth, userAgent, cap, sub.OriginHost).Scan(&id)
 	if err != nil && pgerr.IsMissingSchema(err) {
-		// Before migration 000120: no origin column, and no custom domain
+		// Before migration 000119: no origin column, and no custom domain
 		// can be served either.
 		legacy := strings.NewReplacer(", origin_host)", ")", ", NULLIF($7, '')", "").Replace(query)
 		err = s.db.QueryRowContext(ctx, legacy, pageID, sub.Endpoint, sub.P256dh, sub.Auth, userAgent, cap).Scan(&id)
@@ -241,7 +241,7 @@ func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter t
 	`
 	rows, err := s.db.QueryContext(ctx, query, limit, staleAfter.Seconds())
 	if err != nil && pgerr.IsMissingSchema(err) {
-		// Before migration 000123 deliveries have no incident: every one is
+		// Before migration 000122 deliveries have no incident: every one is
 		// a monitor transition.
 		rows, err = s.db.QueryContext(ctx, withoutIncidents(query), limit, staleAfter.Seconds())
 	}
@@ -322,7 +322,7 @@ func (s *pushStore) CompleteDelivery(ctx context.Context, id uuid.UUID, sent, fa
 const pushVisiblePages = "sp.visibility IN ('public', 'unlisted')"
 
 // pushDeliveryIncidentColumn is the incident of an outbox-driven delivery
-// (migration 000123); withoutIncidents reads it as NULL on an older
+// (migration 000122); withoutIncidents reads it as NULL on an older
 // database, where every delivery is a monitor transition.
 const pushDeliveryIncidentColumn = "d.incident_id"
 

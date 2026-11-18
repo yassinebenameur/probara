@@ -142,9 +142,6 @@ func (h *Handlers) routes(metricsHandler http.Handler) *http.ServeMux {
 	})
 	mux.HandleFunc("/metrics", metricsHandler.ServeHTTP)
 
-	// API proxy for the in-page status page customizer (optional via STATUS_PAGE_API_BASE_URL)
-	mux.HandleFunc("/_sp_api/", h.HandleAPIProxy)
-
 	// The service worker must be a real URL -- it is the one asset the page
 	// cannot inline. It is served from /public/status/ rather than from under
 	// a slug because a worker's default scope is its own directory: at

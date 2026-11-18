@@ -284,7 +284,7 @@ func (s *Service) RedeemPasswordToken(ctx context.Context, plain, purpose, newPa
 
 // setPassword stores a new hash and, with clearLockout, clears the failure
 // streak and any lock (the old password being guessed no longer exists).
-// Before migration 000117 there is no lockout to clear.
+// Before migration 000116 there is no lockout to clear.
 func setPassword(ctx context.Context, tx *sql.Tx, userID uuid.UUID, hash string, clearLockout bool) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE admin_users SET password_hash = $2, updated_at = NOW() WHERE id = $1

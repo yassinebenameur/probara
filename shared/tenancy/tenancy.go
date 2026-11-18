@@ -2,7 +2,7 @@
 // service enforces.
 //
 // Deleting a workspace is a soft delete: the API stamps tenants.deleted_at
-// (migration 000116), and the scheduler's workspace purge later removes the
+// (migration 000115), and the scheduler's workspace purge later removes the
 // data in bounded batches and finally the row. Between the two the workspace
 // is gone for everyone: every credential lookup, public read and background
 // loop adds LiveTenantSQL (or, where a missing row must stay distinguishable
@@ -13,7 +13,7 @@
 // The fragments name tenants.deleted_at directly, so the planner has the
 // column's statistics (an expression over the row would be estimated blind
 // and turn the hot loops into per-tenant nested loops). They therefore need
-// migration 000116 to have run before the binaries that use them serve: the
+// migration 000115 to have run before the binaries that use them serve: the
 // documented upgrade order (migrations first) for this release.
 package tenancy
 

@@ -31,7 +31,7 @@ var (
 // MaxWorkspaceNameLength bounds a workspace name, in characters.
 const MaxWorkspaceNameLength = 100
 
-// tenantNameLiveKey is migration 000116's unique index on live workspace
+// tenantNameLiveKey is migration 000115's unique index on live workspace
 // names; tenants_name_key is the full-table constraint it replaced.
 const (
 	tenantNameLiveKey = "tenants_name_live_key"

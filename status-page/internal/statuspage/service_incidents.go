@@ -93,14 +93,14 @@ const maxListedNextStarts = 3
 // on it (isp): the publication's public title and summary when it has them,
 // else the incident's own. An automatically created incident always has
 // them, because its own title names the internal monitor (migration
-// 000123). The API's subscriber mail and the push ledger read the same
+// 000122). The API's subscriber mail and the push ledger read the same
 // columns.
 const (
 	publicIncidentTitleSQL   = "COALESCE(isp.public_title, i.title)"
 	publicIncidentSummarySQL = "COALESCE(isp.public_summary, i.summary, '')"
 )
 
-// withoutPublicTitles serves a database that has not run migration 000123
+// withoutPublicTitles serves a database that has not run migration 000122
 // yet, where no publication has a public title.
 func withoutPublicTitles(query string) string {
 	query = strings.ReplaceAll(query, publicIncidentTitleSQL, "i.title")

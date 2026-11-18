@@ -17,7 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
 
-// Single-use account tokens (admin_account_tokens, migration 000124): invite
+// Single-use account tokens (admin_account_tokens, migration 000123): invite
 // and password-reset links, email-change confirmations, and the pending
 // second step of a two-factor sign-in. Single use and early revocation need
 // server state, so a token is 256 random bits whose SHA-256 is stored, rather
@@ -54,7 +54,7 @@ var (
 	// superseded, of another purpose, or for an account that no longer
 	// qualifies. One error, so the public routes never say which.
 	ErrTokenInvalid = errors.New("this link is invalid or has expired")
-	// ErrTokensUnavailable: migration 000124 has not run yet.
+	// ErrTokensUnavailable: migration 000123 has not run yet.
 	ErrTokensUnavailable = errors.New("account links are not available until the database is migrated")
 )
 
@@ -190,7 +190,7 @@ func retireTokens(ctx context.Context, q SessionQuerier, userID uuid.UUID, purpo
 
 // RetireAccountTokens revokes every open link and sign-in challenge of
 // userID. User management calls it when a superadmin sets a password. Before
-// migration 000124 there is nothing to retire. In a transaction, a
+// migration 000123 there is nothing to retire. In a transaction, a
 // missing-schema error aborts it: callers holding a transaction use
 // retireTokensTolerant.
 func RetireAccountTokens(ctx context.Context, q SessionQuerier, userID uuid.UUID) error {
@@ -201,7 +201,7 @@ func RetireAccountTokens(ctx context.Context, q SessionQuerier, userID uuid.UUID
 }
 
 // retireTokensTolerant is retireTokens inside tx, under a savepoint so a
-// database without the table (before migration 000124) leaves tx usable.
+// database without the table (before migration 000123) leaves tx usable.
 func retireTokensTolerant(ctx context.Context, tx *sql.Tx, userID uuid.UUID, purposes ...string) error {
 	return tolerateMissingSchema(ctx, tx, func() error {
 		return retireTokens(ctx, tx, userID, purposes...)
@@ -227,7 +227,7 @@ func tolerateMissingSchema(ctx context.Context, tx *sql.Tx, fn func() error) err
 	return err
 }
 
-// mapTokenSchema turns "migration 000124 not applied" into
+// mapTokenSchema turns "migration 000123 not applied" into
 // ErrTokensUnavailable.
 func mapTokenSchema(err error) error {
 	if pgerr.IsMissingSchema(err) {
@@ -255,7 +255,7 @@ func (s *Service) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 var linkPurposes = []string{PurposeInvite, PurposePasswordReset}
 
 // RetireMailedLinksTx revokes userID's open invite and reset links inside
-// tx (under a savepoint, so a database before migration 000124 leaves tx
+// tx (under a savepoint, so a database before migration 000123 leaves tx
 // usable). User management calls it when a superadmin changes the address.
 func RetireMailedLinksTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
 	return retireTokensTolerant(ctx, tx, userID, linkPurposes...)

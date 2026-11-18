@@ -18,7 +18,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// Optional TOTP second factor (migration 000125), for password accounts
+// Optional TOTP second factor (migration 000124), for password accounts
 // only: an SSO user's second factor is the identity provider's business.
 //
 //   - The secret is sealed with the PROBARA_SECRETS_KEY encryptor and never
@@ -42,7 +42,7 @@ const (
 )
 
 var (
-	// ErrTwoFactorUnavailable: migration 000125 has not run yet.
+	// ErrTwoFactorUnavailable: migration 000124 has not run yet.
 	ErrTwoFactorUnavailable = errors.New("two-factor authentication is not available until the database is migrated")
 	// ErrTwoFactorNeedsKey: no PROBARA_SECRETS_KEY, so the secret could not
 	// be stored encrypted.
@@ -89,7 +89,7 @@ func (s *Service) TwoFactorEnrolmentAvailable() bool {
 
 // TwoFactorStatus is a user's second-factor state.
 type TwoFactorStatus struct {
-	// Supported is false before migration 000125.
+	// Supported is false before migration 000124.
 	Supported              bool
 	Enabled                bool
 	EnabledAt              *time.Time
@@ -122,7 +122,7 @@ func (s *Service) GetTwoFactorStatus(ctx context.Context, userID uuid.UUID) (*Tw
 }
 
 // secondFactorEnabled reports whether userID signs in with a second factor.
-// Before migration 000125 nobody does.
+// Before migration 000124 nobody does.
 func secondFactorEnabled(ctx context.Context, q SessionQuerier, userID uuid.UUID) (bool, error) {
 	var enabled bool
 	err := q.QueryRowContext(ctx, `SELECT totp_enabled_at IS NOT NULL FROM admin_users WHERE id = $1`, userID).Scan(&enabled)
@@ -136,7 +136,7 @@ func secondFactorEnabled(ctx context.Context, q SessionQuerier, userID uuid.UUID
 }
 
 // secondFactorEnabledTx is secondFactorEnabled inside tx, under a savepoint
-// so a database before migration 000125 leaves tx usable.
+// so a database before migration 000124 leaves tx usable.
 func secondFactorEnabledTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID) (bool, error) {
 	enabled := false
 	err := tolerateMissingSchema(ctx, tx, func() error {
@@ -287,7 +287,7 @@ func (s *Service) ResetTwoFactor(ctx context.Context, userID uuid.UUID) (bool, e
 		return retireTokensTolerant(ctx, tx, userID, PurposeEmailChange, PurposeMFAChallenge)
 	})
 	if pgerr.IsMissingSchema(err) {
-		// Before migration 000125 nobody has a second factor; the user
+		// Before migration 000124 nobody has a second factor; the user
 		// must still exist.
 		if _, err := s.LoadAccount(ctx, userID); err != nil {
 			return false, err
@@ -568,7 +568,7 @@ func (s *Service) CompleteSecondFactor(ctx context.Context, challenge, code stri
 }
 
 // MarkSessionSecondFactor records on a session how its sign-in passed the
-// second step, for the session list. Best effort before migration 000125.
+// second step, for the session list. Best effort before migration 000124.
 func (s *Service) MarkSessionSecondFactor(ctx context.Context, familyID uuid.UUID, method string) error {
 	if familyID == uuid.Nil {
 		return nil

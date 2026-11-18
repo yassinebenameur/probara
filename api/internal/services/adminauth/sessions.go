@@ -13,7 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 )
 
-// Session families (migration 000118). A family is one sign-in, password or
+// Session families (migration 000117). A family is one sign-in, password or
 // SSO: the refresh token rotates inside it (admin_sessions, one row per
 // token), and the access JWT carries the family id as its `sid` claim.
 // admin_session_families.revoked_at is the single authority for "is this
@@ -83,7 +83,7 @@ func (e *RefreshReuse) Is(target error) bool { return target == ErrRefreshTokenR
 // Refreshed is the session a refresh token continued.
 type Refreshed struct {
 	AdminID uuid.UUID
-	// FamilyID is uuid.Nil before migration 000118.
+	// FamilyID is uuid.Nil before migration 000117.
 	FamilyID uuid.UUID
 	// Rotated is false when the presented token had just been rotated by a
 	// concurrent refresh (within refreshReuseGrace): the caller issues an
@@ -106,7 +106,7 @@ func truncateUserAgent(ua string) string {
 }
 
 // CreateSession starts a session family with its first refresh token and
-// returns the family id (uuid.Nil before migration 000118).
+// returns the family id (uuid.Nil before migration 000117).
 func (s *Service) CreateSession(ctx context.Context, adminID uuid.UUID, refreshTokenHash string, expiresAt time.Time, ip, userAgent, authMethod string) (uuid.UUID, error) {
 	userAgent = truncateUserAgent(userAgent)
 	var familyID uuid.UUID
@@ -230,7 +230,7 @@ func (s *Service) RefreshSession(ctx context.Context, oldHash, newHash string, e
 }
 
 // refreshWithoutFamilies is RefreshSession for a database that predates
-// migration 000118: the previous rotation, without reuse detection.
+// migration 000117: the previous rotation, without reuse detection.
 func (s *Service) refreshWithoutFamilies(ctx context.Context, oldHash, newHash string, expiresAt time.Time, ip, userAgent string) (*Refreshed, error) {
 	var adminID uuid.UUID
 	err := s.db.QueryRowContext(ctx, `
@@ -338,7 +338,7 @@ func (s *Service) RevokeAllSessions(ctx context.Context, adminID, keep uuid.UUID
 
 // RevokeUserSessions ends every session of adminID except keep (uuid.Nil
 // keeps none): the families and their refresh tokens, so access tokens stop
-// working on their next request. Before migration 000118 it revokes the
+// working on their next request. Before migration 000117 it revokes the
 // refresh tokens only. Shared with user management, which ends a user's
 // sessions when a superadmin sets their password.
 func RevokeUserSessions(ctx context.Context, q SessionQuerier, adminID, keep uuid.UUID, reason string) (int, error) {
@@ -378,7 +378,7 @@ func RevokeUserSessions(ctx context.Context, q SessionQuerier, adminID, keep uui
 
 // ListSessions returns adminID's live sessions, most recently used first,
 // with current (the caller's own, uuid.Nil for none) marked. Empty before
-// migration 000118.
+// migration 000117.
 func (s *Service) ListSessions(ctx context.Context, adminID, current uuid.UUID) ([]models.AdminSession, error) {
 	const listSessions = `
 		SELECT id, COALESCE(auth_method, ''), %s, created_at, last_used_at, expires_at,
@@ -389,7 +389,7 @@ func (s *Service) ListSessions(ctx context.Context, adminID, current uuid.UUID) 
 	`
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(listSessions, `COALESCE(second_factor, '')`), adminID)
 	if pgerr.IsUndefinedColumn(err) {
-		// Before migration 000125: no second factor to show.
+		// Before migration 000124: no second factor to show.
 		rows, err = s.db.QueryContext(ctx, fmt.Sprintf(listSessions, `''`), adminID)
 	}
 	if pgerr.IsMissingSchema(err) {
@@ -419,7 +419,7 @@ func (s *Service) ListSessions(ctx context.Context, adminID, current uuid.UUID) 
 // SessionActive reports whether an access token's session still admits
 // requests: it belongs to adminID, is not revoked and has not expired. One
 // primary-key lookup, run for every request a session cookie authenticates
-// (AuthMiddleware) and by /auth/me. Before migration 000118 every session is
+// (AuthMiddleware) and by /auth/me. Before migration 000117 every session is
 // active: there is nothing to revoke yet, and refusing would sign everyone
 // out mid-deploy.
 func (s *Service) SessionActive(ctx context.Context, adminID, familyID uuid.UUID) (bool, error) {

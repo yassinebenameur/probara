@@ -240,8 +240,8 @@ func customTemplateFor(pageID string, version int, source string) (*template.Tem
 	return tmpl, nil
 }
 
-func renderPublicStatusPage(data *StatusPageData, apiEnabled bool) (string, error) {
-	html, _, err := renderStatusPageHTML(data, apiEnabled)
+func renderPublicStatusPage(data *StatusPageData) (string, error) {
+	html, _, err := renderStatusPageHTML(data)
 	return html, err
 }
 
@@ -249,8 +249,8 @@ func renderPublicStatusPage(data *StatusPageData, apiEnabled bool) (string, erro
 // when one exists, falling back to the built-in template if the custom one
 // fails to parse or execute. customErr reports that failure so callers can
 // log it; a page must keep serving on a broken template, never 500.
-func renderStatusPageHTML(data *StatusPageData, apiEnabled bool) (html string, customErr error, err error) {
-	return renderStatusPageView(data, buildStatusPageRenderView(data, apiEnabled))
+func renderStatusPageHTML(data *StatusPageData) (html string, customErr error, err error) {
+	return renderStatusPageView(data, buildStatusPageRenderView(data))
 }
 
 // renderStatusPageView is renderStatusPageHTML for an already built view, so
@@ -277,12 +277,12 @@ func renderStatusPageView(data *StatusPageData, view statusPageRenderView) (html
 // renderStatusPageWithSource renders data with an explicit template source
 // (draft previews). No fallback: a broken draft must surface its error to the
 // author instead of silently rendering the default page.
-func renderStatusPageWithSource(data *StatusPageData, apiEnabled bool, source string) (string, error) {
+func renderStatusPageWithSource(data *StatusPageData, source string) (string, error) {
 	tmpl, err := statustemplate.New("draft_status_page", source)
 	if err != nil {
 		return "", err
 	}
-	view := buildStatusPageRenderView(data, apiEnabled)
+	view := buildStatusPageRenderView(data)
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, view); err != nil {
 		return "", err
@@ -290,7 +290,7 @@ func renderStatusPageWithSource(data *StatusPageData, apiEnabled bool, source st
 	return buf.String(), nil
 }
 
-func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPageRenderView {
+func buildStatusPageRenderView(data *StatusPageData) statusPageRenderView {
 	primary := "#06b6d4"
 	if data.PrimaryColor != nil && strings.TrimSpace(*data.PrimaryColor) != "" {
 		primary = strings.TrimSpace(*data.PrimaryColor)

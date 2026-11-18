@@ -98,7 +98,7 @@ func (p *SessionPruner) pruneOnce() {
 // PruneSessions deletes, in bounded batches, refresh tokens expired longer
 // than retention ago and sessions revoked or expired longer ago than that
 // (see SessionPruner). It returns the number of rows deleted directly
-// (cascaded tokens not counted). Before migration 000118 it prunes nothing.
+// (cascaded tokens not counted). Before migration 000117 it prunes nothing.
 func PruneSessions(ctx context.Context, q SessionQuerier, retention time.Duration) (int64, error) {
 	var total int64
 	for _, stmt := range []string{`
@@ -115,7 +115,7 @@ func PruneSessions(ctx context.Context, q SessionQuerier, retention time.Duratio
 			WHERE expires_at < NOW() - make_interval(secs => $1)
 			LIMIT $2
 		)`,
-		// Account links and sign-in challenges (migration 000124, last: its
+		// Account links and sign-in challenges (migration 000123, last: its
 		// absence ends the run) once long expired, kept as long as sessions
 		// for audit correlation.
 		`

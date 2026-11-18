@@ -65,7 +65,7 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 			{Date: "2026-01-01", Uptime: 91},
 			{Date: "2026-01-02", Uptime: 89},
 		},
-	}, true)
+	})
 	if err != nil {
 		t.Fatalf("renderPublicStatusPage() error = %v", err)
 	}
@@ -195,7 +195,7 @@ func TestRenderPublicStatusPage_IncludesToolbarForMultipleMonitors(t *testing.T)
 				},
 			},
 		},
-	}, false)
+	})
 	if err != nil {
 		t.Fatalf("renderPublicStatusPage() error = %v", err)
 	}
@@ -269,7 +269,7 @@ func TestRenderPublicStatusPage_HidesThemeToggleWhenDisabled(t *testing.T) {
 		Monitors: []MonitorStatus{
 			{Name: "API", MonitorType: "http", Status: "up"},
 		},
-	}, false)
+	})
 	if err != nil {
 		t.Fatalf("renderPublicStatusPage() error = %v", err)
 	}
@@ -298,7 +298,7 @@ func TestRenderPublicStatusPage_RendersPublishedIncidentCards(t *testing.T) {
 				},
 			},
 		},
-	}, true)
+	})
 	if err != nil {
 		t.Fatalf("renderPublicStatusPage() error = %v", err)
 	}
@@ -470,7 +470,7 @@ func BenchmarkRenderPublicStatusPage(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := renderPublicStatusPage(data, true); err != nil {
+		if _, err := renderPublicStatusPage(data); err != nil {
 			b.Fatalf("renderPublicStatusPage() error = %v", err)
 		}
 	}
@@ -501,7 +501,7 @@ func TestBuildStatusPageRenderView_PushRequiresSettingAndKey(t *testing.T) {
 				Title:                    "Acme",
 				PushNotificationsEnabled: tt.enabled,
 				PushPublicKey:            tt.key,
-			}, false)
+			})
 
 			if view.PushEnabled != tt.want {
 				t.Fatalf("PushEnabled = %v, want %v", view.PushEnabled, tt.want)
@@ -521,7 +521,7 @@ func TestRenderStatusPage_PushToggleFollowsPushEnabled(t *testing.T) {
 		AllowThemeToggle: true,
 	}
 
-	off, _, err := renderStatusPageHTML(base, false)
+	off, _, err := renderStatusPageHTML(base)
 	if err != nil {
 		t.Fatalf("renderStatusPageHTML() error = %v", err)
 	}
@@ -534,7 +534,7 @@ func TestRenderStatusPage_PushToggleFollowsPushEnabled(t *testing.T) {
 
 	base.PushNotificationsEnabled = true
 	base.PushPublicKey = "BExampleApplicationServerKey"
-	on, _, err := renderStatusPageHTML(base, false)
+	on, _, err := renderStatusPageHTML(base)
 	if err != nil {
 		t.Fatalf("renderStatusPageHTML() error = %v", err)
 	}
@@ -608,7 +608,7 @@ func TestBuildStatusPageRenderView_OneHourStrips(t *testing.T) {
 			Status:          "up",
 			UptimeHistory1h: minutes,
 		}},
-	}, false)
+	})
 
 	var global []barPoint
 	if err := json.Unmarshal([]byte(view.GlobalUptime1hJSON), &global); err != nil {
@@ -674,7 +674,7 @@ func TestRenderPublicStatusPage_HidesURLAndUptimeTheSettingsHide(t *testing.T) {
 					{Hour: "2026-03-01T00:00", Uptime: 97.31},
 				},
 			}},
-		}, false)
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

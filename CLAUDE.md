@@ -141,7 +141,7 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   must stay distinct), filtered before any `LIMIT`; the alerter's
   notification claim and the check-result insert (`monitorstate.insertResult`)
   are the last gates. The fragments name `tenants.deleted_at` so the planner
-  has statistics: migration 000116 must run before the binaries serve
+  has statistics: migration 000115 must run before the binaries serve
   (upgrade notes in `website/lib/docs/pages/deployment.ts`). The one tolerant
   read is the auth `identityQuery` (`to_jsonb`), because its missing-schema
   fallback treats every admin as a superadmin; never add another. It answers
@@ -796,7 +796,7 @@ or imported groups come back empty. Any other path that creates groups through
   revokes what: `docs/auth-and-rbac.md`. Long-lived responses (the alert
   SSE stream) re-check their credential with `middleware.StillAuthorized`
   each heartbeat and end at `CredentialExpiry`; a new stream must too. The
-  `admin_sessions_default_family` trigger (000118) is rolling-deploy
+  `admin_sessions_default_family` trigger (000117) is rolling-deploy
   compatibility only: drop it in a later release's migration.
 - **Account links and two-factor** (local password accounts only; an SSO
   account never gets a reset, email change, password or second factor

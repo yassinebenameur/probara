@@ -507,7 +507,7 @@ func (p *workspacePurger) trigger(ctx context.Context) {
 
 // runOnce purges deleted workspaces, oldest first, within MaxRowsPerRun rows
 // and returns how many it removed completely. It does nothing (and no error)
-// when another replica holds the lock or before migration 000116.
+// when another replica holds the lock or before migration 000115.
 func (p *workspacePurger) runOnce(ctx context.Context) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspacePurgeRunTimeout)
 	defer cancel()
@@ -566,7 +566,7 @@ func (p *workspacePurger) deletedWorkspaces(ctx context.Context, conn *sql.Conn)
 	rows, err := conn.QueryContext(ctx, `SELECT id FROM tenants WHERE deleted_at IS NOT NULL ORDER BY deleted_at, id`)
 	if err != nil {
 		if pgerr.IsMissingSchema(err) {
-			return nil, nil // before migration 000116 nothing can be deleted
+			return nil, nil // before migration 000115 nothing can be deleted
 		}
 		return nil, fmt.Errorf("list deleted workspaces: %w", err)
 	}

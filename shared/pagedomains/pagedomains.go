@@ -24,7 +24,7 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
-// Domain statuses, as stored in status_page_domains.status (migration 000120
+// Domain statuses, as stored in status_page_domains.status (migration 000119
 // holds the same list in its CHECK).
 const (
 	// Pending: added, not verified yet. Never served.

@@ -210,11 +210,11 @@ old schema; what each path does then:
   so an acknowledgement written by an older API pod during the rollout still
   counts.
 
-- **Session families**: until migration 000118 creates
+- **Session families**: until migration 000117 creates
   `admin_session_families`, the API runs sessions as before (no `sid`, no
   reuse detection; `adminauth` falls back on SQLSTATE 42P01/42703), and
-  until 000117 sign-in runs without the lockout. The other way round, an API
-  pod still on the previous version after 000118 ignores families: it
+  until 000116 sign-in runs without the lockout. The other way round, an API
+  pod still on the previous version after 000117 ignores families: it
   honours a revoked session's refresh token, and the insert trigger gives the
   token it issues a fresh, unrevoked family. So a revocation made during the
   rollout may not hold -- finish the rollout before revoking sessions. The

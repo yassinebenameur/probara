@@ -93,13 +93,13 @@ func main() {
 // need — superadmins reach every tenant. Promoting on conflict is deliberate:
 // this is the break-glass path for an operator with database access, and its
 // whole point is to leave behind an account that can administer the install.
-// For the same reason it lifts a sign-in lockout (migration 000117), and, as
+// For the same reason it lifts a sign-in lockout (migration 000116), and, as
 // any password reset does, it ends the account's existing sessions (session
-// families, migration 000118; the API's adminauth.RevokeUserSessions), its
+// families, migration 000117; the API's adminauth.RevokeUserSessions), its
 // MCP connections (000096), and retires its open invite, reset and
-// email-change links and sign-in challenges (migration 000124;
+// email-change links and sign-in challenges (migration 000123;
 // adminauth.RetireAccountTokens). It also lifts a lock held after repeated
-// failed two-factor codes (000125). Two-factor sign-in stays on: -reset-2fa
+// failed two-factor codes (000124). Two-factor sign-in stays on: -reset-2fa
 // turns it off.
 //
 // It must work before those migrations have run too -- a failed migration
@@ -203,7 +203,7 @@ var errUnknownUser = errors.New("no such user")
 // resetTwoFactor is the break-glass twin of POST /users/{id}/reset-2fa
 // (adminauth.ResetTwoFactor): it drops one user's TOTP secret, enrolment and
 // recovery codes, and retires their pending email change and open sign-in
-// challenges. It reports whether two-factor was on. Before migration 000125
+// challenges. It reports whether two-factor was on. Before migration 000124
 // nobody has a second factor, so it only checks that the user exists.
 func resetTwoFactor(ctx context.Context, client *db.Client, username string) (bool, error) {
 	var hasTwoFactor, hasTokens bool
