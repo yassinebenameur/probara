@@ -87,7 +87,7 @@ spec:
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_VAPID_PRIVATE_KEY" "key" "status_page_vapid_private_key" "secret" .Values.secrets.statusPageVapidPrivateKeyExistingSecret "secretKey" .Values.secrets.statusPageVapidPrivateKeyExistingSecretKey) | nindent 8 }}
         {{- end }}
         {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPagePreviewSecret "secret" .Values.secrets.statusPagePreviewSecretExistingSecret) }}
-        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" true) | nindent 8 }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_PREVIEW_SECRET" "key" "status_page_preview_secret" "secret" .Values.secrets.statusPagePreviewSecretExistingSecret "secretKey" .Values.secrets.statusPagePreviewSecretExistingSecretKey "optional" (not .Values.secrets.statusPagePreviewSecretExistingSecret)) | nindent 8 }}
         {{- end }}
         {{- /* Visitor sessions on password and private pages: a per-field
         Secret (must hold the key), the chart-wide Secret (key optional, so

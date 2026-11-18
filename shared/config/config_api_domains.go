@@ -18,9 +18,13 @@ type StatusPageDomainsConfig struct {
 	// added, none is re-verified).
 	StatusPageCNAMETarget string
 	// StatusPagePublicBaseURL is STATUS_PAGE_BASE_URL, the status-page
-	// service's public origin. The API refuses that host as a custom domain,
-	// and subscriber mail links pages without a custom domain there (empty:
-	// pages cannot take email subscriptions).
+	// service's public origin (no trailing slash; empty when unset). The API
+	// refuses that host as a custom domain, links subscriber mail of pages
+	// without a custom domain there (empty: pages cannot take email
+	// subscriptions), and hands the origin to the operator UI
+	// (GET /auth-context) for its status-page links and template preview:
+	// the published UI image is built once, so a build-time setting there
+	// cannot carry a per-install value.
 	StatusPagePublicBaseURL string
 	// StatusPagePlatformHosts is STATUS_PAGE_PLATFORM_HOSTS, the status-page
 	// service's other platform hosts: refused as custom domains too.

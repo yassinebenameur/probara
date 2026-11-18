@@ -23,7 +23,8 @@ import (
 // replica, with no cache to wait out.
 //
 // Every query here tolerates a database that predates the migration
-// (42P01/42703, the post-upgrade migration job): sessions then work as
+// (42P01/42703: a deployment that starts the binary before migrating; the
+// chart and Compose migrate first): sessions then work as
 // before, without families, and access tokens carry no sid.
 
 // Auth methods recorded on a family.

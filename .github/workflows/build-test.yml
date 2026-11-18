@@ -199,6 +199,37 @@ jobs:
           NEXT_TELEMETRY_DISABLED: 1
         run: npm run build
 
+  release-compose:
+    name: Release Compose and installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+      - name: Render the base Compose file
+        run: docker compose config --quiet
+      # Dummy values for every ${VAR:?} in docker-compose.release.yml; nothing
+      # is pulled or started.
+      - name: Render the release Compose override
+        env:
+          POSTGRES_PASSWORD: ci-postgres
+          NATS_PLATFORM_PASSWORD: ci-nats
+          PROBARA_VERSION: 0.0.0-ci
+          LOCAL_AI_TOKEN: ci-local-ai-token
+          PROBARA_SECRETS_KEY: ci-secrets-key
+          ADMIN_JWT_SECRET: ci-admin-jwt-secret
+          STATUS_PAGE_PREVIEW_SECRET: ci-preview-secret
+          NATS_LOCATION_AUTH_ISSUER_SEED: SACISEED
+          NATS_LOCATION_AUTH_ISSUER_PUBLIC_KEY: ACIPUBLIC
+          BOOTSTRAP_SETUP_CODE: CICI-CICI-CICI-CICI
+          STATUS_PAGE_SESSION_SECRET: ci-status-page-session-secret
+          STATUS_PAGE_INTERNAL_TOKEN: ci-status-page-internal-token
+        run: docker compose -f docker-compose.yml -f docker-compose.release.yml config --quiet
+      # Only the docker CLI: the issuer pair is pre-seeded and nothing starts.
+      - name: Check the installer's .env handling
+        run: bash scripts/test-install.sh
+
   ai-fast:
     name: AI fast tests
     # Pinned: the Python 3.13.3 the AI jobs need has no build for the image

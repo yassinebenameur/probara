@@ -148,8 +148,9 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 		Scan(&platformRole, &disabledAt, &membershipRole, &tenantGone)
 	switch {
 	case pgerr.IsMissingSchema(err):
-		// Deploy-ordering tolerance: migrations run as a post-upgrade job, so
-		// this binary may briefly see the old schema. Pre-migration every
+		// Deploy-ordering tolerance: the chart and Compose migrate before new
+		// pods start, but a deployment that skips that step can run this
+		// binary on the old schema. Pre-migration every
 		// admin is a global superuser, so legacy behavior is correct here.
 		log.WithError(err).Warn("RBAC schema not migrated yet; treating admin as superadmin")
 		platformRole = auth.PlatformRoleSuperadmin

@@ -134,12 +134,6 @@ func (s *pushStore) reconcileNotifications(ctx context.Context) (int64, error) {
 		pushNotificationHorizon.Seconds(),
 		pushFlapDebounce.Seconds(),
 	)
-	if err != nil && pgerr.IsMissingSchema(err) {
-		res, err = s.db.ExecContext(ctx, withoutVisibility(query),
-			pushNotificationHorizon.Seconds(),
-			pushFlapDebounce.Seconds(),
-		)
-	}
 	if err != nil {
 		return 0, fmt.Errorf("reconcile push notifications: %w", err)
 	}

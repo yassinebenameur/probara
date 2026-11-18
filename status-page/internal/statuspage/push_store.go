@@ -128,8 +128,6 @@ func (s *pushStore) DeleteSubscription(ctx context.Context, id uuid.UUID) error 
 // browser about the page.
 func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, bool, error) {
 	// A deleted workspace's page is not found here, as on every other route.
-	// withoutVisibility (the retry below) replaces only pushVisiblePages, so
-	// the live-workspace condition holds on both paths.
 	query := `
 		SELECT sp.id, COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
 		       AND ` + pushVisiblePages + `
@@ -139,9 +137,6 @@ func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, 
 	var id uuid.UUID
 	var enabled bool
 	err := s.db.QueryRowContext(ctx, query, slug).Scan(&id, &enabled)
-	if err != nil && pgerr.IsMissingSchema(err) {
-		err = s.db.QueryRowContext(ctx, withoutVisibility(query), slug).Scan(&id, &enabled)
-	}
 	switch {
 	case err == sql.ErrNoRows:
 		return uuid.UUID{}, false, nil
@@ -244,20 +239,11 @@ func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter t
 		RETURNING d.id, d.status_page_id, sp.slug, sp.title, d.monitor_id, d.monitor_name, d.kind,
 		          ` + pushVisiblePages + `, ` + pushDeliveryIncidentColumn + `
 	`
-	// Each fallback serves a database a migration behind this binary
-	// (000123 adds incident_id, 000114 visibility), so a rolling upgrade
-	// keeps sending.
-	var rows *sql.Rows
-	var err error
-	for _, q := range []string{
-		query,
-		withoutIncidents(query),
-		withoutVisibility(withoutIncidents(query)),
-	} {
-		rows, err = s.db.QueryContext(ctx, q, limit, staleAfter.Seconds())
-		if err == nil || !pgerr.IsMissingSchema(err) {
-			break
-		}
+	rows, err := s.db.QueryContext(ctx, query, limit, staleAfter.Seconds())
+	if err != nil && pgerr.IsMissingSchema(err) {
+		// Before migration 000123 deliveries have no incident: every one is
+		// a monitor transition.
+		rows, err = s.db.QueryContext(ctx, withoutIncidents(query), limit, staleAfter.Seconds())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("claim push deliveries: %w", err)
@@ -334,12 +320,6 @@ func (s *pushStore) CompleteDelivery(ctx context.Context, id uuid.UUID, sent, fa
 // pushVisiblePages is the SQL predicate (on status_pages sp) for pages whose
 // visitors may get push notifications: public and unlisted.
 const pushVisiblePages = "sp.visibility IN ('public', 'unlisted')"
-
-// withoutVisibility drops pushVisiblePages from a query for a database that
-// has not run migration 000114 yet, where no page can be gated.
-func withoutVisibility(query string) string {
-	return strings.ReplaceAll(query, pushVisiblePages, "TRUE")
-}
 
 // pushDeliveryIncidentColumn is the incident of an outbox-driven delivery
 // (migration 000123); withoutIncidents reads it as NULL on an older

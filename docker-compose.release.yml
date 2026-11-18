@@ -94,6 +94,10 @@ services:
       # The UI is published, so whoever reaches it first could otherwise
       # create the first administrator; the form asks for this code instead.
       BOOTSTRAP_SETUP_CODE: "${BOOTSTRAP_SETUP_CODE:?BOOTSTRAP_SETUP_CODE is required (scripts/install.sh generates .env)}"
+      # Same origin as on status-page: the API hands it to the UI, whose
+      # prebuilt image cannot know it, for status-page links and previews,
+      # and subscriber mail links pages without a custom domain there.
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-}"
       # wss://... address private-location workers dial (the websocket
       # listener behind your TLS proxy on 443); empty disables the deploy
       # snippets.
@@ -112,9 +116,6 @@ services:
       SMTP_FROM: "${SMTP_FROM:-}"
       SMTP_FROM_NAME: "${SMTP_FROM_NAME:-}"
       APP_BASE_URL: "${APP_BASE_URL:-}"
-      # Status-page subscriber mail links back to the pages there (or their
-      # custom domain); the same value the status-page service gets below.
-      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
       STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required (scripts/install.sh generates .env)}"
     ports: !reset []
     networks:
@@ -156,7 +157,10 @@ services:
     environment:
       POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://probara-platform:${NATS_PLATFORM_PASSWORD:?NATS_PLATFORM_PASSWORD is required}@nats:4222"
-      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-http://localhost:8082}"
+      # Public origin of the status pages (https://status.example.com):
+      # canonical links, og:url, feed links and push deep links. Empty leaves
+      # those out or root-relative rather than pointing at localhost.
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-}"
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:?STATUS_PAGE_PREVIEW_SECRET is required}"
       STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:?STATUS_PAGE_SESSION_SECRET is required (scripts/install.sh generates .env)}"
       STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required}"
@@ -193,6 +197,8 @@ services:
     environment:
       API_PROXY_TARGET: "http://api:8080"
       API_PROXY_TRUST_FORWARDED_FOR: "true"
+      # Read at runtime for the CSP frame-src of the template editor's preview.
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-}"
     depends_on:
       api:
         condition: service_healthy

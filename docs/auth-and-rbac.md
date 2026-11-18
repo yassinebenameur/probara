@@ -455,16 +455,18 @@ exercise mappings.
 
 ## Deploy ordering
 
-The helm migrations job is post-upgrade, so new binaries briefly run on
-the old schema. All auth queries feature-detect (SQLSTATE 42P01/42703 →
+The helm migrations job is a pre-upgrade hook and Compose services wait for
+the `migrations` service, so new binaries start on the migrated schema; a
+deployment that skips that step (`migrations.enabled=false`, a rendered
+chart applied without its hooks) can still run them briefly on the old
+schema. All auth queries feature-detect (SQLSTATE 42P01/42703 →
 legacy behavior: everyone superadmin, keys full-access) and the audit
 writer drops rows — the API never crash-loops pre-migration. The exception
 is workspace soft delete (000116): API-key validation, tenant lists and
 every background loop name `tenants.deleted_at`, so that migration must run
 before the new binaries serve (the release's upgrade notes say so);
 `identityQuery` alone reads it tolerantly, so a missing column can never
-elevate a member. For
-zero-surprise rollouts run the migration job manually first (see
+elevate a member. Without the hook, run the migrations first (see
 `docs/correctness-notes.md` "Deploy ordering").
 
 ## Verification
