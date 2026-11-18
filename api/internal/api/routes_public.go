@@ -63,9 +63,18 @@ func mountOAuthRoutes(r chi.Router, oauthHandlers *oauthhandlers.Handlers, authM
 func mountAuthRoutes(r chi.Router, authHandlers *authhandlers.Handlers, adminUsersHandlers *userhandlers.Handlers) {
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/login", authHandlers.Login)
+		r.Post("/login/mfa", authHandlers.LoginMFA)
 		r.Post("/refresh", authHandlers.Refresh)
 		r.Post("/logout", authHandlers.Logout)
 		r.Get("/me", authHandlers.Me)
+		// Account links (handlers/auth/links.go): the token rides in the
+		// X-Action-Token header, never the path.
+		r.Get("/capabilities", authHandlers.Capabilities)
+		r.Post("/password/forgot", authHandlers.ForgotPassword)
+		r.Post("/password/reset", authHandlers.ResetPassword)
+		r.Get("/invite", authHandlers.InviteInfo)
+		r.Post("/invite/accept", authHandlers.AcceptInvite)
+		r.Post("/email/confirm", authHandlers.ConfirmEmail)
 		r.Route("/oidc", func(r chi.Router) {
 			r.Get("/status", authHandlers.OIDCStatus)
 			r.Get("/start", authHandlers.OIDCStart)

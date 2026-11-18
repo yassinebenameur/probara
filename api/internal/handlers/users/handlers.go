@@ -17,8 +17,10 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/accountmail"
 	adminusers "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
+	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -27,8 +29,6 @@ import (
 const (
 	minUsernameLength = 3
 	maxUsernameLength = 64
-	minPasswordLength = 12
-	maxPasswordLength = 128
 )
 
 var usernameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -43,6 +43,11 @@ type Handlers struct {
 	setupCode string
 	// security serves unlock and the user's sessions (security.go).
 	security accountSecurity
+	// links, mail and sso serve invites, reset links and the two-factor
+	// reset (lifecycle.go).
+	links accountLinks
+	mail  *accountmail.Mailer
+	sso   ssoProvider
 }
 
 type userService interface {
@@ -167,6 +172,11 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
+		if errors.Is(err, auth.ErrPasswordTooLong) {
+			// The validator already refuses it; never let bcrypt's limit be a 500.
+			apierrors.WriteValidationError(w, auth.ErrPasswordTooLong.Error())
+			return
+		}
 		if errors.Is(err, adminusers.ErrWorkspaceNotFound) {
 			apierrors.WriteError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 			return
@@ -233,7 +243,7 @@ func (h *Handlers) BootstrapFirstUser(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, adminusers.ErrBootstrapClosed):
 			apierrors.WriteError(w, http.StatusConflict, "conflict", err.Error())
 			return
-		case errors.Is(err, adminusers.ErrUsernameTaken):
+		case errors.Is(err, adminusers.ErrUsernameTaken), errors.Is(err, auth.ErrPasswordTooLong):
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		default:
@@ -277,6 +287,9 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, adminusers.ErrCannotDemoteLastAdmin):
 			apierrors.WriteValidationError(w, err.Error())
 			return
+		case errors.Is(err, auth.ErrPasswordTooLong):
+			apierrors.WriteValidationError(w, auth.ErrPasswordTooLong.Error())
+			return
 		case errors.Is(err, adminusers.ErrWorkspaceNotFound):
 			apierrors.WriteError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 			return
@@ -310,6 +323,13 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		"username": user.Username,
 		"changed":  changed,
 	})
+	if req.Password != nil && h.mail.Enabled() && user.Email != nil && *user.Email != "" {
+		// The owner learns their password was set by someone else.
+		to, username := *user.Email, user.Username
+		h.mail.Background(h.logger, "password changed notice", func(ctx context.Context) error {
+			return h.mail.PasswordChanged(ctx, to, username, accountmail.PasswordChangedByAdministrator)
+		})
+	}
 
 	httpx.WriteJSON(w, http.StatusOK, user)
 }
@@ -448,12 +468,8 @@ func validateUsername(username string) error {
 	return nil
 }
 
+// validatePassword is the platform's one password rule (auth.ValidatePassword),
+// shared with invites, resets and the account page.
 func validatePassword(password string) error {
-	if password == "" {
-		return errors.New("password is required")
-	}
-	if len(password) < minPasswordLength || len(password) > maxPasswordLength {
-		return errors.New("password must be between 12 and 128 characters")
-	}
-	return nil
+	return auth.ValidatePassword(password)
 }

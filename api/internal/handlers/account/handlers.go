@@ -1,5 +1,6 @@
-// Package account serves the signed-in user's own account: today their
-// sessions. Users are platform-scoped, so nothing here is tenant-scoped.
+// Package account serves the signed-in user's own account: their sessions,
+// password, email address and second factor (security.go). Users are
+// platform-scoped, so nothing here is tenant-scoped.
 package account
 
 import (
@@ -13,6 +14,7 @@ import (
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/accountmail"
 	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
@@ -30,6 +32,10 @@ type Handlers struct {
 	sessions sessionService
 	logger   *logger.Logger
 	audit    *audit.Recorder
+	// security and mail serve the password, email and two-factor routes
+	// (security.go).
+	security securityService
+	mail     *accountmail.Mailer
 }
 
 // NewHandlers creates the account handlers.
