@@ -19,6 +19,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/securityheaders"
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -70,6 +71,10 @@ type statusPageSettingsStored struct {
 
 	EnableEmailSubscriptions bool `json:"enable_email_subscriptions"`
 	AutoPublishIncidents     bool `json:"auto_publish_incidents"`
+
+	// Template is the built-in template name; "" (a row from before the
+	// setting) reads as the default.
+	Template string `json:"template,omitempty"`
 }
 
 type statusPageSectionInput struct {
@@ -189,6 +194,11 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 	if patch.AutoPublishIncidents != nil {
 		s.AutoPublishIncidents = *patch.AutoPublishIncidents
 	}
+	if patch.Template != nil {
+		// Validation rejects unknown names; one here (a hand-edited row)
+		// reads as the default.
+		s.Template = statustemplate.NormalizeBuiltin(*patch.Template)
+	}
 	return s
 }
 
@@ -244,6 +254,8 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 	// Set apart from the literal above so its alignment stays put.
 	out.EnableEmailSubscriptions = &enableEmailSubscriptions
 	out.AutoPublishIncidents = &autoPublishIncidents
+	builtin := statustemplate.NormalizeBuiltin(s.Template)
+	out.Template = &builtin
 	return out
 }
 

@@ -908,7 +908,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/status-pages/{id}/template/default`",
-              "Export current built-in source",
+              "Export a built-in template source: the default, or `?name=classic` for Classic (any other name is a `400`)",
             ],
             [
               "`GET /api/v1/status-pages/{id}/template/versions/{version}/source`",

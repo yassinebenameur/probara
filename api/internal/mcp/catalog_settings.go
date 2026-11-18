@@ -7,6 +7,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	"github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
 const channelConfigDoc = "Plugin-specific config object. Its fields are the plugin manifest's fields " +
@@ -316,10 +317,14 @@ func statusPageTools() []spec {
 		},
 		{
 			Name:        "get_default_status_page_template",
-			Title:       "Get default template source",
-			Description: "The built-in status page template source (Go html/template); the starting point for a custom one.",
+			Title:       "Get built-in template source",
+			Description: "A built-in status page template source (Go html/template); the starting point for a custom one.",
 			Method:      http.MethodGet, Route: "/status-pages/{id}/template/default",
 			PathDocs: page,
+			Query: []param{{
+				Name: "name", Enum: statustemplate.BuiltinNames(), Default: statustemplate.BuiltinDefault,
+				Description: "Which built-in template: default, or classic (the banner, history-bar and incident-history layout). A page renders one by its settings.template.",
+			}},
 		},
 		{
 			Name:        "get_status_page_template_version",

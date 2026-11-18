@@ -66,6 +66,9 @@ type StatusPageData struct {
 	// Published custom template ("" = render with the built-in template).
 	CustomTemplateSource  string `json:"-"` // For template use only
 	CustomTemplateVersion int    `json:"-"` // For template use only
+	// Template is the page's built-in template setting (statustemplate
+	// names); it renders the page when no custom template is published.
+	Template string `json:"-"`
 	// SEOTitle and SEODescription are the stored overrides ("" = derived in
 	// seo.go); AllowSearchIndexing is the page's indexing opt-out.
 	SEOTitle            string `json:"-"`
@@ -409,6 +412,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.SEODescription = settings.SEODescription
 	page.AllowSearchIndexing = settings.AllowSearchIndexing
 	page.EmailSubscriptionsEnabled = settings.EnableEmailSubscriptions
+	page.Template = settings.Template
 
 	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
 		return nil, fmt.Errorf("failed to get custom template: %w", err)

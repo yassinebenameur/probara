@@ -59,6 +59,11 @@ type StatusPageSettings struct {
 	// maintenance, not explained by a dependency, not recovering), and
 	// resolves it when the monitor recovers. Off by default.
 	AutoPublishIncidents *bool `json:"auto_publish_incidents,omitempty"`
+	// Template picks the built-in template the page renders with while no
+	// custom template is published: "default" (the default) or "classic"
+	// (shared/statustemplate.Builtins). A published custom template still
+	// wins.
+	Template *string `json:"template,omitempty"`
 }
 
 // Bounds of the SEO overrides. Search results show about 60 and 160

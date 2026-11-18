@@ -459,6 +459,34 @@ func TestValidateStatusPageUpdate(t *testing.T) {
 			errContains: "csp_mode must be strict, compatible, off",
 		},
 		{
+			name: "classic template update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					Template: ptr("classic"),
+				},
+			},
+		},
+		{
+			name: "unknown template update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					Template: ptr("modern"),
+				},
+			},
+			wantErr:     true,
+			errContains: "template must be one of: default, classic",
+		},
+		{
+			name: "empty template update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					Template: ptr(""),
+				},
+			},
+			wantErr:     true,
+			errContains: "template must be one of",
+		},
+		{
 			name: "valid sections update",
 			req: &models.UpdateStatusPageRequest{
 				Sections: &[]models.StatusPageSection{

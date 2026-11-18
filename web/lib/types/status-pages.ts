@@ -59,7 +59,14 @@ export interface StatusPageSettings {
    * and resolve it when the monitor recovers. Off by default.
    */
   auto_publish_incidents?: boolean;
+  /**
+   * The built-in template the page renders with while no custom template is
+   * published. 'default' unless set; see lib/status-page-templates.ts.
+   */
+  template?: StatusPageTemplateName;
 }
+
+export type StatusPageTemplateName = 'default' | 'classic';
 
 export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';
 

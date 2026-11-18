@@ -1,7 +1,8 @@
 'use client';
 
 import { useMemo, useReducer } from 'react';
-import type { Monitor, StatusPage, StatusPageVisibility } from '@/lib/types';
+import type { Monitor, StatusPage, StatusPageTemplateName, StatusPageVisibility } from '@/lib/types';
+import { pageTemplate } from '@/lib/status-page-templates';
 
 export interface EditableMonitor {
   monitor_id: string;
@@ -42,6 +43,8 @@ export interface FormState {
   clearPassword: boolean;
   /** Search and link-preview settings, also stored in the settings JSONB. */
   seo: SeoSettings;
+  /** The built-in template the public page renders with (settings JSONB). */
+  template: StatusPageTemplateName;
 }
 
 export interface SeoSettings {
@@ -127,6 +130,7 @@ export function initialState(statusPage?: StatusPage): FormState {
       description: statusPage?.settings?.seo_description || '',
       allowIndexing: statusPage?.settings?.allow_search_indexing !== false,
     },
+    template: pageTemplate(statusPage?.settings?.template),
   };
 }
 
@@ -160,7 +164,8 @@ export type Action =
   | { type: 'set_visibility'; value: StatusPageVisibility }
   | { type: 'set_password'; value: string }
   | { type: 'set_clear_password'; value: boolean }
-  | { type: 'set_seo'; value: Partial<SeoSettings> };
+  | { type: 'set_seo'; value: Partial<SeoSettings> }
+  | { type: 'set_template'; value: StatusPageTemplateName };
 
 export function reducer(state: FormState, action: Action): FormState {
   switch (action.type) {
@@ -185,6 +190,9 @@ export function reducer(state: FormState, action: Action): FormState {
 
     case 'set_seo':
       return { ...state, seo: { ...state.seo, ...action.value } };
+
+    case 'set_template':
+      return { ...state, template: action.value };
 
     case 'add_section': {
       const section = makeSection(action.title || 'New section', action.id);

@@ -1101,8 +1101,19 @@ or imported groups come back empty. Any other path that creates groups through
   `{{cspNonce}}` renders `statustemplate.NoncePlaceholder`, swapped per
   response after the cached render; custom head/footer HTML may carry the
   literal `{{cspNonce}}`. Every inline `<script>` in `default.gohtml` needs
-  `nonce="{{cspNonce}}"` (`TestCSPNonceContract`), and a 304 never carries a
+  `nonce="{{cspNonce}}"` (`TestCSPNonceContract`; every built-in:
+  `TestBuiltinsParseValidateAndCarryNonce`), and a 304 never carries a
   CSP.
+- **Built-in templates**: `shared/statustemplate/builtin.go` (`Builtins`) is
+  the one list (`default.gohtml`, `classic.gohtml`); the page's `template`
+  setting (three mirrors; UI twin `web/lib/status-page-templates.ts`) picks
+  one while no custom template is published. API validation,
+  `GET …/template/default?name=` and the renderer (`builtinTemplateFor`) all
+  read it. View fields the classic built-in needs are built in
+  `status-page/internal/statuspage/render_classic.go` from data the render
+  already loads, reach every template, and are documented in
+  `website/lib/docs/pages/status-pages.ts`; never change `default.gohtml`'s
+  output to serve another built-in.
 - **Visibility gate before everything** (`statuspage/access.go`, contract
   `shared/pageaccess`): `authorize` runs first in `HandleStatusPage`, before
   the method guard, every sub-route and the slug-keyed render cache; deny by
@@ -1647,7 +1658,8 @@ or imported groups come back empty. Any other path that creates groups through
   connect), `web/app/icon.svg` (dashboard favicon), `website/app/icon.svg`
   (landing/docs favicon), and an inline data-URI `<link rel="icon">` in
   `shared/statustemplate/default.gohtml` (status pages, monochrome variant
-  that inverts with browser chrome). Same trace geometry, four copies —
+  that inverts with browser chrome; `classic.gohtml` carries the same URI,
+  `TestClassicFaviconMatchesDefault`). Same trace geometry, four copies —
   status pages get a data URI because pages render under arbitrary domains
   and path prefixes (the push service worker is their one static route: its
   scope needs a real URL). Alert email is the deliberate exception:

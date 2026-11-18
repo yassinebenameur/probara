@@ -70,7 +70,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           tone: "warning",
           title: "A public page exposes operational information",
           text:
-            "A public or unlisted page is readable by anyone who has its URL. Only select monitors, names, descriptions, incidents, and maintenance details intended for unauthenticated visitors, or make the page password-protected or private. The active built-in template does not currently render monitor target URLs, but custom templates and future use of schema-reserved fields must still be reviewed for disclosure.",
+            "A public or unlisted page is readable by anyone who has its URL. Only select monitors, names, descriptions, incidents, and maintenance details intended for unauthenticated visitors, or make the page password-protected or private. The Default built-in template shows a monitor's target only as the fallback detail line of a monitor without a latency figure, and the Classic built-in shows it in each service's expanded details; both only while `show_monitor_url` is on (the default). Custom templates and future use of schema-reserved fields must still be reviewed for disclosure.",
         },
       ],
     },
@@ -88,9 +88,9 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "`show_monitor_url`",
-              "Off keeps each monitor's target out of the built-in page, including its search filter and the row's detail line (which otherwise falls back to the target), and out of `/data`",
+              "Off keeps each monitor's target out of the built-in page, including its search filter, the row's detail line (which otherwise falls back to the target) and Classic's expanded details, and out of `/data`",
             ],
-            ["`show_monitor_uptime`", "Controls per-monitor uptime in the built-in view. Off removes it everywhere on the page: the uptime strips, the metric column and kiosk tiles (shown as `—`), the search filter, `/data`, `summary.json` and the uptime badges"],
+            ["`show_monitor_uptime`", "Controls per-monitor uptime in the built-in view. Off removes it everywhere on the page: the uptime strips, the metric column and kiosk tiles (shown as `—`), the search filter, Classic's history bars, uptime figures and range switch, `/data`, `summary.json` and the uptime badges"],
             [
               "`show_monitor_tls`",
               "Present in the settings schema; not currently wired into the built-in template",
@@ -109,7 +109,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             ["`show_footer`", "Controls the built-in footer region"],
             ["`footer_text`", "Built-in custom footer text, up to 250 characters"],
-            ["`default_theme`", "Initial built-in theme: `light` or `dark`"],
+            ["`default_theme`", "Initial built-in theme: `light` or `dark`. Classic follows the visitor's saved choice, then the system preference, and uses this only while `allow_theme_toggle` is off"],
             ["`allow_theme_toggle`", "Allows the built-in visitor theme switch"],
             [
               "`enable_push_notifications`",
@@ -148,6 +148,10 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`auto_publish_incidents`",
               "Off by default. Publishes a monitor's outage to the page after 5 minutes and resolves it on recovery; see [automatic publishing](#auto-publish)",
             ],
+            [
+              "`template`",
+              "`default` (the default) or `classic`: the [built-in template](#built-in-templates) the page renders with while no custom template is published. Any other value is refused. Set under Identity & branding → Page design",
+            ],
           ],
         },
         {
@@ -158,7 +162,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Separately from these settings, the built-in template automatically shows a small \"Certificate expires soon\" note on a component whose monitor has an open [`tls_expiry` alert](/docs/alerting/#host-and-mesh) — the certificate is inside its `tls_min_days_valid` window while the component itself remains operational, so the note never changes the component's status. Custom templates receive this as the boolean `CertExpiresSoon` field on each monitor entry.",
+            "Separately from these settings, the built-in template automatically shows a small \"Certificate expires soon\" note (in Classic, in the service's expanded details) on a component whose monitor has an open [`tls_expiry` alert](/docs/alerting/#host-and-mesh) — the certificate is inside its `tls_min_days_valid` window while the component itself remains operational, so the note never changes the component's status. Custom templates receive this as the boolean `CertExpiresSoon` field on each monitor entry.",
         },
         {
           type: "callout",
@@ -708,6 +712,41 @@ export const STATUS_PAGES_PAGE: DocPage = {
       ],
     },
     {
+      id: "built-in-templates",
+      title: "Built-in templates",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A page renders one of two built-in templates, chosen by its `template` setting, until a [custom template](#template-lifecycle) is published (a published custom template always wins; if it fails to render, the page falls back to its chosen built-in).",
+        },
+        {
+          type: "table",
+          columns: ["Template", "Layout"],
+          rows: [
+            [
+              "Default (`default`)",
+              "A status summary with page-wide uptime, search and status filters, collapsible sections, and a list of current incidents. The rest of this page describes it unless it says otherwise",
+            ],
+            [
+              "Classic (`classic`)",
+              "The layout visitors know from other status pages: an overall banner, the active incidents with all their public updates, every service with its status word and a strip of history bars, scheduled maintenance, and the past seven days of incidents day by day",
+            ],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "Classic's banner names the overall state from the component counts: \"All systems operational\", \"Degraded performance\", \"Partial outage\", \"Major outage\" (more than half of the services down), \"Maintenance in progress\", or \"Some services are not reporting\", with one line on how many services are affected and how long ago the page was rendered.",
+            "History bars cover 24 hours (one slot per hour), 7, 30 or 90 days (one per day); the range switch has no `1h`. Each slot is drawn as about 90 equal cells in total, so the strip keeps one rhythm whatever the range, and its tooltip names the slot and its uptime. Cells use the same thresholds as the Default strips (99% and 95%); a slot without checks is a neutral \"No data\" cell. A service row expands to its type, response time, last check, target (with `show_monitor_url`) and a certificate notice.",
+            "An incident lists every public update, newest first, then its summary as the original post. Updates do not record the state they were posted in, so only the newest carries the incident's current state; earlier ones read \"Update\". Past incidents are listed under the UTC day they were published, or resolved when published before the seven days.",
+            "The view switch (List, Compact, Kiosk), theme button, notification bell and \"Subscribe to updates\" sit in the header; the keyboard shortcuts `1`, `2`, `K`, `T` and `Esc` and the `?range=` and `?mode=` URL parameters work as in the Default template, and a visitor's theme and view choice carries across pages of either template. Kiosk is a full-screen wall view with a large banner, a clock and every service as a tile.",
+            "Classic draws its accent (the Subscribe buttons and links) in the page's primary colour, with dark or white text, whichever reads better; status colours appear only on the banner, the bars and the status words. It uses the Archivo typeface when the visitor has it installed and the system font otherwise; it downloads no fonts.",
+          ],
+        },
+      ],
+    },
+    {
       id: "monitor-data",
       title: "Monitor data on a public page",
       blocks: [
@@ -800,13 +839,13 @@ export const STATUS_PAGES_PAGE: DocPage = {
       id: "template-lifecycle",
       title: "Template lifecycle",
       intro:
-        "Every page has a built-in default template and at most one editable draft. Publishing is versioned and previous published source is archived.",
+        "Every page renders a [built-in template](#built-in-templates) (Default or Classic, by its `template` setting) until a custom one is published, and has at most one editable draft. Publishing is versioned and previous published source is archived.",
       blocks: [
         {
           type: "table",
           columns: ["Action", "Effect"],
           rows: [
-            ["Load default", "Returns the built-in template source"],
+            ["Load built-in", "Loads a built-in template source into the editor, Default or Classic, as a starting point. With no draft and nothing published, the editor opens on the built-in the page renders with"],
             [
               "Save draft",
               "Validates and stores one unpublished template without affecting visitors",
@@ -823,7 +862,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ],
             [
               "Reset",
-              "Archives the current published template and restores the built-in source as a new version",
+              "Archives the current published template so the page renders its built-in template again",
             ],
           ],
         },
@@ -848,7 +887,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Templates use Go `html/template`, which contextually escapes ordinary data values. Use the structures exposed by the default template as the compatibility reference and preview with real page data before publication.",
+            "Templates use Go `html/template`, which contextually escapes ordinary data values. Use either built-in template's source as the compatibility reference and preview with real page data before publication.",
         },
         {
           type: "paragraph",
@@ -883,6 +922,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Each range has its own strip data (a JSON array of `{label, uptime}` cells, `uptime` -1 for no data, already resampled to the cell count the functions return) and uptime figure. The page exposes `.GlobalUptime1hJSON`, `.GlobalUptime24JSON`, `.GlobalUptime7JSON`, `.GlobalUptime30JSON` and `.GlobalUptime90JSON` with matching `…Value` strings. Each monitor exposes `.History1hJSON`, `.History24hJSON`, `.History7dJSON`, `.History30dJSON` and `.History90dJSON` for its row, `.ExpandedHistory1hJSON`, `.ExpandedHistory30dJSON` and `.ExpandedHistory90dJSON` for its expanded strip, and `.Uptime1hValue` through `.Uptime90Value`. The `1h` fields were added later; a template written before them simply offers no `1h` range.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Added with the Classic template and available to every template: `.BannerTitle`, `.BannerTone` (`ok`, `warn`, `down`, `maint` or `unknown`) and `.BannerSummary` (empty when all is well); `.RenderedAtISO`, the render time in RFC 3339 UTC; `.ActiveIncidents` and `.PastIncidents` (unresolved and resolved, newest first) and `.IncidentHistory`, seven entries newest first with `.DateISO`, `.DateText` and `.Incidents` (empty on a quiet day); `.AccentColor` and `.AccentInk`. Every incident entry adds `.IsActive`, `.AffectsText` (\"Affects A, B\"), `.PublishedAtISO` and `.Updates`, each with `.AtISO`, `.DayISO`, `.TimeText` (\"15:04 UTC\", with the date when it falls on another day than `.DayISO`), `.StateLabel` and `.Message`. Maintenance entries add `.AffectsText`. Monitors add `.StatusWord` (Operational, Degraded, Outage, Maintenance, Unknown), `.Bars` (the 24-hour strip ready to draw, each with `.Tone` and `.Tip`) and `.Bars24hJSON`, `.Bars7dJSON`, `.Bars30dJSON` and `.Bars90dJSON`, one `{label, uptime}` point per hour or day; the bar fields are empty when `show_monitor_uptime` is off.",
         },
         {
           type: "callout",

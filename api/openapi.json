@@ -9799,6 +9799,12 @@
                   "null",
                   "boolean"
                 ]
+              },
+              "template": {
+                "type": [
+                  "null",
+                  "string"
+                ]
               }
             },
             "type": [
@@ -10474,6 +10480,12 @@
                       "type": [
                         "null",
                         "boolean"
+                      ]
+                    },
+                    "template": {
+                      "type": [
+                        "null",
+                        "string"
                       ]
                     }
                   },
@@ -25258,6 +25270,12 @@
                           "null",
                           "boolean"
                         ]
+                      },
+                      "template": {
+                        "type": [
+                          "null",
+                          "string"
+                        ]
                       }
                     },
                     "type": [
@@ -25688,6 +25706,12 @@
                         "type": [
                           "null",
                           "boolean"
+                        ]
+                      },
+                      "template": {
+                        "type": [
+                          "null",
+                          "string"
                         ]
                       }
                     },
@@ -26321,7 +26345,7 @@
     },
     "/status-pages/{id}/template/default": {
       "get": {
-        "description": "The built-in status page template source (Go html/template); the starting point for a custom one.",
+        "description": "A built-in status page template source (Go html/template); the starting point for a custom one.",
         "operationId": "get_default_status_page_template",
         "parameters": [
           {
@@ -26330,6 +26354,19 @@
             "name": "id",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which built-in template: default, or classic (the banner, history-bar and incident-history layout). A page renders one by its settings.template.",
+            "in": "query",
+            "name": "name",
+            "schema": {
+              "default": "default",
+              "enum": [
+                "default",
+                "classic"
+              ],
               "type": "string"
             }
           },
@@ -26363,7 +26400,7 @@
             "$ref": "#/components/responses/Error"
           }
         },
-        "summary": "Get default template source",
+        "summary": "Get built-in template source",
         "tags": [
           "status-pages"
         ]

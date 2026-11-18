@@ -18,6 +18,8 @@ import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
 import FormField from '@/components/ui/FormField';
 import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
+import Radio from '@/components/ui/Radio';
+import { PAGE_TEMPLATE_OPTIONS } from '@/lib/status-page-templates';
 import SectionList from './SectionList';
 import PagePreview from './PagePreview';
 import PageAccessFields from './PageAccessFields';
@@ -64,6 +66,7 @@ function snapshot(state: FormState): string {
       secondary_color: state.basics.secondary_color.trim(),
     },
     enablePushNotifications: state.enablePushNotifications,
+    template: state.template,
     visibility: state.visibility,
     password: state.password !== '',
     clearPassword: state.clearPassword,
@@ -316,6 +319,7 @@ export default function StatusPageForm({
         seo_title: state.seo.title.trim(),
         seo_description: state.seo.description.trim(),
         allow_search_indexing: state.seo.allowIndexing,
+        template: state.template,
       },
       ...pageAccessPayload(state),
     };
@@ -424,6 +428,34 @@ export default function StatusPageForm({
               onChange={(value) => setBasic('secondary_color', value)}
             />
           </div>
+
+          <fieldset>
+            <legend className="mb-2 text-ui font-medium text-white">Page design</legend>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {PAGE_TEMPLATE_OPTIONS.map((option) => (
+                // The whole card is the radio's label; selected reads as a
+                // neutral raised card, never orange.
+                <Radio
+                  key={option.value}
+                  name="status-page-template"
+                  value={option.value}
+                  checked={state.template === option.value}
+                  onChange={() => dispatch({ type: 'set_template', value: option.value })}
+                  label={<span className="font-medium text-white">{option.label}</span>}
+                  description={option.description}
+                  stretch
+                  className={`w-full rounded-xl border !p-3 transition-colors ${
+                    state.template === option.value
+                      ? 'border-[var(--input-edge)] bg-control-hover'
+                      : 'border-edge-control bg-control hover:bg-control-hover'
+                  }`}
+                />
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              A published custom template (Template editor) takes precedence over this choice.
+            </p>
+          </fieldset>
 
           <div className="glass-well p-4">
             <Checkbox

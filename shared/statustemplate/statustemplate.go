@@ -15,9 +15,11 @@ import (
 	"github.com/yassinebenameur/probara/shared/models"
 )
 
-// DefaultSource is the built-in public status page template. It is the
-// template served when a status page has no published custom template, and
-// the source handed to customers as the starting point for customization.
+// DefaultSource is the default built-in public status page template. It is
+// the template served when a status page has no published custom template
+// and its template setting is "default" (builtin.go lists every built-in),
+// and the source handed to customers as the starting point for
+// customization.
 //
 //go:embed default.gohtml
 var DefaultSource string

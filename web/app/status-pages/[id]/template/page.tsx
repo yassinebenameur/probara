@@ -21,6 +21,7 @@ import {
   StatusPageSettings,
   StatusPageLibraryTemplate,
   StatusPageCSPMode,
+  StatusPageTemplateName,
 } from '@/lib/types';
 import {
   getStatusPage,
@@ -58,6 +59,7 @@ import { useCurrentUser, useStatusPageBaseUrl } from '@/components/providers/Cur
 import { formatDateTime, formatDateTimeFull, formatFileSize } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import { isGatedVisibility } from '@/lib/status-page-access';
+import { PAGE_TEMPLATE_OPTIONS, pageTemplate, pageTemplateLabel } from '@/lib/status-page-templates';
 import { followLiveSource, templateEditorState } from '@/lib/template-editor';
 import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
 import { errorMessage } from '@/lib/errors';
@@ -133,14 +135,14 @@ export default function StatusPageTemplatePage() {
       applySettings(page.settings);
 
       // Seed the editor: draft first, then the published version, then the
-      // built-in default as the starting point.
+      // built-in template the page renders with as the starting point.
       let seed: string;
       if (template.draft_source != null) {
         seed = template.draft_source;
       } else if (template.published_version != null) {
         seed = await getStatusPageTemplateVersionSource(id, template.published_version);
       } else {
-        seed = await getStatusPageDefaultTemplateSource(id);
+        seed = await getStatusPageDefaultTemplateSource(id, pageTemplate(page.settings?.template));
       }
       setSource(seed);
       setBaseline(seed);
@@ -267,7 +269,7 @@ export default function StatusPageTemplatePage() {
       const live =
         state.published_version != null
           ? await getStatusPageTemplateVersionSource(id, state.published_version)
-          : await getStatusPageDefaultTemplateSource(id);
+          : await getStatusPageDefaultTemplateSource(id, pageTemplate(statusPage?.settings?.template));
       const next = followLiveSource({ source, baseline }, live);
       setSource(next.source);
       setBaseline(next.baseline);
@@ -291,11 +293,11 @@ export default function StatusPageTemplatePage() {
     if (state) await followLive(state);
   };
 
-  const handleLoadDefault = async () => {
+  const handleLoadBuiltin = async (name: StatusPageTemplateName) => {
     try {
       setBusy(true);
-      setSource(await getStatusPageDefaultTemplateSource(id));
-      showToast('Built-in template loaded into the editor', 'success');
+      setSource(await getStatusPageDefaultTemplateSource(id, name));
+      showToast(`${pageTemplateLabel(name)} built-in template loaded into the editor`, 'success');
     } catch (err) {
       showToast(errorMessage(err, 'Failed to load the built-in template'), 'error');
     } finally {
@@ -424,7 +426,7 @@ export default function StatusPageTemplatePage() {
   const publicUrl = resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl);
   const activeLabel = templateState?.has_custom
     ? `Custom template v${templateState.published_version}`
-    : 'Built-in template';
+    : `Built-in template (${pageTemplateLabel(statusPage.settings?.template)})`;
   const maxSize = templateState?.max_size_bytes || 512 * 1024;
   const historyVersions = (templateState?.versions || []).filter(
     (v) => v.status !== 'draft'
@@ -572,15 +574,24 @@ export default function StatusPageTemplatePage() {
             >
               Manage library
             </Button>
-            <Button
-              variant="subtle"
-              size="sm"
-              icon={<FileInput strokeWidth={1.75} />}
-              onClick={handleLoadDefault}
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) void handleLoadBuiltin(pageTemplate(e.target.value));
+              }}
               disabled={busy}
+              aria-label="Load a built-in template into the editor"
+              className="input input-sm mr-1 h-9 !w-auto text-ui"
             >
-              Load built-in
-            </Button>
+              <option value="" disabled>
+                Load built-in…
+              </option>
+              {PAGE_TEMPLATE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <Button
               variant="subtle"
               size="sm"

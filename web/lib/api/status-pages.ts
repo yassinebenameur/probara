@@ -7,6 +7,7 @@ import type {
   StatusPageLibraryTemplate,
   StatusPageLibraryTemplateListResponse,
   StatusPageListResponse,
+  StatusPageTemplateName,
   StatusPageTemplateState,
   UpdateStatusPageRequest,
 } from '../types';
@@ -85,8 +86,13 @@ export async function resetStatusPageTemplate(id: string): Promise<StatusPageTem
   return apiRequest<StatusPageTemplateState>('DELETE', `/v1/status-pages/${id}/template`);
 }
 
-export async function getStatusPageDefaultTemplateSource(id: string): Promise<string> {
-  return apiRequestText(`/v1/status-pages/${id}/template/default`);
+/** A built-in template's source; `name` picks one (absent: the default). */
+export async function getStatusPageDefaultTemplateSource(
+  id: string,
+  name?: StatusPageTemplateName
+): Promise<string> {
+  const query = name && name !== 'default' ? `?name=${encodeURIComponent(name)}` : '';
+  return apiRequestText(`/v1/status-pages/${id}/template/default${query}`);
 }
 
 export async function getStatusPageTemplateVersionSource(

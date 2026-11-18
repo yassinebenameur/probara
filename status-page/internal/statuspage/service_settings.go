@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/yassinebenameur/probara/shared/securityheaders"
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
 type statusPageSettingsPatch struct {
@@ -36,6 +37,8 @@ type statusPageSettingsPatch struct {
 	AllowSearchIndexing *bool   `json:"allow_search_indexing,omitempty"`
 
 	EnableEmailSubscriptions *bool `json:"enable_email_subscriptions,omitempty"`
+
+	Template *string `json:"template,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -69,6 +72,10 @@ type statusPageSettingsStored struct {
 	// EnableEmailSubscriptions renders the subscribe form (subscribe.go);
 	// the API, which stores subscribers, checks the same setting again.
 	EnableEmailSubscriptions bool
+
+	// Template is the built-in template the page renders with when it has
+	// no published custom template (statustemplate.Builtins).
+	Template string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -88,6 +95,7 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		EnablePushNotifications: false,
 		// A public page is meant to be found; an operator opts out.
 		AllowSearchIndexing: true,
+		Template:            statustemplate.BuiltinDefault,
 	}
 }
 
@@ -170,6 +178,10 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	}
 	if patch.EnableEmailSubscriptions != nil {
 		stored.EnableEmailSubscriptions = *patch.EnableEmailSubscriptions
+	}
+	if patch.Template != nil {
+		// An unknown name (a row from a newer release) renders the default.
+		stored.Template = statustemplate.NormalizeBuiltin(*patch.Template)
 	}
 	return stored
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/securityheaders"
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
 const (
@@ -589,6 +590,11 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 	if settings.CSPMode != nil {
 		if _, ok := securityheaders.ParseCSPMode(*settings.CSPMode); !ok {
 			return fmt.Errorf("csp_mode must be strict, compatible, off, or empty for automatic")
+		}
+	}
+	if settings.Template != nil {
+		if _, ok := statustemplate.LookupBuiltin(*settings.Template); !ok {
+			return fmt.Errorf("template must be one of: %s", strings.Join(statustemplate.BuiltinNames(), ", "))
 		}
 	}
 	if settings.SEOTitle != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEOTitle)) > models.MaxSEOTitleLength {

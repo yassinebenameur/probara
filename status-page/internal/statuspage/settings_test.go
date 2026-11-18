@@ -108,3 +108,24 @@ func TestParseStatusPageSettings_EmailSubscriptions(t *testing.T) {
 		t.Fatal("enable_email_subscriptions not read")
 	}
 }
+
+// The template setting reaches the renderer: absent is the default, a known
+// name is kept, an unknown one (a newer release's row) reads as the default.
+// The API write mirror has the matching round trip (api statuspages
+// settings_test).
+func TestParseStatusPageSettings_Template(t *testing.T) {
+	if got := parseStatusPageSettings(nil).Template; got != "default" {
+		t.Fatalf("absent template = %q, want default", got)
+	}
+	for raw, want := range map[string]string{
+		`{"template":"classic"}`: "classic",
+		`{"template":"Classic"}`: "classic",
+		`{"template":"default"}`: "default",
+		`{"template":"modern"}`:  "default",
+		`{"template":""}`:        "default",
+	} {
+		if got := parseStatusPageSettings([]byte(raw)).Template; got != want {
+			t.Errorf("%s: template = %q, want %q", raw, got, want)
+		}
+	}
+}

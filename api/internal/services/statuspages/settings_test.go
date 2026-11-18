@@ -190,3 +190,41 @@ func TestCheckSubscriptionsEnable(t *testing.T) {
 		t.Fatalf("refused with mail ready: %v", err)
 	}
 }
+
+// template survives the write path: "default" for a page that never set
+// it, stored by applyPatch, kept by the JSON, returned by toAPI, left alone
+// by a patch that omits it, and the stored JSON is what the status-page read
+// mirror parses (its TestParseStatusPageSettings_Template).
+func TestStatusPageSettings_TemplateRoundTrip(t *testing.T) {
+	if got := defaultStatusPageSettings().toAPI().Template; got == nil || *got != "default" {
+		t.Fatalf("default toAPI Template = %v, want default", got)
+	}
+	if got := parseStatusPageSettings([]byte(`{"show_footer":true}`)).toAPI().Template; got == nil || *got != "default" {
+		t.Fatalf("a page stored before the setting must read as default, got %v", got)
+	}
+
+	classic := "Classic"
+	stored := defaultStatusPageSettings().applyPatch(&models.StatusPageSettings{Template: &classic})
+	raw, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]any
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	if keys["template"] != "classic" {
+		t.Fatalf("stored JSON = %s", raw)
+	}
+	reread := parseStatusPageSettings(raw)
+	if got := reread.toAPI().Template; got == nil || *got != "classic" {
+		t.Fatalf("toAPI Template = %v, want classic", got)
+	}
+	if kept := reread.applyPatch(&models.StatusPageSettings{}); kept.Template != "classic" {
+		t.Fatalf("an absent template changed the stored one: %q", kept.Template)
+	}
+	back := "default"
+	if reset := reread.applyPatch(&models.StatusPageSettings{Template: &back}); reset.Template != "default" {
+		t.Fatalf("template default = %q", reset.Template)
+	}
+}
