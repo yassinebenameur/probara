@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -216,6 +217,12 @@ const (
 	classProxyGated routeClass = "proxy-gated"
 	// classDispatcher: the per-page dispatcher itself.
 	classDispatcher routeClass = "dispatcher"
+	// classSubscriptionLink: a subscriber mail's link routes, exempt from
+	// authorize so unsubscribing works whatever the page's visibility
+	// became. They never read the page: a private page and a missing slug
+	// answer alike (up to the per-response CSP nonce), and with no page
+	// content.
+	classSubscriptionLink routeClass = "subscription-link"
 )
 
 // routeTable is every route the status-page service serves: the server mux
@@ -243,6 +250,13 @@ var routeTable = []struct {
 	{"/preview/draft", classPreviewToken, http.MethodGet},
 	{"/push/subscribe", classGated, http.MethodPost},
 	{"/push/unsubscribe", classGated, http.MethodPost},
+	// Email subscriptions (subscribe.go): the form is forwarded to the API
+	// after the gate (gated pages answer "not available" behind it); the
+	// mail links are answered from their token alone.
+	{"/subscribe", classGated, http.MethodPost},
+	{"/subscription", classSubscriptionLink, http.MethodGet},
+	{"/subscription/confirm", classSubscriptionLink, http.MethodPost},
+	{"/subscription/unsubscribe", classSubscriptionLink, http.MethodPost},
 	{"/unlock", classUnlock, http.MethodPost},
 	// Page add-ons (addons.go pageAddonRoutes): gated like the page, and
 	// private on a gated page (gatedPageRequest).
@@ -421,16 +435,16 @@ func TestAccess_PrivateIsIndistinguishableFromMissing(t *testing.T) {
 				apply(missing)
 				a, b := f.do(private), f.do(missing)
 				label := method + " " + row.route + " (" + credName + ")"
-				if a.Code != b.Code || a.Body.String() != b.Body.String() {
+				if a.Code != b.Code || withoutNonce(a.Body.String()) != withoutNonce(b.Body.String()) {
 					t.Errorf("%s: private %d %q vs missing %d %q", label, a.Code, a.Body.String(), b.Code, b.Body.String())
 				}
-				if !equalHeaders(a.Header(), b.Header()) {
+				if !equalHeaders(nonceFree(a.Header()), nonceFree(b.Header())) {
 					t.Errorf("%s: headers differ:\nprivate %v\nmissing %v", label, a.Header(), b.Header())
 				}
-				if strings.Contains(a.Body.String(), pageSentinel) {
+				if strings.Contains(a.Body.String(), pageSentinel) || strings.Contains(a.Body.String(), "Internal") {
 					t.Errorf("%s: private page content served", label)
 				}
-				if a.Code != http.StatusNotFound {
+				if a.Code != http.StatusNotFound && row.class != classSubscriptionLink {
 					t.Errorf("%s: private = %d, want 404", label, a.Code)
 				}
 			}
@@ -940,3 +954,20 @@ func decodeB64(s string) (string, error) {
 }
 
 func encodeB64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+var nonceRE = regexp.MustCompile(`nonce[-=]"?[A-Za-z0-9+/=_-]+`)
+
+// withoutNonce blanks per-response CSP nonces, the one part of a rendered
+// answer that differs between two identical requests.
+func withoutNonce(v string) string { return nonceRE.ReplaceAllString(v, "nonce") }
+
+func nonceFree(h http.Header) http.Header {
+	out := h.Clone()
+	for k, vs := range out {
+		for i, v := range vs {
+			vs[i] = withoutNonce(v)
+		}
+		out[k] = vs
+	}
+	return out
+}

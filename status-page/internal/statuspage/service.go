@@ -79,6 +79,11 @@ type StatusPageData struct {
 	// handler from STATUS_PAGE_BASE_URL like PushPublicKey; "" when the
 	// deployment does not name its public origin.
 	CanonicalURL string `json:"-"`
+	// EmailSubscriptionsEnabled is the page's enable_email_subscriptions;
+	// SubscribeFormEnabled, set by the handler, is that AND a public or
+	// unlisted page AND a configured API to forward to (subscribe.go).
+	EmailSubscriptionsEnabled bool `json:"-"`
+	SubscribeFormEnabled      bool `json:"-"`
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (1-min buckets)
@@ -415,6 +420,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.SEOTitle = settings.SEOTitle
 	page.SEODescription = settings.SEODescription
 	page.AllowSearchIndexing = settings.AllowSearchIndexing
+	page.EmailSubscriptionsEnabled = settings.EnableEmailSubscriptions
 
 	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
 		return nil, fmt.Errorf("failed to get custom template: %w", err)

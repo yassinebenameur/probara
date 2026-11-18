@@ -107,7 +107,15 @@ var workspacePurgePlan = []purgeStep{
 	byTenant("discovered_services"),
 	byTenant("discovery_integrations"),
 
-	// Status pages (their slugs are unique across workspaces).
+	// Status pages (their slugs are unique across workspaces). Email
+	// subscribers (visitors' addresses) first: deliveries before the outbox
+	// rows and subscribers they reference, the outbox before the incidents,
+	// timeline entries, maintenance windows and pages it references.
+	// status_page_confirmation_sends holds no tenant (inbox hashes only) and
+	// is pruned by age by the API's subscriber runner.
+	byTenant("status_page_notification_deliveries"),
+	byTenant("status_page_notification_outbox"),
+	byTenant("status_page_subscribers"),
 	viaParent("status_page_push_subscriptions", `JOIN status_pages p ON p.id = c.status_page_id WHERE p.tenant_id = $1`),
 	viaParent("status_page_push_deliveries", `JOIN status_pages p ON p.id = c.status_page_id WHERE p.tenant_id = $1`),
 	viaParent("incident_status_page_monitors", `JOIN incidents i ON i.id = c.incident_id WHERE i.tenant_id = $1`),

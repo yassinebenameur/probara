@@ -1824,6 +1824,32 @@
         </article>
       {{end}}
     </section>
+
+    {{if .SubscribeEnabled}}
+    <section class="incidents-section subscribe-section" id="subscribeSection" aria-labelledby="subscribeHeading">
+      <style>
+        .subscribe-card { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
+        .subscribe-copy { flex: 1 1 260px; }
+        .subscribe-copy h2 { margin: 0 0 4px; font-size: 1rem; font-weight: 600; }
+        .subscribe-copy p { margin: 0; color: var(--text-muted); font-size: .85rem; }
+        .subscribe-form { display: flex; flex: 1 1 320px; gap: 8px; }
+        .subscribe-form label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+        .subscribe-form input { flex: 1; min-width: 0; min-height: 34px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); font: inherit; font-size: .85rem; }
+        .subscribe-form input:focus-visible, .subscribe-form button:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+      </style>
+      <div class="inc-card subscribe-card">
+        <div class="subscribe-copy">
+          <h2 id="subscribeHeading">Get updates by email</h2>
+          <p>We email you when an incident is posted, updated or resolved here, and when maintenance is scheduled. You confirm your address first, and every email has an unsubscribe link.</p>
+        </div>
+        <form class="subscribe-form" method="post" action="{{.SubscribeAction}}">
+          <label for="subscribeEmail">Email address</label>
+          <input id="subscribeEmail" name="email" type="email" autocomplete="email" inputmode="email" required maxlength="254" placeholder="you@example.com" />
+          <button type="submit" class="btn-s">Subscribe</button>
+        </form>
+      </div>
+    </section>
+    {{end}}
   </main>
 
   {{if .ShowFooter}}

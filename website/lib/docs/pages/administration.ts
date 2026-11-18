@@ -253,7 +253,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
             ],
             [
               "Within seconds",
-              "Its monitors are no longer dispatched, results still in flight are discarded, and the absence watchdog, mesh probes and maintenance windows skip it. Its status pages stop being served once the status-page cache expires (`STATUS_PAGE_CACHE_TTL`, 10 seconds by default) and visitor push stops. The alerter neither evaluates nor notifies for it: open alerts are left as they are and are not resolved (so its channels hear nothing), and notifications still queued are dropped. Scheduled SLA reports and AI analyses stop.",
+              "Its monitors are no longer dispatched, results still in flight are discarded, and the absence watchdog, mesh probes and maintenance windows skip it. Its status pages stop being served once the status-page cache expires (`STATUS_PAGE_CACHE_TTL`, 10 seconds by default) visitor push and subscriber email stop, and its subscription links answer as invalid. The alerter neither evaluates nor notifies for it: open alerts are left as they are and are not resolved (so its channels hear nothing), and notifications still queued are dropped. Scheduled SLA reports and AI analyses stop.",
             ],
             [
               "In the background",

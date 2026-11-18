@@ -11,31 +11,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/statuspagesql"
 )
 
 // pagePublicNameSQL is the name the page shows for the monitor aliased by
-// monAlias on the page pageExpr: its section display name, else its legacy
-// flat-layout display name, else the monitor's own name, trimmed the way
-// scanMonitorStatuses trims it. Incident and maintenance "affected" lists
-// use it so they never print an internal name the component list hides.
-// Both arguments are trusted SQL (an alias and a placeholder).
+// monAlias on the page pageExpr (shared/statuspagesql, which the API's
+// subscriber mail reads too). Incident and maintenance "affected" lists use
+// it so they never print an internal name the component list hides.
 func pagePublicNameSQL(pageExpr, monAlias string) string {
-	return `COALESCE((
-		SELECT NULLIF(btrim(dn.display_name), '')
-		FROM (
-			SELECT spsm.display_name, 0 AS priority
-			FROM status_page_section_monitors spsm
-			JOIN status_page_sections sps ON sps.id = spsm.section_id
-			WHERE sps.status_page_id = ` + pageExpr + ` AND spsm.monitor_id = ` + monAlias + `.id
-			UNION ALL
-			SELECT spm.display_name, 1 AS priority
-			FROM status_page_monitors spm
-			WHERE spm.status_page_id = ` + pageExpr + ` AND spm.monitor_id = ` + monAlias + `.id
-		) dn
-		ORDER BY dn.priority
-		LIMIT 1
-	), btrim(` + monAlias + `.name))`
+	return statuspagesql.PublicNameSQL(pageExpr, monAlias)
 }
 
 // loadMaintenanceWindows returns the maintenance windows with an occurrence
@@ -102,9 +88,38 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 // maxListedNextStarts caps the later starts a repeating window lists.
 const maxListedNextStarts = 3
 
+// publicIncidentTitleSQL and publicIncidentSummarySQL are what a page (its
+// render, /data, summary.json and feed) shows for incident i as published
+// on it (isp): the publication's public title and summary when it has them,
+// else the incident's own. An automatically created incident always has
+// them, because its own title names the internal monitor (migration
+// 000123). The API's subscriber mail and the push ledger read the same
+// columns.
+const (
+	publicIncidentTitleSQL   = "COALESCE(isp.public_title, i.title)"
+	publicIncidentSummarySQL = "COALESCE(isp.public_summary, i.summary, '')"
+)
+
+// withoutPublicTitles serves a database that has not run migration 000123
+// yet, where no publication has a public title.
+func withoutPublicTitles(query string) string {
+	query = strings.ReplaceAll(query, publicIncidentTitleSQL, "i.title")
+	return strings.ReplaceAll(query, publicIncidentSummarySQL, "COALESCE(i.summary, '')")
+}
+
+// queryPublicIncidents runs a query that reads the public title columns,
+// falling back for a database a migration behind.
+func (s *Service) queryPublicIncidents(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		return s.db.QueryContext(ctx, withoutPublicTitles(query), args...)
+	}
+	return rows, err
+}
+
 func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT i.id, i.title, COALESCE(i.summary, ''), i.state, isp.published_at, i.resolved_at
+	rows, err := s.queryPublicIncidents(ctx, `
+		SELECT i.id, `+publicIncidentTitleSQL+`, `+publicIncidentSummarySQL+`, i.state, isp.published_at, i.resolved_at
 		FROM incident_status_page_publications isp
 		JOIN incidents i ON i.id = isp.incident_id AND i.tenant_id = isp.tenant_id
 		WHERE isp.status_page_id = $1 AND isp.tenant_id = $2 AND isp.unpublished_at IS NULL

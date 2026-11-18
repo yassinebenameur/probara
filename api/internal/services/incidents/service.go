@@ -11,6 +11,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
+	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/db"
 )
@@ -410,10 +411,20 @@ func (s *Service) TransitionIncidentState(ctx context.Context, tenantID, inciden
 	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, message, nil); err != nil {
 		return nil, err
 	}
+	// Subscribers of the pages it is on hear about the resolution; other
+	// state changes carry no text of their own and are not mailed.
+	if req.State == models.IncidentStateResolved {
+		if err := pagenotify.IncidentResolvedTx(ctx, tx, tenantID, incidentID); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit incident transaction: %w", err)
 	}
+
+	// The pages show the state; re-render them (this also wakes visitor push).
+	s.publishIncidentStatusPageRefreshes(ctx, tenantID, incidentID)
 
 	return s.GetIncident(ctx, tenantID, incidentID)
 }

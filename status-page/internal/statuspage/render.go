@@ -93,6 +93,11 @@ type statusPageRenderView struct {
 	Robots          string
 	FeedURL         string
 	SummaryURL      string
+	// SubscribeEnabled shows the email subscribe form (subscribe.go);
+	// SubscribeAction is its target, a plain form POST that works without
+	// script. Custom templates may render the same form with these fields.
+	SubscribeEnabled bool
+	SubscribeAction  string
 }
 
 const (
@@ -326,6 +331,17 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 
 	if view.FooterText == "" {
 		view.FooterText = fmt.Sprintf("© %d %s", time.Now().UTC().Year(), data.Title)
+	}
+	if data.SubscribeFormEnabled {
+		// Host-independent like the feed link (the render is cached per
+		// slug and served on every host): the page's canonical origin, its
+		// custom domain when it has one, else the platform path.
+		view.SubscribeEnabled = true
+		base := strings.TrimRight(strings.TrimSpace(data.CanonicalURL), "/")
+		if base == "" {
+			base = "/public/status/" + data.Slug
+		}
+		view.SubscribeAction = base + subscribeSuffix
 	}
 
 	sections := data.Sections

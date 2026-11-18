@@ -5,14 +5,18 @@ package incidents
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/pagenotify"
+	"github.com/yassinebenameur/probara/shared/statuspagesql"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -34,6 +38,9 @@ func (s *Service) PublishIncidentToStatusPage(ctx context.Context, tenantID, inc
 	if err != nil {
 		return nil, err
 	}
+	if req.PublicTitle != nil && !validPublicTitle(*req.PublicTitle) {
+		return nil, errPublicTitle
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -54,40 +61,15 @@ func (s *Service) PublishIncidentToStatusPage(ctx context.Context, tenantID, inc
 	}
 	if isNoOp, err := s.isNoOpIncidentPublicationUpdate(ctx, tx, tenantID, incidentID, statusPageID, monitorIDs); err != nil {
 		return nil, err
-	} else if isNoOp {
+	} else if isNoOp && req.PublicTitle == nil {
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit incident transaction: %w", err)
 		}
 		return s.GetIncident(ctx, tenantID, incidentID)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO incident_status_page_publications (
-			incident_id, status_page_id, tenant_id, published_at, unpublished_at, created_at, updated_at
-		) VALUES ($1, $2, $3, NOW(), NULL, NOW(), NOW())
-		ON CONFLICT (incident_id, status_page_id) DO UPDATE
-		SET tenant_id = EXCLUDED.tenant_id,
-			published_at = NOW(),
-			unpublished_at = NULL,
-			updated_at = NOW()
-	`, incidentID, statusPageID, tenantID); err != nil {
-		return nil, fmt.Errorf("upsert incident publication: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM incident_status_page_monitors
-		WHERE incident_id = $1 AND status_page_id = $2
-	`, incidentID, statusPageID); err != nil {
-		return nil, fmt.Errorf("replace incident publication monitors: %w", err)
-	}
-
-	for _, monitorID := range monitorIDs {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO incident_status_page_monitors (incident_id, status_page_id, monitor_id, created_at)
-			VALUES ($1, $2, $3, NOW())
-		`, incidentID, statusPageID, monitorID); err != nil {
-			return nil, fmt.Errorf("insert incident publication monitor: %w", err)
-		}
+	if _, err := PublishTx(ctx, tx, tenantID, incidentID, statusPageID, monitorIDs, PublishOptions{PublicTitle: req.PublicTitle}); err != nil {
+		return nil, err
 	}
 
 	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Incident published to status page", map[string]interface{}{
@@ -104,6 +86,157 @@ func (s *Service) PublishIncidentToStatusPage(ctx context.Context, tenantID, inc
 	s.publishStatusPageRefresh(tenantID, statusPageID)
 
 	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
+// The public wording of an automatically created incident. Its own title
+// and summary name the internal monitor ("<monitor> incident", written by
+// the alerter or by automatic publishing), so a public surface never shows
+// them: every publication of such an incident carries a public title of its
+// own, AutoPublicTitle followed by the page's names for the components it
+// lists, and AutoPublicSummary.
+const (
+	AutoPublicTitle   = "Service disruption"
+	AutoPublicSummary = "We are seeing a disruption on the components listed below and are looking into it."
+	maxPublicTitle    = 200
+)
+
+var errPublicTitle = errors.New("public title must be at most 200 characters on one line")
+
+func validPublicTitle(v string) bool {
+	if utf8.RuneCountInString(strings.TrimSpace(v)) > maxPublicTitle {
+		return false
+	}
+	for _, r := range v {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return false
+		}
+	}
+	return true
+}
+
+// PublishOptions are how a publication is made.
+type PublishOptions struct {
+	// Auto marks a publication made by automatic outage publishing
+	// (pagesubscribers); an operator publishing the same incident again
+	// makes it theirs.
+	Auto bool
+	// PublicTitle: nil keeps the publication's current public title, ""
+	// goes back to the default, anything else replaces it.
+	PublicTitle *string
+}
+
+// PublishTx puts the incident on the page with exactly monitorIDs as its
+// affected components, in the caller's transaction, and reports whether the
+// page newly shows it (it was not published there, or was taken down). Only
+// then does it write the page's notification outbox row
+// (pagenotify.IncidentPublishedTx): changing the components of a live
+// publication announces nothing. It sets the publication's public title (see
+// AutoPublicTitle). The caller has checked the incident, the page and the
+// monitors belong to the tenant.
+func PublishTx(ctx context.Context, tx *sql.Tx, tenantID, incidentID, statusPageID uuid.UUID, monitorIDs []uuid.UUID, opts PublishOptions) (bool, error) {
+	var wasLive bool
+	var currentTitle sql.NullString
+	err := tx.QueryRowContext(ctx, `
+		SELECT unpublished_at IS NULL, public_title
+		FROM incident_status_page_publications
+		WHERE incident_id = $1 AND status_page_id = $2
+		FOR UPDATE
+	`, incidentID, statusPageID).Scan(&wasLive, &currentTitle)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("load incident publication: %w", err)
+	}
+	var autoCreated bool
+	if err := tx.QueryRowContext(ctx, `SELECT is_auto_created FROM incidents WHERE id = $1 AND tenant_id = $2`,
+		incidentID, tenantID).Scan(&autoCreated); err != nil {
+		return false, fmt.Errorf("load incident: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO incident_status_page_publications (
+			incident_id, status_page_id, tenant_id, published_at, unpublished_at, created_at, updated_at, auto_published
+		) VALUES ($1, $2, $3, NOW(), NULL, NOW(), NOW(), $4)
+		ON CONFLICT (incident_id, status_page_id) DO UPDATE
+		SET tenant_id = EXCLUDED.tenant_id,
+			published_at = NOW(),
+			unpublished_at = NULL,
+			updated_at = NOW(),
+			auto_published = EXCLUDED.auto_published
+	`, incidentID, statusPageID, tenantID, opts.Auto); err != nil {
+		return false, fmt.Errorf("upsert incident publication: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM incident_status_page_monitors
+		WHERE incident_id = $1 AND status_page_id = $2
+	`, incidentID, statusPageID); err != nil {
+		return false, fmt.Errorf("replace incident publication monitors: %w", err)
+	}
+
+	for _, monitorID := range monitorIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO incident_status_page_monitors (incident_id, status_page_id, monitor_id, created_at)
+			VALUES ($1, $2, $3, NOW())
+		`, incidentID, statusPageID, monitorID); err != nil {
+			return false, fmt.Errorf("insert incident publication monitor: %w", err)
+		}
+	}
+
+	title := currentTitle
+	if opts.PublicTitle != nil {
+		v := strings.TrimSpace(*opts.PublicTitle)
+		title = sql.NullString{String: v, Valid: v != ""}
+	}
+	var summary sql.NullString
+	if autoCreated {
+		summary = sql.NullString{String: AutoPublicSummary, Valid: true}
+		if !title.Valid {
+			composed, err := composeAutoPublicTitle(ctx, tx, incidentID, statusPageID)
+			if err != nil {
+				return false, err
+			}
+			title = sql.NullString{String: composed, Valid: true}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE incident_status_page_publications SET public_title = $3, public_summary = $4
+		WHERE incident_id = $1 AND status_page_id = $2
+	`, incidentID, statusPageID, title, summary); err != nil {
+		return false, fmt.Errorf("set incident public title: %w", err)
+	}
+
+	if wasLive {
+		return false, nil
+	}
+	if err := pagenotify.IncidentPublishedTx(ctx, tx, tenantID, incidentID, statusPageID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// composeAutoPublicTitle is AutoPublicTitle followed by the names the page
+// gives the publication's components, e.g. "Service disruption: Checkout,
+// Search".
+func composeAutoPublicTitle(ctx context.Context, tx *sql.Tx, incidentID, statusPageID uuid.UUID) (string, error) {
+	var names sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT string_agg(name, ', ' ORDER BY name)
+		FROM (
+			SELECT DISTINCT `+statuspagesql.PublicNameSQL("$2", "m")+` AS name
+			FROM incident_status_page_monitors ispm
+			JOIN monitors m ON m.id = ispm.monitor_id AND m.deleted_at IS NULL
+			WHERE ispm.incident_id = $1 AND ispm.status_page_id = $2
+		) n
+	`, incidentID, statusPageID).Scan(&names); err != nil {
+		return "", fmt.Errorf("name incident components: %w", err)
+	}
+	title := AutoPublicTitle
+	if strings.TrimSpace(names.String) != "" {
+		title += ": " + strings.TrimSpace(names.String)
+	}
+	if r := []rune(title); len(r) > maxPublicTitle {
+		title = strings.TrimSpace(string(r[:maxPublicTitle-1])) + "…"
+	}
+	return title, nil
 }
 
 // UnpublishIncidentFromStatusPage removes an incident publication from a status page.
@@ -215,7 +348,7 @@ func (s *Service) loadActiveStatusPageIDsForIncident(ctx context.Context, tenant
 
 func (s *Service) loadIncidentPublications(ctx context.Context, tenantID, incidentID uuid.UUID) ([]models.IncidentPublication, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT isp.status_page_id, sp.slug, sp.title, isp.published_at, isp.unpublished_at,
+		SELECT isp.status_page_id, sp.slug, sp.title, isp.published_at, isp.unpublished_at, isp.public_title, isp.auto_published,
 			COALESCE(
 				array_agg(ispm.monitor_id ORDER BY ispm.monitor_id) FILTER (WHERE ispm.monitor_id IS NOT NULL),
 				'{}'
@@ -225,7 +358,7 @@ func (s *Service) loadIncidentPublications(ctx context.Context, tenantID, incide
 		LEFT JOIN incident_status_page_monitors ispm
 			ON ispm.incident_id = isp.incident_id AND ispm.status_page_id = isp.status_page_id
 		WHERE isp.incident_id = $1 AND isp.tenant_id = $2 AND isp.unpublished_at IS NULL
-		GROUP BY isp.status_page_id, sp.slug, sp.title, isp.published_at, isp.unpublished_at
+		GROUP BY isp.status_page_id, sp.slug, sp.title, isp.published_at, isp.unpublished_at, isp.public_title, isp.auto_published
 		ORDER BY isp.published_at DESC, isp.status_page_id
 	`, incidentID, tenantID)
 	if err != nil {
@@ -237,9 +370,11 @@ func (s *Service) loadIncidentPublications(ctx context.Context, tenantID, incide
 	for rows.Next() {
 		var item models.IncidentPublication
 		var unpublishedAt sql.NullTime
+		var publicTitle sql.NullString
 		monitorIDs := make([]uuid.UUID, 0)
 		if err := rows.Scan(
-			&item.StatusPageID, &item.StatusPageSlug, &item.StatusPageTitle, &item.PublishedAt, &unpublishedAt, pq.Array(&monitorIDs),
+			&item.StatusPageID, &item.StatusPageSlug, &item.StatusPageTitle, &item.PublishedAt, &unpublishedAt,
+			&publicTitle, &item.AutoPublished, pq.Array(&monitorIDs),
 		); err != nil {
 			return nil, fmt.Errorf("scan incident publication: %w", err)
 		}
@@ -248,6 +383,10 @@ func (s *Service) loadIncidentPublications(ctx context.Context, tenantID, incide
 			item.UnpublishedAt = &value
 		}
 		item.MonitorIDs = monitorIDs
+		if publicTitle.Valid {
+			v := publicTitle.String
+			item.PublicTitle = &v
+		}
 		publications = append(publications, item)
 	}
 	if err := rows.Err(); err != nil {

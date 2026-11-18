@@ -113,6 +113,7 @@ func writeIncidentError(w http.ResponseWriter, err error) {
 		"invalid monitor ID",
 		"message is required",
 		"selected monitors must be linked to the incident and status page",
+		"public title must be at most 200 characters on one line",
 		"resolved incidents cannot be reopened":
 		apierrors.WriteValidationError(w, err.Error())
 	default:
@@ -156,6 +157,7 @@ func isIncidentExpectedMutationError(err error) bool {
 		"invalid monitor ID",
 		"invalid incident severity",
 		"invalid owner user id",
+		"public title must be at most 200 characters on one line",
 		"selected monitors must be linked to the incident and status page":
 		return true
 	default:

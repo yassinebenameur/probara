@@ -67,6 +67,9 @@ type statusPageSettingsStored struct {
 	SEOTitle            *string `json:"seo_title,omitempty"`
 	SEODescription      *string `json:"seo_description,omitempty"`
 	AllowSearchIndexing bool    `json:"allow_search_indexing"`
+
+	EnableEmailSubscriptions bool `json:"enable_email_subscriptions"`
+	AutoPublishIncidents     bool `json:"auto_publish_incidents"`
 }
 
 type statusPageSectionInput struct {
@@ -180,6 +183,12 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 	if patch.AllowSearchIndexing != nil {
 		s.AllowSearchIndexing = *patch.AllowSearchIndexing
 	}
+	if patch.EnableEmailSubscriptions != nil {
+		s.EnableEmailSubscriptions = *patch.EnableEmailSubscriptions
+	}
+	if patch.AutoPublishIncidents != nil {
+		s.AutoPublishIncidents = *patch.AutoPublishIncidents
+	}
 	return s
 }
 
@@ -209,7 +218,9 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 	enablePushNotifications := s.EnablePushNotifications
 	cspMode := s.CSPMode
 	allowSearchIndexing := s.AllowSearchIndexing
-	return &models.StatusPageSettings{
+	enableEmailSubscriptions := s.EnableEmailSubscriptions
+	autoPublishIncidents := s.AutoPublishIncidents
+	out := &models.StatusPageSettings{
 		ShowMonitorTags:         &showMonitorTags,
 		ShowMonitorURL:          &showMonitorURL,
 		ShowMonitorUptime:       &showMonitorUptime,
@@ -230,6 +241,10 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 		SEODescription:          s.SEODescription,
 		AllowSearchIndexing:     &allowSearchIndexing,
 	}
+	// Set apart from the literal above so its alignment stays put.
+	out.EnableEmailSubscriptions = &enableEmailSubscriptions
+	out.AutoPublishIncidents = &autoPublishIncidents
+	return out
 }
 
 // statusPagePublisher publishes cache-invalidation events for the public
@@ -242,6 +257,37 @@ type statusPagePublisher interface {
 type Service struct {
 	db        *db.Client
 	publisher statusPagePublisher
+	// subscriberMailProblems says why this API cannot mail status-page
+	// subscribers (nil: never configured, which reads as "cannot").
+	subscriberMailProblems func() []string
+}
+
+// ErrSubscriptionsUnavailable: email subscriptions were turned on while the
+// API cannot mail subscribers. Returned wrapped with the reasons.
+var ErrSubscriptionsUnavailable = errors.New("email subscriptions cannot be enabled on this installation")
+
+// ConfigureSubscriberMail installs the check that refuses turning email
+// subscriptions on while subscriber mail cannot be sent
+// (pagesubscribers.Service.MailProblems).
+func (s *Service) ConfigureSubscriberMail(problems func() []string) {
+	s.subscriberMailProblems = problems
+}
+
+// checkSubscriptionsEnable refuses turning enable_email_subscriptions on
+// (from off) when subscriber mail cannot be sent. A page already on keeps
+// saving: the setting stays, and the runner says why nothing goes out.
+func (s *Service) checkSubscriptionsEnable(was bool, patch *models.StatusPageSettings) error {
+	if was || patch == nil || patch.EnableEmailSubscriptions == nil || !*patch.EnableEmailSubscriptions {
+		return nil
+	}
+	problems := []string{"subscriber mail is not configured on this API."}
+	if s.subscriberMailProblems != nil {
+		problems = s.subscriberMailProblems()
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w. %s", ErrSubscriptionsUnavailable, strings.Join(problems, " "))
 }
 
 // NewService creates a new status page service. publisher may be nil.
@@ -276,6 +322,9 @@ func (s *Service) CreateStatusPage(ctx context.Context, tenantID uuid.UUID, req 
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(), $10, $11, $12)
 	`
 
+	if err := s.checkSubscriptionsEnable(false, req.Settings); err != nil {
+		return nil, err
+	}
 	settingsStored := defaultStatusPageSettings().applyPatch(req.Settings)
 	settingsJSON, _ := json.Marshal(settingsStored)
 	if _, err := tx.ExecContext(ctx, query,
@@ -454,7 +503,11 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 			}
 			return nil, fmt.Errorf("failed to get existing settings: %w", err)
 		}
-		mergedJSON, _ := json.Marshal(parseStatusPageSettings(existingJSON).applyPatch(req.Settings))
+		existing := parseStatusPageSettings(existingJSON)
+		if err := s.checkSubscriptionsEnable(existing.EnableEmailSubscriptions, req.Settings); err != nil {
+			return nil, err
+		}
+		mergedJSON, _ := json.Marshal(existing.applyPatch(req.Settings))
 		setParts = append(setParts, fmt.Sprintf("settings = $%d", argIndex))
 		args = append(args, mergedJSON)
 		argIndex++

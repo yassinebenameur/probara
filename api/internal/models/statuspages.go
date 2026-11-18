@@ -46,6 +46,19 @@ type StatusPageSettings struct {
 	// AllowSearchIndexing lets search engines index the page. On by
 	// default; off sends noindex in a robots meta tag and X-Robots-Tag.
 	AllowSearchIndexing *bool `json:"allow_search_indexing,omitempty"`
+	// EnableEmailSubscriptions shows a subscribe form on the public page:
+	// visitors confirm their address by a link (double opt-in) and are then
+	// mailed when an incident is published, updated or resolved there and
+	// when maintenance is scheduled (api/internal/services/pagesubscribers).
+	// Off by default. Turning it on needs the API's mailer, APP_BASE_URL,
+	// STATUS_PAGE_BASE_URL and PROBARA_SECRETS_KEY; it has no effect on
+	// password and private pages.
+	EnableEmailSubscriptions *bool `json:"enable_email_subscriptions,omitempty"`
+	// AutoPublishIncidents publishes a monitor's outage to the page when a
+	// monitor the page shows has been down for AutoPublishDelay (outside
+	// maintenance, not explained by a dependency, not recovering), and
+	// resolves it when the monitor recovers. Off by default.
+	AutoPublishIncidents *bool `json:"auto_publish_incidents,omitempty"`
 }
 
 // Bounds of the SEO overrides. Search results show about 60 and 160

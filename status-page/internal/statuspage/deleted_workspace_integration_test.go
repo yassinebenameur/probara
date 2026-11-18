@@ -152,7 +152,10 @@ func TestDeletedWorkspacePagesAreMissingOnEveryRoute(t *testing.T) {
 			for _, method := range []string{row.method, http.MethodGet, http.MethodPost} {
 				a := do(notFoundRequest(method, "/public/status/"+slug+row.route))
 				b := do(notFoundRequest(method, "/public/status/no-such-page"+row.route))
-				if a.Code != b.Code || a.Body.String() != b.Body.String() || !equalHeaders(a.Header(), b.Header()) {
+				// The subscription link landing carries a fresh CSP nonce per
+				// answer; only that may differ.
+				if a.Code != b.Code || withoutNonce(a.Body.String()) != withoutNonce(b.Body.String()) ||
+					!equalHeaders(nonceFree(a.Header()), nonceFree(b.Header())) {
 					t.Errorf("%s %s%s: deleted %d %v %q / missing %d %v %q", method, slug, row.route,
 						a.Code, a.Header(), a.Body.String(), b.Code, b.Header(), b.Body.String())
 				}

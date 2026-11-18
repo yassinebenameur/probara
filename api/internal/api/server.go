@@ -68,6 +68,7 @@ import (
 	oidcauthservice "github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	oidcmappingsservice "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
+	pagesubscriberservice "github.com/yassinebenameur/probara/api/internal/services/pagesubscribers"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	reportscheduleservice "github.com/yassinebenameur/probara/api/internal/services/reportschedules"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
@@ -100,6 +101,7 @@ type Server struct {
 	auditPruner        *auditservice.Pruner
 	sessionPruner      *adminauthservice.SessionPruner
 	reportRunner       *reportscheduleservice.Runner
+	subscriberRunner   *pagesubscriberservice.Runner
 	domainRunner       *statuspagedomainservice.Runner
 	locationAuthorizer *locationnatsauthservice.Service
 	locationAuth       *callout.AuthorizationService
@@ -215,6 +217,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	// Emailed SLA report schedules and their runner (routes_reportschedules.go).
 	reportScheduleHandlers, reportRunner := newReportSchedules(cfg, dbClient, auditRecorder, log)
+	// Status-page email subscribers and their runner (routes_statuspage_subscribers.go).
+	subscriberHandlers, subscriberRunner := newStatusPageSubscribers(cfg, dbClient, auditRecorder, statusPublisher, log)
 
 	// Status page custom domains and their re-verification runner (routes_statuspage_domains.go).
 	domainHandlers, domainRunner := newStatusPageDomains(cfg, dbClient, statusPublisher, auditRecorder, log)
@@ -267,6 +271,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 		mountAlertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_alertactions.go)
 		mountReportUnsubscribeRoutes(r, reportScheduleHandlers)           // signed unsubscribe links of report emails
+		mountStatusPageSubscriberPublicRoutes(r, subscriberHandlers)      // status-page subscribe forward and subscriber mail links
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -417,8 +422,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Status pages
 			statusPageService := statuspageservice.NewService(dbClient, statusPublisher)
+			statusPageService.ConfigureSubscriberMail(subscriberHandlers.Service.SubscriptionProblems)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
-			mountStatusPageRoutes(r, statusPageHandlers)
+			mountStatusPageRoutes(r, statusPageHandlers, subscriberHandlers.Routes)
 			mountStatusPageDomainRoutes(r, domainHandlers)
 
 			// Tenants (membership-filtered for members, all for superadmins)
@@ -463,6 +469,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		auditPruner:        auditPruner,
 		sessionPruner:      sessionPruner,
 		reportRunner:       reportRunner,
+		subscriberRunner:   subscriberRunner,
 		domainRunner:       domainRunner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
@@ -516,6 +523,9 @@ func (s *Server) Start() error {
 	if s.reportRunner != nil {
 		s.reportRunner.Start()
 	}
+	if s.subscriberRunner != nil {
+		s.subscriberRunner.Start()
+	}
 	if s.domainRunner != nil {
 		s.domainRunner.Start()
 	}
@@ -541,6 +551,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// records its send event.
 	if s.reportRunner != nil {
 		s.reportRunner.Stop()
+	}
+	if s.subscriberRunner != nil {
+		s.subscriberRunner.Stop()
 	}
 	if s.domainRunner != nil {
 		s.domainRunner.Stop()

@@ -232,6 +232,22 @@ func TestOpenAPIResponsesMatchHandlers(t *testing.T) {
 	check(post, "/status-pages/{id}/access-tokens/{accessTokenId}/revoke",
 		"/api/v1/status-pages/"+pageID+"/access-tokens/"+tokenID+"/revoke", nil, noContent)
 
+	// Status page email subscribers (visitors subscribe through the public
+	// page; seed two): summary, list, remove one, remove by domain.
+	var subscriberID string
+	if err := f.db.QueryRowContext(f.ctx, `
+		INSERT INTO status_page_subscribers (tenant_id, status_page_id, email, email_hash, inbox_hash, state, confirmed_at)
+		VALUES ($1, $2, 'one@openapi.example.com', md5('one') || md5('one'), md5('one') || md5('one'), 'confirmed', NOW()),
+		       ($1, $2, 'two@openapi.example.com', md5('two') || md5('two'), md5('two') || md5('two'), 'pending', NULL)
+		RETURNING id`, f.tenantA, pageID).Scan(&subscriberID); err != nil {
+		t.Fatal(err)
+	}
+	subscribers := "/api/v1/status-pages/" + pageID + "/subscribers"
+	check(get, "/status-pages/{id}/subscribers/summary", subscribers+"/summary", nil, ok)
+	nonEmptyList(check(get, "/status-pages/{id}/subscribers", subscribers, nil, ok))
+	check(post, "/status-pages/{id}/subscribers/{subscriberId}/remove", subscribers+"/"+subscriberID+"/remove", nil, noContent)
+	check(post, "/status-pages/{id}/subscribers/remove", subscribers+"/remove", map[string]any{"domain": "openapi.example.com"}, ok)
+
 	// Status page custom domains: add, list, verify (its DNS lookups fail or
 	// time out here, which is recorded and still answers the domain), remove.
 	domainID := idOf(check(post, "/status-page-domains", "/api/v1/status-page-domains",

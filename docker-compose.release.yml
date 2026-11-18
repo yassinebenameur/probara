@@ -95,7 +95,8 @@ services:
       # create the first administrator; the form asks for this code instead.
       BOOTSTRAP_SETUP_CODE: "${BOOTSTRAP_SETUP_CODE:?BOOTSTRAP_SETUP_CODE is required (scripts/install.sh generates .env)}"
       # Same origin as on status-page: the API hands it to the UI, whose
-      # prebuilt image cannot know it, for status-page links and previews.
+      # prebuilt image cannot know it, for status-page links and previews,
+      # and subscriber mail links pages without a custom domain there.
       STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-}"
       # wss://... address private-location workers dial (the websocket
       # listener behind your TLS proxy on 443); empty disables the deploy
@@ -115,6 +116,7 @@ services:
       SMTP_FROM: "${SMTP_FROM:-}"
       SMTP_FROM_NAME: "${SMTP_FROM_NAME:-}"
       APP_BASE_URL: "${APP_BASE_URL:-}"
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required (scripts/install.sh generates .env)}"
     ports: !reset []
     networks:
       probara-network: {}
@@ -161,6 +163,7 @@ services:
       STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-}"
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:?STATUS_PAGE_PREVIEW_SECRET is required}"
       STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:?STATUS_PAGE_SESSION_SECRET is required (scripts/install.sh generates .env)}"
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required}"
     ports: !override
       - "${PROBARA_STATUS_PAGE_PORT:-8082}:8082"
 

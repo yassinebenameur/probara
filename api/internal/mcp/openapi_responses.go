@@ -285,6 +285,12 @@ var successResponses = map[string]successResponse{
 	"remove_status_page_domain": noContent,
 	"plan_monitor_apply":        ok[models.MonitorApplyPlan](),
 	"apply_monitors":            ok[models.MonitorApplyResult](),
+	// statuspagesubscribers handlers: summary and list write the service's
+	// answer (200), bulk remove the count (200), single remove nothing (204).
+	"get_status_page_subscriber_summary": ok[models.StatusPageSubscriberSummary](),
+	"list_status_page_subscribers":       ok[models.StatusPageSubscriberListResponse](),
+	"remove_status_page_subscriber":      noContent,
+	"remove_status_page_subscribers":     ok[models.RemoveStatusPageSubscribersResponse](),
 
 	// Routes documented outside the catalog (openapi_routes.go)
 	"push_heartbeat":        ok[models.PushAcceptedResponse](),

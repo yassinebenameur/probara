@@ -311,3 +311,42 @@ func TestUnsubscribeActionIsSeparate(t *testing.T) {
 		t.Fatalf("ack token as unsubscribe: err = %v, want ErrInvalid", err)
 	}
 }
+
+// Subscriber confirmation links expire after two days, unsubscribe links
+// after a year, and no action's token authorizes another.
+func TestSubscriptionActionsAreSeparate(t *testing.T) {
+	s := signerAt(keyring{1: key1}, t0)
+	actions := map[string]time.Duration{
+		ActionConfirmSubscription: ConfirmSubscriptionTTL,
+		ActionUnsubscribePage:     UnsubscribeTTL,
+	}
+	others := []string{ActionAcknowledge, ActionUnsubscribeReport, ActionConfirmSubscription, ActionUnsubscribePage}
+	for action, ttl := range actions {
+		tok, err := s.ActionToken(action, tenant.String(), alert.String(), channel.String(), t0)
+		if err != nil {
+			t.Fatalf("%s: ActionToken: %v", action, err)
+		}
+		c, err := s.Verify(tok, action)
+		if err != nil || !c.ExpiresAt.Equal(t0.Add(ttl)) || c.AlertID != alert || c.ChannelID != channel {
+			t.Fatalf("%s: Verify = %+v, %v", action, c, err)
+		}
+		if _, err := signerAt(keyring{1: key1}, t0.Add(ttl)).Verify(tok, action); !errors.Is(err, ErrExpired) {
+			t.Fatalf("%s after its TTL: err = %v, want ErrExpired", action, err)
+		}
+		for _, other := range others {
+			if other == action {
+				continue
+			}
+			if _, err := s.Verify(tok, other); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("%s token as %s: err = %v, want ErrInvalid", action, other, err)
+			}
+		}
+	}
+	seen := map[byte]string{}
+	for action, code := range actionCodes {
+		if prev, dup := seen[code]; dup {
+			t.Fatalf("actions %s and %s share code %d", prev, action, code)
+		}
+		seen[code] = action
+	}
+}

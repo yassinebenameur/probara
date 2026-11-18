@@ -224,6 +224,7 @@ jobs:
           NATS_LOCATION_AUTH_ISSUER_PUBLIC_KEY: ACIPUBLIC
           BOOTSTRAP_SETUP_CODE: CICI-CICI-CICI-CICI
           STATUS_PAGE_SESSION_SECRET: ci-status-page-session-secret
+          STATUS_PAGE_INTERNAL_TOKEN: ci-status-page-internal-token
         run: docker compose -f docker-compose.yml -f docker-compose.release.yml config --quiet
       # Only the docker CLI: the issuer pair is pre-seeded and nothing starts.
       - name: Check the installer's .env handling

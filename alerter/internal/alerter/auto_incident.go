@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/autoincident"
 	"github.com/yassinebenameur/probara/shared/incidentrecovery"
 )
 
@@ -51,83 +52,30 @@ func (a *Alerter) ensureAutoIncidentForAlertTx(ctx context.Context, tx *sql.Tx, 
 	return nil
 }
 
+// findOrCreateAutoIncidentTx returns the monitor's open automatic incident,
+// creating it when there is none (shared/autoincident, which the API's
+// status-page auto-publish uses too, so both land on the same incident).
 func (a *Alerter) findOrCreateAutoIncidentTx(ctx context.Context, tx *sql.Tx, binding alertSubject) (uuid.UUID, bool, error) {
-	// One open auto incident per (tenant, monitor). The retired per-policy
-	// column on incidents is no longer named here (its drop migration follows
-	// one release later), so an open auto incident left over from the policy
-	// era is reused rather than shadowed by a second one — acceptable: it is
-	// the same monitor's incident.
-	var incidentID uuid.UUID
-	err := tx.QueryRowContext(ctx, `
-		SELECT id
-		FROM incidents
-		WHERE tenant_id = $1
-			AND is_auto_created = TRUE
-			AND auto_monitor_id = $2
-			AND state <> 'resolved'
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-		FOR UPDATE
-	`, binding.TenantID, binding.MonitorID).Scan(&incidentID)
-	if err == nil {
-		return incidentID, false, nil
-	}
-	if err != sql.ErrNoRows {
-		return uuid.Nil, false, fmt.Errorf("load auto incident: %w", err)
-	}
-
-	incidentID = uuid.New()
 	title, summary := buildAlerterAutoIncidentNarrative(binding.MonitorName)
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO incidents (
-			id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, 'investigating', TRUE, $5, NOW(), NOW())
-	`, incidentID, binding.TenantID, title, summary, binding.MonitorID); err != nil {
-		return uuid.Nil, false, fmt.Errorf("create auto incident: %w", err)
-	}
-
-	return incidentID, true, nil
+	return autoincident.FindOrCreateTx(ctx, tx, binding.TenantID, binding.MonitorID, title, summary)
 }
 
-// autoIncidentLockKey is the advisory-lock key that serializes auto-incident
-// creation for one monitor. The trailing nil UUID is where the retired alert
-// policy id used to sit; it stays so the key is byte-identical to the one an
-// older alerter replica computes, and the two still exclude each other during
-// a rolling deploy. Do not "simplify" it away.
+// autoIncidentLockKey is autoincident.LockKey, the key that serializes
+// automatic incident creation for one monitor across services and releases.
 func autoIncidentLockKey(tenantID, monitorID uuid.UUID) string {
-	return fmt.Sprintf("%s:%s:%s", tenantID, monitorID, uuid.Nil)
+	return autoincident.LockKey(tenantID, monitorID)
 }
 
 func (a *Alerter) lockAutoIncidentKeyTx(ctx context.Context, tx *sql.Tx, tenantID, monitorID uuid.UUID) error {
-	lockKey := autoIncidentLockKey(tenantID, monitorID)
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
-		return fmt.Errorf("lock auto incident key: %w", err)
-	}
-	return nil
+	return autoincident.LockTx(ctx, tx, tenantID, monitorID)
 }
 
 func (a *Alerter) ensureIncidentAlertLinkTx(ctx context.Context, tx *sql.Tx, incidentID, alertID uuid.UUID) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (incident_id, alert_id) DO NOTHING
-	`, incidentID, alertID)
-	if err != nil {
-		return false, fmt.Errorf("attach incident alert: %w", err)
-	}
-	return alerterMutationChanged(result), nil
+	return autoincident.LinkAlertTx(ctx, tx, incidentID, alertID)
 }
 
 func (a *Alerter) ensureIncidentMonitorLinkTx(ctx context.Context, tx *sql.Tx, incidentID, monitorID uuid.UUID) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO incident_monitors (incident_id, monitor_id, created_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (incident_id, monitor_id) DO NOTHING
-	`, incidentID, monitorID)
-	if err != nil {
-		return false, fmt.Errorf("attach incident monitor: %w", err)
-	}
-	return alerterMutationChanged(result), nil
+	return autoincident.LinkMonitorTx(ctx, tx, incidentID, monitorID)
 }
 
 func buildAlerterAutoIncidentNarrative(monitorName string) (string, string) {
@@ -139,13 +87,4 @@ func buildAlerterAutoIncidentNarrative(monitorName string) (string, string) {
 	}
 
 	return title, "Automatically created from a firing alert."
-}
-
-func alerterMutationChanged(result sql.Result) bool {
-	if result == nil {
-		return false
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	return err == nil && rowsAffected > 0
 }

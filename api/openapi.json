@@ -5071,6 +5071,9 @@
           "publications": {
             "items": {
               "properties": {
+                "auto_published": {
+                  "type": "boolean"
+                },
                 "monitor_ids": {
                   "items": {
                     "format": "uuid",
@@ -5079,6 +5082,12 @@
                   "type": [
                     "null",
                     "array"
+                  ]
+                },
+                "public_title": {
+                  "type": [
+                    "null",
+                    "string"
                   ]
                 },
                 "published_at": {
@@ -5108,7 +5117,8 @@
                 "status_page_slug",
                 "status_page_title",
                 "published_at",
-                "monitor_ids"
+                "monitor_ids",
+                "auto_published"
               ],
               "type": "object"
             },
@@ -7989,6 +7999,17 @@
         ],
         "type": "object"
       },
+      "RemoveStatusPageSubscribersResponse": {
+        "properties": {
+          "removed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "type": "object"
+      },
       "ResetTwoFactorResponse": {
         "properties": {
           "was_enabled": {
@@ -9665,6 +9686,12 @@
                   "boolean"
                 ]
               },
+              "auto_publish_incidents": {
+                "type": [
+                  "null",
+                  "boolean"
+                ]
+              },
               "csp_mode": {
                 "type": [
                   "null",
@@ -9693,6 +9720,12 @@
                 "type": [
                   "null",
                   "string"
+                ]
+              },
+              "enable_email_subscriptions": {
+                "type": [
+                  "null",
+                  "boolean"
                 ]
               },
               "enable_push_notifications": {
@@ -10329,6 +10362,12 @@
                         "boolean"
                       ]
                     },
+                    "auto_publish_incidents": {
+                      "type": [
+                        "null",
+                        "boolean"
+                      ]
+                    },
                     "csp_mode": {
                       "type": [
                         "null",
@@ -10357,6 +10396,12 @@
                       "type": [
                         "null",
                         "string"
+                      ]
+                    },
+                    "enable_email_subscriptions": {
+                      "type": [
+                        "null",
+                        "boolean"
                       ]
                     },
                     "enable_push_notifications": {
@@ -10487,6 +10532,209 @@
           "page",
           "page_size",
           "total"
+        ],
+        "type": "object"
+      },
+      "StatusPageSubscriberListResponse": {
+        "properties": {
+          "counts": {
+            "properties": {
+              "confirmed": {
+                "type": "integer"
+              },
+              "pending": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "confirmed",
+              "pending"
+            ],
+            "type": "object"
+          },
+          "items": {
+            "items": {
+              "properties": {
+                "confirmed_at": {
+                  "format": "date-time",
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "created_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                },
+                "id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "requested_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "email",
+                "state",
+                "created_at",
+                "requested_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "mail_problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "mail_ready": {
+            "type": "boolean"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "page_size": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total",
+          "counts",
+          "limit",
+          "mail_ready",
+          "mail_problems"
+        ],
+        "type": "object"
+      },
+      "StatusPageSubscriberSummary": {
+        "properties": {
+          "counts": {
+            "properties": {
+              "confirmed": {
+                "type": "integer"
+              },
+              "pending": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "confirmed",
+              "pending"
+            ],
+            "type": "object"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "mail_problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "mail_ready": {
+            "type": "boolean"
+          },
+          "recent": {
+            "items": {
+              "properties": {
+                "created_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "failed": {
+                  "type": "integer"
+                },
+                "id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "last_error": {
+                  "type": "string"
+                },
+                "recipients": {
+                  "type": "integer"
+                },
+                "sent": {
+                  "type": "integer"
+                },
+                "skip_reason": {
+                  "type": "string"
+                },
+                "skipped": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "uncertain": {
+                  "type": "integer"
+                },
+                "waiting": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "created_at",
+                "status",
+                "recipients",
+                "sent",
+                "waiting",
+                "failed",
+                "uncertain",
+                "skipped"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          }
+        },
+        "required": [
+          "counts",
+          "limit",
+          "mail_ready",
+          "mail_problems",
+          "recent"
         ],
         "type": "object"
       },
@@ -17244,6 +17492,12 @@
                     "type": [
                       "null",
                       "array"
+                    ]
+                  },
+                  "public_title": {
+                    "type": [
+                      "null",
+                      "string"
                     ]
                   }
                 },
@@ -24891,6 +25145,12 @@
                           "boolean"
                         ]
                       },
+                      "auto_publish_incidents": {
+                        "type": [
+                          "null",
+                          "boolean"
+                        ]
+                      },
                       "csp_mode": {
                         "type": [
                           "null",
@@ -24919,6 +25179,12 @@
                         "type": [
                           "null",
                           "string"
+                        ]
+                      },
+                      "enable_email_subscriptions": {
+                        "type": [
+                          "null",
+                          "boolean"
                         ]
                       },
                       "enable_push_notifications": {
@@ -25310,6 +25576,12 @@
                           "boolean"
                         ]
                       },
+                      "auto_publish_incidents": {
+                        "type": [
+                          "null",
+                          "boolean"
+                        ]
+                      },
                       "csp_mode": {
                         "type": [
                           "null",
@@ -25338,6 +25610,12 @@
                         "type": [
                           "null",
                           "string"
+                        ]
+                      },
+                      "enable_email_subscriptions": {
+                        "type": [
+                          "null",
+                          "boolean"
                         ]
                       },
                       "enable_push_notifications": {
@@ -25666,6 +25944,267 @@
           }
         },
         "summary": "Revoke kiosk token",
+        "tags": [
+          "status-pages"
+        ]
+      }
+    },
+    "/status-pages/{id}/subscribers": {
+      "get": {
+        "description": "A status page's email subscribers, newest first: address, state (pending until the confirmation link is followed, then confirmed; only confirmed ones are mailed) and dates. Requires write access because it reveals visitors' addresses.\n\nAccess: Needs write access because the answer reveals a credential: viewers and read-scope API keys get 403.",
+        "operationId": "list_status_page_subscribers",
+        "parameters": [
+          {
+            "description": "Status page ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1-based page number (default 1).",
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page, 1-100 (default 20).",
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/tenant_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPageSubscriberListResponse"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "List status page subscribers",
+        "tags": [
+          "status-pages"
+        ]
+      }
+    },
+    "/status-pages/{id}/subscribers/remove": {
+      "post": {
+        "description": "Delete every subscriber of a status page (all: true), or every one whose address is at a domain, e.g. after a flood of sign-ups from one domain. Returns how many were removed.\n\nAccess: Needs write access: viewers and read-scope API keys get 403.",
+        "operationId": "remove_status_page_subscribers",
+        "parameters": [
+          {
+            "description": "Status page ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/tenant_id"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "all": {
+                    "description": "Remove every subscriber of the page.",
+                    "type": "boolean"
+                  },
+                  "domain": {
+                    "description": "Remove the subscribers whose address is at this domain (e.g. example.com).",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoveStatusPageSubscribersResponse"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Remove status page subscribers in bulk",
+        "tags": [
+          "status-pages"
+        ]
+      }
+    },
+    "/status-pages/{id}/subscribers/summary": {
+      "get": {
+        "description": "A status page's email subscribers by count (confirmed, awaiting confirmation), the per-page limit, whether this installation can mail them (mail_ready, mail_problems), and what the latest notices came to (sent, waiting, failed, uncertain, skipped, last error). Addresses are not included.",
+        "operationId": "get_status_page_subscriber_summary",
+        "parameters": [
+          {
+            "description": "Status page ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/tenant_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPageSubscriberSummary"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Get status page subscriber summary",
+        "tags": [
+          "status-pages"
+        ]
+      }
+    },
+    "/status-pages/{id}/subscribers/{subscriberId}/remove": {
+      "post": {
+        "description": "Delete one subscriber of a status page, and whatever was still waiting to be mailed to them. The address can subscribe again (and confirm again) on the public page.\n\nAccess: Needs write access: viewers and read-scope API keys get 403.",
+        "operationId": "remove_status_page_subscriber",
+        "parameters": [
+          {
+            "description": "Status page ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Subscriber ID, from list_status_page_subscribers.",
+            "in": "path",
+            "name": "subscriberId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/tenant_id"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no body."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Remove status page subscriber",
         "tags": [
           "status-pages"
         ]
@@ -27525,7 +28064,9 @@
     "GET /api/v1/oauth/authorize": "OAuth protocol endpoint for MCP clients",
     "GET /api/v1/oauth/authorize/request": "consent screen data, signed-in user sessions only",
     "GET /api/v1/oauth/grants": "MCP connection management, signed-in user sessions only",
+    "GET /api/v1/public/status-page-subscriptions/unsubscribe": "subscriber mail unsubscribe link, authorized by its signed token; remove_status_page_subscriber covers it",
     "GET /api/v1/report-unsubscribe": "report email unsubscribe link, authorized by its signed token; set_sla_report_schedule manages recipients",
+    "GET /api/v1/status-pages/{id}/subscribers/export": "CSV download for the operator UI; list_status_page_subscribers returns the same rows",
     "GET /api/v1/users/bootstrap/status": "first-run setup, unauthenticated",
     "PATCH /api/v1/alert-policies/{id}": "retired (410 Gone)",
     "POST /api/v1/account/email": "the signed-in user's own email address, browser sessions only",
@@ -27551,6 +28092,9 @@
     "POST /api/v1/oauth/register": "OAuth protocol endpoint for MCP clients",
     "POST /api/v1/oauth/revoke": "OAuth protocol endpoint for MCP clients",
     "POST /api/v1/oauth/token": "OAuth protocol endpoint for MCP clients",
+    "POST /api/v1/public/status-page-subscriptions/confirm": "subscription confirmation link, authorized by its signed token",
+    "POST /api/v1/public/status-page-subscriptions/unsubscribe": "subscriber mail unsubscribe link, authorized by its signed token; remove_status_page_subscriber covers it",
+    "POST /api/v1/public/status-pages/{slug}/subscribe": "visitor subscribe form, forwarded by the status-page service",
     "POST /api/v1/report-unsubscribe": "report email unsubscribe link, authorized by its signed token; set_sla_report_schedule manages recipients",
     "POST /api/v1/users/bootstrap/first": "first-run setup, unauthenticated"
   }

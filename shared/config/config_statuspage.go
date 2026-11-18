@@ -59,6 +59,16 @@ type StatusPageConfig struct {
 	// CookieSecure is STATUS_PAGE_COOKIE_SECURE: nil when unset. See
 	// SessionCookieSecure.
 	CookieSecure *bool
+	// InternalAPIURL is where the service forwards visitors' email
+	// subscription requests (the API stores subscribers; this service stays
+	// read-only): STATUS_PAGE_INTERNAL_API_URL, else STATUS_PAGE_API_BASE_URL.
+	// Empty means no page shows a subscribe form.
+	InternalAPIURL string
+	// InternalToken is STATUS_PAGE_INTERNAL_TOKEN: the service presents it
+	// on every forwarded subscription request, and the API refuses the
+	// subscribe and confirm routes without it. Empty: no page shows a
+	// subscribe form.
+	InternalToken string
 	// TrustForwardedHost is STATUS_PAGE_TRUST_FORWARDED_HOST (default
 	// false): a custom domain is then matched on X-Forwarded-Host, but only
 	// from a TRUSTED_PROXY_CIDRS peer. For proxies that rewrite Host.
@@ -68,6 +78,20 @@ type StatusPageConfig struct {
 	// /public/status/, the API proxy, metrics). Every other public hostname
 	// gets a verified custom domain's page or not found.
 	PlatformHosts []string
+}
+
+// MinStatusPageInternalTokenLength is the shortest STATUS_PAGE_INTERNAL_TOKEN
+// accepted.
+const MinStatusPageInternalTokenLength = 32
+
+// loadStatusPageInternalToken reads STATUS_PAGE_INTERNAL_TOKEN, shared by the
+// api and status-page services, refusing one too short to be a secret.
+func loadStatusPageInternalToken() (string, error) {
+	token := strings.TrimSpace(os.Getenv("STATUS_PAGE_INTERNAL_TOKEN"))
+	if token != "" && len(token) < MinStatusPageInternalTokenLength {
+		return "", fmt.Errorf("STATUS_PAGE_INTERNAL_TOKEN must be at least %d characters", MinStatusPageInternalTokenLength)
+	}
+	return token, nil
 }
 
 // SessionCookieSecure decides the visitor session cookie's Secure flag, like
@@ -155,6 +179,18 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 			return nil, fmt.Errorf("invalid STATUS_PAGE_PLATFORM_HOSTS entry %q: want a host name", raw)
 		}
 		cfg.PlatformHosts = append(cfg.PlatformHosts, host)
+	}
+
+	// A separate variable from STATUS_PAGE_API_BASE_URL, which also turns
+	// on the /_sp_api customizer proxy: an install can forward subscriptions
+	// to the API without exposing that proxy.
+	cfg.InternalAPIURL = strings.TrimRight(strings.TrimSpace(os.Getenv("STATUS_PAGE_INTERNAL_API_URL")), "/")
+	if cfg.InternalAPIURL == "" {
+		cfg.InternalAPIURL = strings.TrimRight(strings.TrimSpace(cfg.APIBaseURL), "/")
+	}
+
+	if cfg.InternalToken, err = loadStatusPageInternalToken(); err != nil {
+		return nil, err
 	}
 
 	cfg.SessionSecret = strings.TrimSpace(os.Getenv("STATUS_PAGE_SESSION_SECRET"))

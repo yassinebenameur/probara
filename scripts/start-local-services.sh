@@ -214,7 +214,9 @@ start_service api ./api/cmd/api 8080 9090 \
   ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-your-secret-key-change-in-production}" \
   ADMIN_ACCESS_TTL_MINUTES="${ADMIN_ACCESS_TTL_MINUTES:-15}" \
   ADMIN_REFRESH_TTL_DAYS="${ADMIN_REFRESH_TTL_DAYS:-30}" \
-  ADMIN_COOKIE_SECURE="${ADMIN_COOKIE_SECURE:-false}"
+  ADMIN_COOKIE_SECURE="${ADMIN_COOKIE_SECURE:-false}" \
+  STATUS_PAGE_BASE_URL="${STATUS_PAGE_BASE_URL:-http://localhost:8082}" \
+  STATUS_PAGE_INTERNAL_TOKEN="${STATUS_PAGE_INTERNAL_TOKEN:-dev-status-page-internal-token-change-me}"
 
 start_service scheduler ./scheduler/cmd/scheduler 8081 9091 \
   CHECK_JOB_STREAM="${CHECK_JOB_STREAM:-CHECK_JOBS}" \
@@ -244,6 +246,7 @@ start_service worker ./worker/cmd/worker 8083 9092 \
 start_service status-page ./status-page/cmd/status-page 8082 9093 \
   STATUS_PAGE_BASE_URL="${STATUS_PAGE_BASE_URL:-http://localhost:8082}" \
   STATUS_PAGE_API_BASE_URL="${STATUS_PAGE_API_BASE_URL:-http://localhost:8080}" \
+  STATUS_PAGE_INTERNAL_TOKEN="${STATUS_PAGE_INTERNAL_TOKEN:-dev-status-page-internal-token-change-me}" \
   STATUS_PAGE_VAPID_PUBLIC_KEY="${STATUS_PAGE_VAPID_PUBLIC_KEY:-}" \
   STATUS_PAGE_VAPID_PRIVATE_KEY="${STATUS_PAGE_VAPID_PRIVATE_KEY:-}" \
   STATUS_PAGE_VAPID_SUBJECT="${STATUS_PAGE_VAPID_SUBJECT:-mailto:dev@localhost}" \

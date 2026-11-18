@@ -116,7 +116,8 @@ spec:
         {{- end }}
         # Status page custom domains: the CNAME target operators point their
         # hostnames at (empty turns the feature off), and the status-page
-        # base URL, whose host is refused as a custom domain. The API also
+        # base URL, whose host is refused as a custom domain and which
+        # subscriber mail links pages without a custom domain to. The API also
         # hands the base URL to the operator UI (GET /auth-context) for its
         # status-page links and preview: the UI image is prebuilt, so its own
         # build-time setting cannot carry a per-install value.
@@ -166,6 +167,9 @@ spec:
         {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "PROBARA_SECRETS_KEY" "key" "probara_secrets_key" "secret" .Values.secrets.probaraSecretsKeyExistingSecret "secretKey" .Values.secrets.probaraSecretsKeyExistingSecretKey) | nindent 8 }}
         {{- end }}
         {{- with (include "monitoring-platform.smtpEnv" .) }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- with (include "monitoring-platform.statusPageInternalTokenEnv" .) }}
         {{- . | nindent 8 }}
         {{- end }}
         {{- include "monitoring-platform.edgeEnv" (dict "ctx" . "component" "api") | nindent 8 }}

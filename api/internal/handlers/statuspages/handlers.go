@@ -59,6 +59,10 @@ func (h *Handlers) CreateStatusPage(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteValidationError(w, "slug already exists")
 			return
 		}
+		if errors.Is(err, statuspageservice.ErrSubscriptionsUnavailable) {
+			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
@@ -160,6 +164,10 @@ func (h *Handlers) UpdateStatusPage(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, statuspageservice.ErrSlugExists) {
 			apierrors.WriteValidationError(w, "slug already exists")
+			return
+		}
+		if errors.Is(err, statuspageservice.ErrSubscriptionsUnavailable) {
+			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
 		if errors.Is(err, statuspageservice.ErrPasswordRequired) {

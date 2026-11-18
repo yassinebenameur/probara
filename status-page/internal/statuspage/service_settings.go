@@ -34,6 +34,8 @@ type statusPageSettingsPatch struct {
 	SEOTitle            *string `json:"seo_title,omitempty"`
 	SEODescription      *string `json:"seo_description,omitempty"`
 	AllowSearchIndexing *bool   `json:"allow_search_indexing,omitempty"`
+
+	EnableEmailSubscriptions *bool `json:"enable_email_subscriptions,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -63,6 +65,10 @@ type statusPageSettingsStored struct {
 	SEOTitle            string
 	SEODescription      string
 	AllowSearchIndexing bool
+
+	// EnableEmailSubscriptions renders the subscribe form (subscribe.go);
+	// the API, which stores subscribers, checks the same setting again.
+	EnableEmailSubscriptions bool
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -161,6 +167,9 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	}
 	if patch.AllowSearchIndexing != nil {
 		stored.AllowSearchIndexing = *patch.AllowSearchIndexing
+	}
+	if patch.EnableEmailSubscriptions != nil {
+		stored.EnableEmailSubscriptions = *patch.EnableEmailSubscriptions
 	}
 	return stored
 }

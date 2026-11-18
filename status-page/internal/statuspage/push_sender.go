@@ -157,6 +157,9 @@ func (p *pushSender) pass() {
 		// Still try to send: a reconcile failure must not strand rows that
 		// are already pending.
 	}
+	if _, err := p.store.reconcileOutboxNotifications(ctx); err != nil {
+		p.logger.WithError(err).Warn("Failed to reconcile status page incident push notifications")
+	}
 
 	claimed, err := p.store.ClaimDeliveries(ctx, pushClaimBatch, pushClaimStaleAfter)
 	if err != nil {
@@ -369,8 +372,36 @@ func (p *pushSender) recordResult(ctx context.Context, id uuid.UUID, ok bool) {
 	}
 }
 
+// incidentPushBodies is what a visitor is told for each incident event.
+var incidentPushBodies = map[string]string{
+	"incident_published": "Incident: ",
+	"incident_updated":   "Update: ",
+	"incident_resolved":  "Resolved: ",
+}
+
 // payloadFor builds the notification a visitor sees.
 func (p *pushSender) payloadFor(d pendingDelivery) pushPayload {
+	if prefix, ok := incidentPushBodies[d.Kind]; ok {
+		title := strings.TrimSpace(d.PageTitle)
+		if title == "" {
+			title = "Status update"
+		}
+		subject := strings.TrimSpace(d.MonitorName)
+		if subject == "" {
+			subject = "an incident"
+		}
+		return pushPayload{
+			Version: 1,
+			Kind:    d.Kind,
+			Title:   title,
+			Body:    prefix + subject,
+			// One slot per incident, so its update or resolution replaces
+			// the earlier banner.
+			Tag: "i:" + d.IncidentID.String(),
+			TS:  time.Now().UTC().UnixMilli(),
+			URL: p.pageURL(d.Slug),
+		}
+	}
 	name := strings.TrimSpace(d.MonitorName)
 	if name == "" {
 		name = "A service"

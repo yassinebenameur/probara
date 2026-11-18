@@ -412,6 +412,11 @@ INSERT INTO status_page_push_subscriptions (status_page_id, endpoint, p256dh, au
 INSERT INTO status_page_push_deliveries (status_page_id, monitor_id, interval_id, kind, monitor_name) VALUES ('{P}', '{M1}', gen_random_uuid(), 'down', 'm1');
 INSERT INTO incident_status_page_publications (incident_id, status_page_id, tenant_id) VALUES ('{I}', '{P}', '{T}');
 INSERT INTO incident_status_page_monitors (incident_id, status_page_id, monitor_id) VALUES ('{I}', '{P}', '{M1}');
+INSERT INTO status_page_subscribers (id, tenant_id, status_page_id, email, email_hash, inbox_hash, state)
+	VALUES ('{SUB}', '{T}', '{P}', 'ops-{X}@example.com', 'h-{X}', 'i-{X}', 'confirmed');
+INSERT INTO status_page_notification_outbox (id, tenant_id, status_page_id, event_kind, incident_id, dedupe_key)
+	VALUES ('{OB}', '{T}', '{P}', 'incident_published', '{I}', 'k-{X}');
+INSERT INTO status_page_notification_deliveries (outbox_id, subscriber_id, tenant_id) VALUES ('{OB}', '{SUB}', '{T}');
 
 INSERT INTO slas (id, tenant_id, name, target_pct) VALUES ('{SLA}', '{T}', 'sla-{X}', 99.9);
 INSERT INTO sla_monitors (sla_id, monitor_id) VALUES ('{SLA}', '{M1}');
@@ -440,7 +445,7 @@ func seedWorkspaceEverywhere(ctx context.Context, t *testing.T, dbClient *shared
 	t.Helper()
 	pairs := []string{"{T}", tenant.String(), "{ADMIN}", p.admin.String(), "{CLIENT}", p.client.String(),
 		"{X}", strings.ReplaceAll(uuid.NewString(), "-", "")[:12]}
-	for _, key := range []string{"GRANT", "L1", "L2", "M1", "M2", "G", "CH", "AP", "A", "TR", "I", "P", "S", "SLA", "SCH", "W", "DI", "DS"} {
+	for _, key := range []string{"GRANT", "L1", "L2", "M1", "M2", "G", "CH", "AP", "A", "TR", "I", "P", "S", "SLA", "SCH", "W", "DI", "DS", "SUB", "OB"} {
 		pairs = append(pairs, "{"+key+"}", uuid.NewString())
 	}
 	_, err := dbClient.ExecContext(ctx, strings.NewReplacer(pairs...).Replace(workspaceFixtureSQL))

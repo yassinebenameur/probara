@@ -7,7 +7,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
   description:
     "Publish branded, live public status pages with sections, incidents, maintenance, and versioned templates.",
   eyebrow: "Public communication",
-  readingTime: "24 min read",
+  readingTime: "27 min read",
   keywords: [
     "status page",
     "public incidents",
@@ -16,6 +16,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
     "custom CSS",
     "status badge",
     "Atom feed",
+    "email subscribers",
   ],
   sections: [
     {
@@ -139,6 +140,14 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`allow_search_indexing`",
               "On by default. Off sends `noindex, nofollow` in a robots meta tag and an `X-Robots-Tag` header; the page stays public. Applies to public pages only: unlisted, password and private pages are always `noindex, nofollow` (the settings UI shows the toggle forced off)",
             ],
+            [
+              "`enable_email_subscriptions`",
+              "Off by default. Shows a subscribe form on public and unlisted pages; see [email subscribers](#email-subscribers). Turning it on is refused while the API cannot send subscriber mail",
+            ],
+            [
+              "`auto_publish_incidents`",
+              "Off by default. Publishes a monitor's outage to the page after 5 minutes and resolves it on recovery; see [automatic publishing](#auto-publish)",
+            ],
           ],
         },
         {
@@ -216,12 +225,24 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`GET /public/status/{slug}/monitors/{id}/badge.svg` and `…/uptime.svg`",
               "Status and uptime badges of a component the page shows",
             ],
+            [
+              "`POST /public/status/{slug}/subscribe`",
+              "The subscribe form's target (a plain form post, no script needed); forwarded to the API. See [email subscribers](#email-subscribers)",
+            ],
+            [
+              "`GET /public/status/{slug}/subscription`",
+              "The page a confirmation or unsubscribe link opens. It acts on nothing until the visitor presses its button",
+            ],
+            [
+              "`POST /public/status/{slug}/subscription/confirm` and `…/unsubscribe`",
+              "That page's buttons; forwarded to the API",
+            ],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Every route under `/public/status/{slug}/` — those above and any added later — passes the page's [visibility](#visibility) check before it does anything else, including serving the cached render. The only exceptions are `/unlock`, which is how a visitor gets through the check, and `sw.js`, which serves no page data.",
+            "Every route under `/public/status/{slug}/` — those above and any added later — passes the page's [visibility](#visibility) check before it does anything else, including serving the cached render. The only exceptions are `/unlock`, which is how a visitor gets through the check, `sw.js`, which serves no page data, and, on the platform host, the subscription link routes (`/subscription`, `…/confirm`, `…/unsubscribe`), so unsubscribing works whatever the page's visibility became: they never read the page, answer a private page and a missing slug alike, and show nothing but what the API returns for a valid token. On a [custom domain](#custom-domains) they pass the check like every other path, which is why unsubscribe links always name the platform host.",
         },
         {
           type: "paragraph",
@@ -528,6 +549,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "**Sessions.** A password or kiosk session on a custom domain is a host-only cookie at `/`, always `Secure` (custom domains are https only, so a display following a stray `http://` link never sends it in clear; `STATUS_PAGE_COOKIE_SECURE` does not apply there). A session opened on the platform host does not carry over (they are different origins), so a visitor or kiosk display unlocks or opens its kiosk URL on the domain it uses.",
             "**Isolation.** The page is the only one on its origin, so the cross-page limit described under [visibility](#visibility) does not apply. Its Content-Security-Policy is the same: `connect-src 'self'` is the custom origin, and `frame-ancestors` still admits the operator UI, which previews pages through the platform host.",
             "**Notifications.** The service worker is `/sw.js` with the root as its scope, behind the page's access check like every other route: on a password or private page's domain, where push is off, it is not found. Subscriptions are per origin: see [visitor notifications](#browser-notifications).",
+            "**Email subscribers.** The subscribe form on a custom domain posts to that domain, and subscriber email links to the page's canonical URL, confirmation link included. Unsubscribe links name the platform host, the one address that serves them whatever becomes of the page's visibility or domain.",
             "**Host header.** Pages are matched on the request's `Host`. Behind a proxy that rewrites it, set `STATUS_PAGE_TRUST_FORWARDED_HOST=true` to match on `X-Forwarded-Host` instead, believed only from `TRUSTED_PROXY_CIDRS` peers. A forged `Host` can only ever select a verified domain's own page or a platform host's routes, which that host serves anyway.",
           ],
         },
@@ -564,6 +586,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ["`suspect`", "Not sent — mid-confirmation, by design not yet an outage"],
             ["`unknown`, or a paused monitor", "Not sent"],
             ["Any monitor inside an active maintenance window", "Not sent"],
+            ["An incident published on the page, a public update posted on it, its resolution", "Sent, naming the incident; an update or resolution replaces the earlier notification"],
           ],
         },
         {
@@ -586,7 +609,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Turning the setting off stops new notifications but keeps existing subscriptions, so re-enabling does not force everyone to opt in again.",
             "Rotating the VAPID keypair invalidates every stored subscription — push services bind an endpoint to the key that created it — and every visitor must opt in again.",
             "A page rendered by a custom template gets no control unless the author adds one; `.PushEnabled` and `.PushPublicKey` are available in the template context.",
-            "Subscriptions store only the opaque browser endpoint, its public keys and, for one made on a [custom domain](#custom-domains), that domain. No visitor identity, email address, or visit history is recorded.",
+            "Subscriptions store only the opaque browser endpoint, its public keys and, for one made on a [custom domain](#custom-domains), that domain. No visitor identity or visit history is recorded; [email subscriptions](#email-subscribers) are a separate opt-in that does store the visitor's address.",
             "A browser keeps one subscription per origin: subscribing on a page's custom domain and on the platform host are two subscriptions, each turned off where it was made, and each notification opens the page where its subscription was made (the platform URL once that custom domain is removed or failed).",
             "Password and private pages offer no notifications: a subscription outlives the visitor session that made it. Switching a page to password or private stops notifications to its existing subscribers; switching it back resumes them.",
           ],
@@ -595,6 +618,93 @@ export const STATUS_PAGES_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Delivery is driven by the recorded state timeline rather than by live events, so a notification is not lost when a message is dropped or a replica restarts. Transitions older than about fifteen minutes are discarded instead of delivered late: a notification saying a service is down, arriving after it recovered, is worse than none.",
+        },
+      ],
+    },
+    {
+      id: "email-subscribers",
+      title: "Email subscribers",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "With `enable_email_subscriptions` on, a public or unlisted page shows a form where visitors leave an email address. The address gets a confirmation email first (double opt-in): nothing else is sent until its link is followed, and the link works for 48 hours. Confirmed subscribers are then emailed about what is published on the page.",
+        },
+        {
+          type: "table",
+          columns: ["Event", "Email"],
+          rows: [
+            ["An operator publishes an incident on the page (or publishes it again after taking it down)", "Sent, with the incident's summary, state and affected components as the page names them"],
+            ["A public update is posted on an incident the page shows", "Sent, with the update's text"],
+            ["An incident the page shows is resolved", "Sent"],
+            ["An incident changes state without a public update, is edited, or its components change", "Not sent"],
+            ["Internal notes", "Never sent"],
+            ["A maintenance window that covers a component of the page is scheduled, or its schedule or components change, while it has an occurrence ahead", "Sent once, with its next occurrence; a recurring window's mail describes its weekly rule"],
+            ["An announced one-off maintenance window starts", "Sent once, at the start"],
+            ["Each occurrence of a recurring window", "Not sent: the window was announced once, with its rule"],
+            ["A window that starts immediately (a snooze)", "Not sent"],
+            ["An announced window is deleted, or its one-off occurrence is withdrawn before it starts", "Sent, only to the subscribers who were emailed the announcement: \"Maintenance cancelled\" (or \"ended early\" when it had started)"],
+            ["A monitor outage published by [automatic publishing](#auto-publish)", "Sent, like an operator's publication, and its resolution"],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "Every email goes to one subscriber, sent in the page's name (its title as the sender name; the address stays the installation's `SMTP_FROM`) with its accent colour, as HTML and plain text, links back to the page, and carries the subscriber's own unsubscribe link in the body and as a one-click `List-Unsubscribe` header (RFC 8058). Unsubscribing deletes the address. It works from any email, whatever the page's visibility has become since.",
+            "The subscribe form answers the same way for any address, new, waiting for confirmation, already subscribed or unsubscribed before: the page never tells whether an address is subscribed. Confirmation emails are sent in the background, so the answer's timing does not tell either.",
+            "Limits: an address gets at most 3 confirmation emails a day per page, and one inbox (its `+tag` aliases counted together) at most 5 a day across every page. A page takes at most 100 new addresses an hour (counted whatever became of them: confirming addresses as they arrive frees no room), at most 500 waiting for confirmation and 10,000 subscribers in total; past a page limit the form says the page is not accepting subscriptions, for every address. The installation sends at most 500 confirmation emails an hour; incident and maintenance emails always go first and are never held back by confirmations. The status-page service allows each visitor 5 subscription requests a minute, and each page 60 subscribe requests a minute (the confirmation and unsubscribe buttons count per visitor only).",
+            "The API accepts a subscription or a confirmation only from the status-page service, which presents `STATUS_PAGE_INTERNAL_TOKEN`: calling the API directly cannot skip the page's visibility check or the per-visitor limit.",
+            "Only plain addresses are accepted (letters, digits and the usual symbols in dot-separated words, with a domain), so nothing a visitor types can reach an email header.",
+            "Unconfirmed addresses are deleted 7 days after their last request.",
+            "Delivery is at most once per subscriber and event. A temporary failure is retried 1, 5, 30 minutes and 2 hours later; after the fifth failed attempt (about 2 hours 40 minutes after the first, the length of an SMTP outage it survives) the email is given up. A relay that refuses an address outright fails it at once, and a message whose sending was interrupted after the relay may have received it is not sent again. An event that could not be prepared for email within 6 hours (mail not configured, the API down) is not sent late. Each of these is logged as a warning and shown under Recent notices in the page's Subscribers panel (`GET …/subscribers/summary`).",
+            "Members with write access see the subscriber addresses: the list, removal one by one or in bulk (every subscriber, or those at one domain, confirmed by typing the page's slug) and the CSV export; viewers see the counts and recent notices only. Exports are recorded in the audit log, as are confirmations and unsubscribes (by a hash of the address, never the address).",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Public and unlisted pages only",
+          text:
+            "Password and private pages show no subscribe form and email nobody: an email would carry the page's incident text to an address that once had access, past the page's password and sessions. Changing a page to password or private stops its emails (its subscribers are kept); changing it back resumes them.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Email subscriptions need the API to send mail: `SMTP_HOST` and `SMTP_FROM`, `APP_BASE_URL` (one-click unsubscribe goes through the API there), `STATUS_PAGE_BASE_URL` (the links in a subscriber email point to the page there, or to its [custom domain](#custom-domains) when it has a verified one; unsubscribe links always use this address), `PROBARA_SECRETS_KEY` (links are signed with it) and `STATUS_PAGE_INTERNAL_TOKEN` on both the API and the status-page service. Without them the setting cannot be turned on, and the settings page says what is missing. The status-page service forwards the form to the API (`STATUS_PAGE_INTERNAL_API_URL`; see [configuration](/docs/configuration/)) and stores nothing itself.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "A page rendered by a custom template gets no form unless the author adds one. `.SubscribeEnabled` says whether the page offers subscriptions and `.SubscribeAction` is the form's target:",
+        },
+        {
+          type: "code",
+          language: "html",
+          code:
+            '{{if .SubscribeEnabled}}\n<form method="post" action="{{.SubscribeAction}}">\n  <label for="email">Email address</label>\n  <input id="email" name="email" type="email" autocomplete="email" required maxlength="254" />\n  <button type="submit">Subscribe</button>\n</form>\n{{end}}',
+        },
+      ],
+    },
+    {
+      id: "auto-publish",
+      title: "Automatic publishing of outages",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "With `auto_publish_incidents` on, a monitor the page shows that has been down for 5 minutes gets an incident published on the page, and the incident is resolved once the monitor has stayed recovered for 10 minutes. Subscribers are emailed (and pushed to) as for an incident an operator publishes. Both delays are fixed.",
+        },
+        {
+          type: "list",
+          items: [
+            "An outage is the monitor's open availability alert. The 5 minutes count from when it opened, or from its last reopening as a relapse.",
+            "Nothing is published for a monitor in maintenance, one that is paused, one whose outage a [dependency](/docs/dependencies/) explains, or one already passing again while its recovery is confirmed.",
+            "Resolution waits for the alert to resolve, which happens only once the recovery is confirmed (\"mark up after N passes\"), and then 10 more minutes: a monitor that fails again meanwhile keeps the same incident open and nobody is emailed.",
+            "A monitor that fails again within an hour of its incident being resolved automatically reopens that incident with a public update (\"The disruption has returned\"), emailed as an update, instead of publishing a new one. A monitor flapping all day stays one incident.",
+            "Nothing is published while an unresolved incident about the monitor is already on the page, and an outage is published at most once per page: if an operator takes the incident down or resolves it, it is not put back while that outage lasts.",
+            "The incident is the monitor's automatic incident, the same one the workspace setting \"create an incident when an alert fires\" opens, so a monitor never gets two. Its own title names the internal monitor, so the page never shows it: every publication of an automatically created incident has a public title, \"Service disruption\" followed by the names the page gives the affected components (per page), and a neutral summary. The page, its feed and summary, subscriber email and browser notifications all show the public title. An operator can change a publication's public title from the incident's publish form (`public_title`); an incident an operator wrote keeps showing its own title unless one is set.",
+            "Only automatically published incidents are resolved automatically; an operator publishing the same incident by hand makes it theirs.",
+          ],
         },
       ],
     },
@@ -659,6 +769,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
           text:
             "Use public updates for subscriber-facing communication. Use internal notes for hypotheses, credentials-free diagnostic detail, and response coordination that should never render publicly.",
         },
+        {
+          type: "paragraph",
+          text:
+            "Publishing, public updates and resolution reach the page's [email subscribers](#email-subscribers) and [browser notification](#browser-notifications) subscribers. The publish form shows how many email subscribers a page will notify.",
+        },
       ],
     },
     {
@@ -674,6 +789,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
           type: "paragraph",
           text:
             "Maintenance changes [alert behavior](/docs/alerting/#maintenance) but does not stop checks. A page can continue showing observed state while also explaining the scheduled work, which helps visitors distinguish planned degradation from an unannounced incident.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Which maintenance is emailed to [subscribers](#email-subscribers): a window when it is scheduled or rescheduled, and a one-off window again when it starts. A recurring window is announced once with its rule, never at each occurrence.",
         },
       ],
     },

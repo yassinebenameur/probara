@@ -2,6 +2,7 @@ package statuspage
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -103,6 +104,12 @@ var customHostRouteTable = []struct {
 	{"/monitors/" + addonRouteTestID + "/uptime.svg", "/monitors/" + addonRouteTestID + "/uptime.svg", classGated, http.MethodGet},
 	{"/some-future-route.json", "/some-future-route.json", classGated, http.MethodGet},
 	{"/sw.js", "/sw.js", classGated, http.MethodGet},
+	{"/subscribe", "/subscribe", classGated, http.MethodPost},
+	// The mail link routes skip the gate only on the platform host (mail
+	// unsubscribe links name it); on a custom domain they are gated.
+	{"/subscription", "/subscription", classGated, http.MethodGet},
+	{"/subscription/confirm", "/subscription/confirm", classGated, http.MethodPost},
+	{"/subscription/unsubscribe", "/subscription/unsubscribe", classGated, http.MethodPost},
 }
 
 // Paths that are something else on the platform host and nothing on a
@@ -143,7 +150,7 @@ func TestCustomHost_RouteTableCoversEverySubRoute(t *testing.T) {
 			t.Errorf("sub-route %q has no custom-domain form in customHostRouteTable", row.route)
 			continue
 		}
-		if class != row.class {
+		if class != row.class && !(row.class == classSubscriptionLink && class == classGated) {
 			t.Errorf("sub-route %q: custom-domain class %q, slug class %q", row.route, class, row.class)
 		}
 	}
@@ -157,6 +164,16 @@ func TestCustomHost_RoutesMatchSlugRoutes(t *testing.T) {
 	f := newCustomHostFixture(t)
 	for _, row := range customHostRouteTable {
 		if row.slugRoute == "" {
+			continue
+		}
+		if isSubscriptionLinkRoute(row.slugRoute) {
+			// Gated on the domain, open on the platform host: the domain
+			// answers the gate's refusal, never the page.
+			for _, method := range []string{row.method, http.MethodGet, http.MethodPost} {
+				if rec := f.serve(on(method, lockedHost, row.path)); rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), pageSentinel) {
+					t.Errorf("%s %s on a password page's domain = %d", method, row.path, rec.Code)
+				}
+			}
 			continue
 		}
 		for _, method := range []string{row.method, http.MethodGet, http.MethodPost, http.MethodDelete} {
@@ -669,5 +686,39 @@ func TestHostTable_ReloadAndFailure(t *testing.T) {
 	table.Lookup(context.Background(), openHost)
 	if loads.Load() != n+1 {
 		t.Fatal("not retried after the retry delay")
+	}
+}
+
+// A public page's custom domain serves the subscribe form's target and the
+// mail link routes at its root; the cached page's form posts to the page's
+// canonical origin, which a visitor on the platform host may post to.
+func TestCustomHost_Subscriptions(t *testing.T) {
+	f := newCustomHostFixture(t)
+	api := &fakeSubscriberAPI{status: http.StatusOK, body: `{"state":"unsubscribed","page_title":"Open"}`}
+	srv := httptest.NewServer(api)
+	t.Cleanup(srv.Close)
+	f.h.config.InternalAPIURL = srv.URL
+	f.h.config.InternalToken = testInternalToken
+
+	landing := f.serve(on(http.MethodGet, openHost, "/subscription?action=unsubscribe"))
+	if landing.Code != http.StatusOK || !strings.Contains(landing.Body.String(), `action="subscription/unsubscribe"`) {
+		t.Fatalf("landing on a custom domain = %d %q", landing.Code, landing.Body.String())
+	}
+	req := on(http.MethodPost, openHost, "/subscription/unsubscribe")
+	req.Body = io.NopCloser(strings.NewReader("token=tok"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if rec := f.serve(req); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "You are unsubscribed") {
+		t.Fatalf("unsubscribe on a custom domain = %d %q", rec.Code, rec.Body.String())
+	}
+	api.status, api.body = http.StatusAccepted, `{"state":"check_inbox"}`
+	sub := on(http.MethodPost, openHost, "/subscribe")
+	sub.Body = io.NopCloser(strings.NewReader("email=a%40example.com"))
+	sub.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	sub.Header.Set("Origin", "https://"+platformHost)
+	if rec := f.serve(sub); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Check your inbox") {
+		t.Fatalf("subscribe posted from the platform host to the domain = %d %q", rec.Code, rec.Body.String())
+	}
+	if got := api.requests[len(api.requests)-1].path; got != "/api/v1/public/status-pages/open/subscribe" {
+		t.Fatalf("forwarded to %q", got)
 	}
 }

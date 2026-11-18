@@ -45,6 +45,10 @@ type Handlers struct {
 	clientIPs *clientip.Resolver
 	// access is the visibility gate every page route passes (access.go).
 	access *accessGate
+	// subscribes throttles the email subscription routes per client and
+	// page; subscribeClient forwards them to the API (subscribe.go).
+	subscribes      *subscribeThrottle
+	subscribeClient *http.Client
 	// hosts maps verified custom domains to their pages (domains.go,
 	// custom_host.go). Nil without a service: no custom domain is served.
 	hosts *hostTable
@@ -82,6 +86,12 @@ func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Log
 		pushLimiter: newPushRateLimiter(),
 		clientIPs:   newClientIPResolver(cfg),
 		access:      newAccessGate(store, secret, cookieSecure),
+		subscribes:  newSubscribeThrottle(),
+		// No redirects: the API's answer is the status and body it sent.
+		subscribeClient: &http.Client{
+			Timeout:       subscribeForwardTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 }
 
@@ -109,6 +119,15 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		h.HandleUnlock(w, r, slug)
 		return
 	}
+	// A subscriber mail's links work whatever the page's visibility became;
+	// they never read the page (subscribe.go). Only on the platform host:
+	// on a custom domain they go through the gate like every route, so a
+	// private page's domain stays indistinguishable from an unknown host
+	// (mail unsubscribe links always name the platform host).
+	if _, onCustomHost := customHostFrom(r); isSubscriptionLinkRoute(rest) && !onCustomHost {
+		h.handleSubscriptionLink(w, r, slug, rest)
+		return
+	}
 
 	// The visibility gate runs before the method guard, every sub-route and
 	// the render cache (access.go). From here on, routes write through aw,
@@ -130,7 +149,8 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	// route below is read-only, so the GET guard sits here rather than above
 	// the sub-routing.
 	isPushRoute := rest == "/push/subscribe" || rest == "/push/unsubscribe"
-	if !isPushRoute && r.Method != http.MethodGet {
+	// The subscribe form's target (subscribe.go) checks its own method.
+	if !isPushRoute && rest != subscribeSuffix && !isSubscriptionLinkRoute(rest) && r.Method != http.MethodGet {
 		http.Error(aw, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -165,6 +185,15 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		h.HandlePushServiceWorker(aw, r)
 		return
 	default:
+		// Email subscriptions (subscribe.go): forwarded to the API.
+		if isSubscriptionLinkRoute(rest) {
+			// On a custom domain, after the gate (see above).
+			h.handleSubscriptionLink(aw, r, slug, rest)
+			return
+		}
+		if h.handleSubscription(aw, r, slug, rest, acc) {
+			return
+		}
 		// Page add-ons (addons.go): summary.json, badges and the Atom feed.
 		// They read the slug-keyed render and feed caches, so they are
 		// served only from here, after authorize; on a gated page r carries
@@ -262,6 +291,7 @@ func (h *Handlers) cachedPage(parent context.Context, slug string) (renderedPage
 		// the render, and this slug-keyed cache, never depend on the Host
 		// header.
 		data.CanonicalURL = h.pageCanonicalURL(ctx, data.ID, slug)
+		data.SubscribeFormEnabled = h.subscriptionsOffered(visibility, data.EmailSubscriptionsEnabled)
 		view := buildStatusPageRenderView(data, h.apiProxyEnabled())
 		html, customErr, err := renderStatusPageView(data, view)
 		if customErr != nil {
@@ -380,6 +410,7 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 	}
 	data.CanonicalURL = h.pageCanonicalURL(ctx, data.ID, slug)
 	data.Visibility = pageVisibility(r.Context())
+	data.SubscribeFormEnabled = h.subscriptionsOffered(data.Visibility, data.EmailSubscriptionsEnabled)
 
 	var html string
 	if hasDraft {

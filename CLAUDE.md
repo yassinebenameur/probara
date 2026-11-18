@@ -634,7 +634,7 @@ or imported groups come back empty. Any other path that creates groups through
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
   `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
-  `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`) are the contract external secret managers
+  `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`, `status_page_internal_token`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
   only without a per-field Secret (as `BOOTSTRAP_SETUP_CODE`). `ADMIN_COOKIE_SECURE` comes from the
@@ -1139,6 +1139,43 @@ or imported groups come back empty. Any other path that creates groups through
   The gate passes its visibility on the request (`withPageVisibility`) and
   `cachedPage` rebuilds an entry built under another one; an access change
   invalidates the page, summary and feed together.
+- **Email subscribers are written by the API alone**
+  (`api/internal/services/pagesubscribers`); the status-page service only
+  forwards (`subscribe.go`, `STATUS_PAGE_INTERNAL_API_URL`), presenting
+  `STATUS_PAGE_INTERNAL_TOKEN` (`pageaccess.ForwardTokenHeader`; the API's
+  subscribe/confirm answer nothing else, one-click unsubscribe stays public),
+  per-client `subscribeThrottle`, nothing identifying the visitor forwarded.
+  The subscribe form is gated; on the platform host the `/subscription…`
+  link routes run before the gate and never read the page (row class
+  `classSubscriptionLink`), so unsubscribing survives a visibility change;
+  on a custom domain they are gated like the page. Public and unlisted pages only;
+  addresses are readable with write access only (`…/subscribers/summary` for
+  everyone). Page limits count rows created in the hour whatever their
+  state; confirmations are capped per inbox (`InboxHash`, +tag stripped) and
+  per hour (`status_page_confirmation_sends`). The
+  notification outbox (`status_page_notification_outbox`, written by
+  `api/internal/services/pagenotify` in the trigger's own transaction) is the
+  single trigger for subscriber mail and incident push: a new trigger is a
+  `pagenotify` call inside that transaction, never a send. The runner follows
+  the report schedules' claimed/sending/uncertain rules; every subscriber link
+  is built in `pagesubscribers/links.go` through `pagedomains.PublicBaseURL`
+  (the page's verified custom domain, else `STATUS_PAGE_BASE_URL`), except
+  the unsubscribe landing, always on the platform host; tokens
+  are `shared/actionlink` actions in the URL fragment. Subscribe answers alike
+  for every address state and never mails from the request. Automatic outage
+  publishing (`autopublish.go`) finds or creates incidents only through
+  `shared/autoincident`, the alerter's lock and lookup; page component names
+  come from `shared/statuspagesql`. **No public surface shows an
+  automatically created incident's own title or summary** (they name the
+  monitor): `incidents.PublishTx` gives every publication of one a per-page
+  `public_title`/`public_summary`, and the page, `/data`, feed, summary,
+  subscriber mail and push read `COALESCE(isp.public_title, i.title)`
+  (`publicIncidentTitleSQL`). A new public reader uses the same columns.
+  Announced maintenance withdrawn (delete, one-off skipped at start) is a
+  `pagenotify.MaintenanceCancelledTx`, mailed only to who got the
+  announcement; an announced window is soft-deleted, never removed.
+  Every subscriber query (public endpoints, runner, auto-publish) excludes
+  deleted workspaces with `tenancy.LiveTenantSQL`.
 - **Custom domains** (`shared/pagedomains` is the contract; the API alone
   writes and verifies them in `api/internal/services/statuspagedomains`, TXT +
   CNAME, DNS only, runner claims with `FOR UPDATE SKIP LOCKED` in batches
