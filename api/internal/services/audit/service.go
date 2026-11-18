@@ -277,7 +277,9 @@ func (r *Recorder) insertBatch(batch []Event) {
 
 	if err := r.insertEvents(ctx, batch); err != nil {
 		if pgerr.IsMissingSchema(err) {
-			// Pre-migration window (post-upgrade migrations job): drop quietly.
+			// Pre-migration window (only when a deployment starts the binary
+			// before migrating; the chart and Compose migrate first): drop
+			// quietly.
 			return
 		}
 		r.log.WithError(err).Error("Failed to persist audit events")

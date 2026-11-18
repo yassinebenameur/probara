@@ -54,6 +54,7 @@ import Dialog from '@/components/ui/Dialog';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
+import { useCurrentUser, useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { formatDateTime, formatDateTimeFull, formatFileSize } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
 import { isGatedVisibility } from '@/lib/status-page-access';
@@ -75,6 +76,10 @@ interface PendingConfirm {
 
 export default function StatusPageTemplatePage() {
   const router = useRouter();
+  const statusPageBaseUrl = useStatusPageBaseUrl();
+  // The origin arrives with /v1/auth-context; until it has, the preview URL
+  // (which may carry a preview token) would resolve against the UI origin.
+  const { loading: identityLoading } = useCurrentUser();
   const params = useParams();
   const id = params.id as string;
   const { showToast } = useToast();
@@ -162,14 +167,15 @@ export default function StatusPageTemplatePage() {
   const { dirty, needsSave, status } = templateEditorState({ source, baseline, hasDraft });
 
   const previewUrl = useMemo(() => {
-    if (!statusPage) return '';
+    if (!statusPage || identityLoading) return '';
     const base = resolveStatusPageDraftPreviewUrl(
       statusPage,
-      templateState?.preview_token
+      templateState?.preview_token,
+      statusPageBaseUrl
     );
     const separator = base.includes('?') ? '&' : '?';
     return `${base}${separator}_=${previewNonce}`;
-  }, [statusPage, templateState?.preview_token, previewNonce]);
+  }, [statusPage, templateState?.preview_token, previewNonce, statusPageBaseUrl, identityLoading]);
 
   // ⌘S / Ctrl+S saves the draft. A ref keeps the listener stable while the
   // handler closes over the latest source; it stands down while a dialog is
@@ -415,7 +421,7 @@ export default function StatusPageTemplatePage() {
     );
   }
 
-  const publicUrl = resolveStatusPagePublicUrl(statusPage);
+  const publicUrl = resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl);
   const activeLabel = templateState?.has_custom
     ? `Custom template v${templateState.published_version}`
     : 'Built-in template';
@@ -628,11 +634,13 @@ export default function StatusPageTemplatePage() {
                 >
                   Refresh
                 </Button>
-                <Button variant="subtle" size="xs" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
-                  <a href={previewUrl} target="_blank" rel="noopener noreferrer">
-                    Open
-                  </a>
-                </Button>
+                {previewUrl && (
+                  <Button variant="subtle" size="xs" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
+                    <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                      Open
+                    </a>
+                  </Button>
+                )}
               </div>
             </div>
             {/* A password or private page opens to the preview only with its
@@ -646,13 +654,17 @@ export default function StatusPageTemplatePage() {
             )}
             {/* The draft route renders the published (or built-in) page while
                 no draft exists, so there is always something real to show. */}
-            <iframe
-              key={previewNonce}
-              src={previewUrl}
-              title={hasDraft ? 'Draft template preview' : 'Live status page preview'}
-              className="min-h-0 w-full flex-1 bg-[#fff]"
-              sandbox="allow-scripts allow-same-origin"
-            />
+            {previewUrl ? (
+              <iframe
+                key={previewNonce}
+                src={previewUrl}
+                title={hasDraft ? 'Draft template preview' : 'Live status page preview'}
+                className="min-h-0 w-full flex-1 bg-[#fff]"
+                sandbox="allow-scripts allow-same-origin"
+              />
+            ) : (
+              <div className="min-h-0 w-full flex-1" aria-hidden="true" />
+            )}
           </div>
         </div>
 

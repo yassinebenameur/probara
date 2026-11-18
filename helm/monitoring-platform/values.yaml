@@ -395,6 +395,18 @@ smtp:
 # MIGRATIONS JOB
 # =============================================================================
 migrations:
+  # A hook Job: post-install on a first install (the embedded PostgreSQL
+  # exists only then), pre-upgrade on every upgrade, so new pods never start
+  # against an old schema. A failed Job stops the upgrade before anything
+  # else changes. Large migrations may need `helm upgrade --timeout`.
+  # It runs before the upgrade creates anything, so an upgrade that switches
+  # from an external database to the embedded PostgreSQL (postgresql.enabled)
+  # or renames the release's objects (fullnameOverride) waits for a database
+  # that does not exist yet and times out: apply such a change with
+  # enabled=false (the API still migrates at startup), then turn it back on.
+  # The Job uses no release ServiceAccount, so enabling or renaming that is
+  # safe. Argo CD maps this combined hook to both PreSync and PostSync: set
+  # enabled=false there and run migrations as your own sync-wave Job.
   enabled: true
   image:
     # Uses main image repository with -migrations suffix if not specified
@@ -674,8 +686,10 @@ frontend:
   replicas: 2
   httpPort: 3000
   apiUrl: "/api"
-  # Public base URL for status page links shown in the frontend.
-  # Defaults to statusPage.baseUrl when empty.
+  # Deprecated and ignored: the UI's status-page links come from
+  # statusPage.baseUrl, which the api hands to it at runtime (a build-time
+  # value here never reached the published image). Kept so existing values
+  # files still render.
   statusPageUrl: ""
   # Runtime API upstream for Next.js server-side API proxy route (/api/*).
   # Leave empty to use the in-cluster API service automatically when api.enabled=true.

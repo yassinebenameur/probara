@@ -64,8 +64,19 @@ export function originOf(url: string | undefined): string | null {
 }
 
 /**
+ * The status-page URL the deployment configured, for the CSP: the UI
+ * server's STATUS_PAGE_BASE_URL, read per request at runtime (the published
+ * image is built once, so a NEXT_PUBLIC_ value is frozen empty in it), else
+ * the build-time NEXT_PUBLIC_STATUS_PAGE_URL of a development build. The
+ * links themselves get the same value from the API (lib/statusPageUrl.ts).
+ */
+export function configuredStatusPageUrl(runtime: string | undefined, buildTime: string | undefined): string | undefined {
+  return originOf(runtime) ? runtime : buildTime;
+}
+
+/**
  * Where status pages live, mirroring lib/statusPageUrl.ts: the configured
- * NEXT_PUBLIC_STATUS_PAGE_URL, else the dev convention of :8082 on a
+ * URL (configuredStatusPageUrl), else the dev convention of :8082 on a
  * localhost UI, else the UI's own origin ('self', already allowed).
  */
 export function statusPageFrameOrigins(configured: string | undefined, hostname: string, protocol: string): string[] {

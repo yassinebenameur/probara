@@ -92,6 +92,11 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
+            "A location worker from before [TCP monitors](/docs/monitors/#network-protocols) gained `tls_ca_pem` and `tls_server_name` ignores both fields: a TLS TCP monitor that relies on a private CA or on a server name other than its host fails on that location with a certificate error (unknown authority, or a name mismatch) until the worker is upgraded. Upgrade the location workers before giving TCP monitors either field.",
+        },
+        {
+          type: "paragraph",
+          text:
             "Locations behind a firewall that allows only outbound HTTPS connect over `wss://` on 443: the broker's [websocket listener](/docs/deployment/#nats-websocket) behind an HTTPS ingress or reverse proxy. A `tls://` URL instead needs the broker's TCP port open outbound. The snippet carries a one-line comment naming which of the two it uses. A `wss://` URL may carry a path (`wss://probara.example.com/nats`) when the listener shares a host with the UI.",
         },
         {

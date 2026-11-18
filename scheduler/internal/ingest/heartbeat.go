@@ -64,7 +64,14 @@ func (i *Ingest) startHeartbeatSubscriber() (*nats.Subscription, error) {
 		defer cancel()
 		credential, err := i.locationCredential(ctx, hb.LocationID, "", "")
 		if err != nil {
-			i.logger.WithError(err).WithField("location_id", hb.LocationID).Debug("Ignoring unauthorized location heartbeat")
+			// Core NATS cannot redeliver, so either way this beat is gone and
+			// the next one (~15 s) retries; only the log tells a platform
+			// failure apart from an unauthorized sender.
+			if isRejected(err) {
+				i.logger.WithError(err).WithField("location_id", hb.LocationID).Debug("Ignoring unauthorized location heartbeat")
+			} else {
+				i.logger.WithError(err).WithField("location_id", hb.LocationID).Warn("Could not verify location heartbeat")
+			}
 			return
 		}
 		signature := hb.Signature

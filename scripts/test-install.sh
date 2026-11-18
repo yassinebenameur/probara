@@ -7,7 +7,10 @@
 #     appends a second secret, and the installer reads them to the same
 #     values Compose does;
 #   - a second run changes nothing, and --version changes only
-#     PROBARA_VERSION.
+#     PROBARA_VERSION;
+#   - the public origins (APP_BASE_URL, STATUS_PAGE_BASE_URL) start empty,
+#     never localhost, the closing text asks for them, and a value set in
+#     .env reaches every service that reads it.
 # Needs the docker CLI (for `docker compose config`), not a running stack. The
 # issuer pair is pre-seeded so no run pulls the nats-box image.
 #
@@ -57,6 +60,13 @@ grep -qF '"build"' <<<"$resolved" && fail "fresh: a service still builds from so
 grep -qF 'your-secret-key-change-in-production' <<<"$resolved" && fail "fresh: the development JWT secret leaked into the release stack"
 grep -qF 'probara-dex-secret' <<<"$resolved" && fail "fresh: the development OIDC secret leaked into the release stack"
 grep -qF 'postgres://probara:probara@' <<<"$resolved" && fail "fresh: the development database password leaked into the release stack"
+for key in APP_BASE_URL STATUS_PAGE_BASE_URL; do
+  [[ "$(defined "$fresh" "$key")" == 1 ]] || fail "fresh: $key is defined $(defined "$fresh" "$key") times"
+  grep -qx "$key=" "$fresh/.env" || fail "fresh: $key is not an empty placeholder"
+  grep -qF "$key" <<<"$out" || fail "fresh: the closing text does not mention $key"
+done
+grep -qF '"STATUS_PAGE_BASE_URL": "http://localhost' <<<"$resolved" && fail "fresh: STATUS_PAGE_BASE_URL defaults to localhost"
+[[ "$(grep -cF '"STATUS_PAGE_BASE_URL": ""' <<<"$resolved")" == 3 ]] || fail "fresh: STATUS_PAGE_BASE_URL is not empty on api, frontend and status-page"
 
 cp "$fresh/.env" "$fresh/.env.first"
 out="$(run "$fresh" 2.1.0)"
@@ -83,10 +93,11 @@ printf '%s\n' \
   'NATS_LOCATION_AUTH_ISSUER_PUBLIC_KEY:AFAKEPUBLIC' \
   "export BOOTSTRAP_SETUP_CODE: 'KEEP-THIS-CODE'" \
   $'\tPROBARA_TRUSTED_PROXIES\t=\t10.0.0.0/8' \
+  'STATUS_PAGE_BASE_URL=https://status.example.com' \
   'export COMPOSE_PROFILES=' > "$edited/.env"
 
 out="$(run "$edited" 2.1.0)"
-for key in "${required_secrets[@]}" COMPOSE_PROFILES PROBARA_VERSION PROBARA_TRUSTED_PROXIES; do
+for key in "${required_secrets[@]}" COMPOSE_PROFILES PROBARA_VERSION PROBARA_TRUSTED_PROXIES STATUS_PAGE_BASE_URL; do
   [[ "$(defined "$edited" "$key")" == 1 ]] || fail "edited: $key is defined $(defined "$edited" "$key") times"
 done
 grep -qx 'export ADMIN_JWT_SECRET=hand-edited-jwt' "$edited/.env" || fail "edited: export form was rewritten"
@@ -105,6 +116,8 @@ for want in hand-edited-jwt 'postgres://probara:keepme@' 'nats://probara-platfor
   'AFAKEPUBLIC' '"PROBARA_TRUSTED_PROXIES": "10.0.0.0/8"'; do
   grep -qF -- "$want" <<<"$resolved" || fail "edited: compose did not resolve $want"
 done
+[[ "$(grep -cF '"STATUS_PAGE_BASE_URL": "https://status.example.com"' <<<"$resolved")" == 3 ]] \
+  || fail "edited: STATUS_PAGE_BASE_URL did not reach api, frontend and status-page"
 
 cp "$edited/.env" "$edited/.env.first"
 run "$edited" 2.1.0 >/dev/null
