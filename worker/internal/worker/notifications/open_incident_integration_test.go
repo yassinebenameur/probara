@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/testutil"
@@ -208,62 +209,227 @@ func TestHandle_PagingIncidentFollowsDeliveredPages(t *testing.T) {
 }
 
 // A relapse notice held by an acknowledgement after it was claimed is handed
-// back to exactly the row the claim replaced: a route that had heard the
-// earlier recovery is 'resolved' in that episode again, with its time, as
-// if the acknowledgement had come before the claim (then nothing is
-// claimed), so the relapse's own resolve skips it either way.
+// back to the row the claim replaced, with its time and episode, as if the
+// acknowledgement had come before the claim. A replaced 'resolved' stays
+// 'resolved' only when that recovery notice possibly reached the channel
+// (its delivery key's attempt marker, which a delivered resolve keeps): then
+// the relapse's own resolve skips the route, as it would have. A recovery
+// notice that never reached it (still on a retry, or dropped once the alert
+// reopened) hands the row back as 'created', so the route hears the next
+// recovery.
 func TestHandle_HeldRelapseNoticeRestoresTheRow(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "held-notice")
+	recoveryAt := time.Now().Add(-10 * time.Minute).UTC().Truncate(time.Microsecond)
+	claimedAt := time.Now().Add(-30 * time.Second).UTC().Truncate(time.Microsecond)
+	for _, tc := range []struct {
+		name  string
+		heard bool
+		want  string
+	}{
+		{"the recovery notice reached the channel", true, "resolved"},
+		{"the recovery notice never reached the channel", false, "created"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API "+tc.want)
+			alertID, ch := uuid.New(), uuid.New()
+			for _, q := range []struct {
+				sql  string
+				args []any
+			}{
+				{`INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, acknowledged_at, relapse_count, reopened_at,
+					failure_count, created_at, updated_at)
+				VALUES ($1, $2, $3, 'availability', 'acknowledged', NOW() - INTERVAL '1 hour', NOW(), 1, NOW() - INTERVAL '1 minute', 3, NOW(), NOW())`,
+					[]any{alertID, tenantID, monitorID}},
+				{`INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
+				VALUES ($1, $2, 'chat', $3, '{}'::jsonb, TRUE, NOW(), NOW())`, []any{ch, tenantID, muteStubType}},
+				{`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, paged_relapse, delivered_relapse)
+				VALUES ($1, $2, $3, 'relapsed', 1, 0)`, []any{alertID, ch, claimedAt}},
+			} {
+				if _, err := dbClient.ExecContext(ctx, q.sql, q.args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.heard {
+				// What a delivered episode-0 resolve leaves: its own marker.
+				if _, err := recipientledger.MarkAttempt(ctx, dbClient, alertID, ch, notifications.RecipientEventKeyFor("resolved", time.Time{}, 0)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			zero := 0
+			raw, _ := json.Marshal(notifications.DispatchEnvelope{
+				V: 1, ChannelID: ch.String(), ChannelType: muteStubType,
+				AlertID: alertID.String(), EventType: "created",
+				DeliveryKey: notifications.RecipientEventKeyFor("relapsed", time.Time{}, 1),
+				Event: notifications.AlertEvent{Type: "created", Timestamp: claimedAt,
+					Alert: notifications.AlertDetails{ID: alertID.String(), RelapseCount: 1, RelapseNotice: true,
+						PagedRelapse: 1, PreviousPagedRelapse: &zero}},
+				Release: &notifications.ClaimRelease{EventType: "resolved", SentAt: &recoveryAt, PagedRelapse: 0},
+			})
+			muteStub.take()
+			c := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
+			if err := c.handle(ctx, &queue.Message{Data: raw, NumDelivered: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if sent := muteStub.take(); len(sent) != 0 {
+				t.Fatalf("a held relapse notice was sent: %v", sent)
+			}
+			var lastEvent string
+			var lastSent time.Time
+			var paged int
+			if err := dbClient.QueryRowContext(ctx, `SELECT last_event_type, last_sent_at, paged_relapse FROM alert_notification_states
+				WHERE alert_id = $1 AND channel_id = $2`, alertID, ch).Scan(&lastEvent, &lastSent, &paged); err != nil {
+				t.Fatal(err)
+			}
+			if lastEvent != tc.want || !lastSent.Equal(recoveryAt) || paged != 0 {
+				t.Fatalf("row after the hand-back = (%s, %s, %d), want (%s, %s, 0)", lastEvent, lastSent, paged, tc.want, recoveryAt)
+			}
+		})
+	}
+}
+
+// The recovery notice of episode 0 fails transiently and waits on a retry;
+// the alert reopens and the relapse notice is claimed; the retried recovery
+// notice is dropped (the alert is open again) while the row says 'relapsed',
+// so it hands nothing back; the alert is acknowledged and the retried relapse
+// notice is held. The channel never heard the first recovery, so it must
+// hear the relapse's: the alerter's resolve claim must win on the row the
+// held notice handed back, and the worker deliver it.
+func TestHandle_HeldRelapseNoticeAfterADroppedRecoveryStillGetsTheNextRecovery(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "held-after-drop")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	alertID, ch := uuid.New(), uuid.New()
-	heardRecovery := time.Now().Add(-10 * time.Minute).UTC().Truncate(time.Microsecond)
-	claimedAt := time.Now().Add(-30 * time.Second).UTC().Truncate(time.Microsecond)
-	for _, q := range []struct {
-		sql  string
-		args []any
-	}{
-		{`INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, acknowledged_at, relapse_count, reopened_at,
-			failure_count, created_at, updated_at)
-		VALUES ($1, $2, $3, 'availability', 'acknowledged', NOW() - INTERVAL '1 hour', NOW(), 1, NOW() - INTERVAL '1 minute', 3, NOW(), NOW())`,
-			[]any{alertID, tenantID, monitorID}},
-		{`INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
-		VALUES ($1, $2, 'chat', $3, '{}'::jsonb, TRUE, NOW(), NOW())`, []any{ch, tenantID, muteStubType}},
-		{`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, paged_relapse, delivered_relapse)
-		VALUES ($1, $2, $3, 'relapsed', 1, 0)`, []any{alertID, ch, claimedAt}},
-	} {
-		if _, err := dbClient.ExecContext(ctx, q.sql, q.args...); err != nil {
+	exec := func(q string, args ...any) int64 {
+		t.Helper()
+		res, err := dbClient.ExecContext(ctx, q, args...)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		n, _ := res.RowsAffected()
+		return n
+	}
+	exec(`INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, 'availability', 'active', NOW() - INTERVAL '1 hour', 3, NOW(), NOW())`, alertID, tenantID, monitorID)
+	exec(`INSERT INTO alert_channels (id, tenant_id, name, type, config, is_active, created_at, updated_at)
+		VALUES ($1, $2, 'chat', $3, '{}'::jsonb, TRUE, NOW(), NOW())`, ch, tenantID, muteStubType)
+	// Paged and delivered in episode 0.
+	exec(`INSERT INTO alert_notification_states (alert_id, channel_id, last_sent_at, last_event_type, paged_relapse, delivered_relapse)
+		VALUES ($1, $2, NOW() - INTERVAL '50 minutes', 'created', 0, 0)`, alertID, ch)
+
+	c := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
+	handle := func(env notifications.DispatchEnvelope, attempt uint64) error {
+		raw, _ := json.Marshal(env)
+		return c.handle(ctx, &queue.Message{Data: raw, NumDelivered: attempt})
+	}
+	failNext := func() {
+		muteStub.mu.Lock()
+		defer muteStub.mu.Unlock()
+		if muteStub.fail == nil {
+			muteStub.fail = map[string]error{}
+		}
+		muteStub.fail[ch.String()] = plugin.NotDelivered(errors.New("returned status 503"))
+	}
+	row := func() (string, int) {
+		t.Helper()
+		var event string
+		var paged int
+		if err := dbClient.QueryRowContext(ctx, `SELECT last_event_type, paged_relapse FROM alert_notification_states
+			WHERE alert_id = $1 AND channel_id = $2`, alertID, ch).Scan(&event, &paged); err != nil {
 			t.Fatal(err)
 		}
+		return event, paged
+	}
+	// The alerter's resolve claim (claimNotificationTx): wins unless the row
+	// already says 'resolved'.
+	claimResolve := func(at time.Time) bool {
+		return exec(`UPDATE alert_notification_states SET last_sent_at = $3, last_event_type = 'resolved', updated_at = NOW()
+			WHERE alert_id = $1 AND channel_id = $2 AND last_event_type <> 'resolved'`, alertID, ch, at) == 1
+	}
+	resolveEnvelope := func(at time.Time, episode int) notifications.DispatchEnvelope {
+		return notifications.DispatchEnvelope{
+			V: 1, ChannelID: ch.String(), ChannelType: muteStubType,
+			AlertID: alertID.String(), EventType: "resolved",
+			DeliveryKey: notifications.RecipientEventKeyFor("resolved", time.Time{}, episode),
+			Event: notifications.AlertEvent{Type: "resolved", Timestamp: at,
+				Alert: notifications.AlertDetails{ID: alertID.String(), RelapseCount: episode, PagedRelapse: 0}},
+		}
+	}
+	muteStub.take()
+
+	// 1. The alert recovers; the recovery notice is claimed and queued, and
+	// the provider answers 503: it waits on its retry backoff.
+	exec(`UPDATE alerts SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1`, alertID)
+	recoveredAt := time.Now().Add(-5 * time.Minute).UTC().Truncate(time.Microsecond)
+	if !claimResolve(recoveredAt) {
+		t.Fatal("first recovery claim lost")
+	}
+	firstRecovery := resolveEnvelope(recoveredAt, 0)
+	failNext()
+	if err := handle(firstRecovery, 1); err == nil {
+		t.Fatal("the failing recovery notice was not retried")
+	}
+
+	// 2. The monitor fails again and the alert reopens; the relapse notice is
+	// claimed (resolved -> relapsed), and its first attempt fails too.
+	exec(`UPDATE alerts SET status = 'active', resolved_at = NULL, relapse_count = 1, reopened_at = NOW(), updated_at = NOW()
+		WHERE id = $1`, alertID)
+	claimedAt := time.Now().Add(-4 * time.Minute).UTC().Truncate(time.Microsecond)
+	if exec(`UPDATE alert_notification_states SET last_sent_at = $3, last_event_type = 'relapsed', paged_relapse = 1, updated_at = NOW()
+		WHERE alert_id = $1 AND channel_id = $2 AND paged_relapse < 1`, alertID, ch, claimedAt) != 1 {
+		t.Fatal("relapse claim lost")
 	}
 	zero := 0
-	raw, _ := json.Marshal(notifications.DispatchEnvelope{
+	notice := notifications.DispatchEnvelope{
 		V: 1, ChannelID: ch.String(), ChannelType: muteStubType,
 		AlertID: alertID.String(), EventType: "created",
 		DeliveryKey: notifications.RecipientEventKeyFor("relapsed", time.Time{}, 1),
 		Event: notifications.AlertEvent{Type: "created", Timestamp: claimedAt,
 			Alert: notifications.AlertDetails{ID: alertID.String(), RelapseCount: 1, RelapseNotice: true,
 				PagedRelapse: 1, PreviousPagedRelapse: &zero}},
-		Release: &notifications.ClaimRelease{EventType: "resolved", SentAt: &heardRecovery, PagedRelapse: 0},
-	})
-	muteStub.take()
-	c := &Consumer{logger: logger.New("test", "error"), db: dbClient, encryptor: secrets.NoOpEncryptor{}}
-	if err := c.handle(ctx, &queue.Message{Data: raw, NumDelivered: 1}); err != nil {
+		Release: &notifications.ClaimRelease{EventType: "resolved", SentAt: &recoveredAt, PagedRelapse: 0},
+	}
+	failNext()
+	if err := handle(notice, 1); err == nil {
+		t.Fatal("the failing relapse notice was not retried")
+	}
+
+	// 3. The recovery notice's retry is dropped: the alert is open again.
+	// The row no longer records its claim, so nothing is handed back.
+	if err := handle(firstRecovery, 2); err != nil {
+		t.Fatal(err)
+	}
+	if event, _ := row(); event != "relapsed" {
+		t.Fatalf("row after the dropped recovery = %s, want relapsed", event)
+	}
+
+	// 4. An operator acknowledges; the relapse notice's retry is held.
+	exec(`UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW(), updated_at = NOW() WHERE id = $1`, alertID)
+	if err := handle(notice, 2); err != nil {
 		t.Fatal(err)
 	}
 	if sent := muteStub.take(); len(sent) != 0 {
-		t.Fatalf("a held relapse notice was sent: %v", sent)
+		t.Fatalf("sent so far = %v, want nothing (every send failed, was dropped or held)", sent)
 	}
-	var lastEvent string
-	var lastSent time.Time
-	var paged int
-	if err := dbClient.QueryRowContext(ctx, `SELECT last_event_type, last_sent_at, paged_relapse FROM alert_notification_states
-		WHERE alert_id = $1 AND channel_id = $2`, alertID, ch).Scan(&lastEvent, &lastSent, &paged); err != nil {
+	if event, paged := row(); event != "created" || paged != 0 {
+		t.Fatalf("row after the held notice = (%s, %d), want (created, 0): the channel never heard the recovery", event, paged)
+	}
+
+	// 5. The alert recovers while still acknowledged: the alerter claims the
+	// relapse's recovery notice for this route and the worker delivers it.
+	exec(`UPDATE alerts SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1`, alertID)
+	finalAt := time.Now().UTC().Truncate(time.Microsecond)
+	if !claimResolve(finalAt) {
+		t.Fatal("the relapse's recovery was not claimed for a route that never heard a recovery")
+	}
+	if err := handle(resolveEnvelope(finalAt, 1), 1); err != nil {
 		t.Fatal(err)
 	}
-	if lastEvent != "resolved" || !lastSent.Equal(heardRecovery) || paged != 0 {
-		t.Fatalf("row after the hand-back = (%s, %s, %d), want (resolved, %s, 0): as if never claimed", lastEvent, lastSent, paged, heardRecovery)
+	if sent := muteStub.take(); len(sent) != 1 || sent[0] != "resolved" {
+		t.Fatalf("sent = %v, want the relapse's recovery notice", sent)
 	}
 }

@@ -848,7 +848,9 @@ or imported groups come back empty. Any other path that creates groups through
   under their delivery key, which carries the episode
   (`releaseSupersededResolveClaim` and the relapse branch of
   `releaseMutedClaim` read it); a held relapse notice is handed back to the
-  exact row its claim replaced (`DispatchEnvelope.Release`). Dispatch message ids are the idempotency key plus the
+  exact row its claim replaced (`DispatchEnvelope.Release`), except a
+  `resolved` whose resolve never reached the channel, which goes back as
+  `created` (`recoveryReached`, the resolve's own marker). Dispatch message ids are the idempotency key plus the
   claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
   finds again on retry (the resume clock for a page, `relapsed:` plus it
   for a relapse notice, the round for a reminder, `acknowledged_at` for an
@@ -973,7 +975,10 @@ or imported groups come back empty. Any other path that creates groups through
   request logs and metric labels cannot record it; the public API routes are
   `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
   Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
-  link when it has one.
+  link when it has one. A link acts only on its alert episode: the handler
+  refuses one issued (`actionlink.Claims.IssuedAt`, derived from the fixed
+  TTL) before the latest relapse's recovery (`issuedInEarlierEpisode`), so
+  changing an action's TTL shifts every outstanding link's issue time.
 - **Delivery history** (`alert_notification_deliveries`, 90 days) is written
   only through `shared/notifications/deliverylog`, from exactly two send
   paths — `deliverNotification` (`alerter/.../delivery_log.go`: in the claim
