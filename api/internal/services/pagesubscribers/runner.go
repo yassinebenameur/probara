@@ -116,13 +116,26 @@ func (s *Service) RunOnce(ctx context.Context) error {
 			sent += n
 		}
 	}
-	if now := s.now(); now.Sub(s.lastPrune) >= pruneEvery {
+	if now := s.now(); s.pruneDue(now) {
 		if err := s.prune(ctx, now); err != nil {
 			return quietCancel(ctx, err)
 		}
-		s.lastPrune = now
 	}
 	return nil
+}
+
+// pruneDue reports whether the hourly prune is owed and, if so, takes it:
+// the clock is advanced before the prune runs so a concurrent pass does not
+// start a second one. A failed prune is simply retried an hour later; the
+// rows it removes are only old ones.
+func (s *Service) pruneDue(now time.Time) bool {
+	s.pruneMu.Lock()
+	defer s.pruneMu.Unlock()
+	if now.Sub(s.lastPrune) < pruneEvery {
+		return false
+	}
+	s.lastPrune = now
+	return true
 }
 
 func quietCancel(ctx context.Context, err error) error {

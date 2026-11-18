@@ -165,7 +165,10 @@ type Service struct {
 	lastWake time.Time
 	// sendConcurrency bounds simultaneous sends in one delivery batch.
 	sendConcurrency int
-	// lastPrune is when the Runner last pruned; prunes run hourly.
+	// lastPrune is when the Runner last pruned; prunes run hourly. pruneMu
+	// guards it: RunOnce may be called concurrently on one Service (the ticker
+	// and an early wake, or tests standing in for two replicas).
+	pruneMu   sync.Mutex
 	lastPrune time.Time
 }
 
