@@ -1,11 +1,14 @@
 package statuspage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
 // Temporary helper: renders a rich sample page to /tmp for visual review.
@@ -193,6 +196,15 @@ func TestWriteClassicPreviewHTML(t *testing.T) {
 	flat := classicSampleData(scenarioOperational, now)
 	flat.Sections = nil
 	write("nosections", flat)
+
+	// Kiosk previews: 1, 4, 9, 24 and 60 services, with both built-ins.
+	for _, n := range []int{1, 4, 9, 24, 60} {
+		kiosk := kioskSampleData(n, now)
+		write(fmt.Sprintf("kiosk-%d", n), kiosk)
+		kiosk = kioskSampleData(n, now)
+		kiosk.Template = statustemplate.BuiltinDefault
+		write(fmt.Sprintf("kiosk-%d-default", n), kiosk)
+	}
 
 	long := classicSampleData(scenarioOutage, now)
 	long.Title = "Example Cloud Platform Services and Regional Infrastructure status"

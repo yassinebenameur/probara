@@ -259,37 +259,72 @@
     :root[data-mode="compact"] .top { padding: 20px 0 24px; }
     :root[data-mode="compact"] section { margin-top: 32px; }
 
-    /* Kiosk: a full-screen wall view. */
-    .kiosk { display: none; }
+    /* Kiosk: a wall view read from across the room. A slim top bar carries
+       the overall state, the fleet counts and the clock; below, every
+       service is a tile in section groups. layoutKiosk() picks the column
+       count and tile height that fill the screen (few services: large
+       tiles; many: small) and sets --k-s, the type scale; data-density
+       sheds tile detail when even the smallest tiles cannot hold it. A tile
+       in trouble is tinted with an edge in its tone; healthy tiles stay
+       plain and their green history is dimmed, so problems stand out. */
+    .kiosk { display: none; --k-cols: 4; --k-s: 1; }
     :root[data-mode="kiosk"] body { overflow: hidden; }
     :root[data-mode="kiosk"] .page, :root[data-mode="kiosk"] .tip { display: none; }
-    :root[data-mode="kiosk"] .kiosk { display: flex; flex-direction: column; height: 100vh; height: 100dvh; padding: 22px 28px 28px; gap: 18px; }
-    .k-top { display: flex; align-items: center; gap: 12px; }
-    .k-top .name { font-size: 20px; }
-    .k-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
-    .k-clock { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-    .k-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
-    .k-banner { padding: 24px 26px; gap: 18px; }
-    .k-banner .banner-icon { width: 44px; height: 44px; }
-    .k-banner .banner-icon svg { width: 24px; height: 24px; }
-    .k-banner .banner-title { font-size: 32px; }
-    .k-banner .banner-sub { font-size: 16px; }
-    .k-sec-name { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--ink-3); }
-    .k-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
-    .k-tile { padding: 14px 16px; min-width: 0; }
-    .k-tile-head { display: flex; align-items: baseline; gap: 10px; }
-    .k-name { min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .k-tile .comp-state { min-width: 0; margin-left: auto; }
-    .k-tile .bars { height: 22px; margin-top: 10px; gap: 2px; }
-    .kiosk[data-density="2"] .k-banner { padding: 16px 22px; }
-    .kiosk[data-density="2"] .k-banner .banner-title { font-size: 24px; }
-    .kiosk[data-density="2"] .k-tile { padding: 10px 12px; }
-    .kiosk[data-density="2"] .k-tile .bars { height: 12px; margin-top: 7px; }
-    .kiosk[data-density="3"] .k-banner { padding: 12px 18px; }
-    .kiosk[data-density="3"] .k-banner .banner-title { font-size: 20px; }
-    .kiosk[data-density="3"] .k-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 6px; }
-    .kiosk[data-density="3"] .k-tile { padding: 8px 10px; font-size: 13px; }
-    .kiosk[data-density="3"] .k-tile .bars { display: none; }
+    :root[data-mode="kiosk"] .kiosk { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+    .k-top { flex: none; display: flex; align-items: center; gap: 28px; min-height: 76px; padding: 12px 28px; border-bottom: 1px solid var(--edge); background: var(--panel); }
+    .k-top[data-t="warn"] { background: linear-gradient(var(--warn-tint), var(--warn-tint)), linear-gradient(var(--warn-tint), var(--warn-tint)), var(--panel); }
+    .k-top[data-t="down"] { background: linear-gradient(var(--down-tint), var(--down-tint)), linear-gradient(var(--down-tint), var(--down-tint)), var(--panel); }
+    .k-top[data-t="maint"] { background: linear-gradient(var(--maint-tint), var(--maint-tint)), linear-gradient(var(--maint-tint), var(--maint-tint)), var(--panel); }
+    .k-id { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 1 auto; }
+    .k-id .name { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .k-overall { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .k-overall .banner-icon { width: 34px; height: 34px; }
+    .k-top[data-t="warn"] .banner-icon { background: var(--warn); } .k-top[data-t="down"] .banner-icon { background: var(--down); }
+    .k-top[data-t="maint"] .banner-icon { background: var(--maint); } .k-top[data-t="unknown"] .banner-icon { background: var(--ink-3); }
+    .k-overall-title { margin: 0; font-size: 30px; font-weight: 600; line-height: 1.1; letter-spacing: -.015em; white-space: nowrap; }
+    .k-counts { display: flex; align-items: baseline; gap: 24px; margin: 0 auto; padding: 0; list-style: none; }
+    .k-count { display: flex; align-items: baseline; gap: 7px; font-size: 14px; color: var(--ink-3); white-space: nowrap; }
+    .k-count b { font-size: 26px; font-weight: 600; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+    .k-count[data-t="ok"] b { color: var(--ink); }
+    .k-count[data-t="ok"] { color: var(--ink-2); }
+    .k-count[data-hot] { font-weight: 600; }
+    .k-count[data-hot][data-t="warn"], .k-count[data-hot][data-t="warn"] b { color: var(--warn-ink); }
+    .k-count[data-hot][data-t="down"], .k-count[data-hot][data-t="down"] b { color: var(--down-ink); }
+    .k-count[data-hot][data-t="maint"], .k-count[data-hot][data-t="maint"] b { color: var(--maint-ink); }
+    .k-count[data-hot][data-t="unknown"], .k-count[data-hot][data-t="unknown"] b { color: var(--ink-2); }
+    .k-right { display: flex; align-items: center; gap: 16px; flex: none; }
+    .k-right .js-updated { font-size: 13px; color: var(--ink-3); white-space: nowrap; }
+    .k-clock { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+    .k-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 28px 24px; display: flex; flex-direction: column; gap: 18px; }
+    .k-sec { margin: 0; }
+    .k-sec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .k-sec-name { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+    .k-sec-count { padding: 0 7px; border-radius: 999px; background: var(--well); font-size: 12px; line-height: 20px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+    .k-rule { flex: 1; height: 1px; background: var(--rule); min-width: 16px; }
+    .k-sec-state { font-size: 14px; font-weight: 600; white-space: nowrap; color: var(--ink-3); }
+    .k-sec-state[data-t="ok"] { font-weight: 500; }
+    .k-sec-state[data-t="warn"] { color: var(--warn-ink); } .k-sec-state[data-t="down"] { color: var(--down-ink); } .k-sec-state[data-t="maint"] { color: var(--maint-ink); } .k-sec-state[data-t="unknown"] { color: var(--ink-2); }
+    .k-grid { display: grid; grid-template-columns: repeat(var(--k-cols), minmax(0, 1fr)); grid-auto-rows: var(--k-tile-h, auto); gap: 12px; }
+    .k-tile { position: relative; min-width: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: calc(5px * var(--k-s)); padding: calc(13px * var(--k-s)) calc(16px * var(--k-s)); background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; box-shadow: var(--shadow); }
+    .k-tile[data-t="warn"] { background: linear-gradient(var(--warn-tint), var(--warn-tint)), linear-gradient(var(--warn-tint), var(--warn-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--warn), var(--shadow); }
+    .k-tile[data-t="down"] { background: linear-gradient(var(--down-tint), var(--down-tint)), linear-gradient(var(--down-tint), var(--down-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--down), var(--shadow); }
+    .k-tile[data-t="maint"] { background: linear-gradient(var(--maint-tint), var(--maint-tint)), linear-gradient(var(--maint-tint), var(--maint-tint)), var(--panel); box-shadow: inset 4px 0 0 var(--maint), var(--shadow); }
+    .k-tile[data-t="unknown"] { background: linear-gradient(var(--well), var(--well)), var(--panel); box-shadow: inset 4px 0 0 var(--ink-3), var(--shadow); }
+    .k-tile-head { display: flex; align-items: baseline; gap: calc(10px * var(--k-s)); min-width: 0; }
+    .k-name { min-width: 0; font-size: calc(17px * var(--k-s)); font-weight: 500; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .k-state { margin-left: auto; flex: none; font-size: calc(16px * var(--k-s)); font-weight: 500; line-height: 1.25; color: var(--ok-ink); white-space: nowrap; }
+    .k-tile:not([data-t="ok"]) .k-state { font-weight: 700; }
+    .k-state[data-t="warn"] { color: var(--warn-ink); } .k-state[data-t="down"] { color: var(--down-ink); } .k-state[data-t="maint"] { color: var(--maint-ink); } .k-state[data-t="unknown"] { color: var(--ink-2); }
+    .k-sub { font-size: calc(13px * var(--k-s)); line-height: 1.3; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .k-metrics { display: flex; gap: calc(18px * var(--k-s)); font-size: calc(13px * var(--k-s)); line-height: 1.3; color: var(--ink-3); white-space: nowrap; overflow: hidden; }
+    .k-metrics b { font-size: calc(15px * var(--k-s)); font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+    .k-tile > * { flex: none; }
+    .k-tile .bars { height: calc(22px * var(--k-s)); margin-top: calc(6px * var(--k-s)); gap: 2px; }
+    .k-tile .bars i[data-t="ok"] { opacity: .5; }
+    .kiosk[data-density="2"] .k-metrics { display: none; }
+    .kiosk[data-density="3"] .k-metrics, .kiosk[data-density="3"] .k-sub { display: none; }
+    .kiosk[data-density="4"] .k-metrics, .kiosk[data-density="4"] .k-sub, .kiosk[data-density="4"] .k-tile .bars { display: none; }
+    .kiosk[data-density="4"] .k-tile { justify-content: center; }
 
     @media (max-width: 640px) {
       .page { padding: 0 14px 64px; }
@@ -308,8 +343,13 @@
       .sub { grid-template-columns: 1fr; padding: 18px 16px; }
       .bars { gap: 1px; }
       .keys { display: none; }
-      :root[data-mode="kiosk"] .kiosk { padding: 14px; }
+      .k-top { flex-wrap: wrap; gap: 10px 16px; padding: 12px 14px; }
+      .k-counts { order: 3; width: 100%; margin: 0; gap: 14px; flex-wrap: wrap; }
+      .k-right { margin-left: auto; }
+      .k-overall-title { font-size: 22px; }
       .k-clock { font-size: 20px; }
+      .k-right .js-updated { display: none; }
+      .k-body { padding: 14px; }
     }
     @media (hover: none) { .keys { display: none; } }
     @media (prefers-reduced-motion: reduce) {
@@ -460,35 +500,43 @@
 </div>
 
 <div class="kiosk" id="kioskView">
-  <header class="k-top">
-    {{if .HasLogo}}<img class="logo-img" src="{{.LogoURL}}" alt="" />{{else}}<div class="logo" aria-hidden="true">{{printf "%.1s" .Title}}</div>{{end}}
-    <p class="name">{{.Title}}</p>
+  <header class="k-top" id="kioskTop" data-t="{{.BannerTone}}">
+    <div class="k-id">
+      {{if .HasLogo}}<img class="logo-img" src="{{.LogoURL}}" alt="" />{{else}}<div class="logo" aria-hidden="true">{{printf "%.1s" .Title}}</div>{{end}}
+      <p class="name">{{.Title}}</p>
+    </div>
+    <div class="k-overall" role="status">
+      <span class="banner-icon" aria-hidden="true">{{template "classicBannerIcon" .BannerTone}}</span>
+      <p class="k-overall-title">{{.BannerTitle}}</p>
+    </div>
+    <ul class="k-counts" aria-label="Services by state">
+      <li class="k-count" data-t="ok"><b>{{.OperationalCount}}</b>Operational</li>
+      <li class="k-count" data-t="warn"{{if .DegradedCount}} data-hot{{end}}><b>{{.DegradedCount}}</b>Degraded</li>
+      <li class="k-count" data-t="down"{{if .DownCount}} data-hot{{end}}><b>{{.DownCount}}</b>Outage</li>
+      <li class="k-count" data-t="maint"{{if .MaintenanceCount}} data-hot{{end}}><b>{{.MaintenanceCount}}</b>Maintenance</li>
+      {{if .UnknownCount}}<li class="k-count" data-t="unknown" data-hot><b>{{.UnknownCount}}</b>Unknown</li>{{end}}
+    </ul>
     <div class="k-right">
+      <span class="js-updated" data-at="{{.RenderedAtISO}}">Updated at {{slice .RenderedAtISO 11 16}} UTC</span>
       <span class="k-clock" id="kioskTime"></span>
       <button type="button" class="btn" id="kioskExitBtn">Exit <kbd>Esc</kbd></button>
     </div>
   </header>
   <div class="k-body" id="kioskBody">
-    <div class="panel banner k-banner" data-t="{{.BannerTone}}">
-      <div class="banner-icon" aria-hidden="true">{{template "classicBannerIcon" .BannerTone}}</div>
-      <div class="banner-text">
-        <p class="banner-title">{{.BannerTitle}}</p>
-        {{if .BannerSummary}}<div class="banner-sub">{{.BannerSummary}}</div>{{end}}
-      </div>
-      <div class="banner-time js-updated" data-at="{{.RenderedAtISO}}">Updated at {{slice .RenderedAtISO 11 16}} UTC</div>
-    </div>
     {{range .Sections}}
-    <div class="k-sec">
-      {{if or (gt (len $.Sections) 1) (ne .Title "Services")}}<h2 class="k-sec-name">{{.Title}}</h2>{{end}}
+    <section class="k-sec" aria-label="{{.Title}}">
+      {{if or (gt (len $.Sections) 1) (ne .Title "Services")}}<div class="k-sec-head"><h2 class="k-sec-name">{{.Title}}</h2><span class="k-sec-count">{{.MonitorCount}}</span><span class="k-rule"></span><span class="k-sec-state" data-t="{{.ToneClass}}">{{.StatusSummary}}</span></div>{{end}}
       <div class="k-grid">
         {{range .Monitors}}
-        <div class="panel k-tile">
-          <div class="k-tile-head"><span class="k-name" title="{{.Name}}">{{.Name}}</span><span class="comp-state" data-t="{{.ToneClass}}">{{.StatusWord}}</span></div>
-          {{if $.ShowMonitorUptime}}<span class="bars js-strip" aria-hidden="true" data-max-cells="48" data-range-24h="{{.Bars24hJSON}}" data-range-7d="{{.Bars7dJSON}}" data-range-30d="{{.Bars30dJSON}}" data-range-90d="{{.Bars90dJSON}}"></span>{{end}}
+        <div class="k-tile" data-t="{{.ToneClass}}">
+          <div class="k-tile-head"><span class="k-name" title="{{.Name}}">{{.Name}}</span><span class="k-state" data-t="{{.ToneClass}}">{{.StatusWord}}</span></div>
+          <div class="k-sub">{{.TypeLabel}} · <span data-ago="{{.LastCheckUnix}}">{{.LastCheckAgo}}</span></div>
+          <div class="k-metrics"><span><b>{{.LatencyText}}</b> latency</span>{{if $.ShowMonitorUptime}}<span><b data-uptime-value data-range-value-24h="{{.Uptime24Value}}" data-range-value-7d="{{.Uptime7Value}}" data-range-value-30d="{{.Uptime30Value}}" data-range-value-90d="{{.Uptime90Value}}">{{.Uptime24Value}}</b> uptime</span>{{end}}</div>
+          {{if $.ShowMonitorUptime}}<span class="bars js-strip k-strip" aria-hidden="true" data-max-cells="48" data-range-24h="{{.Bars24hJSON}}" data-range-7d="{{.Bars7dJSON}}" data-range-30d="{{.Bars30dJSON}}" data-range-90d="{{.Bars90dJSON}}"></span>{{end}}
         </div>
         {{end}}
       </div>
-    </div>
+    </section>
     {{end}}
   </div>
 </div>
@@ -574,6 +622,9 @@
         var value = el.getAttribute('data-range-value-' + activeRange) || '—';
         el.textContent = value === '—' ? 'No data' : value + ' uptime';
       });
+      all('[data-uptime-value]').forEach(function (el) {
+        el.textContent = el.getAttribute('data-range-value-' + activeRange) || '—';
+      });
       all('[data-axis-start]').forEach(function (el) { el.textContent = RANGE_TEXT[activeRange].start; });
       all('[data-axis-end]').forEach(function (el) { el.textContent = RANGE_TEXT[activeRange].end; });
       if (syncUrl) setParam('range', activeRange, defaultRange);
@@ -642,16 +693,54 @@
       if (next === 'kiosk') { updateClock(); scheduleFit(); }
     }
 
-    // Kiosk density: raise it until the wall view fits, then let it scroll.
+    // Kiosk layout: choose the column count whose tiles are largest while
+    // every section fits the screen (rows are counted per section, since each
+    // starts its own row), cap a tile at a sensible shape, and scale the
+    // type with the tile. Then shed detail tier by tier while any tile
+    // overflows; past the last tier the body scrolls.
     var fitScheduled = false;
+    var K_GAP = 12, K_MIN_W = 150, K_MIN_H = 44;
     function fitKiosk() {
       if (currentMode() !== 'kiosk') return;
       var view = document.getElementById('kioskView');
       var bodyEl = document.getElementById('kioskBody');
       if (!view || !bodyEl) return;
-      for (var tier = 1; tier <= 3; tier++) {
+      var sections = all('#kioskBody .k-sec');
+      var counts = sections.map(function (sec) { return sec.querySelectorAll('.k-tile').length; }).filter(function (n) { return n > 0; });
+      var total = counts.reduce(function (a, b) { return a + b; }, 0);
+      if (!total) return;
+      var style = window.getComputedStyle(bodyEl);
+      var width = bodyEl.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      var height = bodyEl.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      var chrome = all('#kioskBody .k-sec-head').reduce(function (h, el) { return h + el.offsetHeight + 10; }, 0) + 18 * (counts.length - 1);
+      var best = null;
+      for (var cols = 1; cols <= total; cols++) {
+        var tileW = (width - K_GAP * (cols - 1)) / cols;
+        if (tileW < K_MIN_W && best) break;
+        var rows = counts.reduce(function (r, n) { return r + Math.ceil(n / cols); }, 0);
+        var tileH = (height - chrome - K_GAP * (rows - counts.length)) / rows;
+        var h = Math.min(tileH, tileW / 1.6);
+        var score = h * Math.min(tileW, h * 4.5);
+        if (!best || score > best.score) best = { cols: cols, w: tileW, h: h, score: score };
+      }
+      var tileHeight = Math.max(K_MIN_H, Math.floor(best.h));
+      // The type follows the tile, but never outgrows its width (a lone
+      // service gets large type, not a stretched layout).
+      var scale = Math.max(0.66, Math.min(4, tileHeight / 132, best.w / 270));
+      view.style.setProperty('--k-cols', String(best.cols));
+      view.style.setProperty('--k-tile-h', tileHeight + 'px');
+      view.style.setProperty('--k-s', scale.toFixed(3));
+      var cells = Math.max(12, Math.min(90, Math.floor((best.w - 32 * scale) / (4 + 3 * scale))));
+      all('#kioskBody .k-strip').forEach(function (el) {
+        if (el.getAttribute('data-max-cells') !== String(cells)) {
+          el.setAttribute('data-max-cells', String(cells));
+          renderStrip(el, activeRange);
+        }
+      });
+      var tiles = all('#kioskBody .k-tile');
+      for (var tier = 1; tier <= 4; tier++) {
         view.setAttribute('data-density', String(tier));
-        if (bodyEl.scrollHeight <= bodyEl.clientHeight + 1) return;
+        if (!tiles.some(function (t) { return t.scrollHeight > t.clientHeight + 1; })) return;
       }
     }
     function scheduleFit() {
@@ -768,7 +857,7 @@
 
     // ---- Live refresh ---------------------------------------------------
 
-    var LIVE_REGIONS = ['liveTop', 'servicesList', 'maintenanceSection', 'historySection', 'kioskBody'];
+    var LIVE_REGIONS = ['liveTop', 'servicesList', 'maintenanceSection', 'historySection', 'kioskTop', 'kioskBody'];
 
     function replaceRegion(id, nextDoc) {
       var current = document.getElementById(id);
@@ -801,6 +890,7 @@
         applyRange(activeRange, false);
         localizeTimes();
         updateAges();
+        updateClock();
         scheduleFit();
       }).catch(function () {}).then(function () {
         refreshInFlight = false;

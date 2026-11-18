@@ -1,6 +1,7 @@
 package statuspage
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/statustemplate"
@@ -197,4 +198,81 @@ func classicSampleData(scenario classicScenario, now time.Time) *StatusPageData 
 		Template: statustemplate.BuiltinClassic, SubscribeFormEnabled: true,
 		CanonicalURL: "https://status.example.com",
 	}
+}
+
+// kioskNames is the pool the kiosk fixtures draw service names from.
+var kioskNames = []string{
+	"Public API", "GraphQL gateway", "Auth service", "Load balancer", "CDN eu-west", "SIP trunk",
+	"Primary Postgres", "Billing worker", "Checkout flow", "Webhooks", "Search cluster", "Object storage",
+	"Read replicas", "Cache layer", "Event stream", "Mail relay", "DNS resolution", "CDN us-east",
+	"Admin console", "Mobile API", "Payments gateway", "Image resizer", "Reporting jobs", "Status API",
+	"Edge router fra", "Edge router ams", "Edge router lhr", "Edge router iad", "Edge router sfo", "Edge router sin",
+	"Voice gateway", "Media relay", "Queue broker", "Scheduler", "Notification fan-out", "Audit log",
+	"Feature flags", "Session store", "Rate limiter", "Partner API", "Data export", "Analytics ingest",
+	"Billing API", "Invoice renderer", "Tax service", "Ledger", "Fraud scoring", "KYC checks",
+	"Docs site", "Marketing site", "Community forum", "Help center", "Status page", "Changelog",
+	"Backup verifier", "Log shipper", "Metrics store", "Trace collector", "Secrets vault", "CI runners",
+}
+
+// kioskSampleData is a page of n services for the kiosk previews, grouped
+// like real pages (one section for a handful, several for many), with one
+// outage, one degraded, one maintenance and one unknown service once there
+// are enough of them.
+func kioskSampleData(n int, now time.Time) *StatusPageData {
+	base := classicSampleData(scenarioOutage, now)
+	var pool []MonitorStatus
+	for _, s := range base.Sections {
+		pool = append(pool, s.Monitors...)
+	}
+	var perSection int
+	switch {
+	case n == 9:
+		perSection = 3
+	case n <= 4:
+		perSection = n
+	case n <= 24:
+		perSection = 6
+	default:
+		perSection = 12
+	}
+	titles := []string{"Core platform", "Edge and network", "Data and storage", "Payments", "Websites", "Operations"}
+	var sections []StatusPageSectionData
+	for i := 0; i < n; i++ {
+		m := pool[i%len(pool)]
+		m.ID = fmt.Sprintf("k%d", i)
+		m.Name = kioskNames[i%len(kioskNames)]
+		m.Status = "up"
+		if n >= 4 {
+			switch i {
+			case 1:
+				m.Status = "degraded"
+			case 3:
+				m.Status = "down"
+			}
+		}
+		if n >= 9 {
+			switch i {
+			case 6:
+				m.Status = "maintenance"
+			case 7:
+				m.Status = "unknown"
+				m.LastCheckTime = nil
+				m.LastLatency = nil
+			}
+		}
+		if i%perSection == 0 {
+			title := "Services"
+			if n > 1 {
+				title = titles[(i/perSection)%len(titles)]
+			}
+			sections = append(sections, StatusPageSectionData{ID: fmt.Sprintf("ks%d", i/perSection), Title: title})
+		}
+		sections[len(sections)-1].Monitors = append(sections[len(sections)-1].Monitors, m)
+	}
+	var monitors []MonitorStatus
+	for _, s := range sections {
+		monitors = append(monitors, s.Monitors...)
+	}
+	base.Sections, base.Monitors = sections, monitors
+	return base
 }
