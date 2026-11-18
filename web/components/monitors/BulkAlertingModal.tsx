@@ -26,6 +26,8 @@ interface BulkAlertingModalProps {
 export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlertingModalProps) {
   const [touchSensitivity, setTouchSensitivity] = useState(false);
   const [threshold, setThreshold] = useState(2);
+  const [touchRecovery, setTouchRecovery] = useState(false);
+  const [recoveryThreshold, setRecoveryThreshold] = useState(1);
   const [touchRouting, setTouchRouting] = useState(false);
   const [mode, setMode] = useState<NotificationMode>('default');
   const [channels, setChannels] = useState<ChannelAssignment[]>([]);
@@ -33,7 +35,7 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
   const [error, setError] = useState<string | null>(null);
   const notifyTitleId = useId();
 
-  const canApply = !saving && (touchSensitivity || touchRouting);
+  const canApply = !saving && (touchSensitivity || touchRecovery || touchRouting);
 
   const apply = async () => {
     setSaving(true);
@@ -42,6 +44,7 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
       await bulkUpdateAlerting({
         monitor_ids: monitorIds,
         ...(touchSensitivity ? { consecutive_failures_threshold: threshold } : {}),
+        ...(touchRecovery ? { recovery_threshold: recoveryThreshold } : {}),
         ...(touchRouting
           ? { notification_mode: mode, notification_channels: mode === 'custom' ? channels : [] }
           : {}),
@@ -100,6 +103,40 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
                   {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
                     <option key={n} value={n}>
                       {n} failed check{n === 1 ? '' : 's'}
+                    </option>
+                  ))}
+                </select>
+              )}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Recovery confirmation section */}
+      <div className="glass-well p-4">
+        <Checkbox
+          checked={touchRecovery}
+          onChange={setTouchRecovery}
+          label={<span className="font-medium text-white">Set recovery confirmation</span>}
+          className="select-none"
+        />
+
+        {touchRecovery && (
+          <div className="mt-3 pl-[26px]">
+            <FormRow
+              title="Mark up after"
+              description="Consecutive passing checks before a down monitor counts as up again. Until then it stays down, and that time counts as downtime."
+              control={({ titleId, descriptionId }) => (
+                <select
+                  value={recoveryThreshold}
+                  onChange={(e) => setRecoveryThreshold(Number(e.target.value))}
+                  className="input input-sm !w-44 cursor-pointer"
+                  aria-labelledby={titleId}
+                  aria-describedby={descriptionId}
+                >
+                  {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={n}>
+                      {n} passing check{n === 1 ? '' : 's'}
                     </option>
                   ))}
                 </select>

@@ -157,14 +157,17 @@ deliberate trade for collapsing request bursts into one computation.
 
 ## Deploy ordering
 
-Migrations run in two places: the API applies them at startup, before it
-serves (`api/cmd/api/main.go`), and the helm migrations job runs them as a
-**post-install/post-upgrade hook**
-(`helm/monitoring-platform/templates/job-migrations.yaml`). Neither gates the
-other workloads: on upgrade the scheduler, worker and alerter pods can start
-before the new API pod or the hook Job has migrated. New code must therefore
-tolerate running against the **old schema** for the rollout window.
-Concretely:
+Migrations run before the code that needs them: the helm migrations job is a
+**post-install/pre-upgrade hook**
+(`helm/monitoring-platform/templates/job-migrations.yaml`), so an upgrade
+starts no new pod until it has migrated, and every Compose service that
+reads the database waits for the `migrations` service. The API also applies
+them at startup, before it serves (`api/cmd/api/main.go`), as a safety net.
+The window that remains is the other way round: pods of the previous release
+run against the **new schema** until the rollout replaces them, so
+migrations stay additive. A deployment that skips the hook (`helm template |
+kubectl apply`, `migrations.enabled=false`) can still start new pods on the
+old schema; what each path does then:
 
 - **Scheduler rollup job**: schema-lag errors (Postgres SQLSTATE class 42,
   e.g. `42703` undefined_column, `42P01` undefined_table) are classified as
@@ -193,6 +196,30 @@ Concretely:
   failure in that window can still re-text recipients. Workers from before the
   change ignore an envelope's `delivery_key`; new workers fall back to the
   event timestamp for envelopes without one.
+- **Acknowledge/snooze mute**: until migration 000101 adds
+  `alerts.snoozed_until`, `unacknowledged_at` and `acknowledged_by_user_id`,
+  the alerter's dispatch queries and `deliverNotification` fail with SQLSTATE
+  42703, so no notification goes out (a resolve is retried by the recovery
+  sweep afterwards), and the worker's `eventSuperseded` fails and JetStream
+  retries the message on its backoff. Until 000102 adds
+  `first_acknowledged_at`, `snoozed_at` and `snoozed_by_user_id`, the API's
+  alert reads, acknowledge, snooze and SLA reports fail too. All of it
+  recovers once the columns exist. Do not add a fallback without the
+  columns: a dispatch that cannot read the mute could page an acknowledged
+  alert. SLA reports read `COALESCE(first_acknowledged_at, acknowledged_at)`,
+  so an acknowledgement written by an older API pod during the rollout still
+  counts.
+
+- **Session families**: until migration 000117 creates
+  `admin_session_families`, the API runs sessions as before (no `sid`, no
+  reuse detection; `adminauth` falls back on SQLSTATE 42P01/42703), and
+  until 000116 sign-in runs without the lockout. The other way round, an API
+  pod still on the previous version after 000117 ignores families: it
+  honours a revoked session's refresh token, and the insert trigger gives the
+  token it issues a fresh, unrevoked family. So a revocation made during the
+  rollout may not hold -- finish the rollout before revoking sessions. The
+  trigger exists only for this window; drop it in a migration of a later
+  release.
 
 For zero-error rollouts, when convenient, run the migration job manually
 before `helm upgrade` so the new schema is already in place when the new pods

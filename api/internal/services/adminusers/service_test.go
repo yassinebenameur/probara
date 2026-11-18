@@ -21,9 +21,10 @@ type mockRepository struct {
 	createFirstUserFn         func(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error)
 	updateUserFn              func(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error)
 	revokeSessionsByAdminIDFn func(ctx context.Context, adminID uuid.UUID) error
-	countActiveAdminsFn       func(ctx context.Context) (int, error)
-	isLastActiveSuperadminFn  func(ctx context.Context, userID uuid.UUID) (bool, error)
+	bootstrapClosedFn         func(ctx context.Context) (bool, error)
 	deleteUserFn              func(ctx context.Context, userID uuid.UUID) error
+	// untilSuperadmin records the bootstrap scope the service last asked for.
+	untilSuperadmin bool
 }
 
 func (m *mockRepository) ListUsers(ctx context.Context, page, pageSize int) ([]models.AdminUser, int, error) {
@@ -47,7 +48,8 @@ func (m *mockRepository) CreateUser(ctx context.Context, id uuid.UUID, username 
 	return nil, nil
 }
 
-func (m *mockRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+func (m *mockRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time, untilSuperadmin bool) (*models.AdminUser, error) {
+	m.untilSuperadmin = untilSuperadmin
 	if m.createFirstUserFn != nil {
 		return m.createFirstUserFn(ctx, id, username, passwordHash, now)
 	}
@@ -61,23 +63,17 @@ func (m *mockRepository) UpdateUser(ctx context.Context, userID uuid.UUID, usern
 	return nil, nil
 }
 
-func (m *mockRepository) RevokeSessionsByAdminID(ctx context.Context, adminID uuid.UUID) error {
+func (m *mockRepository) RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error {
 	if m.revokeSessionsByAdminIDFn != nil {
 		return m.revokeSessionsByAdminIDFn(ctx, adminID)
 	}
 	return nil
 }
 
-func (m *mockRepository) CountActiveAdmins(ctx context.Context) (int, error) {
-	if m.countActiveAdminsFn != nil {
-		return m.countActiveAdminsFn(ctx)
-	}
-	return 0, nil
-}
-
-func (m *mockRepository) IsLastActiveSuperadmin(ctx context.Context, userID uuid.UUID) (bool, error) {
-	if m.isLastActiveSuperadminFn != nil {
-		return m.isLastActiveSuperadminFn(ctx, userID)
+func (m *mockRepository) BootstrapClosed(ctx context.Context, untilSuperadmin bool) (bool, error) {
+	m.untilSuperadmin = untilSuperadmin
+	if m.bootstrapClosedFn != nil {
+		return m.bootstrapClosedFn(ctx)
 	}
 	return false, nil
 }
@@ -90,6 +86,14 @@ func (m *mockRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error
 }
 
 func (m *mockRepository) AttachMemberships(ctx context.Context, users []models.AdminUser) error {
+	return nil
+}
+
+func (m *mockRepository) AttachLockState(ctx context.Context, users []models.AdminUser) error {
+	return nil
+}
+
+func (m *mockRepository) AttachSignInFactors(ctx context.Context, users []models.AdminUser) error {
 	return nil
 }
 
@@ -279,8 +283,8 @@ func TestService_CreateUser_DuplicateEmail(t *testing.T) {
 func TestService_HasActiveUsers(t *testing.T) {
 	svc := &Service{
 		repo: &mockRepository{
-			countActiveAdminsFn: func(ctx context.Context) (int, error) {
-				return 1, nil
+			bootstrapClosedFn: func(ctx context.Context) (bool, error) {
+				return true, nil
 			},
 		},
 	}
@@ -361,6 +365,35 @@ func TestService_CreateFirstUser(t *testing.T) {
 	})
 }
 
+// With a setup code configured, bootstrap stays open until an active
+// superadmin exists (an SSO member does not close it); without one, until any
+// active user exists, as before. The SQL guards themselves are covered by the
+// integration tests that run against Postgres (here and in oidcauth).
+func TestService_BootstrapScopeFollowsSetupCode(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		repo := &mockRepository{
+			createFirstUserFn: func(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+				return &models.AdminUser{ID: id, Username: username}, nil
+			},
+		}
+		svc := &Service{repo: repo, bcryptCost: 4}
+		svc.ConfigureSetupCode(required)
+		if _, err := svc.HasActiveUsers(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if repo.untilSuperadmin != required {
+			t.Fatalf("setup code %v: status counted superadmins only = %v", required, repo.untilSuperadmin)
+		}
+		repo.untilSuperadmin = !required
+		if _, err := svc.CreateFirstUser(context.Background(), &models.CreateAdminUserRequest{Username: "admin", Password: strPtr("very-secure-password")}); err != nil {
+			t.Fatal(err)
+		}
+		if repo.untilSuperadmin != required {
+			t.Fatalf("setup code %v: create guarded on superadmins only = %v", required, repo.untilSuperadmin)
+		}
+	}
+}
+
 func TestService_UpdateUser_PasswordResetRevokesSessions(t *testing.T) {
 	targetID := uuid.New()
 	revokeCount := 0
@@ -407,18 +440,16 @@ func TestService_UpdateUser_PasswordResetRevokesSessions(t *testing.T) {
 	}
 }
 
+// The repository refuses the demotion inside its transaction; the service
+// reports that refusal as is, not as a generic write failure.
 func TestService_UpdateUser_DemoteLastSuperadminBlocked(t *testing.T) {
 	targetID := uuid.New()
 	member := "member"
 
 	svc := &Service{
 		repo: &mockRepository{
-			isLastActiveSuperadminFn: func(ctx context.Context, userID uuid.UUID) (bool, error) {
-				return true, nil
-			},
 			updateUserFn: func(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error) {
-				t.Fatal("update should not run when demote is blocked")
-				return nil, nil
+				return nil, ErrCannotDemoteLastAdmin
 			},
 		},
 		bcryptCost: 4,
@@ -471,8 +502,8 @@ func TestService_DeleteUser_GuardrailsAndDelete(t *testing.T) {
 	t.Run("reject deleting last active superadmin", func(t *testing.T) {
 		svc := &Service{
 			repo: &mockRepository{
-				isLastActiveSuperadminFn: func(ctx context.Context, userID uuid.UUID) (bool, error) {
-					return true, nil
+				deleteUserFn: func(ctx context.Context, userID uuid.UUID) error {
+					return ErrCannotDeleteLastUser
 				},
 			},
 		}

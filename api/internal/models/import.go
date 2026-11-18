@@ -10,6 +10,9 @@ const (
 
 	ImportSchemaPortableMonitorExport = "portable_monitor_export"
 	ImportSchemaUptimeKumaExport      = "uptime_kuma_export"
+	ImportSchemaBetterStackExport     = "better_stack_export"
+	ImportSchemaUptimeRobotExport     = "uptimerobot_export"
+	ImportSchemaGatusConfig           = "gatus_config"
 )
 
 // ImportRow represents a single row from the imported file.
@@ -21,7 +24,15 @@ type ImportRow struct {
 	Index    int                    `json:"index"`
 	Fields   map[string]interface{} `json:"fields"`
 	Warnings []string               `json:"warnings,omitempty"`
+	// Derived marks a row a format adapter added rather than translated one
+	// to one (ImportRowDerivedDomainExpiry), so the preview can label it and
+	// the operator can leave it out. ExecuteImport treats it like any row.
+	Derived string `json:"derived,omitempty"`
 }
+
+// ImportRowDerivedDomainExpiry marks a domain monitor built from a source
+// monitor's domain-expiration check.
+const ImportRowDerivedDomainExpiry = "domain_expiry"
 
 // ImportSkippedRow describes a source record that a format adapter refused to
 // translate. Skipped records never become ImportRows — the preview must show
@@ -53,6 +64,9 @@ type FieldMapping struct {
 	// ConsecutiveFailuresThreshold is the retry tolerance before a monitor is
 	// considered down. Clamped to [1,10] on import to match the column check.
 	ConsecutiveFailuresThreshold string `json:"consecutive_failures_threshold,omitempty"`
+	// RecoveryThreshold is the passing checks in a row a down monitor needs
+	// before it is up again. Clamped to [1,10] on import like the above.
+	RecoveryThreshold string `json:"recovery_threshold,omitempty"`
 }
 
 // ImportPreviewResponse is returned after parsing the uploaded file
@@ -98,6 +112,17 @@ type ImportExecuteResponse struct {
 	SkippedCount int               `json:"skipped_count"`
 }
 
+// PortableMonitorExportKind is the kind of every portable export document.
+const PortableMonitorExportKind = "monitor_export"
+
+// Portable export versions. Version 2 adds each monitor's key and, by key,
+// its keyed group members and dependencies; the importer reads both, apply
+// (POST /monitors/apply) needs version 2.
+const (
+	PortableExportVersion1 = 1
+	PortableExportVersion2 = 2
+)
+
 type PortableMonitorExport struct {
 	Kind     string                  `json:"kind" yaml:"kind"`
 	Version  int                     `json:"version" yaml:"version"`
@@ -105,13 +130,24 @@ type PortableMonitorExport struct {
 }
 
 type PortableExportMonitor struct {
-	Name                         string      `json:"name" yaml:"name"`
-	Type                         MonitorType `json:"type" yaml:"type"`
-	IntervalSeconds              int         `json:"interval_seconds" yaml:"interval_seconds"`
-	TimeoutSeconds               int         `json:"timeout_seconds" yaml:"timeout_seconds"`
-	Enabled                      bool        `json:"enabled" yaml:"enabled"`
-	Tags                         []string    `json:"tags,omitempty" yaml:"tags,omitempty"`
-	Config                       interface{} `json:"config" yaml:"config"`
-	GroupMembers                 []string    `json:"group_members,omitempty" yaml:"group_members,omitempty"`
-	ConsecutiveFailuresThreshold int         `json:"consecutive_failures_threshold,omitempty" yaml:"consecutive_failures_threshold,omitempty"`
+	// Key is the monitor's config-as-code identity (version 2); empty for
+	// a monitor without one.
+	Key             string      `json:"key,omitempty" yaml:"key,omitempty"`
+	Name            string      `json:"name" yaml:"name"`
+	Type            MonitorType `json:"type" yaml:"type"`
+	IntervalSeconds int         `json:"interval_seconds" yaml:"interval_seconds"`
+	TimeoutSeconds  int         `json:"timeout_seconds" yaml:"timeout_seconds"`
+	// Enabled is always written; a document that leaves it out means true
+	// to apply (the importer has always read it as false).
+	Enabled *bool       `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Tags    []string    `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Config  interface{} `json:"config" yaml:"config"`
+	// GroupMembers names a group's members by monitor name (the importer).
+	GroupMembers []string `json:"group_members,omitempty" yaml:"group_members,omitempty"`
+	// MemberKeys are a group's keyed members by key, DependsOn a monitor's
+	// keyed upstream dependencies by key (version 2; apply reads these).
+	MemberKeys                   []string `json:"member_keys,omitempty" yaml:"member_keys,omitempty"`
+	DependsOn                    []string `json:"depends_on,omitempty" yaml:"depends_on,omitempty"`
+	ConsecutiveFailuresThreshold int      `json:"consecutive_failures_threshold,omitempty" yaml:"consecutive_failures_threshold,omitempty"`
+	RecoveryThreshold            int      `json:"recovery_threshold,omitempty" yaml:"recovery_threshold,omitempty"`
 }

@@ -146,7 +146,7 @@ func TestWritePreviewHTML(t *testing.T) {
 				Updates:            []StatusPageIncidentUpdate{{Message: "A fix has been deployed; latency is recovering."}},
 			},
 		},
-	}, true)
+	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}

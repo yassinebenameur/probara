@@ -126,7 +126,8 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	}
 
 	msg := req.View()
-	dedupKey := DedupKey(req.Event.Alert.ID)
+	alert := req.Event.Alert
+	dedupKey := DedupKey(alert.ID, alert.PagedRelapse)
 
 	var action string
 	switch req.Type() {
@@ -149,13 +150,29 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 		}
 		action = "resolve"
 	}
+	if prev := alert.PreviousPagedRelapse; action == "trigger" && alert.RelapseNotice && prev != nil && *prev != alert.PagedRelapse {
+		// A relapse opens a new incident (a trigger on the earlier one's key
+		// would be folded into it, and not page while it is open or
+		// acknowledged). Close the earlier one first: it is still open when
+		// this channel never received that recovery, and a resolve of an
+		// incident already resolved is a no-op.
+		if err := plugin.PostJSON(ctx, p.httpClient, endpoint, buildEvent(routingKey, DedupKey(alert.ID, *prev), "resolve", msg), nil, "pagerduty events api"); err != nil {
+			return err
+		}
+	}
 	return plugin.PostJSON(ctx, p.httpClient, endpoint, buildEvent(routingKey, dedupKey, action, msg), nil, "pagerduty events api")
 }
 
-// DedupKey is the PagerDuty dedup_key for a Probara alert. It is stable for
-// the alert's lifetime, which is what lets acknowledge and resolve find the
-// incident the trigger opened.
-func DedupKey(alertID string) string {
+// DedupKey is the PagerDuty dedup_key for one paging episode of a Probara
+// alert: its first trigger (episode 0) and each relapse (the relapse number,
+// notifications.AlertDetails.PagedRelapse) open their own incident.
+// Acknowledge and resolve carry the episode of the channel's page, so they
+// find the incident that page opened. Episode 0 keeps the key alerts had
+// before relapses existed.
+func DedupKey(alertID string, episode int) string {
+	if episode > 0 {
+		return fmt.Sprintf("probara:%s:relapse-%d", alertID, episode)
+	}
 	return "probara:" + alertID
 }
 

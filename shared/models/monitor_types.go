@@ -26,6 +26,7 @@ const (
 	MonitorTypeTCP              MonitorType = "tcp"
 	MonitorTypeMySQL            MonitorType = "mysql"
 	MonitorTypeWebSocket        MonitorType = "websocket"
+	MonitorTypeDomain           MonitorType = "domain"
 )
 
 // AllMonitorTypes lists every monitor type a user can create. It does not
@@ -49,4 +50,5 @@ var AllMonitorTypes = []MonitorType{
 	MonitorTypeMySQL,
 	MonitorTypeWebSocket,
 	MonitorTypePrometheus,
+	MonitorTypeDomain,
 }

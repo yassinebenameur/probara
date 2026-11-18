@@ -55,6 +55,13 @@ func (i *Ingest) persist(ctx context.Context, m models.CheckResultMessage, ids m
 	if err != nil {
 		return outcome{}, err
 	}
+	if transition.To == monitorstate.StateDown && transition.ConsecutiveSuccesses > 0 && !transition.HistoryOnly {
+		// Best effort, after the state committed: a miss only costs the
+		// fast recheck for this pass (the dispatch keeps it for the next).
+		if err := pullRecoveringRecheck(ctx, i.db.DB, result.MonitorID); err != nil {
+			i.logger.WithError(err).WithField("monitor_id", result.MonitorID).Warn("Failed to pull in a recovery recheck")
+		}
+	}
 	return outcome{duplicate: transition.Duplicate, stateChanged: transition.Changed}, nil
 }
 

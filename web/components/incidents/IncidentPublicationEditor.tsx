@@ -3,15 +3,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight, EyeOff, Globe } from 'lucide-react';
 
-import { getStatusPages } from '@/lib/api';
+import { getStatusPageSubscriberSummary, getStatusPages } from '@/lib/api';
 import type { IncidentDetail, StatusPage } from '@/lib/types';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { sameIdSet } from '@/lib/incident-view';
+import { publishNotice, subscriptionAvailability } from '@/lib/status-page-subscribers';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Checkbox from '@/components/ui/Checkbox';
 import IconButton from '@/components/ui/IconButton';
+import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import TypeBadge from '@/components/ui/TypeBadge';
 
@@ -19,7 +22,8 @@ interface IncidentPublicationEditorProps {
   incident: IncidentDetail;
   /** Write affordances; viewers see where the incident is published, nothing else. */
   canWrite: boolean;
-  onPublish: (statusPageId: string, monitorIds: string[]) => Promise<void>;
+  /** publicTitle is sent only when the operator changed it ('' = default). */
+  onPublish: (statusPageId: string, monitorIds: string[], publicTitle?: string) => Promise<void>;
   onUnpublish: (statusPageId: string) => Promise<void>;
 }
 
@@ -29,6 +33,7 @@ export default function IncidentPublicationEditor({
   onPublish,
   onUnpublish,
 }: IncidentPublicationEditorProps) {
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const [statusPages, setStatusPages] = useState<StatusPage[]>([]);
   const [selectedStatusPageId, setSelectedStatusPageId] = useState('');
   const [selectedMonitorIds, setSelectedMonitorIds] = useState<string[]>([]);
@@ -76,6 +81,34 @@ export default function IncidentPublicationEditor({
     (publication) => publication.status_page_id === selectedStatusPageId
   );
 
+  // Confirmed email subscribers of the selected page, when it mails any:
+  // publishing there emails each of them.
+  const [confirmedSubscribers, setConfirmedSubscribers] = useState<number | null>(null);
+  useEffect(() => {
+    setConfirmedSubscribers(null);
+    if (!selectedStatusPage || !subscriptionAvailability(selectedStatusPage.settings, selectedStatusPage.visibility).active) {
+      return;
+    }
+    let cancelled = false;
+    getStatusPageSubscriberSummary(selectedStatusPage.id)
+      .then((response) => {
+        if (!cancelled) setConfirmedSubscribers(response.mail_ready ? response.counts.confirmed : null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStatusPage]);
+  // What the page shows as the title: the publication's public title (an
+  // automatically created incident always has one), else the incident's.
+  const currentPublicTitle = existingPublication?.public_title ?? '';
+  const [publicTitle, setPublicTitle] = useState('');
+  useEffect(() => setPublicTitle(currentPublicTitle), [currentPublicTitle, selectedStatusPageId]);
+  const publicTitleChanged = publicTitle.trim() !== currentPublicTitle;
+  const subscriberNotice = existingPublication
+    ? null
+    : publishNotice(selectedStatusPage?.settings, selectedStatusPage?.visibility, confirmedSubscribers);
+
   useEffect(() => {
     const publication = incident.publications.find((p) => p.status_page_id === selectedStatusPageId);
     setSelectedMonitorIds(publication ? publication.monitor_ids : []);
@@ -95,7 +128,9 @@ export default function IncidentPublicationEditor({
 
   const handlePublish = () => {
     if (!selectedStatusPageId) return;
-    void run('publish', () => onPublish(selectedStatusPageId, selectedMonitorIds));
+    void run('publish', () =>
+      onPublish(selectedStatusPageId, selectedMonitorIds, publicTitleChanged ? publicTitle.trim() : undefined)
+    );
   };
 
   const publicationComponentNames = (monitorIds: string[]): string => {
@@ -115,7 +150,8 @@ export default function IncidentPublicationEditor({
   };
 
   const publishedIds = new Set(incident.publications.map((p) => p.status_page_id));
-  const unchanged = !!existingPublication && sameIdSet(existingPublication.monitor_ids, selectedMonitorIds);
+  const unchanged =
+    !!existingPublication && sameIdSet(existingPublication.monitor_ids, selectedMonitorIds) && !publicTitleChanged;
   const busy = saving !== null;
   const publishedCount = incident.publications.length;
 
@@ -132,7 +168,7 @@ export default function IncidentPublicationEditor({
         {publishedCount > 0 && (
           <ul className="glass-well divide-y divide-divider">
             {incident.publications.map((publication) => {
-              const href = resolveStatusPagePublicUrl({ slug: publication.status_page_slug });
+              const href = resolveStatusPagePublicUrl({ slug: publication.status_page_slug }, statusPageBaseUrl);
               return (
                 <li key={publication.status_page_id} className="flex items-center gap-3 py-2.5 pl-3.5 pr-1.5">
                   <Globe className="h-4 w-4 flex-shrink-0 text-emerald-400" strokeWidth={1.75} aria-hidden="true" />
@@ -217,6 +253,23 @@ export default function IncidentPublicationEditor({
               )}
             </fieldset>
 
+            <div>
+              <Input
+                label="Public title"
+                value={publicTitle}
+                maxLength={200}
+                disabled={busy}
+                aria-describedby="incident-public-title-hint"
+                onChange={(event) => setPublicTitle(event.target.value)}
+                placeholder={incident.is_auto_created ? 'Service disruption: <component names>' : incident.title}
+              />
+              <p id="incident-public-title-hint" className="mt-1 text-xs text-slate-500">
+                {incident.is_auto_created
+                  ? 'This incident was created automatically and its own title names the monitor, so the page never shows it. Leave empty for “Service disruption” with the page’s component names.'
+                  : 'What the page, its subscribers and visitor notifications see. Leave empty to show the incident’s own title.'}
+              </p>
+            </div>
+
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
@@ -232,6 +285,7 @@ export default function IncidentPublicationEditor({
               {existingPublication && (
                 <span className="text-xs text-emerald-300">Published here</span>
               )}
+              {subscriberNotice && <span className="text-xs text-slate-500">{subscriberNotice}</span>}
             </div>
           </>
         )}

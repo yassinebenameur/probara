@@ -6,7 +6,12 @@ export interface ImportRow {
   fields: Record<string, unknown>;
   /** Per-monitor translation caveats, set by format adapters (e.g. Uptime Kuma). */
   warnings?: string[];
+  /** Set when an adapter added the row rather than translating a source record (IMPORT_ROW_DERIVED_*). */
+  derived?: string;
 }
+
+/** A domain monitor built from a source monitor's domain-expiration check. */
+export const IMPORT_ROW_DERIVED_DOMAIN_EXPIRY = 'domain_expiry';
 
 export interface FieldMapping {
   name?: string;
@@ -26,6 +31,7 @@ export interface FieldMapping {
   enabled?: string;
   group_members?: string;
   consecutive_failures_threshold?: string;
+  recovery_threshold?: string;
 }
 
 /** A source record a format adapter refused to translate. Informational only. */
@@ -39,6 +45,12 @@ export interface ImportSkippedRow {
 export const IMPORT_SCHEMA_PORTABLE = 'portable_monitor_export';
 
 export const IMPORT_SCHEMA_UPTIME_KUMA = 'uptime_kuma_export';
+
+export const IMPORT_SCHEMA_BETTER_STACK = 'better_stack_export';
+
+export const IMPORT_SCHEMA_UPTIMEROBOT = 'uptimerobot_export';
+
+export const IMPORT_SCHEMA_GATUS = 'gatus_config';
 
 export interface ImportPreviewResponse {
   format: ImportFormat;

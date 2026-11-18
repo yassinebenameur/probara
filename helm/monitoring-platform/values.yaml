@@ -92,6 +92,39 @@ nats:
     locationIssuerSeed: ""
     locationIssuerSeedExistingSecret: ""
     locationIssuerSeedExistingSecretKey: nats_location_auth_issuer_seed
+  # WebSocket listener for private-location workers whose network allows only
+  # outbound HTTPS: they connect to wss://<ingress host><path> on 443. The
+  # broker serves the listener in plaintext on `port` inside the cluster and
+  # TLS terminates at the ingress. Websocket clients go through the same auth
+  # callout as TCP clients, so the ingress requires nats.auth.enabled (the
+  # render fails otherwise). With the ingress on and api.publicNatsURL empty,
+  # the API advertises wss://<host><path> in deploy snippets.
+  websocket:
+    enabled: false
+    port: 8443
+    ingress:
+      enabled: false
+      # Empty = ingress.className.
+      className: ""
+      # Dedicated host (nats.example.com), or an app host from ingress.hosts
+      # with its own path such as /nats (never "/" there: it would take over
+      # the UI's routes, so the render refuses it). The worker sends the path
+      # in its upgrade request.
+      host: ""
+      path: /
+      # NATS keeps idle connections open between 2-minute pings, longer than
+      # ingress-nginx's 60s default proxy timeouts.
+      annotations:
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+      # Same shape as ingress.tls, e.g.
+      # - secretName: nats-tls
+      #   hosts: [nats.example.com]
+      # Required (the render fails without it) unless tlsTerminatedUpstream.
+      tls: []
+      # Set true only when TLS ends before the ingress (e.g. an AWS ALB or
+      # another load balancer with the certificate) so tls can stay empty.
+      tlsTerminatedUpstream: false
   persistence:
     enabled: true
     size: 1Gi
@@ -186,6 +219,49 @@ secrets:
   statusPagePreviewSecret: ""
   statusPagePreviewSecretExistingSecret: ""
   statusPagePreviewSecretExistingSecretKey: status_page_preview_secret
+  # Signs visitor sessions on password and private status pages
+  # (STATUS_PAGE_SESSION_SECRET, canonical key status_page_session_secret,
+  # status-page only). At least 32 characters: `openssl rand -hex 32`.
+  # Changing it signs every visitor out, kiosk displays included.
+  #
+  # Left empty with a chart-managed adminJwtSecret, the chart DERIVES it
+  # (sha256 of a domain-separated adminJwtSecret), for the same reasons as
+  # localAiToken below: stable across upgrades and GitOps renders, never a
+  # random re-roll, and as private as the JWT secret (a well-known value with
+  # the shipped placeholder). Rotating adminJwtSecret rotates it.
+  #
+  # The chart cannot read Secrets, so it derives nothing when adminJwtSecret
+  # comes from an existing Secret: set this value or a Secret below, or
+  # password and private pages stay closed (the install notes say so). With
+  # the chart-wide secrets.existingSecret, add status_page_session_secret to
+  # that Secret (optional there, so older Secrets keep working with those
+  # pages closed); a Secret named in statusPageSessionSecretExistingSecret must
+  # exist and hold the key.
+  statusPageSessionSecret: ""
+  statusPageSessionSecretExistingSecret: ""
+  statusPageSessionSecretExistingSecretKey: status_page_session_secret
+  # Shared by the api and status-page services
+  # (STATUS_PAGE_INTERNAL_TOKEN, canonical key status_page_internal_token):
+  # the status page presents it when it forwards a visitor's email
+  # subscription, and the API's subscribe and confirm routes answer nothing
+  # else. At least 32 characters. Left empty with a chart-managed
+  # adminJwtSecret it is derived like statusPageSessionSecret above; with an
+  # external JWT secret set it (or a Secret below), or no page can take
+  # email subscribers. Rotating it only fails requests in flight.
+  statusPageInternalToken: ""
+  statusPageInternalTokenExistingSecret: ""
+  statusPageInternalTokenExistingSecretKey: status_page_internal_token
+  # One-time code the first-admin form asks for (BOOTSTRAP_SETUP_CODE,
+  # canonical key bootstrap_setup_code, api only). Set it when the UI is
+  # reachable before you create the first administrator, so nobody else can
+  # claim the install; unset leaves that form open until an admin exists.
+  # At least 16 characters besides dashes and spaces (case-insensitive), or
+  # the API refuses to start. With only the chart-wide secrets.existingSecret
+  # set, the key is optional in that Secret; a Secret named in
+  # bootstrapSetupCodeExistingSecret must exist and hold the key.
+  bootstrapSetupCode: ""
+  bootstrapSetupCodeExistingSecret: ""
+  bootstrapSetupCodeExistingSecretKey: bootstrap_setup_code
   # Bearer token the api and the platform worker present to the local AI
   # service (LOCAL_AI_TOKEN, canonical key local_ai_token). Needed whenever
   # localAI.enabled or localAI.externalUrl is set; at least 16 characters.
@@ -229,13 +305,72 @@ secrets:
 extraEnv: []
 
 # =============================================================================
-# PUBLIC APP URL (notification deep links)
+# PUBLIC APP URL (operator UI origin)
 # =============================================================================
-# Public origin of the operator UI, e.g. "https://probara.example.com". Alert
-# emails render an "open the monitor" button pointing at it. Left empty the
-# button is omitted — a notification linking to a guessed host is worse than one
-# with no link. Rendered into api, alerter and worker alongside the SMTP block.
+# Public origin of the operator UI, e.g. "https://probara.example.com".
+# Rendered into api, alerter and worker alongside the SMTP block, and into
+# status-page. Uses:
+#   - notification deep links ("open the monitor", acknowledge links) and
+#     scheduled SLA report links -- omitted while empty, never a guessed host;
+#   - the MCP OAuth consent screen's address;
+#   - an origin the api accepts session-cookie writes from (cross-site request
+#     forgery check). The UI itself does not need it there: through its /api
+#     proxy (port-forward, any ingress) or the bundled ingress its writes are
+#     accepted as is. Set it if a refused write's 403 names the UI's origin;
+#   - the status pages' frame-ancestors, for the template editor's preview.
 appBaseURL: ""
+
+# =============================================================================
+# TRUSTED PROXIES (client IP resolution)
+# =============================================================================
+# CIDRs or bare IPs of the reverse proxies in front of the api and status-page
+# (ingress controller pods, a cloud load balancer). Only these peers'
+# X-Forwarded-For / X-Real-IP resolve the client address for the audit log,
+# session IPs and rate limits, and only their X-Forwarded-Proto: https earns
+# HSTS. X-Forwarded-For is walked right to left; the first address outside
+# this list is the client. Rendered as TRUSTED_PROXY_CIDRS into api and
+# status-page.
+#
+# Empty (the default) trusts no proxy: the client is the TCP peer. Behind the
+# bundled ingress that peer is the ingress controller pod, a private address
+# standing for every visitor: the API rate limit then applies per credential
+# only (no per-address limit on sign-in, anonymous calls or failed
+# credentials) and the audit log records the ingress -- set this to the pod
+# CIDR your ingress controller runs in, e.g.
+# ["10.0.0.0/8"]. List only proxies you run: a range that also holds clients
+# lets those clients choose their address. The bundled ingress sends /api
+# straight to the api; the frontend's /api proxy drops X-Forwarded-For unless
+# frontend.extraEnv sets API_PROXY_TRUST_FORWARDED_FOR=true. It also judges
+# which writes come from the UI by its Host header and ignores a client
+# X-Forwarded-Host; behind your own proxy that rewrites Host, set
+# API_PROXY_TRUST_FORWARDED_HOST=true in frontend.extraEnv.
+trustedProxyCIDRs: []
+
+# =============================================================================
+# BROWSER / EDGE SECURITY
+# =============================================================================
+security:
+  # Strict-Transport-Security max-age in seconds for api and status-page
+  # (SECURITY_HSTS_MAX_AGE). Empty = automatic: 31536000 (one year) when
+  # ingress.enabled and ingress.tls is set, else 0 (off). The header is only
+  # ever sent on HTTPS requests -- TLS at the pod, or X-Forwarded-Proto: https
+  # from a trustedProxyCIDRs peer -- so list your ingress there.
+  hstsMaxAge: ""
+  # General API rate limit (API_RATE_LIMIT_PER_MINUTE / _BURST): one token
+  # bucket per credential (API key, MCP grant, session user, refresh token);
+  # per client address only for anonymous requests and verified failures, and
+  # only when the address names a client (forwarded by a trustedProxyCIDRs
+  # peer, or a public peer). Kept in memory on each api replica -- the
+  # effective cluster-wide ceiling is this times api.replicas. 0 disables it.
+  # Probes, valid push and discovery-collector tokens, and validated OTLP
+  # export and alert streams are not limited.
+  apiRateLimitPerMinute: 600
+  apiRateLimitBurst: 120
+  # Browser origins allowed credentialed cross-origin API calls
+  # (API_ALLOWED_ORIGINS), and allowed to write with the session cookie.
+  # Empty: the appBaseURL origin when set, else same-origin only, which is
+  # all the bundled frontend needs.
+  apiAllowedOrigins: []
 
 # =============================================================================
 # SMTP (builtin email notification channels)
@@ -271,6 +406,18 @@ smtp:
 # MIGRATIONS JOB
 # =============================================================================
 migrations:
+  # A hook Job: post-install on a first install (the embedded PostgreSQL
+  # exists only then), pre-upgrade on every upgrade, so new pods never start
+  # against an old schema. A failed Job stops the upgrade before anything
+  # else changes. Large migrations may need `helm upgrade --timeout`.
+  # It runs before the upgrade creates anything, so an upgrade that switches
+  # from an external database to the embedded PostgreSQL (postgresql.enabled)
+  # or renames the release's objects (fullnameOverride) waits for a database
+  # that does not exist yet and times out: apply such a change with
+  # enabled=false (the API still migrates at startup), then turn it back on.
+  # The Job uses no release ServiceAccount, so enabling or renaming that is
+  # safe. Argo CD maps this combined hook to both PreSync and PostSync: set
+  # enabled=false there and run migrations as your own sync-wave Job.
   enabled: true
   image:
     # Uses main image repository with -migrations suffix if not specified
@@ -303,9 +450,15 @@ api:
   publicBaseURL: ""
   # NATS address reachable from remote networks, baked into private-location
   # worker deploy snippets. Requires nats.auth.enabled; expose NATS through TLS
-  # before pointing external locations at it.
-  # Example: "tls://nats.example.com:4222"
+  # before pointing external locations at it. Empty with
+  # nats.websocket.ingress.enabled = wss://<that host><path>.
+  # Example: "tls://nats.example.com:4222" or "wss://nats.example.com"
   publicNatsURL: ""
+  # Image the private-location deploy snippets (docker run / Compose) tell
+  # remote sites to run. Empty = "{image.repository}-worker:{image tag}", the
+  # same worker this release deploys. Set it when remote sites pull from a
+  # different registry or mirror. Rendered as LOCATION_WORKER_IMAGE.
+  locationWorkerImage: ""
   # Secure attribute of the session cookies (ADMIN_COOKIE_SECURE). Leave empty
   # to derive it: Secure when publicBaseURL is an https:// origin, otherwise
   # not. Set "true" behind TLS termination when publicBaseURL is unset, or
@@ -393,6 +546,7 @@ worker:
   #     replicas: 1
   #     concurrency: "10"      # optional, defaults to worker.concurrency
   #     natsUrl: ""            # authenticated NATS URL from deploy info (required)
+  #     pingGroupRange: ""     # optional, overrides worker.pingGroupRange
   #     # Or take both from a Secret in the release namespace instead, so no
   #     # location credential lands in the PodSpec. Set it and natsUrl/
   #     # credential are no longer required.
@@ -411,6 +565,17 @@ worker:
   # (Kubernetes EnvVar entries), e.g. HTTP_ALLOWED_CIDRS or check tuning.
   # Individual locations entries may also carry their own extraEnv list.
   extraEnv: []
+  # Ping monitors send ICMP echoes over unprivileged "ping" sockets (never raw
+  # sockets: no NET_RAW, no root). Linux allows them only to groups inside
+  # net.ipv4.ping_group_range, which the default worker fleet and every
+  # location worker get as a pod sysctl. It is a namespaced "safe" sysctl,
+  # allowed by the kubelet without flags and by the baseline and restricted
+  # Pod Security Standards. If a cluster policy (Gatekeeper, Kyverno, a PSP)
+  # forbids every pod sysctl, set "" so the pods start: ping then works only
+  # where the node runtime already opens the range (containerd 2.x does), and
+  # elsewhere reports errors naming the sysctl while other checks run on. A
+  # worker.locations entry may set its own pingGroupRange (also "").
+  pingGroupRange: "0 2147483647"
 
 # =============================================================================
 # ALERTER SERVICE
@@ -444,6 +609,12 @@ statusPage:
   logLevel: "info"
   # Base URL for status page links
   baseUrl: ""
+  # Secure attribute of the visitor session cookie on password and private
+  # pages (STATUS_PAGE_COOKIE_SECURE). Empty derives it: on when baseUrl is
+  # https://, else set per request when it arrived over HTTPS (which behind a
+  # TLS-terminating ingress needs trustedProxyCIDRs). Set "true" behind TLS
+  # without a baseUrl, or "false" to force it off.
+  cookieSecure: ""
   service:
     type: ClusterIP
     port: 8080
@@ -483,6 +654,41 @@ statusPage:
   # an entry here.
   extraEnv: []
 
+  # Custom domains: operators add a hostname to a status page in the UI and
+  # create the DNS records it shows (a CNAME to cnameTarget and a TXT
+  # record); the API verifies them, and only verified domains are served.
+  # TLS terminates at the Ingress: list each domain below as well, and the
+  # chart renders one Ingress per domain (needs ingress.enabled), routing it
+  # to the status-page service with its own TLS Secret.
+  #
+  # Host every custom domain must CNAME to (STATUS_PAGE_CNAME_TARGET on the
+  # api). Empty uses the host of baseUrl; with both empty, custom domains
+  # are off.
+  cnameTarget: ""
+  # One entry per custom domain: {host: status.example.org, tlsSecretName:
+  # status-example-org-tls}. Each host must also be verified in the UI. The
+  # status-page service serves the platform routes only on its platform hosts
+  # (the host of baseUrl, ingress.hosts and platformHosts below), so until a
+  # listed host is verified (or after it fails or is removed in the UI) its
+  # Ingress gets only not-found answers; the render fails without any
+  # platform host.
+  customDomains: []
+  # Extra hosts that serve the platform routes (every page under
+  # /public/status/), besides baseUrl's host and ingress.hosts:
+  # STATUS_PAGE_PLATFORM_HOSTS. For a proxy of your own in front of the
+  # service under another name.
+  platformHosts: []
+  # cert-manager ClusterIssuer that issues the custom domains' certificates
+  # (the cert-manager.io/cluster-issuer annotation on their Ingresses, which
+  # carry ingress.annotations too; this value wins over an issuer set there).
+  # Empty: no annotation of its own; create the TLS Secrets yourself, or set
+  # the issuer in ingress.annotations.
+  customDomainsClusterIssuer: ""
+  # Match custom domains on X-Forwarded-Host instead of Host
+  # (STATUS_PAGE_TRUST_FORWARDED_HOST), believed only from trustedProxyCIDRs
+  # peers. Only for a proxy in front of the Ingress that rewrites Host.
+  trustForwardedHost: false
+
 # =============================================================================
 # FRONTEND SERVICE
 # =============================================================================
@@ -491,8 +697,10 @@ frontend:
   replicas: 2
   httpPort: 3000
   apiUrl: "/api"
-  # Public base URL for status page links shown in the frontend.
-  # Defaults to statusPage.baseUrl when empty.
+  # Deprecated and ignored: the UI's status-page links come from
+  # statusPage.baseUrl, which the api hands to it at runtime (a build-time
+  # value here never reached the published image). Kept so existing values
+  # files still render.
   statusPageUrl: ""
   # Runtime API upstream for Next.js server-side API proxy route (/api/*).
   # Leave empty to use the in-cluster API service automatically when api.enabled=true.

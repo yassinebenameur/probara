@@ -24,8 +24,8 @@ export function parseAlertFocus(params: { get(name: string): string | null }): A
  * Null means stay put (no tenant in the link, already selected, an API-key
  * session with no selection, or a workspace the viewer has no access to).
  */
-export function focusTenantSwitch(
-  focus: AlertFocus,
+export function focusTenantSwitch<F extends Pick<AlertFocus, 'tenantId'>>(
+  focus: F,
   selectedTenantId: string | null,
   visibleTenantIds: readonly string[]
 ): string | null {

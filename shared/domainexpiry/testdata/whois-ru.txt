@@ -1,0 +1,12 @@
+% TCI Whois Service. Terms of use:
+
+domain:        EXAMPLE.RU
+nserver:       ns1.example.ru.
+state:         REGISTERED, DELEGATED, VERIFIED
+registrar:     EXAMPLE-RU
+created:       1999-07-21T07:14:22Z
+paid-till:     2027-07-31T21:00:00Z
+free-date:     2027-09-01
+source:        TCI
+
+Last updated on 2026-11-15T20:58:01Z

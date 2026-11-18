@@ -6,7 +6,11 @@ import { ArrowUpRight, Paintbrush } from 'lucide-react';
 import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
+import KioskTokensPanel from '@/components/status-pages/KioskTokensPanel';
+import SubscribersPanel from '@/components/status-pages/SubscribersPanel';
+import DomainsPanel from '@/components/status-pages/DomainsPanel';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
@@ -19,6 +23,7 @@ import { useAsyncData } from '@/lib/useAsyncData';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
+  const statusPageBaseUrl = useStatusPageBaseUrl();
   const params = useParams();
   const id = params.id as string;
 
@@ -78,7 +83,7 @@ export default function EditStatusPagePage() {
     );
   }
 
-  const publicUrl = resolveStatusPagePublicUrl(statusPage);
+  const publicUrl = resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl);
 
   return (
     <Page width="detail">
@@ -112,6 +117,21 @@ export default function EditStatusPagePage() {
         statusPage={statusPage}
         onSubmit={handleSubmit}
         loading={saving}
+      />
+
+      <SubscribersPanel statusPage={statusPage} />
+
+      <KioskTokensPanel statusPage={statusPage} />
+
+      {/* A domain turning verified or being removed moves public_url, which
+          the links above and the Share panel prefer. */}
+      <DomainsPanel
+        statusPage={statusPage}
+        onChanged={() => {
+          getStatusPage(id)
+            .then(setStatusPage)
+            .catch(() => {});
+        }}
       />
     </Page>
   );

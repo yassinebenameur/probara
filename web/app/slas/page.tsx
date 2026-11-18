@@ -25,6 +25,7 @@ import { SlaFormModal } from '@/components/slas/SlaFormModal';
 import { BudgetBar, SlaStatusPill } from '@/components/slas/SlaVisuals';
 import { errorMessage } from '@/lib/errors';
 import { useAsyncData } from '@/lib/useAsyncData';
+import { useSlaDeepLink } from '@/components/slas/useSlaDeepLink';
 
 // Below this much tracked time a period's availability is thin evidence; say
 // so next to the figure so a near-empty period never reads as an outage.
@@ -45,6 +46,8 @@ const SORT_VALUE: Record<SlaSortKey, (sla: Sla) => SortValue> = {
 };
 
 export default function SlasPage() {
+  // An emailed report's link lands here and moves on to the SLA.
+  const followingLink = useSlaDeepLink();
   const { showToast } = useToast();
   const canWrite = useCanWrite();
   const { data: slas, setData: setSlas, loading, error, reload: load } = useAsyncData<Sla[]>(
@@ -78,6 +81,10 @@ export default function SlasPage() {
     setEditing(undefined);
     setModalOpen(true);
   };
+
+  if (followingLink) {
+    return <div className="glass mx-auto w-full max-w-[100rem] p-8 text-center text-sm text-slate-500" role="status">Opening the report…</div>;
+  }
 
   return (
     <Page width="data">

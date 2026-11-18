@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	probing "github.com/prometheus-community/pro-bing"
 	"github.com/tidwall/gjson"
 
 	"github.com/yassinebenameur/probara/shared/models"
@@ -100,6 +99,9 @@ type httpMetrics struct {
 	// DisplayValues are the config's display_fields resolved against the
 	// response body; the monitors list shows them from the latest result.
 	DisplayValues []httpDisplayValue `json:"display_values,omitempty"`
+	// FailureResponse is the redacted response of a failed check
+	// (http_failure_capture.go); never set on a success.
+	FailureResponse *httpFailureResponse `json:"failure_response,omitempty"`
 }
 
 type httpDisplayValue struct {
@@ -155,6 +157,10 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	}
 
 	var redirectsFollowed int
+	guard := redirectGuard{secretNames: make([]string, 0, len(config.SecretHeaders))}
+	for name := range config.SecretHeaders {
+		guard.secretNames = append(guard.secretNames, name)
+	}
 	client := &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -165,7 +171,7 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
 			redirectsFollowed = len(via)
-			return nil
+			return guard.check(req, via)
 		},
 	}
 
@@ -227,9 +233,18 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		}
 	}
 
-	// Set headers
+	// Set headers. Secret headers go last so they win over a same-named
+	// plain one (validation refuses that pairing; this is belt and braces),
+	// and basic auth, which validation keeps apart from an Authorization
+	// header, last of all.
 	for k, v := range config.Headers {
 		req.Header.Set(k, v)
+	}
+	for k, v := range config.SecretHeaders {
+		req.Header.Set(k, v)
+	}
+	if config.BasicAuthUsername != "" {
+		req.SetBasicAuth(config.BasicAuthUsername, config.BasicAuthPassword)
 	}
 
 	var traceTimings httpTimingInfo
@@ -275,7 +290,9 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	if err != nil {
 		errorReason := "unknown"
 		errStr := err.Error()
-		if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline") {
+		if errors.Is(err, errRedirectRefused) {
+			errorReason = "redirect"
+		} else if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline") {
 			errorReason = "timeout"
 		} else if strings.Contains(errStr, "no such host") || strings.Contains(errStr, "DNS") {
 			errorReason = "dns"
@@ -292,21 +309,15 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	}
 	defer resp.Body.Close()
 
-	// Read response body with size limit
-	limitedReader := io.LimitReader(resp.Body, int64(c.maxBodySizeBytes))
+	// Read response body with size limit. One byte past the limit tells a
+	// body that stopped there from one that went on (the failure capture
+	// marks the latter truncated); assertions see at most the limit.
+	limitedReader := io.LimitReader(resp.Body, int64(c.maxBodySizeBytes)+1)
 	bodyBytes, err := io.ReadAll(limitedReader)
-	if err != nil {
-		errMsg := fmt.Sprintf("body_read: %v", err)
-		httpStatus := resp.StatusCode
-		return CheckResult{
-			Status:       "error",
-			HTTPStatus:   &httpStatus,
-			ErrorMessage: &errMsg,
-			LatencyMs:    &latencyMs,
-		}
+	readCapped := len(bodyBytes) > c.maxBodySizeBytes
+	if readCapped {
+		bodyBytes = bodyBytes[:c.maxBodySizeBytes]
 	}
-
-	body := string(bodyBytes)
 
 	httpStatus := resp.StatusCode
 
@@ -314,6 +325,26 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		FinalURL:  resp.Request.URL.String(),
 		Redirects: redirectsFollowed,
 	}
+
+	// withFailureResponse attaches the redacted response to a result that
+	// is not a success (always on: a failure is diagnosable from its row).
+	withFailureResponse := func(result CheckResult) CheckResult {
+		metrics.FailureResponse = captureFailureResponse(resp, bodyBytes, readCapped, &config)
+		result.MetricsData, _ = json.Marshal(httpMetricsEnvelope{HTTP: metrics})
+		return result
+	}
+
+	if err != nil {
+		errMsg := fmt.Sprintf("body_read: %v", err)
+		return withFailureResponse(CheckResult{
+			Status:       "error",
+			HTTPStatus:   &httpStatus,
+			ErrorMessage: &errMsg,
+			LatencyMs:    &latencyMs,
+		})
+	}
+
+	body := string(bodyBytes)
 
 	if collectTiming {
 		metrics.Timing = &traceTimings
@@ -368,13 +399,13 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		failed, err := evaluateBodyAssertions(body, bodyAssertions)
 		if err != nil {
 			errMsg := fmt.Sprintf("body_assertions: %v", err)
-			return CheckResult{
+			return withFailureResponse(CheckResult{
 				Status:               "error",
 				HTTPStatus:           &httpStatus,
 				LatencyMs:            &latencyMs,
 				ErrorMessage:         &errMsg,
 				MatchedBodySubstring: matchedBodySubstring,
-			}
+			})
 		}
 		assertionsFailed = append(assertionsFailed, failed...)
 	}
@@ -387,13 +418,13 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 			failed, err := evaluateJSONAssertions(body, config.JSONAssertions)
 			if err != nil {
 				errMsg := fmt.Sprintf("json_assertions: %v", err)
-				return CheckResult{
+				return withFailureResponse(CheckResult{
 					Status:               "error",
 					HTTPStatus:           &httpStatus,
 					LatencyMs:            &latencyMs,
 					ErrorMessage:         &errMsg,
 					MatchedBodySubstring: matchedBodySubstring,
-				}
+				})
 			}
 			assertionsFailed = append(assertionsFailed, failed...)
 		}
@@ -420,16 +451,14 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 	metrics.Assertions = assertionsFailed
 
 	if len(assertionsFailed) > 0 {
-		metricsJSON, _ := json.Marshal(httpMetricsEnvelope{HTTP: metrics})
 		errMsg := strings.Join(assertionsFailed, "; ")
-		return CheckResult{
+		return withFailureResponse(CheckResult{
 			Status:               "failure",
 			HTTPStatus:           &httpStatus,
 			LatencyMs:            &latencyMs,
 			ErrorMessage:         &errMsg,
 			MatchedBodySubstring: matchedBodySubstring,
-			MetricsData:          metricsJSON,
-		}
+		})
 	}
 
 	metricsJSON, _ := json.Marshal(httpMetricsEnvelope{HTTP: metrics})
@@ -774,72 +803,4 @@ func parseFloat(s string) (float64, error) {
 
 func parseBool(s string) (bool, error) {
 	return strconv.ParseBool(strings.TrimSpace(strings.ToLower(s)))
-}
-
-// PingChecker implements Checker for ping monitors
-type PingChecker struct{}
-
-// NewPingChecker creates a new ping checker
-func NewPingChecker() *PingChecker {
-	return &PingChecker{}
-}
-
-// Check performs a ping check
-func (c *PingChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
-	var config models.PingMonitorConfig
-	if err := json.Unmarshal(configRaw, &config); err != nil {
-		errMsg := fmt.Sprintf("failed to unmarshal ping config: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Create pinger
-	pinger, err := probing.NewPinger(config.Host)
-	if err != nil {
-		errMsg := fmt.Sprintf("failed to create pinger: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Set unprivileged mode (uses UDP instead of raw ICMP)
-	pinger.SetPrivileged(false)
-
-	// Set timeout
-	pinger.Timeout = time.Duration(timeoutSeconds) * time.Second
-
-	// Set count to 1 ping
-	pinger.Count = 1
-
-	// Run ping
-	err = pinger.Run()
-	if err != nil {
-		errMsg := fmt.Sprintf("ping failed: %v", err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	stats := pinger.Statistics()
-
-	// Check if we received any packets
-	if stats.PacketsRecv == 0 {
-		errMsg := "no response received"
-		return CheckResult{
-			Status:       "failure",
-			ErrorMessage: &errMsg,
-		}
-	}
-
-	// Success - convert RTT to milliseconds
-	latencyMs := stats.AvgRtt.Milliseconds()
-
-	return CheckResult{
-		Status:    "success",
-		LatencyMs: &latencyMs,
-	}
 }

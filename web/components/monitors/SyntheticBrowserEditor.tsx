@@ -23,9 +23,19 @@ import {
   buildSyntheticBrowserGuidedDraft,
   defaultSyntheticBrowserStep,
   syntheticBrowserActionMeta,
+  undefinedSyntheticBrowserRefs,
+  undefinedRefsWarning,
 } from '@/lib/monitor-form/synthetic';
 import { FIELD_LABEL, FormInput, FormSelect, TILE_SELECTED, ToggleRow, FormPanel } from './form-kit';
-import { SyntheticModeHeader, SyntheticTemplatesWell, SyntheticVariablesField, swapped, withItem, withoutItem } from './synthetic-kit';
+import {
+  SyntheticModeHeader,
+  SyntheticSecretVariablesField,
+  SyntheticTemplatesWell,
+  SyntheticVariablesField,
+  swapped,
+  withItem,
+  withoutItem,
+} from './synthetic-kit';
 
 const BROWSER_SETUP_TABS = [
   { id: 'guided', label: 'Guided' },
@@ -76,6 +86,7 @@ const clearBrowserErrors = (prev: Record<string, string>) => ({
   synthetic_browser_steps: '',
   synthetic_browser_start_url: '',
   synthetic_browser_variables: '',
+  synthetic_browser_secret_variables: '',
 });
 
 /**
@@ -294,8 +305,12 @@ function GuidedSetup({
                   type="password"
                   value={form.synthetic_browser_guided_password}
                   onChange={(v) => patch({ synthetic_browser_guided_password: v })}
-                  placeholder="********"
-                  hint="If empty, fill step for password is skipped."
+                  placeholder={form.synthetic_browser_guided_password_stored ? 'Stored password (leave blank to keep)' : '********'}
+                  hint={
+                    form.synthetic_browser_guided_password_stored
+                      ? 'Stored encrypted. Type a new one to replace it.'
+                      : 'Stored encrypted and redacted from results. If empty, fill step for password is skipped.'
+                  }
                 />
               </div>
             </>
@@ -313,7 +328,9 @@ function GuidedSetup({
             <p className="text-ui text-slate-400">Review generated journey before creating the monitor.</p>
             <p className="flex flex-wrap gap-x-3 text-xs tabular-nums text-slate-500">
               <span>{preview.steps.length} steps</span>
-              <span>{Object.keys(preview.variables).length} variables</span>
+              <span>
+                {Object.keys(preview.variables).length + Object.keys(preview.secretVariables).length} variables
+              </span>
               <span>Screenshot on failure</span>
             </p>
           </div>
@@ -374,6 +391,12 @@ function ExpertSetup({
 }) {
   const patch = (p: Partial<MonitorFormState>) => setForm({ ...form, ...p });
   const steps = form.synthetic_browser_steps;
+  // Undefined {{references}} per step: a warning, never a blocked save.
+  const stepRefs = undefinedSyntheticBrowserRefs(
+    form.synthetic_browser_variables || [],
+    form.synthetic_browser_secret_variables || [],
+    steps
+  );
   const setSteps = (next: SyntheticBrowserStepDraft[]) => patch({ synthetic_browser_steps: next });
 
   const applyTemplate = (template: 'login_flow' | 'homepage_smoke') => {
@@ -388,7 +411,10 @@ function ExpertSetup({
         onModeChange={onModeChange}
         facts={[
           `${steps.length} steps`,
-          `${(form.synthetic_browser_variables || []).filter((v) => v.key.trim()).length} variables`,
+          `${
+            (form.synthetic_browser_variables || []).filter((v) => v.key.trim()).length +
+            (form.synthetic_browser_secret_variables || []).filter((v) => v.key.trim()).length
+          } variables`,
           form.synthetic_browser_screenshot_on_failure ? 'Screenshot on failure' : 'No screenshot',
         ]}
         description="Basic is optimized for common user journeys. Advanced unlocks device/variables/step timeout tuning."
@@ -472,6 +498,14 @@ function ExpertSetup({
         />
       )}
 
+      {mode === 'advanced' && (
+        <SyntheticSecretVariablesField
+          rows={form.synthetic_browser_secret_variables}
+          onChange={(rows) => patch({ synthetic_browser_secret_variables: rows })}
+          error={errors.synthetic_browser_secret_variables}
+        />
+      )}
+
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <label className={FIELD_LABEL}>Steps</label>
@@ -488,6 +522,7 @@ function ExpertSetup({
         {errors.synthetic_browser_steps && <p className="text-xs text-rose-300">{errors.synthetic_browser_steps}</p>}
         {steps.map((step, stepIdx) => (
           <BrowserStepCard
+            refWarning={undefinedRefsWarning(stepRefs[stepIdx] || [])}
             key={`synthetic-browser-step-${stepIdx}`}
             step={step}
             index={stepIdx}
@@ -506,6 +541,7 @@ function ExpertSetup({
 }
 
 function BrowserStepCard({
+  refWarning,
   step,
   index,
   count,
@@ -514,6 +550,8 @@ function BrowserStepCard({
   onMove,
   onRemove,
 }: {
+  /** Undefined {{references}} in this step: warned about, never blocking. */
+  refWarning?: string;
   step: SyntheticBrowserStepDraft;
   index: number;
   count: number;
@@ -571,6 +609,11 @@ function BrowserStepCard({
           <IconButton icon={<Trash2 strokeWidth={1.75} />} label="Remove step" danger onClick={onRemove} />
         </div>
       </div>
+      {refWarning && (
+        <p role="status" className="text-xs text-amber-300">
+          {refWarning}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormInput label="Step ID" value={step.id} onChange={(v) => patchStep({ id: v })} placeholder="open_login" />

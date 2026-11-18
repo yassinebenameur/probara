@@ -1,0 +1,210 @@
+{
+  "schema": "uptimerobot_export",
+  "warnings": [
+    "2 UptimeRobot record(s) could not be imported: HTTP digest authentication is not supported - Probara's HTTP monitor sends basic auth only; unrecognized UptimeRobot monitor type 6",
+    "1 monitor(s) will be created disabled until a credential or placeholder is completed - see their notes",
+    "UptimeRobot alert contacts were not migrated - attach Probara alert channels after import",
+    "UptimeRobot maintenance windows were not migrated - recreate them as Probara maintenance windows"
+  ],
+  "rows": [
+    {
+      "index": 0,
+      "fields": {
+        "config": {
+          "method": "GET",
+          "tls_min_days_valid": 30,
+          "url": "https://www.example.com"
+        },
+        "enabled": true,
+        "interval_seconds": 300,
+        "name": "Homepage",
+        "timeout_seconds": 30,
+        "type": "http"
+      },
+      "warnings": [
+        "UptimeRobot's SSL expiry reminders became one TLS expiry alert, opened 30 days before the certificate expires"
+      ]
+    },
+    {
+      "index": 1,
+      "fields": {
+        "config": {
+          "body_assertions": [
+            {
+              "case_insensitive": true,
+              "op": "contains",
+              "value": "Add to cart"
+            }
+          ],
+          "method": "GET",
+          "url": "https://shop.example.com/"
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "Shop keyword",
+        "timeout_seconds": 20,
+        "type": "http"
+      }
+    },
+    {
+      "index": 2,
+      "fields": {
+        "config": {
+          "body_assertions": [
+            {
+              "op": "not_contains",
+              "value": "Fatal error"
+            }
+          ],
+          "method": "GET",
+          "url": "https://shop.example.com/checkout"
+        },
+        "enabled": true,
+        "interval_seconds": 120,
+        "name": "Error page absent",
+        "timeout_seconds": 30,
+        "type": "http"
+      }
+    },
+    {
+      "index": 3,
+      "fields": {
+        "config": {
+          "basic_auth_password": "ur-secret-pass",
+          "basic_auth_username": "monitor",
+          "body": "{\"ping\":true}",
+          "expected_status_ranges": [
+            {
+              "max": 301,
+              "min": 200
+            },
+            {
+              "max": 399,
+              "min": 303
+            }
+          ],
+          "expected_statuses": [
+            404
+          ],
+          "headers": {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+          },
+          "method": "POST",
+          "secret_headers": {
+            "X-Api-Key": "ur-api-key-123"
+          },
+          "tls_skip_verify": true,
+          "url": "https://api.example.com/v1/orders"
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "Orders API",
+        "timeout_seconds": 15,
+        "type": "http"
+      }
+    },
+    {
+      "index": 4,
+      "fields": {
+        "config": {
+          "host": "198.51.100.7"
+        },
+        "enabled": true,
+        "interval_seconds": 60,
+        "name": "Router ping",
+        "timeout_seconds": 30,
+        "type": "ping"
+      }
+    },
+    {
+      "index": 5,
+      "fields": {
+        "config": {
+          "host": "mail.example.com",
+          "port": 25
+        },
+        "enabled": true,
+        "interval_seconds": 300,
+        "name": "SMTP port",
+        "timeout_seconds": 30,
+        "type": "tcp"
+      }
+    },
+    {
+      "index": 6,
+      "fields": {
+        "config": {
+          "host": "admin.example.com",
+          "port": 8443
+        },
+        "enabled": true,
+        "interval_seconds": 300,
+        "name": "Admin console port",
+        "timeout_seconds": 30,
+        "type": "tcp"
+      }
+    },
+    {
+      "index": 7,
+      "fields": {
+        "config": {
+          "expected_interval_seconds": 3600,
+          "grace_period_seconds": 0
+        },
+        "enabled": true,
+        "interval_seconds": 3600,
+        "name": "Cron heartbeat",
+        "type": "push"
+      },
+      "warnings": [
+        "Probara issues its own push token, so this heartbeat's URL is different from the UptimeRobot one - repoint whatever sends the heartbeat"
+      ]
+    },
+    {
+      "index": 8,
+      "fields": {
+        "config": {
+          "method": "GET",
+          "url": "http://blog.example.com"
+        },
+        "enabled": false,
+        "interval_seconds": 900,
+        "name": "Paused blog",
+        "timeout_seconds": 30,
+        "type": "http"
+      }
+    },
+    {
+      "index": 9,
+      "fields": {
+        "config": {
+          "basic_auth_username": "ops",
+          "method": "GET",
+          "url": "https://partner.example.com/"
+        },
+        "enabled": false,
+        "interval_seconds": 20,
+        "name": "Partner portal",
+        "timeout_seconds": 19,
+        "type": "http"
+      },
+      "warnings": [
+        "the basic auth password was not in the export, so this monitor was created disabled - re-enter the basic auth password and enable it",
+        "the 30s timeout was lowered to 19s to stay below the check interval"
+      ]
+    }
+  ],
+  "skipped_rows": [
+    {
+      "name": "Digest admin",
+      "source_type": "http",
+      "reason": "HTTP digest authentication is not supported - Probara's HTTP monitor sends basic auth only"
+    },
+    {
+      "name": "Zone records",
+      "source_type": "6",
+      "reason": "unrecognized UptimeRobot monitor type 6"
+    }
+  ]
+}

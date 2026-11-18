@@ -68,13 +68,17 @@ import (
 	oidcauthservice "github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	oidcmappingsservice "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
+	pagesubscriberservice "github.com/yassinebenameur/probara/api/internal/services/pagesubscribers"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
+	reportscheduleservice "github.com/yassinebenameur/probara/api/internal/services/reportschedules"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
+	statuspagedomainservice "github.com/yassinebenameur/probara/api/internal/services/statuspagedomains"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/bootstrap"
+	"github.com/yassinebenameur/probara/shared/clientip"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -95,6 +99,10 @@ type Server struct {
 	statusPublisher    *statusupdates.Publisher
 	auditRecorder      *auditservice.Recorder
 	auditPruner        *auditservice.Pruner
+	sessionPruner      *adminauthservice.SessionPruner
+	reportRunner       *reportscheduleservice.Runner
+	subscriberRunner   *pagesubscriberservice.Runner
+	domainRunner       *statuspagedomainservice.Runner
 	locationAuthorizer *locationnatsauthservice.Service
 	locationAuth       *callout.AuthorizationService
 	locationAuthConn   *nats.Conn
@@ -127,9 +135,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	r.Use(apimiddleware.RecoveryMiddleware(log))
 	r.Use(apimiddleware.LoggingMiddleware(log))
 	r.Use(apimiddleware.MetricsMiddleware(cfg.ServiceName))
-	r.Use(middleware.RealIP)
+	// Client address for audit, session IPs and rate limits: forwarding
+	// headers count only from TRUSTED_PROXY_CIDRS peers (shared/clientip).
+	r.Use(clientip.NewResolver(cfg.TrustedProxyCIDRs).Middleware)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
+	// Edge security (routes_edge.go): headers, CORS allowlist, anonymous rate limit.
+	rateLimiter := useEdgeSecurity(r, cfg, log)
 
 	// Health and metrics endpoints (no auth required)
 	healthHandlers := NewHandlers(cfg, log, metricsRegistry, dbClient)
@@ -157,6 +169,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	locationSvc := locationservice.NewService(dbClient)
 	locationSvc.ConfigureEncryption(secretsEncryptor)
+	locationSvc.ConfigureWorkerImage(cfg.LocationWorkerImage)
 	var locationAuthorizer *locationnatsauthservice.Service
 	var locationAuthErr error
 	if cfg.NATSLocationAuthIssuerSeed != "" {
@@ -196,15 +209,29 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Audit trail: async recorder + retention pruner (lifecycle on Server).
 	auditRecorder := auditservice.NewRecorder(dbClient, log)
 	auditPruner := auditservice.NewPruner(dbClient, log, cfg.AuditRetentionDays)
+	sessionPruner := adminauthservice.NewSessionPruner(dbClient, log, time.Duration(cfg.AdminRefreshTTLDays)*24*time.Hour)
 	auditSvc := auditservice.NewService(dbClient)
 
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
 	mountPushWebhookRoutes(r, pushHandlers)
 
+	// Emailed SLA report schedules and their runner (routes_reportschedules.go).
+	reportScheduleHandlers, reportRunner := newReportSchedules(cfg, dbClient, auditRecorder, log)
+	// Status-page email subscribers and their runner (routes_statuspage_subscribers.go).
+	subscriberHandlers, subscriberRunner := newStatusPageSubscribers(cfg, dbClient, auditRecorder, statusPublisher, log)
+
+	// Status page custom domains and their re-verification runner (routes_statuspage_domains.go).
+	domainHandlers, domainRunner := newStatusPageDomains(cfg, dbClient, statusPublisher, auditRecorder, log)
+
 	// MCP: OAuth authorization server discovery at the well-known paths
 	// clients probe (path insertion and appending, OAuth and OpenID names).
-	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret)
-	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL)
+	// Which browser origins may write with the session cookie (CSRF;
+	// middleware/origin.go): the auth middleware, sign-in/refresh/sign-out and
+	// OAuth consent share it.
+	origins := apimiddleware.NewOriginPolicy(cfg.AppBaseURL, cfg.PublicBaseURL, cfg.AllowedOrigins, cfg.TrustedProxyCIDRs, log)
+	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret, origins)
+	authMiddleware = rateLimiter.Authenticate(authMiddleware) // per-credential rate limit (routes_edge.go)
+	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL).WithOriginPolicy(origins)
 	mcpHandler := mcpserver.NewHandler(log, oauthHandlers.ResourceMetadataURL)
 	mountOAuthDiscoveryRoutes(r, oauthHandlers)
 
@@ -225,13 +252,26 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		mountOAuthRoutes(r, oauthHandlers, authMiddleware)
 
 		adminUsersSvc := adminusersservice.NewService(dbClient, cfg.AdminBcryptCost)
-		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder)
+		adminUsersSvc.ConfigureSetupCode(cfg.BootstrapSetupCode != "")
+		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder).WithSetupCode(cfg.BootstrapSetupCode)
 
 		// Auth endpoints (no auth required)
 		authService := adminauthservice.NewService(dbClient, cfg.AdminBcryptCost)
 		oidcService := oidcauthservice.NewService(cfg.OIDC, dbClient, log)
+		oidcService.ConfigureSetupCode(cfg.BootstrapSetupCode != "")
 		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
-		mountAuthRoutes(r, authHandlers, adminUsersHandlers)
+		mountAuthRoutes(r, authHandlers, adminUsersHandlers, origins)
+		// Sign-in lockout and sessions: superadmin unlock and user sessions
+		// (handlers/users/security.go), the signed-in user's own sessions
+		// (routes_account.go).
+		adminUsersHandlers.WithAccountSecurity(authService)
+		// Invites, resets, email change and two-factor (routes_account.go).
+		accountMailer := wireAccountSecurity(cfg, log, authService, secretsEncryptor, keyConfigured, authHandlers, adminUsersHandlers, oidcService)
+		mountAccountRoutes(r, authMiddleware, authService, accountMailer, log, auditRecorder)
+
+		mountAlertActionRoutes(r, dbClient, alertHub, auditRecorder, log) // signed acknowledge links (routes_alertactions.go)
+		mountReportUnsubscribeRoutes(r, reportScheduleHandlers)           // signed unsubscribe links of report emails
+		mountStatusPageSubscriberPublicRoutes(r, subscriberHandlers)      // status-page subscribe forward and subscriber mail links
 
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
@@ -247,6 +287,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Lives at /auth-context (not /auth/context) because the outer
 			// unauthenticated /auth subrouter shadows that subtree.
 			r.Get("/auth-context", authHandlers.AuthContext)
+			mountOpenAPIRoute(r, mcpHandler) // GET /openapi.json (routes_openapi.go)
 
 			// Agent service and handlers (needed by monitors route)
 			agentService := agentservice.NewService(dbClient.DB)
@@ -296,6 +337,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			monitorService := monitorservice.NewService(monitorservice.NewPostgresRepository(dbClient))
 			monitorService.ConfigureHistoryDependencies(groupSvc, monitorStatusNotifier{publisher: statusPublisher})
 			monitorService.ConfigureEncryption(secretsEncryptor)
+			monitorService.ConfigureVersionLog(log)
 			resultSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
 			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)
@@ -305,6 +347,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Import service and handlers
 			importSvc := importservice.NewService(dbClient, monitorService, groupSvc)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
+			importHdlrs.ConfigureAudit(auditRecorder)
 
 			// Private locations (remote worker deployments)
 			locationHandlers := locationhandlers.NewHandlers(locationSvc, cfg.PublicNATSURL, log)
@@ -327,6 +370,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo, cfg.LocalAI.Disabled || !cfg.AITriageEnabled), Log: log}
 			r.Route("/slas", slaHandlers.Routes)
 			r.Route("/sla-reports", slaHandlers.ReportRoutes)
+			mountReportScheduleRoutes(r, reportScheduleHandlers)
 
 			// Maintenance windows
 			maintenanceService := maintenancewindowservice.NewService(dbClient)
@@ -361,9 +405,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			mountRetiredAlertPolicyRoutes(r)
 
 			// Alert channels
-			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor)
+			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor).WithLogger(log)
 			alertChannelHandlers := alertchannelhandlers.NewHandlers(alertChannelService, log)
 			mountAlertChannelRoutes(r, alertChannelHandlers)
+			mountDeliveryRoutes(r, dbClient, log) // notification delivery history (routes_deliveries.go)
 
 			// Notification settings (workspace default routing, reminders, auto-incident)
 			notificationSettingsSvc := notificationsettingsservice.NewService(dbClient)
@@ -377,12 +422,14 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Status pages
 			statusPageService := statuspageservice.NewService(dbClient, statusPublisher)
+			statusPageService.ConfigureSubscriberMail(subscriberHandlers.Service.SubscriptionProblems)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
-			mountStatusPageRoutes(r, statusPageHandlers)
+			mountStatusPageRoutes(r, statusPageHandlers, subscriberHandlers.Routes)
+			mountStatusPageDomainRoutes(r, domainHandlers)
 
 			// Tenants (membership-filtered for members, all for superadmins)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
-			mountTenantRoutes(r, tenantHandlers)
+			mountTenantRoutes(r, tenantHandlers, newWorkspaceHandlers(tenantSvc, cfg, auditRecorder, log))
 
 			// Audit log (tenant admins and superadmins)
 			auditHandlers := audithandlers.NewHandlers(auditSvc, log)
@@ -420,6 +467,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		statusPublisher:    statusPublisher,
 		auditRecorder:      auditRecorder,
 		auditPruner:        auditPruner,
+		sessionPruner:      sessionPruner,
+		reportRunner:       reportRunner,
+		subscriberRunner:   subscriberRunner,
+		domainRunner:       domainRunner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
 		mcpErr:             mcpErr,
@@ -466,6 +517,18 @@ func (s *Server) Start() error {
 	if s.auditPruner != nil {
 		s.auditPruner.Start()
 	}
+	if s.sessionPruner != nil {
+		s.sessionPruner.Start()
+	}
+	if s.reportRunner != nil {
+		s.reportRunner.Start()
+	}
+	if s.subscriberRunner != nil {
+		s.subscriberRunner.Start()
+	}
+	if s.domainRunner != nil {
+		s.domainRunner.Start()
+	}
 
 	return s.http.ListenAndServe()
 }
@@ -484,11 +547,25 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.alertSubscriber != nil {
 		s.alertSubscriber.Stop()
 	}
+	// Before the audit recorder: a period claimed during shutdown still
+	// records its send event.
+	if s.reportRunner != nil {
+		s.reportRunner.Stop()
+	}
+	if s.subscriberRunner != nil {
+		s.subscriberRunner.Stop()
+	}
+	if s.domainRunner != nil {
+		s.domainRunner.Stop()
+	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Stop()
 	}
 	if s.auditPruner != nil {
 		s.auditPruner.Stop()
+	}
+	if s.sessionPruner != nil {
+		s.sessionPruner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

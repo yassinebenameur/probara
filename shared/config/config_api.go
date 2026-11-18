@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/ai"
 )
@@ -48,13 +49,25 @@ type APIConfig struct {
 	// baked into agent install scripts and push webhook URLs, bypassing
 	// Host-header inspection which is unreliable behind reverse proxies.
 	PublicBaseURL string
-	// PublicNATSURL is the NATS address reachable from remote networks (e.g.
-	// "nats://nats.example.com:4222"), baked into private-location worker
-	// deploy snippets. Empty renders a placeholder.
+	// PublicNATSURL is the NATS address reachable from remote networks
+	// ("tls://nats.example.com:4222", or "wss://nats.example.com" for the
+	// broker's websocket listener behind an HTTPS ingress), baked into
+	// private-location worker deploy snippets. Empty disables the snippets.
 	PublicNATSURL string
 	// NATSLocationAuthIssuerSeed enables the API-hosted NATS authorization
 	// callout used to issue per-location broker permissions.
 	NATSLocationAuthIssuerSeed string
+	// LocationWorkerImage is LOCATION_WORKER_IMAGE, the image private-location
+	// deploy snippets reference. Empty means the locations service default
+	// (the worker image at this build's release version).
+	LocationWorkerImage string
+	// BootstrapSetupCode is BOOTSTRAP_SETUP_CODE, already normalized
+	// (NormalizeSetupCode): when set, creating the first administrator
+	// requires it, so a freshly published install cannot be claimed by
+	// whoever reaches the UI first. Empty keeps the endpoint open until the
+	// first admin exists. Both the form and the SSO bootstrap decision read
+	// this one value, so they can never disagree about whether a code is set.
+	BootstrapSetupCode string
 	// Mesh knobs mirrored from the scheduler (same env vars) so edge
 	// staleness and probe-now timeouts agree with the actual probe cadence.
 	MeshProbeIntervalSeconds int
@@ -65,6 +78,16 @@ type APIConfig struct {
 	// minute (excess gets 429 + Retry-After, which the collector retries).
 	OTLPMaxSeriesPerMonitor int
 	OTLPMonitorRatePerMin   int
+	// StatusPageInternalToken is STATUS_PAGE_INTERNAL_TOKEN, which the
+	// status-page service presents on forwarded subscription requests; the
+	// public subscribe and confirm routes refuse any call without it.
+	StatusPageInternalToken string
+	// Client IP resolution, security headers, CORS and the general rate
+	// limit (config_edge.go).
+	EdgeConfig
+	APIEdgeConfig
+	// Status page custom domains (config_api_domains.go).
+	StatusPageDomainsConfig
 }
 
 // LoadAPIConfig loads API service configuration
@@ -211,6 +234,10 @@ func LoadAPIConfig() (*APIConfig, error) {
 	// agent install scripts and push webhook URLs. Trailing slash is stripped.
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/")
 
+	if cfg.StatusPageInternalToken, err = loadStatusPageInternalToken(); err != nil {
+		return nil, err
+	}
+
 	// PUBLIC_NATS_URL: externally-reachable NATS address baked into
 	// private-location worker deploy snippets.
 	cfg.PublicNATSURL = strings.TrimSpace(os.Getenv("PUBLIC_NATS_URL"))
@@ -220,6 +247,16 @@ func LoadAPIConfig() (*APIConfig, error) {
 	}
 	if cfg.NATSLocationAuthIssuerSeed != "" && strings.TrimSpace(os.Getenv("PROBARA_SECRETS_KEY")) == "" {
 		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
+	}
+	cfg.LocationWorkerImage = strings.TrimSpace(os.Getenv("LOCATION_WORKER_IMAGE"))
+	// A code that normalizes to something short (or to nothing, like "--")
+	// would leave the form guessable or open while SSO bootstrap is off, so
+	// it refuses to start instead.
+	if raw := strings.TrimSpace(os.Getenv("BOOTSTRAP_SETUP_CODE")); raw != "" {
+		cfg.BootstrapSetupCode = NormalizeSetupCode(raw)
+		if n := utf8.RuneCountInString(cfg.BootstrapSetupCode); n < MinSetupCodeLength {
+			return nil, fmt.Errorf("BOOTSTRAP_SETUP_CODE must have at least %d characters besides dashes and spaces, got %d", MinSetupCodeLength, n)
+		}
 	}
 
 	// OTLP_* — ingest guardrails for the OTel metrics endpoint.
@@ -262,6 +299,16 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, err
 	}
 	cfg.NotificationEgressConfig = egressCfg
+
+	if cfg.EdgeConfig, err = loadEdgeConfig(); err != nil {
+		return nil, err
+	}
+	if cfg.APIEdgeConfig, err = loadAPIEdgeConfig(cfg.AppBaseURL); err != nil {
+		return nil, err
+	}
+	if cfg.StatusPageDomainsConfig, err = loadStatusPageDomainsConfig(); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
 }
@@ -339,4 +386,21 @@ func loadOIDCConfig(publicBaseURL string) (*OIDCConfig, error) {
 	cfg.JITDefaultTenantID = envOrDefault("OIDC_JIT_DEFAULT_TENANT_ID", "00000000-0000-0000-0000-000000000001")
 
 	return cfg, nil
+}
+
+// MinSetupCodeLength is the shortest BOOTSTRAP_SETUP_CODE the API starts
+// with, counted after NormalizeSetupCode. scripts/install.sh generates 20.
+const MinSetupCodeLength = 16
+
+// NormalizeSetupCode lets an operator type the setup code the way the
+// installer printed it or not: case, dashes and spaces are ignored. The API
+// applies it once to the configured code and to every submitted one.
+func NormalizeSetupCode(code string) string {
+	return strings.ToUpper(strings.Map(func(r rune) rune {
+		switch r {
+		case '-', ' ', '\t':
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(code)))
 }

@@ -11,7 +11,11 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/worker ./worker/cmd/worker
+# Release version stamped into shared/buildinfo (docker-build.yml passes the
+# metadata action's version, docker-compose.yml PROBARA_VERSION). Declared just
+# before the build so a new version only invalidates this layer.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/yassinebenameur/probara/shared/buildinfo.Version=${VERSION}" -o /app/worker ./worker/cmd/worker
 
 # Runtime stage
 FROM alpine:3.24

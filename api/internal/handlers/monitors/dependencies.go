@@ -10,8 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
+	"github.com/yassinebenameur/probara/api/internal/models"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 )
 
@@ -43,7 +45,7 @@ func (h *Handlers) listDependencyRelation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var items interface{}
+	var items []models.DependencyMonitor
 	if relation == "dependencies" {
 		items, err = h.dependencyService.GetDependencies(r.Context(), tenantUUID, monitorID)
 	} else {
@@ -59,7 +61,7 @@ func (h *Handlers) listDependencyRelation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, map[string]interface{}{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, models.DependencyMonitorList{Items: items})
 }
 
 // GetDependencyGraph handles GET /api/v1/monitors/dependency-graph — the
@@ -135,11 +137,28 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	if op == "add" {
-		err = h.dependencyService.AddDependency(r.Context(), tenantUUID, monitorID, dependsOnID)
-	} else {
-		err = h.dependencyService.RemoveDependency(r.Context(), tenantUUID, monitorID, dependsOnID)
-	}
+	// The edge and the monitor's version, in one transaction.
+	_, err = h.inSave(r.Context(), func(ctx context.Context) error {
+		// Both ends locked in lock order before the edge changes
+		// (api/internal/dbtx): the monitor whose dependencies change FOR
+		// UPDATE, so two opposite edge adds serialize and the second one's
+		// cycle check sees the first; the target FOR KEY SHARE.
+		if err := h.lockForSave(ctx, tenantUUID, []uuid.UUID{monitorID}, []string{dependsOnID.String()}); err != nil {
+			return err
+		}
+		h.captureBaseline(ctx, tenantUUID, monitorID)
+		var err error
+		if op == "add" {
+			err = h.dependencyService.AddDependency(ctx, tenantUUID, monitorID, dependsOnID)
+		} else {
+			err = h.dependencyService.RemoveDependency(ctx, tenantUUID, monitorID, dependsOnID)
+		}
+		if err != nil {
+			return err
+		}
+		h.recordVersion(ctx, tenantUUID, monitorID)
+		return nil
+	})
 	if err != nil {
 		h.writeDependencyError(w, tenantUUID, monitorID, err)
 		return
@@ -170,6 +189,8 @@ func (h *Handlers) syncDependencies(ctx context.Context, tenantUUID, monitorID u
 // writeDependencyError maps a syncDependencies failure to an HTTP response.
 func (h *Handlers) writeDependencyError(w http.ResponseWriter, tenantUUID, monitorID uuid.UUID, err error) {
 	switch {
+	case dbtx.IsConflict(err):
+		writeConflict(w)
 	case errors.Is(err, depservice.ErrDependencyCycle):
 		apierrors.WriteError(w, http.StatusConflict, "dependency_cycle", err.Error())
 	case errors.Is(err, depservice.ErrMonitorNotFound):

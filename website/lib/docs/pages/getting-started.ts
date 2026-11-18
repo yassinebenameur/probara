@@ -59,6 +59,13 @@ export const GETTING_STARTED_PAGE: DocPage = {
           text:
             "`make start-all-local` runs application services as local processes. `make start-all` builds and runs them with Docker Compose. Use the matching stop or restart target for the workflow you chose.",
         },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Just running Probara? Use the release install",
+          text:
+            "To run a release on one host without cloning or building, `curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/main/scripts/install.sh | bash` downloads the [release Compose files](/docs/deployment/#release-compose), generates every secret into `.env`, and starts the published images, the operator UI included, on port 3000. It prints a one-time setup code that the first-administrator form asks for.",
+        },
       ],
     },
     {
@@ -220,9 +227,9 @@ export const GETTING_STARTED_PAGE: DocPage = {
           ordered: true,
           items: [
             "Open the web application at `http://localhost:3000`.",
-            "Follow the bootstrap prompt and create the initial account.",
+            "Follow the bootstrap prompt and create the initial account. When the API has `BOOTSTRAP_SETUP_CODE` set (the release installer always sets it), the form also asks for that setup code: the installer prints it when it finishes and keeps it in the install directory's `.env`.",
             "Use a username of 3–64 characters containing letters, numbers, `.`, `_`, or `-`.",
-            "Use a password between 12 and 128 characters.",
+            "Use a password of at least 12 characters and at most 72 bytes (bcrypt hashes no more; accented or non-Latin letters take two to four bytes each).",
             "Sign in and select the initial tenant context.",
           ],
         },
@@ -231,12 +238,12 @@ export const GETTING_STARTED_PAGE: DocPage = {
           tone: "warning",
           title: "Bootstrap closes after first use",
           text:
-            "The public first-user endpoint is only valid while no users exist. Treat initial bootstrap as an installation step, not a recurring user-management path.",
+            "The public first-user endpoint is only valid while no users exist, and never again once a superadministrator has existed. Treat initial bootstrap as an installation step, not a recurring user-management path. Without a setup code, whoever reaches the UI first can claim it: set `BOOTSTRAP_SETUP_CODE` (Helm: `secrets.bootstrapSetupCode`) on any install that is reachable by others before you create the first administrator.",
         },
         {
           type: "paragraph",
           text:
-            "An empty installation configured for [OIDC](/docs/administration/#oidc) can also bootstrap through the first successful just-in-time OIDC login. Subsequent user and tenant access is governed by platform roles and tenant memberships.",
+            "An empty installation configured for [OIDC](/docs/administration/#oidc) can also bootstrap through the first successful just-in-time OIDC login, unless `BOOTSTRAP_SETUP_CODE` is set: then SSO users are always created as ordinary members, and the first superadministrator must come from the first-administrator form with the code, after which it can promote SSO users. Subsequent user and tenant access is governed by platform roles and tenant memberships.",
         },
       ],
     },

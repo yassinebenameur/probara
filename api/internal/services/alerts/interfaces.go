@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -34,6 +35,21 @@ type AlertService interface {
 
 	// BulkResolve resolves each listed open alert; the rest are reported per id.
 	BulkResolve(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error)
+
+	// UnacknowledgeAlert returns an acknowledged alert to active.
+	UnacknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error)
+
+	// SnoozeAlert mutes an open alert's notifications until a time.
+	SnoozeAlert(ctx context.Context, tenantID, alertID uuid.UUID, until time.Time) (*models.AlertWithDetails, error)
+
+	// UnsnoozeAlert ends an open alert's running snooze now.
+	UnsnoozeAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error)
+
+	// BulkUnacknowledge, BulkSnooze and BulkUnsnooze apply those to many
+	// alerts; the rest are reported per id, never failing the batch.
+	BulkUnacknowledge(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error)
+	BulkSnooze(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID, until time.Time) (*BulkResult, error)
+	BulkUnsnooze(ctx context.Context, tenantID uuid.UUID, alertIDs []uuid.UUID) (*BulkResult, error)
 
 	// GetActiveAlertForMonitor gets the active alert for a monitor if one exists
 	GetActiveAlertForMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Alert, error)

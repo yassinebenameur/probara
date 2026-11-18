@@ -4,6 +4,7 @@
 // ("5 alerts triggered") whose text comes from summarizeAlertBurst.
 
 import { formatAlertValue, formatSeriesLabel } from './metrics';
+import { tlsExpiryCondition } from './tls-cert';
 import type { Alert, AlertStreamEventType } from './types';
 
 export type AlertToastType = 'error' | 'warning' | 'success' | 'info';
@@ -16,12 +17,13 @@ export interface AlertToastContent {
   group: string;
 }
 
-/** Who the alert is about: the monitor, or the location pair of a mesh edge. */
+/** Who the alert is about: the monitor, the location pair of a mesh edge, or an offline location. */
 export function alertSubject(alert: Alert): string {
   if (alert.monitor_name) return alert.monitor_name;
   if (alert.source_location_name && alert.target_location_name) {
     return `${alert.source_location_name} → ${alert.target_location_name}`;
   }
+  if (alert.kind === 'location_offline') return alert.source_location_name || 'A location';
   return alert.kind === 'mesh_edge' ? 'A mesh path' : 'A monitor';
 }
 
@@ -42,11 +44,17 @@ export function alertCondition(alert: Alert): string {
       return `${label} is over its threshold`;
     }
     case 'tls_expiry':
+      return tlsExpiryCondition(alert.last_error, alert.metric_value);
+    case 'domain_expiry':
+      if (alert.metric_value != null && alert.metric_value < 0) return 'domain registration has expired';
+      // No value: the alerter could not determine the expiry date.
       return alert.metric_value != null
-        ? `certificate expires in ${Math.max(0, Math.round(alert.metric_value))}d`
-        : 'certificate is about to expire';
+        ? `domain registration expires in ${Math.round(alert.metric_value)}d`
+        : 'domain expiry date could not be determined';
     case 'mesh_edge':
       return 'path is down';
+    case 'location_offline':
+      return 'stopped reporting';
     case 'availability':
     default:
       return 'is down';
@@ -61,6 +69,8 @@ const RESOLVED_NOUN: Record<Alert['kind'], string> = {
   host_metric: 'host metric alert',
   tls_expiry: 'certificate alert',
   mesh_edge: 'path alert',
+  domain_expiry: 'domain alert',
+  location_offline: 'location alert',
 };
 
 function isDependencySuppressed(alert: Alert): boolean {
@@ -86,9 +96,16 @@ export function alertToast(type: AlertStreamEventType, alert: Alert): AlertToast
     }
     // Same split as alertCondition: a missing kind falls to its "is down"
     // wording, so it must take the down tone too.
-    const severe = !alert.kind || alert.kind === 'availability' || alert.kind === 'mesh_edge';
+    // An offline location and an already-expired domain are outages too.
+    const severe =
+      !alert.kind ||
+      alert.kind === 'availability' ||
+      alert.kind === 'mesh_edge' ||
+      alert.kind === 'location_offline' ||
+      (alert.kind === 'domain_expiry' && alert.metric_value != null && alert.metric_value < 0);
     return {
-      title: 'Alert triggered',
+      // A reopened alert (relapse) arrives as "created" with its relapse count.
+      title: (alert.relapse_count ?? 0) > 0 ? 'Alert relapsed' : 'Alert triggered',
       message: `${subject} ${alertCondition(alert)}`,
       type: severe ? 'error' : 'warning',
       group: 'alert-created',

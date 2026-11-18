@@ -115,9 +115,9 @@ func TestEncryptDecryptMonitorConfig_RoundTrip(t *testing.T) {
 
 func TestEncryptMonitorConfig_NoSecretTypePassthrough(t *testing.T) {
 	enc := monitorTestEncryptor(t)
-	raw := json.RawMessage(`{"url":"https://example.com","method":"GET"}`)
+	raw := json.RawMessage(`{"host":"example.com"}`)
 
-	out, err := EncryptMonitorConfig(enc, "http", raw)
+	out, err := EncryptMonitorConfig(enc, "ping", raw)
 	if err != nil {
 		t.Fatalf("EncryptMonitorConfig: %v", err)
 	}

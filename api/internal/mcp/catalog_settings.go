@@ -81,14 +81,17 @@ func notificationTools() []spec {
 			Name:  "get_notification_settings",
 			Title: "Get notification settings",
 			Description: "Workspace alerting defaults: default channels (who monitors in \"default\" mode page), " +
-				"reminders, auto-incident creation, latency anomaly detection and dependency suppression.",
+				"reminders, auto-incident creation, latency anomaly detection, dependency suppression and the " +
+				"relapse reopen cooldown (alert_reopen_cooldown_minutes, 0 = off).",
 			Method: http.MethodGet, Route: "/notification-settings",
 		},
 		{
 			Name:  "update_notification_settings",
 			Title: "Update notification settings",
 			Description: "Change workspace alerting defaults. Unsent fields stay. default_channels, when sent, " +
-				"replaces the default routing in order ([] routes default-mode monitors to nobody).",
+				"replaces the default routing in order ([] routes default-mode monitors to nobody). " +
+				"alert_reopen_cooldown_minutes (1-1440, 0 = off): an alert that recovered on its own and fails " +
+				"again within it reopens as a relapse instead of a new alert.",
 			Method: http.MethodPut, Route: "/notification-settings",
 			Body: typeOf[notificationsettings.UpdateRequest](),
 		},
@@ -118,8 +121,9 @@ func notificationTools() []spec {
 			Description: "Download operator verdicts on AI output as JSONL (fine-tuning data). Tenant admins only; " +
 				"capped at 5,000 labels.",
 			Method: http.MethodPost, Route: "/ai-labels/export",
-			Body:  typeOf[models.AILabelExportFilter](),
-			Enums: map[string][]string{"subject_types": {"incident_analysis", "alert_triage", "dependency_pair"}},
+			Body:         typeOf[models.AILabelExportFilter](),
+			BodyOptional: true,
+			Enums:        map[string][]string{"subject_types": {"incident_analysis", "alert_triage", "dependency_pair"}},
 		},
 		{
 			Name:        "list_api_keys",
@@ -227,9 +231,10 @@ func slaTools() []spec {
 			Description: "Freeze a closed period's report as an immutable record (e.g. for a customer). Defaults to " +
 				"the last closed period; a period can be issued once.",
 			Method: http.MethodPost, Route: "/slas/{id}/reports",
-			PathDocs:  sla,
-			Body:      typeOf[models.IssueSLAReportRequest](),
-			FieldDocs: map[string]string{"period": "Closed period key (default: the last closed period)."},
+			PathDocs:     sla,
+			Body:         typeOf[models.IssueSLAReportRequest](),
+			BodyOptional: true,
+			FieldDocs:    map[string]string{"period": "Closed period key (default: the last closed period)."},
 		},
 		{
 			Name:        "get_issued_sla_report",
@@ -263,8 +268,8 @@ func statusPageTools() []spec {
 		{
 			Name:  "create_status_page",
 			Title: "Create status page",
-			Description: "Create a PUBLIC status page at its slug. Lay monitors out in sections (title + monitors " +
-				"with optional display names); settings toggle what visitors see.",
+			Description: "Create a status page at its slug (public unless visibility says otherwise). Lay monitors " +
+				"out in sections (title + monitors with optional display names); settings toggle what visitors see.",
 			Method: http.MethodPost, Route: "/status-pages",
 			Body: typeOf[models.CreateStatusPageRequest](), Required: []string{"slug", "title"},
 			FieldDocs: map[string]string{
@@ -272,6 +277,8 @@ func statusPageTools() []spec {
 				"sections":              "Ordered sections: {title, monitors: [{monitor_id, display_name?}]}. A monitor may appear once.",
 				"monitor_ids":           "Legacy flat list (one \"Services\" section); prefer sections.",
 				"monitor_display_names": "Legacy: monitor ID -> public name, with monitor_ids.",
+				"visibility":            statusPageVisibilityDoc,
+				"password":              statusPagePasswordDoc,
 			},
 		},
 		{
@@ -281,6 +288,10 @@ func statusPageTools() []spec {
 			Method:      http.MethodPatch, Route: "/status-pages/{id}",
 			PathDocs: page,
 			Body:     typeOf[models.UpdateStatusPageRequest](),
+			FieldDocs: map[string]string{
+				"visibility": statusPageVisibilityDoc,
+				"password":   statusPagePasswordDoc + " Omit to keep it; \"\" clears it (refused on a password page).",
+			},
 		},
 		{
 			Name:        "delete_status_page",
@@ -443,7 +454,7 @@ func platformTools() []spec {
 			Name:        "list_tenants",
 			Title:       "List workspaces",
 			Description: "Workspaces (tenants) you can act in, with your role in each. Pass an ID as tenant_id to other tools. Sign-in connections only.",
-			Method:      http.MethodGet, Route: "/tenants", Platform: true,
+			Method:      http.MethodGet, Route: "/tenants", Platform: true, SessionOnly: true,
 		},
 		{
 			Name:        "list_users",

@@ -10,6 +10,7 @@ import (
 
 // RecoveryMiddleware recovers from panics and logs the error
 func RecoveryMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
+	redactor := &pathRedactor{}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
@@ -17,7 +18,7 @@ func RecoveryMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 					log.WithFields(map[string]interface{}{
 						"error":      fmt.Sprintf("%v", err),
 						"stack":      string(debug.Stack()),
-						"path":       r.URL.Path,
+						"path":       redactor.redact(r),
 						"method":     r.Method,
 						"request_id": GetRequestID(r.Context()),
 					}).Error("Panic recovered")

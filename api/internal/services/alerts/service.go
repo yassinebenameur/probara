@@ -17,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/services/triageview"
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
 // Errors the handlers map to a status with errors.Is. The text reaches API
@@ -48,7 +49,10 @@ func NewService(db *db.Client, incidents incidentAutomation) *Service {
 // alertDetailSelect is the shared projection for AlertWithDetails. Monitors
 // are LEFT JOINed because mesh_edge alerts have no monitor — their subject is
 // a directed location pair (sl → tl). The trailing triage columns and join
-// come from triageview (read-only; triage never changes paging).
+// come from triageview (read-only; triage never changes paging). snoozed_until,
+// snoozed_at and who snoozed are reported only while the snooze holds
+// (alertrouting.SnoozedPredicate, the alerter's own test), so a payload never
+// reports a snooze that has ended.
 var alertDetailSelect = `
 	SELECT a.id, a.tenant_id, a.monitor_id, a.status,
 		a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
@@ -58,9 +62,16 @@ var alertDetailSelect = `
 		m.name as monitor_name,
 		a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name,
 		a.source_location_id, a.target_location_id, sl.name, tl.name,
-		CASE WHEN ` + alertSuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonDependency + `' END,
+		CASE WHEN ` + alertDependencySuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonDependency + `'
+			WHEN ` + alertLocationSuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonLocationOffline + `' END,
 		CASE WHEN a.status IN ('active', 'acknowledged') AND a.kind = 'availability'
 			THEN json_array_length(` + alertrouting.ImpactedMonitorsSubquery("a.monitor_id") + `) ELSE 0 END,
+		a.acknowledged_by_user_id, ackby.username,
+		CASE WHEN a.status IN ('active', 'acknowledged') AND ` + alertrouting.SnoozedPredicate("a") + ` THEN a.snoozed_until END,
+		CASE WHEN a.status IN ('active', 'acknowledged') AND ` + alertrouting.SnoozedPredicate("a") + ` THEN a.snoozed_at END,
+		CASE WHEN a.status IN ('active', 'acknowledged') AND ` + alertrouting.SnoozedPredicate("a") + ` THEN a.snoozed_by_user_id END,
+		CASE WHEN a.status IN ('active', 'acknowledged') AND ` + alertrouting.SnoozedPredicate("a") + ` THEN snoozeby.username END,
+		a.relapse_count, a.reopened_at,
 		` + triageview.Columns + `
 	FROM alerts a
 	LEFT JOIN monitors m ON a.monitor_id = m.id
@@ -68,19 +79,30 @@ var alertDetailSelect = `
 	LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 	LEFT JOIN locations sl ON sl.id = a.source_location_id
 	LEFT JOIN locations tl ON tl.id = a.target_location_id
+	LEFT JOIN admin_users ackby ON ackby.id = a.acknowledged_by_user_id
+	LEFT JOIN admin_users snoozeby ON snoozeby.id = a.snoozed_by_user_id
 	` + triageview.Join + `
 `
 
 // alertSuppressedPredicate is TRUE for an open alert whose notifications the
-// alerter is currently suppressing. It is the very predicate the alerter's
-// dispatch query excludes on, so the API never calls an alert suppressed that
-// would in fact page (or vice versa). Resolved alerts are never suppressed:
-// there is nothing left to dispatch. Expects aliases a (alerts), m (monitors)
-// and te (tenants); m is NULL for mesh alerts, which makes the CASE inside
-// fall through to the tenant default and the root-cause test NULL → not
-// suppressed.
-var alertSuppressedPredicate = `(a.status IN ('active', 'acknowledged') AND COALESCE(` +
+// alerter is currently suppressing. It is built from the very predicates the
+// alerter's dispatch queries exclude on, so the API never calls an alert
+// suppressed that would in fact page (or vice versa). Resolved alerts are
+// never suppressed: there is nothing left to dispatch. Expects aliases a
+// (alerts), m (monitors) and te (tenants); m is NULL for mesh alerts, which
+// makes the dependency CASE fall through to the tenant default and the
+// root-cause test NULL → not suppressed by a dependency.
+var alertSuppressedPredicate = `(` + alertDependencySuppressedPredicate + ` OR ` + alertLocationSuppressedPredicate + `)`
+
+// alertDependencySuppressedPredicate: an upstream dependency explains the
+// alert (suppression_reason "dependency").
+var alertDependencySuppressedPredicate = `(a.status IN ('active', 'acknowledged') AND COALESCE(` +
 	alertrouting.SuppressedByDependencyPredicate("a", "m", "te") + `, FALSE))`
+
+// alertLocationSuppressedPredicate: a mesh edge whose location stopped
+// reporting (suppression_reason "location_offline").
+var alertLocationSuppressedPredicate = `(a.status IN ('active', 'acknowledged') AND ` +
+	alertrouting.SuppressedByOfflineLocationPredicate("a") + `)`
 
 // alertVisibleClause hides alerts of soft-deleted monitors while keeping
 // monitor-less (mesh) alerts visible.
@@ -122,6 +144,9 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		&alert.SourceLocationID, &alert.TargetLocationID, &alert.SourceLocationName, &alert.TargetLocationName,
 		&alert.SuppressionReason, &alert.ImpactedCount,
+		&alert.AcknowledgedByUserID, &alert.AcknowledgedBy, &alert.SnoozedUntil,
+		&alert.SnoozedAt, &alert.SnoozedByUserID, &alert.SnoozedBy,
+		&alert.RelapseCount, &alert.ReopenedAt,
 	}, triage.Dest()...)...)
 	if err != nil {
 		return nil, err
@@ -236,11 +261,19 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 }
 
 // GetAlert retrieves an alert by ID. A labelable triage also carries its
-// label context (the triage label dialog reads it from this route only).
+// label context (the triage label dialog reads it from this route only), and
+// a relapsed alert its relapse history.
 func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
 	alert, err := s.getAlert(ctx, tenantID, alertID)
 	if err != nil {
 		return nil, err
+	}
+	if alert.RelapseCount > 0 {
+		relapses, err := s.loadRelapses(ctx, tenantID, alertID)
+		if err != nil {
+			return nil, err
+		}
+		alert.Relapses = relapses
 	}
 	if alert.Triage != nil && alert.Triage.Labelable {
 		labelContext, err := triageview.LoadLabelContext(ctx, s.db, tenantID, alert.Triage.ID)
@@ -250,6 +283,33 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 		alert.Triage.LabelContext = labelContext
 	}
 	return alert, nil
+}
+
+// loadRelapses reads an alert's relapse history, oldest first.
+func (s *Service) loadRelapses(ctx context.Context, tenantID, alertID uuid.UUID) ([]models.AlertRelapse, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.relapse_number, r.recovered_at, r.reopened_at
+		FROM alert_relapses r
+		JOIN alerts a ON a.id = r.alert_id
+		WHERE r.alert_id = $1 AND a.tenant_id = $2
+		ORDER BY r.relapse_number
+	`, alertID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load alert relapses: %w", err)
+	}
+	defer rows.Close()
+	var relapses []models.AlertRelapse
+	for rows.Next() {
+		var r models.AlertRelapse
+		if err := rows.Scan(&r.Number, &r.RecoveredAt, &r.ReopenedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan alert relapse: %w", err)
+		}
+		relapses = append(relapses, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating alert relapses: %w", err)
+	}
+	return relapses, nil
 }
 
 // getAlert retrieves an alert by ID with its compact triage.
@@ -349,18 +409,40 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	return alerts, nil
 }
 
-// AcknowledgeAlert marks an alert as acknowledged
+// firstAckEpisodeStartSet is the SET item that records, with the first
+// acknowledgement, when the paging episode it answered began: the trigger, or
+// the relapse reopen it followed. SET expressions read the row as it was, so
+// it sees first_acknowledged_at before the same statement sets it. SLA time
+// to acknowledge is first_acknowledged_at minus this, so a first
+// acknowledgement given during a relapse is not stretched across the
+// recovered gap. alias qualifies the alerts row ("" for none).
+func firstAckEpisodeStartSet(alias string) string {
+	if alias != "" {
+		alias += "."
+	}
+	return `first_ack_episode_started_at = CASE WHEN ` + alias + `first_acknowledged_at IS NULL
+				THEN COALESCE(` + alias + `reopened_at, ` + alias + `triggered_at) ELSE ` + alias + `first_ack_episode_started_at END`
+}
+
+// AcknowledgeAlert marks an alert as acknowledged, by the acting user
+// (actingUserID). From then on the alerter sends it no reminder and no
+// further escalation (shared/alertrouting mute.go). The first acknowledgement
+// is also kept in first_acknowledged_at, which neither an unacknowledge nor a
+// relapse reopen ever clears: SLA reports measure time to acknowledge from it
+// (firstAckEpisodeStartSet).
 func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
 	now := time.Now()
 	query := `
 		UPDATE alerts
-		SET status = 'acknowledged', acknowledged_at = $1, updated_at = $1
+		SET status = 'acknowledged', acknowledged_at = $1, acknowledged_by_user_id = $4, updated_at = $1,
+			first_acknowledged_at = COALESCE(first_acknowledged_at, $1),
+			` + firstAckEpisodeStartSet("") + `
 		WHERE id = $2 AND tenant_id = $3 AND status = 'active'
 		RETURNING id
 	`
 
 	var id uuid.UUID
-	err := s.db.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
+	err := s.db.QueryRowContext(ctx, query, now, alertID, tenantID, actingUserID(ctx)).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrAlertNotActive
@@ -373,11 +455,15 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, tenantID, alertID uuid.U
 
 // ResolveAlert marks an alert as resolved
 func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
-	now := time.Now()
+	// resolve_reason 'manual' (notifications.ResolveReasonManual): the
+	// closing notice the alerter sends must not claim the condition cleared.
+	// resolved_at is the database clock, as the alerter's resolves are, so
+	// every alert time (and the relapse cooldown) is on one clock.
 	query := `
 		UPDATE alerts
-		SET status = 'resolved', resolved_at = $1, updated_at = $1
-		WHERE id = $2 AND tenant_id = $3 AND status IN ('active', 'acknowledged')
+		SET status = 'resolved', resolved_at = NOW(), updated_at = NOW(),
+			resolve_reason = '` + notifications.ResolveReasonManual + `'
+		WHERE id = $1 AND tenant_id = $2 AND status IN ('active', 'acknowledged')
 		RETURNING id
 	`
 
@@ -390,7 +476,7 @@ func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID)
 	}()
 
 	var id uuid.UUID
-	err = tx.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
+	err = tx.QueryRowContext(ctx, query, alertID, tenantID).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrAlertAlreadyResolved
@@ -417,7 +503,7 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 			triggered_at, acknowledged_at, resolved_at, failure_count,
 			last_error, kind, baseline_latency_ms, observed_latency_ms, anomaly_score,
 			metric_name, metric_value, threshold_value,
-			root_cause_monitor_id, root_cause_down_since, created_at, updated_at
+			root_cause_monitor_id, root_cause_down_since, relapse_count, reopened_at, created_at, updated_at
 		FROM alerts
 		WHERE tenant_id = $1 AND monitor_id = $2 AND status IN ('active', 'acknowledged')
 		ORDER BY triggered_at DESC
@@ -430,7 +516,7 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
 		&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
-		&alert.RootCauseMonitorID, &alert.RootCauseDownSince,
+		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RelapseCount, &alert.ReopenedAt,
 		&alert.CreatedAt, &alert.UpdatedAt,
 	)
 

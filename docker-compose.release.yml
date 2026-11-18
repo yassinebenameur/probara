@@ -1,0 +1,298 @@
+# Release install: the published images from GHCR instead of builds from
+# source, plus the operator UI. It is an override of docker-compose.yml, so
+# the service wiring stays in one file (and in step with the Helm chart):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
+#
+# scripts/install.sh downloads both files at a release tag and writes a .env
+# with generated secrets and COMPOSE_FILE naming both files, so plain
+# `docker compose ...` in that directory uses them. It never overwrites a
+# value already in .env.
+#
+# Every platform credential is required (${VAR:?...}): release mode has no
+# development defaults. Credentials of optional features (SMTP_PASSWORD,
+# OIDC_CLIENT_SECRET, STATUS_PAGE_VAPID_PRIVATE_KEY) stay optional but never
+# fall back to a development value. Needs Docker Compose 2.24.4 or newer
+# (!reset, !override).
+#
+# Published ports: the UI (3000, through the `edge` proxy) and status pages
+# (8082). The API is reached through the UI's /api proxy; PostgreSQL, NATS
+# client/monitoring, the frontend itself and every metrics port stay on the
+# Compose networks. The NATS websocket listener is published on loopback only,
+# for a TLS reverse proxy on 443 to front (private locations dial wss://).
+#
+# Networks: `edge`, `frontend` and `api` share probara-front; everything else
+# stays on probara-network, which the api also joins for PostgreSQL and NATS.
+# The worker sends tenant-defined HTTP requests with arbitrary headers, so it
+# must never reach the frontend or edge, and the api trusts forwarding headers
+# only from the frontend's fixed address on probara-front.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (scripts/install.sh generates .env)}"
+    ports: !reset []
+
+  # Auth on: platform services log in as probara-platform, with the password
+  # passed as a --pass argument and never through nats.conf variable
+  # expansion, which re-parses the value as configuration. Every other client,
+  # i.e. private-location workers, goes through the API-hosted auth callout,
+  # on 4222 and on the websocket listener alike.
+  nats:
+    command: !override
+      - "-c"
+      - "/etc/nats/nats.conf"
+      - "--user"
+      - "probara-platform"
+      - "--pass"
+      - "${NATS_PLATFORM_PASSWORD:?NATS_PLATFORM_PASSWORD is required (scripts/install.sh generates .env)}"
+    configs:
+      - source: nats_release_conf
+        target: /etc/nats/nats.conf
+    ports: !override
+      - "${NATS_WEBSOCKET_PUBLISH:-127.0.0.1:8443}:8443"
+
+  migrations:
+    build: !reset null
+    image: "ghcr.io/yassinebenameur/probara-migrations:${PROBARA_VERSION:?PROBARA_VERSION is required (a release such as 2.1.0)}"
+    environment:
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/probara?sslmode=disable"
+    # The image carries the migrations of its own release.
+    volumes: !reset []
+
+  # Started through the local-ai profile, which scripts/install.sh puts in
+  # COMPOSE_PROFILES. To run without it, empty COMPOSE_PROFILES and set
+  # LOCAL_AI_DISABLED=true in .env.
+  local-ai:
+    build: !reset null
+    image: "${LOCAL_AI_IMAGE:-ghcr.io/yassinebenameur/probara-local-ai:${PROBARA_VERSION:?PROBARA_VERSION is required}}"
+    profiles: ["local-ai"]
+    environment:
+      LOCAL_AI_TOKEN: "${LOCAL_AI_TOKEN:?LOCAL_AI_TOKEN is required (scripts/install.sh generates .env)}"
+
+  api:
+    build: !reset null
+    image: "ghcr.io/yassinebenameur/probara-api:${PROBARA_VERSION:?PROBARA_VERSION is required}"
+    environment:
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://probara-platform:${NATS_PLATFORM_PASSWORD:?NATS_PLATFORM_PASSWORD is required}@nats:4222"
+      PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:?PROBARA_SECRETS_KEY is required (scripts/install.sh generates .env)}"
+      ADMIN_JWT_SECRET: "${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET is required (scripts/install.sh generates .env)}"
+      LOCAL_AI_TOKEN: "${LOCAL_AI_TOKEN:?LOCAL_AI_TOKEN is required}"
+      STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:?STATUS_PAGE_PREVIEW_SECRET is required (scripts/install.sh generates .env)}"
+      OIDC_CLIENT_SECRET: "${OIDC_CLIENT_SECRET:-}"
+      # Off until the UI is served over HTTPS: a Secure cookie never comes
+      # back over plain http://host:3000.
+      ADMIN_COOKIE_SECURE: "${ADMIN_COOKIE_SECURE:-false}"
+      # The UI's external origin (https://probara.example.com); agent
+      # installers and push URLs are built from it. The API itself is only
+      # reachable through the UI's /api proxy.
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+      # Auth-callout issuer (an nkey account seed; the broker holds only its
+      # public key, nats_release_conf below).
+      NATS_LOCATION_AUTH_ISSUER_SEED: "${NATS_LOCATION_AUTH_ISSUER_SEED:?NATS_LOCATION_AUTH_ISSUER_SEED is required (scripts/install.sh generates .env)}"
+      # The UI is published, so whoever reaches it first could otherwise
+      # create the first administrator; the form asks for this code instead.
+      BOOTSTRAP_SETUP_CODE: "${BOOTSTRAP_SETUP_CODE:?BOOTSTRAP_SETUP_CODE is required (scripts/install.sh generates .env)}"
+      # Same origin as on status-page: the API hands it to the UI, whose
+      # prebuilt image cannot know it, for status-page links and previews,
+      # and subscriber mail links pages without a custom domain there.
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-}"
+      # wss://... address private-location workers dial (the websocket
+      # listener behind your TLS proxy on 443); empty disables the deploy
+      # snippets.
+      PUBLIC_NATS_URL: "${PUBLIC_NATS_URL:-}"
+      # Every browser request reaches the API through the frontend's /api
+      # proxy. Trusting exactly the frontend's address (never a whole network:
+      # the worker shares probara-network with the api and can send any
+      # header) lets the API read the client IP that `edge` resolved, so audit
+      # records, session IPs and per-IP limits see real clients.
+      TRUSTED_PROXY_CIDRS: "${PROBARA_FRONTEND_IP:-172.31.213.10}/32"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-}"
+      SMTP_USE_TLS: "${SMTP_USE_TLS:-}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      SMTP_FROM_NAME: "${SMTP_FROM_NAME:-}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required (scripts/install.sh generates .env)}"
+    ports: !reset []
+    networks:
+      probara-network: {}
+      probara-front: {}
+
+  scheduler:
+    build: !reset null
+    image: "ghcr.io/yassinebenameur/probara-scheduler:${PROBARA_VERSION:?PROBARA_VERSION is required}"
+    environment:
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://probara-platform:${NATS_PLATFORM_PASSWORD:?NATS_PLATFORM_PASSWORD is required}@nats:4222"
+      PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:?PROBARA_SECRETS_KEY is required}"
+    ports: !reset []
+
+  worker:
+    build: !reset null
+    image: "ghcr.io/yassinebenameur/probara-worker:${PROBARA_VERSION:?PROBARA_VERSION is required}"
+    environment:
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://probara-platform:${NATS_PLATFORM_PASSWORD:?NATS_PLATFORM_PASSWORD is required}@nats:4222"
+      PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:?PROBARA_SECRETS_KEY is required}"
+      LOCAL_AI_TOKEN: "${LOCAL_AI_TOKEN:?LOCAL_AI_TOKEN is required}"
+      # Development convenience only (rewrites loopback SIP targets).
+      SIP_LOCALHOST_AS_HOST_GATEWAY: "false"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-}"
+      SMTP_USE_TLS: "${SMTP_USE_TLS:-}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      SMTP_FROM_NAME: "${SMTP_FROM_NAME:-}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
+    ports: !reset []
+
+  status-page:
+    build: !reset null
+    image: "ghcr.io/yassinebenameur/probara-status-page:${PROBARA_VERSION:?PROBARA_VERSION is required}"
+    environment:
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://probara-platform:${NATS_PLATFORM_PASSWORD:?NATS_PLATFORM_PASSWORD is required}@nats:4222"
+      # Public origin of the status pages (https://status.example.com):
+      # canonical links, og:url, feed links and push deep links. Empty leaves
+      # those out or root-relative rather than pointing at localhost.
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-}"
+      STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:?STATUS_PAGE_PREVIEW_SECRET is required}"
+      STATUS_PAGE_SESSION_SECRET: "${STATUS_PAGE_SESSION_SECRET:?STATUS_PAGE_SESSION_SECRET is required (scripts/install.sh generates .env)}"
+      STATUS_PAGE_INTERNAL_TOKEN: "${STATUS_PAGE_INTERNAL_TOKEN:?STATUS_PAGE_INTERNAL_TOKEN is required}"
+    ports: !override
+      - "${PROBARA_STATUS_PAGE_PORT:-8082}:8082"
+
+  alerter:
+    build: !reset null
+    image: "ghcr.io/yassinebenameur/probara-alerter:${PROBARA_VERSION:?PROBARA_VERSION is required}"
+    environment:
+      POSTGRES_URL: "postgres://probara:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://probara-platform:${NATS_PLATFORM_PASSWORD:?NATS_PLATFORM_PASSWORD is required}@nats:4222"
+      PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:?PROBARA_SECRETS_KEY is required}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-}"
+      SMTP_USE_TLS: "${SMTP_USE_TLS:-}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      SMTP_FROM_NAME: "${SMTP_FROM_NAME:-}"
+      APP_BASE_URL: "${APP_BASE_URL:-}"
+    ports: !reset []
+
+  # The operator UI. Its server-side /api proxy forwards to the API on
+  # probara-front. It is reachable only through `edge` (no published port, not
+  # on probara-network), which is why it may forward X-Forwarded-For: Next.js
+  # keeps a client-supplied X-Forwarded-For (it fills the header from the
+  # socket only when absent), so a frontend that anyone else could reach would
+  # let them pick their own IP. Never publish its port or add it to
+  # probara-network.
+  frontend:
+    image: "ghcr.io/yassinebenameur/probara-frontend:${PROBARA_VERSION:?PROBARA_VERSION is required}"
+    container_name: probara-frontend
+    environment:
+      API_PROXY_TARGET: "http://api:8080"
+      API_PROXY_TRUST_FORWARDED_FOR: "true"
+      # Read at runtime for the CSP frame-src of the template editor's preview.
+      STATUS_PAGE_BASE_URL: "${STATUS_PAGE_BASE_URL:-}"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/login"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      probara-front:
+        # The one address the api trusts (TRUSTED_PROXY_CIDRS above).
+        ipv4_address: "${PROBARA_FRONTEND_IP:-172.31.213.10}"
+    restart: unless-stopped
+
+  # The one published UI entrypoint. Caddy replaces X-Forwarded-For with the
+  # client it resolves ({client_ip}): the TCP peer or, when the peer is one of
+  # PROBARA_TRUSTED_PROXIES (space-separated CIDRs of your own TLS proxy or
+  # load balancer), the rightmost untrusted address of the incoming chain. It
+  # drops every other client-address header (X-Real-IP, True-Client-IP,
+  # Forwarded, ...), so a client-sent one never gets past it.
+  edge:
+    image: caddy:2.11.4-alpine
+    container_name: probara-edge
+    environment:
+      # 127.0.0.1/32 trusts nothing outside the container: the TCP peer is
+      # the client.
+      PROBARA_TRUSTED_PROXIES: "${PROBARA_TRUSTED_PROXIES:-127.0.0.1/32}"
+    configs:
+      - source: edge_caddyfile
+        target: /etc/caddy/Caddyfile
+    ports:
+      - "${PROBARA_UI_PORT:-3000}:3000"
+    depends_on:
+      frontend:
+        condition: service_healthy
+    networks:
+      - probara-front
+    restart: unless-stopped
+
+# Fixed so the frontend's address is known. Dynamic addresses (api, edge)
+# come only from ip_range, so no other container can ever be handed the
+# frontend's address. If the subnet collides with a host network, change all
+# three together: PROBARA_FRONTEND_IP inside the subnet, outside the range.
+networks:
+  probara-front:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${PROBARA_FRONT_SUBNET:-172.31.213.0/24}"
+          ip_range: "${PROBARA_FRONT_IP_RANGE:-172.31.213.128/25}"
+
+configs:
+  edge_caddyfile:
+    content: |
+      {
+      	admin off
+      	servers {
+      		trusted_proxies static {$$PROBARA_TRUSTED_PROXIES}
+      		trusted_proxies_strict
+      	}
+      }
+      :3000 {
+      	reverse_proxy frontend:3000 {
+      		header_up X-Forwarded-For {client_ip}
+      		header_up -X-Real-IP
+      		header_up -True-Client-IP
+      		header_up -Forwarded
+      		header_up -X-Forwarded
+      		header_up -X-Client-IP
+      		header_up -X-Cluster-Client-IP
+      		header_up -CF-Connecting-IP
+      		header_up -Fastly-Client-IP
+      		header_up -X-Original-Forwarded-For
+      	}
+      }
+  # JetStream, monitoring, the websocket listener (it has no command-line
+  # flag) and authorization. The websocket block declares no authorization of
+  # its own, so websocket clients go through the same auth callout. The
+  # issuer public key is public by construction; the platform password is
+  # deliberately not here (see the nats service above).
+  nats_release_conf:
+    content: |
+      jetstream {
+        store_dir: /data
+      }
+      http_port: 8222
+      websocket {
+        port: 8443
+        no_tls: true
+      }
+      authorization {
+        auth_callout {
+          issuer: "${NATS_LOCATION_AUTH_ISSUER_PUBLIC_KEY:?NATS_LOCATION_AUTH_ISSUER_PUBLIC_KEY is required (scripts/install.sh generates .env)}"
+          auth_users: ["probara-platform"]
+        }
+      }

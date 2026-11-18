@@ -73,8 +73,14 @@ type syntheticAPIStepMetrics struct {
 	Extracted        map[string]string `json:"extracted,omitempty"`
 }
 
-// Check executes a synthetic API journey.
+// Check executes a synthetic API journey, then scrubs the values of its
+// secret_variables from everything the result reports.
 func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
+	result := c.check(ctx, configRaw, timeoutSeconds)
+	return newSecretRedactor(syntheticSecretValues(configRaw)).redactResult(result)
+}
+
+func (c *SyntheticAPIChecker) check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
 	var config models.SyntheticAPIMonitorConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		errMsg := fmt.Sprintf("failed to unmarshal synthetic_api config: %v", err)
@@ -101,10 +107,7 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 		baseURL = parsed
 	}
 
-	vars := make(map[string]string, len(config.Variables))
-	for k, v := range config.Variables {
-		vars[k] = v
-	}
+	vars := mergeSyntheticVariables(config.Variables, config.SecretVariables)
 	// sensitive names the extracted variables marked sensitive, whose values
 	// are kept out of assertion messages.
 	sensitive := make(map[string]bool)
@@ -175,6 +178,7 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 		}
 
 		headers := make(map[string]string, len(step.Request.Headers))
+		secretHeaderNames := secretReferencingHeaders(step.Request.Headers, config.SecretVariables, sensitive)
 		for k, v := range step.Request.Headers {
 			resolved, err := interpolateTemplate(v, vars)
 			if err != nil {
@@ -240,6 +244,17 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 			req.Header.Set(k, v)
 		}
 
+		// What a redirect off the origin must not carry: the headers that
+		// reference a secret, and, refused outright, a URL or body template
+		// that does. Decided from the {{refs}} as written, not by searching
+		// the resolved text: a secret value that happens to appear in an
+		// ordinary URL ("health") is not a reference to it.
+		guard := redirectGuard{
+			secretNames: secretHeaderNames,
+			carriesSecret: referencesSecret(step.Request.URL, config.SecretVariables, sensitive) ||
+				(step.Request.Body != nil && referencesSecret(*step.Request.Body, config.SecretVariables, sensitive)),
+		}
+
 		client := &http.Client{
 			Timeout:   time.Duration(stepTimeout) * time.Second,
 			Transport: transport,
@@ -259,7 +274,7 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 			if maxRedirects >= 0 && len(via) > maxRedirects {
 				return fmt.Errorf("redirects: stopped after %d redirects", maxRedirects)
 			}
-			return nil
+			return guard.check(req, via)
 		}
 
 		resp, err := client.Do(req)
@@ -386,6 +401,34 @@ func (c *SyntheticAPIChecker) Check(ctx context.Context, configRaw json.RawMessa
 		ErrorMessage: errPtr,
 		MetricsData:  metricsData,
 	}
+}
+
+// secretReferencingHeaders names the step headers whose value references a
+// secret variable or a sensitive extraction, so a redirect off the origin
+// drops them along with the credential-named ones.
+func secretReferencingHeaders(headers, secretVariables map[string]string, sensitive map[string]bool) []string {
+	if len(secretVariables) == 0 && len(sensitive) == 0 {
+		return nil
+	}
+	var names []string
+	for name, value := range headers {
+		if referencesSecret(value, secretVariables, sensitive) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// referencesSecret reports whether a template references, by {{name}}, a
+// secret variable or a value extracted as sensitive by an earlier step.
+func referencesSecret(template string, secretVariables map[string]string, sensitive map[string]bool) bool {
+	for _, match := range syntheticTemplateRegex.FindAllStringSubmatch(template, -1) {
+		ref := strings.TrimSpace(match[1])
+		if _, secret := secretVariables[ref]; secret || sensitive[ref] {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveSyntheticStepURL(baseURL *url.URL, raw string, vars map[string]string) (string, error) {

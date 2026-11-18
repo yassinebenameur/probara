@@ -4,9 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // pushStore is the status-page service's ONLY write path to Postgres.
@@ -36,6 +40,9 @@ type pushSubscriptionRow struct {
 	Endpoint string
 	P256dh   string
 	Auth     string
+	// OriginHost is the custom domain it was made on ("" for the platform
+	// host). Read back only while that domain still serves the page.
+	OriginHost string
 }
 
 // Subscribe stores a browser subscription, or refreshes an existing one.
@@ -50,10 +57,12 @@ type pushSubscriptionRow struct {
 // read-then-write, so two concurrent subscribes cannot both observe a count
 // below the cap and both insert.
 func (s *pushStore) Subscribe(ctx context.Context, pageID uuid.UUID, sub pushSubscriptionRow, userAgent string, cap int) (bool, error) {
+	// origin_host is written on insert only: an endpoint belongs to the
+	// origin whose service worker created it, so it never moves.
 	const query = `
 		INSERT INTO status_page_push_subscriptions
-			(status_page_id, endpoint, p256dh, auth, user_agent)
-		SELECT $1, $2, $3, $4, NULLIF($5, '')
+			(status_page_id, endpoint, p256dh, auth, user_agent, origin_host)
+		SELECT $1, $2, $3, $4, NULLIF($5, ''), NULLIF($7, '')
 		WHERE (
 			SELECT COUNT(*) FROM status_page_push_subscriptions WHERE status_page_id = $1
 		) < $6
@@ -66,7 +75,13 @@ func (s *pushStore) Subscribe(ctx context.Context, pageID uuid.UUID, sub pushSub
 		RETURNING id
 	`
 	var id uuid.UUID
-	err := s.db.QueryRowContext(ctx, query, pageID, sub.Endpoint, sub.P256dh, sub.Auth, userAgent, cap).Scan(&id)
+	err := s.db.QueryRowContext(ctx, query, pageID, sub.Endpoint, sub.P256dh, sub.Auth, userAgent, cap, sub.OriginHost).Scan(&id)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		// Before migration 000119: no origin column, and no custom domain
+		// can be served either.
+		legacy := strings.NewReplacer(", origin_host)", ")", ", NULLIF($7, '')", "").Replace(query)
+		err = s.db.QueryRowContext(ctx, legacy, pageID, sub.Endpoint, sub.P256dh, sub.Auth, userAgent, cap).Scan(&id)
+	}
 	if err == sql.ErrNoRows {
 		// The WHERE suppressed the insert: the page is at its cap. ON CONFLICT
 		// never runs for a suppressed row, so an existing subscriber
@@ -107,16 +122,22 @@ func (s *pushStore) DeleteSubscription(ctx context.Context, id uuid.UUID) error 
 
 // PageIDForSlug resolves a public slug to its page id, and reports whether the
 // page has opted into browser notifications. Both come from one query so the
-// subscribe handler cannot act on a stale or half-read page.
+// subscribe handler cannot act on a stale or half-read page. Password and
+// private pages never take subscriptions: a subscription outlives the visitor
+// session that made it, so it would keep telling a signed-out or revoked
+// browser about the page.
 func (s *pushStore) PageIDForSlug(ctx context.Context, slug string) (uuid.UUID, bool, error) {
-	const query = `
-		SELECT id, COALESCE(settings->>'enable_push_notifications', 'false') = 'true'
-		FROM status_pages
-		WHERE slug = $1
+	// A deleted workspace's page is not found here, as on every other route.
+	query := `
+		SELECT sp.id, COALESCE(sp.settings->>'enable_push_notifications', 'false') = 'true'
+		       AND ` + pushVisiblePages + `
+		FROM status_pages sp
+		WHERE sp.slug = $1 AND ` + tenancy.LiveTenantSQL("sp.tenant_id") + `
 	`
 	var id uuid.UUID
 	var enabled bool
-	switch err := s.db.QueryRowContext(ctx, query, slug).Scan(&id, &enabled); {
+	err := s.db.QueryRowContext(ctx, query, slug).Scan(&id, &enabled)
+	switch {
 	case err == sql.ErrNoRows:
 		return uuid.UUID{}, false, nil
 	case err != nil:
@@ -169,6 +190,9 @@ type pendingDelivery struct {
 	MonitorID   uuid.UUID
 	MonitorName string
 	Kind        string
+	// IncidentID is set (and MonitorID zero) for an incident event from the
+	// notification outbox; MonitorName then holds the incident's title.
+	IncidentID uuid.UUID
 }
 
 // ClaimDeliveries takes ownership of up to limit pending notifications.
@@ -184,25 +208,43 @@ type pendingDelivery struct {
 // notification is the better failure than dropping every notification a
 // crashed replica held.
 func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter time.Duration) ([]pendingDelivery, error) {
-	const query = `
+	// A deleted workspace's queued pushes are never sent; they are filtered
+	// before the LIMIT so they cannot hold the head of the queue.
+	query := `
 		WITH claimed AS (
 			SELECT d.id
 			FROM status_page_push_deliveries d
-			WHERE d.status = 'pending'
-			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2))
+			JOIN status_pages csp ON csp.id = d.status_page_id
+			WHERE (d.status = 'pending'
+			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2)))
+			  AND ` + tenancy.LiveTenantSQL("csp.tenant_id") + `
 			ORDER BY d.created_at
 			LIMIT $1
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF d SKIP LOCKED
 		)
 		UPDATE status_page_push_deliveries d
-		SET status = 'sending', claimed_at = NOW()
+		-- A notification still pending when its page turned password or
+		-- private is closed unsent (sent with no recipients), never kept for
+		-- later: it would name the page and the monitor to subscribers who
+		-- may no longer see it, and arrive stale if the page reopened.
+		SET status = CASE WHEN ` + pushVisiblePages + ` THEN 'sending' ELSE 'sent' END,
+		    claimed_at = NOW(),
+		    sent_at = CASE WHEN ` + pushVisiblePages + ` THEN d.sent_at ELSE NOW() END,
+		    sent_count = CASE WHEN ` + pushVisiblePages + ` THEN d.sent_count ELSE 0 END,
+		    failed_count = CASE WHEN ` + pushVisiblePages + ` THEN d.failed_count ELSE 0 END
 		FROM claimed c
 		JOIN status_page_push_deliveries dd ON dd.id = c.id
 		JOIN status_pages sp ON sp.id = dd.status_page_id
 		WHERE d.id = c.id
-		RETURNING d.id, d.status_page_id, sp.slug, sp.title, d.monitor_id, d.monitor_name, d.kind
+		RETURNING d.id, d.status_page_id, sp.slug, sp.title, d.monitor_id, d.monitor_name, d.kind,
+		          ` + pushVisiblePages + `, ` + pushDeliveryIncidentColumn + `
 	`
 	rows, err := s.db.QueryContext(ctx, query, limit, staleAfter.Seconds())
+	if err != nil && pgerr.IsMissingSchema(err) {
+		// Before migration 000122 deliveries have no incident: every one is
+		// a monitor transition.
+		rows, err = s.db.QueryContext(ctx, withoutIncidents(query), limit, staleAfter.Seconds())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("claim push deliveries: %w", err)
 	}
@@ -211,22 +253,38 @@ func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter t
 	var out []pendingDelivery
 	for rows.Next() {
 		var d pendingDelivery
-		if err := rows.Scan(&d.ID, &d.PageID, &d.Slug, &d.PageTitle, &d.MonitorID, &d.MonitorName, &d.Kind); err != nil {
+		var deliverable bool
+		var monitorID, incidentID uuid.NullUUID
+		if err := rows.Scan(&d.ID, &d.PageID, &d.Slug, &d.PageTitle, &monitorID, &d.MonitorName, &d.Kind, &deliverable, &incidentID); err != nil {
 			return nil, fmt.Errorf("scan claimed push delivery: %w", err)
 		}
-		out = append(out, d)
+		d.MonitorID, d.IncidentID = monitorID.UUID, incidentID.UUID
+		if deliverable {
+			out = append(out, d)
+		}
 	}
 	return out, rows.Err()
 }
 
-// SubscriptionsForPage returns every browser subscribed to a page.
+// SubscriptionsForPage returns every browser subscribed to a page, each with
+// the custom domain it was made on while that domain still serves the page
+// (else "", and its notification links to the platform URL).
 func (s *pushStore) SubscriptionsForPage(ctx context.Context, pageID uuid.UUID) ([]pushSubscriptionRow, error) {
 	const query = `
-		SELECT id, endpoint, p256dh, auth
-		FROM status_page_push_subscriptions
-		WHERE status_page_id = $1
+		SELECT s.id, s.endpoint, s.p256dh, s.auth, COALESCE(d.hostname, '')
+		FROM status_page_push_subscriptions s
+		LEFT JOIN status_page_domains d
+		  ON d.status_page_id = s.status_page_id AND d.hostname = s.origin_host AND d.status = 'verified'
+		WHERE s.status_page_id = $1
 	`
 	rows, err := s.db.QueryContext(ctx, query, pageID)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id, endpoint, p256dh, auth, ''
+			FROM status_page_push_subscriptions
+			WHERE status_page_id = $1
+		`, pageID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load push subscriptions: %w", err)
 	}
@@ -235,7 +293,7 @@ func (s *pushStore) SubscriptionsForPage(ctx context.Context, pageID uuid.UUID) 
 	var out []pushSubscriptionRow
 	for rows.Next() {
 		var sub pushSubscriptionRow
-		if err := rows.Scan(&sub.ID, &sub.Endpoint, &sub.P256dh, &sub.Auth); err != nil {
+		if err := rows.Scan(&sub.ID, &sub.Endpoint, &sub.P256dh, &sub.Auth, &sub.OriginHost); err != nil {
 			return nil, fmt.Errorf("scan push subscription: %w", err)
 		}
 		out = append(out, sub)
@@ -257,4 +315,17 @@ func (s *pushStore) CompleteDelivery(ctx context.Context, id uuid.UUID, sent, fa
 		return fmt.Errorf("complete push delivery: %w", err)
 	}
 	return nil
+}
+
+// pushVisiblePages is the SQL predicate (on status_pages sp) for pages whose
+// visitors may get push notifications: public and unlisted.
+const pushVisiblePages = "sp.visibility IN ('public', 'unlisted')"
+
+// pushDeliveryIncidentColumn is the incident of an outbox-driven delivery
+// (migration 000122); withoutIncidents reads it as NULL on an older
+// database, where every delivery is a monitor transition.
+const pushDeliveryIncidentColumn = "d.incident_id"
+
+func withoutIncidents(query string) string {
+	return strings.ReplaceAll(query, pushDeliveryIncidentColumn, "NULL::uuid")
 }

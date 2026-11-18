@@ -1,0 +1,16 @@
+
+    Domain name:
+        example.uk
+
+    Registrant:
+        Example Registry
+
+    Registrar:
+        No registrar listed.  This domain is registered directly with the registry.
+
+    Relevant dates:
+        Registered on: 10-Jun-2014
+        Last updated:  15-May-2026
+
+    Registration status:
+        No registration status listed.

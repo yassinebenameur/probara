@@ -46,13 +46,15 @@ SLA reports come in the same install.
 
 ### Checks
 
-Probara has 18 monitor types. **Web:** HTTP (status, body, header and JSON
+Probara has 19 monitor types. **Web:** HTTP (status, body, header and JSON
 assertions, phase timings, TLS-expiry alerts), multi-step API journeys,
 headless-browser journeys, WebSocket and gRPC health. **Network:** ping, DNS,
-TCP and SIP. **Data:** Redis, PostgreSQL, MySQL, MongoDB and a message broker
+TCP, SIP and domain registration expiry (RDAP, with WHOIS as the fallback).
+**Data:** Redis, PostgreSQL, MySQL, MongoDB and a message broker
 (RabbitMQ). **Other:** host agent (OpenTelemetry), Prometheus query
 thresholds, push heartbeats and groups. Checks run every 10 seconds to every
-24 hours (SIP test calls at most once a minute).
+24 hours (SIP test calls at most once a minute, domain lookups at most once an
+hour).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/monitors-dark.webp">
@@ -94,9 +96,9 @@ probe network: each vantage point is a worker you run.
 
 ### Alerting and dependencies
 
-There are nine built-in channels: email, Slack, Discord, Microsoft Teams,
-Telegram, SMS via Twilio, webhooks (optionally HMAC-signed), PagerDuty and
-Opsgenie / Jira Service Management. Acks made in Probara are sent on to
+There are eleven built-in channels: email, Slack, Discord, Microsoft Teams,
+Telegram, ntfy, Gotify, SMS via Twilio, webhooks (optionally HMAC-signed),
+PagerDuty and Opsgenie / Jira Service Management. Acks made in Probara are sent on to
 PagerDuty and Opsgenie. Alerts can escalate in tiers, send reminders and stay
 quiet during maintenance windows. Latency anomaly detection compares response
 times with learned baselines. Every monitor shows whether its alerts reach
@@ -203,10 +205,11 @@ Checked against each project's public repository, docs and pricing pages on
 
 **Coming from Uptime Kuma?** Import its backup file directly, or pull
 monitors from a live Kuma 2.x with
-[`scripts/kuma-export`](scripts/kuma-export/README.md). Monitors that cannot
-be translated are listed, not silently dropped. You can also import JSON,
-YAML or CSV, and export everything as a portable YAML bundle (secrets are
-masked and must be re-entered).
+[`scripts/kuma-export`](scripts/kuma-export/README.md). Better Stack and
+UptimeRobot API exports and Gatus configuration files import the same way.
+Monitors that cannot be translated are listed, not silently dropped. You can
+also import JSON, YAML or CSV, and export everything as a portable YAML
+bundle (secrets are masked and must be re-entered).
 
 <details>
 <summary>Sources (checked 2026-10-21)</summary>
@@ -229,6 +232,19 @@ masked and must be re-entered).
 </details>
 
 ## Quick start
+
+### Run a release with Docker Compose
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yassinebenameur/probara/main/scripts/install.sh | bash
+```
+
+This downloads the release Compose files into `./probara`, generates every
+secret into `.env` (back it up), and starts the published images, the UI
+included, on <http://localhost:3000>. It prints a one-time setup code that
+the first-administrator form asks for, so nobody else can claim the install. Re-running it never changes an existing
+value; `--version X` upgrades. See
+[Release Compose install](https://probara-uptime.com/docs/deployment/#release-compose).
 
 ### Try it locally
 
@@ -271,7 +287,8 @@ kubectl -n probara port-forward svc/probara-frontend 3000:3000
 
 Pin `--version 2.0.0` for repeatable installs. The images are linux/amd64
 only, and the bundled Postgres and NATS need a default StorageClass. Add
-`--set localAI.enabled=false` to skip the AI pod.
+`--set localAI.enabled=false` to skip the AI pod. The location-worker snippet
+the UI generates pins the worker to the platform's own version.
 
 ## Going further
 

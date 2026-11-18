@@ -183,8 +183,13 @@ jobs:
         # overwrite the others' cache manifest.
         cache-from: type=gha,scope=${{ matrix.image_suffix }}
         cache-to: type=gha,scope=${{ matrix.image_suffix }},mode=${{ matrix.cache_mode || 'max' }}
+        # VERSION is stamped into shared/buildinfo by every Go Dockerfile (the
+        # release version on tags, the branch name otherwise); the api derives
+        # its default LOCATION_WORKER_IMAGE tag from it. Dockerfiles that do
+        # not declare the arg ignore it.
         build-args: |
           BUILDKIT_INLINE_CACHE=1
+          VERSION=${{ steps.meta.outputs.version }}
           ${{ matrix.image_suffix == 'local-ai' && format('LAYA_GIT_URL={0}', env.LAYA_GIT_URL) || '' }}
           ${{ matrix.image_suffix == 'local-ai' && format('HF_ENDPOINT={0}', env.HF_ENDPOINT) || '' }}
 

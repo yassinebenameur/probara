@@ -10,22 +10,38 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+
+	"github.com/yassinebenameur/probara/shared/db/pgerr"
+	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/statuspagesql"
 )
 
-// loadMaintenanceWindows returns active and upcoming (next 14 days) maintenance
-// windows that affect at least one monitor on this status page, directly or via
-// a targeted group. Affected monitor names are page-scoped.
+// pagePublicNameSQL is the name the page shows for the monitor aliased by
+// monAlias on the page pageExpr (shared/statuspagesql, which the API's
+// subscriber mail reads too). Incident and maintenance "affected" lists use
+// it so they never print an internal name the component list hides.
+func pagePublicNameSQL(pageExpr, monAlias string) string {
+	return statuspagesql.PublicNameSQL(pageExpr, monAlias)
+}
+
+// loadMaintenanceWindows returns the maintenance windows with an occurrence
+// in progress or starting in the next 14 days that covers at least one
+// monitor on this status page, directly or via a targeted group. Coverage is
+// the shared occurrence fragment (S-M5), never the window's own times. Each
+// window is listed once, at its earliest such occurrence; a repeating window
+// also carries the starts of up to maxListedNextStarts later ones. Affected
+// monitor names are page-scoped.
 func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageMaintenanceWindow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT mw.title, mw.description, mw.starts_at, mw.ends_at,
-			NOW() >= mw.starts_at AS is_active,
-			array_agg(DISTINCT pm.name) AS affected
-		FROM maintenance_windows mw
-		JOIN maintenance_window_monitors mwm ON mwm.maintenance_window_id = mw.id
-		JOIN monitors pm ON pm.tenant_id = mw.tenant_id AND pm.deleted_at IS NULL
-			AND (pm.id = mwm.monitor_id
-				OR pm.id IN (SELECT mg.monitor_id FROM monitor_groups mg WHERE mg.group_id = mwm.monitor_id))
-		WHERE mw.tenant_id = $2
+		SELECT mw.id, mw.title, mw.description, mo.occurrence_starts_at, MAX(mo.ends_at),
+			NOW() >= mo.occurrence_starts_at AS is_active,
+			mw.recurrence_weekdays IS NOT NULL AS repeating,
+			array_agg(DISTINCT `+pagePublicNameSQL("$1", "pm")+`) AS affected,
+			mw.updated_at
+		FROM monitors pm
+		CROSS JOIN LATERAL `+maintenance.OccurrenceRangesSQL("$2", "pm.id", "NOW()", "NOW() + INTERVAL '14 days'")+` mo
+		JOIN maintenance_windows mw ON mw.id = mo.window_id AND mw.tenant_id = $2
+		WHERE pm.tenant_id = $2 AND pm.deleted_at IS NULL
 		  AND pm.id IN (
 			SELECT spsm.monitor_id
 			FROM status_page_section_monitors spsm
@@ -34,10 +50,8 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 			UNION
 			SELECT spm.monitor_id FROM status_page_monitors spm WHERE spm.status_page_id = $1
 		  )
-		  AND mw.ends_at > NOW()
-		  AND mw.starts_at < NOW() + INTERVAL '14 days'
-		GROUP BY mw.id
-		ORDER BY mw.starts_at
+		GROUP BY mw.id, mo.occurrence_starts_at
+		ORDER BY mo.occurrence_starts_at, mw.id
 	`, statusPageID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("query maintenance windows: %w", err)
@@ -45,13 +59,24 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 	defer rows.Close()
 
 	windows := make([]StatusPageMaintenanceWindow, 0)
+	index := map[uuid.UUID]int{}
 	for rows.Next() {
+		var id uuid.UUID
 		var w StatusPageMaintenanceWindow
 		var affected []string
-		if err := rows.Scan(&w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, pq.Array(&affected)); err != nil {
+		if err := rows.Scan(&id, &w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, &w.Repeating, pq.Array(&affected), &w.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan maintenance window: %w", err)
 		}
+		w.ID = id
+		if i, seen := index[id]; seen {
+			// A later occurrence of a window already listed.
+			if len(windows[i].NextStartsAt) < maxListedNextStarts {
+				windows[i].NextStartsAt = append(windows[i].NextStartsAt, w.StartsAt)
+			}
+			continue
+		}
 		w.AffectedMonitors = affected
+		index[id] = len(windows)
 		windows = append(windows, w)
 	}
 	if err := rows.Err(); err != nil {
@@ -60,9 +85,41 @@ func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tena
 	return windows, nil
 }
 
+// maxListedNextStarts caps the later starts a repeating window lists.
+const maxListedNextStarts = 3
+
+// publicIncidentTitleSQL and publicIncidentSummarySQL are what a page (its
+// render, /data, summary.json and feed) shows for incident i as published
+// on it (isp): the publication's public title and summary when it has them,
+// else the incident's own. An automatically created incident always has
+// them, because its own title names the internal monitor (migration
+// 000122). The API's subscriber mail and the push ledger read the same
+// columns.
+const (
+	publicIncidentTitleSQL   = "COALESCE(isp.public_title, i.title)"
+	publicIncidentSummarySQL = "COALESCE(isp.public_summary, i.summary, '')"
+)
+
+// withoutPublicTitles serves a database that has not run migration 000122
+// yet, where no publication has a public title.
+func withoutPublicTitles(query string) string {
+	query = strings.ReplaceAll(query, publicIncidentTitleSQL, "i.title")
+	return strings.ReplaceAll(query, publicIncidentSummarySQL, "COALESCE(i.summary, '')")
+}
+
+// queryPublicIncidents runs a query that reads the public title columns,
+// falling back for a database a migration behind.
+func (s *Service) queryPublicIncidents(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil && pgerr.IsMissingSchema(err) {
+		return s.db.QueryContext(ctx, withoutPublicTitles(query), args...)
+	}
+	return rows, err
+}
+
 func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT i.id, i.title, COALESCE(i.summary, ''), i.state, isp.published_at, i.resolved_at
+	rows, err := s.queryPublicIncidents(ctx, `
+		SELECT i.id, `+publicIncidentTitleSQL+`, `+publicIncidentSummarySQL+`, i.state, isp.published_at, i.resolved_at
 		FROM incident_status_page_publications isp
 		JOIN incidents i ON i.id = isp.incident_id AND i.tenant_id = isp.tenant_id
 		WHERE isp.status_page_id = $1 AND isp.tenant_id = $2 AND isp.unpublished_at IS NULL
@@ -121,9 +178,9 @@ func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tena
 	return incidents, nil
 }
 
-// batchIncidentAffectedComponents fetches the affected component names for all
-// given incidents in a single query, keyed by incident ID. Per-incident
-// ordering (monitor name ASC) matches the previous per-incident query.
+// batchIncidentAffectedComponents fetches the affected component names (the
+// page's public names) for all given incidents in a single query, keyed by
+// incident ID, each list in name order.
 func (s *Service) batchIncidentAffectedComponents(ctx context.Context, statusPageID uuid.UUID, incidentIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
 	result := make(map[uuid.UUID][]string, len(incidentIDs))
 	if len(incidentIDs) == 0 {
@@ -131,11 +188,14 @@ func (s *Service) batchIncidentAffectedComponents(ctx context.Context, statusPag
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT ispm.incident_id, m.name
-		FROM incident_status_page_monitors ispm
-		JOIN monitors m ON m.id = ispm.monitor_id
-		WHERE ispm.incident_id = ANY($1) AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
-		ORDER BY m.name ASC
+		SELECT incident_id, name
+		FROM (
+			SELECT ispm.incident_id, `+pagePublicNameSQL("$2", "m")+` AS name
+			FROM incident_status_page_monitors ispm
+			JOIN monitors m ON m.id = ispm.monitor_id
+			WHERE ispm.incident_id = ANY($1) AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
+		) affected
+		ORDER BY name ASC
 	`, pq.Array(incidentIDs), statusPageID)
 	if err != nil {
 		return nil, fmt.Errorf("query incident affected components: %w", err)

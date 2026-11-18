@@ -180,7 +180,7 @@ func TestBulkUpdateAlerting_SIPCallKeepsForbiddenError(t *testing.T) {
 	threshold := 3
 	editor := callerContexts()["tenant editor"].ctx
 
-	_, err := svc.BulkUpdateAlerting(editor, tenantID, []uuid.UUID{probeID, callID}, &threshold, nil, nil)
+	_, err := svc.BulkUpdateAlerting(editor, tenantID, []uuid.UUID{probeID, callID}, &threshold, nil, nil, nil)
 	if !errors.Is(err, ErrCallMonitorForbidden) {
 		t.Fatalf("BulkUpdateAlerting(probe, call) = %v, want ErrCallMonitorForbidden", err)
 	}
@@ -189,7 +189,7 @@ func TestBulkUpdateAlerting_SIPCallKeepsForbiddenError(t *testing.T) {
 	}
 
 	// Without the call monitor the same editor's edit goes through.
-	if n, err := svc.BulkUpdateAlerting(editor, tenantID, []uuid.UUID{probeID}, &threshold, nil, nil); err != nil || n != 1 {
+	if n, err := svc.BulkUpdateAlerting(editor, tenantID, []uuid.UUID{probeID}, &threshold, nil, nil, nil); err != nil || n != 1 {
 		t.Fatalf("BulkUpdateAlerting(probe) = %d, %v, want 1, nil", n, err)
 	}
 	if len(repo.updated) != 1 || repo.updated[0] != probeID {

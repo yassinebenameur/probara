@@ -1,4 +1,5 @@
 import type {
+  CheckResult,
   MonitorAnalyticsRange,
   MonitorAnalyticsResponse,
   MonitorMetricsSnapshotsResponse,
@@ -8,6 +9,15 @@ import type {
 import { apiRequest, withQuery } from './core';
 
 // Monitor Results API functions
+
+/**
+ * One check result whole: the list reads replace a failed HTTP check's
+ * captured response with `http.failure_response_omitted`, this one has it.
+ */
+export async function getMonitorResult(monitorId: string, resultId: string): Promise<CheckResult> {
+  return apiRequest<CheckResult>('GET', `/v1/monitors/${monitorId}/results/${resultId}`);
+}
+
 export async function getMonitorResults(
   id: string,
   params?: { limit?: number; since?: string }

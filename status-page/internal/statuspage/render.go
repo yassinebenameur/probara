@@ -79,6 +79,25 @@ type statusPageRenderView struct {
 	Monitors           []statusPageMonitorView
 	Incidents          []statusPageIncidentView
 	MaintenanceWindows []statusPageMaintenanceView
+	// Head metadata (seo.go), added later: SEOTitle is the <title> and
+	// og:title, MetaDescription the description tags, SiteName og:site_name,
+	// CanonicalURL the canonical link and og:url ("" when the public origin
+	// is unknown), OGImageURL the logo when it is an absolute URL, Robots
+	// the robots meta content, FeedURL and SummaryURL the Atom feed and
+	// summary.json.
+	SEOTitle        string
+	MetaDescription string
+	SiteName        string
+	CanonicalURL    string
+	OGImageURL      string
+	Robots          string
+	FeedURL         string
+	SummaryURL      string
+	// SubscribeEnabled shows the email subscribe form (subscribe.go);
+	// SubscribeAction is its target, a plain form POST that works without
+	// script. Custom templates may render the same form with these fields.
+	SubscribeEnabled bool
+	SubscribeAction  string
 }
 
 const (
@@ -105,6 +124,17 @@ type statusPageMaintenanceView struct {
 	IsActive               bool
 	TimeRangeText          string
 	AffectedComponentsText string
+	// RepeatText is set for a repeating window: "Repeats" plus the next
+	// starts that fall within the look-ahead.
+	RepeatText string
+	// StartsAtISO/EndsAtISO and NextStartsISO (space-separated) are the
+	// same instants in RFC 3339 UTC. The default template carries them as
+	// data attributes so its script can show the visitor's local time with
+	// the server-rendered UTC text alongside; without scripts the UTC text
+	// stays as it is.
+	StartsAtISO   string
+	EndsAtISO     string
+	NextStartsISO string
 }
 
 type statusPageSectionView struct {
@@ -210,8 +240,8 @@ func customTemplateFor(pageID string, version int, source string) (*template.Tem
 	return tmpl, nil
 }
 
-func renderPublicStatusPage(data *StatusPageData, apiEnabled bool) (string, error) {
-	html, _, err := renderStatusPageHTML(data, apiEnabled)
+func renderPublicStatusPage(data *StatusPageData) (string, error) {
+	html, _, err := renderStatusPageHTML(data)
 	return html, err
 }
 
@@ -219,9 +249,13 @@ func renderPublicStatusPage(data *StatusPageData, apiEnabled bool) (string, erro
 // when one exists, falling back to the built-in template if the custom one
 // fails to parse or execute. customErr reports that failure so callers can
 // log it; a page must keep serving on a broken template, never 500.
-func renderStatusPageHTML(data *StatusPageData, apiEnabled bool) (html string, customErr error, err error) {
-	view := buildStatusPageRenderView(data, apiEnabled)
+func renderStatusPageHTML(data *StatusPageData) (html string, customErr error, err error) {
+	return renderStatusPageView(data, buildStatusPageRenderView(data))
+}
 
+// renderStatusPageView is renderStatusPageHTML for an already built view, so
+// a build that also derives summary.json from the view builds it once.
+func renderStatusPageView(data *StatusPageData, view statusPageRenderView) (html string, customErr error, err error) {
 	if strings.TrimSpace(data.CustomTemplateSource) != "" {
 		tmpl, cerr := customTemplateFor(data.ID, data.CustomTemplateVersion, data.CustomTemplateSource)
 		if cerr == nil {
@@ -243,12 +277,12 @@ func renderStatusPageHTML(data *StatusPageData, apiEnabled bool) (html string, c
 // renderStatusPageWithSource renders data with an explicit template source
 // (draft previews). No fallback: a broken draft must surface its error to the
 // author instead of silently rendering the default page.
-func renderStatusPageWithSource(data *StatusPageData, apiEnabled bool, source string) (string, error) {
+func renderStatusPageWithSource(data *StatusPageData, source string) (string, error) {
 	tmpl, err := statustemplate.New("draft_status_page", source)
 	if err != nil {
 		return "", err
 	}
-	view := buildStatusPageRenderView(data, apiEnabled)
+	view := buildStatusPageRenderView(data)
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, view); err != nil {
 		return "", err
@@ -256,7 +290,7 @@ func renderStatusPageWithSource(data *StatusPageData, apiEnabled bool, source st
 	return buf.String(), nil
 }
 
-func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPageRenderView {
+func buildStatusPageRenderView(data *StatusPageData) statusPageRenderView {
 	primary := "#06b6d4"
 	if data.PrimaryColor != nil && strings.TrimSpace(*data.PrimaryColor) != "" {
 		primary = strings.TrimSpace(*data.PrimaryColor)
@@ -291,12 +325,23 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		MonitorStripCells: monitorUptimeStripCells,
 		MonitorCount:      len(data.Monitors),
 		CustomCSS:         template.CSS(strings.TrimSpace(data.CustomCSS)),
-		CustomHeadHTML:    template.HTML(strings.TrimSpace(data.CustomHeadHTML)),
-		CustomFooterHTML:  template.HTML(strings.TrimSpace(data.CustomFooterHTML)),
+		CustomHeadHTML:    template.HTML(withNoncePlaceholder(data.CustomHeadHTML)),
+		CustomFooterHTML:  template.HTML(withNoncePlaceholder(data.CustomFooterHTML)),
 	}
 
 	if view.FooterText == "" {
 		view.FooterText = fmt.Sprintf("© %d %s", time.Now().UTC().Year(), data.Title)
+	}
+	if data.SubscribeFormEnabled {
+		// Host-independent like the feed link (the render is cached per
+		// slug and served on every host): the page's canonical origin, its
+		// custom domain when it has one, else the platform path.
+		view.SubscribeEnabled = true
+		base := strings.TrimRight(strings.TrimSpace(data.CanonicalURL), "/")
+		if base == "" {
+			base = "/public/status/" + data.Slug
+		}
+		view.SubscribeAction = base + subscribeSuffix
 	}
 
 	sections := data.Sections
@@ -318,7 +363,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		}
 
 		for _, monitor := range section.Monitors {
-			renderMonitor := buildStatusPageMonitorView(monitor)
+			renderMonitor := buildStatusPageMonitorView(monitor, monitorViewOptionsFor(data))
 			renderSection.Monitors = append(renderSection.Monitors, renderMonitor)
 			view.Monitors = append(view.Monitors, renderMonitor)
 			renderSection.MonitorCount++
@@ -406,6 +451,16 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	sort.Slice(view.Incidents, func(i, j int) bool {
 		return incidentStateRank(view.Incidents[i].State) < incidentStateRank(view.Incidents[j].State)
 	})
+
+	seo := resolvePageSEO(data)
+	view.SEOTitle = seo.Title
+	view.MetaDescription = seo.Description
+	view.SiteName = seo.SiteName
+	view.CanonicalURL = seo.CanonicalURL
+	view.OGImageURL = seo.OGImageURL
+	view.Robots = seo.Robots
+	view.FeedURL = seo.FeedURL
+	view.SummaryURL = seo.SummaryURL
 
 	return view
 }
@@ -514,7 +569,35 @@ func buildStatusPageMaintenanceView(window StatusPageMaintenanceWindow) statusPa
 		IsActive:               window.IsActive,
 		TimeRangeText:          timeRangeText,
 		AffectedComponentsText: affectedComponentsText,
+		RepeatText:             maintenanceRepeatText(window),
+		StartsAtISO:            start.Format(time.RFC3339),
+		EndsAtISO:              end.Format(time.RFC3339),
+		NextStartsISO:          isoList(window.NextStartsAt),
 	}
+}
+
+func isoList(times []time.Time) string {
+	out := make([]string, len(times))
+	for i, t := range times {
+		out[i] = t.UTC().Format(time.RFC3339)
+	}
+	return strings.Join(out, " ")
+}
+
+// maintenanceRepeatText labels a repeating window and lists its next starts
+// (UTC, like the time range above it).
+func maintenanceRepeatText(window StatusPageMaintenanceWindow) string {
+	if !window.Repeating {
+		return ""
+	}
+	if len(window.NextStartsAt) == 0 {
+		return "Repeats"
+	}
+	next := make([]string, 0, len(window.NextStartsAt))
+	for _, t := range window.NextStartsAt {
+		next = append(next, t.UTC().Format("Jan 2, 15:04"))
+	}
+	return "Repeats · next: " + strings.Join(next, ", ") + " UTC"
 }
 
 func incidentStateRank(state string) int {
@@ -530,7 +613,23 @@ func incidentStateRank(state string) int {
 	}
 }
 
-func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
+// monitorViewOptions are the page settings that decide what a monitor row
+// may disclose. The view leaves out what they hide, so nothing hidden can
+// reach the HTML through an attribute (data-search) or an unguarded field;
+// /data applies the same settings (publicPageData).
+type monitorViewOptions struct {
+	showURL    bool
+	showUptime bool
+}
+
+func monitorViewOptionsFor(data *StatusPageData) monitorViewOptions {
+	return monitorViewOptions{showURL: data.ShowMonitorURL, showUptime: data.ShowMonitorUptime}
+}
+
+func buildStatusPageMonitorView(monitor MonitorStatus, opts monitorViewOptions) statusPageMonitorView {
+	if !opts.showURL {
+		monitor.URL = ""
+	}
 	lastCheckUnix := int64(0)
 	lastCheckAgo := "No recent check"
 	if monitor.LastCheckTime != nil {
@@ -571,7 +670,11 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 	}
 
 	searchParts := []string{monitor.Name, monitor.URL, monitor.MonitorType, strings.Join(monitor.Tags, " ")}
-	for _, metric := range []string{latencyText, uptimeText} {
+	metrics := []string{latencyText}
+	if opts.showUptime {
+		metrics = append(metrics, uptimeText)
+	}
+	for _, metric := range metrics {
 		if metric != "" {
 			searchParts = append(searchParts, metric)
 		}
@@ -595,6 +698,12 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 	uptime7Value := uptimeValue(averageBarPoints(history7Raw))
 	uptime30Value := uptimeValue(averageBarPoints(history30Raw))
 	uptime90Value := uptimeValue(averageBarPoints(history90Raw))
+	if !opts.showUptime {
+		// The template prints the summary metric and the range values in a
+		// row's metric column and kiosk tile whatever the setting.
+		uptime1hValue, uptime24Value, uptime7Value, uptime30Value, uptime90Value = "—", "—", "—", "—", "—"
+		uptimeSort = -1
+	}
 
 	return statusPageMonitorView{
 		ID:                     monitor.ID,
@@ -762,6 +871,7 @@ var typeLabels = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "TCP",
 	models.MonitorTypeWebSocket:        "WebSocket",
 	models.MonitorTypePrometheus:       "Prometheus",
+	models.MonitorTypeDomain:           "Domain expiry",
 }
 
 var typeBadges = map[models.MonitorType]string{
@@ -783,6 +893,7 @@ var typeBadges = map[models.MonitorType]string{
 	models.MonitorTypeTCP:              "TCP",
 	models.MonitorTypeWebSocket:        "WS",
 	models.MonitorTypePrometheus:       "PROM",
+	models.MonitorTypeDomain:           "DOMN",
 }
 
 func typeLabel(kind string) string {
@@ -926,4 +1037,12 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// withNoncePlaceholder trims operator-authored head/footer HTML and turns its
+// literal {{cspNonce}} tokens into the nonce placeholder. That HTML is data,
+// not template source, so the template function cannot expand inside it;
+// the placeholder is then swapped per response like the template's own.
+func withNoncePlaceholder(raw string) string {
+	return strings.ReplaceAll(strings.TrimSpace(raw), statustemplate.NonceToken, statustemplate.NoncePlaceholder)
 }

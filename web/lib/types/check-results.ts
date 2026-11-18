@@ -1,6 +1,7 @@
 import type {
   GRPCMetricsEnvelope,
   HTTPMetricsEnvelope,
+  PingMetricsEnvelope,
   PushMetrics,
   SIPMetricsEnvelope,
   SyntheticAPIMetricsEnvelope,
@@ -20,6 +21,7 @@ export interface CheckResult {
   metrics_data?:
     | PushMetrics
     | HTTPMetricsEnvelope
+    | PingMetricsEnvelope
     | GRPCMetricsEnvelope
     | TCPMetricsEnvelope
     | WebSocketMetricsEnvelope

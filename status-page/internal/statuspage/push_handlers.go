@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 
+	"github.com/yassinebenameur/probara/shared/pagedomains"
 	"github.com/yassinebenameur/probara/shared/statustemplate"
 	"github.com/yassinebenameur/probara/shared/webpush"
 )
@@ -41,11 +41,6 @@ const (
 	// unbounded storage.
 	pushSubscriptionCapEnvVar  = "STATUS_PAGE_PUSH_MAX_SUBSCRIPTIONS_PER_PAGE"
 	defaultPushSubscriptionCap = 10000
-
-	// pushTrustProxyEnvVar opts into reading X-Forwarded-For for rate-limit
-	// keying. Off by default: trusting a client-settable header would make
-	// the limiter free to bypass by anyone who can spoof it.
-	pushTrustProxyEnvVar = "STATUS_PAGE_TRUSTED_PROXY"
 
 	// Rate limit per client IP. Subscribing is a once-per-browser action, so
 	// this is generous for real use and still bounds abuse.
@@ -139,7 +134,7 @@ func (h *Handlers) HandlePushSubscribe(w http.ResponseWriter, r *http.Request, s
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
-	if !h.pushLimiter.allow(clientIP(r, pushTrustProxy())) {
+	if !h.pushLimiter.allow(h.clientIPs.Resolve(r)) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
@@ -174,10 +169,17 @@ func (h *Handlers) HandlePushSubscribe(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
+	// A browser keeps one subscription per origin, so one made on a custom
+	// domain records it: its notifications open the page there.
+	originHost := ""
+	if ch, ok := customHostFrom(r); ok {
+		originHost = ch.Host
+	}
 	stored, err := h.pushStore.Subscribe(ctx, pageID, pushSubscriptionRow{
-		Endpoint: endpoint,
-		P256dh:   strings.TrimSpace(req.Keys.P256dh),
-		Auth:     strings.TrimSpace(req.Keys.Auth),
+		Endpoint:   endpoint,
+		P256dh:     strings.TrimSpace(req.Keys.P256dh),
+		Auth:       strings.TrimSpace(req.Keys.Auth),
+		OriginHost: originHost,
 	}, truncate(r.UserAgent(), 512), pushSubscriptionCap())
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "slug": slug}).
@@ -211,7 +213,7 @@ func (h *Handlers) HandlePushUnsubscribe(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
-	if !h.pushLimiter.allow(clientIP(r, pushTrustProxy())) {
+	if !h.pushLimiter.allow(h.clientIPs.Resolve(r)) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
@@ -271,6 +273,7 @@ func (h *Handlers) resolvePushPage(ctx context.Context, w http.ResponseWriter, s
 
 // pushOriginOK rejects a cross-origin Origin header. Requests without one
 // (curl, same-origin form posts) are allowed through to the other guards.
+// On a custom domain the origin must be that domain.
 func (h *Handlers) pushOriginOK(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
@@ -279,6 +282,9 @@ func (h *Handlers) pushOriginOK(r *http.Request) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return false
+	}
+	if ch, ok := customHostFrom(r); ok {
+		return pagedomains.HostFromHeader(u.Host) == ch.Host
 	}
 	return strings.EqualFold(u.Host, r.Host)
 }
@@ -297,27 +303,6 @@ func decodePushBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
-}
-
-// clientIP keys the rate limiter. X-Forwarded-For is honoured only behind an
-// explicit opt-in, because it is client-settable.
-func clientIP(r *http.Request, trustProxy bool) string {
-	if trustProxy {
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			if first := strings.TrimSpace(strings.Split(fwd, ",")[0]); first != "" {
-				return first
-			}
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-func pushTrustProxy() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv(pushTrustProxyEnvVar)), "true")
 }
 
 func pushSubscriptionCap() int {
@@ -359,8 +344,13 @@ func (h *Handlers) HandlePushServiceWorker(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("ETag", etag)
 	// Allows the client to register with a scope broader than this file's own
-	// directory if it ever needs to; the client currently narrows instead.
-	w.Header().Set("Service-Worker-Allowed", "/public/status/")
+	// directory if it ever needs to; the client currently narrows instead. On
+	// a custom domain the worker is /sw.js and the page's scope is the root.
+	if _, ok := customHostFrom(r); ok {
+		w.Header().Set("Service-Worker-Allowed", "/")
+	} else {
+		w.Header().Set("Service-Worker-Allowed", "/public/status/")
+	}
 
 	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, serviceWorkerETag) {
 		w.WriteHeader(http.StatusNotModified)

@@ -22,9 +22,19 @@ import {
   defaultSyntheticAssertionForTarget,
   normalizeAssertionTarget,
   syntheticAssertionOpsByTarget,
+  undefinedSyntheticAPIRefs,
+  undefinedRefsWarning,
 } from '@/lib/monitor-form/synthetic';
 import { FIELD_LABEL, FormInput, FormSelect, FormTextarea, ToggleRow, FormPanel } from './form-kit';
-import { SyntheticModeHeader, SyntheticTemplatesWell, SyntheticVariablesField, swapped, withItem, withoutItem } from './synthetic-kit';
+import {
+  SyntheticModeHeader,
+  SyntheticSecretVariablesField,
+  SyntheticTemplatesWell,
+  SyntheticVariablesField,
+  swapped,
+  withItem,
+  withoutItem,
+} from './synthetic-kit';
 
 const STEP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'].map((m) => ({ value: m, label: m }));
 
@@ -53,6 +63,12 @@ export default function SyntheticApiEditor({
 }) {
   const patch = (p: Partial<MonitorFormState>) => setForm({ ...form, ...p });
   const steps = form.synthetic_api_steps;
+  // Undefined {{references}} per step: a warning, never a blocked save.
+  const stepRefs = undefinedSyntheticAPIRefs(
+    form.synthetic_api_variables || [],
+    form.synthetic_api_secret_variables || [],
+    steps
+  );
   const setSteps = (next: SyntheticAPIStepDraft[]) => patch({ synthetic_api_steps: next });
 
   const applyTemplate = (template: 'health_auth' | 'single_health') => {
@@ -61,6 +77,7 @@ export default function SyntheticApiEditor({
       ...prev,
       synthetic_api_steps: '',
       synthetic_api_variables: '',
+      synthetic_api_secret_variables: '',
       synthetic_api_base_url: '',
     }));
   };
@@ -72,7 +89,10 @@ export default function SyntheticApiEditor({
         onModeChange={onModeChange}
         facts={[
           `${steps.length} steps`,
-          `${(form.synthetic_api_variables || []).filter((v) => v.key.trim()).length} variables`,
+          `${
+            (form.synthetic_api_variables || []).filter((v) => v.key.trim()).length +
+            (form.synthetic_api_secret_variables || []).filter((v) => v.key.trim()).length
+          } variables`,
           `${steps.reduce((sum, step) => sum + step.extracts.length, 0)} extracts`,
         ]}
         description="Basic keeps the journey builder focused. Advanced unlocks headers, extracts, and assertion tuning."
@@ -118,6 +138,14 @@ export default function SyntheticApiEditor({
         />
       )}
 
+      {mode === 'advanced' && (
+        <SyntheticSecretVariablesField
+          rows={form.synthetic_api_secret_variables}
+          onChange={(rows) => patch({ synthetic_api_secret_variables: rows })}
+          error={errors.synthetic_api_secret_variables}
+        />
+      )}
+
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <label className={FIELD_LABEL}>Steps</label>
@@ -134,6 +162,7 @@ export default function SyntheticApiEditor({
         {errors.synthetic_api_steps && <p className="text-xs text-rose-300">{errors.synthetic_api_steps}</p>}
         {steps.map((step, stepIdx) => (
           <SyntheticApiStepCard
+            refWarning={undefinedRefsWarning(stepRefs[stepIdx] || [])}
             key={`synthetic-api-step-${stepIdx}`}
             step={step}
             index={stepIdx}
@@ -152,6 +181,7 @@ export default function SyntheticApiEditor({
 }
 
 function SyntheticApiStepCard({
+  refWarning,
   step,
   index,
   count,
@@ -160,6 +190,8 @@ function SyntheticApiStepCard({
   onMove,
   onRemove,
 }: {
+  /** Undefined {{references}} in this step: warned about, never blocking. */
+  refWarning?: string;
   step: SyntheticAPIStepDraft;
   index: number;
   count: number;
@@ -205,6 +237,11 @@ function SyntheticApiStepCard({
           <IconButton icon={<Trash2 strokeWidth={1.75} />} label="Remove step" danger onClick={onRemove} />
         </div>
       </div>
+      {refWarning && (
+        <p role="status" className="text-xs text-amber-300">
+          {refWarning}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <FormInput label="Step ID" value={step.id} onChange={(v) => patchStep({ id: v })} placeholder="health" />

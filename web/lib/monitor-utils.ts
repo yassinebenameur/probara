@@ -140,8 +140,22 @@ export function isFailingStatus(status: MonitorDisplayStatus): boolean {
   return status === 'down' || status === 'degraded';
 }
 
+/**
+ * A down monitor's progress toward confirming its recovery: passes counted so
+ * far and passes needed (`recovery_threshold`), or null when it is not
+ * confirming one. Until confirmed the monitor is still down, and the time
+ * counts as downtime.
+ */
+export function recoveryProgress(
+  monitor: Pick<Monitor, 'current_state' | 'consecutive_successes' | 'recovery_threshold'>
+): { passes: number; needed: number } | null {
+  const passes = monitor.consecutive_successes ?? 0;
+  if (monitor.current_state !== 'down' || passes <= 0) return null;
+  return { passes, needed: Math.max(monitor.recovery_threshold ?? 1, passes + 1) };
+}
+
 export function getEffectiveMonitorStatus(
-  monitor: Pick<Monitor, 'enabled' | 'in_maintenance' | 'current_state' | 'location_ids'>,
+  monitor: Pick<Monitor, 'enabled' | 'in_maintenance' | 'current_state' | 'location_ids' | 'consecutive_successes'>,
   results: CheckResult[]
 ): MonitorDisplayStatus {
   if (!monitor.enabled) {
@@ -149,6 +163,12 @@ export function getEffectiveMonitorStatus(
   }
   if (monitor.in_maintenance) {
     return 'maintenance';
+  }
+
+  // A monitor confirming its recovery is down whatever its latest check
+  // says: the server holds it down until enough checks in a row pass.
+  if (monitor.current_state === 'down' && (monitor.consecutive_successes ?? 0) > 0) {
+    return 'down';
   }
 
   // Multi-location monitors: the server's quorum verdict is authoritative —
@@ -197,6 +217,8 @@ export function monitorTargetLabel(type?: MonitorType | string): string {
       return 'host';
     case 'sip':
       return 'SIP target';
+    case 'domain':
+      return 'domain';
     default:
       return 'endpoint';
   }
@@ -273,7 +295,8 @@ export function sortBySeverity<T>(
 /**
  * The address a monitor checks, as shown under its name: the URL for HTTP,
  * synthetic, Prometheus and WebSocket monitors, `host:port` for gRPC and TCP,
- * who a SIP test call rings (`number@domain`), the host for everything else. Null when the type has no target (push,
+ * who a SIP test call rings (`number@domain`), the watched name for a domain
+ * monitor, the host for everything else. Null when the type has no target (push,
  * group, agent without a host).
  */
 export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config'>): string | null {
@@ -291,6 +314,7 @@ export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config'>): string
       const port = (config.port as number | undefined) || (config.use_tls === false ? 80 : 443);
       return `${host}:${port}`;
     }
+    if (monitor.type === 'domain') return str('domain');
     if (monitor.type === 'tcp' && host) {
       return config.port ? `${host}:${config.port}` : host;
     }

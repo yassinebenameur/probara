@@ -31,7 +31,42 @@ type StatusPageSettings struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+	// CSPMode is the public page's Content-Security-Policy mode: "strict",
+	// "compatible", "off", or "" for automatic (compatible when the page has
+	// custom CSS, custom head/footer HTML or a published custom template,
+	// else strict). See shared/securityheaders.
+	CSPMode *string `json:"csp_mode,omitempty"`
+	// SEOTitle and SEODescription override the public page's <title> and
+	// search/link-preview description (up to MaxSEOTitleLength and
+	// MaxSEODescriptionLength characters). "" clears an override: the page
+	// then uses "<title> · Status" and its description, else a fixed
+	// sentence naming the page.
+	SEOTitle       *string `json:"seo_title,omitempty"`
+	SEODescription *string `json:"seo_description,omitempty"`
+	// AllowSearchIndexing lets search engines index the page. On by
+	// default; off sends noindex in a robots meta tag and X-Robots-Tag.
+	AllowSearchIndexing *bool `json:"allow_search_indexing,omitempty"`
+	// EnableEmailSubscriptions shows a subscribe form on the public page:
+	// visitors confirm their address by a link (double opt-in) and are then
+	// mailed when an incident is published, updated or resolved there and
+	// when maintenance is scheduled (api/internal/services/pagesubscribers).
+	// Off by default. Turning it on needs the API's mailer, APP_BASE_URL,
+	// STATUS_PAGE_BASE_URL and PROBARA_SECRETS_KEY; it has no effect on
+	// password and private pages.
+	EnableEmailSubscriptions *bool `json:"enable_email_subscriptions,omitempty"`
+	// AutoPublishIncidents publishes a monitor's outage to the page when a
+	// monitor the page shows has been down for AutoPublishDelay (outside
+	// maintenance, not explained by a dependency, not recovering), and
+	// resolves it when the monitor recovers. Off by default.
+	AutoPublishIncidents *bool `json:"auto_publish_incidents,omitempty"`
 }
+
+// Bounds of the SEO overrides. Search results show about 60 and 160
+// characters; link previews a little more.
+const (
+	MaxSEOTitleLength       = 120
+	MaxSEODescriptionLength = 300
+)
 
 // StatusPageTemplateVersion summarizes one stored custom-template row.
 type StatusPageTemplateVersion struct {
@@ -131,6 +166,16 @@ type StatusPage struct {
 	Settings       *StatusPageSettings `json:"settings,omitempty"`
 	CreatedAt      time.Time           `json:"created_at"`
 	UpdatedAt      time.Time           `json:"updated_at"`
+	// Visibility is who may view the page: public, unlisted, password or
+	// private (shared/pageaccess). A column, not a setting.
+	Visibility string `json:"visibility"`
+	// HasPassword reports whether a visitor password is stored; the
+	// password itself is write-only.
+	HasPassword bool `json:"has_password"`
+	// PublicURL is the page's URL on its canonical custom domain (the oldest
+	// verified one, shared/pagedomains.PrimaryHostSQL); omitted while it has
+	// none, when the page lives only on the platform host.
+	PublicURL string `json:"public_url,omitempty"`
 }
 
 // CreateStatusPageRequest represents a request to create a status page
@@ -145,6 +190,10 @@ type CreateStatusPageRequest struct {
 	MonitorDisplayNames map[string]string   `json:"monitor_display_names,omitempty"`
 	Sections            []StatusPageSection `json:"sections,omitempty"`
 	Settings            *StatusPageSettings `json:"settings,omitempty"`
+	// Visibility defaults to public.
+	Visibility *string `json:"visibility,omitempty"`
+	// Password is the visitor password, required for password visibility.
+	Password *string `json:"password,omitempty"`
 }
 
 // UpdateStatusPageRequest represents a request to update a status page
@@ -159,6 +208,12 @@ type UpdateStatusPageRequest struct {
 	MonitorDisplayNames *map[string]string   `json:"monitor_display_names,omitempty"`
 	Sections            *[]StatusPageSection `json:"sections,omitempty"`
 	Settings            *StatusPageSettings  `json:"settings,omitempty"`
+	// Visibility: absent keeps the stored value.
+	Visibility *string `json:"visibility,omitempty"`
+	// Password is write-only: absent keeps the stored password, "" clears
+	// it, anything else replaces it. Setting or clearing it signs every
+	// password visitor out.
+	Password *string `json:"password,omitempty"`
 }
 
 // StatusPageListResponse represents a paginated list of status pages
@@ -167,4 +222,37 @@ type StatusPageListResponse struct {
 	Page     int          `json:"page"`
 	PageSize int          `json:"page_size"`
 	Total    int          `json:"total"`
+}
+
+// StatusPageAccessToken is a kiosk token of a status page. It opens a
+// password or private page; the token itself is shown once, at creation, and
+// only its hash is stored.
+type StatusPageAccessToken struct {
+	ID    uuid.UUID `json:"id"`
+	Label string    `json:"label"`
+	// Who created it: an operator or an API key (nil once deleted).
+	CreatedByUserID   *uuid.UUID `json:"created_by_user_id,omitempty"`
+	CreatedByAPIKeyID *uuid.UUID `json:"created_by_api_key_id,omitempty"`
+	// CreatedBy is the operator's username or the API key's name, for
+	// display; empty when the creator no longer exists.
+	CreatedBy string     `json:"created_by,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+// CreateStatusPageAccessTokenRequest names a new kiosk token.
+type CreateStatusPageAccessTokenRequest struct {
+	Label string `json:"label"`
+}
+
+// CreatedStatusPageAccessToken is the one response that carries the token.
+type CreatedStatusPageAccessToken struct {
+	StatusPageAccessToken
+	Token string `json:"token"`
+}
+
+// StatusPageAccessTokenListResponse lists a page's kiosk tokens, newest
+// first, revoked ones included.
+type StatusPageAccessTokenListResponse struct {
+	Items []StatusPageAccessToken `json:"items"`
 }

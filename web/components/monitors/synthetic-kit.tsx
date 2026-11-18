@@ -1,15 +1,22 @@
 'use client';
 
 import { ReactNode, useEffect, useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Lock, Plus, X } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Callout, { type CalloutTone } from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import Tabs from '@/components/ui/Tabs';
 import { Location } from '@/lib/types';
 import { formatLatency } from '@/lib/format';
-import { SyntheticEditorMode, SyntheticTestPhase, SyntheticVarKV } from '@/lib/monitor-form/synthetic';
+import {
+  SyntheticEditorMode,
+  SyntheticTestPhase,
+  SyntheticVarKV,
+  plainVariableGoesSecret,
+} from '@/lib/monitor-form/synthetic';
+import type { SecretKV } from '@/lib/monitor-form/secret-map';
 import { FIELD_LABEL } from './form-kit';
+import SecretRowsEditor from './SecretRowsEditor';
 import type { SyntheticLiveTest } from './useSyntheticLiveTest';
 
 // Pieces the synthetic API and browser editors share: the Basic/Advanced
@@ -107,7 +114,11 @@ export function SyntheticTemplatesWell({
   );
 }
 
-/** Key/value variables. Removing the last row blanks it instead. */
+/**
+ * Key/value variables. Removing the last row blanks it instead. A row with a
+ * credential name (plainVariableGoesSecret) is shown as the secret it is
+ * saved as: its value masked, with a note.
+ */
 export function SyntheticVariablesField({
   rows,
   onChange,
@@ -129,39 +140,50 @@ export function SyntheticVariablesField({
       <label className={`${FIELD_LABEL} mb-1.5`}>Variables (optional)</label>
       {error && <p className="mb-2 text-xs text-rose-300">{error}</p>}
       <div className="space-y-2">
-        {rows.map((row, idx) => (
-          <div key={`var-${idx}`} className="grid grid-cols-12 gap-2">
-            <input
-              className="input col-span-5"
-              placeholder="Variable name"
-              aria-label={`Variable ${idx + 1} name`}
-              value={row.key}
-              onChange={(e) => setRow(idx, { key: e.target.value })}
-            />
-            <input
-              className="input col-span-6"
-              placeholder="Variable value"
-              aria-label={`Variable ${idx + 1} value`}
-              value={row.value}
-              onChange={(e) => setRow(idx, { value: e.target.value })}
-            />
-            <div className="col-span-1 flex items-center justify-center">
-              <IconButton
-                icon={<X strokeWidth={1.75} />}
-                label="Remove variable"
-                onClick={() => {
-                  const next = [...rows];
-                  if (next.length === 1) {
-                    next[0] = { key: '', value: '' };
-                  } else {
-                    next.splice(idx, 1);
-                  }
-                  onChange(next);
-                }}
+        {rows.map((row, idx) => {
+          const goesSecret = plainVariableGoesSecret(row);
+          return (
+            <div key={`var-${idx}`} className="grid grid-cols-12 gap-2">
+              <input
+                className="input col-span-5"
+                placeholder="Variable name"
+                aria-label={`Variable ${idx + 1} name`}
+                value={row.key}
+                onChange={(e) => setRow(idx, { key: e.target.value })}
               />
+              <input
+                className="input col-span-6"
+                placeholder="Variable value"
+                aria-label={`Variable ${idx + 1} value`}
+                type={goesSecret ? 'password' : 'text'}
+                autoComplete={goesSecret ? 'new-password' : undefined}
+                value={row.value}
+                onChange={(e) => setRow(idx, { value: e.target.value })}
+              />
+              <div className="col-span-1 flex items-center justify-center">
+                <IconButton
+                  icon={<X strokeWidth={1.75} />}
+                  label="Remove variable"
+                  onClick={() => {
+                    const next = [...rows];
+                    if (next.length === 1) {
+                      next[0] = { key: '', value: '' };
+                    } else {
+                      next.splice(idx, 1);
+                    }
+                    onChange(next);
+                  }}
+                />
+              </div>
+              {goesSecret && (
+                <p className="col-span-12 flex items-center gap-1.5 text-xs text-slate-500">
+                  <Lock className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
+                  Saved as a secret variable: encrypted, never shown again, and redacted from results.
+                </p>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="mt-2">
         <Button
@@ -175,6 +197,39 @@ export function SyntheticVariablesField({
         </Button>
       </div>
       <p className="mt-2 text-xs text-slate-500">{hint}</p>
+    </div>
+  );
+}
+
+/**
+ * Secret variables: referenced as {{name}} like plain ones, but stored
+ * encrypted, never shown again, and redacted from check results.
+ */
+export function SyntheticSecretVariablesField({
+  rows,
+  onChange,
+  error,
+}: {
+  rows: SecretKV[];
+  onChange: (rows: SecretKV[]) => void;
+  error?: string;
+}) {
+  return (
+    <div>
+      <label className={`${FIELD_LABEL} mb-1.5`}>Secret variables (optional)</label>
+      {error && <p className="mb-2 text-xs text-rose-300">{error}</p>}
+      <SecretRowsEditor
+        rows={rows}
+        onChange={onChange}
+        toggleable={false}
+        itemNoun="secret variable"
+        namePlaceholder="Variable name"
+        valuePlaceholder="Secret value"
+      />
+      <p className="mt-2 text-xs text-slate-500">
+        Passwords, tokens and keys. Reference them as <code>{'{{name}}'}</code>; values are stored encrypted, never
+        shown again, and replaced by [REDACTED] in check results.
+      </p>
     </div>
   );
 }

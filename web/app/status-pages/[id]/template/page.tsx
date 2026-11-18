@@ -20,6 +20,7 @@ import {
   StatusPageTemplateState,
   StatusPageSettings,
   StatusPageLibraryTemplate,
+  StatusPageCSPMode,
 } from '@/lib/types';
 import {
   getStatusPage,
@@ -51,9 +52,12 @@ import Pill from '@/components/ui/Pill';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Dialog from '@/components/ui/Dialog';
 import Input from '@/components/ui/Input';
+import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
+import { useCurrentUser, useStatusPageBaseUrl } from '@/components/providers/CurrentUserProvider';
 import { formatDateTime, formatDateTimeFull, formatFileSize } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
+import { isGatedVisibility } from '@/lib/status-page-access';
 import { followLiveSource, templateEditorState } from '@/lib/template-editor';
 import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
 import { errorMessage } from '@/lib/errors';
@@ -72,6 +76,10 @@ interface PendingConfirm {
 
 export default function StatusPageTemplatePage() {
   const router = useRouter();
+  const statusPageBaseUrl = useStatusPageBaseUrl();
+  // The origin arrives with /v1/auth-context; until it has, the preview URL
+  // (which may carry a preview token) would resolve against the UI origin.
+  const { loading: identityLoading } = useCurrentUser();
   const params = useParams();
   const id = params.id as string;
   const { showToast } = useToast();
@@ -94,6 +102,7 @@ export default function StatusPageTemplatePage() {
   const [brandingCSS, setBrandingCSS] = useState('');
   const [brandingHead, setBrandingHead] = useState('');
   const [brandingFooter, setBrandingFooter] = useState('');
+  const [cspMode, setCspMode] = useState<StatusPageCSPMode>('');
   const [savingBranding, setSavingBranding] = useState(false);
 
   const [libraryItems, setLibraryItems] = useState<StatusPageLibraryTemplate[]>([]);
@@ -108,6 +117,7 @@ export default function StatusPageTemplatePage() {
     setBrandingCSS(settings?.custom_css || '');
     setBrandingHead(settings?.custom_head_html || '');
     setBrandingFooter(settings?.custom_footer_html || '');
+    setCspMode(settings?.csp_mode || '');
   };
 
   const load = useCallback(async () => {
@@ -157,14 +167,15 @@ export default function StatusPageTemplatePage() {
   const { dirty, needsSave, status } = templateEditorState({ source, baseline, hasDraft });
 
   const previewUrl = useMemo(() => {
-    if (!statusPage) return '';
+    if (!statusPage || identityLoading) return '';
     const base = resolveStatusPageDraftPreviewUrl(
       statusPage,
-      templateState?.preview_token
+      templateState?.preview_token,
+      statusPageBaseUrl
     );
     const separator = base.includes('?') ? '&' : '?';
     return `${base}${separator}_=${previewNonce}`;
-  }, [statusPage, templateState?.preview_token, previewNonce]);
+  }, [statusPage, templateState?.preview_token, previewNonce, statusPageBaseUrl, identityLoading]);
 
   // ⌘S / Ctrl+S saves the draft. A ref keeps the listener stable while the
   // handler closes over the latest source; it stands down while a dialog is
@@ -364,6 +375,7 @@ export default function StatusPageTemplatePage() {
           custom_css: brandingCSS,
           custom_head_html: brandingHead,
           custom_footer_html: brandingFooter,
+          csp_mode: cspMode,
         },
       });
       setStatusPage(updated);
@@ -409,7 +421,7 @@ export default function StatusPageTemplatePage() {
     );
   }
 
-  const publicUrl = resolveStatusPagePublicUrl(statusPage);
+  const publicUrl = resolveStatusPagePublicUrl(statusPage, statusPageBaseUrl);
   const activeLabel = templateState?.has_custom
     ? `Custom template v${templateState.published_version}`
     : 'Built-in template';
@@ -481,6 +493,23 @@ export default function StatusPageTemplatePage() {
               placeholder={'<div class="links">…</div>'}
               className={`${CODE_AREA} p-3`}
             />
+          </FormField>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <FormField
+            label="Content-Security-Policy"
+            description={
+              'Strict runs only scripts that carry nonce="{{cspNonce}}" (custom templates and the HTML snippets above can use it). ' +
+              'Automatic is compatible while the page has custom CSS, custom HTML or a custom template, strict otherwise. ' +
+              'Off sends no resource policy.'
+            }
+          >
+            <Select value={cspMode} onChange={(e) => setCspMode(e.target.value as StatusPageCSPMode)}>
+              <option value="">Automatic</option>
+              <option value="strict">Strict</option>
+              <option value="compatible">Compatible</option>
+              <option value="off">Off</option>
+            </Select>
           </FormField>
         </div>
         <div className="flex justify-end">
@@ -605,22 +634,37 @@ export default function StatusPageTemplatePage() {
                 >
                   Refresh
                 </Button>
-                <Button variant="subtle" size="xs" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
-                  <a href={previewUrl} target="_blank" rel="noopener noreferrer">
-                    Open
-                  </a>
-                </Button>
+                {previewUrl && (
+                  <Button variant="subtle" size="xs" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
+                    <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                      Open
+                    </a>
+                  </Button>
+                )}
               </div>
             </div>
+            {/* A password or private page opens to the preview only with its
+                preview token, which the API mints only when the deployment
+                sets STATUS_PAGE_PREVIEW_SECRET. */}
+            {isGatedVisibility(statusPage.visibility) && templateState && !templateState.preview_token && (
+              <Callout tone="warning" className="mx-3 mb-3">
+                This page is not public, and previews of it need <code className="font-mono">STATUS_PAGE_PREVIEW_SECRET</code>{' '}
+                on the api and status-page services. Without it the preview cannot open the page.
+              </Callout>
+            )}
             {/* The draft route renders the published (or built-in) page while
                 no draft exists, so there is always something real to show. */}
-            <iframe
-              key={previewNonce}
-              src={previewUrl}
-              title={hasDraft ? 'Draft template preview' : 'Live status page preview'}
-              className="min-h-0 w-full flex-1 bg-[#fff]"
-              sandbox="allow-scripts allow-same-origin"
-            />
+            {previewUrl ? (
+              <iframe
+                key={previewNonce}
+                src={previewUrl}
+                title={hasDraft ? 'Draft template preview' : 'Live status page preview'}
+                className="min-h-0 w-full flex-1 bg-[#fff]"
+                sandbox="allow-scripts allow-same-origin"
+              />
+            ) : (
+              <div className="min-h-0 w-full flex-1" aria-hidden="true" />
+            )}
           </div>
         </div>
 

@@ -36,15 +36,18 @@ func alertTools() []spec {
 			Name:  "get_alert",
 			Title: "Get alert",
 			Description: "One alert in full, including its AI triage (suspected cause, evidence) when the local " +
-				"model has produced one, and the labelling context for label_alert_triage.",
+				"model has produced one, the labelling context for label_alert_triage, and for a relapsed alert " +
+				"(relapse_count > 0) its relapse history.",
 			Method: http.MethodGet, Route: "/alerts/{id}",
 			PathDocs: map[string]string{"id": "Alert ID."},
 		},
 		{
 			Name:  "acknowledge_alert",
 			Title: "Acknowledge alert",
-			Description: "Acknowledge an active alert: stops reminders and tells paging channels (PagerDuty, " +
-				"Opsgenie) to stop escalating. Only active alerts can be acknowledged.",
+			Description: "Acknowledge an active alert: from then on it sends no reminders and no escalation tier " +
+				"that had not fired yet (the resolve and any suspected-cause follow-up still go out), and paging " +
+				"channels (PagerDuty, Opsgenie) are told to stop escalating. Only active alerts can be acknowledged; " +
+				"unacknowledge_alert undoes it.",
 			Method: http.MethodPost, Route: "/alerts/{id}/acknowledge",
 			PathDocs: map[string]string{"id": "Alert ID."},
 		},
@@ -52,7 +55,8 @@ func alertTools() []spec {
 			Name:  "resolve_alert",
 			Title: "Resolve alert",
 			Description: "Resolve an active or acknowledged alert by hand. Channels that were paged receive a real " +
-				"\"resolved\" notification. If the monitor is still failing, a new alert can open.",
+				"\"resolved\" notification. If the monitor is still failing, a new alert can open (a manually " +
+				"resolved alert never reopens as a relapse).",
 			Method: http.MethodPost, Route: "/alerts/{id}/resolve",
 			PathDocs: map[string]string{"id": "Alert ID."},
 		},

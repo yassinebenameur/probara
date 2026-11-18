@@ -7,9 +7,17 @@ Congratulations! The monitoring platform has been deployed successfully.
 {{- if .Values.migrations.enabled }}
 
 DATABASE MIGRATIONS:
-  A migrations job has been created and will run automatically.
-  Check the status with:
+{{- if .Release.IsInstall }}
+  The migrations job ran after this install created the database.
+{{- else }}
+  The migrations job ran before this upgrade changed any workload, so the new
+  pods start on the migrated schema. Pods of the previous release ran against
+  it until the rollout replaced them. `helm rollback` does not reverse it.
+{{- end }}
+  A succeeded job is deleted; a failed one fails the release and is kept for
+  its logs:
     kubectl -n {{ .Release.Namespace }} get jobs -l app.kubernetes.io/component=migrations
+    kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=migrations
 {{- end }}
 
 ACCESSING THE APPLICATION:
@@ -100,6 +108,31 @@ COMPONENTS DEPLOYED:
 {{- end }}
 {{- if .Values.frontend.enabled }}
   - Frontend ({{ .Values.frontend.replicas }} replicas)
+{{- end }}
+{{- if and .Values.ingress.enabled (not .Values.trustedProxyCIDRs) }}
+
+WARNING: CLIENT ADDRESSES
+  trustedProxyCIDRs is empty, so the api and status page take the ingress
+  controller pod as every client's address: the audit log records it, the
+  API rate limit applies per credential only (sign-in, anonymous calls and
+  failed credentials are not limited per address), and HSTS is never sent.
+  Set trustedProxyCIDRs to the CIDR your ingress controller pods use.
+{{- end }}
+{{- if .Values.statusPage.enabled }}
+{{- if and (not .Values.secrets.statusPageSessionSecretExistingSecret) (not .Values.secrets.existingSecret) (not (include "monitoring-platform.statusPageSessionSecret" .)) }}
+
+WARNING: PASSWORD AND PRIVATE STATUS PAGES ARE CLOSED
+  The chart cannot derive STATUS_PAGE_SESSION_SECRET because adminJwtSecret
+  comes from an existing Secret. Set secrets.statusPageSessionSecret or
+  secrets.statusPageSessionSecretExistingSecret; until then password pages
+  answer 503 and private pages 404.
+{{- else if and .Values.secrets.existingSecret (not .Values.secrets.statusPageSessionSecretExistingSecret) }}
+
+NOTE: STATUS PAGE SESSIONS
+  Password and private status pages read status_page_session_secret from
+  {{ .Values.secrets.existingSecret }}. Add that key (at least 32 characters)
+  or they stay closed.
+{{- end }}
 {{- end }}
 
 ===============================================================================

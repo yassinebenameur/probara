@@ -6,6 +6,8 @@ package statuspage
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
 
 type statusPageSettingsPatch struct {
@@ -26,6 +28,14 @@ type statusPageSettingsPatch struct {
 	CustomCSS        *string `json:"custom_css,omitempty"`
 	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
 	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+
+	CSPMode *string `json:"csp_mode,omitempty"`
+
+	SEOTitle            *string `json:"seo_title,omitempty"`
+	SEODescription      *string `json:"seo_description,omitempty"`
+	AllowSearchIndexing *bool   `json:"allow_search_indexing,omitempty"`
+
+	EnableEmailSubscriptions *bool `json:"enable_email_subscriptions,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -46,6 +56,19 @@ type statusPageSettingsStored struct {
 	CustomCSS        string
 	CustomHeadHTML   string
 	CustomFooterHTML string
+
+	// CSPMode is the stored csp_mode; "" is automatic (securityheaders).
+	CSPMode string
+
+	// SEOTitle and SEODescription override the head's title and description
+	// ("" = derived, seo.go). AllowSearchIndexing off sends noindex.
+	SEOTitle            string
+	SEODescription      string
+	AllowSearchIndexing bool
+
+	// EnableEmailSubscriptions renders the subscribe form (subscribe.go);
+	// the API, which stores subscribers, checks the same setting again.
+	EnableEmailSubscriptions bool
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -63,6 +86,8 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		// Off by default: enabling it makes the page ask visitors for
 		// notification permission, which is the operator's call to make.
 		EnablePushNotifications: false,
+		// A public page is meant to be found; an operator opts out.
+		AllowSearchIndexing: true,
 	}
 }
 
@@ -129,6 +154,22 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	}
 	if patch.CustomFooterHTML != nil {
 		stored.CustomFooterHTML = strings.TrimSpace(*patch.CustomFooterHTML)
+	}
+	if patch.CSPMode != nil {
+		// An unknown value reads as automatic; ResolveCSPMode decides.
+		stored.CSPMode, _ = securityheaders.ParseCSPMode(*patch.CSPMode)
+	}
+	if patch.SEOTitle != nil {
+		stored.SEOTitle = strings.TrimSpace(*patch.SEOTitle)
+	}
+	if patch.SEODescription != nil {
+		stored.SEODescription = strings.TrimSpace(*patch.SEODescription)
+	}
+	if patch.AllowSearchIndexing != nil {
+		stored.AllowSearchIndexing = *patch.AllowSearchIndexing
+	}
+	if patch.EnableEmailSubscriptions != nil {
+		stored.EnableEmailSubscriptions = *patch.EnableEmailSubscriptions
 	}
 	return stored
 }

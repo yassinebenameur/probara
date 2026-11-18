@@ -1,0 +1,12 @@
+{
+  "_comment": "tls_expiry last_error texts and what both readers (Go notifications.ParseTLSExpiryError, web tlsExpiryCertificate) take from them. Written by notifications.FormatTLSExpiryError.",
+  "cases": [
+    {"text": "tls: intermediate certificate CN=Example Issuing CA 2,O=Example expires on 2026-12-01 (in 9d, < 14d)", "ok": true, "intermediate": true, "subject": "CN=Example Issuing CA 2,O=Example", "common_name": "Example Issuing CA 2", "not_after": "2026-12-01"},
+    {"text": "tls: certificate CN=api.example.com expires on 2026-12-01 (in 5d, < 14d)", "ok": true, "intermediate": false, "subject": "CN=api.example.com", "common_name": "api.example.com", "not_after": "2026-12-01"},
+    {"text": "tls: intermediate certificate CN=R3\\,expires,O=Let's Encrypt expired on 2026-11-01 (2d ago, threshold 14d)", "ok": true, "intermediate": true, "subject": "CN=R3\\,expires,O=Let's Encrypt", "common_name": "R3,expires", "not_after": "2026-11-01"},
+    {"text": "tls: intermediate certificate O=No Common Name expires (in 3d, < 7d)", "ok": true, "intermediate": true, "subject": "O=No Common Name", "common_name": "O=No Common Name", "not_after": ""},
+    {"text": "tls: certificate expires (in 3d, < 14d)", "ok": true, "intermediate": false, "subject": "", "common_name": "", "not_after": ""},
+    {"text": "tls: expires in 11d (< 14d)", "ok": false},
+    {"text": "connect: connection refused", "ok": false}
+  ]
+}

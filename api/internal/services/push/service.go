@@ -15,6 +15,7 @@ import (
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // Service handles push monitor business logic
@@ -39,11 +40,13 @@ func (s *Service) ProcessPush(ctx context.Context, token string, payload PushPay
 	var enabled bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, enabled FROM monitors
-		 WHERE push_token = $1 AND type = 'push' AND deleted_at IS NULL`,
+		 WHERE push_token = $1 AND type = 'push' AND deleted_at IS NULL
+		   AND `+tenancy.LiveTenantSQL("monitors.tenant_id"),
 		token,
 	).Scan(&monitorID, &tenantID, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("push monitor not found for token: %s", token)
+		// Never echo the token: the handler logs this error.
+		return fmt.Errorf("push monitor not found")
 	}
 	if err != nil {
 		return fmt.Errorf("failed to lookup push monitor: %w", err)

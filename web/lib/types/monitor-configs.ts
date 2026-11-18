@@ -17,7 +17,8 @@ export type MonitorType =
   | "tcp"
   | "mysql"
   | "websocket"
-  | "prometheus";
+  | "prometheus"
+  | "domain";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -105,10 +106,23 @@ export interface HTTPMonitorConfig {
   tls_server_name?: string;
   tls_ca_pem?: string;
   collect_timing?: boolean;
+  // Write-only (shared/secrets): secret header values and the password read
+  // back as "***". The API moves credential-named `headers` here on write.
+  secret_headers?: Record<string, string>;
+  basic_auth_username?: string;
+  basic_auth_password?: string;
 }
 
 export interface PingMonitorConfig {
   host: string;
+  /** Echoes per check, 1-10; absent sends 3 (Go models.PingMonitorConfig). */
+  count?: number;
+  /** Gap between echoes, 200-10000 ms; absent is 250, shortened to fit the timeout. */
+  interval_ms?: number;
+  /** Fail above this share of lost echoes (0 to below 100); absent fails only at 100%. */
+  max_packet_loss_pct?: number;
+  /** Fail when the average round trip exceeds it. */
+  max_rtt_ms?: number;
 }
 
 export interface DNSMonitorConfig {
@@ -125,6 +139,10 @@ export interface GRPCMonitorConfig {
   port?: number;
   service?: string;
   use_tls?: boolean;
+  metadata?: Record<string, string>;
+  // Write-only: values read back as "***". The API moves credential-named
+  // `metadata` keys here on write.
+  secret_metadata?: Record<string, string>;
 }
 
 export interface PrometheusMonitorConfig {
@@ -150,6 +168,12 @@ export interface TCPMonitorConfig {
   port: number;
   use_tls?: boolean;
   tls_skip_verify?: boolean;
+  /** Opens a tls_expiry alert under this many days left (requires use_tls). */
+  tls_min_days_valid?: number;
+  /** SNI and verification name; the host when absent (requires use_tls). */
+  tls_server_name?: string;
+  /** PEM CA certificates trusted besides the system store (requires use_tls). */
+  tls_ca_pem?: string;
 }
 
 export interface GroupMonitorConfig {
@@ -413,6 +437,8 @@ export interface SyntheticAPIMonitorConfig {
   failure_mode?: SyntheticFailureMode;
   variables?: Record<string, string>;
   steps: SyntheticAPIStepConfig[];
+  // Write-only {{name}} values: read back as "***", redacted from results.
+  secret_variables?: Record<string, string>;
 }
 
 export type SyntheticBrowserAction =
@@ -446,6 +472,9 @@ export interface SyntheticBrowserMonitorConfig {
   variables?: Record<string, string>;
   artifacts?: SyntheticBrowserArtifacts;
   steps: SyntheticBrowserStepConfig[];
+  // Write-only {{name}} values (a login password): read back as "***",
+  // redacted from results.
+  secret_variables?: Record<string, string>;
 }
 
 export type MonitorConfig =
@@ -466,4 +495,38 @@ export type MonitorConfig =
   | RabbitMQMonitorConfig
   | MySQLMonitorConfig
   | WebSocketMonitorConfig
-  | PrometheusMonitorConfig;
+  | PrometheusMonitorConfig
+  | DomainMonitorConfig;
+
+// Domain registration expiry (shared/models/domain.go). min_days_valid absent
+// means 30 days.
+export interface DomainMonitorConfig {
+  domain: string;
+  min_days_valid?: number;
+}
+
+// metrics_data.domain of a domain check (shared/domainexpiry Info): the
+// expiry is known (expires_at), the name is not registered (registered
+// false), or the expiry could not be determined (unknown_reason).
+export interface DomainInfo {
+  domain: string;
+  expires_at?: string;
+  days_until_expiry?: number;
+  registered_at?: string;
+  updated_at?: string;
+  registrar?: string;
+  statuses?: string[];
+  registered?: boolean;
+  source?: 'rdap' | 'whois';
+  server?: string;
+  rdap_error?: string;
+  unknown_reason?: string;
+  /** RDAP and WHOIS both said "not registered". */
+  not_found_confirmed?: boolean;
+  /** The registry is known never to publish an expiry date. */
+  no_expiry_published?: boolean;
+  /** The date has passed but the registry reports a renew grace period. */
+  renewal_grace?: boolean;
+  /** clientHold/serverHold: registered but not delegated, so it does not resolve. */
+  on_hold?: boolean;
+}

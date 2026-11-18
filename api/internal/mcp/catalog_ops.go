@@ -167,28 +167,33 @@ func locationTools() []spec {
 			Name:  "create_maintenance_window",
 			Title: "Create maintenance window",
 			Description: "Schedule a maintenance window: alerts for the listed monitors (a group covers its members) " +
-				"are suppressed between starts_at and ends_at. Checks keep running and uptime is accounted as maintenance.",
+				"are suppressed between starts_at and ends_at, or on every occurrence of a weekly recurrence. " +
+				"Checks keep running and uptime is accounted as maintenance.",
 			Method: http.MethodPost, Route: "/maintenance-windows",
 			Body:     typeOf[models.CreateMaintenanceWindowRequest](),
-			Required: []string{"title", "starts_at", "ends_at", "monitor_ids"},
+			Required: []string{"title", "monitor_ids"},
 			FieldDocs: map[string]string{
-				"starts_at": "Start (RFC 3339).",
-				"ends_at":   "End (RFC 3339), after starts_at and in the future.",
+				"starts_at":  "One-off start (RFC 3339); omit with recurrence.",
+				"ends_at":    "One-off end (RFC 3339), after starts_at and in the future; omit with recurrence.",
+				"recurrence": maintenanceRecurrenceDoc,
 			},
 		},
 		{
-			Name:        "update_maintenance_window",
-			Title:       "Update maintenance window",
-			Description: "Change a maintenance window. monitor_ids, when sent, replaces the covered set.",
-			Method:      http.MethodPatch, Route: "/maintenance-windows/{id}",
-			PathDocs: map[string]string{"id": "Maintenance window ID."},
-			Body:     typeOf[models.UpdateMaintenanceWindowRequest](),
+			Name:  "update_maintenance_window",
+			Title: "Update maintenance window",
+			Description: "Change a maintenance window. monitor_ids, when sent, replaces the covered set; recurrence, when " +
+				"sent, replaces the whole rule. Changes apply from now on and never rewrite occurrences that already started.",
+			Method: http.MethodPatch, Route: "/maintenance-windows/{id}",
+			PathDocs:  map[string]string{"id": "Maintenance window ID."},
+			Body:      typeOf[models.UpdateMaintenanceWindowRequest](),
+			FieldDocs: map[string]string{"recurrence": maintenanceRecurrenceDoc},
 		},
 		{
-			Name:        "delete_maintenance_window",
-			Title:       "Delete maintenance window",
-			Description: "Delete a maintenance window (ends it immediately if active).",
-			Method:      http.MethodDelete, Route: "/maintenance-windows/{id}",
+			Name:  "delete_maintenance_window",
+			Title: "Delete maintenance window",
+			Description: "Delete a maintenance window: it ends immediately if active and its future occurrences are " +
+				"removed; time it already covered stays in availability history.",
+			Method: http.MethodDelete, Route: "/maintenance-windows/{id}",
 			PathDocs: map[string]string{"id": "Maintenance window ID."}, Destructive: true,
 		},
 	}

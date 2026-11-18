@@ -8,6 +8,8 @@ package builtin
 import (
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/discord"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
+	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/gotify"
+	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/ntfy"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/opsgenie"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/pagerduty"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/slack"

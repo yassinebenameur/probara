@@ -22,6 +22,8 @@ export interface AuthContext {
   role?: TenantRole;
   scope?: ApiKeyScope;
   can_write: boolean;
+  // Deployment's public status-page origin (STATUS_PAGE_BASE_URL), when set.
+  status_page_base_url?: string;
 }
 
 export interface OidcStatus {

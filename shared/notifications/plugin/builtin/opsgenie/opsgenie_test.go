@@ -229,3 +229,30 @@ func TestPriorityFor(t *testing.T) {
 		}
 	}
 }
+
+// Each paging episode is its own Opsgenie alert: a relapse notice closes the
+// channel's previous alert, then creates one under the relapse's alias, so
+// it notifies even when the earlier alert is still open and acknowledged.
+func TestSend_RelapseOpensItsOwnAlert(t *testing.T) {
+	srv, calls := recordServer(t, 0)
+	p := New()
+	p.base = srv.URL + "/v2/alerts"
+	ev := sampleEvent()
+	one := 1
+	ev.Alert.RelapseCount, ev.Alert.PagedRelapse, ev.Alert.RelapseNotice, ev.Alert.PreviousPagedRelapse = 3, 3, true, &one
+	if err := p.Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: map[string]any{"api_key": "k-123", "priority": "P2"}},
+		Event:   ev, EventType: "created",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("calls = %+v, want close then create", *calls)
+	}
+	if c := (*calls)[0]; c.path != "/v2/alerts/probara-a-1-relapse-1/close" {
+		t.Errorf("close = %+v", c)
+	}
+	if c := (*calls)[1]; c.path != "/v2/alerts" || c.body["alias"] != "probara-a-1-relapse-3" {
+		t.Errorf("create = %+v", c)
+	}
+}

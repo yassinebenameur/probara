@@ -35,9 +35,19 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
 - `shared/db/migrations/` — golang-migrate pairs `NNNNNN_name.{up,down}.sql`
-  (take the next free number), applied by `cmd/migrate` — from the repo root
+  (take the next free number; numbering must stay contiguous — a gap filled
+  later is silently skipped on upgraded installs, and `TestMigrationNumbering`
+  (`shared/db/migrations_numbering_test.go`) fails on a duplicate number, an
+  unpaired file, or a gap not in `knownMigrationGaps`), applied by
+  `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
-  Compose job, Helm a post-install/upgrade hook Job
+  Compose job, Helm a `post-install,pre-upgrade` hook Job
+  (`job-migrations.yaml`, with its own hook Secret for a chart-composed DSN,
+  since the release Secret is not updated yet), so new pods never start on
+  an old schema and code may rely on its release's migrations; Compose
+  services wait for `migrations` (`service_completed_successfully`). Old
+  pods run briefly on the new schema: keep migrations additive. The API's
+  startup migration is a safety net only
 - `cmd/` — `migrate`, `discovery-collector` (the in-cluster Kubernetes
   inventory collector, own image), plus one-off admin tools in `cmd/admin/`
   (`cmd/admin` itself upserts a superadmin, like the first-user form; VAPID
@@ -122,6 +132,30 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
+- **Deleted workspaces are refused at the shared lookup.** Workspace delete
+  is a soft delete (`tenants.deleted_at`, superadmins only,
+  `api/internal/services/tenants/workspaces.go`); the API never runs
+  `DELETE FROM tenants`. Every query that resolves a credential or tenant, or
+  iterates tenant data in a background loop, adds
+  `shared/tenancy.LiveTenantSQL` (or `DeletedTenantSQL` where an unknown ID
+  must stay distinct), filtered before any `LIMIT`; the alerter's
+  notification claim and the check-result insert (`monitorstate.insertResult`)
+  are the last gates. The fragments name `tenants.deleted_at` so the planner
+  has statistics: migration 000115 must run before the binaries serve
+  (upgrade notes in `website/lib/docs/pages/deployment.ts`). The one tolerant
+  read is the auth `identityQuery` (`to_jsonb`), because its missing-schema
+  fallback treats every admin as a superadmin; never add another. It answers
+  `404 workspace_not_found` for any workspace the caller cannot open
+  (deleted, purged, unknown, or a member's non-membership). The scheduler's
+  workspace purge (`scheduler/internal/scheduler/purger_tenants.go`, own
+  advisory lock) removes the data, blanking secret columns first
+  (`workspaceScrubPlan`): a new table holding tenant data (a `tenant_id`
+  column or a foreign key into such a table) goes into `workspacePurgePlan`
+  (before the tables it references) or `workspacePurgeExempt`, gets a row in
+  the test's `workspaceFixtureSQL`, and any secret column gets a scrub step
+  (`TestWorkspacePurgePlanCoversEveryTenantTable`,
+  `TestWorkspacePurge_RemovesEveryRowAndSparesOtherWorkspaces`,
+  `TestWorkspacePurge_ScrubsSecretsFirst`).
 - API routes are registered by the `mount*Routes` functions in
   `api/internal/api/routes_*.go`; `NewServer` (`server.go`) builds the
   services and handlers and calls them in order.
@@ -145,6 +179,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   Import, preview, and anything type-driven must delegate to it
   (`DefaultRegistry.Has/Types`), never keep a parallel hardcoded list.
 - **Active-check types** (timeout semantics): `validation.IsActiveCheckType`.
+  Every registered type is active xor passive
+  (`TestRegistryTypesArePartitionedActiveOrPassive`).
 - **Passive types** (never dispatched, refused by run-now, skipped by the
   worker): `shared/models.PassiveMonitorTypes`; the monitor page's
   `PASSIVE_TYPES` is its UI mirror.
@@ -168,6 +204,32 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   clone strips masks for every type first (`stripMaskedSecrets` in
   `web/lib/monitor-clone.ts`), and a form marks a masked value "stored" only
   in edit mode.
+  Request credentials: http `secret_headers` + `basic_auth_password`, grpc
+  `secret_metadata`, synthetic_api/synthetic_browser `secret_variables`. A
+  secret nested below the top level (a step header, a fill value) is a
+  `{{name}}` reference to `secret_variables`, never a nested registry path;
+  the worker redacts those values from results (`secretRedactor`,
+  `worker/internal/worker/secret_redact.go`) and keeps credentials on the
+  origin across redirects (`redirectGuard`). Every write moves
+  credential-named headers, metadata and synthetic variables into the secret
+  maps (`secrets.NormalizeSensitiveHeaders`, after the merge in
+  `prepareConfigForWrite`, which then refuses a merged config that conflicts
+  with a kept secret); the `cmd/admin/migrate_sensitive_headers` backfill
+  calls the same function, after renaming miscased keys stored before
+  validation refused them. Two name rules, each one fixture in
+  `shared/secrets/testdata/`: headers/metadata use `IsSensitiveHeaderName`
+  (any name containing token/secret/…; TS twin in
+  `web/lib/monitor-form/http.ts`, also called by `scripts/kuma-export`),
+  synthetic variables use `IsSensitiveVariableName` (last name segment only,
+  so `token_url` stays plain; TS twin in `web/lib/monitor-form/synthetic.ts`).
+  Both twins are tested equal to their fixture. A variable move never creates
+  a secret name validation refuses (`movableSensitiveVariables`). Skip
+  secret work for a config with no secret key via `secrets.HasSecretValues`
+  (byte-level). Keys match exactly while config structs decode
+  case-insensitively, so `ValidatorRegistry.Validate` refuses a miscapitalized
+  secret key or plain key on a `secrets.PlainCredentialPaths` path
+  (`validateSecretKeySpelling`); add a path there when the write path reads a
+  new plain key.
 - **Channel config secrets** are the plugin manifest's `secret` fields, and
   they merge differently (`secrets.MergePreserveSecrets`): absent, `""` and
   `***` all **keep** the stored value (the channel form submits every secret
@@ -175,10 +237,32 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   stored value", offered only for optional secret fields.
 - **Certificate location in `metrics_data`**: `shared/tlscert` owns the
   certificate snapshot (`Info`, built by `FromConnectionState`) and where it
-  sits (`MetricsPaths`: `http.tls`, `sip.tls`). The alerter's `tls_expiry`
+  sits (`MetricsPaths`: `http.tls`, `sip.tls`, `tcp.tls`). The alerter's `tls_expiry`
   reads through `SQLExpr`, the status page and AI evidence through
   `Extract`; `TestSQLExprMatchesExtract` pins the pair. A new TLS-capable
-  type adds its path there, never a hard-coded `#> '{x,tls}'`.
+  type adds its path there, never a hard-coded `#> '{x,tls}'`. The expiry
+  that counts is always the chain's earliest (leaf + presented
+  intermediates, never a trust-store root; `chainOf`): `Info.Expiry` in Go,
+  `ExpirySQL` in SQL (`TestExpirySQLMatchesExpiry`), never `not_after` alone.
+- **Domain registration snapshot**: `shared/domainexpiry` owns the domain
+  check's `metrics_data.domain` (`Info`, `MetricsPaths`, `SQLExpr`/
+  `ExpiresAtSQL`/`UnknownReasonSQL`, `Extract`; its own
+  `TestSQLExprMatchesExtract`), the lookups (RDAP via the embedded IANA
+  bootstrap in `Directory`, WHOIS fallback) and `RegistrableDomain`. Lookups
+  dial only through the worker's `domainDialGuard`, which blocks private
+  destinations whatever `HTTP_BLOCK_PRIVATE_IPS` says (servers come from
+  bootstrap data and referrals); keep redirect/referral targets validated
+  there. An undetermined expiry (including a throttled or refused lookup)
+  is a `success` with `unknown_reason`, never a failure; the alerter's
+  `evaluateDomainExpiry` (`domain_expiry.go`) turns a persistent one into a
+  valueless `domain_expiry` alert (not for `PublishesNoExpiry` TLDs), and
+  resolves-and-reopens when the alert switches between valueless and dated.
+  One registry answer never pages: `ValidateDomainMonitorRules`
+  (`shared/models/domain.go`) holds domain monitors to a threshold of at
+  least 2 and at most one location, and an RDAP 404 yields to a WHOIS that
+  holds the name. Lookups are throttled per registry host in the worker
+  (`throttle.go`), and `POST /monitors/test` of this type needs write
+  access (`handlers/monitors/checks.go`, beside the saved-secret gate).
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
@@ -205,7 +289,12 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   silences its whole membership — reachability reports it
   (`group_rollup_paused`), dispatch still does it. The package doc, the
   fragments' comments and `annotateOpenAlertRootCauses` (the grace clock)
-  cover the rest.
+  cover the rest. Monitor-less alerts (mesh edges, `location_offline`) route
+  through `TenantTargetsSQL`, the tenant defaults without a monitor
+  (`TestTenantTargetsSQLMatchesDefaults`), and a mesh edge with a location
+  that stopped reporting dispatches nothing
+  (`SuppressedByOfflineLocationPredicate`, `suppression_reason`
+  `location_offline`).
 - **Status page settings live in THREE mirrors**, all of which must change
   together for a new setting to survive a round trip:
   `api/internal/models/statuspages.go` (`StatusPageSettings`, the wire type),
@@ -241,6 +330,21 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   rollup ranges via the scheduler's `syncDowntimeFromIntervals` projection;
   `TestDowntimeProjectionMatchesRawAnalyticsPath` pins the pair). Never
   derive downtime from check rows.
+- **SLA burn and report emails**: burn rate, burn-down and exhaustion (S-U8,
+  `api/internal/services/slas/burn.go`) are extra buckets on the report's one
+  `IntegrateTimeline` call, never another query; `SLAReport.burn` is optional
+  like `suspected_causes`. Scheduled report emails run in the **API**
+  (`api/internal/services/reportschedules`, its `Runner` started from
+  `server.go` and stopped before the audit recorder): issue the report with
+  no lock held, then claim the period and its per-recipient deliveries in one
+  `lock_timeout` transaction before mailing; a delivery is `claimed` (safe to
+  hand back) until `sending` is committed right before `SendMessage`, so
+  `uncertain` (never resent) only follows a started send. Which periods go
+  out (catch-up of the last 3, `sends_after`, the grace-hour carry-over) is
+  `nextPeriod`; the SLA service re-plans when a period or timezone changes.
+  The burn budget base is `periodBudget` (eligible time, as the headline). Schedules need SMTP,
+  `APP_BASE_URL` and `PROBARA_SECRETS_KEY` on the API; unsubscribe links are
+  `shared/actionlink` tokens (`ActionUnsubscribeReport`, own TTL).
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the
@@ -267,6 +371,42 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
   cascades only on tenant delete. The label routes are writes (never in
   `postReadPaths`); export is `RequireTenantAdmin`.
+- **Monitor config history**: every path that creates or changes a monitor
+  records a version through `api/internal/services/monitors/versions.go`,
+  inside the save's transaction (`api/internal/dbtx` carries it through the
+  monitors, groups and dependencies services; `Service.InTx`, which retries a
+  deadlock once). `CreateMonitor`/`UpdateMonitor` do it; a write beside them
+  calls `RecordVersion` (member and dependency routes) or `RecordVersionTx`
+  (discovery approval); a change made outside a save (location, channel or
+  monitor delete) uses the set-based `PrepareSystemVersionsTx` (before its
+  writes) and `RecordTx` (after), which only log failures. A save of an
+  existing monitor calls `CaptureBaseline` before its first write; nothing in
+  a save may use a second pool connection. **Lock order** (doc in
+  `api/internal/dbtx`): every transaction locks the monitor rows it touches
+  before its first write, ascending id, one pass (`LockMonitorsTx`: FOR
+  UPDATE for monitors changed or versioned, edge sources included; FOR KEY
+  SHARE for edge targets); deletes lock the monitors they rewrite the same
+  way. The FOR UPDATE row lock also serializes version numbering, with no
+  advisory lock; apply's per-workspace advisory lock is taken before any row
+  lock (below). Snapshots are
+  masked with `secrets.MaskStoredMonitorConfig`; restore never writes a
+  secret from a version (`restoreConfig`) and refuses another type. A new
+  top-level setting accepted by `UpdateMonitorRequest` is one
+  `snapshotColumns` entry (`versions_fields.go`) plus its
+  `models.MonitorConfigSnapshot` field, or it is neither versioned nor
+  restored.
+- **Maintenance coverage**: `shared/maintenance` (S-M5). A window is a
+  schedule (one-off, or the weekly `Rule`, expanded only by `Rule.Expand`);
+  what covers monitors is its materialized occurrences
+  (`maintenance_window_occurrences`), read only through
+  `OccurrenceRangesSQL`, `InMaintenance*Predicate` and
+  `MaintenanceUntilExpr` — never `maintenance_windows.starts_at/ends_at`.
+  Every occurrence writer is in `store.go`: the API on save, the scheduler's
+  `maintenance_occurrences.go` rolling the 35-day horizon. Started
+  occurrences, removed targets (`maintenance_window_past_targets`) and
+  deleted windows (`deleted_at`) are history, never rewritten. Anything that
+  inserts a window directly (tests, `scripts/seed-demo`) must insert its
+  occurrence too (`testutil.MaterializeOneOffMaintenance`).
 
 ## Monitor import
 
@@ -277,18 +417,41 @@ schema + warnings + skipped rows; `parse.go`), then `ExecuteImport`
 - **Raw path** (`useRawConfig`): rows carry an already-typed nested `config`
   object. Supports every registry type, resolves group members by name in a
   second pass, and validates through `validation.DefaultRegistry` before
-  create. Both recognized schemas take this path.
+  create. Every recognized schema takes this path.
 - **Simple path**: generic CSV/JSON/YAML field mapping. Only http, ping, dns,
   grpc and group; everything else is skipped.
 
 Adding a foreign source format means one adapter returning a `parsedSource`
 (see `parsePortableExport` and `parseKumaExport`), hooked into `parseJSON` or
-`parseYAML`. Build `ImportRow.Fields` **directly** — going through
+`parseYAML` before the generic wrappers. Better Stack, UptimeRobot and Gatus
+(`betterstack.go`, `uptimerobot.go`, `gatus.go`) build on `foreign.go`, whose
+`finish` registry-validates every translated row (rejects become
+`SkippedRows`) and assembles names and groups; each has a fixture and golden in
+`testdata/` and a row in the detection matrix (`foreign_test.go`). A row an
+adapter adds rather than translates (a domain monitor from a domain-expiry
+check) sets `ImportRow.Derived`, so the review step can leave it out.
+Build `ImportRow.Fields` **directly** — going through
 `flattenMap` dot-flattens the nested `config` and silently drops you onto the
 simple path. Records you refuse to translate go in `SkippedRows`, never as
 rows: `detectAndSuggestTypes` defaults unknown types to `http` and the UI
 auto-applies that suggestion, so an emitted row for an untranslatable monitor
 becomes a silent bad import.
+
+**Config-as-code apply** (`POST /monitors/apply[/plan]`, `apply.go`/
+`apply_execute.go` here) is another monitor write path, built on the same
+row builders (`portableRow`, `build*RequestFromConfig`) and the monitors,
+groups and dependencies services (versions source `apply`). One request is
+one `InTx` transaction that first takes `pg_advisory_xact_lock` per
+workspace on that transaction (released by commit or rollback; never a
+session lock on a pooled connection), re-plans, locks rows in lock order
+before the first write, and re-checks the locked monitors against the plan
+(`checkLockedUnchanged`). Prune deletes keyed monitors (`monitors.key`)
+only, within `prune_scope` when given. Secrets are compared only inside the
+monitors service (`PlanConfigWrites`, which also resolves a document's
+masked URL credentials and synthetic step credentials against the stored
+config so the same file converges), and a plan compares a literal with the
+stored value only for callers with write access. A field added to the
+portable export is applied only once the plan's `diff` handles it.
 
 **Group membership is the junction table**, not `config.monitor_ids`.
 `Monitor.MemberIDs`, group alert roll-up, and the dashboards all read
@@ -308,7 +471,11 @@ or imported groups come back empty. Any other path that creates groups through
    the shared struct, so put `Validate()` on it rather than duplicating rules
 2. Validator in `api/internal/validation/` + register in `registry.go`, and
    its `ConfigType()` in `config_types.go` (the struct MCP's
-   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`)
+   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`);
+   an active type also goes in `activeCheckTypes` (`validation.go`). No
+   migration: `monitors_timeout_check` (000099) names only the passive types,
+   so only a new passive type rewrites it, together with
+   `PassiveMonitorTypes` (`TestTimeoutCheckPassiveTypesMatchGo`)
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
    through `dialGuard` (SSRF policy)
@@ -329,7 +496,13 @@ or imported groups come back empty. Any other path that creates groups through
    `MonitorType`, so a missing icon does not compile), `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
    `badge`), and the type count + `monitorGroups` on the
-   landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
+   landing page (`website/app/page.tsx`, three counts; `website/app/docs/page.tsx`,
+   README). Also per type: the status page's target extractor
+   (`newMonitorPresenters`, `status-page/internal/statuspage/presenter.go`),
+   `monitorTarget`/`monitorTargetLabel` (`web/lib/monitor-utils.ts`), the
+   clone case (`web/lib/monitor-clone.ts`), the import page's `getTarget`,
+   and any spelling worth an alias in the importer's `typeAliases`
+   (`api/internal/services/import/mapping.go`)
 
 ## Cross-service contracts
 
@@ -409,11 +582,13 @@ or imported groups come back empty. Any other path that creates groups through
   deliver alerts but fail every test with `mailer not configured`. Parsed once
   in `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
   top-level `smtp:` and `appBaseURL:` values render the env into all three
-  workloads via the `smtpEnv` helper. Compose wires none of it.
+  workloads via the `smtpEnv` helper. The base Compose file wires none of
+  it; `docker-compose.release.yml` passes it to all three.
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
   `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
-  deep links to notifications (every channel, via `plugin.Configure`) —
-  unset omits them, never a guessed host.
+  deep links and, with `PROBARA_SECRETS_KEY`, acknowledge links to
+  notifications (every channel, via `plugin.Configure`) — unset omits them,
+  never a guessed host.
 - **Notification egress**: the same three workloads read
   `NOTIFICATION_BLOCK_PRIVATE_IPS` (default **true**) /
   `NOTIFICATION_ALLOWED_CIDRS` (`loadNotificationEgressConfig`); each main
@@ -459,10 +634,10 @@ or imported groups come back empty. Any other path that creates groups through
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
   `oidc_client_secret`, `local_ai_token`, `status_page_vapid_private_key`,
-  `status_page_preview_secret`) are the contract external secret managers
+  `status_page_preview_secret`, `bootstrap_setup_code`, `status_page_session_secret`, `status_page_internal_token`) are the contract external secret managers
   fill. `STATUS_PAGE_PREVIEW_SECRET` is one key rendered into two workloads
   (the api signs preview tokens, status-page verifies them) and is `optional`
-  in the Secret. `ADMIN_COOKIE_SECURE` comes from the
+  only without a per-field Secret (as `BOOTSTRAP_SETUP_CODE`). `ADMIN_COOKIE_SECURE` comes from the
   `monitoring-platform.adminCookieSecure` helper: `api.cookieSecure` if set,
   else true exactly when `api.publicBaseURL` is https.
   Helm cannot read Secrets, so anything the chart *composes* from a
@@ -473,7 +648,177 @@ or imported groups come back empty. Any other path that creates groups through
   `nats-statefulset.yaml`). Never move it into `nats.conf` `$VAR` expansion:
   that re-parses the value as config (numeric, boolean-ish or
   space/comma/brace passwords abort startup), and quoting the reference
-  silently disables the expansion.
+  silently disables the expansion. The release Compose file does the same
+  with a Compose-interpolated `--pass` in the nats `command`.
+- **Release version (`shared/buildinfo.Version`)** is stamped by
+  `-ldflags -X` from each Go Dockerfile's `VERSION` build-arg
+  (`docker-build.yml`: the metadata action's version; base Compose:
+  `PROBARA_VERSION`, default `dev`); a new Go Dockerfile must stamp it too.
+  Services log it at startup and MCP reports it. **`LOCATION_WORKER_IMAGE`**
+  (api) is the image private-location deploy snippets reference: unset is
+  `locations.DefaultWorkerImage`, the worker at `buildinfo.ReleaseVersion`
+  (the moving `:alpha` channel tag for unreleased builds), never `:latest`. Helm sets
+  `{image.repository}-worker:{imageTag}` (override `api.locationWorkerImage`).
+- **Release Compose** (`docker-compose.release.yml`, an override of the base
+  file) runs the published images plus the frontend and an `edge` Caddy. It
+  overrides images, ports, credentials (platform ones `${VAR:?}`; optional
+  features' never a dev default) and the client-IP chain; other env stays in
+  the base file. `scripts/install.sh` must generate every `:?` secret
+  (`bash scripts/test-install.sh` checks its `.env` handling: every form
+  Compose accepts, `KEY: v` included, counts as set; a second run changes
+  nothing). Client IPs: `edge` overwrites `X-Forwarded-For` with
+  `{client_ip}` and drops every other client-address header; the frontend
+  (never published) forwards it with `API_PROXY_TRUST_FORWARDED_FOR=true`;
+  the api trusts only the frontend's fixed address `PROBARA_FRONTEND_IP/32`
+  (`TRUSTED_PROXY_CIDRS`). `edge`, frontend and api share `probara-front`,
+  which the worker (tenant-defined requests, arbitrary headers) must never
+  join; never trust a whole network the worker is on. Public origins
+  (`APP_BASE_URL`, `STATUS_PAGE_BASE_URL`) default to empty, never
+  localhost; the installer writes them empty and names them in its closing
+  text.
+- **Status-page origin in the operator UI**: the published UI image is built
+  once, so `NEXT_PUBLIC_STATUS_PAGE_URL` is a dev fallback only. The api
+  reads `STATUS_PAGE_BASE_URL` and returns it as `status_page_base_url` on
+  `GET /auth-context`; `useStatusPageBaseUrl()` (CurrentUserProvider) feeds
+  `lib/statusPageUrl.ts`, and every call site passes it; anything that loads
+  such a URL by itself (the template preview iframe, which may carry a
+  preview token) waits for `useCurrentUser().loading` to clear. The UI server reads
+  the same variable at runtime for its CSP `frame-src`
+  (`configuredStatusPageUrl`, `lib/csp.ts`). The api reads it once, as
+  `StatusPagePublicBaseURL` (`config_api_domains.go`), which also gates
+  custom domains. Helm renders `statusPage.baseUrl` into status-page, api
+  and frontend (`frontend.statusPageUrl` is deprecated and ignored);
+  release Compose passes `.env`'s value to the same three.
+- **Result ingest never acks a platform failure**
+  (`scheduler/internal/ingest`): a location result is acked unprocessed
+  only when verification fails with `errRejected` (subject/payload
+  mismatch, unknown or disabled location, bad signature); a database error
+  or a schema behind the code NAKs with `retryDelay` (explicit NAKs bypass
+  the consumer's BackOff), as do persist failures. Every retry is bounded
+  (`retryOrGiveUp`: ~15 min for database/schema errors, 3 deliveries for a
+  credential the configured key cannot decrypt), then TERMed
+  (`queue.Terminate`) and counted in `result_ingest_abandoned_total`: a
+  delayed NAK stays in the ack-pending set, and at the consumer's
+  `MaxAckPending` (set deliberately, `resultIngestMaxAckPending`) no new
+  result is delivered for any tenant. Core-NATS heartbeats
+  cannot be redelivered and only log the difference.
+- **NATS websocket listener** (port 8443, plaintext; TLS terminates at the
+  ingress or proxy) lets private locations dial `wss://` on 443. Helm
+  `nats.websocket.*`: its own Ingress (`ingress-nats-websocket.yaml`, never a
+  path in `ingress.yaml`), which fails the render without `nats.auth.enabled`,
+  without `tls` (unless `tlsTerminatedUpstream`), and on `/` of an app host; with it on and `api.publicNatsURL` empty the
+  API advertises `wss://<host><path>` (`monitoring-platform.publicNatsUrl`).
+  Release Compose serves it on loopback 8443. The listener has no auth block,
+  so the callout covers it (`TestAuthorizationCalloutCoversWebsocketClients`);
+  `shared/queue.NewClient` moves a `wss://` URL's path into `nats.ProxyPath`,
+  since nats.go otherwise upgrades on `/`, and refuses credentials over plain
+  `ws://` to a non-loopback host.
+- **`BOOTSTRAP_SETUP_CODE`** (api, optional): when set, `POST
+  /users/bootstrap/first` needs it (`setup_code`, constant-time compare,
+  case/dash-insensitive, same 403 for missing and wrong, never logged), and
+  `GET /users/bootstrap/status` reports `setup_code_required`, never the code
+  (`api/internal/handlers/users`). `LoadAPIConfig` normalizes it once
+  (`config.NormalizeSetupCode`) and refuses to start below 16 characters;
+  every consumer reads that value. Unset keeps the open first-run form for
+  dev and existing installs. `scripts/install.sh` generates and prints it,
+  the release Compose requires it, Helm renders `secrets.bootstrapSetupCode`
+  through `secretEnv` (`optional` only without a per-field Secret). The login page's field logic lives in
+  `web/lib/bootstrap.ts`. With a code set, an SSO sign-in never bootstraps:
+  JIT users (the first included) get the ordinary JIT role, and bootstrap
+  stays open until an active **superadmin** exists rather than any active
+  user (`ConfigureSetupCode` on `oidcauth` and `adminusers`, wired in
+  `server.go`; both must follow the same setting). Unset keeps SSO
+  bootstrap parity. Either way bootstrap (form and SSO) closes for good once
+  a superadmin has ever existed: `admin_bootstrap_closed`, set by a trigger
+  on `admin_users` (000106), read via `adminusers.SuperadminEverExisted`.
+  Every path that demotes, disables or deletes a user takes
+  `adminusers.LockSuperadmins` first, then counts, in one transaction.
+- **Client IPs come only from `shared/clientip`** (`FromRequest` behind the
+  router-wide resolver middleware, or a `Resolver`): forwarding headers count
+  only from `TRUSTED_PROXY_CIDRS` peers (parsed once in
+  `shared/config/config_edge.go`, api and status-page). Never read
+  `X-Forwarded-For`/`X-Real-IP` in a handler. The web `/api` proxy drops
+  them (`web/lib/api-proxy.ts`) unless `API_PROXY_TRUST_FORWARDED_FOR=true`.
+- **Edge controls**: `shared/securityheaders` owns the headers (API policy,
+  status-page per-page CSP, HSTS only via `IsHTTPS`); `web/next.config.js`
+  mirrors its static values. The API mounts headers, the CORS allowlist
+  (`middleware/cors.go`) and the anonymous rate-limit stage in
+  `useEdgeSecurity` (`api/internal/api/routes_edge.go`); `authMiddleware` is
+  wrapped by `rateLimiter.Authenticate`. A presented credential is never
+  judged on an address bucket: valid ones spend their own bucket, a signed
+  session cookie keys on its user, an expired one (within the refresh
+  lifetime, with no bearer header) keeps its 401, and only verified
+  failures (401s incl. sign-in, unknown push/collector tokens) are charged
+  to the address afterwards. While that failure bucket is empty, anything
+  needing a lookup (key, token, refresh cookie, sign-in) is refused before
+  the handler, except a live session cookie and a credential that verified
+  on this replica in the last 10 min (`verifiedCredentials`,
+  `ratelimit_verified.go`: keyed HMAC only, bounded LRU, TTL restarted per
+  success, forgotten at first failure; a refresh's rotated cookie is
+  recorded from its Set-Cookie and kept for the access TTL + 10 min). A
+  refresh carrying a signed access cookie skips the pre-check, charged per
+  user, its 401 kept (the access cookie's Max-Age is the refresh lifetime,
+  not the token's, so browsers send it expired; keep it so). A request that authenticates and is then refused (bad
+  tenant id, `workspace_not_found`) spends its credential's bucket
+  (`ratelimit_refusal.go`). A never-seen valid credential and every
+  sign-in wait for budget -- accepted. The cookie check is
+  `classifySessionToken`, unexported in `middleware` -- never authentication. Address buckets exist only for
+  `clientip.Attributable` addresses (trusted-proxy-forwarded or public
+  peer), IPv6 per /64. Authenticated routes are read from the router (on
+  `RawPath`, as chi routes), so new routes need no list. Never echo `Origin` in a handler. The env rides
+  Compose and the chart's `trustedProxyCIDRs` + `security:` block
+  (`monitoring-platform.edgeEnv`) together.
+- **CSRF**: `middleware.OriginPolicy` (`origin.go`) is the one origin check.
+  `AuthMiddleware` applies it to every unsafe request the session cookie
+  authenticates (403 `cross_origin_refused`; non-JSON body 415, multipart
+  only on `MultipartUploadPaths`, pinned to the MCP catalog by
+  `TestMultipartUploadPathsMatchCatalog`); sign-in (both steps), refresh,
+  sign-out and the mailed-link POSTs wear `RequireTrustedOrigin` (same
+  origin + JSON rule), OAuth consent re-checks it. The UI's `/api` proxy
+  vouches for its own origin's writes by dropping Origin/Referer/
+  Sec-Fetch-Site (`vouchForSameOriginWrite`, `web/lib/api-proxy.ts`), which
+  is why no origin configuration is needed. It judges by its `Host` header
+  only (`browserHost`) and never reads or forwards a client
+  `X-Forwarded-Host` unless `API_PROXY_TRUST_FORWARDED_HOST=true`; the API
+  never believes an untrusted peer's `X-Forwarded-Host`. A new cookie-setting route takes
+  `RequireTrustedOrigin`. Reasoning: the `OriginPolicy` comment.
+- **Session identity**: one `admin_session_families` row per sign-in
+  (password or SSO); refresh tokens rotate inside it and the access JWT's
+  `sid` claim names it. The family's `revoked_at` is the only authority:
+  `AuthMiddleware` checks it per cookie request (`middleware/session.go`,
+  one PK lookup, no cache) and `/auth/me` too, so never add a path that
+  trusts a session JWT without it. Revocation lives in
+  `api/internal/services/adminauth/sessions.go` (`RevokeSession`,
+  `RevokeUserSessions`); a rotated refresh token reused past 60 s revokes
+  its family. Password sign-in lockout (10 failures → 15 min, on
+  `admin_users`) is `adminauth/lockout.go`: every refusal answers alike,
+  and a second sign-in factor counts through `RecordFailedAttempt`. What
+  revokes what: `docs/auth-and-rbac.md`. Long-lived responses (the alert
+  SSE stream) re-check their credential with `middleware.StillAuthorized`
+  each heartbeat and end at `CredentialExpiry`; a new stream must too. The
+  `admin_sessions_default_family` trigger (000117) is rolling-deploy
+  compatibility only: drop it in a later release's migration.
+- **Account links and two-factor** (local password accounts only; an SSO
+  account never gets a reset, email change, password or second factor
+  here): invite / reset / email-change links and the sign-in challenge are
+  single-use rows in `admin_account_tokens` (random, SHA-256 stored,
+  purpose-bound; `adminauth/tokens.go`), never `shared/actionlink`. Every
+  path that sets a password or resets two-factor retires the user's open
+  tokens (`RetireAccountTokens`; `cmd/admin` does it in SQL), or a pending
+  email change survives the recovery. Link tokens ride in the URL fragment
+  and `X-Action-Token`; the pages are in `web/lib/public-routes.ts`. Without
+  `SMTP_*` + `APP_BASE_URL` on the API (`accountmail.Enabled`) only a
+  superadmin's response carries a link. TOTP secrets are sealed with
+  `PROBARA_SECRETS_KEY` (no key, no enrolment; never the no-op encryptor).
+  Failed second factors and account-page password checks reserve an attempt
+  through the lockout before comparing; a correct password releases only its
+  own count, an internal error gives the attempt back, and a reset keeps a
+  two-factor account's ordinary lock (repeated second-factor lockouts hold
+  it until unlock or reset). Every password set also revokes the user's MCP
+  OAuth grants (`RevokeMCPAccess`), and an address change retires mailed
+  links. Passwords are capped at 72 bytes (bcrypt) in
+  `auth.ValidatePassword` and `web/lib/password.ts`. The rules and expiries:
+  `docs/auth-and-rbac.md`.
 
 ## MCP server
 
@@ -499,6 +844,9 @@ or imported groups come back empty. Any other path that creates groups through
   session only, outside the write gate, with their own audit events.
 - `tools/list` filtering by capability is UX; enforcement is the inner
   dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
+- A handler that refuses API keys without a router role gate marks its entry
+  `SessionOnly` (the tenant list); the gate walk cannot see it, and both the
+  tool list and the OpenAPI security read the flag.
 
 ## Kubernetes discovery
 
@@ -557,6 +905,37 @@ or imported groups come back empty. Any other path that creates groups through
   encode the same due rules; change them together.
   The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
   never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
+- **Acknowledge and snooze mute an alert** (no setting): no reminder and no
+  not-yet-fired escalation page; the resolve, the `acknowledged` event to
+  paging channels and the `suspected_cause` follow-up still go out. The
+  rule is `shared/alertrouting/mute.go` (`MutedPredicate`, `MuteHolds`,
+  `DispatchResumedAtExpr`), applied by `openAlertEventDue` (pre-filter, also
+  mesh, location offline), `deliverNotification` (claim) and the worker's `eventSuperseded`;
+  change all three together (`TestMutePreFilterMatchesClaim` pins the
+  alerter pair). Unack/unsnooze restart the delay and reminder clocks
+  (`DispatchEligibleSinceExpr`, the reminder claim). A held page the worker
+  drops hands its claim back (`releaseMutedClaim`) only when it provably
+  reached nobody: no page attempt marker and no recipient in the ledger
+  (`recipientledger.MarkAttempt`, written before the send, cleared only on
+  `plugin.IsNotDelivered`; `worker/.../page_marker.go`), never by delivery
+  count; otherwise the route keeps counting as paged so it hears the ack
+  and the resolve. Resolves and relapse notices are marked the same way,
+  under their delivery key, which carries the episode
+  (`releaseSupersededResolveClaim` and the relapse branch of
+  `releaseMutedClaim` read it); a held relapse notice is handed back to the
+  exact row its claim replaced (`DispatchEnvelope.Release`), except a
+  `resolved` whose resolve never reached the channel, which goes back as
+  `created` (`recoveryReached`, the resolve's own marker). Dispatch message ids are the idempotency key plus the
+  claim's `dispatchRound` (`notification_claim.go`): what a rolled-back claim
+  finds again on retry (the resume clock for a page, `relapsed:` plus it
+  for a relapse notice, the round for a reminder, `acknowledged_at` for an
+  ack, nothing for resolve and follow-up; the episode is in the
+  idempotency key itself), so JetStream's duplicate window collapses a retried publish
+  ("duplicate" is success) yet queues a re-page after an unack or snooze end.
+  SLA time to acknowledge reads `first_acknowledged_at` (set once by the API,
+  never cleared), not `acknowledged_at`, which an unacknowledge clears,
+  measured from `first_ack_episode_started_at` (set with it:
+  `firstAckEpisodeStartSet` in `api/internal/services/alerts`).
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
   skips notifications, so it is not an error to log.
 - **Incident recovery entries have one writer**: `shared/incidentrecovery`.
@@ -569,11 +948,43 @@ or imported groups come back empty. Any other path that creates groups through
 - **Delivery ordering rests on row locks — keep them.** The async worker
   holds the alert row `FOR SHARE` from its status check through `Send`
   (`eventSuperseded` in `worker/internal/worker/notifications/consumer.go`),
-  so a trigger never reaches a provider after its resolve, and
-  `ackOvertaken` re-sends an ack that overtook a trigger on a retry backoff.
+  so a trigger never reaches a provider after its resolve, nor after an
+  acknowledgement or snooze: the acknowledge, snooze and resolve UPDATEs
+  wait for an in-flight send, and a page or reminder still queued when they
+  commit is dropped under the same lock (`alertrouting.MuteHolds`), as is an
+  acknowledgement queued before an unacknowledge. Resolves take the lock
+  too, so a relapse reopen waits (at most `reopenLockTimeout`) for a resolve
+  being sent; a resolve still queued is dropped only while the alert is open
+  again and the channel is not a paging one (`releaseSupersededResolveClaim`
+  hands its claim back to `created` only when it provably reached nobody),
+  and delivered once the alert has recovered again; any other event of an
+  earlier episode (`relapse_count`) is dropped.
   The alerter's claim lock is `FOR SHARE` too. Never move `Send` out of the
   worker's transaction or make either lock `FOR UPDATE`; the comments at
   those functions explain why.
+- **Relapse reopen** (off unless `tenants.alert_reopen_cooldown_minutes` is
+  set): the rule is `shared/alertrouting/relapse.go`; every alert kind's
+  opener calls `reopenRecentAlertTx` (`alerter/internal/alerter/relapse.go`)
+  before its INSERT, and a new kind's opener must too, as must a new
+  resolve path pass `resolvedRecovered` (condition cleared, reopenable) or
+  `resolvedOutOfScope` (paused, deleted, rule removed, stale) to
+  `resolveAlert`; a manual resolve never reopens. `reopened_at` restarts the
+  delay and reminder clocks (`DispatchResumedAtExpr`). A route whose
+  `paged_relapse` is below the alert's `relapse_count` is due one `relapsed`
+  claim (sent as `created` with `RelapseNotice`, the only send `present`
+  words as a relapse), in `openAlertEventDue` and
+  `claimNotificationTx` together (`TestRelapsePreFilterMatchesClaim`); the
+  episode rides the ledger and idempotency keys
+  (`notifications.RecipientEventKeyFor`, `notifications.IdempotencyKey`), and
+  paging plugins key incidents on the route's `PagedRelapse`
+  (`pagerduty.DedupKey`, `opsgenie.Alias`). What is open at a provider is
+  `delivered_relapse`, written only after a delivered page (alerter sync
+  path, worker `recordDeliveredPage`); resolves, acks and a relapse notice's
+  close of the earlier incident target it (`claimNotificationTx`, worker
+  `useOpenIncident`), and a relapse notice dropped or failed for good still
+  sends that close (`closePreviousIncident`). Alert times come from the
+  database clock: `resolveAlert` and the API resolves write `NOW()`, as the
+  reopen window and `reopened_at` do; never resolve with a process clock.
 - **Alert wording lives in `shared/notifications/present`**, for every
   channel. `present.Build` turns an event into one `Message` (label, summary,
   metric, facts, deep link, tone); plugins reach it via
@@ -582,6 +993,33 @@ or imported groups come back empty. Any other path that creates groups through
   there, never in a plugin or template. Email wraps it (`email/view.go`:
   `alertView` = `present.Message` + palette) so `alert.gohtml` (HTML part)
   and `renderAlertText` (plain-text part) render from one model.
+- **Alert kinds**: `alerts_kind_check` (latest rewrite 000100) and the
+  `Kind*` constants in `shared/notifications/event.go` list the same kinds;
+  a new kind rewrites the CHECK in one migration and adds its constant, its
+  wording in `present`, and `AlertKind` in `web/lib/types/monitors.ts`
+  (`TestAlertKindCheckMatchesGo` in `shared/db` pins all but the last). A
+  kind that notifies must also be listed in `openAlertDispatchablePredicate`
+  (`alerter/internal/alerter/lifecycle.go`), or it opens and never pages.
+- **Location liveness** (S-F6) is `shared/monitorstate/freshness.go`:
+  offline is `LocationOfflinePredicate`, disconnected
+  `LocationDisconnectedPredicate`, each with a Go twin
+  (`TestLocationPredicatesMatchGo` pins both at the boundaries), connected
+  `LocationConnected`. The alerter's `location_offline` evaluator
+  (`alerter/internal/alerter/location_offline.go`), the mesh hold, the API's
+  `connected`/`offline` and the UI's wording (`locationConnection` in
+  `web/lib/status-tones.ts`) all read them; never re-derive one from
+  `last_seen_at`. The evaluator's guard (`locationOfflineHold`) holds the
+  locations that went quiet together with the newest heartbeat, at most
+  15 minutes, and everything just after startup (database clock).
+- **Transactional mail** (invites, resets, subscriber mail, reports) goes
+  through `shared/mail.Sender` (`SMTPMailer.SendMessage`), never a second
+  MIME builder; `Message.Validate` is the header-injection guard and accepts
+  only plain dot-atom addresses (`ParseRecipient`). It sends one copy per
+  recipient over one reused connection, never falls back to the alert
+  default recipients, and reports partial failures as `*mail.DeliveryError`.
+  Alert email stays on `SendAlert`. Both run SMTP I/O under a deadline
+  (`smtp_session.go`: the ctx deadline, else 30 s per message; a cancelled
+  ctx means now), and neither fails a send on QUIT once DATA was accepted.
 - **Channel plugins** (`shared/notifications/plugin/builtin/<type>/`,
   registered in `builtin.go`) follow the checklist in the `plugin` package
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and
@@ -594,14 +1032,45 @@ or imported groups come back empty. Any other path that creates groups through
 - **Fan-out progress is durable, per recipient.** Every real send sets
   `DispatchRequest.Recipients` (`shared/notifications/recipientledger`, table
   `alert_notification_recipient_deliveries`) from the pool, never the claim or
-  lock transaction (both roll back), keyed by `notifications.RecipientEventKey`:
+  lock transaction (both roll back), keyed by `notifications.RecipientEventKeyFor`:
   the event type, plus for reminders the `last_sent_at` the reminder claim
   replaced (`claimNotificationTx`), carried to the worker as
   `DispatchEnvelope.DeliveryKey`. A deliberate re-send of an event needs a key
-  of its own (`notifications.OvertakenAckKey`, the worker's re-ack), or it
-  inherits the first send's recipients and reaches nobody. A multi-recipient
+  of its own, or it inherits the first send's recipients and reaches nobody. A multi-recipient
   plugin skips what it reports delivered and records each acceptance (the
   `plugin` doc; `twilio` does).
+- **Acknowledge links come from `present`, never a plugin.** `ackFor`
+  (`present/ack.go`) puts the signed link on `Message.AckURL` for
+  created/reminder pages, minted by
+  `plugin.Runtime.Links` (`shared/actionlink`, HKDF of `PROBARA_SECRETS_KEY`,
+  installed by `bootstrap.ConfigureNotifications`) and bound to the channel;
+  no key or no `APP_BASE_URL` means no link, and `View()` never passes the
+  signer on test sends. The token rides in the URL fragment
+  (`/alert-action#…`) and the `X-Action-Token` header, never a URL path, so
+  request logs and metric labels cannot record it; the public API routes are
+  `api/internal/handlers/alertactions` (GET reads, only POST acknowledges).
+  Paging plugins (PagerDuty, Opsgenie) never render it; SMS drops the deep
+  link when it has one. A link acts only on its alert episode: the handler
+  refuses one issued (`actionlink.Claims.IssuedAt`, derived from the fixed
+  TTL) before the latest relapse's recovery (`issuedInEarlierEpisode`), so
+  changing an action's TTL shifts every outstanding link's issue time.
+- **Delivery history** (`alert_notification_deliveries`, 90 days) is written
+  only through `shared/notifications/deliverylog`, from exactly two send
+  paths — `deliverNotification` (`alerter/.../delivery_log.go`: in the claim
+  tx when it commits, through the pool after a rollback) and the worker
+  consumer (`worker/.../notifications/delivery_log.go`, one call per outcome,
+  drops included) — plus the API test send. Never write it elsewhere, never
+  let a failed write fail a delivery (`RecordTx`: a savepoint plus server-side
+  `SET LOCAL` timeouts — never a client context deadline inside a caller's
+  transaction, lib/pq closes the connection when one fires), and never
+  store raw error text: `deliverylog` sanitizes it and masks the channel's
+  secrets (`SecretValues`). Fan-out rows follow the recipient ledger
+  (`deliverylog.Track`), one per recipient an attempt tried. A held page's
+  row says `muted_requeued` when `releaseMutedClaim` handed its claim back and
+  `muted` when it kept it (`mutedReason`, read in the same tx), so change them
+  together; a relapse notice is recorded as event `relapsed`, and a resolve
+  dropped for a relapse as `reopened` (committed with its hand-back). A new drop or failure cause is a `Reason*` constant plus its
+  wording in `web/lib/deliveries.ts` and the alerting docs.
 
 ## Status pages
 
@@ -626,6 +1095,118 @@ or imported groups come back empty. Any other path that creates groups through
   and the render cache is empty — exactly when browser notifications matter —
   so the push wake-up sits **above** that guard. Anything hooked in below it
   never fires for the case it was built to serve.
+- **CSP nonce contract**: every rendered page gets an enforced CSP
+  (`status-page/internal/statuspage/csp.go`, modes in
+  `shared/securityheaders`, `csp_mode` setting in the three mirrors).
+  `{{cspNonce}}` renders `statustemplate.NoncePlaceholder`, swapped per
+  response after the cached render; custom head/footer HTML may carry the
+  literal `{{cspNonce}}`. Every inline `<script>` in `default.gohtml` needs
+  `nonce="{{cspNonce}}"` (`TestCSPNonceContract`), and a 304 never carries a
+  CSP.
+- **Visibility gate before everything** (`statuspage/access.go`, contract
+  `shared/pageaccess`): `authorize` runs first in `HandleStatusPage`, before
+  the method guard, every sub-route and the slug-keyed render cache; deny by
+  default, exempt only `/unlock` and a valid preview token on
+  `/preview/draft`. A new route or suffix (feeds, summaries, badges) needs a
+  row in `routeTable` (`TestRouteAccess_EveryRouteIsClassified` scans the
+  package). Private-without-credential answers via `writeNotFound`, identical
+  to a missing slug, from the same single `PageAccess` query. The API alone
+  writes visibility, password hashes and token hashes; sessions are stateless
+  HMAC cookies (`session.go`, `STATUS_PAGE_SESSION_SECRET`, path-scoped;
+  Helm derives it from a chart-managed `adminJwtSecret`). No
+  push on password/private pages; a surface that enumerates pages lists only
+  `pageaccess.Listed` ones. A route behind the gate writes through the
+  returned `accessWriter` (`gated()`; `markGatedResponse` forces no-store, no
+  ETag, no CORS, same-origin CORP) and gets `crossPageRequest` (another page
+  on the origin may not fetch or frame a gated page) for free. Wrong passwords
+  and kiosk tokens share `failureThrottle` (`unlock_throttle.go`: failures
+  only, `clientip` `BucketKey`, LRU-capped). Every SSE stream re-checks access
+  on its heartbeat. Migration 000114's down refuses while a page is not public.
+- **Page add-ons** (`feed.atom`, `summary.json`, badges; `addons.go`) are
+  sub-routes dispatched from `HandleStatusPage` (`parsePageAddon`, every
+  shape in `pageAddonRoutes`), never mux routes, so a check there covers
+  them. `summary.json` and the badges come from the page's own render
+  (`cachedPage`, keyed by slug alone, so access checks run before it) and
+  show only rendered components; hidden uptime stays `null` and uptime
+  badges 404 (`summary.go`); `/data` applies the same rule
+  (`publicPageData`). The feed is cached under `feedCacheKey` and dropped
+  with the page. A gated page's add-ons go through `gatedPageRequest` (one
+  call: private, no CORS). Affected lists use the page's display names
+  (`pagePublicNameSQL`). The summary is a versioned contract pinned by
+  `testdata/summary_v1.golden.json`: add fields, never repurpose them. Head
+  metadata and the indexing decision live in `seo.go` (`pageIndexable`:
+  only public pages are indexable, whatever `allow_search_indexing` says).
+  The gate passes its visibility on the request (`withPageVisibility`) and
+  `cachedPage` rebuilds an entry built under another one; an access change
+  invalidates the page, summary and feed together.
+- **Email subscribers are written by the API alone**
+  (`api/internal/services/pagesubscribers`); the status-page service only
+  forwards (`subscribe.go`, `STATUS_PAGE_INTERNAL_API_URL`), presenting
+  `STATUS_PAGE_INTERNAL_TOKEN` (`pageaccess.ForwardTokenHeader`; the API's
+  subscribe/confirm answer nothing else, one-click unsubscribe stays public),
+  per-client `subscribeThrottle`, nothing identifying the visitor forwarded.
+  The subscribe form is gated; on the platform host the `/subscription…`
+  link routes run before the gate and never read the page (row class
+  `classSubscriptionLink`), so unsubscribing survives a visibility change;
+  on a custom domain they are gated like the page. Public and unlisted pages only;
+  addresses are readable with write access only (`…/subscribers/summary` for
+  everyone). Page limits count rows created in the hour whatever their
+  state; confirmations are capped per inbox (`InboxHash`, +tag stripped) and
+  per hour (`status_page_confirmation_sends`). The
+  notification outbox (`status_page_notification_outbox`, written by
+  `api/internal/services/pagenotify` in the trigger's own transaction) is the
+  single trigger for subscriber mail and incident push: a new trigger is a
+  `pagenotify` call inside that transaction, never a send. The runner follows
+  the report schedules' claimed/sending/uncertain rules; every subscriber link
+  is built in `pagesubscribers/links.go` through `pagedomains.PublicBaseURL`
+  (the page's verified custom domain, else `STATUS_PAGE_BASE_URL`), except
+  the unsubscribe landing, always on the platform host; tokens
+  are `shared/actionlink` actions in the URL fragment. Subscribe answers alike
+  for every address state and never mails from the request. Automatic outage
+  publishing (`autopublish.go`) finds or creates incidents only through
+  `shared/autoincident`, the alerter's lock and lookup; page component names
+  come from `shared/statuspagesql`. **No public surface shows an
+  automatically created incident's own title or summary** (they name the
+  monitor): `incidents.PublishTx` gives every publication of one a per-page
+  `public_title`/`public_summary`, and the page, `/data`, feed, summary,
+  subscriber mail and push read `COALESCE(isp.public_title, i.title)`
+  (`publicIncidentTitleSQL`). A new public reader uses the same columns.
+  Announced maintenance withdrawn (delete, one-off skipped at start) is a
+  `pagenotify.MaintenanceCancelledTx`, mailed only to who got the
+  announcement; an announced window is soft-deleted, never removed.
+  Every subscriber query (public endpoints, runner, auto-publish) excludes
+  deleted workspaces with `tenancy.LiveTenantSQL`.
+- **Custom domains** (`shared/pagedomains` is the contract; the API alone
+  writes and verifies them in `api/internal/services/statuspagedomains`, TXT +
+  CNAME, DNS only, runner claims with `FOR UPDATE SKIP LOCKED` in batches
+  sized to finish within the lease). A hostname is unique only among
+  **verified** rows (partial unique index): unverified claims coexist, the
+  first to verify supersedes the rest (`record`, audited per workspace), and
+  pending/superseded claims expire after `ClaimTTL`. Verification messages
+  are fixed wording (`verify.go`), never resolver text or foreign names. On
+  the status page, `CustomHosts` (`custom_host.go`) runs **in front of the
+  mux** and **fails closed**: the platform routes only for platform hosts
+  (`STATUS_PAGE_BASE_URL`, `STATUS_PAGE_PLATFORM_HOSTS`) and names that can
+  never be a domain (`pagedomains.CanBeCustomDomain`: probes, in-cluster);
+  a verified host is rewritten onto `/public/status/{slug}/…` so the gate,
+  route table and caches apply unchanged (`/sw.js` included, not found on
+  gated pages); every other host, and every public host before the table
+  first loads, gets `writeNotFound`. The API keeps the feature off unless
+  the same settings make the status page fail closed
+  (`config.StatusPageFailsClosed`). Every domain query carries
+  `tenancy.LiveTenantSQL`; the workspace purge removes domains first. Hosts resolve only through the
+  in-memory `hostTable` (`domains.go`: every claimed hostname, one join
+  through `status_pages`, invalidated by page events above the subscriber's
+  guard, 30 s TTL), never a per-request query on the Host, and the gate
+  refuses a slug whose page ID differs from the table's
+  (`customHostPageMismatch`). Visitor-facing paths go through `pagePath`,
+  `pageSubPath`, `visitorPath` and `sessionCookieScope` (host-only `/`,
+  always `Secure`), never a literal `/public/status/`; absolute page URLs
+  (API and status page) come from `pagedomains.PublicBaseURL`/`PublicURL`
+  with the primary domain from `PrimaryHostSQL`, the same on every host, so
+  the slug-keyed render stays host-independent. Push subscriptions keep
+  `origin_host` for their deep link (`payloadsByOrigin`). New custom-host
+  path forms go in `customHostRouteTable` (`custom_host_test.go`).
 
 ## Web UI conventions
 
@@ -637,7 +1218,12 @@ or imported groups come back empty. Any other path that creates groups through
   listeners — only components *outside* that subtree (Sidebar,
   `useFleetHealth`, CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
   redirect to their list page on a switch (`/users/[id]` excepted: users are
-  platform-scoped).
+  platform-scoped). A change to the workspace list (create, rename, delete,
+  or a `workspace_not_found` answer, handled in `lib/api/core.ts`) emits
+  `TENANTS_CHANGED_EVENT`, which only `TenantSwitcher` listens to: it reloads
+  the list and settles the selection again. Platform-scoped API paths are
+  `PLATFORM_PATHS` in `lib/api/core.ts` (never `X-Tenant-ID`, never the
+  no-workspace error); add a new platform route there.
 - **Folded routes stay as redirects**: Mesh is a tab of Locations and
   the alert channel list is a tab of Settings (`?tab=`, via
   `components/ui/Tabs.tsx` `useUrlTab`). `/mesh` and `/alert-channels` are
@@ -908,6 +1494,8 @@ or imported groups come back empty. Any other path that creates groups through
   JSON of every type's create and edit round trip (and of a clone for the
   delegated types and http), so a payload change shows up as a test diff;
   a field a form hydrates goes into its type's edit fixture.
+- **CSP**: `web/proxy.ts` sends a report-only nonce CSP (`lib/csp.ts`);
+  no inline `<script>` without the `x-nonce` nonce (`app/layout.tsx`).
 
 ## Build, test, verify
 
@@ -949,13 +1537,31 @@ or imported groups come back empty. Any other path that creates groups through
 - Python (`ai-service/`, `scripts/*.py`, CI helper scripts): CI runs
   `ruff check` with the pyflakes rules in `ruff.toml`; run it before pushing
   Python changes (`pip install ruff==0.8.4`).
+- OpenAPI: `api/openapi.json` is generated from the MCP tool catalog bound
+  to the router (`api/internal/mcp/openapi*.go`) and served at
+  `/api/v1/openapi.json`. Regenerate it with `make openapi` whenever a route
+  or catalog entry changes; `TestOpenAPIGolden` fails when it is stale, and
+  `make openapi` lists the operations still without a typed response. Typed
+  success responses come from `successResponses` (`openapi_responses.go`):
+  add an entry only after reading the handler, never guess one, and name the
+  type the handler writes (no map literals, no copies); an error answer
+  richer than the envelope goes in `operationErrors`, same rule. A
+  generation failure at runtime only makes the endpoint answer 503. A route
+  an agent must not call but the REST API documents goes in `openAPIRoutes`
+  (and `notExposed`).
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).
   After touching local AI values, templates, Compose, the Makefile or the
   start script, run `python .github/workflows/scripts/local_ai_helm_cases.py`
   and `python3 -I scripts/check-local-ai-packaging.py` (render cases, fail
   cases and Compose wiring; CI runs both in `local-ai-pr.yml`).
-- Compose: `docker compose config` validates env wiring.
+- Compose: `docker compose config` validates env wiring; for the release
+  override, `docker compose -f docker-compose.yml -f docker-compose.release.yml
+  config -q` under dummy values for its required variables, and
+  `bash scripts/test-install.sh` (needs only the docker CLI). CI runs both
+  (`Release Compose and installer` in `build-test.yml`), and `helm-lint.yml`
+  renders four value sets and fails unless the migrations Job keeps its
+  `post-install,pre-upgrade` hook.
 - ai-service: from the repo root with the hash-locked deps installed
   (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
   PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests
@@ -1175,6 +1781,52 @@ or imported groups come back empty. Any other path that creates groups through
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
   reports need, and state it in `website/lib/docs/pages/slas.ts`.
+- **`maintenance_window_occurrences` is SLA history too.** Nothing prunes it;
+  the coverage fragments stay cheap as it grows only because they start
+  from the monitor's links and probe each window through
+  `idx_maintenance_window_occurrences_window_end` (see `occurrencesSQL`;
+  `TestCoverageQueriesStayIndexDrivenWithLongHistory` pins the plan). Never
+  fold the link branches into one `OR` filter.
+- **Ping** (`worker/internal/worker/ping_checker.go`) resolves through the
+  SSRF policy (`netguard.Policy.ResolveAllowed`, via `dialGuard`) and sends
+  only over unprivileged ICMP sockets. Those need the
+  `net.ipv4.ping_group_range` sysctl: Helm sets it (`worker.pingGroupRange`,
+  per-location override, `workerPodSecurityContext` helper); Docker 20.10+
+  has it by default, and Compose and the location Docker snippets must
+  never set it (a user-namespaced container refuses to start with it;
+  `dockerDeploySnippets` test). Echo spacing and the prober's deadline are
+  `models.PingMonitorConfig.PingSchedule` over the time left after
+  resolving; the API's `ValidatePingSchedule` uses the same function.
+- **Failed HTTP response capture** (`http_failure_capture.go`) is always on
+  for non-success results with a response: redact the whole read body
+  (`secretRedactor` + `redactCredentialFields`), then cut by encoded size;
+  `captureMaxBytes` keeps it under 16 KiB, far below the AI evidence's 64 KiB
+  `metrics_data` cutoff. Reads of many rows never ship it: the API's list,
+  batch and snapshot reads go through `listMetricsDataSQL`
+  (`services/results/failure_capture.go`, leaves
+  `http.failure_response_omitted`), the status page and AI evidence drop
+  `{http,failure_response}`; only `GetMonitorResult` returns it. A new
+  bulk `metrics_data` read must do the same. Check results reach Postgres
+  through `pgSafeJSON`/`pgSafeText` (`shared/monitorstate/pgsafe.go`), so
+  NUL or invalid UTF-8 in any checker's text cannot fail an insert.
+- **Which certificate a `tls_expiry` alert is about** rides its
+  `last_error` (`notifications.FormatTLSExpiryError` /
+  `ParseTLSExpiryError`, the alerts row carries it to every event);
+  `present` names an intermediate from it, and `web/lib/tls-cert.ts` is the
+  twin (`shared/notifications/testdata/tls_expiry_errors.json` pins both).
+- **Path-borne credentials** (`/push/{token}`): the API's request log, panic
+  log and HTTP metrics never use `r.URL.Path` raw — logs redact by the
+  router's patterns, metrics label by route pattern
+  (`api/internal/middleware/route_redaction.go`). Redaction keys on the
+  parameter NAME, so a credential in a path must be a `{…token}`/`{…secret}`
+  parameter, and a handler must not log or echo it.
+- **Recovery confirmation** (S-T7): every writer of monitor or location
+  state carries `consecutive_successes` and `recovery_pending` with the
+  rest (reset with the failures; a down stream going `unknown` or moving
+  to other locations keeps owing its confirmation — `AfterSilence`,
+  `SetLocations`). Which monitors never get a fast recheck (suspect or
+  recovering) is one table, `monitorstate.FastRecheckExempt`; a new type
+  whose interval floor is a rate limit goes there.
 
 ## Commits and PRs
 

@@ -35,7 +35,33 @@ export interface StatusPageSettings {
   custom_css?: string;
   custom_head_html?: string;
   custom_footer_html?: string;
+  /**
+   * Public page Content-Security-Policy mode. '' (automatic) is compatible
+   * while the page has custom CSS, custom head/footer HTML or a published
+   * custom template, strict otherwise. Strict runs only scripts carrying
+   * nonce="{{cspNonce}}".
+   */
+  csp_mode?: StatusPageCSPMode;
+  /** Overrides the public page's <title> and og:title (up to 120 characters). '' clears it. */
+  seo_title?: string;
+  /** Overrides the search and link-preview description (up to 300 characters). '' clears it. */
+  seo_description?: string;
+  /** Let search engines index the page. On by default; off sends noindex. */
+  allow_search_indexing?: boolean;
+  /**
+   * Show a subscribe form on the public page (double opt-in email updates).
+   * Off by default. Turning it on needs subscriber mail configured on the
+   * API; it has no effect on password and private pages.
+   */
+  enable_email_subscriptions?: boolean;
+  /**
+   * Publish a monitor's outage to the page once it has lasted 5 minutes,
+   * and resolve it when the monitor recovers. Off by default.
+   */
+  auto_publish_incidents?: boolean;
 }
+
+export type StatusPageCSPMode = '' | 'strict' | 'compatible' | 'off';
 
 export interface StatusPage {
   id: string;
@@ -52,6 +78,10 @@ export interface StatusPage {
   settings?: StatusPageSettings;
   created_at: string;
   updated_at: string;
+  /** Who may view the page; see lib/status-page-access.ts. */
+  visibility?: StatusPageVisibility;
+  /** A visitor password is stored. The password itself is write-only. */
+  has_password?: boolean;
 }
 
 export interface StatusPageTemplateVersion {
@@ -99,6 +129,9 @@ export interface CreateStatusPageRequest {
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
   settings?: StatusPageSettings;
+  visibility?: StatusPageVisibility;
+  /** Visitor password (required for password visibility). */
+  password?: string;
 }
 
 export interface UpdateStatusPageRequest {
@@ -112,6 +145,9 @@ export interface UpdateStatusPageRequest {
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
   settings?: StatusPageSettings;
+  visibility?: StatusPageVisibility;
+  /** Write-only: omitted keeps the stored password, '' removes it. */
+  password?: string;
 }
 
 export interface StatusPageListResponse {
@@ -119,4 +155,73 @@ export interface StatusPageListResponse {
   page: number;
   page_size: number;
   total: number;
+}
+
+/** Who may view a status page (status_pages.visibility, shared/pageaccess). */
+export type StatusPageVisibility = 'public' | 'unlisted' | 'password' | 'private';
+
+/** A kiosk token of a status page; its value is shown once, at creation. */
+export interface StatusPageAccessToken {
+  id: string;
+  label: string;
+  created_by_user_id?: string;
+  created_by_api_key_id?: string;
+  /** Operator username or API key name; empty once the creator is gone. */
+  created_by?: string;
+  created_at: string;
+  revoked_at?: string;
+}
+
+/** The one response that carries a kiosk token's value. */
+export interface CreatedStatusPageAccessToken extends StatusPageAccessToken {
+  token: string;
+}
+
+export interface StatusPageAccessTokenListResponse {
+  items: StatusPageAccessToken[];
+}
+
+/**
+ * A custom domain's verification state; only verified domains are served.
+ * superseded: another status page verified the hostname first.
+ */
+export type StatusPageDomainStatus = 'pending' | 'verified' | 'failed' | 'superseded';
+
+/** A DNS record a custom domain needs, with what the last check found. */
+export interface StatusPageDomainRecord {
+  type: 'CNAME' | 'TXT';
+  name: string;
+  value: string;
+  /** null before the first check. */
+  found: boolean | null;
+}
+
+/** A status page's custom domain (status-page-domains API). */
+export interface StatusPageDomain {
+  id: string;
+  status_page_id: string;
+  /** Lower-case ASCII; an internationalized name is shown as punycode. */
+  hostname: string;
+  status: StatusPageDomainStatus;
+  /** The page's address on this domain. */
+  url: string;
+  /** The page's canonical domain: its oldest verified one. */
+  primary: boolean;
+  records: StatusPageDomainRecord[];
+  last_error?: string;
+  last_checked_at?: string;
+  verified_at?: string;
+  /** Set while a verified domain fails its checks (still served). */
+  failing_since?: string;
+  next_check_at: string;
+  created_at: string;
+  /** When an unverified claim (pending or superseded) is removed. */
+  expires_at?: string;
+}
+
+export interface StatusPageDomainListResponse {
+  items: StatusPageDomain[];
+  /** false when the installation has no STATUS_PAGE_CNAME_TARGET. */
+  enabled: boolean;
+  cname_target?: string;
 }

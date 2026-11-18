@@ -18,6 +18,24 @@ type AdminUser struct {
 	UpdatedAt    time.Time          `json:"updated_at"`
 	LastLoginAt  *time.Time         `json:"last_login_at,omitempty"`
 	DisabledAt   *time.Time         `json:"disabled_at,omitempty"`
+	// LockedUntil is set while password sign-in is locked after repeated
+	// failures; FailedLoginCount is the current failure streak. Both appear
+	// only on the user-management reads (/users).
+	LockedUntil      *time.Time `json:"locked_until,omitempty"`
+	FailedLoginCount int        `json:"failed_login_count,omitempty"`
+	// HasPassword and TwoFactorEnabled appear only on the user-management
+	// reads too: whether the account can sign in with a password (no: send
+	// an invite) and whether two-factor sign-in is on.
+	HasPassword      *bool `json:"has_password,omitempty"`
+	TwoFactorEnabled bool  `json:"two_factor_enabled,omitempty"`
+	// SecondFactorLockouts counts the locks failed two-factor codes caused in
+	// the last 24 hours (someone knows the password), the last at
+	// LastSecondFactorLockoutAt; LockoutHeld: they reached the threshold and
+	// the account stays locked until a superadmin unlocks it or the user
+	// completes a password reset. User-management reads only.
+	SecondFactorLockouts      int        `json:"second_factor_lockouts,omitempty"`
+	LastSecondFactorLockoutAt *time.Time `json:"last_second_factor_lockout_at,omitempty"`
+	LockoutHeld               bool       `json:"lockout_held,omitempty"`
 }
 
 // TenantMembership represents a user's role within one tenant.
@@ -38,6 +56,10 @@ type AuthContextResponse struct {
 	Role         *string `json:"role,omitempty"`
 	Scope        *string `json:"scope,omitempty"`
 	CanWrite     bool    `json:"can_write"`
+	// StatusPageBaseURL is the deployment's public status-page origin
+	// (STATUS_PAGE_BASE_URL), omitted when unset. Deployment configuration,
+	// not identity: it rides here because every UI session already asks.
+	StatusPageBaseURL string `json:"status_page_base_url,omitempty"`
 }
 
 // AdminLoginRequest represents a login request.
@@ -51,9 +73,12 @@ type AdminAuthResponse struct {
 	User AdminUser `json:"user"`
 }
 
-// AdminBootstrapStatusResponse indicates whether at least one active admin exists.
+// AdminBootstrapStatusResponse indicates whether at least one active admin
+// exists, and whether creating the first one needs the install's setup code
+// (BOOTSTRAP_SETUP_CODE). The code itself is never returned.
 type AdminBootstrapStatusResponse struct {
-	HasAdminUsers bool `json:"has_admin_users"`
+	HasAdminUsers     bool `json:"has_admin_users"`
+	SetupCodeRequired bool `json:"setup_code_required"`
 }
 
 // AdminUserListResponse represents a paginated list of admin users.

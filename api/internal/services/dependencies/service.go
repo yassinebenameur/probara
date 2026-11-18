@@ -7,6 +7,7 @@ package dependencies
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/apperr"
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
 )
@@ -49,49 +51,100 @@ func (s *Service) SetDependencies(ctx context.Context, tenantID, monitorID uuid.
 		}
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin dependency transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (SELECT 1 FROM monitors WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL)
-	`, monitorID, tenantID).Scan(&exists); err != nil {
-		return fmt.Errorf("verify monitor: %w", err)
-	}
-	if !exists {
-		return ErrMonitorNotFound
-	}
-
-	if len(deduped) > 0 {
-		idStrings := make([]string, len(deduped))
-		for i, id := range deduped {
-			idStrings[i] = id.String()
+	return dbtx.Run(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS (SELECT 1 FROM monitors WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL)
+		`, monitorID, tenantID).Scan(&exists); err != nil {
+			return fmt.Errorf("verify monitor: %w", err)
 		}
+		if !exists {
+			return ErrMonitorNotFound
+		}
+
+		if len(deduped) > 0 {
+			idStrings := make([]string, len(deduped))
+			for i, id := range deduped {
+				idStrings[i] = id.String()
+			}
+			var count int
+			if err := tx.QueryRowContext(ctx, `
+				SELECT COUNT(*) FROM monitors
+				WHERE id = ANY($1::uuid[]) AND tenant_id = $2 AND deleted_at IS NULL
+			`, pq.Array(idStrings), tenantID).Scan(&count); err != nil {
+				return fmt.Errorf("verify dependency targets: %w", err)
+			}
+			if count != len(deduped) {
+				return fmt.Errorf("%w: one or more dependency targets do not exist", ErrMonitorNotFound)
+			}
+		}
+
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM monitor_dependencies WHERE monitor_id = $1`, monitorID); err != nil {
+			return fmt.Errorf("clear dependencies: %w", err)
+		}
+
+		for _, dependsOnID := range deduped {
+			// Adding edge monitor→dependsOn creates a cycle iff the monitor is
+			// already transitively upstream of dependsOn. Checked after the DELETE
+			// so replacing a set that reorders edges doesn't false-positive, and
+			// after earlier inserts so the new set is internally consistent too.
+			var cycle bool
+			if err := tx.QueryRowContext(ctx, `
+				WITH RECURSIVE upstream AS (
+					SELECT md.depends_on_id
+					FROM monitor_dependencies md
+					WHERE md.monitor_id = $1
+					UNION
+					SELECT md.depends_on_id
+					FROM upstream u
+					JOIN monitor_dependencies md ON md.monitor_id = u.depends_on_id
+				)
+				SELECT EXISTS (SELECT 1 FROM upstream WHERE depends_on_id = $2)
+			`, dependsOnID, monitorID).Scan(&cycle); err != nil {
+				return fmt.Errorf("validate dependency cycle: %w", err)
+			}
+			if cycle {
+				var name string
+				if err := tx.QueryRowContext(ctx,
+					`SELECT name FROM monitors WHERE id = $1`, dependsOnID).Scan(&name); err != nil {
+					name = dependsOnID.String()
+				}
+				return fmt.Errorf("%w: %q already depends on this monitor", ErrDependencyCycle, name)
+			}
+
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO monitor_dependencies (monitor_id, depends_on_id, created_at)
+				VALUES ($1, $2, NOW())
+				ON CONFLICT (monitor_id, depends_on_id) DO NOTHING
+			`, monitorID, dependsOnID); err != nil {
+				return fmt.Errorf("insert dependency: %w", err)
+			}
+		}
+
+		return nil
+	})
+}
+
+// AddDependency creates a single dependency edge: monitor depends on dependsOn.
+// Used by the interactive graph editor; SetDependencies remains the bulk path.
+func (s *Service) AddDependency(ctx context.Context, tenantID, monitorID, dependsOnID uuid.UUID) error {
+	if monitorID == dependsOnID {
+		return fmt.Errorf("%w: monitor cannot depend on itself", ErrDependencyCycle)
+	}
+
+	return dbtx.Run(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
 		var count int
 		if err := tx.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM monitors
-			WHERE id = ANY($1::uuid[]) AND tenant_id = $2 AND deleted_at IS NULL
-		`, pq.Array(idStrings), tenantID).Scan(&count); err != nil {
-			return fmt.Errorf("verify dependency targets: %w", err)
+			WHERE id IN ($1, $2) AND tenant_id = $3 AND deleted_at IS NULL
+		`, monitorID, dependsOnID, tenantID).Scan(&count); err != nil {
+			return fmt.Errorf("verify monitors: %w", err)
 		}
-		if count != len(deduped) {
-			return fmt.Errorf("%w: one or more dependency targets do not exist", ErrMonitorNotFound)
+		if count != 2 {
+			return ErrMonitorNotFound
 		}
-	}
 
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM monitor_dependencies WHERE monitor_id = $1`, monitorID); err != nil {
-		return fmt.Errorf("clear dependencies: %w", err)
-	}
-
-	for _, dependsOnID := range deduped {
-		// Adding edge monitor→dependsOn creates a cycle iff the monitor is
-		// already transitively upstream of dependsOn. Checked after the DELETE
-		// so replacing a set that reorders edges doesn't false-positive, and
-		// after earlier inserts so the new set is internally consistent too.
 		var cycle bool
 		if err := tx.QueryRowContext(ctx, `
 			WITH RECURSIVE upstream AS (
@@ -123,40 +176,21 @@ func (s *Service) SetDependencies(ctx context.Context, tenantID, monitorID uuid.
 		`, monitorID, dependsOnID); err != nil {
 			return fmt.Errorf("insert dependency: %w", err)
 		}
-	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit dependency transaction: %w", err)
-	}
-	return nil
+		return nil
+	})
 }
 
-// AddDependency creates a single dependency edge: monitor depends on dependsOn.
-// Used by the interactive graph editor; SetDependencies remains the bulk path.
-func (s *Service) AddDependency(ctx context.Context, tenantID, monitorID, dependsOnID uuid.UUID) error {
+// WouldCycle reports whether making monitorID depend on dependsOnID would
+// close a cycle (monitorID is already upstream of dependsOnID, or they are
+// the same monitor) — the check SetDependencies and AddDependency refuse
+// with. A restore uses it to leave such an edge out instead of failing.
+func (s *Service) WouldCycle(ctx context.Context, monitorID, dependsOnID uuid.UUID) (bool, error) {
 	if monitorID == dependsOnID {
-		return fmt.Errorf("%w: monitor cannot depend on itself", ErrDependencyCycle)
+		return true, nil
 	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin dependency transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var count int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM monitors
-		WHERE id IN ($1, $2) AND tenant_id = $3 AND deleted_at IS NULL
-	`, monitorID, dependsOnID, tenantID).Scan(&count); err != nil {
-		return fmt.Errorf("verify monitors: %w", err)
-	}
-	if count != 2 {
-		return ErrMonitorNotFound
-	}
-
 	var cycle bool
-	if err := tx.QueryRowContext(ctx, `
+	if err := dbtx.Of(ctx, s.db).QueryRowContext(ctx, `
 		WITH RECURSIVE upstream AS (
 			SELECT md.depends_on_id
 			FROM monitor_dependencies md
@@ -168,35 +202,15 @@ func (s *Service) AddDependency(ctx context.Context, tenantID, monitorID, depend
 		)
 		SELECT EXISTS (SELECT 1 FROM upstream WHERE depends_on_id = $2)
 	`, dependsOnID, monitorID).Scan(&cycle); err != nil {
-		return fmt.Errorf("validate dependency cycle: %w", err)
+		return false, fmt.Errorf("validate dependency cycle: %w", err)
 	}
-	if cycle {
-		var name string
-		if err := tx.QueryRowContext(ctx,
-			`SELECT name FROM monitors WHERE id = $1`, dependsOnID).Scan(&name); err != nil {
-			name = dependsOnID.String()
-		}
-		return fmt.Errorf("%w: %q already depends on this monitor", ErrDependencyCycle, name)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO monitor_dependencies (monitor_id, depends_on_id, created_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (monitor_id, depends_on_id) DO NOTHING
-	`, monitorID, dependsOnID); err != nil {
-		return fmt.Errorf("insert dependency: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit dependency transaction: %w", err)
-	}
-	return nil
+	return cycle, nil
 }
 
 // RemoveDependency deletes a single dependency edge. Removing an edge that
 // does not exist is a no-op, not an error (idempotent unlink).
 func (s *Service) RemoveDependency(ctx context.Context, tenantID, monitorID, dependsOnID uuid.UUID) error {
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := dbtx.Of(ctx, s.db).ExecContext(ctx, `
 		DELETE FROM monitor_dependencies md
 		USING monitors m
 		WHERE md.monitor_id = $1 AND md.depends_on_id = $2
@@ -230,7 +244,7 @@ func (s *Service) GetDependents(ctx context.Context, tenantID, monitorID uuid.UU
 }
 
 func (s *Service) listRelated(ctx context.Context, tenantID, monitorID uuid.UUID, query string) ([]models.DependencyMonitor, error) {
-	rows, err := s.db.QueryContext(ctx, query, monitorID, tenantID)
+	rows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, query, monitorID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list dependencies: %w", err)
 	}
@@ -255,7 +269,7 @@ func (s *Service) GetDependencyGraph(ctx context.Context, tenantID uuid.UUID) (*
 		Edges: []models.DependencyGraphEdge{},
 	}
 
-	edgeRows, err := s.db.QueryContext(ctx, `
+	edgeRows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, `
 		SELECT md.monitor_id, md.depends_on_id
 		FROM monitor_dependencies md
 		JOIN monitors src ON src.id = md.monitor_id
@@ -280,7 +294,7 @@ func (s *Service) GetDependencyGraph(ctx context.Context, tenantID uuid.UUID) (*
 		return nil, err
 	}
 
-	nodeRows, err := s.db.QueryContext(ctx, `
+	nodeRows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, `
 		SELECT m.id, m.name, m.type, m.current_state, m.last_state_change_at
 		FROM monitors m
 		WHERE m.tenant_id = $1 AND m.deleted_at IS NULL
@@ -307,7 +321,7 @@ func (s *Service) GetDependencyGraph(ctx context.Context, tenantID uuid.UUID) (*
 // GetDependsOnIDs returns the raw upstream IDs for a monitor, for read
 // enrichment of the Monitor model (mirrors monitors repo GetMemberIDs).
 func (s *Service) GetDependsOnIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := dbtx.Of(ctx, s.db).QueryContext(ctx, `
 		SELECT md.depends_on_id
 		FROM monitor_dependencies md
 		JOIN monitors m ON m.id = md.depends_on_id

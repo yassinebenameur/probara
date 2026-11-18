@@ -77,7 +77,7 @@ func loadSMTPConfig() (SMTPConfig, error) {
 		cfg.SMTPFromName = "Probara Alerts"
 	}
 
-	cfg.AppBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/")
+	cfg.AppBaseURL = loadAppBaseURL()
 
 	cfg.SMTPUseTLS = true
 	if v := os.Getenv("SMTP_USE_TLS"); v != "" {

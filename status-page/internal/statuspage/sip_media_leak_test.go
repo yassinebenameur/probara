@@ -56,7 +56,7 @@ func TestStatusPage_SIPCallMediaDoesNotLeak(t *testing.T) {
 	}
 
 	data := &StatusPageData{ID: "page-1", Slug: "status", Title: "Status", Monitors: []MonitorStatus{monitor}}
-	html, err := renderPublicStatusPage(data, true)
+	html, err := renderPublicStatusPage(data)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 
 	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/httpx"
+	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
 	auditservice "github.com/yassinebenameur/probara/api/internal/services/audit"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
@@ -95,5 +96,5 @@ func (h *Handlers) Actions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, map[string][]string{"actions": actions})
+	httpx.WriteJSON(w, http.StatusOK, models.AuditActionListResponse{Actions: actions})
 }

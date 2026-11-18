@@ -19,13 +19,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/dbtx"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/pagination"
+	"github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/db/pgerr"
 	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/secrets"
+	"github.com/yassinebenameur/probara/shared/tenancy"
 )
 
 // ErrNotFound is returned when a location does not exist for the tenant.
@@ -35,15 +38,12 @@ var ErrNotFound = errors.New("location not found")
 // disabled, deleted location from a wrong credential.
 var ErrInvalidWorkerCredential = errors.New("invalid location worker credential")
 
-// connectedWindow is how fresh last_seen_at must be for a location to count
-// as connected. Workers heartbeat every ~15s, so a minute tolerates a few
-// missed beats without flapping.
-const connectedWindow = time.Minute
-
 // Service handles location business logic.
 type Service struct {
 	db        *db.Client
 	encryptor secrets.Encryptor
+	// workerImage is LOCATION_WORKER_IMAGE; empty means DefaultWorkerImage.
+	workerImage string
 }
 
 // NewService creates a new locations service.
@@ -60,12 +60,19 @@ func (s *Service) ConfigureEncryption(encryptor secrets.Encryptor) {
 	}
 }
 
-const locationColumns = `
+// locationColumns computes `offline` with the alerter's own predicate, in
+// SQL on the database clock, so the API never calls a location offline that
+// the alerter does not (or the reverse).
+var locationColumns = `
 	l.id, l.tenant_id, l.name, l.slug, l.description, l.enabled,
 	l.last_seen_at, l.mesh_endpoint, l.created_at, l.updated_at,
 	(SELECT COUNT(*) FROM monitor_locations ml
 	 JOIN monitors m ON m.id = ml.monitor_id AND m.deleted_at IS NULL
-	 WHERE ml.location_id = l.id) AS monitor_count`
+	 WHERE ml.location_id = l.id) AS monitor_count,
+	` + monitorstate.LocationOfflinePredicate("l") + ` AS offline,
+	(SELECT oa.id FROM alerts oa
+	 WHERE oa.kind = 'location_offline' AND oa.status IN ('active', 'acknowledged')
+	   AND oa.source_location_id = l.id AND oa.tenant_id = l.tenant_id) AS open_alert_id`
 
 // Create registers a new location.
 func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.CreateLocationRequest) (*models.Location, error) {
@@ -155,7 +162,7 @@ func (s *Service) workerCredential(ctx context.Context, tenantID, locationID uui
 
 // AuthenticateWorker validates broker auth-callout credentials for one
 // private location. locationID is the NATS username and credential the
-// password. Only active locations authenticate.
+// password. Only active locations of a live workspace authenticate.
 func (s *Service) AuthenticateWorker(ctx context.Context, locationID, credential string) error {
 	id, err := uuid.Parse(locationID)
 	if err != nil || credential == "" {
@@ -167,6 +174,7 @@ func (s *Service) AuthenticateWorker(ctx context.Context, locationID, credential
 		FROM locations
 		WHERE id = $1 AND enabled = TRUE AND deleted_at IS NULL
 		  AND worker_credential IS NOT NULL
+		  AND `+tenancy.LiveTenantSQL("locations.tenant_id")+`
 	`, id).Scan(&stored); err != nil {
 		return ErrInvalidWorkerCredential
 	}
@@ -192,7 +200,9 @@ func (s *Service) ProtectMonitorConfigForWorker(ctx context.Context, tenantID, l
 }
 
 func (s *Service) protectMonitorConfigForCredential(credential, monitorType string, config []byte) ([]byte, error) {
-	if !secrets.HasMonitorSecrets(monitorType) {
+	// A config with no secret key needs no re-encryption (see
+	// secrets.HasSecretValues); this also skips the key derivation.
+	if !secrets.HasSecretValues(monitorType, config) {
 		return config, nil
 	}
 	plaintext, err := secrets.DecryptMonitorConfig(s.encryptor, monitorType, config)
@@ -306,9 +316,13 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID uuid.UUID, re
 		}
 	}
 
+	// enabled_at restarts only on a disabled → enabled change (the SET reads
+	// the row's old enabled): the offline rule waits one threshold from it,
+	// so a re-enabled location whose worker is not back yet does not page.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE locations
-		SET name = $1, slug = $2, description = $3, enabled = $4, mesh_endpoint = $5, updated_at = NOW()
+		SET name = $1, slug = $2, description = $3, enabled = $4, mesh_endpoint = $5, updated_at = NOW(),
+			enabled_at = CASE WHEN $4 AND NOT enabled THEN NOW() ELSE enabled_at END
 		WHERE id = $6 AND tenant_id = $7 AND deleted_at IS NULL
 	`, name, slug, description, enabled, meshEndpoint, locationID, tenantID)
 	if err != nil {
@@ -325,22 +339,41 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID uuid.UUID, re
 // quorum is clamped to its remaining location count, and monitors dropping
 // to zero locations restart the legacy state machine from 'unknown'.
 // Returns how many monitors were affected.
+//
+// The affected monitors are locked in id order (lock order,
+// api/internal/dbtx) and each gets a system configuration version,
+// recorded set-based so a location used by thousands of monitors stays a
+// short transaction; a recording failure never fails the delete. A deadlock
+// is retried once.
 func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (int, error) {
+	var affected int
+	err := dbtx.Retry(ctx, func() error {
+		var err error
+		affected, err = s.deleteOnce(ctx, tenantID, locationID)
+		return err
+	})
+	return affected, err
+}
+
+func (s *Service) deleteOnce(ctx context.Context, tenantID, locationID uuid.UUID) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.ExecContext(ctx, `
-		UPDATE locations SET deleted_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-	`, locationID, tenantID)
-	if err != nil {
+	// The location row is locked the way the soft delete below would lock
+	// it (FOR NO KEY UPDATE, which a save attaching a monitor to it does not
+	// wait on), so nothing changes before the monitors are locked and their
+	// baselines read.
+	var found uuid.UUID
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id FROM locations WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL FOR NO KEY UPDATE
+	`, locationID, tenantID).Scan(&found); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
 		return 0, fmt.Errorf("failed to delete location: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return 0, ErrNotFound
 	}
 
 	// S-O1 (docs/state-semantics.md): lock every affected monitor row, in
@@ -350,10 +383,10 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 	// to a re-upsert of the just-removed location's state.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id FROM monitors
-		WHERE id IN (SELECT monitor_id FROM monitor_locations WHERE location_id = $1)
+		WHERE id IN (SELECT monitor_id FROM monitor_locations WHERE location_id = $1) AND tenant_id = $2
 		ORDER BY id
 		FOR UPDATE
-	`, locationID)
+	`, locationID, tenantID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to lock affected monitors: %w", err)
 	}
@@ -369,6 +402,17 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("error iterating affected monitors: %w", err)
+	}
+
+	// Before the first change to them: the baselines of affected monitors
+	// without history.
+	versions := monitors.PrepareSystemVersionsTx(ctx, tx, tenantID, affected)
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE locations SET deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+	`, locationID, tenantID); err != nil {
+		return 0, fmt.Errorf("failed to delete location: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -418,6 +462,10 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 			SET location_quorum = GREATEST(1, LEAST(m.location_quorum, sub.remaining)),
 				current_state = CASE WHEN sub.remaining = 0 THEN 'unknown' ELSE m.current_state END,
 				consecutive_failures = CASE WHEN sub.remaining = 0 THEN 0 ELSE m.consecutive_failures END,
+				consecutive_successes = CASE WHEN sub.remaining = 0 THEN 0 ELSE m.consecutive_successes END,
+				-- Back on the default fleet, a monitor that was down still
+				-- owes a recovery confirmation (S-T7).
+				recovery_pending = CASE WHEN sub.remaining = 0 THEN m.current_state = 'down' OR m.recovery_pending ELSE m.recovery_pending END,
 				updated_at = NOW()
 			FROM (
 				SELECT m2.id, COUNT(ml.location_id)::int AS remaining
@@ -436,6 +484,44 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 		return 0, err
 	}
 
+	// Monitors still down with other locations left: the deleted location no
+	// longer counts toward the display-only recovery progress (S-T7). Only a
+	// down aggregate has progress, so a location under thousands of healthy
+	// monitors adds one query here, not thousands. The rows are already
+	// locked above; this writes only the state counter, never a version.
+	recount, err := tx.QueryContext(ctx, `
+		SELECT id FROM monitors
+		WHERE id = ANY($1) AND current_state = 'down'
+		  AND EXISTS (SELECT 1 FROM monitor_locations ml WHERE ml.monitor_id = monitors.id)
+		ORDER BY id
+	`, pq.Array(affected))
+	if err != nil {
+		return 0, fmt.Errorf("find monitors to recount: %w", err)
+	}
+	var recountIDs []uuid.UUID
+	for recount.Next() {
+		var id uuid.UUID
+		if err := recount.Scan(&id); err != nil {
+			recount.Close()
+			return 0, fmt.Errorf("scan monitor to recount: %w", err)
+		}
+		recountIDs = append(recountIDs, id)
+	}
+	recount.Close()
+	if err := recount.Err(); err != nil {
+		return 0, fmt.Errorf("iterate monitors to recount: %w", err)
+	}
+	for _, monitorID := range recountIDs {
+		if err := monitorstate.RefreshRecoveryProgressTx(ctx, tx, monitorID); err != nil {
+			return 0, err
+		}
+	}
+
+	// The affected monitors' location settings changed outside a save:
+	// record that as a system version, or the next save would be credited
+	// with it.
+	versions.RecordTx(ctx, tx)
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit transaction: %w", err)
 	}
@@ -452,6 +538,7 @@ func scanLocation(row rowScanner) (*models.Location, error) {
 	if err := row.Scan(
 		&l.ID, &l.TenantID, &l.Name, &l.Slug, &l.Description, &l.Enabled,
 		&l.LastSeenAt, &l.MeshEndpoint, &l.CreatedAt, &l.UpdatedAt, &l.MonitorCount,
+		&l.Offline, &l.OpenAlertID,
 	); err != nil {
 		return nil, err
 	}
@@ -460,9 +547,9 @@ func scanLocation(row rowScanner) (*models.Location, error) {
 }
 
 // IsConnected reports whether a heartbeat timestamp is fresh enough to show
-// the location as connected.
+// the location as connected (monitorstate.LocationConnectedWindow, S-F6).
 func IsConnected(lastSeenAt *time.Time) bool {
-	return lastSeenAt != nil && time.Since(*lastSeenAt) < connectedWindow
+	return monitorstate.LocationConnected(lastSeenAt, time.Now())
 }
 
 // normalizeMeshEndpoint validates a host:port mesh endpoint. Nil or empty

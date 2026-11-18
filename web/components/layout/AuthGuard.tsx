@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { getSession } from '@/lib/api';
 import { hasApiKey } from '@/lib/auth';
+import { isPublicRoute } from '@/lib/public-routes';
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -14,8 +15,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let isMounted = true;
 
-    // Don't protect auth pages
-    if (pathname === '/connect' || pathname === '/login' || pathname === '/oauth/consent') {
+    // Pages outside the shell: sign-in and the emailed-link pages (lib/public-routes.ts)
+    if (isPublicRoute(pathname)) {
       setChecked(true);
       setAuthed(true);
       return;

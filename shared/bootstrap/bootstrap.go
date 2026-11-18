@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/actionlink"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -155,17 +156,29 @@ type NotificationOptions struct {
 
 // ConfigureNotifications installs the process-level notification runtime:
 // the deep-link origin and egress (SSRF) policy every channel plugin dials
-// through, and the SMTP mailer behind the email plugin. The API, the alerter
-// and the worker all call it; a binary that does not fails closed (private
-// egress blocked, no links, email Send refused).
+// through, the signer behind acknowledge links, and the SMTP mailer behind
+// the email plugin. The API, the alerter and the worker all call it; a binary
+// that does not fails closed (private egress blocked, no links, email Send
+// refused).
 func ConfigureNotifications(log *logger.Logger, smtp config.SMTPConfig, egress config.NotificationEgressConfig, opts NotificationOptions) {
-	plugin.Configure(plugin.Runtime{
+	runtime := plugin.Runtime{
 		AppBaseURL: smtp.AppBaseURL,
 		Egress: netguard.Policy{
 			BlockPrivate: egress.NotificationBlockPrivateIPs,
 			AllowedCIDRs: egress.NotificationAllowedCIDRs,
 		},
-	})
+	}
+	// Acknowledge links are signed with a key derived from
+	// PROBARA_SECRETS_KEY. Without one (or with a malformed one, which the
+	// mains refuse anyway) notifications simply carry no acknowledge link.
+	links, err := actionlink.FromEnv()
+	switch {
+	case err != nil:
+		log.WithError(err).Warn("Invalid PROBARA_SECRETS_KEY; notifications carry no acknowledge links")
+	case links != nil:
+		runtime.Links = links
+	}
+	plugin.Configure(runtime)
 	if !opts.Mailer {
 		return
 	}

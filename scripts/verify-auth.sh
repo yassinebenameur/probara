@@ -84,7 +84,7 @@ check "viewer POST api-keys -> 403" 403 "$(status_as "$VIEWER_JAR" POST /api/v1/
 check "viewer GET audit-log -> 403" 403 "$(status_as "$VIEWER_JAR" GET /api/v1/audit-log "$TENANT")"
 VIEWER_TENANTS=$(curl -s -b "$VIEWER_JAR" "$API/api/v1/tenants" | jq '.items | length')
 check "viewer sees exactly 1 tenant" 1 "$VIEWER_TENANTS"
-check "viewer denied foreign tenant" 403 "$(status_as "$VIEWER_JAR" GET /api/v1/monitors 00000000-0000-0000-0000-0000000000ff)"
+check "viewer denied foreign tenant" 404 "$(status_as "$VIEWER_JAR" GET /api/v1/monitors 00000000-0000-0000-0000-0000000000ff)"
 
 echo "== Editor permissions =="
 EDITOR_JAR="$COOKIES_DIR/editor"

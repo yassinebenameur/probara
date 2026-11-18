@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/securityheaders"
 )
 
 const (
@@ -155,6 +158,7 @@ var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeTCP:              true,
 	models.MonitorTypeMySQL:            true,
 	models.MonitorTypeWebSocket:        true,
+	models.MonitorTypeDomain:           true,
 }
 
 // IsActiveCheckType reports whether the monitor type is actively scheduled by
@@ -173,6 +177,11 @@ func ValidateMonitor(req *models.CreateMonitorRequest) error {
 func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *ValidatorRegistry) error {
 	if req.Name == "" {
 		return fmt.Errorf("name is required")
+	}
+	if req.Key != nil {
+		if err := ValidateMonitorKey(*req.Key); err != nil {
+			return err
+		}
 	}
 
 	// Validate type using registry
@@ -212,12 +221,24 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
+	if err := ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
+		return err
+	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
 		return err
 	}
 
 	if err := ValidateMonitorLocationFields(req.Type, req.LocationIDs, req.LocationQuorum); err != nil {
 		return err
+	}
+	if req.Type == models.MonitorTypeDomain {
+		threshold := 2 // the create default (services/monitors)
+		if req.ConsecutiveFailuresThreshold != nil {
+			threshold = *req.ConsecutiveFailuresThreshold
+		}
+		if err := sharedmodels.ValidateDomainMonitorRules(threshold, len(req.LocationIDs)); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -230,6 +251,13 @@ func ValidateMonitorUpdate(req *models.UpdateMonitorRequest, existingMonitor *mo
 
 // ValidateMonitorUpdateWithRegistry validates an UpdateMonitorRequest using a custom registry
 func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existingMonitor *models.Monitor, registry *ValidatorRegistry) error {
+	// "" removes the key; anything else must be a valid key.
+	if req.Key != nil && *req.Key != "" {
+		if err := ValidateMonitorKey(*req.Key); err != nil {
+			return err
+		}
+	}
+
 	// Validate type if being updated
 	if req.Type != nil {
 		if !registry.Has(*req.Type) {
@@ -298,6 +326,9 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
+	if err := ValidateRecoveryThreshold(req.RecoveryThreshold); err != nil {
+		return err
+	}
 	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
 		return err
 	}
@@ -308,6 +339,21 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 	}
 	if req.LocationIDs != nil || req.LocationQuorum != nil {
 		if err := ValidateMonitorLocationFields(monitorType, locationIDs, req.LocationQuorum); err != nil {
+			return err
+		}
+	}
+	if monitorType == models.MonitorTypeDomain {
+		// The monitor as it will be: a PATCH of the type alone must not
+		// keep another type's threshold of 1 or its several locations.
+		threshold := existingMonitor.ConsecutiveFailuresThreshold
+		if req.ConsecutiveFailuresThreshold != nil {
+			threshold = *req.ConsecutiveFailuresThreshold
+		}
+		locations := len(existingMonitor.LocationIDs)
+		if req.LocationIDs != nil {
+			locations = len(locationIDs)
+		}
+		if err := sharedmodels.ValidateDomainMonitorRules(threshold, locations); err != nil {
 			return err
 		}
 	}
@@ -398,6 +444,15 @@ func ValidateDependencySuppression(value *string) error {
 	return fmt.Errorf("dependency_suppression must be 'inherit', 'on' or 'off'")
 }
 
+// ValidateRecoveryThreshold validates recovery_threshold, the passing checks
+// in a row a down monitor needs before it is up again (S-T7).
+func ValidateRecoveryThreshold(threshold *int) error {
+	if threshold != nil && (*threshold < monitorstate.MinRecoveryThreshold || *threshold > monitorstate.MaxRecoveryThreshold) {
+		return fmt.Errorf("recovery_threshold must be between %d and %d", monitorstate.MinRecoveryThreshold, monitorstate.MaxRecoveryThreshold)
+	}
+	return nil
+}
+
 // ValidateMonitorNotificationFields validates the notification-routing fields that can be set
 // on both CreateMonitorRequest and UpdateMonitorRequest (spec §7.4).
 func ValidateMonitorNotificationFields(threshold *int, mode *string, rollup *string, channels []models.MonitorChannelAssignment) error {
@@ -455,6 +510,10 @@ func ValidateStatusPage(req *models.CreateStatusPageRequest) error {
 		return err
 	}
 
+	if err := validateStatusPageAccess(req.Visibility, req.Password); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -490,6 +549,10 @@ func ValidateStatusPageUpdate(req *models.UpdateStatusPageRequest) error {
 		}
 	}
 
+	if err := validateStatusPageAccess(req.Visibility, req.Password); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -522,6 +585,17 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 	}
 	if settings.CustomFooterHTML != nil && len(*settings.CustomFooterHTML) > 64*1024 {
 		return fmt.Errorf("custom_footer_html must be 64KB or less")
+	}
+	if settings.CSPMode != nil {
+		if _, ok := securityheaders.ParseCSPMode(*settings.CSPMode); !ok {
+			return fmt.Errorf("csp_mode must be strict, compatible, off, or empty for automatic")
+		}
+	}
+	if settings.SEOTitle != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEOTitle)) > models.MaxSEOTitleLength {
+		return fmt.Errorf("seo_title must be %d characters or less", models.MaxSEOTitleLength)
+	}
+	if settings.SEODescription != nil && utf8.RuneCountInString(strings.TrimSpace(*settings.SEODescription)) > models.MaxSEODescriptionLength {
+		return fmt.Errorf("seo_description must be %d characters or less", models.MaxSEODescriptionLength)
 	}
 	return nil
 }

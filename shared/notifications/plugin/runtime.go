@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/netguard"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 // Runtime is the process-level context every plugin shares. Each binary that
@@ -27,6 +28,10 @@ type Runtime struct {
 	// Egress is the outbound-connection policy applied to every plugin HTTP
 	// request. Channel URLs are tenant-supplied, so this is the SSRF boundary.
 	Egress netguard.Policy
+	// Links signs the one-click acknowledge links in notifications (an
+	// *actionlink.Signer over PROBARA_SECRETS_KEY). Nil, or an empty
+	// AppBaseURL, renders none.
+	Links present.LinkSigner
 }
 
 // runtime defaults to blocking private addresses: a binary that forgets
@@ -135,7 +140,7 @@ func (c ChannelRef) String(key string) string {
 func PostJSON(ctx context.Context, client *http.Client, target string, body any, headers map[string]string, service string) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return Permanent(fmt.Errorf("marshal %s payload: %w", service, err))
+		return Permanent(NotDelivered(fmt.Errorf("marshal %s payload: %w", service, err)))
 	}
 	return Post(ctx, client, target, "application/json", payload, headers, service)
 }
@@ -144,7 +149,7 @@ func PostJSON(ctx context.Context, client *http.Client, target string, body any,
 func Post(ctx context.Context, client *http.Client, target, contentType string, body []byte, headers map[string]string, service string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
-		return Permanent(fmt.Errorf("build %s request: %w", service, err))
+		return Permanent(NotDelivered(fmt.Errorf("build %s request: %w", service, err)))
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("User-Agent", "Probara-Alerts/1.0")
@@ -163,10 +168,25 @@ func Post(ctx context.Context, client *http.Client, target, contentType string, 
 		if errors.Is(err, netguard.ErrBlocked) {
 			// The egress policy refused the destination; retrying resolves
 			// to the same address.
-			return Permanent(fmt.Errorf("post %s: %w", service, err))
+			return Permanent(NotDelivered(fmt.Errorf("post %s: %w", service, err)))
+		}
+		if neverSent(err) {
+			return NotDelivered(fmt.Errorf("post %s: %w", service, err))
 		}
 		return fmt.Errorf("post %s: %w", service, err)
 	}
 	defer resp.Body.Close()
 	return CheckResponse(resp, service)
+}
+
+// neverSent reports whether a transport error happened before the request
+// could reach the provider: name resolution or the TCP dial failed. Anything
+// later (TLS, a write, a timeout waiting for the answer) may have delivered.
+func neverSent(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }

@@ -1,5 +1,5 @@
 import {
-  Cable, Code, Cylinder, Database, Flame, Folder, Globe, Leaf, MessageSquare, MousePointer2,
+  Cable, CalendarClock, Code, Cylinder, Database, Flame, Folder, Globe, Leaf, MessageSquare, MousePointer2,
   Network, Phone, PlugZap, Radio, Search, Server, Webhook, Zap,
   type LucideIcon,
 } from 'lucide-react';
@@ -18,6 +18,7 @@ export const MONITOR_TYPE_ICONS: Record<MonitorType, LucideIcon> = {
   grpc: Network,
   tcp: PlugZap,
   sip: Phone,
+  domain: CalendarClock,
   postgres: Database,
   mysql: Cylinder,
   redis: Zap,

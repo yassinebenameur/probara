@@ -358,34 +358,56 @@ func insertTriageLabel(ctx context.Context, t *testing.T, db *shareddb.Client, c
 	`, c.tenantID, c.triageID.String(), c.triageID, verdict, ai.CatalogueVersion)
 }
 
-// An acknowledged alert still gets the hint (it helps whoever is working
-// it), and the event carries the catalogue's wording for the triage's key.
-func TestSuspectedCauseOnAcknowledgedAlert(t *testing.T) {
-	ctx := context.Background()
-	db, cleanup := testutil.SetupPostgresDB(ctx, t)
-	defer cleanup()
-	c := newCauseCase(ctx, t, db, followUpStubType)
-	mustExec(ctx, t, db, `UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW() WHERE id = $1`, c.alertID)
+// An acknowledged or snoozed alert still gets the hint (it helps whoever is
+// working it), exactly once, while its reminders stay muted; the event
+// carries the catalogue's wording for the triage's key and the alert's own
+// status.
+func TestSuspectedCauseOnAcknowledgedOrSnoozedAlert(t *testing.T) {
+	for _, tc := range []struct {
+		name, mute, wantStatus string
+	}{
+		{"acknowledged", `UPDATE alerts SET status = 'acknowledged', acknowledged_at = NOW() WHERE id = $1`, "acknowledged"},
+		{"snoozed", `UPDATE alerts SET snoozed_until = NOW() + INTERVAL '1 hour' WHERE id = $1`, "active"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, cleanup := testutil.SetupPostgresDB(ctx, t)
+			defer cleanup()
+			c := newCauseCase(ctx, t, db, followUpStubType)
+			mustExec(ctx, t, db, `UPDATE tenants SET alert_reminder_seconds = 60 WHERE id = $1`, c.tenantID)
+			mustExec(ctx, t, db, tc.mute, c.alertID)
 
-	rec := &causeRecorder{}
-	a := newIntegrationAlerter(db)
-	a.sendFunc = rec.send
-	if err := a.dispatchSuspectedCauses(ctx); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := rec.last("suspected_cause")
-	if !ok {
-		t.Fatal("no follow-up for an acknowledged alert")
-	}
-	title, actions, _ := ai.RCAChoice("dns_failure")
-	sc := got.record.SuspectedCause
-	if got.record.Status != "acknowledged" || sc == nil || sc.Key != "dns_failure" || sc.Title != title ||
-		sc.Confidence != "high" || len(sc.Actions) != len(actions) || sc.TriageID != c.triageID.String() {
-		t.Fatalf("record = status %q cause %+v", got.record.Status, sc)
-	}
-	event := buildAlertEvent("suspected_cause", alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID}, &got.record, nil, time.Now())
-	if event.Type != "suspected_cause" || event.Alert.Status != "acknowledged" || event.Alert.SuspectedCause == nil {
-		t.Fatalf("event = %+v", event)
+			rec := &causeRecorder{}
+			a := newIntegrationAlerter(db)
+			a.sendFunc = rec.send
+			for i := 0; i < 2; i++ {
+				if err := a.dispatchSuspectedCauses(ctx); err != nil {
+					t.Fatal(err)
+				}
+				// The page is five minutes old and reminders are due every
+				// minute: only the mute keeps them back.
+				if err := a.dispatchOpenAlerts(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := rec.count("suspected_cause", c.alertID); got != 1 {
+				t.Fatalf("follow-ups = %d, want exactly 1", got)
+			}
+			if got := rec.count("reminder", c.alertID); got != 0 {
+				t.Fatalf("reminders on a muted alert = %d, want 0", got)
+			}
+			got, _ := rec.last("suspected_cause")
+			title, actions, _ := ai.RCAChoice("dns_failure")
+			sc := got.record.SuspectedCause
+			if got.record.Status != tc.wantStatus || sc == nil || sc.Key != "dns_failure" || sc.Title != title ||
+				sc.Confidence != "high" || len(sc.Actions) != len(actions) || sc.TriageID != c.triageID.String() {
+				t.Fatalf("record = status %q cause %+v", got.record.Status, sc)
+			}
+			event := buildAlertEvent("suspected_cause", alertSubject{MonitorID: c.monitorID, TenantID: c.tenantID}, &got.record, nil, time.Now())
+			if event.Type != "suspected_cause" || event.Alert.Status != tc.wantStatus || event.Alert.SuspectedCause == nil {
+				t.Fatalf("event = %+v", event)
+			}
+		})
 	}
 }
 
@@ -466,14 +488,14 @@ func TestClaimSuspectedCause(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback() }()
-		ok, _, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0)
+		claim, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.Commit(); err != nil {
 			t.Fatal(err)
 		}
-		return ok
+		return claim.claimed
 	}
 	if claim(uuid.New()) {
 		t.Fatal("claimed a channel that was never paged")

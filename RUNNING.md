@@ -126,6 +126,10 @@ Location workers are **NATS-only**:
 
 - Set `NATS_URL` (must be reachable from the remote network — enable NATS
   auth/TLS before exposing it) and `WORKER_LOCATION_ID` (the location's UUID).
+  `wss://` URLs reach the broker's websocket listener over 443 through an
+  HTTPS ingress or proxy, for networks that allow only outbound HTTPS.
+- The generated snippet pins the worker image to the API's release version
+  (`LOCATION_WORKER_IMAGE` overrides it).
 - Do **not** set `POSTGRES_URL`. Results are published over NATS and persisted
   by the scheduler-side ingest consumer; the worker never touches the database.
 - To try it locally, uncomment the `worker-location-example` service in

@@ -1,0 +1,15 @@
+# Copyright (c) 1997- The Swedish Internet Foundation.
+# Result of search for registered domain names under
+# the .se top level domain.
+#
+state:            active
+domain:           example.se
+holder:           examp0001-00001
+created:          2000-05-04
+modified:         2023-03-08
+expires:          2031-03-09
+transferred:      2019-01-25
+nserver:          ns1.example.se
+dnssec:           signed delegation
+status:           ok
+registrar:        Example Registrar AB
