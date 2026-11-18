@@ -48,7 +48,7 @@ code="$(sed -n 's/^BOOTSTRAP_SETUP_CODE=//p' "$fresh/.env")"
 grep -qF "$code" <<<"$out" || fail "fresh: the installer did not print the setup code"
 key_b64="$(sed -n 's/^PROBARA_SECRETS_KEY=//p' "$fresh/.env")"
 [[ "$(printf '%s' "$key_b64" | openssl base64 -d -A | wc -c | tr -d ' ')" == 32 ]] || fail "fresh: PROBARA_SECRETS_KEY is not 32 base64 bytes"
-[[ "$(stat -f %Lp "$fresh/.env" 2>/dev/null || stat -c %a "$fresh/.env")" == 600 ]] || fail "fresh: .env is not mode 600"
+[[ "$(stat -c %a "$fresh/.env" 2>/dev/null || stat -f %Lp "$fresh/.env")" == 600 ]] || fail "fresh: .env is not mode 600"
 
 resolved="$(cd "$fresh" && clean docker compose config --format json)"
 for want in '"image": "ghcr.io/yassinebenameur/probara-api:2.1.0"' '"image": "ghcr.io/yassinebenameur/probara-frontend:2.1.0"' \
