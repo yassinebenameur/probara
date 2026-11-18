@@ -489,6 +489,11 @@ func (r *sqlRepository) UpdateUser(ctx context.Context, userID uuid.UUID, userna
 		}
 	}
 
+	var oldEmail sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT email FROM admin_users WHERE id = $1 FOR UPDATE`, userID).Scan(&oldEmail); err != nil {
+		return nil, err
+	}
+
 	row := tx.QueryRowContext(ctx, `
 		UPDATE admin_users
 		SET username = COALESCE($2, username),
@@ -503,6 +508,13 @@ func (r *sqlRepository) UpdateUser(ctx context.Context, userID uuid.UUID, userna
 	user, err := scanUser(row)
 	if err != nil {
 		return nil, err
+	}
+	if email != nil && !strings.EqualFold(oldEmail.String, *email) {
+		// Invite and reset links went to the old address, which may be the
+		// reason for the change: they stop working.
+		if err := adminauth.RetireMailedLinksTx(ctx, tx, userID); err != nil {
+			return nil, fmt.Errorf("failed to retire account links: %w", err)
+		}
 	}
 
 	if memberships != nil {
@@ -543,18 +555,23 @@ func insertMembershipsTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID, memb
 }
 
 // RevokeSessionsByAdminID runs after a password is set through user
-// management: it ends the user's sessions (but keep) and retires every open
-// invite, reset and email-change link and sign-in challenge, so nothing
-// started under the old password outlives it.
+// management: it ends the user's sessions (but keep) and MCP connections,
+// and retires every open invite, reset and email-change link and sign-in
+// challenge, so nothing started under the old password outlives it.
+// Workspace API keys are not the user's credentials and stay.
 func (r *sqlRepository) RevokeSessionsByAdminID(ctx context.Context, adminID, keep uuid.UUID) error {
 	if _, err := adminauth.RevokeUserSessions(ctx, r.db, adminID, keep, adminauth.RevokeReasonPasswordReset); err != nil {
+		return err
+	}
+	if _, err := adminauth.RevokeMCPAccess(ctx, r.db, adminID); err != nil {
 		return err
 	}
 	return adminauth.RetireAccountTokens(ctx, r.db, adminID)
 }
 
-// AttachSignInFactors fills HasPassword and TwoFactorEnabled (migration
-// 000125; before it nobody has a second factor).
+// AttachSignInFactors fills HasPassword, TwoFactorEnabled and the
+// second-factor lockout state (migration 000125; before it nobody has a
+// second factor). Second-factor lockouts older than the window read as none.
 func (r *sqlRepository) AttachSignInFactors(ctx context.Context, users []models.AdminUser) error {
 	if len(users) == 0 {
 		return nil
@@ -569,9 +586,12 @@ func (r *sqlRepository) AttachSignInFactors(ctx context.Context, users []models.
 		SELECT id, COALESCE(password_hash, '') <> '', %s
 		FROM admin_users WHERE id = ANY($1)
 	`
-	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(query, `totp_enabled_at IS NOT NULL`), pq.Array(ids))
+	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(query, `totp_enabled_at IS NOT NULL,
+		CASE WHEN second_factor_lockout_at > NOW() - make_interval(secs => $2) THEN second_factor_lockouts ELSE 0 END,
+		CASE WHEN second_factor_lockout_at > NOW() - make_interval(secs => $2) THEN second_factor_lockout_at END,
+		lockout_held AND locked_until > NOW()`), pq.Array(ids), adminauth.SecondFactorLockoutWindow.Seconds())
 	if pgerr.IsUndefinedColumn(err) {
-		rows, err = r.db.QueryContext(ctx, fmt.Sprintf(query, `FALSE`), pq.Array(ids))
+		rows, err = r.db.QueryContext(ctx, fmt.Sprintf(query, `FALSE, 0, NULL::timestamptz, FALSE`), pq.Array(ids))
 	}
 	if err != nil {
 		return err
@@ -579,13 +599,18 @@ func (r *sqlRepository) AttachSignInFactors(ctx context.Context, users []models.
 	defer rows.Close()
 	for rows.Next() {
 		var id uuid.UUID
-		var hasPassword, twoFactor bool
-		if err := rows.Scan(&id, &hasPassword, &twoFactor); err != nil {
+		var hasPassword, twoFactor, held bool
+		var lockouts int
+		var lastLockout *time.Time
+		if err := rows.Scan(&id, &hasPassword, &twoFactor, &lockouts, &lastLockout, &held); err != nil {
 			return err
 		}
 		if i, ok := index[id]; ok {
 			users[i].HasPassword = &hasPassword
 			users[i].TwoFactorEnabled = twoFactor
+			users[i].SecondFactorLockouts = lockouts
+			users[i].LastSecondFactorLockoutAt = lastLockout
+			users[i].LockoutHeld = held
 		}
 	}
 	return rows.Err()

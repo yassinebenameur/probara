@@ -130,8 +130,11 @@ others); superadmin revoke (one / all; on your own account all others);
 superadmin password set (all; your own password: all others —
 `adminusers.UpdateUser` keeps the caller's `sid`); `cmd/admin` (all); user
 deletion (cascade); refresh reuse (that one); a completed password reset or
-invite (all); the user's own password change or turning two-factor off
-(all others). Not: lockout or unlock (a
+invite (all); the user's own password change, turning two-factor off, or a
+recovery code used (all others). Every password set (reset, invite, own
+change, superadmin set, `cmd/admin`) also revokes the user's MCP OAuth
+grants and unexchanged codes (`adminauth.RevokeMCPAccess`); workspace API
+keys are not user credentials and stay. Not: lockout or unlock (a
 guesser must not be able to sign people out), role and membership changes
 (roles are re-read per request anyway). Revoking an SSO session does not
 sign out of the IdP.
@@ -170,9 +173,13 @@ pruner deletes tokens expired longer than the session retention.
 lookup and mail in the background (bounded workers), mailing only an
 enabled local account with an address, locked included, at most
 `PasswordResetMailsPerHour` (3) self-service resets per account per hour.
-Completing a reset or invite sets the password, revokes all sessions,
-retires every other token, and clears the lockout unless two-factor is on
-(lock and second factor survive a reset). Email change: current password
+Completing a reset or invite sets the password, revokes all sessions and
+MCP grants, retires every other token, and clears the lockout unless
+two-factor is on (an ordinary lock and the second factor survive a reset; a
+held lock is lifted). An address change (confirmation or superadmin edit)
+retires open invite and reset links (`RetireMailedLinksTx`). Passwords are
+12 characters to 72 bytes (`auth.ValidatePassword`; `HashPassword` returns
+`ErrPasswordTooLong`, which handlers answer as a validation error). Email change: current password
 under the lockout, confirmation to the new address, notice to the old one,
 applied on confirmation (uniqueness checked there). Superadmin invite /
 reset link: mailed with `SMTP_*` + `APP_BASE_URL` on the API
@@ -192,7 +199,14 @@ correct password, after releasing that attempt's reservation unless it just
 locked the account (then the ordinary refusal); `CompleteSecondFactor`
 reserves an attempt through `RecordFailedAttempt` before comparing the code,
 and under the user row lock checks the code, uses the challenge and clears
-the streak. Locked, disabled or wrong code: one `401` body. The rate limiter
+the streak. Locked, disabled or wrong code: one `401` body. A lock completed
+by a wrong code is a second-factor lockout (`recordSecondFactorLockout`,
+audit `auth.second_factor_lockout`, mail notice, shown on the user's page);
+the third within 24 h holds the account (`lockout_held`, `locked_until` far
+ahead) until a superadmin unlock, `cmd/admin`, or a completed reset. An
+internal error in the step (an unreadable secret: `ErrSecretUnreadable`,
+logged once) gives the attempt back. A recovery code signs out every other
+session. The rate limiter
 treats `POST /auth/login/mfa` as a sign-in. Disable needs password and code
 and revokes other sessions; superadmin `POST /users/{id}/reset-2fa`;
 `cmd/admin -reset-2fa <username>` (tolerates a database without 000124/125).

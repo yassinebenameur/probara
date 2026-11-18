@@ -6,7 +6,7 @@ import Callout from '@/components/ui/Callout';
 import AuthCard from '@/components/auth/AuthCard';
 import SetPasswordForm from '@/components/auth/SetPasswordForm';
 import { acceptInvite, getInviteInfo } from '@/lib/api';
-import { linkErrorMessage, readLinkToken } from '@/lib/account-links';
+import { linkErrorMessage, takeLinkToken } from '@/lib/account-links';
 import { errorCode, errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import type { InviteInfo } from '@/lib/types';
@@ -20,7 +20,7 @@ export default function AcceptInvitePage() {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    setToken(readLinkToken(window.location.hash));
+    setToken(takeLinkToken());
   }, []);
 
   useEffect(() => {

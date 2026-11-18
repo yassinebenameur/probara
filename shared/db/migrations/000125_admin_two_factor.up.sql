@@ -5,10 +5,19 @@
 -- It is set with totp_enabled_at NULL while an enrolment waits for its
 -- confirming code. totp_last_step is the last accepted RFC 6238 time step: a
 -- code is accepted only for a later step, so no code works twice.
+-- second_factor_lockouts counts the sign-in locks that a failed second
+-- factor completed, within 24 hours of the previous one
+-- (second_factor_lockout_at); the third holds the account (lockout_held,
+-- with locked_until far in the future) until a superadmin unlocks it or the
+-- user completes a password reset. Someone failing the code step knows the
+-- password, so the lock must not keep resetting for them.
 ALTER TABLE admin_users
     ADD COLUMN totp_secret_enc TEXT,
     ADD COLUMN totp_enabled_at TIMESTAMPTZ,
-    ADD COLUMN totp_last_step BIGINT;
+    ADD COLUMN totp_last_step BIGINT,
+    ADD COLUMN second_factor_lockouts INT NOT NULL DEFAULT 0,
+    ADD COLUMN second_factor_lockout_at TIMESTAMPTZ,
+    ADD COLUMN lockout_held BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Single-use recovery codes, stored as SHA-256 hashes; regenerating replaces
 -- the whole set.

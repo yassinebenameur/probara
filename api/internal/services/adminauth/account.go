@@ -223,12 +223,16 @@ func (s *Service) InviteSubject(ctx context.Context, plain string) (*Account, ti
 
 // RedeemPasswordToken uses an invite or reset link to set the account's
 // password. In one transaction it retires every other open link and sign-in
-// challenge of the account, ends all of its sessions, and clears the sign-in
-// lockout -- unless two-factor is on: then the streak and any lock survive
-// and the second factor stays on, because a reset needs only the mailbox,
-// and clearing the lock would let a mailbox holder buy a fresh batch of code
-// guesses with each reset. A link of another purpose, or for an account that
-// was disabled or linked to an identity provider since, is ErrTokenInvalid.
+// challenge of the account, ends all of its sessions and MCP connections,
+// and clears the sign-in lockout -- unless two-factor is on: then the streak
+// and an ordinary lock survive and the second factor stays on, because a
+// reset needs only the mailbox, and clearing the lock would let a mailbox
+// holder buy a fresh batch of code guesses with each reset. Only a held lock
+// (repeated second-factor lockouts, lockout_held) is lifted, since the reset
+// proves the mailbox and that lock never ends on its own; the count of
+// recent second-factor lockouts stays, so the next one holds it again. A
+// link of another purpose, or for an account that was disabled or linked to
+// an identity provider since, is ErrTokenInvalid.
 func (s *Service) RedeemPasswordToken(ctx context.Context, plain, purpose, newPassword string) (*Account, error) {
 	if purpose != PurposeInvite && purpose != PurposePasswordReset {
 		return nil, ErrTokenInvalid
@@ -257,10 +261,18 @@ func (s *Service) RedeemPasswordToken(ctx context.Context, plain, purpose, newPa
 		if err := setPassword(ctx, tx, a.ID, hash, !secondFactor); err != nil {
 			return err
 		}
+		if secondFactor {
+			if err := releaseHeldLockTx(ctx, tx, a.ID); err != nil {
+				return err
+			}
+		}
 		if err := retireTokens(ctx, tx, a.ID, allTokenPurposes...); err != nil {
 			return err
 		}
 		if _, err := RevokeUserSessions(ctx, tx, a.ID, uuid.Nil, RevokeReasonPasswordReset); err != nil {
+			return err
+		}
+		if err := revokeMCPAccessTolerant(ctx, tx, a.ID); err != nil {
 			return err
 		}
 		a.HasPassword = true
@@ -290,9 +302,9 @@ func setPassword(ctx context.Context, tx *sql.Tx, userID uuid.UUID, hash string,
 
 // ChangePassword sets a signed-in local user's new password (the caller has
 // verified the current one), retires every open link and sign-in challenge,
-// and ends every other session; keep is the session making the change. The
-// lockout and the second factor are left as they are. It returns how many
-// sessions ended.
+// and ends every other session and every MCP connection; keep is the session
+// making the change. The lockout and the second factor are left as they are.
+// It returns how many sessions ended.
 func (s *Service) ChangePassword(ctx context.Context, userID, keep uuid.UUID, newPassword string) (int, error) {
 	hash, err := auth.HashPassword(newPassword, s.bcryptCost)
 	if err != nil {
@@ -314,7 +326,10 @@ func (s *Service) ChangePassword(ctx context.Context, userID, keep uuid.UUID, ne
 			return err
 		}
 		revoked, err = RevokeUserSessions(ctx, tx, userID, keep, RevokeReasonPasswordReset)
-		return err
+		if err != nil {
+			return err
+		}
+		return revokeMCPAccessTolerant(ctx, tx, userID)
 	})
 	return revoked, err
 }
@@ -389,7 +404,8 @@ type ConfirmedEmailChange struct {
 
 // ConfirmEmailChange uses an email-change link and sets the address. The
 // account must still be an enabled local account. An address another account
-// took meanwhile is ErrEmailTaken, and the link stays usable.
+// took meanwhile is ErrEmailTaken, and the link stays usable. Open invite and
+// reset links are retired: they went to the old address.
 func (s *Service) ConfirmEmailChange(ctx context.Context, plain string) (*ConfirmedEmailChange, error) {
 	var out ConfirmedEmailChange
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
@@ -407,6 +423,9 @@ func (s *Service) ConfirmEmailChange(ctx context.Context, plain string) (*Confir
 			if pgerr.IsUniqueViolation(err) {
 				return ErrEmailTaken
 			}
+			return err
+		}
+		if err := retireTokens(ctx, tx, a.ID, linkPurposes...); err != nil {
 			return err
 		}
 		out = ConfirmedEmailChange{Account: a, OldEmail: a.Email, NewEmail: *rec.NewEmail}

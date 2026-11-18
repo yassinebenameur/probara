@@ -81,12 +81,14 @@ func (h *Handlers) writeError(w http.ResponseWriter, err error, what string) {
 		apierrors.WriteError(w, http.StatusConflict, "not_local_account", err.Error())
 	case errors.Is(err, adminauth.ErrSameEmail):
 		apierrors.WriteValidationError(w, err.Error())
+	case errors.Is(err, auth.ErrPasswordTooLong):
+		apierrors.WriteValidationError(w, auth.ErrPasswordTooLong.Error())
 	case errors.Is(err, adminauth.ErrInvalidSecondFactor):
 		apierrors.WriteError(w, http.StatusBadRequest, "invalid_code", err.Error())
 	case errors.Is(err, adminauth.ErrTwoFactorEnabled), errors.Is(err, adminauth.ErrTwoFactorDisabled),
 		errors.Is(err, adminauth.ErrNoPendingEnrolment):
 		apierrors.WriteError(w, http.StatusConflict, "conflict", err.Error())
-	case errors.Is(err, adminauth.ErrTwoFactorNeedsKey):
+	case errors.Is(err, adminauth.ErrTwoFactorNeedsKey), errors.Is(err, adminauth.ErrSecretUnreadable):
 		apierrors.WriteError(w, http.StatusConflict, "two_factor_unavailable", err.Error())
 	case errors.Is(err, adminauth.ErrTwoFactorUnavailable), errors.Is(err, adminauth.ErrTokensUnavailable):
 		apierrors.WriteError(w, http.StatusServiceUnavailable, "unavailable", err.Error())
@@ -199,7 +201,8 @@ func (h *Handlers) Security(w http.ResponseWriter, r *http.Request) {
 
 // ChangePassword handles POST /api/v1/account/password: a local user's new
 // password, with the current one (checked under the sign-in lockout). Every
-// other session of the account ends; this one stays signed in.
+// other session of the account and every MCP connection ends; this session
+// stays signed in. Workspace API keys are not the user's and stay.
 func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	userID, current, ok := sessionCaller(w, r)
 	if !ok {
@@ -213,7 +216,8 @@ func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
-	if _, ok := h.localAccount(w, r, userID); !ok {
+	account, ok := h.localAccount(w, r, userID)
+	if !ok {
 		return
 	}
 	if err := h.security.VerifyCurrentPassword(r.Context(), userID, req.CurrentPassword); err != nil {
@@ -226,6 +230,9 @@ func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.recordAccount(r, "auth.password_change", userID, map[string]any{"revoked_sessions": revoked})
+	h.notify(account, "password changed notice", func(ctx context.Context, to string) error {
+		return h.mail.PasswordChanged(ctx, to, account.Username, accountmail.PasswordChangedByUser)
+	})
 	httpx.WriteJSON(w, http.StatusOK, models.RevokeSessionsResponse{Revoked: revoked})
 }
 
@@ -373,8 +380,9 @@ func (h *Handlers) DisableTwoFactor(w http.ResponseWriter, r *http.Request) {
 // RegenerateRecoveryCodes handles POST
 // /api/v1/account/two-factor/recovery-codes: replaces every recovery code
 // (password and a current code required) and returns the new set, once.
+// Proving it with a recovery code signs out every other session.
 func (h *Handlers) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
-	userID, _, ok := sessionCaller(w, r)
+	userID, current, ok := sessionCaller(w, r)
 	if !ok {
 		return
 	}
@@ -385,7 +393,8 @@ func (h *Handlers) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Reques
 	if _, ok := h.enrolledAccount(w, r, userID); !ok {
 		return
 	}
-	if _, err := h.security.VerifyCurrentCredentials(r.Context(), userID, req.CurrentPassword, req.Code, true); err != nil {
+	method, err := h.security.VerifyCurrentCredentials(r.Context(), userID, req.CurrentPassword, req.Code, true)
+	if err != nil {
 		h.writeCredentialFailure(w, r, userID, err)
 		return
 	}
@@ -394,7 +403,17 @@ func (h *Handlers) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Reques
 		h.writeError(w, err, "replace the recovery codes")
 		return
 	}
-	h.recordAccount(r, "auth.recovery_codes_regenerate", userID, nil)
+	details := map[string]any{}
+	if method == adminauth.SecondFactorRecoveryCode {
+		// A recovery code suggests a lost device: every other session ends,
+		// as at sign-in.
+		revoked, err := h.sessions.RevokeAllSessions(r.Context(), userID, current, adminauth.RevokeReasonRecoveryCode)
+		if err != nil {
+			h.logger.WithError(err).Error("Failed to sign out other sessions after a recovery code")
+		}
+		details["revoked_sessions"] = revoked
+	}
+	h.recordAccount(r, "auth.recovery_codes_regenerate", userID, details)
 	httpx.WriteJSON(w, http.StatusOK, models.RecoveryCodesResponse{RecoveryCodes: codes})
 }
 

@@ -114,8 +114,9 @@ func writeDeliveryFailed(w http.ResponseWriter) {
 // SendInvite handles POST /api/v1/users/{id}/invite. "password" mails a
 // single-use set-your-password link (7 days; a newer invite replaces it) to
 // an account with no password; "sso" mails a note to sign in with single
-// sign-on and sets nothing. Without email delivery the response carries the
-// link to hand over.
+// sign-on and sets nothing. With single sign-on enabled the method is
+// required for an account not linked yet. Without email delivery the
+// response carries the link to hand over.
 func (h *Handlers) SendInvite(w http.ResponseWriter, r *http.Request) {
 	user, ok := h.targetUser(w, r)
 	if !ok {
@@ -138,9 +139,18 @@ func (h *Handlers) SendInvite(w http.ResponseWriter, r *http.Request) {
 	method := req.Method
 	switch method {
 	case "":
-		method = inviteMethodPassword
-		if account.Linked {
+		switch {
+		case account.Linked:
 			method = inviteMethodSSO
+		case h.ssoEnabled():
+			// Ambiguous with single sign-on on: a password invite gives the
+			// account a password, after which the identity provider can no
+			// longer link it by email, so the user would sign in without the
+			// provider's multi-factor authentication. The caller must say.
+			apierrors.WriteValidationError(w, `single sign-on is enabled: choose the invite method, "sso" (sign in with the identity provider) or "password" (set a Probara password; the account is then never linked to the identity provider)`)
+			return
+		default:
+			method = inviteMethodPassword
 		}
 	case inviteMethodPassword, inviteMethodSSO:
 	default:

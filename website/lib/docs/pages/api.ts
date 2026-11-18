@@ -131,7 +131,7 @@ export const API_PAGE: DocPage = {
             ["`POST /api/v1/auth/login/mfa`", "Second step of a [two-factor](/docs/security/#account-links-two-factor) sign-in: the `mfa_token` the password step answered with (5 minutes, single use; no cookie before this) and a `code` from the authenticator app or a recovery code. A wrong code and a locked account get the same `401`; an unusable challenge is `401 mfa_challenge_invalid`"],
             ["`GET /api/v1/auth/capabilities`", "Whether this installation emails account links (`email_delivery`)"],
             ["`POST /api/v1/auth/password/forgot`", "Request a reset link by `login` (username or email address); always the same `202`, whatever the account"],
-            ["`POST /api/v1/auth/password/reset`", "Set the password through a reset link (token in the `X-Action-Token` header, `password` in the body); signs the account out everywhere"],
+            ["`POST /api/v1/auth/password/reset`", "Set the password through a reset link (token in the `X-Action-Token` header, `password` in the body); signs the account out of every browser and revokes its MCP connections (workspace API keys stay)"],
             ["`GET /api/v1/auth/invite`", "The username an invite link (`X-Action-Token`) sets up, without using it"],
             ["`POST /api/v1/auth/invite/accept`", "Set the first password through an invite link (`X-Action-Token`)"],
             ["`POST /api/v1/auth/email/confirm`", "Complete an email change through the link sent to the new address (`X-Action-Token`)"],
@@ -1228,7 +1228,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/account/password`",
-              "Signed-in browser session only; change your password (`current_password`, `new_password`); signs out your other sessions, returns `revoked`",
+              "Signed-in browser session only; change your password (`current_password`, `new_password`); signs out your other sessions and revokes your MCP connections, returns `revoked`",
             ],
             [
               "`POST /api/v1/account/email`",

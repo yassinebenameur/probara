@@ -95,24 +95,31 @@ func main() {
 // whole point is to leave behind an account that can administer the install.
 // For the same reason it lifts a sign-in lockout (migration 000117), and, as
 // any password reset does, it ends the account's existing sessions (session
-// families, migration 000118; the API's adminauth.RevokeUserSessions) and
-// retires its open invite, reset and email-change links and sign-in
-// challenges (migration 000124; adminauth.RetireAccountTokens). Two-factor
-// sign-in stays on: -reset-2fa turns it off.
+// families, migration 000118; the API's adminauth.RevokeUserSessions), its
+// MCP connections (000096), and retires its open invite, reset and
+// email-change links and sign-in challenges (migration 000124;
+// adminauth.RetireAccountTokens). It also lifts a lock held after repeated
+// failed two-factor codes (000125). Two-factor sign-in stays on: -reset-2fa
+// turns it off.
 //
 // It must work before those migrations have run too -- a failed migration
 // job is exactly when an operator reaches for it -- so it looks for their
 // columns and table first and leaves out what is not there yet.
 func upsertSuperadmin(ctx context.Context, client *db.Client, username, passwordHash string) error {
-	var hasLockout, hasFamilies, hasTokens bool
+	var hasLockout, hasHold, hasFamilies, hasTokens, hasMCP bool
 	if err := client.QueryRowContext(ctx, `
 		SELECT EXISTS (
 		           SELECT 1 FROM information_schema.columns
 		           WHERE table_schema = current_schema() AND table_name = 'admin_users'
 		             AND column_name = 'locked_until'),
+		       EXISTS (
+		           SELECT 1 FROM information_schema.columns
+		           WHERE table_schema = current_schema() AND table_name = 'admin_users'
+		             AND column_name = 'lockout_held'),
 		       to_regclass('admin_session_families') IS NOT NULL,
-		       to_regclass('admin_account_tokens') IS NOT NULL
-	`).Scan(&hasLockout, &hasFamilies, &hasTokens); err != nil {
+		       to_regclass('admin_account_tokens') IS NOT NULL,
+		       to_regclass('mcp_oauth_grants') IS NOT NULL
+	`).Scan(&hasLockout, &hasHold, &hasFamilies, &hasTokens, &hasMCP); err != nil {
 		return err
 	}
 
@@ -128,6 +135,13 @@ func upsertSuperadmin(ctx context.Context, client *db.Client, username, password
 		              failed_login_count = 0,
 		              last_failed_login_at = NULL,
 		              locked_until = NULL`
+	}
+	if hasHold {
+		// A lock held after repeated failed two-factor codes too.
+		clearLock += `,
+		              lockout_held = FALSE,
+		              second_factor_lockouts = 0,
+		              second_factor_lockout_at = NULL`
 	}
 	var userID string
 	if err := tx.QueryRowContext(ctx, `
@@ -162,6 +176,20 @@ func upsertSuperadmin(ctx context.Context, client *db.Client, username, password
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE admin_account_tokens SET revoked_at = NOW()
 			WHERE admin_user_id = $1 AND used_at IS NULL AND revoked_at IS NULL
+		`, userID); err != nil {
+			return err
+		}
+	}
+	if hasMCP {
+		// As the API's adminauth.RevokeMCPAccess: MCP clients connected
+		// under the old password stop acting as the user.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE mcp_oauth_grants SET revoked_at = NOW() WHERE admin_user_id = $1 AND revoked_at IS NULL
+		`, userID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM mcp_oauth_codes WHERE admin_user_id = $1 AND grant_id IS NULL
 		`, userID); err != nil {
 			return err
 		}

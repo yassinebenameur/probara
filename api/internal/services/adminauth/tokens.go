@@ -248,3 +248,59 @@ func (s *Service) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	}
 	return tx.Commit()
 }
+
+// linkPurposes are the links mailed to the account's address. When the
+// address changes they are retired: one already sent to the old, possibly
+// compromised mailbox must not keep working.
+var linkPurposes = []string{PurposeInvite, PurposePasswordReset}
+
+// RetireMailedLinksTx revokes userID's open invite and reset links inside
+// tx (under a savepoint, so a database before migration 000124 leaves tx
+// usable). User management calls it when a superadmin changes the address.
+func RetireMailedLinksTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
+	return retireTokensTolerant(ctx, tx, userID, linkPurposes...)
+}
+
+// RevokeMCPAccess ends every MCP OAuth connection of userID: its grants
+// (which every access and refresh token is checked against) and the
+// authorization codes not exchanged yet, which would otherwise mint a new
+// grant. A credential reset calls it, because whoever held the old password
+// may have connected an MCP client that would keep acting as the user.
+// Workspace API keys are not the user's credentials and stay. Before
+// migration 000096 there is nothing to revoke.
+func RevokeMCPAccess(ctx context.Context, q SessionQuerier, userID uuid.UUID) (int, error) {
+	var revoked int
+	err := q.QueryRowContext(ctx, `
+		WITH grants AS (
+			UPDATE mcp_oauth_grants SET revoked_at = NOW()
+			WHERE admin_user_id = $1 AND revoked_at IS NULL
+			RETURNING 1
+		), codes AS (
+			DELETE FROM mcp_oauth_codes WHERE admin_user_id = $1 AND grant_id IS NULL
+			RETURNING 1
+		)
+		SELECT COUNT(*) FROM grants
+	`, userID).Scan(&revoked)
+	if pgerr.IsMissingSchema(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to revoke MCP connections: %w", err)
+	}
+	return revoked, nil
+}
+
+// revokeMCPAccessTolerant is RevokeMCPAccess inside tx, under a savepoint.
+func revokeMCPAccessTolerant(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
+	return tolerateMissingSchema(ctx, tx, func() error {
+		_, err := tx.ExecContext(ctx, `
+			WITH grants AS (
+				UPDATE mcp_oauth_grants SET revoked_at = NOW()
+				WHERE admin_user_id = $1 AND revoked_at IS NULL
+				RETURNING 1
+			)
+			DELETE FROM mcp_oauth_codes WHERE admin_user_id = $1 AND grant_id IS NULL
+		`, userID)
+		return err
+	})
+}

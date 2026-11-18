@@ -39,6 +39,9 @@ const (
 	RevokeReasonAdmin         = "admin"
 	RevokeReasonPasswordReset = "password_reset"
 	RevokeReasonRefreshReuse  = "refresh_reuse"
+	// RevokeReasonRecoveryCode: a recovery code signed in (a lost device),
+	// so the user's other sessions ended.
+	RevokeReasonRecoveryCode = "recovery_code"
 )
 
 // refreshReuseGrace is how long a rotated refresh token still earns an access

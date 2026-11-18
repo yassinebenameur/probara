@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { KeyRound, Mail, ShieldOff } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
+import Radio from '@/components/ui/Radio';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -26,6 +27,9 @@ export default function UserAccountActions({ user, onChanged }: { user: AdminUse
   const [busy, setBusy] = useState<'' | 'invite' | 'sso' | 'reset' | 'two-factor'>('');
   const [result, setResult] = useState<{ title: string; response: AccountLinkResponse } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  // With single sign-on on, an account not linked yet needs an explicit
+  // invite method (the API refuses to guess); SSO is the safe default.
+  const [inviteMethod, setInviteMethod] = useState<'sso' | 'password'>('sso');
 
   useEffect(() => {
     let ignore = false;
@@ -100,12 +104,12 @@ export default function UserAccountActions({ user, onChanged }: { user: AdminUse
         <Callout tone="info">The account is disabled: no invite or reset link can be issued.</Callout>
       ) : (
         <div className="flex flex-wrap gap-2">
-          {!linked && !hasPassword && (
+          {!linked && !hasPassword && !ssoEnabled && (
             <Button size="sm" icon={<Mail />} loading={busy === 'invite'} disabled={busy !== ''} onClick={() => issue('invite')}>
               Send invite
             </Button>
           )}
-          {ssoEnabled && !hasPassword && (
+          {linked && ssoEnabled && (
             <Button size="sm" icon={<Mail />} loading={busy === 'sso'} disabled={busy !== ''} onClick={() => issue('sso')}>
               Send single sign-on invite
             </Button>
@@ -127,6 +131,34 @@ export default function UserAccountActions({ user, onChanged }: { user: AdminUse
             </Button>
           )}
         </div>
+      )}
+      {!linked && !hasPassword && ssoEnabled && !disabled && (
+        <fieldset className="glass-well mt-4 space-y-3 rounded-xl p-4">
+          <legend className="sr-only">Invite method</legend>
+          <Radio
+            name="invite-method"
+            checked={inviteMethod === 'sso'}
+            onChange={() => setInviteMethod('sso')}
+            label="Invite to sign in with SSO"
+            description="The user signs in with the identity provider, which links this account by email on first sign-in and applies its own multi-factor authentication."
+          />
+          <Radio
+            name="invite-method"
+            checked={inviteMethod === 'password'}
+            onChange={() => setInviteMethod('password')}
+            label="Invite to set a password"
+            description="The account gets a Probara password. It is then never linked to the identity provider by email, and signs in without the provider's multi-factor authentication."
+          />
+          <Button
+            size="sm"
+            icon={<Mail />}
+            loading={busy === 'invite' || busy === 'sso'}
+            disabled={busy !== ''}
+            onClick={() => issue(inviteMethod === 'sso' ? 'sso' : 'invite')}
+          >
+            Send invite
+          </Button>
+        </fieldset>
       )}
       {linked && !disabled && (
         <p className="mt-3 text-xs text-slate-500">

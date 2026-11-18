@@ -53,6 +53,11 @@ var (
 	ErrNoPendingEnrolment = errors.New("start two-factor setup first")
 	// ErrInvalidSecondFactor is a wrong, reused or malformed code.
 	ErrInvalidSecondFactor = errors.New("the authentication code is incorrect")
+	// ErrSecretUnreadable: a stored authenticator secret cannot be opened
+	// (PROBARA_SECRETS_KEY missing, or the key version that sealed it
+	// removed). Authenticator codes cannot be checked; recovery codes still
+	// work, and a superadmin's two-factor reset is the fix.
+	ErrSecretUnreadable = errors.New("the stored authenticator secret cannot be decrypted: PROBARA_SECRETS_KEY is missing or no longer holds the key version that sealed it; recovery codes still work, and a superadmin can reset two-factor sign-in")
 	// ErrMFAChallengeInvalid is an unknown, used, expired or retired
 	// second-step challenge: the sign-in must start again.
 	ErrMFAChallengeInvalid = errors.New("the sign-in attempt expired; enter your password again")
@@ -233,14 +238,14 @@ func (s *Service) EnableTOTP(ctx context.Context, userID uuid.UUID, code string)
 // tampering, and with no key configured nothing can be opened.
 func (s *Service) openSecret(sealed string) (string, error) {
 	if s.enc == nil {
-		return "", ErrTwoFactorNeedsKey
+		return "", ErrSecretUnreadable
 	}
 	if !secrets.LooksLikeEnvelope(sealed) {
-		return "", errors.New("stored authenticator secret is not encrypted")
+		return "", fmt.Errorf("%w (the stored value is not an encrypted envelope)", ErrSecretUnreadable)
 	}
 	secret, err := s.enc.Decrypt(sealed)
 	if err != nil {
-		return "", fmt.Errorf("failed to decrypt the authenticator secret: %w", err)
+		return "", fmt.Errorf("%w: %v", ErrSecretUnreadable, err)
 	}
 	return secret, nil
 }
@@ -497,11 +502,15 @@ func (s *Service) CompleteSecondFactor(ctx context.Context, challenge, code stri
 	}
 
 	var out SecondStep
+	codeWrong := false
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
 		// The user row is held from here (checkSecondFactorTx), so a
 		// concurrent password reset or two-factor reset either lands first
 		// and retires this challenge, or waits for this sign-in.
 		method, err := s.checkSecondFactorTx(ctx, tx, userID, code)
+		if errors.Is(err, ErrInvalidSecondFactor) {
+			codeWrong = true
+		}
 		if err != nil {
 			return err
 		}
@@ -539,8 +548,20 @@ func (s *Service) CompleteSecondFactor(ctx context.Context, challenge, code stri
 	switch {
 	case errors.Is(err, ErrInvalidSecondFactor):
 		reserved.SecondFactor = true
+		if reserved.LockedNow && codeWrong {
+			// A wrong code locked the account: whoever is signing in has the
+			// password. Count it, and hold the account after repeated ones.
+			if err := s.recordSecondFactorLockout(ctx, reserved); err != nil {
+				return nil, err
+			}
+		}
 		return nil, reserved
+	case errors.Is(err, ErrMFAChallengeInvalid):
+		return nil, err
 	case err != nil:
+		// Not the user's fault (an unreadable secret, a database error):
+		// give the attempt back so it cannot lock them out.
+		s.releaseReservation(ctx, userID, reserved)
 		return nil, err
 	}
 	return &out, nil

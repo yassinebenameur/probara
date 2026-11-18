@@ -139,7 +139,7 @@ func (m *Mailer) PasswordReset(ctx context.Context, to, username, token string, 
 		Title:   "Reset your password",
 		Paragraphs: []string{
 			fmt.Sprintf("A password reset was requested for the Probara account %s.", username),
-			"Choose a new password with the link below. Resetting signs the account out everywhere.",
+			"Choose a new password with the link below. Resetting signs the account out of every browser and disconnects its MCP clients; workspace API keys are not affected.",
 		},
 		ButtonLabel: "Choose a new password",
 		ButtonURL:   m.URL(LinkPath(ResetPasswordPath, token)),
@@ -204,7 +204,47 @@ func (m *Mailer) TwoFactorDisabled(ctx context.Context, to, username string, byA
 // in, and how many are left.
 func (m *Mailer) RecoveryCodeUsed(ctx context.Context, to, username string, remaining int) error {
 	return m.securityNotice(ctx, to, "A recovery code was used",
-		fmt.Sprintf("A recovery code was used to sign in to the Probara account %s. %d unused recovery codes remain; you can generate a new set on the account page.", username, remaining))
+		fmt.Sprintf("A recovery code was used to sign in to the Probara account %s, so every other browser signed in to it was signed out. %d unused recovery codes remain; you can generate a new set on the account page.", username, remaining))
+}
+
+// Password change sources, for PasswordChanged.
+const (
+	PasswordChangedByUser          = "from the account page"
+	PasswordChangedByReset         = "with a password reset link"
+	PasswordChangedByAdministrator = "by an administrator"
+)
+
+// PasswordChanged tells the account its password was changed (how is one of
+// the PasswordChangedBy constants).
+func (m *Mailer) PasswordChanged(ctx context.Context, to, username, how string) error {
+	return m.securityNotice(ctx, to, "Password changed",
+		fmt.Sprintf("The password of the Probara account %s was changed %s. Other browsers signed in to it were signed out and its MCP clients disconnected; workspace API keys are not affected.", username, how))
+}
+
+// EmailChanged tells the old address that the account's address changed.
+func (m *Mailer) EmailChanged(ctx context.Context, to, username, newEmail string) error {
+	return m.securityNotice(ctx, to, "Email address changed",
+		fmt.Sprintf("The email address of the Probara account %s is now %s. Password reset links and notices go there from now on, and links sent to this address no longer work.", username, newEmail))
+}
+
+// SecondFactorLockout tells the account that failed two-factor codes locked
+// it: whoever tried knows the password. held: repeated lockouts keep it
+// locked until an administrator unlocks it or a password reset is completed.
+func (m *Mailer) SecondFactorLockout(ctx context.Context, to, username string, held bool) error {
+	lock := "Sign-in is locked for 15 minutes."
+	if held {
+		lock = "This happened repeatedly, so sign-in stays locked until an administrator unlocks it or you reset your password."
+	}
+	return m.send(ctx, to, view{
+		Subject: "Probara security notice: someone used your password",
+		Title:   "Someone entered your password",
+		Paragraphs: []string{
+			fmt.Sprintf("Someone signed in to the Probara account %s with the right password, then entered wrong two-factor codes until the account locked. %s", username, lock),
+			"If this was not you, your password is known to someone else: change it now (use Forgot password on the sign-in page if you are locked out) and tell your Probara administrator.",
+		},
+		ButtonLabel: "Reset your password",
+		ButtonURL:   m.URL("/forgot-password"),
+	})
 }
 
 func (m *Mailer) securityNotice(ctx context.Context, to, title, text string) error {

@@ -176,11 +176,39 @@ func TestResetTwoFactorTurnsItOffAndRetiresChallenges(t *testing.T) {
 	`, userID); err != nil {
 		t.Fatal(err)
 	}
+	// A lock held after repeated failed codes, and an MCP connection.
+	if _, err := client.ExecContext(ctx, `
+		UPDATE admin_users SET lockout_held = TRUE, second_factor_lockouts = 3, second_factor_lockout_at = NOW(),
+		                       locked_until = NOW() + INTERVAL '100 years'
+		WHERE id = $1
+	`, userID); err != nil {
+		t.Fatal(err)
+	}
+	tenant := testutil.InsertTenant(ctx, t, client, "T")
+	var grant string
+	if err := client.QueryRowContext(ctx, `
+		WITH c AS (INSERT INTO mcp_oauth_clients (client_name, redirect_uris) VALUES ('a', ARRAY['http://x']) RETURNING id)
+		INSERT INTO mcp_oauth_grants (client_id, admin_user_id, tenant_id, scope) SELECT id, $1, $2, 'read' FROM c RETURNING id
+	`, userID, tenant).Scan(&grant); err != nil {
+		t.Fatal(err)
+	}
 	if err := upsertSuperadmin(ctx, client, "ops", "new-hash"); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_account_tokens WHERE admin_user_id = $1 AND revoked_at IS NULL`, userID).Scan(&open); err != nil || open != 0 {
 		t.Fatalf("open tokens after the upsert: %d %v", open, err)
+	}
+	var held, locked, grantRevoked bool
+	var lockouts int
+	if err := client.QueryRowContext(ctx, `
+		SELECT lockout_held, locked_until IS NOT NULL, second_factor_lockouts,
+		       (SELECT revoked_at IS NOT NULL FROM mcp_oauth_grants WHERE id = $2)
+		FROM admin_users WHERE id = $1
+	`, userID, grant).Scan(&held, &locked, &lockouts, &grantRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if held || locked || lockouts != 0 || !grantRevoked {
+		t.Fatalf("after the upsert: held=%v locked=%v lockouts=%d grant revoked=%v", held, locked, lockouts, grantRevoked)
 	}
 }
 

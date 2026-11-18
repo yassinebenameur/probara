@@ -16,11 +16,14 @@ func accountActionTools() []spec {
 		{
 			Name:  "invite_user",
 			Title: "Invite user",
-			Description: "Invite a user to set up their account. method \"password\" (the default unless the account is " +
-				"linked to the SSO identity provider) issues a single-use set-your-password link valid 7 days, for an " +
-				"account that has no password yet; a newer invite replaces it. method \"sso\" tells the user to sign in " +
-				"with single sign-on. The link is emailed to the account; without email delivery or an address, the " +
-				"response's link is the one copy to hand over (delivered=false, reason says why). Superadmins only.",
+			Description: "Invite a user to set up their account. method \"password\" issues a single-use " +
+				"set-your-password link valid 7 days for an account that has no password yet (a newer invite replaces it); " +
+				"the account then has a Probara password and is never linked to the SSO identity provider by email, so it " +
+				"signs in without the provider's MFA. method \"sso\" tells the user to sign in with single sign-on. " +
+				"With single sign-on enabled, method is required unless the account is already linked (then \"sso\"); " +
+				"without SSO it defaults to \"password\". The link is emailed to the account; without email delivery or " +
+				"an address, the response's link is the one copy to hand over (delivered=false, reason says why). " +
+				"Superadmins only.",
 			Method: http.MethodPost, Route: "/users/{id}/invite", Platform: true,
 			PathDocs: user,
 			Body:     typeOf[models.SendInviteRequest](),
@@ -31,8 +34,9 @@ func accountActionTools() []spec {
 			Title: "Create password reset link",
 			Description: "Issue a single-use password reset link (valid 1 hour; a newer one replaces it) for a " +
 				"password account. Emailed to the account when email delivery is configured; otherwise the response's " +
-				"link is the one copy to hand over. Completing the reset signs the user out everywhere. Not for SSO " +
-				"accounts or accounts without a password (invite_user). Superadmins only.",
+				"link is the one copy to hand over. Completing the reset signs the user out of every browser session and " +
+				"revokes their MCP connections (workspace API keys are not the user's and stay). Not for SSO accounts or " +
+				"accounts without a password (invite_user). Superadmins only.",
 			Method: http.MethodPost, Route: "/users/{id}/password-reset", Platform: true,
 			PathDocs: user,
 		},

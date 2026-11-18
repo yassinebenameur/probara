@@ -35,6 +35,18 @@ const (
 	// LockoutStreakMemory forgets a streak after this long without a
 	// failure, so occasional typos spread over weeks never add up to a lock.
 	LockoutStreakMemory = 24 * time.Hour
+
+	// SecondFactorLockoutsToHold second-factor lockouts within
+	// SecondFactorLockoutWindow hold the account locked until a superadmin
+	// unlocks it or the user completes a password reset. Whoever fails the
+	// code step knows the password; without the hold they would get ten code
+	// guesses every 15 minutes indefinitely.
+	SecondFactorLockoutsToHold = 3
+	SecondFactorLockoutWindow  = 24 * time.Hour
+	// heldLockDuration stands for "until unlocked": every lock check reads
+	// locked_until, so a held lock is one that ends far in the future
+	// (lockout_held tells the UI which kind it is).
+	heldLockDuration = 100 * 365 * 24 * time.Hour
 )
 
 // ErrInvalidCredentials is every refused password sign-in. A refusal is
@@ -59,6 +71,13 @@ type LoginFailure struct {
 	// (a two-factor sign-in's second step, or an account-page check that
 	// asks for both).
 	SecondFactor bool
+	// SecondFactorLockouts is set when a failed second sign-in step locked
+	// the account: how many such locks there were within
+	// SecondFactorLockoutWindow, this one included. Held: that reached
+	// SecondFactorLockoutsToHold, and the account stays locked until a
+	// superadmin unlocks it or the user completes a password reset.
+	SecondFactorLockouts int
+	Held                 bool
 }
 
 func (f *LoginFailure) Error() string { return ErrInvalidCredentials.Error() }
@@ -330,6 +349,9 @@ func (s *Service) VerifyCurrentCredentials(ctx context.Context, userID uuid.UUID
 			return "", reserved
 		}
 		if err != nil {
+			// Not the caller's fault (an unreadable secret): give the
+			// attempt back rather than lock them out behind it.
+			s.releaseReservation(ctx, userID, reserved)
 			return "", err
 		}
 	}
@@ -343,8 +365,64 @@ func (s *Service) VerifyCurrentCredentials(ctx context.Context, userID uuid.UUID
 	return method, nil
 }
 
+// releaseReservation gives back an attempt that ended in an internal error,
+// unless it locked the account (a lock is never undone here). Best effort.
+func (s *Service) releaseReservation(ctx context.Context, userID uuid.UUID, reserved *LoginFailure) {
+	if reserved == nil || reserved.LockedNow {
+		return
+	}
+	_, _ = s.db.ExecContext(ctx, releaseReservationQuery, userID)
+}
+
+// recordSecondFactorLockoutQuery counts a lock that a failed second step
+// completed and, at SecondFactorLockoutsToHold within the window, holds the
+// account: lockout_held, and locked_until far in the future. $2 is the clock
+// offset (lockoutNow), $3 the window, $4 the threshold, $5 the hold length.
+const recordSecondFactorLockoutQuery = `
+	WITH counted AS (
+		SELECT id, CASE WHEN second_factor_lockout_at > ` + lockoutNow + ` - make_interval(secs => $3)
+		                THEN second_factor_lockouts + 1 ELSE 1 END AS n
+		FROM admin_users WHERE id = $1 FOR UPDATE
+	)
+	UPDATE admin_users u
+	SET second_factor_lockouts = counted.n,
+	    second_factor_lockout_at = ` + lockoutNow + `,
+	    lockout_held = u.lockout_held OR counted.n >= $4,
+	    locked_until = CASE WHEN counted.n >= $4 THEN ` + lockoutNow + ` + make_interval(secs => $5) ELSE u.locked_until END
+	FROM counted
+	WHERE u.id = counted.id
+	RETURNING counted.n, u.lockout_held
+`
+
+// recordSecondFactorLockout counts a second-factor lockout on failure (see
+// recordSecondFactorLockoutQuery). Before migration 000125 it does nothing.
+func (s *Service) recordSecondFactorLockout(ctx context.Context, failure *LoginFailure) error {
+	err := s.db.QueryRowContext(ctx, recordSecondFactorLockoutQuery, *failure.UserID, s.offsetSeconds(),
+		SecondFactorLockoutWindow.Seconds(), SecondFactorLockoutsToHold, heldLockDuration.Seconds()).
+		Scan(&failure.SecondFactorLockouts, &failure.Held)
+	if err != nil && !pgerr.IsMissingSchema(err) {
+		return fmt.Errorf("failed to record second-factor lockout: %w", err)
+	}
+	return nil
+}
+
+// releaseHeldLockTx lifts a held lock (a completed password reset proves the
+// mailbox) and its failure streak, keeping the count of recent second-factor
+// lockouts so the next one holds again. An ordinary lock is left alone.
+func releaseHeldLockTx(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
+	return tolerateMissingSchema(ctx, tx, func() error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE admin_users
+			SET lockout_held = FALSE, locked_until = NULL, failed_login_count = 0, last_failed_login_at = NULL
+			WHERE id = $1 AND lockout_held
+		`, userID)
+		return err
+	})
+}
+
 // UnlockUser lifts a user's lock and clears their failure streak. It reports
-// whether the account was locked; ErrUserNotFound for an unknown id.
+// whether the account was locked; ErrUserNotFound for an unknown id. A held
+// lock (repeated second-factor lockouts) is lifted too, and its count reset.
 func (s *Service) UnlockUser(ctx context.Context, userID uuid.UUID) (bool, error) {
 	var wasLocked bool
 	err := s.db.QueryRowContext(ctx, `
@@ -364,6 +442,12 @@ func (s *Service) UnlockUser(ctx context.Context, userID uuid.UUID) (bool, error
 		}
 		return false, nil
 	case err != nil:
+		return false, fmt.Errorf("failed to unlock user: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE admin_users SET lockout_held = FALSE, second_factor_lockouts = 0, second_factor_lockout_at = NULL
+		WHERE id = $1
+	`, userID); err != nil && !pgerr.IsMissingSchema(err) {
 		return false, fmt.Errorf("failed to unlock user: %w", err)
 	}
 	return wasLocked, nil

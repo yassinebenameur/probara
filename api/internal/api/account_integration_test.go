@@ -171,7 +171,7 @@ func tokenLink(t *testing.T, raw, page string) string {
 // newAccountFixture is newMCPFixture with account mail (an SMTP sink and
 // APP_BASE_URL) when sink is set, and PROBARA_SECRETS_KEY set so two-factor
 // enrolment works.
-func newAccountFixture(t *testing.T, sink *mailSink) *mcpFixture {
+func newAccountFixture(t *testing.T, sink *mailSink, configure ...func(*config.APIConfig)) *mcpFixture {
 	t.Helper()
 	key := make([]byte, 32)
 	for i := range key {
@@ -194,6 +194,9 @@ func newAccountFixture(t *testing.T, sink *mailSink) *mcpFixture {
 		cfg.SMTPPort = sink.port
 		cfg.SMTPFrom = "probara@example.com"
 		cfg.AppBaseURL = "https://app.example.com"
+	}
+	for _, fn := range configure {
+		fn(cfg)
 	}
 	s := NewServer(cfg, logger.New("api-test", "error"), metrics.NewRegistry("api-test"), dbClient)
 	if s.mcpErr != nil {
@@ -337,7 +340,7 @@ func TestTwoFactorSignInOverHTTP(t *testing.T) {
 	for i := 0; i < adminauth.LockoutThreshold; i++ {
 		tablet.do(http.MethodPost, "/api/v1/auth/login/mfa", map[string]string{"mfa_token": second.MFAToken, "code": "000001"})
 	}
-	f.waitAudit("auth.lockout", alice.String())
+	f.waitAudit("auth.second_factor_lockout", alice.String())
 	status, lockedBody := tablet.do(http.MethodPost, "/api/v1/auth/login/mfa", map[string]string{"mfa_token": second.MFAToken, "code": enabled.RecoveryCodes[1]})
 	if status != http.StatusUnauthorized || !bytes.Equal(lockedBody, wrongCodeBody) {
 		t.Fatalf("right code while locked: %d %s, want the wrong-code answer %s", status, lockedBody, wrongCodeBody)
@@ -350,6 +353,11 @@ func TestTwoFactorSignInOverHTTP(t *testing.T) {
 		t.Fatalf("disable while locked: %d %s", status, body)
 	}
 	root := f.createSuperadminBrowser()
+	// The superadmin sees that wrong codes locked the account.
+	status, body = root.do(http.MethodGet, "/api/v1/users/"+alice.String(), nil)
+	if detail := decodeJSON[models.AdminUser](t, status, body, http.StatusOK); detail.SecondFactorLockouts != 1 || detail.LastSecondFactorLockoutAt == nil || detail.LockoutHeld {
+		t.Fatalf("user detail after a second-factor lockout: %s", body)
+	}
 	if status := root.status(http.MethodPost, "/api/v1/users/"+alice.String()+"/unlock"); status != http.StatusOK {
 		t.Fatalf("unlock: %d", status)
 	}
@@ -634,6 +642,10 @@ func TestAccountLinksWithEmailDelivery(t *testing.T) {
 	if email != "moved@example.com" {
 		t.Fatalf("email after confirmation: %s", email)
 	}
+	// The old address is told the change completed.
+	if got := sink.mailsTo("newcomer@example.com", 3, 5*time.Second); len(got) != 3 || !strings.Contains(mailText(t, got[2]), "is now moved@example.com") {
+		t.Fatalf("old address got %d mails, want invite, change notice and completion notice", len(got))
+	}
 
 	// Own password change keeps this session and signs out the others.
 	other := f.browser()
@@ -655,6 +667,9 @@ func TestAccountLinksWithEmailDelivery(t *testing.T) {
 		t.Fatalf("the other session: %d, want signed out", status)
 	}
 	f.waitAudit("auth.password_change", created.ID.String())
+	if got := sink.mailsTo("moved@example.com", 2, 5*time.Second); len(got) != 2 || !strings.Contains(mailText(t, got[1]), "from the account page") {
+		t.Fatalf("password changed notice: %d mails to the address", len(got))
+	}
 
 	// A superadmin's reset link is mailed, not returned.
 	status, body = root.do(http.MethodPost, "/api/v1/users/"+created.ID.String()+"/password-reset", nil)
@@ -697,5 +712,167 @@ func TestAccountRoutesNeedASessionAndALocalAccount(t *testing.T) {
 	status, body = linked.do(http.MethodPost, "/api/v1/account/password", map[string]string{"current_password": identityPassword, "new_password": "a-good-long-password"})
 	if status != http.StatusConflict || !strings.Contains(string(body), "not_local_account") {
 		t.Fatalf("SSO password change: %d %s", status, body)
+	}
+}
+
+// enrolOverHTTP turns two-factor on for a signed-in browser and returns the
+// secret and recovery codes.
+func enrolOverHTTP(t *testing.T, b *browser) (string, []string) {
+	t.Helper()
+	status, body := b.do(http.MethodPost, "/api/v1/account/two-factor/setup", map[string]string{"current_password": identityPassword})
+	setup := decodeJSON[models.TOTPSetupResponse](t, status, body, http.StatusOK)
+	code, _ := adminauth.TOTPCodeAt(setup.Secret, time.Now())
+	status, body = b.do(http.MethodPost, "/api/v1/account/two-factor/enable", map[string]string{"code": code})
+	return setup.Secret, decodeJSON[models.RecoveryCodesResponse](t, status, body, http.StatusOK).RecoveryCodes
+}
+
+// A recovery code suggests a lost device: signing in with one ends every
+// other session (the new one stays), and the account is mailed.
+func TestRecoveryCodeSignInEndsOtherSessions(t *testing.T) {
+	sink := startMailSink(t)
+	f := newAccountFixture(t, sink)
+	f.createUser("alice", "member", nil)
+	if _, err := f.db.ExecContext(f.ctx, `UPDATE admin_users SET email = 'alice@example.com' WHERE username = 'alice'`); err != nil {
+		t.Fatal(err)
+	}
+	laptop := f.browser().mustLogin("alice")
+	_, codes := enrolOverHTTP(t, laptop)
+
+	phone := f.browser()
+	status, body := phone.login("alice", identityPassword)
+	challenge := decodeJSON[models.MFAChallengeResponse](t, status, body, http.StatusOK)
+	status, body = phone.do(http.MethodPost, "/api/v1/auth/login/mfa", map[string]string{"mfa_token": challenge.MFAToken, "code": codes[0]})
+	if status != http.StatusOK {
+		t.Fatalf("recovery code sign-in: %d %s", status, body)
+	}
+	if status := laptop.status(http.MethodGet, "/api/v1/account/security"); status != http.StatusUnauthorized {
+		t.Fatalf("other session after a recovery code: %d, want signed out", status)
+	}
+	if status := phone.status(http.MethodGet, "/api/v1/account/security"); status != http.StatusOK {
+		t.Fatalf("the recovery-code session: %d", status)
+	}
+	if got := sink.mailsTo("alice@example.com", 2, 5*time.Second); len(got) < 2 {
+		t.Fatalf("%d mails, want the two-factor notice and the recovery-code notice", len(got))
+	}
+}
+
+// No path turns bcrypt's 72-byte limit into a 500.
+func TestOverlongPasswordsAreValidationErrors(t *testing.T) {
+	f := newAccountFixture(t, nil)
+	root := f.createSuperadminBrowser()
+	long := strings.Repeat("密", 30) // 90 bytes, 30 characters
+	status, body := root.do(http.MethodPost, "/api/v1/users", models.CreateAdminUserRequest{Username: "longpass", Password: &long, PlatformRole: "member"})
+	if status != http.StatusBadRequest || !strings.Contains(string(body), "72 bytes") {
+		t.Fatalf("create with 90 bytes: %d %s", status, body)
+	}
+	f.createUser("alice", "member", nil)
+	alice := f.userID("alice")
+	status, body = root.do(http.MethodPatch, "/api/v1/users/"+alice.String(), models.UpdateAdminUserRequest{Password: &long})
+	if status != http.StatusBadRequest {
+		t.Fatalf("superadmin set with 90 bytes: %d %s", status, body)
+	}
+	user := f.browser().mustLogin("alice")
+	status, body = user.do(http.MethodPost, "/api/v1/account/password", map[string]string{"current_password": identityPassword, "new_password": long})
+	if status != http.StatusBadRequest {
+		t.Fatalf("own change with 90 bytes: %d %s", status, body)
+	}
+	status, body = root.do(http.MethodPost, "/api/v1/users/"+alice.String()+"/password-reset", nil)
+	reset := decodeJSON[models.AccountLinkResponse](t, status, body, http.StatusOK)
+	token := strings.TrimPrefix(reset.Link, "/reset-password#")
+	if status, body := f.browser().doToken(http.MethodPost, "/api/v1/auth/password/reset", token, map[string]string{"password": long}); status != http.StatusBadRequest {
+		t.Fatalf("reset with 90 bytes: %d %s", status, body)
+	}
+	// 24 three-byte characters are exactly 72 bytes: accepted.
+	fits := strings.Repeat("密", 24)
+	if status, body := f.browser().doToken(http.MethodPost, "/api/v1/auth/password/reset", token, map[string]string{"password": fits}); status != http.StatusNoContent {
+		t.Fatalf("reset with 72 bytes: %d %s", status, body)
+	}
+	if status, _ := f.browser().login("alice", fits); status != http.StatusOK {
+		t.Fatal("sign-in with the 72-byte password")
+	}
+}
+
+// With single sign-on configured, inviting an account not linked yet needs
+// an explicit method: a password invite would keep it from ever being linked.
+func TestInviteNeedsAnExplicitMethodWithSSO(t *testing.T) {
+	f := newAccountFixture(t, nil, func(cfg *config.APIConfig) {
+		cfg.OIDC.Enabled = true
+		cfg.OIDC.IssuerURL = "https://idp.invalid"
+		cfg.OIDC.ClientID = "probara"
+	})
+	root := f.createSuperadminBrowser()
+	status, body := root.do(http.MethodPost, "/api/v1/users", models.CreateAdminUserRequest{
+		Username: "pending", Email: ptrTo("pending@example.com"), PlatformRole: "member",
+	})
+	created := decodeJSON[models.AdminUser](t, status, body, http.StatusCreated)
+	path := "/api/v1/users/" + created.ID.String() + "/invite"
+	if status, body := root.do(http.MethodPost, path, nil); status != http.StatusBadRequest || !strings.Contains(string(body), "choose the invite method") {
+		t.Fatalf("invite without a method: %d %s", status, body)
+	}
+	status, body = root.do(http.MethodPost, path, models.SendInviteRequest{Method: "sso"})
+	if sso := decodeJSON[models.AccountLinkResponse](t, status, body, http.StatusOK); sso.Method != "sso" || sso.Link != "/login" {
+		t.Fatalf("SSO invite: %s", body)
+	}
+	status, body = root.do(http.MethodPost, path, models.SendInviteRequest{Method: "password"})
+	if pw := decodeJSON[models.AccountLinkResponse](t, status, body, http.StatusOK); pw.Method != "password" || !strings.HasPrefix(pw.Link, "/accept-invite#") {
+		t.Fatalf("explicit password invite: %s", body)
+	}
+}
+
+// A superadmin's address change retires mailed links, and a superadmin's
+// password set revokes the user's MCP connections and mails a notice.
+func TestSuperadminEditsRetireLinksAndMCPConnections(t *testing.T) {
+	sink := startMailSink(t)
+	f := newAccountFixture(t, sink)
+	root := f.createSuperadminBrowser()
+	f.createUser("alice", "member", nil)
+	alice := f.userID("alice")
+	if _, err := f.db.ExecContext(f.ctx, `UPDATE admin_users SET email = 'alice@example.com' WHERE id = $1`, alice); err != nil {
+		t.Fatal(err)
+	}
+	anon := f.browser()
+	if status, _ := anon.do(http.MethodPost, "/api/v1/auth/password/forgot", map[string]string{"login": "alice"}); status != http.StatusAccepted {
+		t.Fatal("forgot")
+	}
+	mails := sink.mailsTo("alice@example.com", 1, 5*time.Second)
+	if len(mails) != 1 {
+		t.Fatalf("%d reset mails", len(mails))
+	}
+	token := tokenLink(t, mails[0], "https://app.example.com/reset-password")
+
+	// Saving the same address (another field edited) keeps the link.
+	if status, body := root.do(http.MethodPatch, "/api/v1/users/"+alice.String(), map[string]any{"email": "Alice@Example.com", "platform_role": "member"}); status != http.StatusOK {
+		t.Fatalf("edit: %d %s", status, body)
+	}
+	var open int
+	_ = f.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM admin_account_tokens WHERE admin_user_id = $1 AND revoked_at IS NULL AND used_at IS NULL`, alice).Scan(&open)
+	if open != 1 {
+		t.Fatalf("an unchanged address retired the link (%d open)", open)
+	}
+	if status, body := root.do(http.MethodPatch, "/api/v1/users/"+alice.String(), map[string]any{"email": "new@example.com"}); status != http.StatusOK {
+		t.Fatalf("address change: %d %s", status, body)
+	}
+	if status, _ := anon.doToken(http.MethodPost, "/api/v1/auth/password/reset", token, map[string]string{"password": "a-good-long-password"}); status != http.StatusBadRequest {
+		t.Fatalf("reset link after an address change: %d, want refused", status)
+	}
+
+	var client, grant uuid.UUID
+	if err := f.db.QueryRowContext(f.ctx, `INSERT INTO mcp_oauth_clients (client_name, redirect_uris) VALUES ('agent', ARRAY['http://127.0.0.1/cb']) RETURNING id`).Scan(&client); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.QueryRowContext(f.ctx, `INSERT INTO mcp_oauth_grants (client_id, admin_user_id, tenant_id, scope) VALUES ($1, $2, $3, 'write') RETURNING id`, client, alice, f.tenantA).Scan(&grant); err != nil {
+		t.Fatal(err)
+	}
+	password := "a-new-long-password"
+	if status, body := root.do(http.MethodPatch, "/api/v1/users/"+alice.String(), models.UpdateAdminUserRequest{Password: &password}); status != http.StatusOK {
+		t.Fatalf("password set: %d %s", status, body)
+	}
+	var revoked bool
+	_ = f.db.QueryRowContext(f.ctx, `SELECT revoked_at IS NOT NULL FROM mcp_oauth_grants WHERE id = $1`, grant).Scan(&revoked)
+	if !revoked {
+		t.Fatal("a superadmin password set left the MCP grant live")
+	}
+	if got := sink.mailsTo("new@example.com", 1, 5*time.Second); len(got) != 1 || !strings.Contains(mailText(t, got[0]), "by an administrator") {
+		t.Fatalf("password changed notice: %d mails", len(got))
 	}
 }

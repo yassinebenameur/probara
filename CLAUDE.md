@@ -741,8 +741,13 @@ or imported groups come back empty. Any other path that creates groups through
   `PROBARA_SECRETS_KEY` (no key, no enrolment; never the no-op encryptor).
   Failed second factors and account-page password checks reserve an attempt
   through the lockout before comparing; a correct password releases only its
-  own count, and a reset keeps a two-factor account's lock. The rules and
-  expiries: `docs/auth-and-rbac.md`.
+  own count, an internal error gives the attempt back, and a reset keeps a
+  two-factor account's ordinary lock (repeated second-factor lockouts hold
+  it until unlock or reset). Every password set also revokes the user's MCP
+  OAuth grants (`RevokeMCPAccess`), and an address change retires mailed
+  links. Passwords are capped at 72 bytes (bcrypt) in
+  `auth.ValidatePassword` and `web/lib/password.ts`. The rules and expiries:
+  `docs/auth-and-rbac.md`.
 
 ## MCP server
 

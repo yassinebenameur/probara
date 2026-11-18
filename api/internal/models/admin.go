@@ -28,6 +28,14 @@ type AdminUser struct {
 	// an invite) and whether two-factor sign-in is on.
 	HasPassword      *bool `json:"has_password,omitempty"`
 	TwoFactorEnabled bool  `json:"two_factor_enabled,omitempty"`
+	// SecondFactorLockouts counts the locks failed two-factor codes caused in
+	// the last 24 hours (someone knows the password), the last at
+	// LastSecondFactorLockoutAt; LockoutHeld: they reached the threshold and
+	// the account stays locked until a superadmin unlocks it or the user
+	// completes a password reset. User-management reads only.
+	SecondFactorLockouts      int        `json:"second_factor_lockouts,omitempty"`
+	LastSecondFactorLockoutAt *time.Time `json:"last_second_factor_lockout_at,omitempty"`
+	LockoutHeld               bool       `json:"lockout_held,omitempty"`
 }
 
 // TenantMembership represents a user's role within one tenant.

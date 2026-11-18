@@ -125,7 +125,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
               "3–64 characters; letters, numbers, `.`, `_`, and `-`",
             ],
             ["`email`", "Optional, used for OIDC linking, SSO-only users, and account emails (invites, reset links, security notices)"],
-            ["`password`", "12–128 characters when local login is enabled"],
+            ["`password`", "At least 12 characters and at most 72 bytes (the bcrypt limit) when local login is enabled"],
             [
               "`platform_role`",
               "`superadmin` or `member`",
@@ -177,7 +177,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A superadministrator manages another user's access from the **Sign-in access** panel of the user's page. **Send invite** (`POST /api/v1/users/{id}/invite`, MCP `invite_user`) gives an account without a password a single-use link to set one, valid 7 days; sending another replaces it. For an account that signs in with single sign-on, or with `method: \"sso\"`, the invite only tells the user to sign in with SSO. **Generate reset link** (`POST /api/v1/users/{id}/password-reset`, MCP `create_password_reset_link`) issues a single-use reset link valid 1 hour for a password account; completing it signs the user out everywhere. **Reset two-factor** (`POST /api/v1/users/{id}/reset-2fa`, MCP `reset_user_two_factor`) turns a user's two-factor sign-in off after a lost device: they sign in with the password alone and can enrol again; their sessions stay signed in and a pending email change is cancelled. All three are audited (`user.invite`, `user.password_reset_link`, `user.two_factor_reset`).",
+            "A superadministrator manages another user's access from the **Sign-in access** panel of the user's page. **Send invite** (`POST /api/v1/users/{id}/invite`, MCP `invite_user`) gives an account without a password a single-use link to set one, valid 7 days; sending another replaces it. For an account that signs in with single sign-on, or with `method: \"sso\"`, the invite only tells the user to sign in with SSO. With single sign-on configured, inviting an account that is not linked yet needs an explicit choice (the panel preselects SSO): a password invite gives the account a Probara password, after which the identity provider can never link it by email, so the user signs in without the provider’s multi-factor authentication. **Generate reset link** (`POST /api/v1/users/{id}/password-reset`, MCP `create_password_reset_link`) issues a single-use reset link valid 1 hour for a password account; completing it signs the user out of every browser and revokes their MCP connections (workspace API keys stay). **Reset two-factor** (`POST /api/v1/users/{id}/reset-2fa`, MCP `reset_user_two_factor`) turns a user's two-factor sign-in off after a lost device: they sign in with the password alone and can enrol again; their sessions stay signed in and a pending email change is cancelled. All three are audited (`user.invite`, `user.password_reset_link`, `user.two_factor_reset`).",
         },
         {
           type: "paragraph",
@@ -194,7 +194,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "info",
           title: "Lost authenticator on the last superadmin account",
           text:
-            "Sign in with a recovery code. Without one and without another superadministrator, run `go run ./cmd/admin -reset-2fa <username>` with `POSTGRES_URL` set (it works on a database the migrations have not reached yet), then sign in with the password.",
+            "Sign in with a recovery code (it signs out every other session). Without one and without another superadministrator, run `go run ./cmd/admin -reset-2fa <username>` with `POSTGRES_URL` set (it works on a database the migrations have not reached yet), then sign in with the password.",
         },
       ],
     },

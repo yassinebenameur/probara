@@ -3,10 +3,11 @@
 // /reset-password#<token>, /confirm-email#<token>. The browser never sends a
 // fragment to a server, so the token stays out of access logs; the page hands
 // it to the API in the X-Action-Token header (lib/api/account.ts), as the
-// acknowledge and report-unsubscribe links do. Tokens are single use, so the
-// pages read only on load and act from a button.
+// acknowledge and report-unsubscribe links do, and drops the fragment from
+// browser history once read. Tokens are single use, so the pages read only on
+// load and act from a button.
 
-export { readActionToken as readLinkToken } from './alert-action';
+export { readActionToken as readLinkToken, takeActionToken as takeLinkToken } from './alert-action';
 
 /**
  * A link a superadmin was handed to pass on: absolute when the API knows the

@@ -6,11 +6,12 @@ import Callout from '@/components/ui/Callout';
 import AuthCard from '@/components/auth/AuthCard';
 import SetPasswordForm from '@/components/auth/SetPasswordForm';
 import { resetPasswordWithLink } from '@/lib/api';
-import { linkErrorMessage, readLinkToken } from '@/lib/account-links';
+import { linkErrorMessage, takeLinkToken } from '@/lib/account-links';
 import { errorCode, errorMessage } from '@/lib/errors';
 
 // Behind a password reset link (/reset-password#<token>; lib/account-links.ts).
-// Setting the password signs the account out everywhere; two-factor sign-in,
+// Setting the password signs the account out of every browser and revokes
+// its MCP connections (workspace API keys stay); two-factor sign-in,
 // when on, stays on.
 export default function ResetPasswordPage() {
   // undefined until the fragment has been read on the client.
@@ -18,7 +19,7 @@ export default function ResetPasswordPage() {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    setToken(readLinkToken(window.location.hash));
+    setToken(takeLinkToken());
   }, []);
 
   const submit = async (password: string) => {
@@ -40,7 +41,7 @@ export default function ResetPasswordPage() {
         </Callout>
       ) : done ? (
         <Callout tone="success" title="Password changed" live="polite">
-          Every session of the account was signed out. Sign in with the new password.
+          Every browser signed in to the account was signed out and its MCP connections were revoked (workspace API keys are not affected). Sign in with the new password.
         </Callout>
       ) : (
         <SetPasswordForm submitLabel="Set the new password" onSubmit={submit} />

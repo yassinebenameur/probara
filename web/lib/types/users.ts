@@ -20,6 +20,11 @@ export interface AdminUser {
   has_password?: boolean;
   /** Whether two-factor sign-in is on (/users reads only). */
   two_factor_enabled?: boolean;
+  /** Locks failed two-factor codes caused in the last 24 hours (/users reads only). */
+  second_factor_lockouts?: number;
+  last_second_factor_lockout_at?: string;
+  /** Locked until a superadmin unlocks it or the user resets the password (/users reads only). */
+  lockout_held?: boolean;
 }
 
 export interface AdminUserListResponse {

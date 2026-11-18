@@ -55,6 +55,8 @@ func (h *Handlers) writeLinkError(w http.ResponseWriter, err error, what string)
 		apierrors.WriteError(w, http.StatusServiceUnavailable, "unavailable", err.Error())
 	case errors.Is(err, adminauth.ErrEmailTaken):
 		apierrors.WriteError(w, http.StatusConflict, "email_taken", err.Error())
+	case errors.Is(err, auth.ErrPasswordTooLong):
+		apierrors.WriteValidationError(w, auth.ErrPasswordTooLong.Error())
 	default:
 		h.logger.WithError(err).Error("Failed to " + what)
 		apierrors.WriteInternalError(w, "failed to "+what)
@@ -157,7 +159,9 @@ func (h *Handlers) sendPasswordReset(ctx context.Context, login string, event au
 }
 
 // ResetPassword handles POST /api/v1/auth/password/reset (public): sets the
-// password through a reset link and signs the account out everywhere. The
+// password through a reset link, signs the account out everywhere and
+// disconnects its MCP clients (workspace API keys stay), and mails the
+// account a notice. The
 // second factor stays on, and a two-factor account's lockout stays as it
 // was: a mailbox alone never gets past the second factor.
 func (h *Handlers) ResetPassword(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +195,22 @@ func (h *Handlers) redeemPasswordLink(w http.ResponseWriter, r *http.Request, pu
 		return
 	}
 	h.recordAccountEvent(r, action, account, nil)
+	if purpose == adminauth.PurposePasswordReset {
+		h.notifyAccount(account.Email, "password changed notice", func(ctx context.Context, to string) error {
+			return h.mail.PasswordChanged(ctx, to, account.Username, accountmail.PasswordChangedByReset)
+		})
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// notifyAccount mails a notice in the background to address, when account
+// mail is configured and there is an address.
+func (h *Handlers) notifyAccount(address *string, what string, send func(ctx context.Context, to string) error) {
+	if !h.mail.Enabled() || address == nil || *address == "" {
+		return
+	}
+	to := *address
+	h.mail.Background(h.logger, what, func(ctx context.Context) error { return send(ctx, to) })
 }
 
 // InviteInfo handles GET /api/v1/auth/invite (public): the username an
@@ -219,5 +238,10 @@ func (h *Handlers) ConfirmEmail(w http.ResponseWriter, r *http.Request) {
 		details["old_email"] = *changed.OldEmail
 	}
 	h.recordAccountEvent(r, "auth.email_change", changed.Account, details)
+	// The old address learns the change happened (it was told at request
+	// time that one was pending).
+	h.notifyAccount(changed.OldEmail, "email changed notice", func(ctx context.Context, to string) error {
+		return h.mail.EmailChanged(ctx, to, changed.Account.Username, changed.NewEmail)
+	})
 	httpx.WriteJSON(w, http.StatusOK, models.EmailConfirmedResponse{Email: changed.NewEmail})
 }

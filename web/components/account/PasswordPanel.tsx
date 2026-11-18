@@ -59,7 +59,7 @@ export default function PasswordPanel({ security }: { security: AccountSecurity 
   return (
     <Panel
       title="Password"
-      subtitle="Changing it signs out every other browser signed in to your account and cancels open reset links and a pending email change. This one stays signed in."
+      subtitle="Changing it signs out every other browser signed in to your account, disconnects your MCP clients, and cancels open reset links and a pending email change. This one stays signed in; workspace API keys are not affected."
     >
       <form onSubmit={submit} className="max-w-md space-y-4" noValidate>
         <FormField label="Current password" description="Wrong attempts count toward the sign-in lockout (10 in a row lock the account for 15 minutes).">

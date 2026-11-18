@@ -258,19 +258,31 @@ export default function EditUserPage() {
             <div>
               <dt className="text-xs text-slate-500">Password sign-in</dt>
               <dd className="mt-0.5 text-ui text-slate-300">
-                {locked
-                  ? `Locked until ${formatDateTime(user.locked_until)}`
-                  : user.failed_login_count
-                    ? `${user.failed_login_count} failed in a row`
-                    : 'Not locked'}
+                {locked && user.lockout_held
+                  ? 'Locked until unlocked here or the user resets the password'
+                  : locked
+                    ? `Locked until ${formatDateTime(user.locked_until)}`
+                    : user.failed_login_count
+                      ? `${user.failed_login_count} failed in a row`
+                      : 'Not locked'}
               </dd>
             </div>
           </dl>
+          {(user.second_factor_lockouts ?? 0) > 0 && (
+            <Callout tone="danger" className="mt-4" title="Failed two-factor codes">
+              Someone signed in with this user&apos;s correct password and then failed the two-factor code until the
+              account locked: {user.second_factor_lockouts} time{user.second_factor_lockouts === 1 ? '' : 's'} in the
+              last 24 hours, last {formatDateTime(user.last_second_factor_lockout_at)}. The password is likely known
+              to someone else; ask the user to change it. Three such locks in 24 hours keep the account locked until
+              you unlock it or the user completes a password reset.
+            </Callout>
+          )}
           {locked && (
             <div className="mt-4 space-y-3">
               <Callout tone="warning">
-                Ten failed sign-ins in a row lock password sign-in for 15 minutes. The lock lifts on its
-                own; unlock it sooner if the user is waiting. SSO sign-in is not affected.
+                {user.lockout_held
+                  ? 'Repeated failed two-factor codes hold this lock: it does not lift on its own. Unlock only once the user has a new password or you know the attempts were theirs.'
+                  : 'Ten failed sign-ins in a row lock password sign-in for 15 minutes. The lock lifts on its own; unlock it sooner if the user is waiting. SSO sign-in is not affected.'}
               </Callout>
               <Button icon={<LockOpen />} onClick={handleUnlock} loading={unlocking} disabled={unlocking}>
                 Unlock sign-in

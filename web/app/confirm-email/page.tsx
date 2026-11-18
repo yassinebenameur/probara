@@ -6,7 +6,7 @@ import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import AuthCard from '@/components/auth/AuthCard';
 import { confirmEmailChange } from '@/lib/api';
-import { linkErrorMessage, readLinkToken } from '@/lib/account-links';
+import { linkErrorMessage, takeLinkToken } from '@/lib/account-links';
 import { errorCode, errorMessage } from '@/lib/errors';
 
 // Behind the confirmation link mailed to a new address
@@ -19,7 +19,7 @@ export default function ConfirmEmailPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setToken(readLinkToken(window.location.hash));
+    setToken(takeLinkToken());
   }, []);
 
   const confirm = async () => {

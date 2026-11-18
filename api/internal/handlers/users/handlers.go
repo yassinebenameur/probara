@@ -172,6 +172,11 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
+		if errors.Is(err, auth.ErrPasswordTooLong) {
+			// The validator already refuses it; never let bcrypt's limit be a 500.
+			apierrors.WriteValidationError(w, auth.ErrPasswordTooLong.Error())
+			return
+		}
 		if errors.Is(err, adminusers.ErrWorkspaceNotFound) {
 			apierrors.WriteError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 			return
@@ -238,7 +243,7 @@ func (h *Handlers) BootstrapFirstUser(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, adminusers.ErrBootstrapClosed):
 			apierrors.WriteError(w, http.StatusConflict, "conflict", err.Error())
 			return
-		case errors.Is(err, adminusers.ErrUsernameTaken):
+		case errors.Is(err, adminusers.ErrUsernameTaken), errors.Is(err, auth.ErrPasswordTooLong):
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		default:
@@ -282,6 +287,9 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, adminusers.ErrCannotDemoteLastAdmin):
 			apierrors.WriteValidationError(w, err.Error())
 			return
+		case errors.Is(err, auth.ErrPasswordTooLong):
+			apierrors.WriteValidationError(w, auth.ErrPasswordTooLong.Error())
+			return
 		case errors.Is(err, adminusers.ErrWorkspaceNotFound):
 			apierrors.WriteError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 			return
@@ -315,6 +323,13 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		"username": user.Username,
 		"changed":  changed,
 	})
+	if req.Password != nil && h.mail.Enabled() && user.Email != nil && *user.Email != "" {
+		// The owner learns their password was set by someone else.
+		to, username := *user.Email, user.Username
+		h.mail.Background(h.logger, "password changed notice", func(ctx context.Context) error {
+			return h.mail.PasswordChanged(ctx, to, username, accountmail.PasswordChangedByAdministrator)
+		})
+	}
 
 	httpx.WriteJSON(w, http.StatusOK, user)
 }

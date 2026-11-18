@@ -204,10 +204,11 @@ export const SECURITY_PAGE: DocPage = {
             ['A superadministrator sets a user’s password', 'All of the user’s sessions; setting your own keeps the session in use'],
             ['`go run ./cmd/admin` resets a password', 'All of that account’s sessions'],
             ['The user is deleted', 'All'],
-            ['The user completes a [password reset or an invite](#account-links-two-factor)', 'All of the user’s sessions'],
-            ['The user changes their own password (Account → Password)', 'All but the session in use'],
-            ['The user turns two-factor sign-in off (Account → Two-factor)', 'All but the session in use'],
-            ['Two-factor turned on, a recovery code used, a superadministrator’s two-factor reset, an email change', 'None (the user is emailed a notice of the first three when email is configured)'],
+            ['The user completes a [password reset or an invite](#account-links-two-factor)', 'All of the user’s sessions and MCP connections'],
+            ['The user changes their own password (Account → Password)', 'All but the session in use, and every MCP connection'],
+            ['A superadministrator sets a user’s password (as above)', 'Also every MCP connection of the user'],
+            ['The user turns two-factor sign-in off, or uses a recovery code (to sign in or on Account → Two-factor)', 'All but the session in use (a recovery code suggests a lost device)'],
+            ['Two-factor turned on, a superadministrator’s two-factor reset, an email change', 'None'],
             ['A rotated refresh token is presented again after the 60-second window', 'That session'],
             ['Lockout, unlock, a role or membership change (removing the last membership included)', 'None: roles and memberships are checked on every request anyway, and a lock must not let a guesser sign people out'],
           ],
@@ -246,17 +247,22 @@ export const SECURITY_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'Completing a **reset** sets the password, signs the account out everywhere, retires every other open link and pending sign-in step of the account, and clears the sign-in lockout — except on an account with two-factor sign-in on, where the lock and its failure count stay and two-factor stays on: a reset needs only the mailbox, so it must never buy a fresh round of code guesses or bypass the second factor. An **email change** needs the current password, goes to the new address and applies only when that link is used; whether another account already uses the address is checked then, not when asking, so the form cannot probe for accounts. A password reset, the user’s own password change, a superadministrator setting the password or resetting two-factor, and `cmd/admin` all cancel a pending change, so someone who started one with a stolen password cannot finish it after the owner recovers the account. Every check of the current password on the account page counts toward the [sign-in lockout](#sign-in-lockout-sessions).',
+            'Completing a **reset** sets the password, signs the account out of every browser, revokes its MCP connections (workspace API keys are not the user’s credentials and stay), retires every other open link and pending sign-in step of the account, and clears the sign-in lockout — except on an account with two-factor sign-in on, where an ordinary lock and its failure count stay and two-factor stays on: a reset needs only the mailbox, so it must never buy a fresh round of code guesses or bypass the second factor (it does lift a held lock, below). Changing the email address, by confirmation or by a superadministrator, retires open invite and reset links, which went to the old address; a deleted account’s links go with it, and a disabled account’s links are refused. An **email change** needs the current password, goes to the new address and applies only when that link is used; whether another account already uses the address is checked then, not when asking, so the form cannot probe for accounts. A password reset, the user’s own password change, a superadministrator setting the password or resetting two-factor, and `cmd/admin` all cancel a pending change, so someone who started one with a stolen password cannot finish it after the owner recovers the account. Every check of the current password on the account page counts toward the [sign-in lockout](#sign-in-lockout-sessions).',
         },
         {
           type: 'paragraph',
           text:
-            '**Two-factor sign-in** is optional, per user, for password accounts (SSO users rely on their identity provider). It is TOTP (RFC 6238: HMAC-SHA1, 6 digits, 30-second steps, one step of clock drift either way), enrolled from Account → Two-factor with the password and confirmed with a code; the QR code is drawn in the browser, so the secret never reaches a third party. The secret is stored encrypted with `PROBARA_SECRETS_KEY` and never in plaintext: without the key, enrolment is refused. A code is accepted once (the last used time step is stored, and only later ones count). Enrolment issues 10 recovery codes, shown once and stored as hashes; each works once in place of a code, and a new set replaces them all. Turning two-factor off, or replacing the recovery codes, needs the password and a code.',
+            'Passwords are at least 12 characters and at most 72 bytes, the most bcrypt hashes; accented or non-Latin letters take two to four bytes, so such passwords hold fewer characters. The API and the forms count bytes; existing passwords are unaffected. **Two-factor sign-in** is optional, per user, for password accounts (SSO users rely on their identity provider). It is TOTP (RFC 6238: HMAC-SHA1, 6 digits, 30-second steps, one step of clock drift either way), enrolled from Account → Two-factor with the password and confirmed with a code; the QR code is drawn in the browser, so the secret never reaches a third party. The secret is stored encrypted with `PROBARA_SECRETS_KEY` and never in plaintext: without the key, enrolment is refused. A code is accepted once (the last used time step is stored, and only later ones count). Enrolment issues 10 recovery codes, shown once and stored as hashes; each works once in place of a code, and a new set replaces them all. Turning two-factor off, or replacing the recovery codes, needs the password and a code.',
         },
         {
           type: 'paragraph',
           text:
-            'With two-factor on, a correct password answers with a challenge (`mfa_required`, 5 minutes, single use) and sets no cookie; `POST /api/v1/auth/login/mfa` with a code or recovery code starts the session. A wrong password gets the ordinary refusal, so the first step never tells whether a wrong password belongs to a two-factor account. Failed codes count toward the same lockout as failed passwords, a correct password never resets the count that codes built up, and while the account is locked the second step answers a right code exactly like a wrong one. The rate limiter treats the second step as a sign-in. The session list shows which sessions passed a second factor. With email delivery, the user is mailed when two-factor is turned on or off (by them or a superadministrator) and when a recovery code is used.',
+            'With two-factor on, a correct password answers with a challenge (`mfa_required`, 5 minutes, single use) and sets no cookie; `POST /api/v1/auth/login/mfa` with a code or recovery code starts the session. A wrong password gets the ordinary refusal, so the first step never tells whether a wrong password belongs to a two-factor account. Failed codes count toward the same lockout as failed passwords, a correct password never resets the count that codes built up, and while the account is locked the second step answers a right code exactly like a wrong one. The rate limiter treats the second step as a sign-in. The session list shows which sessions passed a second factor.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'A failed second factor means someone has the password. When wrong codes lock an account, the user is mailed (“someone entered your password”), the audit log records `auth.second_factor_lockout`, and the user’s page in Users shows how many such locks happened in the last 24 hours. The third within 24 hours **holds** the account locked: it does not lift after 15 minutes but stays until a superadministrator unlocks it (Unlock sign-in, or `cmd/admin`) or the user completes a password reset, which proves the mailbox; the next sign-in still needs the second factor, and the count stays, so another lock holds it again. Without the hold, someone with the password would get ten code guesses every 15 minutes indefinitely. With email delivery the user is also mailed when two-factor is turned on or off (by them or a superadministrator), when a recovery code is used, when the password changes (their own change, a reset, or a superadministrator), and at the old address when an email change completes.',
         },
         {
           type: 'paragraph',
@@ -868,7 +874,7 @@ go run ./cmd/admin/migrate_sensitive_headers`,
             ],
             [
               'Administrator password/session',
-              'Reset the password (which signs the user out everywhere) or sign their sessions out from Users, inspect audit activity, and consider JWT rotation if token-signing material was exposed.',
+              'Reset the password (which signs the user out of every browser and revokes their MCP connections; workspace API keys are separate) or sign their sessions out from Users, inspect audit activity, and consider JWT rotation if token-signing material was exposed.',
             ],
             [
               'JWT secret',

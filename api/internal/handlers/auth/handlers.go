@@ -117,7 +117,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		h.logger.WithError(err).Warn("Failed to update admin last login")
 	}
 
-	if err := h.issueSession(w, r, user.ID, adminauth.AuthMethodPassword, ""); err != nil {
+	if _, err := h.issueSession(w, r, user.ID, adminauth.AuthMethodPassword, ""); err != nil {
 		h.logger.WithError(err).Error("Failed to issue admin session")
 		apierrors.WriteInternalError(w, "failed to create session")
 		return
@@ -328,16 +328,16 @@ func (h *Handlers) AuthContext(w http.ResponseWriter, r *http.Request) {
 // sign-in and sets its cookies. authMethod is adminauth.AuthMethodPassword
 // or AuthMethodOIDC; secondFactor is how a two-factor sign-in passed its
 // second step ("" without one), shown in the session list.
-func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID, authMethod, secondFactor string) error {
+func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID, authMethod, secondFactor string) (uuid.UUID, error) {
 	refreshToken, refreshHash, err := generateRefreshToken()
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	refreshTTL := time.Duration(h.cfg.AdminRefreshTTLDays) * 24 * time.Hour
 	familyID, err := h.service.CreateSession(r.Context(), adminID, refreshHash, time.Now().Add(refreshTTL), clientip.FromRequest(r), r.UserAgent(), authMethod)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 	if secondFactor != "" {
 		if err := h.service.MarkSessionSecondFactor(r.Context(), familyID, secondFactor); err != nil {
@@ -346,11 +346,11 @@ func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID 
 	}
 
 	if err := h.setAccessCookie(w, adminID, familyID); err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	h.setRefreshCookie(w, refreshToken, refreshTTL)
-	return nil
+	return familyID, nil
 }
 
 // setAccessCookie issues the access JWT for a session; familyID becomes its

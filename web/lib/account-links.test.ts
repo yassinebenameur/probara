@@ -7,9 +7,10 @@ import {
   looksLikeTotpCode,
   readLinkToken,
   recoveryCodesFile,
+  takeLinkToken,
 } from './account-links';
 import { sessionSecondFactorLabel } from './account';
-import { passwordProblem } from './password';
+import { passwordBytes, passwordProblem } from './password';
 import { isPublicRoute } from './public-routes';
 
 test('link tokens come from the fragment only when token-shaped', () => {
@@ -55,7 +56,40 @@ test('the link pages sit outside the authenticated shell', () => {
 
 test('passwordProblem mirrors the API rule', () => {
   assert.equal(passwordProblem('', ''), 'Enter a new password.');
-  assert.match(passwordProblem('short', 'short'), /12 to 128/);
+  assert.match(passwordProblem('short', 'short'), /at least 12/);
+  // Bytes, not UTF-16 units: 30 CJK characters are 90 bytes, 24 are 72.
+  const cjk30 = '密'.repeat(30);
+  assert.match(passwordProblem(cjk30, cjk30), /too long/);
+  const cjk24 = '密'.repeat(24);
+  assert.equal(passwordProblem(cjk24, cjk24), '');
+  assert.match(passwordProblem('a'.repeat(73), 'a'.repeat(73)), /too long/);
+  assert.equal(passwordBytes('é'), 2);
   assert.match(passwordProblem('long-enough-pass', 'long-enough-PASS'), /do not match/);
   assert.equal(passwordProblem('long-enough-pass', 'long-enough-pass'), '');
+});
+
+test('takeLinkToken drops the fragment from history and survives a second mount', () => {
+  const token = 'Abc_def-0123456789ABCDEFGHIJKLMNOPQRSTUVWXY';
+  const replaced: string[] = [];
+  const loc = { hash: `#${token}`, pathname: '/reset-password', search: '' };
+  const g = globalThis as unknown as { window?: unknown };
+  g.window = {
+    location: loc,
+    history: {
+      state: { kept: true },
+      replaceState: (_state: unknown, _title: string, url: string) => {
+        replaced.push(url);
+        loc.hash = '';
+      },
+    },
+  };
+  try {
+    assert.equal(takeLinkToken(), token);
+    assert.deepEqual(replaced, ['/reset-password']);
+    // React's development double mount reads again with the fragment gone.
+    assert.equal(takeLinkToken(), token);
+    assert.equal(replaced.length, 1);
+  } finally {
+    delete g.window;
+  }
 });
