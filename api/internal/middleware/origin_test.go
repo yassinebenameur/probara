@@ -18,7 +18,7 @@ import (
 // another port of the UI's host.
 func testOriginPolicy() *OriginPolicy {
 	return NewOriginPolicy("https://app.example.com/", "", []string{"https://ops.example.net"},
-		[]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, nil)
 }
 
 func originRequest(method, host string, headers map[string]string) *http.Request {
@@ -189,5 +189,27 @@ func TestAcceptableBodyMultipartOnlyOnUploadRoutes(t *testing.T) {
 	req.ContentLength = -1 // chunked: a body of unknown length
 	if acceptableBody(req) {
 		t.Fatal("a chunked body without a content type was accepted")
+	}
+}
+
+// The refusal tells an operator what was refused and what would fix it,
+// showing the origin normalized, never the raw header.
+func TestCrossOriginRefusalNamesOriginAndSetting(t *testing.T) {
+	h := NewOriginPolicy("", "", nil, nil, nil).RequireTrustedOrigin(statusHandler(http.StatusNoContent))
+	for origin, want := range map[string]string{
+		"http://localhost:3000":      "origin http://localhost:3000 ",
+		"HTTPS://Status.Example:443": "origin https://status.example ",
+		"null":                       "origin null (an opaque origin)",
+		"javascript:\"<x>":           "origin (unreadable)",
+	} {
+		rec := do(h, originRequest(http.MethodPost, "probara-api:8080", map[string]string{"Origin": origin}))
+		var body struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusForbidden || !strings.Contains(body.Message, want) || !strings.Contains(body.Message, "APP_BASE_URL") {
+			t.Errorf("Origin %q: %d %q, want the message to name %q and APP_BASE_URL", origin, rec.Code, body.Message, want)
+		}
 	}
 }

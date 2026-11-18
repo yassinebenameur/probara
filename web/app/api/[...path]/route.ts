@@ -5,6 +5,7 @@ import {
   copyHeaders,
   copyResponseHeaders,
   type ProxyRouteContext as RouteContext,
+  vouchForSameOriginWrite,
 } from '@/lib/api-proxy';
 
 export const runtime = 'nodejs';
@@ -14,6 +15,8 @@ async function proxyRequest(req: NextRequest, ctx: RouteContext): Promise<Respon
   const { path } = await ctx.params;
   const targetUrl = buildTargetUrl(req.url, 'api', path);
   const headers = copyHeaders(req.headers);
+  // A write from the UI's own pages: let the API know (lib/api-proxy.ts).
+  vouchForSameOriginWrite(req.method, req.headers, headers, req.url);
   // The API builds absolute URLs (MCP OAuth metadata and redirects) from
   // the origin the client used; the Host header is dropped above, so pass it
   // on as the forwarded host when no outer proxy already did.

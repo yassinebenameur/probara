@@ -577,9 +577,7 @@ or imported groups come back empty. Any other path that creates groups through
   in `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
   top-level `smtp:` and `appBaseURL:` values render the env into all three
   workloads via the `smtpEnv` helper. The base Compose file wires none of
-  it except `APP_BASE_URL` on the api (default `http://localhost:3000`, the
-  dev UI: the CSRF origin check needs it, as does the local start script);
-  `docker-compose.release.yml` passes it to all three.
+  it; `docker-compose.release.yml` passes it to all three.
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
   `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
   deep links and, with `PROBARA_SECRETS_KEY`, acknowledge links to
@@ -740,9 +738,12 @@ or imported groups come back empty. Any other path that creates groups through
   authenticates (403 `cross_origin_refused`; non-JSON body 415, multipart
   only on `MultipartUploadPaths`, pinned to the MCP catalog by
   `TestMultipartUploadPathsMatchCatalog`), sign-in/refresh/sign-out wear
-  `RequireTrustedOrigin`, OAuth consent re-checks it. Never base a security
-  decision on `X-Forwarded-Host` outside it. A new cookie-setting route takes
-  `RequireTrustedOrigin`. Rules and reasoning: `docs/auth-and-rbac.md`.
+  `RequireTrustedOrigin`, OAuth consent re-checks it. The UI's `/api` proxy
+  vouches for its own origin's writes by dropping Origin/Referer/
+  Sec-Fetch-Site (`vouchForSameOriginWrite`, `web/lib/api-proxy.ts`), which
+  is why no origin configuration is needed; the API never believes an
+  untrusted peer's `X-Forwarded-Host`. A new cookie-setting route takes
+  `RequireTrustedOrigin`. Reasoning: the `OriginPolicy` comment.
 - **Session identity**: one `admin_session_families` row per sign-in
   (password or SSO); refresh tokens rotate inside it and the access JWT's
   `sid` claim names it. The family's `revoked_at` is the only authority:

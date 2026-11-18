@@ -55,6 +55,26 @@ function refreshRateLimitedError(): ApiRequestError {
   );
 }
 
+// The API's answer when a session-cookie write comes from an origin it does
+// not trust (the UI is not where the API expects it).
+const CROSS_ORIGIN_REFUSED = 'cross_origin_refused';
+
+/** The configuration error a 403 cross_origin_refused carries, or null for any other 403. */
+async function originRefusal(response: Response): Promise<ApiRequestError | null> {
+  if (!(response.headers.get('content-type') ?? '').includes('application/json')) return null;
+  try {
+    const error = apiErrorFromBody(await response.json());
+    if (error.error !== CROSS_ORIGIN_REFUSED) return null;
+    return new ApiRequestError(
+      CROSS_ORIGIN_REFUSED,
+      `This page's address is not accepted by the API, so your session cannot be renewed. ` +
+        `An administrator must fix the deployment (${error.message}).`
+    );
+  } catch {
+    return null;
+  }
+}
+
 // A 401 that survived the refresh attempt: send the user back to sign in
 // (or to re-enter the key, which is dropped) and fail the call.
 function handleUnauthorized(hasApiKey: boolean): never {
@@ -245,13 +265,13 @@ export async function apiRequest<T>(
     const response = await fetch(getApiUrl(path), options);
     if (response.status === 401 && !apiKey) {
       tenantSelectionValidated = false;
-      const outcome = await refreshSessionOutcome();
-      if (outcome === 'refreshed') {
+      const refresh = await refreshSessionResult();
+      if (refresh.outcome === 'refreshed') {
         const retryResponse = await fetch(getApiUrl(path), options);
         return await handleResponse<T>(retryResponse, Boolean(apiKey), sentTenantId);
       }
-      if (outcome === 'rate_limited') {
-        throw refreshRateLimitedError();
+      if (refresh.error) {
+        throw refresh.error;
       }
     }
     return await handleResponse<T>(response, Boolean(apiKey), sentTenantId);
@@ -264,16 +284,22 @@ export async function apiRequest<T>(
 }
 
 // How a refresh ended: a new access token; the session is over (sign in
-// again); or the API kept answering 429, which says nothing about the
-// session.
-export type RefreshOutcome = 'refreshed' | 'signed_out' | 'rate_limited';
+// again); the API kept answering 429, which says nothing about the session;
+// or the API refused this page's origin (403 cross_origin_refused), a
+// deployment misconfiguration that signing in again would not fix. The last
+// two carry the error the failed call is answered with, and keep the session.
+export type RefreshOutcome = 'refreshed' | 'signed_out' | 'rate_limited' | 'origin_refused';
+export interface RefreshResult {
+  outcome: RefreshOutcome;
+  error?: ApiRequestError;
+}
 
 // Refresh rotates the token server-side, so concurrent calls would race and
 // all but one lose. Single-flight: every 401 handler (including the SSE
 // stream) awaits the same in-flight request.
-let refreshInFlight: Promise<RefreshOutcome> | null = null;
+let refreshInFlight: Promise<RefreshResult> | null = null;
 
-export function refreshSessionOutcome(): Promise<RefreshOutcome> {
+export function refreshSessionResult(): Promise<RefreshResult> {
   if (!refreshInFlight) {
     refreshInFlight = doRefresh().finally(() => {
       refreshInFlight = null;
@@ -284,7 +310,7 @@ export function refreshSessionOutcome(): Promise<RefreshOutcome> {
 
 /** True when the session was refreshed; false otherwise (including when rate limited). */
 export async function refreshSession(): Promise<boolean> {
-  return (await refreshSessionOutcome()) === 'refreshed';
+  return (await refreshSessionResult()).outcome === 'refreshed';
 }
 
 // A 429 on refresh is retried a few times, waiting what Retry-After asks
@@ -298,7 +324,7 @@ function retryAfterMs(response: Response, attempt: number): number {
   return Math.min(wait, REFRESH_MAX_WAIT_MS);
 }
 
-async function doRefresh(): Promise<RefreshOutcome> {
+async function doRefresh(): Promise<RefreshResult> {
   for (let attempt = 0; ; attempt++) {
     let response: Response;
     try {
@@ -307,11 +333,20 @@ async function doRefresh(): Promise<RefreshOutcome> {
         credentials: 'include',
       });
     } catch {
-      return 'signed_out';
+      return { outcome: 'signed_out' };
     }
-    if (response.ok) return 'refreshed';
-    if (response.status !== 429) return 'signed_out';
-    if (attempt >= REFRESH_RATE_LIMIT_RETRIES) return 'rate_limited';
+    if (response.ok) return { outcome: 'refreshed' };
+    if (response.status === 403) {
+      const refused = await originRefusal(response);
+      if (refused) {
+        // Loud on purpose: every signed-in call fails until the deployment
+        // is fixed, and the message says what to set.
+        console.error(`Session refresh refused by the API: ${refused.message}`);
+        return { outcome: 'origin_refused', error: refused };
+      }
+    }
+    if (response.status !== 429) return { outcome: 'signed_out' };
+    if (attempt >= REFRESH_RATE_LIMIT_RETRIES) return { outcome: 'rate_limited', error: refreshRateLimitedError() };
     const wait = retryAfterMs(response, attempt);
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
@@ -373,11 +408,11 @@ export async function apiFetch(
 
   let response = await makeRequest();
   if (response.status === 401 && !apiKey) {
-    const outcome = await refreshSessionOutcome();
-    if (outcome === 'refreshed') {
+    const refresh = await refreshSessionResult();
+    if (refresh.outcome === 'refreshed') {
       response = await makeRequest();
-    } else if (outcome === 'rate_limited') {
-      throw refreshRateLimitedError();
+    } else if (refresh.error) {
+      throw refresh.error;
     }
   }
 

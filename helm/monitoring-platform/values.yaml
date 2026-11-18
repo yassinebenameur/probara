@@ -294,12 +294,19 @@ secrets:
 extraEnv: []
 
 # =============================================================================
-# PUBLIC APP URL (notification deep links)
+# PUBLIC APP URL (operator UI origin)
 # =============================================================================
-# Public origin of the operator UI, e.g. "https://probara.example.com". Alert
-# emails render an "open the monitor" button pointing at it. Left empty the
-# button is omitted — a notification linking to a guessed host is worse than one
-# with no link. Rendered into api, alerter and worker alongside the SMTP block.
+# Public origin of the operator UI, e.g. "https://probara.example.com".
+# Rendered into api, alerter and worker alongside the SMTP block, and into
+# status-page. Uses:
+#   - notification deep links ("open the monitor", acknowledge links) and
+#     scheduled SLA report links -- omitted while empty, never a guessed host;
+#   - the MCP OAuth consent screen's address;
+#   - an origin the api accepts session-cookie writes from (cross-site request
+#     forgery check). The UI itself does not need it there: through its /api
+#     proxy (port-forward, any ingress) or the bundled ingress its writes are
+#     accepted as is. Set it if a refused write's 403 names the UI's origin;
+#   - the status pages' frame-ancestors, for the template editor's preview.
 appBaseURL: ""
 
 # =============================================================================
@@ -346,8 +353,9 @@ security:
   apiRateLimitPerMinute: 600
   apiRateLimitBurst: 120
   # Browser origins allowed credentialed cross-origin API calls
-  # (API_ALLOWED_ORIGINS). Empty: the appBaseURL origin when set, else
-  # same-origin only, which is all the bundled frontend needs.
+  # (API_ALLOWED_ORIGINS), and allowed to write with the session cookie.
+  # Empty: the appBaseURL origin when set, else same-origin only, which is
+  # all the bundled frontend needs.
   apiAllowedOrigins: []
 
 # =============================================================================

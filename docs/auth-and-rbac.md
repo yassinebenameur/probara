@@ -206,12 +206,17 @@ request's own origin (`Host`, or `X-Forwarded-Host` from a
 be HTTPS). Judged on `Origin`, else `Sec-Fetch-Site` (`same-origin` only),
 else the `Referer`'s origin. `Sec-Fetch-Site: same-origin` never overrides
 an `Origin`: it compares the page with the URL fetched, which may be a proxy
-to the API on another origin (the status page's `/_sp_api`). Through the
-UI's `/api` proxy the trusted origin comes from `APP_BASE_URL` or a trusted
-proxy's `X-Forwarded-Host` (dev Compose and the local start script default
-`APP_BASE_URL` to `http://localhost:3000`). None
-of the three means a non-browser client (`curl` with a cookie jar), which is
-allowed. A cookie-authenticated unsafe request with a body must also be
+to the API on another origin (the status page's `/_sp_api`). None of the
+three means a non-browser client (`curl` with a cookie jar), which is
+allowed -- and it is what the UI's `/api` proxy sends for its own pages: it
+compares the page's origin with the Host (or fronting proxy's
+`X-Forwarded-Host`) it was reached with and, when they match, drops Origin,
+Referer and Sec-Fetch-Site (`web/lib/api-proxy.ts`). A cross-site page cannot
+match: the browser sets Host from the URL, and a custom forwarded header
+needs a CORS preflight the API refuses. So the UI works through its proxy on
+any host or port with no origin configuration; the bundled ingress sends
+`/api` to the API with the browser's Host, which is the API's own origin. The
+403 names the refused origin and `APP_BASE_URL`. A cookie-authenticated unsafe request with a body must also be
 `application/json` (`multipart/form-data` on `MultipartUploadPaths`, the
 import preview), else `415 unsupported_media_type`, so a preflight-free
 `text/plain` request cannot carry JSON. API keys and MCP tokens are not

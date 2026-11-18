@@ -34,9 +34,13 @@ function fakeServer() {
     calls.push({ path, tenant: headers['X-Tenant-ID'] ?? null });
     if (path === '/v1/auth/refresh') {
       if (state.refresh === 200) state.session = 'live';
-      return state.refresh === 429
-        ? json(429, { error: 'rate_limited', message: 'too many requests' }, { 'retry-after': '0' })
-        : json(state.refresh, {});
+      if (state.refresh === 429) {
+        return json(429, { error: 'rate_limited', message: 'too many requests' }, { 'retry-after': '0' });
+      }
+      if (state.refresh === 403) {
+        return json(403, { error: 'cross_origin_refused', message: 'origin http://localhost:3001 is not the operator UI; set APP_BASE_URL' });
+      }
+      return json(state.refresh, {});
     }
     if (state.session === 'expired') return json(401, { error: 'unauthorized', message: 'expired' });
     if (path.startsWith('/v1/tenants')) return json(200, { items: [] });
@@ -100,4 +104,25 @@ test('a rate-limited refresh keeps the session; a refused one signs out', async 
   server.state.refresh = 401;
   await assert.rejects(apiRequest('GET', '/v1/account/sessions'));
   assert.equal(windowShim.location.href, '/login');
+});
+
+test('a refresh refused for its origin is a configuration error, not a sign-out', async () => {
+  const server = fakeServer();
+  windowShim.location.href = '/settings';
+  server.state.session = 'expired';
+  server.state.refresh = 403;
+  const logged: unknown[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void logged.push(args.join(' '));
+  try {
+    await assert.rejects(
+      apiRequest('GET', '/v1/account/sessions'),
+      (err: { error?: string; message?: string }) =>
+        err.error === 'cross_origin_refused' && /APP_BASE_URL/.test(err.message ?? '')
+    );
+  } finally {
+    console.error = original;
+  }
+  assert.equal(windowShim.location.href, '/settings', 'not sent to the sign-in page');
+  assert.equal(logged.length, 1, 'reported, not silent');
 });

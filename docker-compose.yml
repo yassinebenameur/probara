@@ -197,11 +197,6 @@ services:
       API_RATE_LIMIT_PER_MINUTE: "${API_RATE_LIMIT_PER_MINUTE:-600}"
       API_RATE_LIMIT_BURST: "${API_RATE_LIMIT_BURST:-120}"
       API_ALLOWED_ORIGINS: "${API_ALLOWED_ORIGINS:-}"
-      # The operator UI's origin (`make start-ui`, next dev on :3000): its
-      # /api proxy reaches this api from another origin, and session-cookie
-      # writes are accepted only from the UI (cross-site request forgery
-      # check). Also turns on notification deep links to it.
-      APP_BASE_URL: "${APP_BASE_URL:-http://localhost:3000}"
     ports:
       - "8080:8080"
       - "9090:9090"
