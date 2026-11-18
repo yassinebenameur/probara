@@ -907,6 +907,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               'The `/api` proxy drops a client-sent `X-Forwarded-For` / `X-Real-IP` unless this is `true`; set it only when a proxy you run in front of the UI sets that header, and then list the frontend in the API’s `TRUSTED_PROXY_CIDRS` ([trusted proxies](/docs/security/#audit-proxy-trust)). Runtime; not wired by Compose or Helm (use `frontend.extraEnv`).',
             ],
             [
+              '`API_PROXY_TRUST_FORWARDED_HOST`',
+              '`false`',
+              'The `/api` proxy takes the host the browser addressed from its `Host` header, which port-forward, Caddy (the release edge) and nginx-ingress keep; it uses that host to accept the UI’s own writes ([cross-site request forgery](/docs/security/#passwords-api-keys-sessions)) and passes it to the API as `X-Forwarded-Host`, ignoring any client-sent value. Set `true` only when a proxy you run in front of the UI rewrites `Host` and overwrites `X-Forwarded-Host` with the browser’s host: then that header alone counts. Runtime; not wired by Compose or Helm (use `frontend.extraEnv`).',
+            ],
+            [
               '`NEXT_PUBLIC_DEBUG_INGEST_URL`',
               'Empty',
               'Developer-only debug timing sink. If set, monitor IDs and browser timing events are sent to it.',

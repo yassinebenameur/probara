@@ -208,6 +208,11 @@ func TestCookieWritesThroughTheUIProxyWithoutOriginConfiguration(t *testing.T) {
 			map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}},
 		"script setting X-Forwarded-Host through a same-origin proxy": {"localhost:8082",
 			map[string]string{"Origin": "http://localhost:8082", "Sec-Fetch-Site": "same-origin"}},
+		// The UI proxy reached through something that forwards client
+		// headers: it refuses to vouch (Host is its internal name) and sends
+		// that Host on as the forwarded host, never the script's value.
+		"script reaching the UI proxy through a header-forwarding proxy": {"probara-frontend:3000",
+			map[string]string{"Origin": "https://status.example.com", "Sec-Fetch-Site": "same-origin"}},
 		"opaque origin (sandboxed frame)": {"localhost:3000",
 			map[string]string{"Origin": "null", "Sec-Fetch-Site": "cross-site"}},
 		"no Origin, cross-site fetch metadata": {"localhost:3000",
@@ -229,7 +234,7 @@ func TestCookieWritesThroughTheUIProxyWithoutOriginConfiguration(t *testing.T) {
 	// shape with another Origin is refused too.
 	for name, a := range attacks {
 		if a.forwardedHost == "localhost:8082" {
-			continue // only an untrusted peer passes client forwarding headers through
+			continue // the UI proxy (the trusted peer) never passes a client X-Forwarded-Host on
 		}
 		if rec := send(trustedProxy, http.MethodPost, "/api/v1/tenants", a.forwardedHost, true, a.headers); rec.Code != http.StatusForbidden {
 			t.Errorf("%s via the trusted proxy: %d %s, want 403", name, rec.Code, rec.Body)

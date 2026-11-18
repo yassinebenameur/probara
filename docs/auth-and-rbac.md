@@ -209,11 +209,13 @@ an `Origin`: it compares the page with the URL fetched, which may be a proxy
 to the API on another origin (the status page's `/_sp_api`). None of the
 three means a non-browser client (`curl` with a cookie jar), which is
 allowed -- and it is what the UI's `/api` proxy sends for its own pages: it
-compares the page's origin with the Host (or fronting proxy's
-`X-Forwarded-Host`) it was reached with and, when they match, drops Origin,
-Referer and Sec-Fetch-Site (`web/lib/api-proxy.ts`). A cross-site page cannot
-match: the browser sets Host from the URL, and a custom forwarded header
-needs a CORS preflight the API refuses. So the UI works through its proxy on
+compares the page's origin with the `Host` it was reached with (one value;
+`X-Forwarded-Host` instead, alone, only with
+`API_PROXY_TRUST_FORWARDED_HOST=true`) and, when they match, drops Origin,
+Referer and Sec-Fetch-Site (`web/lib/api-proxy.ts`). A page on another origin
+cannot match: the browser sets Host from the URL. The proxy never reads or
+passes on a client `X-Forwarded-Host` otherwise, since anything forwarding
+client headers to it would let a script choose one. So the UI works through its proxy on
 any host or port with no origin configuration; the bundled ingress sends
 `/api` to the API with the browser's Host, which is the API's own origin. The
 403 names the refused origin and `APP_BASE_URL`. A cookie-authenticated unsafe request with a body must also be

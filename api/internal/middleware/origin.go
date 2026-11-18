@@ -57,28 +57,31 @@ var MultipartUploadPaths = []string{"/api/v1/monitors/import/preview"}
 //     to the API with the browser's Host: the page's Origin is the API's own.
 //   - Everything else reaches the API through the UI's own /api proxy
 //     (web/app/api, web/lib/api-proxy.ts), where the API sees an internal
-//     Host. That proxy makes the same-origin comparison itself, against the
-//     Host (or fronting proxy's X-Forwarded-Host) it was reached with -- any
-//     port-forward, LAN address or operator ingress -- and, when the page is
-//     its own origin, forwards the write without Origin, Referer and
+//     Host. That proxy makes the same-origin comparison itself, against one
+//     value: the Host header it was reached with -- any port-forward, LAN
+//     address, Caddy or nginx-ingress keeps the browser's -- or, only when the
+//     operator sets API_PROXY_TRUST_FORWARDED_HOST=true for a fronting proxy
+//     that rewrites Host, that proxy's X-Forwarded-Host. When the page is its
+//     own origin it forwards the write without Origin, Referer and
 //     Sec-Fetch-Site, which this policy lets through as it does any client
-//     that sends none of them (below). A cross-site page cannot make that
-//     comparison succeed: the browser sets Host from the URL it fetched, so a
-//     page on another host or port never matches, and setting
-//     X-Forwarded-Host takes a custom header, hence a CORS preflight, which
-//     the API answers without CORS headers for an unlisted origin (a form post
-//     cannot set headers at all). A write the proxy cannot vouch for keeps its
-//     headers and is judged here.
+//     that sends none of them (below). A page on another origin cannot make
+//     that comparison succeed: the browser sets Host from the URL it fetched,
+//     so a page on another host or port never matches. A client-chosen
+//     X-Forwarded-Host is neither compared nor passed on (the proxy sends the
+//     browser's host instead), since anything that forwards client headers to
+//     the frontend would let a same-origin script on another origin choose
+//     it. A write the proxy cannot vouch for keeps its headers and is judged
+//     here.
 //
-// The API itself never believes X-Forwarded-Host from an untrusted peer,
-// although a browser cannot set it cross-origin either: a script can set any
-// header on a same-origin request, and a proxy to the API on another origin
-// that passes client headers through (the status page's /_sp_api) turns that
-// into an attacker-chosen forwarded host next to an attacker Origin. The UI's
-// proxy is safe to judge by its own Host because it serves only the UI's
-// origin. For the same reason Sec-Fetch-Site: same-origin is not taken as
-// proof here when an Origin is present: it compares the page with the URL
-// the browser fetched, which can be such a proxy.
+// The API itself never believes X-Forwarded-Host from an untrusted peer: a
+// script can set any header on a same-origin request, and a proxy to the API
+// on another origin that passes client headers through (the status page's
+// /_sp_api) turns that into an attacker-chosen forwarded host next to an
+// attacker Origin. A trusted peer's (the UI proxy's, listed in
+// TRUSTED_PROXY_CIDRS) is the browser's host, never a client value. For the
+// same reason Sec-Fetch-Site: same-origin is not taken as proof here when an
+// Origin is present: it compares the page with the URL the browser fetched,
+// which can be such a proxy.
 type OriginPolicy struct {
 	allowed map[string]bool // scheme://host[:port], lowercase, default port dropped
 	proxies *clientip.Resolver

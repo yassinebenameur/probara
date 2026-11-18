@@ -329,7 +329,10 @@ appBaseURL: ""
 # ["10.0.0.0/8"]. List only proxies you run: a range that also holds clients
 # lets those clients choose their address. The bundled ingress sends /api
 # straight to the api; the frontend's /api proxy drops X-Forwarded-For unless
-# frontend.extraEnv sets API_PROXY_TRUST_FORWARDED_FOR=true.
+# frontend.extraEnv sets API_PROXY_TRUST_FORWARDED_FOR=true. It also judges
+# which writes come from the UI by its Host header and ignores a client
+# X-Forwarded-Host; behind your own proxy that rewrites Host, set
+# API_PROXY_TRUST_FORWARDED_HOST=true in frontend.extraEnv.
 trustedProxyCIDRs: []
 
 # =============================================================================

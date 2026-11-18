@@ -15,6 +15,29 @@ export const API_PROXY_TARGET = process.env.API_PROXY_TARGET || 'http://localhos
 const API_PROXY_TRUST_FORWARDED_FOR = process.env.API_PROXY_TRUST_FORWARDED_FOR === 'true';
 const CLIENT_IP_HEADERS = new Set(['x-forwarded-for', 'x-real-ip']);
 
+// The host the browser sent its request to is this proxy's Host header:
+// port-forward, Caddy (the release edge) and nginx-ingress all keep it. An
+// X-Forwarded-Host that reaches this proxy may come from the client (anything
+// that forwards client headers here), so it is neither read nor passed on
+// unless the operator declares, with API_PROXY_TRUST_FORWARDED_HOST=true,
+// that a proxy they run in front of the UI rewrites Host and sets
+// X-Forwarded-Host itself (overwriting any client value). Then that value
+// alone is the browser's host. Never the request URL: Next.js builds it from
+// its own listen address and the client's X-Forwarded-Proto, not from Host.
+const API_PROXY_TRUST_FORWARDED_HOST = process.env.API_PROXY_TRUST_FORWARDED_HOST === 'true';
+
+/** The host the browser addressed (see API_PROXY_TRUST_FORWARDED_HOST), or null. */
+export function browserHost(
+  incoming: Headers,
+  trustForwardedHost: boolean = API_PROXY_TRUST_FORWARDED_HOST,
+): string | null {
+  if (trustForwardedHost) {
+    const forwarded = incoming.get('x-forwarded-host');
+    if (forwarded) return forwarded.split(',')[0].trim() || null;
+  }
+  return incoming.get('host')?.trim() || null;
+}
+
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
   'keep-alive',
@@ -39,21 +62,27 @@ export function buildTargetUrl(requestUrl: string, prefix: string, path: string[
 }
 
 /**
- * The request headers minus the hop-by-hop ones, and minus the client-IP
- * headers unless forwarding them is trusted (see
- * API_PROXY_TRUST_FORWARDED_FOR above).
+ * The request headers minus the hop-by-hop ones, minus the client-IP headers
+ * unless forwarding them is trusted (API_PROXY_TRUST_FORWARDED_FOR), and with
+ * X-Forwarded-Host set to the browser's host (browserHost), never a client's
+ * value: the API believes it from this proxy when the proxy is in
+ * TRUSTED_PROXY_CIDRS.
  */
 export function copyHeaders(
   requestHeaders: Headers,
   trustForwardedFor: boolean = API_PROXY_TRUST_FORWARDED_FOR,
+  trustForwardedHost: boolean = API_PROXY_TRUST_FORWARDED_HOST,
 ): Headers {
   const headers = new Headers();
   requestHeaders.forEach((value, key) => {
     const lower = key.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(lower)) return;
     if (!trustForwardedFor && CLIENT_IP_HEADERS.has(lower)) return;
+    if (lower === 'x-forwarded-host') return;
     headers.set(key, value);
   });
+  const host = browserHost(requestHeaders, trustForwardedHost);
+  if (host) headers.set('x-forwarded-host', host);
   return headers;
 }
 
@@ -96,12 +125,13 @@ export function copyResponseHeaders(upstream: Response): Headers {
 // Cross-site request forgery: the API refuses a session-cookie write from a
 // browser page that is not the operator UI (api/internal/middleware/origin.go).
 // Behind this proxy the API cannot see which host the browser used -- Host is
-// the API's internal name -- but this proxy can: the Host (or the fronting
-// proxy's X-Forwarded-Host) of the request it received is the host the
-// browser sent the request to. A cross-site page cannot change it: the
-// browser sets Host from the URL, and a custom header such as
-// X-Forwarded-Host needs a CORS preflight, which the API refuses to unlisted
-// origins. So when the page's origin equals this proxy's own origin, the
+// the API's internal name -- but this proxy can: its Host header
+// (browserHost) is the host the browser sent the request to, and a page
+// cannot choose it -- the browser sets Host from the URL it fetched. A
+// client-chosen X-Forwarded-Host is ignored (a same-origin script on another
+// origin can set one through anything that forwards client headers here), so
+// the comparison is against one value, never "any of". So when the page's
+// origin equals this proxy's own origin, the
 // request comes from the UI, and the proxy drops Origin, Referer and
 // Sec-Fetch-Site: the API reads a request without them as one no browser
 // attached a cookie to on another page's behalf, and lets it through with no
@@ -128,29 +158,13 @@ function originHostPort(origin: string): { scheme: string; hostPort: string } | 
   return { scheme, hostPort: `${url.hostname.toLowerCase()}:${port}` };
 }
 
-/** The hosts this proxy was reached as: the fronting proxy's forwarded host, the Host header, the URL. */
-function ownHosts(incoming: Headers, requestUrl: string): string[] {
-  const hosts: string[] = [];
-  const forwarded = incoming.get('x-forwarded-host');
-  if (forwarded) hosts.push(forwarded.split(',')[0].trim());
-  const host = incoming.get('host');
-  if (host) hosts.push(host.trim());
-  try {
-    hosts.push(new URL(requestUrl).host);
-  } catch {
-    // Not a URL: nothing to add.
-  }
-  return hosts.filter(Boolean);
-}
-
-function reachedOverHttps(incoming: Headers, requestUrl: string): boolean {
+// The scheme counts only when X-Forwarded-Proto says the request was HTTPS
+// (a TLS-terminating proxy in front). Believed from anyone because it can only
+// make the comparison stricter: a page that wanted to loosen it would have to
+// send a custom header, which takes a preflight.
+function reachedOverHttps(incoming: Headers): boolean {
   const proto = incoming.get('x-forwarded-proto');
-  if (proto) return proto.split(',')[0].trim().toLowerCase() === 'https';
-  try {
-    return new URL(requestUrl).protocol === 'https:';
-  } catch {
-    return false;
-  }
+  return proto !== null && proto.split(',')[0].trim().toLowerCase() === 'https';
 }
 
 /**
@@ -159,7 +173,11 @@ function reachedOverHttps(incoming: Headers, requestUrl: string): boolean {
  * False when it carries none: that is not a browser, and the API lets it
  * through unchanged anyway.
  */
-export function isSameOriginWrite(method: string, incoming: Headers, requestUrl: string): boolean {
+export function isSameOriginWrite(
+  method: string,
+  incoming: Headers,
+  trustForwardedHost: boolean = API_PROXY_TRUST_FORWARDED_HOST,
+): boolean {
   if (safeMethod(method)) return false;
   const origin = incoming.get('origin');
   const site = incoming.get('sec-fetch-site');
@@ -175,19 +193,21 @@ export function isSameOriginWrite(method: string, incoming: Headers, requestUrl:
   if (!page) return false;
   const from = originHostPort(page);
   if (!from) return false;
-  // The scheme counts only when this request is known to be HTTPS (as the
-  // API does): behind a TLS proxy that sets no X-Forwarded-Proto it reads as
-  // http while the page is https.
-  if (reachedOverHttps(incoming, requestUrl) && from.scheme !== 'https') return false;
-  return ownHosts(incoming, requestUrl).some((host) => {
-    const own = originHostPort(`${from.scheme}://${host}`);
-    return own !== null && own.hostPort === from.hostPort;
-  });
+  if (reachedOverHttps(incoming) && from.scheme !== 'https') return false;
+  const host = browserHost(incoming, trustForwardedHost);
+  if (!host) return false;
+  const own = originHostPort(`${from.scheme}://${host}`);
+  return own !== null && own.hostPort === from.hostPort;
 }
 
 /** Drops the browser-origin headers from outgoing when the write comes from this proxy's own origin (see above). */
-export function vouchForSameOriginWrite(method: string, incoming: Headers, outgoing: Headers, requestUrl: string): void {
-  if (!isSameOriginWrite(method, incoming, requestUrl)) return;
+export function vouchForSameOriginWrite(
+  method: string,
+  incoming: Headers,
+  outgoing: Headers,
+  trustForwardedHost: boolean = API_PROXY_TRUST_FORWARDED_HOST,
+): void {
+  if (!isSameOriginWrite(method, incoming, trustForwardedHost)) return;
   for (const name of BROWSER_ORIGIN_HEADERS) outgoing.delete(name);
 }
 

@@ -741,8 +741,10 @@ or imported groups come back empty. Any other path that creates groups through
   `RequireTrustedOrigin`, OAuth consent re-checks it. The UI's `/api` proxy
   vouches for its own origin's writes by dropping Origin/Referer/
   Sec-Fetch-Site (`vouchForSameOriginWrite`, `web/lib/api-proxy.ts`), which
-  is why no origin configuration is needed; the API never believes an
-  untrusted peer's `X-Forwarded-Host`. A new cookie-setting route takes
+  is why no origin configuration is needed. It judges by its `Host` header
+  only (`browserHost`) and never reads or forwards a client
+  `X-Forwarded-Host` unless `API_PROXY_TRUST_FORWARDED_HOST=true`; the API
+  never believes an untrusted peer's `X-Forwarded-Host`. A new cookie-setting route takes
   `RequireTrustedOrigin`. Reasoning: the `OriginPolicy` comment.
 - **Session identity**: one `admin_session_families` row per sign-in
   (password or SSO); refresh tokens rotate inside it and the access JWT's
